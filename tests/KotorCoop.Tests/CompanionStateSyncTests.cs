@@ -210,6 +210,47 @@ public sealed class CompanionStateSyncTests
         Assert.True(EquipApplyDecision.ShouldApply(length: 10, desiredHash: 999, lastAppliedHash: 0));
     }
 
+    // ---- pure rule: NWScript slot id -> CSWSCreature::EquipItem's internal slot index -----
+
+    [Fact]
+    public void EquipSlotMapMapsBodyToTheVerifiedInternalIndex()
+    {
+        // Cross-checked live-in-the-binary: CSWSCreature::ForceEquipClothing's own call site
+        // (0x00501D69) pushes slot=2 for a body/clothing equip.
+        Assert.Equal(EquipSlotMap.InternalSlotBody, EquipSlotMap.ToInternalSlot(nwscriptSlot: 1));
+        Assert.Equal(2, EquipSlotMap.ToInternalSlot(1));
+    }
+
+    [Fact]
+    public void EquipSlotMapMapsRightWeaponToTheOffsetDerivedIndex()
+    {
+        // +0x14 / 4 = 5. NEEDS-LIVE: not cross-checked against a second literal call site.
+        Assert.Equal(EquipSlotMap.InternalSlotRightWeapon, EquipSlotMap.ToInternalSlot(nwscriptSlot: 4));
+        Assert.Equal(5, EquipSlotMap.ToInternalSlot(4));
+    }
+
+    [Fact]
+    public void EquipSlotMapMapsLeftWeaponToTheOffsetDerivedIndex()
+    {
+        // +0x18 / 4 = 6. NEEDS-LIVE: not cross-checked against a second literal call site.
+        Assert.Equal(EquipSlotMap.InternalSlotLeftWeapon, EquipSlotMap.ToInternalSlot(nwscriptSlot: 5));
+        Assert.Equal(6, EquipSlotMap.ToInternalSlot(5));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(-1)]
+    [InlineData(999)]
+    public void EquipSlotMapRefusesEveryOtherNwscriptSlot(int nwscriptSlot)
+    {
+        // Only the three visible slots this project's equipment channels ever ask for (1, 4,
+        // 5) are known — anything else must refuse rather than guess an internal index and
+        // silently equip into the wrong slot.
+        Assert.Equal(-1, EquipSlotMap.ToInternalSlot(nwscriptSlot));
+    }
+
     // ---- PartyPump: settings/capability gating and anti-echo -----------------------------
 
     private const string Module = "end_m01aa";

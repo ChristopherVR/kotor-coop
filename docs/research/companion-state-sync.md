@@ -369,3 +369,173 @@ companion, per `party-reconciliation.md`'s own recipe):
    different local equipment than the host's real one, confirm the CLIENT never overwrites the
    HOST's copy — `party drive: companion 0x... equips ...` should only ever appear in the
    CLIENT's log, never the host's, for this companion.
+
+---
+
+## 6. Root cause of the live FAILURE, and a fix (worktree round, base commit `c9d08bb`)
+
+This worktree branched from `main` before the round that built the `equip`/`grantxp` dev
+verbs and ran the live pass recorded there (`main`'s `docs/live-verification.md`, "Rig pass
+2026-08-27 round 2" — 23 commits ahead of this worktree's base at the time of writing; see
+`git log HEAD..main`). That live pass's own verdict, quoted from `main`: **"a real bug —
+equip lands on the player, not the companion"**, with the operator's own leading (explicitly
+"not confirmed") hypothesis being that `EquipItemFromTemplate`'s caller-object redirect
+"doesn't hold for a live, AI-active party member the way it does for a phantom." No rig was
+available this round either, so this section is disassembly-only, same tag discipline as the
+rest of this document.
+
+### 6.1 The caller-object redirect is NOT the defect — VERIFIED by disassembly
+
+Full static disassembly this round of both halves of `Odyssey.EquipItemFromTemplate`
+(`src/KotorCoop.Plugin/Odyssey.Equipment.cs`):
+
+- **`CreateItemOnObject`'s VM handler, `CSWVirtualMachineCommands::ExecuteCommandCreateObject`
+  is the wrong name — the actual routine is at `0x0052F570`.** It pops its three VM-stack
+  arguments (`sTemplate`, `oTarget`, `nStackSize`) and resolves `oTarget` — the explicit
+  argument our code pushes, `creatureObjectId` — via `CServerExoApp::GetObjectArray` +
+  `CGameObjectArray::GetGameObject` (`0x0052F624`/`0x0052F62B`), casts it to a creature via its
+  own vtable `+0x30` ("AsCreature," the same cast this codebase's own `QueueAttackAction`
+  already documents using), and — when that cast succeeds — calls
+  `CSWSCreature::AcquireItem` (`0x005158E0`) **on that resolved target**, putting the new item
+  in ITS inventory. **Nothing in this function reads `CSWVirtualMachineCommands::
+  has_caller_object`/`caller_object_id` (`implementer+0x04`/`+0x08`) at all.** `oTarget`
+  resolution is entirely independent of VM caller-object state. VERIFIED.
+
+- **`ActionEquipItem`'s VM handler, `CSWVirtualMachineCommands::
+  ExecuteCommandActionEquipItem` (`0x005355F0`, confirmed by name in `tools/kotor1_0_3.db`),
+  reads `caller_object_id` (`this+0x08`, matches the symbol DB's own `offsets` table:
+  `has_caller_object` +0x004, `caller_object_id` +0x008) into a register at the very top of
+  the function** — before either VM-stack pop — resolves it through the identical
+  `GetObjectArray`/`GetGameObject`/AsCreature-cast sequence, and (gated on `has_caller_object
+  == 1`, `this+0x04`, checked at `0x0053567F`) calls `CSWSCreature::AddEquipItemActions`
+  (`0x004F0420`) **on that resolved creature** — the SAME object our C# code writes into
+  `caller_object_id` immediately before the dispatch, restored in a `finally` only after the
+  call returns. VERIFIED: the redirect correctly targets the companion in both halves, with no
+  window in which a stale/reverted value could be read instead.
+
+This directly refutes the live pass's own leading hypothesis. The redirect mechanism itself is
+sound for a live party member exactly as it is for a phantom.
+
+### 6.2 The real defect: `ActionEquipItem` queues, and nothing ever drains the queue for a mirrored companion
+
+`CSWSCreature::AddEquipItemActions` (`0x004F0420`) does not equip anything itself — for the
+ordinary (non-head-slot) path it calls `CSWSCombatRound::AddEquipAction` (`0x004D3C30`) on
+`creature+0x9C8` (the creature's own combat round). **`AddEquipAction`, disassembled in
+full this round, allocates an action node (action-type byte = 6) and appends it to
+`round+0x9B0`** — the exact "pending-action list" `Odyssey.Combat.Attack.cs`'s own
+`QueueAttackAction` already documents at length for the attack case, where draining it needs
+the round's own processing gate (`round+0x958`) armed via `SetRoundTimerActiveFn`/
+`SetRoundDelayFn`/`StartCombatRoundFn` — calls `QueueAttackAction` makes explicitly and
+`AddEquipAction`'s own call chain (which reaches only `CSWSCombatRound::
+DecrementRoundLength`, `0x004D3440`) never does. **`EquipItemFromTemplate` never arms the
+round either.** So the queued equip node has no confirmed path to ever being processed for a
+creature whose round the engine's own AI never separately armed.
+
+Separately: `Odyssey.ClaimCreature` (called by `PartyPresenceController.DriveOne` every pass
+for a mirrored companion, immediately after `ApplyCompanionEquipment`) calls
+`ClearAllActionsFn` (`CSWSObject::ClearAllActions`, `0x004CCD80`), which itself calls
+`creature->combatRound->ClearAllAttacks` (`0x004D37E0`, same `+0x9C8` offset). Disassembled
+this round: `ClearAllAttacks` loops only the round's five embedded `0x14C`-byte maneuver
+sub-structures (`round+4+i*0x14C`) — it does **not** touch `round+0x9B0` directly, so the
+queued equip node is not itself wiped by the claim. What IS true, and load-bearing: a
+phantom is never claimed at all (`PhantomController.OnFrame` calls
+`ApplyEquipment`/`DrivePhantom` every step and never calls `Odyssey.ClaimCreature` anywhere in
+`PhantomController.cs`/`PhantomController.Drive.cs`), so nothing about its round is ever
+touched post-spawn either way, while a live party member's round is repeatedly re-entered by
+`ClaimCreature` a few times a second. Which exact downstream step (an un-armed round's
+processing branch, or some other per-pass write this round's static pass did not trace) is
+what actually stops the node from ever being drained on a companion specifically was not
+pinned to a single instruction — **INFERRED, not fully closed** — but the queue/no-arming gap
+itself (§6.2's first paragraph) is VERIFIED and is, on its own, sufficient reason the equip
+never lands: nothing in this call chain ever asks the engine to process the pending list at
+all, on any creature, phantom included, unless some other system happens to arm the round
+first. Whether that "something else" exists for a real, previously-fought companion but not
+for a fresh phantom was not settled this round.
+
+⚠ **What this section does NOT explain**: the live pass's specific observation, "the item
+lands on the LOCAL PLAYER" (`items` showed the new weapon `held by 0x9`, confirmed to be the
+PC). §6.1 shows both `CreateItemOnObject` and `AddEquipItemActions`/`AddEquipAction` correctly
+resolve and stay scoped to the companion object throughout — nothing in the disassembled call
+chain re-derives "self" as the player at any point. Two candidate explanations, neither
+confirmed: (a) the SAME live round independently found and fixed a `KotorGameBridge.Items.cs`
+item-tag-cache bug ("a missed item-tag lookup was permanently blacklisted instead of retried")
+that could plausibly have misattributed the `items` diagnostic's possessor read during that
+same session; (b) a mechanism downstream of `AddEquipAction` this round's static pass did not
+reach. The live test plan below is written to settle this directly rather than guess further.
+
+### 6.3 The fix: bypass the queue entirely
+
+`Odyssey.EquipItemFromTemplateDirect` (new, `src/KotorCoop.Plugin/Odyssey.Equipment.cs`)
+keeps `GiveItemToInventory` (`CreateItemOnObject` alone — already VERIFIED target-based,
+unchanged) to create the item on the companion, then equips it through
+`CSWSCreature::EquipItem` (`0x004FEB90`, confirmed by name in the symbol DB, `__thiscall`,
+param size 20 bytes = 5 dwords) called **directly** on the resolved companion — the same
+SYNCHRONOUS primitive the workbench's install path and the AI's own
+`ForceEquipClothing`/`EquipMostDamagingMeleeWeapon`/etc. helpers call (15 xrefs to
+`0x004FEB90`, all inside those two families; VERIFIED). No action queue, no combat round, no
+arming needed — the call runs `CanEquipWeapon`, unequips whatever already occupies the slot,
+applies the stat/appearance changes and broadcasts the client update, all inside the one call
+(disassembled in full this round). This sidesteps §6.2's whole open question rather than
+resolving it: there is nothing left pending afterward for `ClaimCreature` — or anything else —
+to race.
+
+The internal slot argument is not the NWScript 1/4/5 convention `ActionEquipItem` uses; it is
+the `CSWInventory` byte offset divided by 4 (body `+0x08` → 2, right weapon `+0x14` → 5, left
+weapon `+0x18` → 6 — VERIFIED offsets, reused from §2.5/`item-identity.md`). The body mapping
+(slot 2) is cross-checked live-in-the-binary this round at `CSWSCreature::
+ForceEquipClothing`'s own call site (`0x00501D69`, a literal `push 2`); the two weapon slots
+were not independently confirmed against a literal (both weapon-equip call sites disassembled,
+`0x00501FC2`/`0x005022D8`, push a register-carried value from their own caller rather than a
+constant) — **INFERRED from the verified offset arithmetic only, NEEDS-LIVE**. Pulled into a
+dependency-free pure rule, `EquipSlotMap` (`src/KotorCoop.Plugin/EquipSlotMap.cs`, compiled
+into `KotorCoop.Tests` the same way `EquipApplyDecision` already is), so the mapping itself is
+unit-tested independently of the engine call that consumes it
+(`CompanionStateSyncTests.EquipSlotMap*`).
+
+`PartyPresenceController.ApplyCompanionEquipment` now calls `EquipItemFromTemplateDirect`
+instead of `EquipItemFromTemplate`. **`PhantomController.ApplyEquipment` is unchanged** — it
+still calls `EquipItemFromTemplate`, the proven-live-for-a-phantom path — so this fix carries
+zero regression risk to the shipped phantom equipment channel. `companion_gear_sync` stays OFF
+(unchanged default); this is a NEEDS-LIVE fix, not a verified one.
+
+⚠ **`main`'s dev verbs are out of reach from this worktree.** The `equip`/`grantxp` console
+verbs, `CheatController.Progression.cs`, and this document's own `§6` "Live-verified
+2026-08-27" section that recorded the original failure all live only on `main` (23 commits
+ahead of this worktree's base at the time of this round; `CheatController.Party.cs` in this
+worktree has no equip-related content at all). Whoever merges this fix forward should also
+point `main`'s `CheatController.Progression.cs::Equip()` at
+`Odyssey.EquipItemFromTemplateDirect` instead of `Odyssey.EquipItemFromTemplate`, so the dev
+verb exercises the same path the real `companion_gear_sync` channel now uses — otherwise the
+verb would keep reproducing the OLD (queued, un-armed) failure while the shipped channel uses
+the new one.
+
+### 6.4 Live test plan (precise, for the next rig pass — re-runs the exact failing scenario)
+
+1. Build and install both instances (`src/KotorCoop.Plugin/build.ps1 -Install` on both, or via
+   `demo.ps1`'s own install step — a stale plugin silently re-tests the OLD code, see
+   "demo.ps1 does not deploy the plugin").
+2. On the HOST, with `companion_gear_sync` still OFF, use the direct primitive through
+   whatever staging path is available on the branch under test (the `equip` dev verb once
+   forward-ported per §6.3's note above, or a temporary local call) targeting Trask
+   (party-roster slot 0) with a real, visually distinct `.uti` — e.g. `equip <trask-id>
+   g_w_lghtsbr01 4` (right-weapon slot; internal slot 5 per `EquipSlotMap`).
+3. **Watch for a crash or hang first.** `CSWSCreature::EquipItem` has never been called from
+   this codebase before; if the engine's own internal checks (`CanEquipWeapon`, the stats
+   recompute) assume state this call path does not set up, a bad call is more likely to
+   surface as an access violation than a silent no-op. Confirm the plugin log's own
+   `equip: ... equipped on 0x...` line, then confirm the process is still alive.
+4. `items` / `resolve <id>` (or the equivalent live memory read): confirm the new item's
+   possessor is the COMPANION's object id, not the PC's — this is the exact assertion the
+   prior round's `items` output got wrong. Confirm the item is actually in the CORRECT
+   internal slot (right hand, not the body slot) — visually, and via
+   `KotorGameBridge.ReadEquippedResref` at the `+0x14` offset if a console primitive for that
+   exists on the branch under test.
+5. Repeat for the body slot (`nwscriptSlot=1` → internal 2, the one literal-confirmed mapping)
+   and the left-weapon slot (`nwscriptSlot=5` → internal 6, the other un-confirmed mapping) —
+   if either produces a visibly wrong result (item in the wrong slot, or a crash), `EquipSlotMap`
+   is the first place to re-derive from a live probe rather than the offset arithmetic alone.
+6. Only once 3-5 are clean: flip `companion_gear_sync=1` on both instances and re-run this
+   document's existing §5 "Companion equipment" live test plan (re-equip on the host, confirm
+   the client's mirrored copy updates, confirm the gear survives a `companion_local_combat`
+   release, confirm anti-echo) — that plan's steps are unchanged by this fix; only the
+   underlying primitive `ApplyCompanionEquipment` calls changed.
