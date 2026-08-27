@@ -2704,6 +2704,15 @@ Nothing about the EXISTING park/hide behaviour changed: `PhantomController.Drive
 audit, confirmed unaffected) is untouched. This is purely an additional, best-effort HUD line
 layered on top, not a new gating mechanism.
 
+**Follow-up, same day (2026-08-27, main session).** The limit above is real, and the fix is the
+one `FlagAway` already used: the line is posted from the AGENT side, where the flag is still
+visible. `src/KotorCoop.Agent/MinigameAnnouncer.cs` diffs every peer's `IsInMinigame` per tick
+(same shape as `AwayAnnouncer`, keyed by peer id, first sight silent) and replies "<name> is in a
+minigame - waiting" / "<name> is back" through the chat overlay, so the notice reaches the
+player under the shipped `minigame_hide_peer=1` too. The plugin-side `MinigameNoticeController`
+stays as the persistent HUD variant for the hide-gate-off case. Tests: `MinigameAnnouncerTests`.
+NEEDS-LIVE with the rest of §23.6.
+
 ### 23.4 Row budget
 
 `MinigameNoticeController` claims screen row 8 (column 8), documented in its own class

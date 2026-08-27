@@ -16,6 +16,11 @@ public sealed partial class CoopCommandDispatcher
     /// <see cref="AwayAnnouncer"/> for why this is a separate diff from the roster one above.</summary>
     private readonly AwayAnnouncer _awayAnnouncer = new();
 
+    /// <summary>A peer's <see cref="KotorCoop.Protocol.PlayerState.FlagInMinigame"/> edge:
+    /// "Malak is in a minigame - waiting" / "Malak is back" — agent-side because the hide
+    /// filter keeps the plugin from ever seeing the flag (see <see cref="MinigameAnnouncer"/>).</summary>
+    private readonly MinigameAnnouncer _minigameAnnouncer = new();
+
     /// <summary>Content differences become lines on screen too — see
     /// <see cref="CompatibilityAnnouncer"/> for why a degradation that is only logged is
     /// indistinguishable from a bug.</summary>
@@ -46,6 +51,7 @@ public sealed partial class CoopCommandDispatcher
         {
             _peerAnnouncer.Reset();
             _awayAnnouncer.Reset();
+            _minigameAnnouncer.Reset();
             _kotor?.PublishSessionPeerCount(0);
             return;
         }
@@ -53,6 +59,7 @@ public sealed partial class CoopCommandDispatcher
         IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
         _peerAnnouncer.Observe(peers, Reply);
         _awayAnnouncer.Observe(peers, Reply);
+        _minigameAnnouncer.Observe(peers, Reply);
 
         // The seamless-arrival gate's signal: written here, every tick, because THIS loop
         // never depends on the player resolve — the pump's RemoteCount does, and its 1 Hz
