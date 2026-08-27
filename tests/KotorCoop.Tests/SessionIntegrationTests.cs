@@ -1346,4 +1346,64 @@ public class SessionIntegrationTests
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);
     }
+
+    /// <summary>
+    /// PlayerState.FlagAway rides the existing Flags dword (Version 39), so this is a plain
+    /// wire round trip rather than a new channel — but it is the one thing a codec-level
+    /// round-trip test cannot prove: that RemotePeer, as the OTHER side's session actually
+    /// hands it out, carries the bit through real sockets and real packets. See
+    /// docs/research/disconnect-reconnect.md.
+    /// </summary>
+    [Fact]
+    public async Task AnAwayPeerIsSeenAsAwayByTheOtherSide()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState hostState = new(new Vector3f(10f, 20f, 0f), 1f, "end_m01aa", 100, 0);
+        PlayerState clientAwayState = new(
+            new Vector3f(30f, 40f, 0f), 2f, "end_m01aa", 90, 0, Flags: PlayerState.FlagAway);
+
+        void Publish()
+        {
+            host.PublishLocalState(hostState);
+            client.PublishLocalState(clientAwayState);
+        }
+
+        bool hostSeesClientAway = await WaitForAsync(
+            () => host.GetRemotePeers().Any(p => p.PeerId == 2 && p.State.IsAway),
+            Timeout,
+            Publish);
+        Assert.True(hostSeesClientAway, "the host never saw the client's away flag");
+
+        // Not incidental to IsAway alone: the round trip must not corrupt the rest of the
+        // state riding alongside the flag.
+        RemotePeer clientAsSeenByHost = host.GetRemotePeers().First(p => p.PeerId == 2);
+        Assert.Equal(clientAwayState.Position, clientAsSeenByHost.State.Position);
+        Assert.False(clientAsSeenByHost.State.IsInMinigame);
+
+        // Clearing it must round-trip too — a stuck bit would leave a returned player parked
+        // forever.
+        PlayerState clientBackState = clientAwayState with { Flags = 0 };
+        void PublishBack()
+        {
+            host.PublishLocalState(hostState);
+            client.PublishLocalState(clientBackState);
+        }
+
+        bool hostSeesClientBack = await WaitForAsync(
+            () => host.GetRemotePeers().Any(p => p.PeerId == 2 && !p.State.IsAway),
+            Timeout,
+            PublishBack);
+        Assert.True(hostSeesClientBack, "the host never saw the client's away flag clear");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
 }
