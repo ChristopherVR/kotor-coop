@@ -120,8 +120,12 @@ public static class ProtocolConstants
     /// instead of being silently dropped whole; the flag/item/journal/loot version+digest
     /// tripwires ride on page 0 only, so a later page costs fewer bytes. See
     /// docs/research/lag-audit.md's 2026-08-27 entry.
+    ///
+    /// Version 44: container-lock explicit arbitration — <see cref="PacketType.LockResponse"/> (56)
+    /// is new and <c>InteractionClaimPacket</c> gained <c>RequestSerial</c>. See
+    /// docs/research/container-sync.md.
     /// </summary>
-    public const byte Version = 43;
+    public const byte Version = 44;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

@@ -51,7 +51,39 @@ internal sealed class WorldStatePump(
         }
 
         bridge.WriteInteractionLocks(theirs);
+
+        PumpContainerLockArbitration(local.Module);
     }
+
+    /// <summary>
+    /// The synchronous-feeling half of the container-lock fix (docs/roadmap-seamless.md Tier 1
+    /// item 4): forwards a fresh request the plugin's own deferral state machine published
+    /// (through the shared block — the plugin cannot reach <c>ICoopSession</c> directly) into
+    /// <see cref="ICoopSession.RequestContainerLock"/> exactly once, then hands back whatever
+    /// answer <see cref="ICoopSession.TryGetLockResponse"/> currently has for it. Every tick, the
+    /// same "cheap no-op almost every tick" shape <see cref="PumpJournal"/>'s own re-offer loop
+    /// already uses.
+    /// </summary>
+    private void PumpContainerLockArbitration(string localModule)
+    {
+        if (bridge.TryReadContainerLockRequest(out uint targetId, out uint requestSerial)
+            && requestSerial != 0 && targetId != 0 && requestSerial != _lastForwardedContainerLockSerial)
+        {
+            _lastForwardedContainerLockSerial = requestSerial;
+            session.RequestContainerLock(localModule, targetId, requestSerial);
+        }
+
+        if (_lastForwardedContainerLockSerial != 0
+            && session.TryGetLockResponse(_lastForwardedContainerLockSerial, out bool granted))
+        {
+            bridge.WriteContainerLockResponse(_lastForwardedContainerLockSerial, granted);
+        }
+    }
+
+    /// <summary>The most recent request serial this pump has already forwarded to the session,
+    /// so a request is sent exactly once rather than re-sent every tick while the plugin's own
+    /// serial field has not yet moved on to a new one.</summary>
+    private uint _lastForwardedContainerLockSerial;
 
     /// <summary>
     /// Carries the quest journal both ways: local changes (advances, legitimate decreases,

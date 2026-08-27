@@ -153,6 +153,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
+| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 300ms host-answer timeout | [container-sync.md](research/container-sync.md) |
 | `pazaak_detect` | OFF⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
 | `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |

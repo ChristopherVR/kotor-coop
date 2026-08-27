@@ -256,7 +256,14 @@ internal static unsafe partial class PluginHost
         // 56 = solo-segment spectate at 0x40C8 (one dword level, "this instance's local player
         //      is the active owner of a story-forced solo segment"). See
         //      SharedBlock.SoloSegment.cs and docs/research/star-forge-finale.md. NEEDS-LIVE.
-        _block->Version = 56;
+        // 57 = container-lock explicit arbitration at 0x40D0..0x40E0 (no TotalSize growth): a
+        //      plugin -> agent request (target id + serial) and an agent -> plugin response
+        //      (serial + granted bit), closing the container-loot race by asking the host to
+        //      arbitrate a fresh click BEFORE the engine's own OpenInventory runs, instead of
+        //      leaving it to the eventually-consistent per-tick claim/lock level to converge.
+        //      See docs/roadmap-seamless.md Tier 1 item 4 and docs/research/container-sync.md's
+        //      container_lock_arbitration section. NEEDS-LIVE.
+        _block->Version = 57;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

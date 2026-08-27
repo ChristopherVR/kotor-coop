@@ -267,4 +267,54 @@ internal partial struct SharedBlock
     /// conversation this bit describes (the session's single arbitrated token).</summary>
     public const int OffsetRemoteDialogueForced = 0x3F20;
 
+
+    // ---- container-lock explicit arbitration (version 57, region 0x40D0..0x40E0, no
+    // TotalSize growth) — docs/roadmap-seamless.md Tier 1 item 4, docs/research/container-sync.md
+    // -----------------------------------------------------------------------------------------
+    //
+    // Closes the container-loot race: the ordinary per-tick claim/lock pair above
+    // (OffsetLocalInteractionTargetId / OffsetInteractionLockTargetIds) is EVENTUALLY
+    // consistent — two clicks inside one RTT both see "not held yet" and both let the engine's
+    // own OpenInventory run. This region is a SEPARATE, synchronous-feeling request/response
+    // pair the plugin's ContainerLockArbiter deferral state machine drives: the plugin publishes
+    // a request the instant a click is deferred, and the agent (which is the only half of this
+    // process pair that can actually talk to the session/network) answers it by forwarding to
+    // ICoopSession.RequestContainerLock and polling TryGetLockResponse — the exact same
+    // "cheat-style request/serial" shape every console command's own ack channel already uses,
+    // reused here because the plugin can only ever ASK the agent for something across this
+    // boundary, never call into the session directly.
+    //
+    // Rides in the free tail after the companion-equipment region (0x40D0, after the override dwords at 0x40C0 and the solo-segment dword at 0x40C8,
+    // TotalSize is 0x4100, leaving 0x40 bytes free before this; this region uses 16 of them). No
+    // TotalSize growth, no relayout of anything else.
+
+    /// <summary>Plugin -&gt; agent. The placeable object id a DEFERRED container click wants
+    /// arbitrated, or 0 while nothing is pending. Written alongside
+    /// <see cref="OffsetLocalContainerLockRequestSerial"/> — the SERIAL is what the agent
+    /// actually keys a fresh request on (see that field's own remarks for the write order).</summary>
+    public const int OffsetLocalContainerLockRequestTargetId = 0x40D0;
+
+    /// <summary>Plugin -&gt; agent. A monotonic id for the request named by
+    /// <see cref="OffsetLocalContainerLockRequestTargetId"/>, written LAST (after the target id)
+    /// so the agent never sees a bumped serial pointing at an id that has not landed yet — the
+    /// same ordering rule <see cref="OffsetLocalDialogueNodeSerial"/> already uses for the
+    /// identical reason. 0 means "nothing pending"; never 0 for a real request
+    /// (<c>ContainerLockArbiter.BeginRequest</c> refuses to start one at serial 0). The agent
+    /// forwards a NEW serial (one it has not already forwarded) to
+    /// <c>ICoopSession.RequestContainerLock</c> exactly once.</summary>
+    public const int OffsetLocalContainerLockRequestSerial = 0x40D4;
+
+    /// <summary>Agent -&gt; plugin. The serial <see cref="OffsetContainerLockResponseGranted"/>
+    /// answers, written LAST (after the granted bit) for the identical reason the request serial
+    /// above is written last on the plugin's side — the plugin must never see a serial match
+    /// with a stale granted bit still sitting behind it.</summary>
+    public const int OffsetContainerLockResponseSerial = 0x40D8;
+
+    /// <summary>Agent -&gt; plugin. Nonzero if the request named by
+    /// <see cref="OffsetContainerLockResponseSerial"/> was granted, zero if it was denied.
+    /// Meaningless until the plugin sees that serial change from what it last read — a stale
+    /// answer to an OLD request must never be misread as an answer to a new one with the same
+    /// (or a not-yet-updated) serial value, which is exactly the ordering the write-order
+    /// remarks above exist to prevent.</summary>
+    public const int OffsetContainerLockResponseGranted = 0x40DC;
 }

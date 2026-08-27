@@ -163,6 +163,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.TransitionAnnounce] = HandleTransitionAnnounce,
             [PacketType.MidModuleMovie] = HandleMidModuleMovie,
             [PacketType.InteractionLock] = HandleInteractionLock,
+            [PacketType.LockResponse] = HandleLockResponse,
             [PacketType.Chat] = HandleChat,
             [PacketType.ProgressionSnapshot] = HandleProgressionSnapshot,
             [PacketType.CompanionXpSnapshot] = HandleCompanionXpSnapshot,
