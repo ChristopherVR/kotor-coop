@@ -75,7 +75,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [party-reconciliation.md](party-reconciliation.md) | Companion follow-AI, drift, and local combat — the master thread | Multiple stalls root-caused and fixed across many rounds; one narrow terminal-node stall remains — a live A/B on two fix candidates reconfirmed the same inconclusive result a fourth time, 2026-08-28, both stay off by default |
+| [party-reconciliation.md](party-reconciliation.md) | Companion follow-AI, drift, and local combat — the master thread | Multiple stalls root-caused and fixed across many rounds; the remaining phase=2 idle stall taken from the engine side, 2026-08-28 (static pass) — a third, previously undocumented engine exit (`TestDirectLine==-3` → `TeleportForward`) found by disassembly, and a new candidate `party_follow_phase2_kick` built on it (pure rule + tests); NOT YET LIVE-TESTED, stays off by default |
 | [client-control-lock.md](client-control-lock.md) | Pinning a client to its own PC, never a shared companion | RE reference; implemented |
 | [control-return.md](control-return.md) | Regression: a client locked onto a companion at connect | Root-caused, fixed, live-verified |
 | [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |

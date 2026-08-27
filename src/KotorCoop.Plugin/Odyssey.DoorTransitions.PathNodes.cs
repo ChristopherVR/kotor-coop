@@ -371,4 +371,112 @@ internal static unsafe partial class Odyssey
     /// MAIN THREAD ONLY.
     /// </summary>
 
+    /// <summary>
+    /// ROUND 95 (party-reconciliation.md, 2026-08-28 static pass, no rig access): the phase=2
+    /// idle stall four independent live A/B rounds (90, 91, 94, and the 2026-08-28 re-run) found
+    /// downstream of every previously-shipped fix candidate — <c>phase=2</c>
+    /// (<c>Moving_To_Path</c>, 0x00511860; see this file's own remarks on
+    /// <see cref="TryAdvanceStalledMovingToPath"/> for the corrected DB name — round 88's own
+    /// prose called this phase "Following_Path," backwards from <c>tools/kotor1_0_3.db</c>, though
+    /// every shipped hex address was always correct), position frozen, <c>attempts</c>
+    /// (<c>record+0x44</c>) reading exactly 0 for the entire stall (13+ minutes in one live
+    /// sample) because the OUTER dispatcher's own per-call gate
+    /// (<c>WalkUpdateLocation_QuickWalk_FollowLeader</c> 0x0051C360, 0x0051C7D0-0x0051C7DF) is
+    /// never open long enough to re-enter the phase-dispatch jump table at all — see
+    /// <see cref="Phase2StallRule"/>'s own remarks for the full disassembly trace of why
+    /// <c>attempts</c>-gated fixes (<see cref="TryAdvanceStalledMovingToPath"/>) structurally
+    /// cannot reach this shape.
+    ///
+    /// Fresh disassembly this round of the jump table at 0x0051CCEC (raw dwords read directly,
+    /// each stub disassembled and its <c>call</c> target cross-checked against
+    /// <c>tools/kotor1_0_3.db</c>'s own function names — not merely address arithmetic) finds a
+    /// THIRD, previously undocumented exit from phase 2, distinct from the already-known
+    /// "TestDirectLine==1" accept and the "anything else" async-requeue dead-end (round 88's
+    /// Finding 2): when <c>CSWSArea::TestDirectLine</c> (0x004BCB70) returns exactly <c>-3</c>
+    /// (0x00511A72, <c>cmp eax,-3</c>), the handler resolves a specific tracked "other slot"
+    /// object id (the same <c>0x7F000000</c> "not spawned" sentinel round 74 already documented
+    /// for an empty second companion slot) through
+    /// <c>CClientExoAppInternal::ServerToClientObjectId</c> +
+    /// <c>CClientExoApp::GetSWParty</c>, then calls <c>CSWParty::IsPartyMember</c> (0x00634620) on
+    /// it; when that returns FALSE — the case any single-companion party is structurally in — the
+    /// handler force-commits phase <see cref="Phase2StallRule.TeleportForwardPhase"/>
+    /// (0x00511AA1: <c>mov dword ptr [edi+4], 0xa</c>) directly, skipping the requeue entirely.
+    /// <c>TeleportForward</c> (0x00512DE0) is itself disassembled in full this round: it walks
+    /// <c>CurrentPathNode</c> forward through the recorded trail with its own obstacle checks
+    /// (<see cref="Phase2StallRule.TeleportForwardPhase"/>'s own remarks) and re-enters phase 2
+    /// with fresh, obstacle-checked <c>TargetPoint</c>/<c>Snapshot</c> — the engine's OWN
+    /// purpose-built "stuck too far behind" recovery path, not a value this codebase invented.
+    ///
+    /// This function does not attempt to reproduce the <c>-3</c>/<c>IsPartyMember</c> precondition
+    /// chain itself (that would mean calling <c>TestDirectLine</c>/<c>IsPartyMember</c> directly
+    /// with a hand-reconstructed argument shape neither this round nor any prior round has
+    /// verified live — exactly the "blind ABI guess" this project's engine-write rule warns
+    /// against). Instead, matching every other fix in this document's own established pattern
+    /// (<see cref="TryResetStuckFollowPhase"/>, <see cref="TryAdvanceStalledMovingToPath"/>,
+    /// <see cref="TryAdvanceStalledPathDestination"/>), it pokes ONLY <c>record+4</c> — the same
+    /// field the engine's own <c>-3</c> branch writes, to the same value — and lets the next
+    /// natural top-level dispatch (<see cref="TryDriveFollowLeaderStep"/>, already called every
+    /// frame) route into <c>TeleportForward</c>'s own handler through the normal jump table, with
+    /// no precondition-chain guesswork required.
+    ///
+    /// Gated by <see cref="Phase2StallRule.ShouldKick"/> — a wall-clock/distance stall detector,
+    /// deliberately NOT gated on <c>attempts &gt; 0</c> the way the sibling phase-2 fix is, because
+    /// live data shows <c>attempts</c> never leaves 0 for exactly the stall shape this targets.
+    ///
+    /// NOT YET LIVE-TESTED — this round had no rig access. See
+    /// docs/research/party-reconciliation.md for the live-verification recipe. Kill switch (to
+    /// enable): <c>party_follow_phase2_kick=1</c> (default OFF).
+    ///
+    /// <paramref name="logWrites"/> (the caller's own cached <c>party_follow_finelog</c> flag)
+    /// logs the before/after phase transition directly when a write fires.
+    ///
+    /// Returns false when the index does not resolve. <paramref name="wrote"/> reports whether the
+    /// poke fired this call.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryKickStalledMovingToPathToTeleportForward(
+        uint companionServerObjectId, bool logWrites, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (phase != Phase2StallRule.MovingToPathPhase)
+        {
+            return true; // not parked in the stall shape this targets — nothing to do
+        }
+
+        *(int*)(record + 4) = Phase2StallRule.TeleportForwardPhase;
+        wrote = true;
+
+        if (logWrites)
+        {
+            PluginHost.Log(
+                $"party follow phase2kick: 0x{companionServerObjectId:X} fired "
+                + $"phase {phase} -> {Phase2StallRule.TeleportForwardPhase} (TeleportForward)");
+        }
+
+        return true;
+    }
 }

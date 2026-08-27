@@ -135,6 +135,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_follow_accept_final_node` | OFF | follow-AI fix candidate: accept the final path node early | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_refresh_final_node` | OFF | follow-AI fix candidate, live-refuted (no effect) | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_extend_final_node` | OFF | follow-AI fix candidate, unconfirmed live | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_follow_phase2_kick` | OFF | follow-AI fix candidate: force TeleportForward out of a phase=2 idle stall, not yet live-tested | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
 | `companion_gear_sync` | ON (see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |

@@ -247,6 +247,14 @@ party_follow_refresh_final_node=0
 # stays OFF by default pending a repro that isolates it from that other blocker.
 party_follow_extend_final_node=0
 
+# Forces the engine's own TeleportForward recovery phase once a companion has held phase=2
+# (Moving_To_Path) continuously for 5+ seconds while its leader is genuinely far away - the
+# stall four independent live A/B rounds (90, 91, 94, 2026-08-28) found downstream of every
+# other candidate above, itself never root-caused until a 2026-08-28 disassembly pass found
+# this engine-native escape hatch. NOT YET LIVE-TESTED - no rig access when it was built.
+# Stays OFF by default pending a live A/B.
+party_follow_phase2_kick=0
+
 # The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
 # SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different
 # structure from CSWPartyTable above - can hold a stale, higher member count after a roster
