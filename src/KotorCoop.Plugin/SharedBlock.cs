@@ -90,7 +90,16 @@ internal partial struct SharedBlock
     /// this region starts cleanly at the old boundary, the same choice every earlier growth in
     /// this file made.
     /// </summary>
-    public const int TotalSize = 0x4100;
+    /// <summary>
+    /// Grown from 0x4100 for the item-template-spawn ring (version 58,
+    /// docs/research/item-identity.md §13): the container-lock arbitration region's own tail
+    /// (0x40E0) leaves only 0x20 free bytes before 0x4100 — nowhere near the 64 x 0x14 ring plus
+    /// its 4-byte cursor (0x504) <see cref="OffsetItemTemplateSpawnRing"/> needs — so this
+    /// region starts cleanly at the old boundary (0x4100..0x4604) and TotalSize is rounded up
+    /// to the next clean 0x100 boundary past that (0x4700), the same choice every earlier
+    /// growth in this file made.
+    /// </summary>
+    public const int TotalSize = 0x4700;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -161,7 +170,10 @@ internal partial struct SharedBlock
     /// (2026-08-27) added <see cref="OffsetBehaviourOverrideMask"/>/
     /// <see cref="OffsetBehaviourOverrideValues"/> — see SharedBlock.BehaviourOverrides.cs.
     /// (2026-08-27, v56) added <see cref="OffsetLocalInSoloSegment"/> — see
-    /// SharedBlock.SoloSegment.cs.
+    /// SharedBlock.SoloSegment.cs. Version 57 (2026-08-27) added the container-lock explicit
+    /// arbitration channel — see SharedBlock.Dialogue.cs. Version 58 (2026-08-28) added
+    /// <see cref="OffsetItemTemplateSpawnRing"/>/<see cref="OffsetItemTemplateSpawnCursor"/> —
+    /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

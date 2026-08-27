@@ -37,4 +37,17 @@ public interface IItemBridge
         resref = string.Empty;
         return false;
     }
+
+    /// <summary>
+    /// Drains the plugin's item-template-spawn ring (docs/research/item-identity.md §13) into
+    /// whatever cache <see cref="TryGetItemResref"/> consults first — the (object id -&gt; real
+    /// blueprint resref) fact for every item <c>CreateItemOnObject</c> actually creates,
+    /// whether a vanilla script asked for it or a `giveloot`/`scriptgive`/`storeinsert`/
+    /// `partypooladd` cheat did. Cheap when nothing is new (one dword read); a no-op default
+    /// so a bridge with no such ring (a test fake, an older plugin) simply never populates the
+    /// extra source and <see cref="TryGetItemResref"/> falls back exactly as it did before.
+    /// </summary>
+    void DrainItemTemplateSpawns()
+    {
+    }
 }

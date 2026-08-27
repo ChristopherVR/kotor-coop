@@ -43,7 +43,12 @@ public sealed partial class KotorGameBridge
     /// is sized to be past the failure rather than to be a limit that bites.</summary>
     private const int SpawnedItemResrefCacheCapacity = 256;
 
-    private void RememberSpawnedItemResref(uint objectId, string resref)
+    /// <summary>internal (not private) only so <c>ItemTemplateSpawnCachePrecedenceTests</c>
+    /// (KotorCoop.Tests, granted access via <c>InternalsVisibleTo</c>) can seed this cache
+    /// directly and pin <see cref="TryGetItemResref"/>'s precedence contract without needing a
+    /// real plugin block or a memory scan — every other caller remains in-process
+    /// (<see cref="CollectVanishedItems"/>, <see cref="DrainItemTemplateSpawns"/>).</summary>
+    internal void RememberSpawnedItemResref(uint objectId, string resref)
     {
         if (objectId is 0 or ObjectInvalid || resref.Length == 0
             || _spawnedItemResrefs.ContainsKey(objectId))
@@ -59,6 +64,12 @@ public sealed partial class KotorGameBridge
             _spawnedItemResrefs.Remove(_spawnedItemResrefOrder.Dequeue());
         }
     }
+
+    /// <summary>internal test seam, same reasoning as <see cref="RememberSpawnedItemResref"/>:
+    /// a pure dictionary lookup, so a test can confirm an id was (or, more to the point, was
+    /// NOT) recorded without going through <see cref="TryGetItemResref"/> — which, on a miss,
+    /// falls through to a real memory sweep this seam lets a test avoid entirely.</summary>
+    internal bool HasSpawnedItemResref(uint objectId) => _spawnedItemResrefs.ContainsKey(objectId);
 
     /// <summary>Drops every learned (object id -&gt; resref) fact. Called on module change,
     /// alongside the tag/address caches — see this field's own remarks on why a stale entry

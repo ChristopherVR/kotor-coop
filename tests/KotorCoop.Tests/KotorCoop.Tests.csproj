@@ -73,8 +73,10 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.World.cs" Link="Plugin\SharedBlock.World.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Browser.cs" Link="Plugin\SharedBlock.Browser.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Cheats.cs" Link="Plugin\SharedBlock.Cheats.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.ItemTemplateSpawns.cs" Link="Plugin\SharedBlock.ItemTemplateSpawns.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.cs" Link="Plugin\SharedBlockView.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Items.cs" Link="Plugin\SharedBlockView.Items.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.ItemTemplateSpawns.cs" Link="Plugin\SharedBlockView.ItemTemplateSpawns.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Combat.cs" Link="Plugin\SharedBlockView.Combat.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.World.cs" Link="Plugin\SharedBlockView.World.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Session.cs" Link="Plugin\SharedBlockView.Session.cs" />
