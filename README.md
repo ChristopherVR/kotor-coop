@@ -35,7 +35,7 @@ attaches from outside with `OpenProcess`.
 | Protocol-version-mismatch reject (`E_PROTO`) | Built, not live-verified | [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Companion equipment (`companion_gear_sync`) | Body-slot re-equip live-confirmed 2026-08-28 (925 ms/235 ms propagation); weapon-slot bug root-caused and fixed in code (wrong internal slot encoding), NEEDS-LIVE — stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Live-verified: two double-apply bugs fixed; a later live pass found a different under-count/lockout bug in the same echo guard, fixed 2026-08-28 (bench-only this round, needs a live re-test) — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Merchant store stock (`store_sync`) | Stays off — the 2026-08-28 `PopulateStoreItemListBox` crash is root-caused and fixed (`ShowStoreGui` was missing two arguments) — NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
@@ -200,11 +200,12 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **One conversation at a time**, by design — the other player spectates rather than getting
   a separate copy.
 - **Companion experience sync is live-verified and on by default** (`companion_xp_sync`).
-  **Equipment sync (`companion_gear_sync`) stays off** — the body slot is live-confirmed working
-  (see the status table above); the weapon-slot bug (the internal slot value passed to the
-  engine's own `EquipItem` call was wrong — a `CSWInventory` byte-offset arithmetic guess instead
-  of the bit-flag value the engine actually expects) is root-caused and fixed in code, but not
-  yet live-verified. **Dialogue recruitment sync is live-confirmed for two companions**
+  **Equipment sync (`companion_gear_sync`) is also live-verified and on by default** — the
+  weapon-slot bug (the internal slot value passed to the engine's own `EquipItem` call was
+  wrong — a `CSWInventory` byte-offset arithmetic guess instead of the bit-flag value the engine
+  actually expects) is fixed and live-confirmed for both weapon slots and the body slot, with
+  mid-session propagation to the client under 3s. **Dialogue recruitment sync is live-confirmed
+  for two companions**
   (`dialogue_recruit_sync`, on by default); a fix for a stale pre-recruit body is implemented but
   not yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md)
   and [dialogue-consequences.md](docs/research/dialogue-consequences.md).

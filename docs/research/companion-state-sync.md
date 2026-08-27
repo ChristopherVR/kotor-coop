@@ -1159,3 +1159,112 @@ disassembly/code-inspection-confirmed and unit-tested only, not live-verified, t
    original "Companion equipment" live test plan (re-equip on host, confirm client's mirrored
    copy updates for a WEAPON slot specifically, confirm anti-echo) — the body slot half of that
    plan is already live-confirmed (§10.2); this closes the loop for weapons.
+
+---
+
+## 12. Live pass (2026-08-28, rig round): §11.6's plan run in full — both weapon slots and the
+## body slot all confirmed live, mid-session propagation clean end to end, `companion_gear_sync`
+## flipped ON
+
+Two-instance rig (`tools/demo.ps1`, default save), Trask (party-roster slot 0) confirmed live
+object id `0x127` on both instances (`partystate.ps1`: host pid 59848 `soloMode 0`, client pid
+51380 `soloMode 1`, both report `member 0: slot 0 objectId 0x127`). `pwsh
+src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` on both game directories first — the
+deployed `dinput8.dll` hash-confirmed byte-identical (`sha256sum`) to the fresh build on both
+installs. Both `coop.ini`s reset from `profiles/coop.ini.example` with `companion_gear_sync=1`
+written in before launch (needed for item 2, the propagation channel). `dotnet build
+KotorCoop.slnx -warnaserror` clean; `dotnet test tests/KotorCoop.Tests --no-build`: 2353/2355,
+the 2 failures both in `CoopCommandDispatcherTests` (real UDP ports, this repo's own documented
+concurrent-`dotnet test` flake per `docs/CONTRIBUTING.md`) — reran that class alone, 8/8 clean,
+confirming no regression. Commands were sent through `tools/blockpoke.ps1 -ProcId <pid> console
+'<line>'` (the documented unattended channel — injected OS keystrokes never reach this game),
+which writes the exact same agent<-plugin field the in-game `~` console does; raw slot reads used
+a small throwaway script following the exact `creature+0xA2C -> CSWInventory* -> +offset`
+sequence `EquipItemFromTemplateDirect`'s own readback already uses, resolving each creature
+pointer with the `resolve <id>` console verb first (host: `0x127` -> `0x17E54770`; client: `0x127`
+-> `0x18674EB8`).
+
+### Item 1 (§11.6 steps 1-5, the direct primitive, right AND left weapon plus body): PASS, all
+### four calls, no crash
+
+| Call (HOST) | Reply | Raw slot after (creature+0xA2C+offset) |
+| --- | --- | --- |
+| `equip 0x127 g_w_lghtsbr01 4` (right weapon) | `equipped 'g_w_lghtsbr01' on 0x127 slot 4` | `+0x14` = `0x131` (new item) |
+| `equip 0x127 g_w_blstrpstl001 4` (right weapon, 16-char resref) | `equipped 'g_w_blstrpstl001' on 0x127 slot 4` | `+0x14` = `0x132` (changed again, not stuck on `0x131`) |
+| `equip 0x127 g_w_blstrpstl002 5` (left weapon) | `equipped 'g_w_blstrpstl002' on 0x127 slot 5` | `+0x18` = `0x134` (was `0x0` before this call, per §10.2's own finding for a slot's first-ever write) |
+| `equip 0x127 g_a_class4001 1` (body) | `equipped 'g_a_class4001' on 0x127 slot 1` | `+0x08` = `0x135` |
+
+This is the exact scenario §10.2 found broken (a weapon slot's raw `CSWInventory` dword never
+changing past the first attempt, and the left slot's very first write never landing at all) —
+`EquipSlotMap`'s bit-flag fix (§11) closes it: **both weapon slots now update on every call,
+including repeated right-weapon calls to different resrefs and a left-weapon slot's first-ever
+write.** (One incidental non-bug: `equip 0x127 g_w_blstrpstl01 5` — a typo'd, non-existent
+resref — correctly refused with `failure 8`, the fail-safe "blueprint not found" path; the very
+next call with the correct `g_w_blstrpstl002` succeeded normally.) A screenshot after the
+sequence (`host_trask_final.png`) shows Trask's visible model changed from the starting
+`g_a_clothes01` look to the newly-equipped armor. Both `swkotor.exe`/`KotorCoop.Agent.exe` process
+pairs stayed alive and `Responding=True` throughout.
+
+### Item 2 (mid-session propagation to the CLIENT within ~5s): PASS, all four calls, fast
+
+Client `kotorcoop-plugin.log`, matched against the host's own equip-call timestamps:
+
+| Slot | Host equip call time | Client `party drive: companion 0x127 equips ...` time | Latency |
+| --- | --- | --- | --- |
+| right weapon (`g_w_lghtsbr01`) | 08:12:07.150 | 08:12:09.718 | **2.57 s** |
+| right weapon (`g_w_blstrpstl001`, 16-char) | 08:17:12.058 | 08:17:13.090 | **1.03 s** |
+| left weapon (`g_w_blstrpstl002`) | 08:17:35.060 | 08:17:36.407 | **1.35 s** |
+| body (`g_a_class4001`) | 08:17:51.345 | 08:17:52.955 | **1.61 s** |
+
+All four well under the "a few seconds" bar §9.3's test plan set, and all four correctly reached
+the client — including the SECOND right-weapon call, the case §10.2 could never get even the
+HOST's own state to change on, let alone propagate. Independently confirmed by reading the
+client's raw `CSWInventory` slots directly (not just trusting the log): right weapon `+0x14` =
+`0x131`, left weapon `+0x18` = `0x135`, body `+0x08` = `0x136` — all three non-zero and each a
+freshly-created LOCAL item (the client creates its own item on receipt; ids do not need to match
+the host's own numbering, and coincidentally overlapping with an earlier host id, e.g. right
+weapon's `0x131`, is not itself meaningful). No `refused`/`failure` line appeared anywhere in the
+client's plugin log across the whole sequence. Both process pairs stayed alive and
+`Responding=True` after every check.
+
+### Verdict: `companion_gear_sync` flipped ON
+
+Items 1 and 2 are both clean. Per this document's own §11.6 step 7 and the task's own item 3:
+`CoopConfig.CompanionGearSync` changed from `IsTruthy(...)` (default OFF) to
+`!kv.ContainsKey("companion_gear_sync") || IsTruthy(...)` (default ON, matching
+`CompanionXpSync`'s own pattern); `AgentComposition.Compose`'s `SyncCompanionGear = config?.
+CompanionGearSync ?? false` changed to `?? true` (matching `SyncCompanionXp`'s own `?? true`
+fallback, so a session with NO coop.ini at all now also defaults to ON, consistent with every
+other already-ON flag rather than a special case); `AgentSettings.SyncCompanionGear`'s own C#
+property default changed to `= true` to match; `PartyPresenceController`'s
+`PluginConfig.ReadBool("companion_gear_sync", false)` changed to `true` (the plugin-side gate,
+independently read); `IPartyBridge.cs`'s doc comment corrected. `profiles/coop.ini.example`'s
+`companion_gear_sync=0` -> `=1`; `docs/CONFIG.md`'s two rows updated to ON; `README.md`'s status
+table, roadmap row and limitations paragraph updated; `docs/roadmap-seamless.md`'s Tier-1 item 11
+row and Wave B summary updated; `docs/research/README.md`'s index row updated.
+`CompanionStateSyncTests.CompanionGearSyncOffByDefault`/`CoopConfigDefaultsCompanionXpOnGearOff`
+renamed to `CompanionGearSyncOnByDefault`/`CoopConfigDefaultsCompanionXpAndGearOn` and
+re-asserted against the new default — `dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` both clean, `dotnet test tests/KotorCoop.Tests
+--no-build`: **2355 passed, 0 failed**. Item 3 of the original queue (a `companion_local_combat`
+release with re-equipped gear) was not re-attempted this round — it is a pre-existing,
+already-documented follow-AI stall (§10.3) unrelated to gear sync, and this round's time budget
+went to the weapon-slot closure above instead.
+
+### Item 4: `verify.ps1` baseline, full test suite, native build — PASS, no regression
+
+Both game directories reinstalled from the post-flip build (`build.ps1 -Install -WarnAsError`,
+hash-confirmed byte-identical deploys on both sides) and the rig relaunched fresh for this check.
+`pwsh tools\verify.ps1` against a freshly-connected, untouched session: **40 passed, 9 failed.**
+Seven of the nine failures match the long-standing documented baseline exactly (`phantom
+damageable, not a sink`; `the peer really loses those hit points`; `a downed player is reported
+to the agent`; `the co-op revive stands the player back up`; `every engine call signature matches
+the binary` (187/189); `a container opened on the client is held and shown open on the host`; `no
+per-frame spam`). The other two (`a client hit costs the enemy real hit points`,
+`an item picked up here vanishes on the peer`) are the SAME two checks this document's own prior
+"item 5" round (2026-08-28) flagged as environment-flaky substitutions that swap in and out
+between runs — squarely inside the documented 40-42/7-9 range, no new failure and no regression
+from `companion_gear_sync` now being ON. `dotnet test tests/KotorCoop.Tests --no-build`:
+**2355 passed, 0 failed** (same run reported in the verdict above — no source changed between
+the two checks). `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: both clean. No crash on either instance across the whole round.

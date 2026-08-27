@@ -103,7 +103,7 @@ public interface IPartyBridge
     /// <c>Odyssey.EquipItemFromTemplate</c> path the phantom equipment channel already uses.
     /// The default overload keeps today's behaviour (position/health/animation only); this
     /// overload exists so a bridge that cannot drive companion gear at all does not need a
-    /// second member. coop.ini <c>companion_gear_sync</c>, OFF by default.
+    /// second member. coop.ini <c>companion_gear_sync</c>, ON by default.
     /// </summary>
     int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members, bool applyEquipment) =>
         TryWritePartyMembers(members);

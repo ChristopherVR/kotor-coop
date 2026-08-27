@@ -585,14 +585,16 @@ companion_xp_sync=1
 # be stale the moment the host player has re-equipped that companion (a workbench upgrade, a
 # looted weapon) since the two instances last agreed. This reads the host's real per-companion
 # gear (body/right weapon/left weapon) and hands it to the plugin, which dresses the mirrored
-# body through the same Odyssey.EquipItemFromTemplate path the phantom equipment channel
-# already uses. Roadmap item 12 - docs/research/companion-state-sync.md. Read independently by
-# BOTH halves (this agent-side key gates whether the host reads/publishes and whether a client
-# applies what it receives; the plugin reads its own copy of the same key to gate the actual
-# engine call). Anti-echo: only the host ever reads a companion's gear to publish it - a client
-# never calls the read path at all, so it cannot report its own possibly-stale copy back. OFF
-# by default, NEEDS-LIVE.
-companion_gear_sync=0
+# body through Odyssey.EquipItemFromTemplateDirect, the same primitive the phantom equipment
+# channel's own live party-member path uses. Roadmap item 11 - docs/research/
+# companion-state-sync.md. Read independently by BOTH halves (this agent-side key gates
+# whether the host reads/publishes and whether a client applies what it receives; the plugin
+# reads its own copy of the same key to gate the actual engine call). Anti-echo: only the host
+# ever reads a companion's gear to publish it - a client never calls the read path at all, so
+# it cannot report its own possibly-stale copy back. Live-verified 2026-08-28 (section 12):
+# both weapon slots and the body slot confirmed working, mid-session propagation under 3s. ON
+# by default.
+companion_gear_sync=1
 
 # Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
 # choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
