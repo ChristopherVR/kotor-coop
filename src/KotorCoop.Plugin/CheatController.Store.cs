@@ -132,12 +132,14 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
-    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-27 addendum): opens the store
-    /// GUI against <see cref="SharedBlock.CheatTarget"/> (object id) or
-    /// <see cref="SharedBlock.CheatText"/> (tag) through <see cref="Odyssey.OpenStore"/> — one
-    /// of the two is required, there is no "nearest store" sweep.
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-27 addendum, root-caused and
+    /// fixed 2026-08-28): opens the store GUI against <see cref="SharedBlock.CheatTarget"/>
+    /// (object id) or <see cref="SharedBlock.CheatText"/> (tag) through
+    /// <see cref="Odyssey.OpenStore"/> — one of the two is required, there is no "nearest store"
+    /// sweep. <paramref name="playerId"/> is the shopping creature's object id, passed straight
+    /// through to <c>CGuiInGame::ShowStoreGui</c>'s own second argument (see Odyssey.Store.cs).
     /// </summary>
-    private void OpenStore()
+    private void OpenStore(uint playerId)
     {
         uint requestedId = block.CheatTarget;
         string text = ReadCheatText();
@@ -180,7 +182,7 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
-        if (!Odyssey.OpenStore(store, out string reason))
+        if (!Odyssey.OpenStore(store, playerId, out string reason))
         {
             PluginHost.Log($"openstore: {what} refused - {reason}");
             Answer(SharedBlock.CheatStatusEngineRefused, $"openstore {what} refused: {reason}");

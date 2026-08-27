@@ -232,34 +232,57 @@ internal static unsafe partial class Odyssey
 
     // ---- openstore: opens the store GUI directly, bypassing ExecuteCommandOpenStore --------
     //
-    // docs/research/store-sync.md §1.6/§6 read ExecuteCommandOpenStore (0x00540300) far enough
-    // to find it resolves oStore (§1.2's GetStoreByGameObjectID) and calls CGuiInGame::
-    // ShowStoreGui (0x0062E310), but deliberately declined to build a verb on that reading
-    // alone: "the call chain from there... was not traced far enough to be confident it is a
-    // direct call rather than a queued client/server GUI message." This pass finished the trace
-    // (fresh disasm, both functions, this session):
+    // 2026-08-28: root-caused the PopulateStoreItemListBox crash (docs/research/store-sync.md's
+    // "Live pass" section) by finishing the disassembly the 2026-08-27 addendum below left
+    // incomplete. THE ADDENDUM'S OWN CLAIM WAS WRONG: "ShowStoreGui takes ONLY `this`... no
+    // stack argument anywhere in the function's body carries a store id." Fresh disasm this
+    // pass shows `CGuiInGame::ShowStoreGui 0x0062E310` is
+    // `__thiscall(CGuiInGame* this, uint storeObjectId, uint pcObjectId)`, ret 8 (two stack
+    // dwords, confirmed by the trailing `ret 8` and by `[esp+0x30]`/`[esp+0x34]` resolving to
+    // `[ESP_entry+4]`/`[ESP_entry+8]` -- the two caller-pushed stack args -- once the function's
+    // own prologue displacement (0x2C bytes: SEH push x3 + `sub esp,0x1C` + `push esi`) is worked
+    // out). After the three precondition gates, it allocates (or reuses)
+    // `CGuiInGame+0x84`'s `CSWGuiStore` panel, then -- VERIFIED, this is the load-bearing part --
+    // writes `storeObjectId` into the panel's `+0x2278` and `pcObjectId` into `+0x227C`, THEN
+    // calls `AddPanel 0x40BC70(gm, panel, 3, 1)`.
     //
-    //   * ShowStoreGui takes ONLY `this` (CGuiInGame*) — no stack args at all. It checks three
-    //     gates (+0x108 initialised, +0x30 clear, +0xB4 clear — the SAME dialogue-active flag
-    //     GuiConversationActive already names in Odyssey.Dialogue.Spectate.cs), then allocates
-    //     (or reuses) the CSWGuiStore panel at CGuiInGame+0x84. It does NOT read a store id
-    //     anywhere in its own body.
-    //   * ExecuteCommandOpenStore writes the resolved store's bonus markup/markdown ints
-    //     (+0x250/+0x24C — correcting store-sync.md §1.6's own "different resolve chain"
-    //     inference: fresh disasm this pass shows `eax` at the write site IS the SAME
-    //     vtable-cast CSWSStore* GetStoreByGameObjectID already returns, not a separate
-    //     structure) DIRECTLY INTO THE STORE, then calls ShowStoreGui, THEN separately
-    //     allocates a 0x34-byte message (tagged 0x16) and posts it through 0x4AEA40 — a second,
-    //     unrelated step this pass did not chase further (very likely the retail client/server
-    //     message-bus family docs/research/container-sync.md already documents for
-    //     OpenInventory/CloseInventory, not something ShowStoreGui itself needs).
-    //   * The store id that CSWGuiStore::PopulateStore (0x006C0610, §1.2) reads back off
-    //     CSWGuiStore+0x227C is never written by ShowStoreGui or by the VM handler in the
-    //     window this pass read — so OpenStore below writes it directly (the SAME field
-    //     PopulateStore's own disasm names) and calls PopulateStore directly to force the
-    //     refresh, rather than depend on whatever the 0x34-byte message eventually does.
+    // `AddPanel` synchronously invokes the panel's own `OnPanelAdded` vtable override
+    // (docs/research/native-browser-panel.md documents this dispatch for the analogous
+    // CSWGuiSaveLoad panel). `CSWGuiStore::OnPanelAdded 0x006C2170` -- VERIFIED, fresh disasm --
+    // is 3 calls + a tail jump: `InitializeStoreType(this)`, `PopulateStore(this)`, base
+    // `OnPanelAdded 0x40B870(this)`, then an unconditional `jmp ShowBuyGUI 0x6C1A50` (which
+    // itself tail-jumps into `PopulateStoreItemListBox 0x6C1840` at its end). `InitializeStoreType
+    // 0x6C1B50` reads the panel's `+0x2278` -- NOT `+0x227C` -- resolves it through
+    // `GetStoreByGameObjectID 0x4AE7B0` (the exact function already verified, type-checked, fails
+    // safe to 0), reads the resolved store's `+0x256` buy_sell_flag to pick
+    // ShowBuyGUI/ShowSellGUI, both of which tail-jump into `PopulateStoreItemListBox`.
+    // `PopulateStoreItemListBox 0x6C1840` ALSO reads `+0x2278` (not `+0x227C`), calls the SAME
+    // `GetStoreByGameObjectID`, and immediately dereferences the result: `mov ebx, [eax+0x230]`
+    // at `0x6C1872` -- this is the exact crashing instruction. `PopulateStore 0x6C0610`
+    // (separately) reads `+0x227C` and resolves it through `GetCreatureByGameObjectID 0x4AE770`
+    // -- corrected finding, replacing store-sync.md's prior mis-read of that field: `+0x227C`
+    // holds the shopping CREATURE's (the PC's) object id, not the store's -- `PopulateStore`
+    // uses it only to build a description string. `CSWGuiStore::Constructor 0x6C1C00` zeroes
+    // `+0x2270`/`+0x2274` but deliberately leaves `+0x2278`/`+0x227C` untouched -- they are the
+    // caller's job (ShowStoreGui's two stack args), same as `CSWGuiSaveLoad`'s ctor leaving
+    // save-row population to its own caller-independent `PopulateGameList` self-call.
     //
-    // See docs/research/store-sync.md's 2026-08-27 addendum for the full disassembly.
+    // Root cause of the crash, in one sentence: the old `ShowStoreGuiFn` delegate was declared
+    // `this`-only, so the native call pushed ZERO stack args against a callee that reads two and
+    // pops 8 bytes on return (`ret 8`) -- `CGuiInGame::ShowStoreGui` wrote whatever stale bytes
+    // happened to be on the native stack into the fresh panel's `+0x2278`/`+0x227C`, then its own
+    // internal `AddPanel` call synchronously ran `PopulateStoreItemListBox` against that garbage
+    // store id, which `GetStoreByGameObjectID` failed safe (or resolved to garbage) on, producing
+    // the null/bad-pointer deref at `0x6C1872` -- ALL of this happens inside the
+    // `ShowStoreGuiFn(gui)` call itself, before the verb's own old follow-up code (which wrote the
+    // store id to the WRONG field, `+0x227C` instead of `+0x2278`, and called `PopulateStore` a
+    // third time) ever ran. The fix below passes the real store id and player id as ShowStoreGui's
+    // own two arguments -- the exact values the engine's own `ExecuteCommandOpenStore`/click path
+    // would supply -- so `AddPanel`'s internal `OnPanelAdded` populates the item list exactly as
+    // retail does, and the verb's own redundant (and wrongly-targeted) manual field write + extra
+    // PopulateStore call are removed.
+    //
+    // See docs/research/store-sync.md's 2026-08-28 root-cause section for the full disassembly.
 
     /// <summary>CGuiInGame + this = nonzero once the HUD is built. VERIFIED, already relied on
     /// unnamed at this literal offset in Odyssey.PauseReconciliation.cs/Odyssey.Travel.cs; named
@@ -276,42 +299,56 @@ internal static unsafe partial class Odyssey
     /// VERIFIED, docs/research/store-sync.md §1.3 (fresh disasm of HideStoreGui 0x0062E4A0).</summary>
     private const int InGameGuiStoreOffset = 0x84;
 
-    /// <summary>CSWGuiStore + this = the currently-open store's OBJECT ID. VERIFIED, fresh
-    /// disasm of CSWGuiStore::PopulateStore 0x006C0610 (docs/research/store-sync.md §1.2).</summary>
-    private const int StorePanelObjectIdOffset = 0x227C;
+    /// <summary>CSWGuiStore + this = the currently-open store's OBJECT ID, read by
+    /// <c>InitializeStoreType</c> and <c>PopulateStoreItemListBox</c> — the item-list
+    /// population path. VERIFIED, fresh disasm this pass of both. NOT the field
+    /// <c>PopulateStore</c> reads (that is <see cref="StorePanelPcIdOffset"/>) — this codebase's
+    /// own prior pass conflated the two; see the section header above for the correction.
+    /// Written by <c>ShowStoreGui</c> itself (its first stack arg), not by this verb — writing
+    /// it manually after the fact is exactly the bug that caused the crash.</summary>
+    private const int StorePanelObjectIdOffset = 0x2278;
+
+    /// <summary>CSWGuiStore + this = the shopping CREATURE's (the PC's) object id, read by
+    /// <c>PopulateStore</c> (0x006C0610) via <c>GetCreatureByGameObjectID 0x4AE770</c> to build
+    /// a description string — NOT the store's id (this codebase's prior pass's mistaken
+    /// reading). VERIFIED, fresh disasm this pass. Written by <c>ShowStoreGui</c> itself (its
+    /// second stack arg).</summary>
+    private const int StorePanelPcIdOffset = 0x227C;
 
     /// <summary>CSWSStore + this = the session-scoped bonus mark-up/mark-down ints
     /// ExecuteCommandOpenStore's VM handler writes (both clamped [-100,100] there — this call
     /// writes 0/0, matching a bare <c>OpenStore(oStore, oPC)</c> with no bonus args). VERIFIED,
-    /// fresh disasm this pass — see the section header above for the correction to
-    /// store-sync.md §1.6's own inference.</summary>
+    /// fresh disasm — see the section header above for the correction to store-sync.md §1.6's
+    /// own inference.</summary>
     private const int StoreBonusMarkUp = 0x250;
 
     private const int StoreBonusMarkDown = 0x24C;
 
-    /// <summary>CGuiInGame::ShowStoreGui(this) -&gt; void. VERIFIED, fresh disasm this pass
-    /// (0x0062E310): thiscall, no stack parameters read anywhere in the function body. See the
-    /// section header above for the full trace.</summary>
-    private static readonly delegate* unmanaged[Thiscall]<nint, void> ShowStoreGuiFn =
-        (delegate* unmanaged[Thiscall]<nint, void>)0x0062E310;
-
-    /// <summary>CSWGuiStore::PopulateStore(this) -&gt; void. VERIFIED, docs/research/store-sync.md
-    /// §1.2 — reads the panel's own <see cref="StorePanelObjectIdOffset"/>, resolves it through
-    /// the SAME safe, type-checked accessor <see cref="ResolveStoreBase"/> wraps, and refreshes
-    /// the displayed item list.</summary>
-    private static readonly delegate* unmanaged[Thiscall]<nint, void> PopulateStoreFn =
-        (delegate* unmanaged[Thiscall]<nint, void>)0x006C0610;
+    /// <summary>CGuiInGame::ShowStoreGui(this, uint storeObjectId, uint pcObjectId) -&gt; void,
+    /// ret 8. VERIFIED, fresh disasm this pass (0x0062E310) — corrects this codebase's own prior
+    /// pass, which mis-read this as taking no stack args at all. Writes storeObjectId into the
+    /// (possibly freshly constructed) panel's <see cref="StorePanelObjectIdOffset"/> and
+    /// pcObjectId into <see cref="StorePanelPcIdOffset"/>, THEN calls <c>AddPanel</c>, which
+    /// synchronously runs <c>CSWGuiStore::OnPanelAdded</c> — <c>InitializeStoreType</c> ->
+    /// <c>ShowBuyGUI</c>/<c>ShowSellGUI</c> -> <c>PopulateStoreItemListBox</c>, then
+    /// <c>PopulateStore</c> — so by the time this call returns the item list and description are
+    /// already populated exactly as a real click would leave them. See the section header above
+    /// for the full trace.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, uint, void> ShowStoreGuiFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, uint, void>)0x0062E310;
 
     /// <summary>
     /// Opens the store GUI for the local player against <paramref name="store"/> (a base
     /// CSWSStore* — see <see cref="ResolveStoreBase"/> or <see cref="CreatureFinder.FindStoreByTag"/>)
     /// — the C++ entry point <c>ExecuteCommandOpenStore</c>'s own VM handler ultimately reaches
-    /// (<c>ShowStoreGui</c>), called directly here instead of through the VM's own
-    /// argument-popping machinery. See the section header above for the full reasoning.
+    /// (<c>ShowStoreGui</c>), called directly here with the same two arguments the engine's own
+    /// open path supplies, instead of through the VM's own argument-popping machinery. See the
+    /// section header above for the full reasoning, including why the previous (`this`-only)
+    /// call was the root cause of the <c>PopulateStoreItemListBox</c> crash.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    internal static bool OpenStore(nint store, out string reason)
+    internal static bool OpenStore(nint store, uint playerObjectId, out string reason)
     {
         reason = string.Empty;
 
@@ -349,7 +386,14 @@ internal static unsafe partial class Odyssey
         *(int*)(store + StoreBonusMarkUp) = 0;
         *(int*)(store + StoreBonusMarkDown) = 0;
 
-        ShowStoreGuiFn(gui);
+        uint storeObjectId = *(uint*)(store + 0x04); // CSWSObject + this = the object id.
+
+        // The two arguments ARE the fix — see the section header above. ShowStoreGui writes
+        // storeObjectId into the panel's own StorePanelObjectIdOffset and playerObjectId into
+        // StorePanelPcIdOffset itself, then its own internal AddPanel call populates the item
+        // list and description through the exact same OnPanelAdded path a real click uses. No
+        // manual field write or extra PopulateStore call is needed (or correct) after this.
+        ShowStoreGuiFn(gui, storeObjectId, playerObjectId);
 
         nint panel = *(nint*)(gui + InGameGuiStoreOffset);
         if (panel == 0)
@@ -358,10 +402,6 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        uint storeObjectId = *(uint*)(store + 0x04); // CSWSObject + this = the object id.
-        *(uint*)(panel + StorePanelObjectIdOffset) = storeObjectId;
-
-        PopulateStoreFn(panel);
         return true;
     }
 }
