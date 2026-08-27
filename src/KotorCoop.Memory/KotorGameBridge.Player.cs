@@ -398,6 +398,15 @@ public sealed partial class KotorGameBridge
         ("placeable census", BlockPlaceableCount),
         ("ground loot", BlockLootCount),
 
+        // A leftover override would keep telling the plugin the host still wants
+        // effect_sync/trigger_relay/liveness_sync/map_reveal_sync/dialogue_recruit_sync
+        // overridden on behalf of a session that has ended — see
+        // docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap and
+        // SetBehaviourOverrides. Values before mask, same reasoning as the write itself: a
+        // reader must never see a stale value dword paired with a freshly-zeroed mask.
+        ("behaviour override values", BlockBehaviourOverrideValues),
+        ("behaviour override mask", BlockBehaviourOverrideMask),
+
         // LAST, always. See the remarks.
         ("command", BlockCommand),
     ];

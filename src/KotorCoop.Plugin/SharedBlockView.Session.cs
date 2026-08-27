@@ -205,4 +205,15 @@ internal sealed unsafe partial class SharedBlockView
     /// defaults on plugin-side (coop.ini menu_button); this is the diagnostics override.</summary>
     public bool ConnectMenuEnabled => *U32(SharedBlock.OffsetConnectEnable) != 0;
 
+
+    // ---- effective behaviour-override flags --------------------------------------
+
+    /// <summary>Agent-written: bit N set = a host-authoritative comparison overrode key N for
+    /// this session. See SharedBlock.BehaviourOverrides.cs and <see cref="EffectiveBehaviourFlag"/>.</summary>
+    public uint BehaviourOverrideMask => *U32(SharedBlock.OffsetBehaviourOverrideMask);
+
+    /// <summary>Agent-written: the value each overridden key was overridden to, meaningful
+    /// only where the paired bit of <see cref="BehaviourOverrideMask"/> is set.</summary>
+    public uint BehaviourOverrideValues => *U32(SharedBlock.OffsetBehaviourOverrideValues);
+
 }

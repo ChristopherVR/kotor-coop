@@ -73,6 +73,20 @@ public class SessionTeardownTests
         Assert.Equal(0x2118, Offset("mirroring"));
 
     /// <summary>
+    /// The effective-behaviour-override mask/values (docs/research/mod-compatibility.md's
+    /// "Behaviour-flag negotiation" gap): a leftover override would keep telling the plugin
+    /// the disconnected session's host still wants effect_sync/trigger_relay/liveness_sync/
+    /// map_reveal_sync/dialogue_recruit_sync overridden — exactly the class of bug this list
+    /// exists to catch, for a channel that did not exist when the list was first written.
+    /// </summary>
+    [Fact]
+    public void TheBehaviourOverridesAreLowered()
+    {
+        Assert.Equal(0x40C0, Offset("behaviour override mask"));
+        Assert.Equal(0x40C4, Offset("behaviour override values"));
+    }
+
+    /// <summary>
     /// The command is the plugin's "a session is driving this instance", and its FALLING edge
     /// is what runs the plugin's own release. Lowering it before the rest would run that
     /// release against a block still full of the previous session's levels.

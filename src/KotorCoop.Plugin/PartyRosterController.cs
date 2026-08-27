@@ -73,9 +73,12 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// only logged and skipped — docs/research/dialogue-consequences.md §4.2. OFF by default:
     /// <see cref="Odyssey.AddAvailableNpcByTemplate"/>'s own doc comment names the one remaining
     /// open risk (the per-slot template mapping is live-confirmed for only one of nine slots).
-    /// coop.ini <c>dialogue_recruit_sync</c>.
+    /// coop.ini <c>dialogue_recruit_sync</c>, overridable per session by the host — see
+    /// <see cref="EffectiveBehaviourFlag"/>.
     /// </summary>
-    private readonly bool _pokeAvailability = PluginConfig.ReadBool("dialogue_recruit_sync", false);
+    private readonly EffectiveBehaviourFlag _pokeAvailability = new(
+        "dialogue_recruit_sync", SharedBlock.OverrideBitDialogueRecruitSync,
+        PluginConfig.ReadBool("dialogue_recruit_sync", false));
 
     /// <summary>
     /// docs/research/party-reconciliation.md's client-door root cause, and
@@ -383,7 +386,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         // only missing step was acting on a bit the peer has that we do not.
         if ((localAvailable & (1u << addSlot)) == 0)
         {
-            if (!_pokeAvailability)
+            if (!_pokeAvailability.Resolve(block))
             {
                 if ((_unavailableLogged & (1u << addSlot)) == 0)
                 {

@@ -23,14 +23,18 @@ namespace KotorCoop.Session;
 /// Five of the nine host-authoritative keys (<c>effect_sync</c>, <c>trigger_relay</c>,
 /// <c>liveness_sync</c>, <c>map_reveal_sync</c>, <c>dialogue_recruit_sync</c>) are fields here
 /// too — a difference on them is compared, warned and recorded exactly like the other four —
-/// but nothing in <c>KotorCoop.Session</c> currently reads them: those five channels are
-/// gated entirely inside the separate plugin process (<c>PluginConfig</c> and per-controller
-/// reads, e.g. <c>PeerEffectController</c>, <c>TriggerRelayController</c>), which this
-/// negotiation does not yet reach — the same gap <c>ApplyChatOverlayConfig</c>/
-/// <c>PazaakDetectEnabled</c> already bridge for a couple of OTHER settings via
-/// <c>KotorGameBridge</c>'s shared-memory block, but that bridge has no slot for these five
-/// yet. Recorded here so the object is complete and ready for that bridge to consult once it
-/// exists; see mod-compatibility.md for the open follow-up.
+/// but nothing in <c>KotorCoop.Session</c> itself reads them: those five channels are gated
+/// entirely inside the separate plugin process (<c>PluginConfig</c> and per-controller reads,
+/// e.g. <c>PeerEffectController</c>, <c>TriggerRelayController</c>). CLOSED 2026-08-27: the
+/// same idiom <c>ApplyChatOverlayConfig</c>/<c>PazaakDetectEnabled</c> already use to push a
+/// couple of OTHER settings across the process boundary now has a slot for these five too —
+/// <see cref="CoopAgent"/> encodes this record every tick
+/// (<c>BehaviourOverrideEncoding.Encode</c>) and pushes it through
+/// <c>IPlayerBridge.SetBehaviourOverrides</c> whenever it changes, into
+/// <c>SharedBlock.OffsetBehaviourOverrideMask</c>/<c>Values</c>; each of the five plugin
+/// controllers resolves its effective value from that region instead of a construction-time
+/// <c>PluginConfig</c> read (see <c>EffectiveBehaviourFlag</c>). See mod-compatibility.md's
+/// dated follow-up entry.
 /// </summary>
 public sealed record SessionOverrides(
     bool? PartySync = null,

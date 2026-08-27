@@ -653,6 +653,30 @@ public sealed partial class KotorGameBridge
 
     private const int BlockHostPartyRosterObjectIds = 0x3F4C;
 
+    // Effective behaviour-override flags (shared block version 55, region 0x40C0..0x40C8, no
+    // TotalSize growth — the tail after the companion-equipment array at 0x4000..0x40C0 has
+    // 0x40 free bytes). Mirrors SharedBlock.OffsetBehaviourOverride*. See
+    // docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap.
+    private const int BlockBehaviourOverrideMask = 0x40C0;
+    private const int BlockBehaviourOverrideValues = 0x40C4;
+
+    /// <summary>
+    /// Pushes this session's effective behaviour-override bits (see
+    /// <see cref="BehaviourOverrideBits"/>) into the plugin's shared block. Values written
+    /// before mask: a reader that checks the mask first never sees a bit newly set with the
+    /// paired value dword still holding whatever the last session left there.
+    /// </summary>
+    public void SetBehaviourOverrides(uint overrideMask, uint overrideValues)
+    {
+        if (_pluginBlock == 0)
+        {
+            return;
+        }
+
+        _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideValues, overrideValues);
+        _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideMask, overrideMask);
+    }
+
     /// <summary>Diagnostics the plugin publishes back to us.</summary>
     public (uint Frames, uint Phantoms, int LastStatus) ReadPluginState()
     {

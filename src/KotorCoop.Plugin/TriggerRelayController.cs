@@ -49,7 +49,10 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
 
     private const string DefaultPatterns = "k_p*_*";
 
-    private readonly bool _enabled = PluginConfig.ReadBool("trigger_relay", true);
+    /// <summary>coop.ini <c>trigger_relay</c>, overridable per session by the host — see
+    /// <see cref="EffectiveBehaviourFlag"/>.</summary>
+    private readonly EffectiveBehaviourFlag _triggerRelay = new(
+        "trigger_relay", SharedBlock.OverrideBitTriggerRelay, PluginConfig.ReadBool("trigger_relay", true));
     private readonly string[] _patterns = ParsePatterns(PluginConfig.Read("trigger_relay_patterns"));
 
     private readonly uint[] _inside = new uint[SharedBlock.TriggerInsideCapacity];
@@ -117,7 +120,7 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
             return;
         }
 
-        if (!_enabled)
+        if (!_triggerRelay.Resolve(block))
         {
             if (!_offLogged)
             {

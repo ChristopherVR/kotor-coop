@@ -17,13 +17,17 @@ design, a CLIENT additionally **adopts the host's value at runtime** rather than
 its own: `party_sync`, `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`,
 `script_item_sync`, `dialogue_item_sync`, `dialogue_recruit_sync`, `movie_relay`. Four of those
 nine (`party_sync`, `script_item_sync`, `dialogue_item_sync`, `movie_relay`) are live-consulted
-by the pump that runs the channel; the other five are recorded on the adopted-overrides object
-but not yet read by anything (they are gated entirely inside the separate plugin process,
-which this negotiation does not reach yet) — see
-[mod-compatibility.md](research/mod-compatibility.md)'s "Behaviour-flag negotiation" section
-for the full design, the exact wire shape, and that open gap. Nothing here changes what a key
-is READ as locally (`CoopConfig`/`AgentSettings` still describe this install's own coop.ini/
-CLI exactly as before); adoption lives in a separate, session-scoped `SessionOverrides` layer.
+directly by the `KotorCoop.Session` pump that runs the channel; the other five
+(`effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`)
+are gated entirely inside the separate PLUGIN process, so adoption for them crosses that
+process boundary instead — the agent pushes the adopted bits into the plugin's shared block
+every tick they change, and each of the five plugin controllers resolves its effective value
+from there instead of its own construction-time `coop.ini` read. All nine are host-adopted
+end to end as of 2026-08-27. See [mod-compatibility.md](research/mod-compatibility.md)'s
+"Behaviour-flag negotiation" section for the full design and the exact wire shape. Nothing
+here changes what a key is READ as locally (`CoopConfig`/`AgentSettings` still describe this
+install's own coop.ini/CLI exactly as before); adoption lives in a separate, session-scoped
+`SessionOverrides` layer.
 
 Every default below is the CODE's own fallback — what applies if the key is absent from
 `coop.ini` entirely. **The file that actually ships** (`profiles/coop.ini.example`, staged
