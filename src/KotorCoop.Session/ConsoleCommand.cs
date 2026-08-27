@@ -487,6 +487,19 @@ public enum CoopCommandKind
     /// store's tag or object id — required, there is no "nearest store" sweep. Local only.
     /// </summary>
     OpenStore,
+
+    /// <summary>
+    /// <c>partyselect ok</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
+    /// 2026-08-28 addendum). Confirms the native party-selection screen
+    /// (<c>CSWGuiPartySelection</c>) with its current on-screen selection, through the panel's
+    /// own OK/Done handler (<c>ConfirmPartySelection</c>) — the same code path a real click
+    /// reaches, including the same message-box precondition <c>loadgame</c> already needs
+    /// poked on a fresh all-console session. Meant for the HOST, the only side with a real
+    /// unsuppressed copy of the screen (<c>party_select_host_only</c> tears the client's own
+    /// copy down before a player ever sees it). Takes no arguments beyond the literal
+    /// <c>ok</c>. Local only.
+    /// </summary>
+    PartySelectOk,
 }
 
 /// <summary>
@@ -683,6 +696,7 @@ public static partial class ConsoleCommand
         new(["setglobal"], ParseSetGlobal),
         new(["pazaak"], ParsePazaak),
         new(["openstore"], ParseOpenStore),
+        new(["partyselect"], ParsePartySelect),
         new(["cheats"], ParseCheats),
     ];
 

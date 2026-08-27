@@ -40,8 +40,8 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
-| [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | Design → implemented, live-verified both directions, ON by default |
-| [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | RE + design; the movie/roster channels already cover it for free, the announce edge and client-side suppression are the real, unbuilt gaps |
+| [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | ON by default, but a 2026-08-28 live pass found `host_load_readopt` reproducibly loses the client (2/2) on the current build — regression, not root-caused, defaults not yet reverted |
+| [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | Party-select suppression shipped (`party_select_host_only`, default ON); a 2026-08-28 live pass built a host-side confirm verb, live-confirmed the escape-pod scripted chain, and found a 100%-reproducible engine crash (`0x40D386`) blocking the leg past `STUNT_00`, plus a likely always-non-null detection bug in the suppression itself |
 | [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | RE coverage complete; the headline gap (Bastila/Malak duel co-op behaviour) is decided and BUILT as `solo_segment_spectate` (§8), default OFF, NEEDS-LIVE — everything else stays NEEDS-LIVE throughout |
 
 ## Combat

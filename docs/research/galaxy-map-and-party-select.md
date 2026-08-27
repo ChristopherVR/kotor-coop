@@ -753,3 +753,145 @@ Prerequisite: an Ebon Hawk save, or `warp ebo_m12aa` from the console
    `follow_lead=host`, a client's own galaxy-map confirm should be refused with "only the host
    can choose a destination"; under `follow_lead=any`, the client's confirm should proceed
    normally and become an announce the host follows via the existing chain.
+
+## Live pass (2026-08-28): `partyselect ok` built and run against the real escape pod — a
+## new, 100%-reproducible engine crash blocks the leg past `STUNT_00`; a real, pre-existing bug
+## found in the suppression detection itself
+
+Task item 2: build a dev verb to confirm the native party-selection screen with its current
+selection (this doc's own §4 item 3/4 follow-up), then run the real `end_m01ab` escape-pod
+transition end to end. Built `partyselect ok` (`SharedBlock.CheatKindPartySelectOk = 37`,
+`CheatKinds.PartySelectOk = 37`; `src/KotorCoop.Plugin/Odyssey.PartySelect.cs`,
+`CheatController.PartySelect.cs`; console verb wired in `ConsoleCommand.cs`/
+`ConsoleCommand.Cheats.cs`/`CoopCommandDispatcher.cs`; deliberately NOT added to
+`FuncInterpHook.cs`'s Tab-completion table, matching `quittomenu`'s own precedent — a dev-only
+LIVE-TEST PRIMITIVE, blockpoke-reachable via `console 'partyselect ok'`, not meant for a real
+player to type). It resolves `CGuiInGame+0x78` (the same chain and vtable
+`PartySelectSuppressionController` already verifies live), then calls
+`CSWGuiPartySelection::ConfirmPartySelection` (`0x006BEC90`, thiscall, ret 4 — disassembled fresh
+this round with `tools/disasm.py`) directly — the panel's own OK/Done handler, the exact code path
+a real click reaches. `ConfirmPartySelection` itself gates on the SAME `CSWGuiMessageBox+0x64` bit
+0 precondition `loadgame` already needs poked (`session-save.md`'s "message-box precondition
+trap") — disassembly confirmed it resolves the identical `AppManagerPtr -> +4 client -> (a helper
+collapsing +4 internal -> +0x40 gui) -> +0x98 messageBox -> +0x64 bit0` chain and only calls
+`AcceptParty` (`0x006BE560`) when that bit is set — so `ConfirmPartySelect` pokes it first (a
+no-op if already set), the same already-proven-safe trick. 4 test files touched:
+`ConsoleCommandVerbTableCoverageTests.cs` (sample-line coverage), no `SharedBlock`/protocol version
+bump needed beyond the plain cheat-kind number. `dotnet build -warnaserror` (root + plugin
+`-WarnAsError`) and `dotnet test` (2304/2304, +1 from baseline) both clean before going live.
+
+**The verb works and does not crash — called live on the HOST three times across two fresh rig
+sessions (`END_M01AA` at game start, and again after a host-only warp to `tar_m10aa`), every time
+answering `partyselect ok: confirmed (poked the message-box precondition bit first, same as
+loadgame's own workaround)` with no crash and the game still fully responsive afterward.**
+
+**Unexpected, important finding: `CGuiInGame+0x78` reads as a live, vtable-matched
+`CSWGuiPartySelection*` from the very first frame after a fresh save load — in `END_M01AA`, well
+before any known trigger for this screen, on BOTH host and client, continuously, for the whole
+session (43,436 `party-select: client copy suppressed`/`swept away` pairs logged on the client in
+under 4 minutes — roughly one pair per frame, non-stop, never settling).** This is not the
+"engine-forced conversation on END_M01AB arrival" the original playthrough round attributed it to
+— it starts well before that, at the Endar Spire's own opening save point, and it never stops. Two
+readings are possible and this round did not have time to settle which: (a) `CGuiInGame+0x78`
+genuinely holds a persistent, lazily-constructed-once panel object that the retail engine reuses
+via `AddPanel`/`RemovePanel` rather than `new`/`delete` per showing — in which case a raw
+non-null-plus-vtable-match test (what `PartySelectSuppressionController.GetPartySelectionPanel`
+and this round's own `Odyssey.GetPartySelectPanel`/`ConfirmPartySelect` both do) can **never**
+distinguish "on screen" from "constructed but hidden," and the already-shipped suppression feature
+has been tearing down (or attempting to) a non-visible object every frame since it shipped; or (b)
+our own sweep-teardown (`panel+0x44 = (…&~0x300)|0x400`) is not actually destroying the object the
+way `native-browser-panel.md` documents for the different `CSWGuiSaveLoad` class, and what
+`PanelExistsFn` reports as "swept away" is immediately followed by a genuinely fresh reconstruction
+— which would mean something in the base game itself is re-opening this screen every single frame,
+an even stranger finding. Either way, **this means the `party-select: client copy suppressed` log
+line is NOT, by itself, evidence that a REAL party-select trigger fired** — it fires identically
+whether or not anything actually happened, which undercuts this doc's own §4 item 5 test plan (a
+log-line check) as originally written. Flagged here, not root-caused; the next round should read
+`CGuiInGame` construction (does `+0x78` get allocated once at GUI-manager construction, independent
+of `ShowPartySelectionGUI`?) before trusting this detection at all.
+
+**The escape-pod scripted chain itself works exactly as this doc's §1.3/§1.4 traced it, live,
+twice.** Host-only `warp end_m01ab` (landed both players at the identical `50.0,120.0,-0.0`,
+matching prior rounds), `tp 85.29 41.13` (the pod), `useplaceable end_pod` (placeable `0x59`) →
+`dialogue: engine reached StartDialog` (node `-1 -> 0`, a fresh conversation, confirmed twice) →
+the conversation's own single line auto-advances (no `selectreply` needed the second time; the
+first time an explicit `selectreply 0` was needed because a DIFFERENT, unrelated conversation —
+apparently the same always-present `end_m01ab`-entry dialogue prior rounds attributed to a
+"forced conversation" — was already holding the dialogue system and had to be closed first) →
+`cinematic: the module transition has queued 1 movie(s): .\movies\01c.bik` →
+`StartNewModule("STUNT_00", ...)`, confirmed by `where` reading `module STUNT_00` on the host. The
+CLIENT correctly never followed (stayed in `end_m01ab` throughout, per the already-documented
+"never follow into a `stunt*` module" rule) — no crash, no desync on the client side either time.
+**PASS**, live-confirmed, matching every claim §1.3 made from static reading alone.
+
+**`transition_announce_scripted` did NOT fire for this transition, both times** — no `announce:`
+line of any kind in either plugin log across the whole sequence, despite shipping ON by default.
+Reading `PluginHost.Frame.cs`'s own scheduling and the STUNT_00 window's own log
+(`cinematic: the main thread was gone for 16532 ms ... no frame callback ran, so nothing this
+plugin does happened in that window`) explains why: the takeoff movie blocks the main thread for
+the movie's own ~16.5s length, and `move_to_module_pending`'s rising edge apparently lands and
+clears again entirely inside that unobserved window — the announce watch never gets a frame to
+sample it on. **A real, live-confirmed gap in item 1 of this doc's own §4 ranked plan**, specific
+to transitions that queue a blocking movie before the module actually swaps (leg 1's own
+Ebon-Hawk-return shape from §1.3 would hit the identical gap) — not specific to co-op or to
+party-select. Not fixed this round (out of scope — this round's brief was items 2-4 of the escape
+pod checklist, not item 1's announce edge); flagged as a NEW addition to this doc's own §4 item 1
+follow-up list.
+
+**BLOCKING: a new, 100%-reproducible engine crash fires ~11-12 seconds into the module STUNT_00
+hands off to, before any real party-selection screen was observed to open — the escape-pod leg
+remains NOT REACHED, now for a different, more precise reason than "needs a human."** Both live
+attempts (independent fresh rig sessions) followed the identical path: STUNT_00's own cutscene
+completes, hands off into a new module with its own forced dialogue
+(`dialogue: engine reached StartDialog (3 so far, forced=False)`, node `-1 -> 2`), and
+**`FIRST-CHANCE access violation (0xC0000005) at 0x40D386`** fires on the HOST **11.686s and
+11.681s** after that dialogue-node line, respectively — same instruction address, same `esp`
+(`0x1AF9B8`), same image-range stack values (`0x745898 0x745898 0x6FD8BD`) both times. Confirmed
+via `tools/crashlog.ps1` against the real Windows Application log (`Faulting application:
+swkotor.exe ... Exception code: 0xc0000005, Fault offset: 0x0000d386`, twice, matching exactly).
+`0x0040D386` is inside `swkotor.exe`'s own image (base `0x400000`), not this mod's plugin DLL — an
+engine-internal crash, not (as far as this round could tell) triggered by anything `partyselect
+ok` or any other new code in this pass touches (the second reproduction never called `partyselect
+ok` at all, and the crash fired identically). The client survives both times (never follows into
+`STUNT_00`, as expected) and stays healthy throughout. `tools/q.py`/`tools/disasm.py` could not
+name a symbol at this exact address this round (time did not allow deeper RE). **This is the exact
+same "escape-pod leg not reached" open issue the original playthrough logged, now reached one step
+further and pinned to an exact, reproducible crash address and timing** — genuinely new
+information, not a re-confirmation of the old "needs a human for one click" limit, since a human
+would hit this SAME crash regardless of who or what confirms the party-select screen.
+
+**Verdict per sub-step:**
+- `partyselect ok` dev verb: **BUILT, live-verified safe to call** (no crash across 3 calls).
+- Party-select suppression "with the on-screen line": **PASS mechanically** (the line fires), but
+  **its evidentiary value is now in question** — see the always-present-panel finding above; this
+  round could not confirm the suppression is reacting to anything real versus firing unconditionally.
+- Scripted transition announce: **FAIL, live-confirmed gap** — never fires when the transition's
+  own movie blocks the main thread for the whole window.
+- Client follows into the next module: **NOT REACHED** — blocked by the new `0x40D386` crash before
+  either side gets far enough to test it.
+
+### Files changed
+* `src/KotorCoop.Plugin/Odyssey.PartySelect.cs` (new), `CheatController.PartySelect.cs` (new),
+  `CheatController.cs` (switch case).
+* `src/KotorCoop.Plugin/SharedBlock.cs` (`CheatKindPartySelectOk = 37`).
+* `src/KotorCoop.Memory/IGameBridge.cs` (`CheatKinds.PartySelectOk = 37`).
+* `src/KotorCoop.Session/ConsoleCommand.cs`, `ConsoleCommand.Cheats.cs` (verb + parser).
+* `src/KotorCoop.Agent/CoopCommandDispatcher.cs` (dispatch entry).
+* `docs/CONSOLE.md` (new row); `tests/KotorCoop.Tests/ConsoleCommandVerbTableCoverageTests.cs`
+  (sample line).
+
+### Open issues, ranked
+1. **The `0x40D386` access violation** — blocks all further live progress on this specific
+   content path. Needs a dedicated RE pass (symbolicate the address, find its caller) before the
+   escape-pod leg can be reached at all, co-op or not — this may well be a latent vanilla-engine
+   fragility this exact sequence had simply never been exercised against before (the original
+   playthrough round never got this far either).
+2. **`CGuiInGame+0x78`'s always-non-null behaviour** — undermines confidence in
+   `party_select_host_only`'s own detection and this round's `partyselect ok` alike. Needs reading
+   `CGuiInGame`'s constructor / `ShowPartySelectionGUI`'s own allocation to settle whether the field
+   is genuinely reused, and if so, what the RIGHT liveness test is (visibility bit? registered-panel
+   check against a specific instance rather than a bare vtable match?).
+3. **`transition_announce_scripted` misses movie-blocked transitions** — add to this doc's §4
+   item 1 as a known gap: the announce watch needs to run BEFORE the movie starts blocking frames,
+   or read the edge from a source that survives the blocked window, not "the next frame that gets
+   to run."

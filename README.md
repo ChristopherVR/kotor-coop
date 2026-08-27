@@ -21,7 +21,7 @@ attaches from outside with `OpenProcess`.
 | World state — containers, items, journal | Live-verified | [shared-state-audit.md](docs/research/shared-state-audit.md) |
 | Dialogue — spectate, late-join, skip-fix | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
 | Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Session lifecycle — menu, connect, save/load rejoin | Live-verified | [session-save.md](docs/research/session-save.md) |
+| Session lifecycle — menu, connect, save/load rejoin | Live-verified; `host_load_readopt` has a known live regression (2026-08-28) | [session-save.md](docs/research/session-save.md) |
 | Companion follow-AI | Live-verified, one known stall left | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
@@ -231,6 +231,12 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Creature liveness reconciliation** (a body alive on one screen, dead on the other) ships
   off by default. The correction mechanism itself works; a separate freshness theory
   remains unconfirmed either way. See [creature-liveness.md](docs/research/creature-liveness.md).
+- **Host save-reload re-adopt (`host_load_readopt`) can lose or hang the client.** Shipped ON by
+  default after a clean 2026-08-24 live pass; a 2026-08-28 re-test on a later build reproduced a
+  failure twice (once the client's own game process disappeared mid-rejoin, once it hung
+  indefinitely) against the exact same recipe that passed cleanly before. Not yet root-caused or
+  reverted — see [session-save.md](docs/research/session-save.md)'s 2026-08-28 entry before relying
+  on this feature.
 - **Chain mode serialises proxies, it doesn't merge them.** A second `dinput8` proxy after
   ours works because ours forwards to it; a proxy that always loads the system DLL itself
   must be the last proxy in `dinput8.chain`. Plain "load me" DLLs (`.asi`) go anywhere.
