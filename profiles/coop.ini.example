@@ -524,11 +524,11 @@ companion_local_combat_range=10
 # docs/research/companion-state-sync.md. Both engines already grant kill XP to every ACTIVE
 # party member independently (CSWPartyTable::DistributeExperience hands the full amount to
 # each member in the active-slot array, not just the PC - docs/research/progression-sync.md
-# section 2), so this channel is expected to matter mainly for script-granted XP aimed at a
-# specific companion; kill XP should already agree without it. OFF by default, NEEDS-LIVE:
-# the read/write mechanism is the identical stats+0x068 field poke the PC's own progression
-# channel already ships with, but nothing here has been observed against the real game yet.
-companion_xp_sync=0
+# section 2), so this channel matters mainly for script-granted XP aimed at a specific
+# companion; kill XP already agrees without it. Live-verified 2026-08-27, default ON:
+# a host-side and a client-side script-XP grant each converged to the higher value within
+# one heavy-pump cycle - docs/research/companion-state-sync.md section 6.
+companion_xp_sync=1
 
 # When companion_local_combat releases a companion to a CLIENT's own engine AI, that AI
 # attacks with whatever gear the CLIENT's copy of the body happens to be wearing - which can

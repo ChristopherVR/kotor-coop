@@ -35,7 +35,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [transition-window-races.md](transition-window-races.md) | Four crash/desync races found by warping a live pair | Root-caused, fixed; established the project's four safe-write patterns |
-| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default, NEEDS-LIVE |
+| [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default; §12 (2026-08-27) live-verified the de-dup gate on a real door crossing, the galaxy-map/escape-pod legs still NEEDS-LIVE |
 | [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`) |
 | [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
@@ -79,9 +79,9 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [client-control-lock.md](client-control-lock.md) | Pinning a client to its own PC, never a shared companion | RE reference; implemented |
 | [control-return.md](control-return.md) | Regression: a client locked onto a companion at connect | Root-caused, fixed, live-verified |
 | [companion-combat-credit-plan.md](companion-combat-credit-plan.md) | Live-test plan: does a released companion's swing land as credited damage? | Run; decisive result on the solo-mode hypothesis; superseded in practice by later party-reconciliation.md rounds |
-| [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Research/design; several policy and GUI-repaint questions remain open, NEEDS-LIVE |
-| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Built, both flags OFF, NEEDS-LIVE |
-| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Implemented, unit-tested; `party_pool_sync` OFF by default, NEEDS-LIVE |
+| [progression-sync.md](progression-sync.md) | Sharing party gold and character XP/level | Gold convergence live-verified 2026-08-27, ON by default; GUI-repaint/policy questions remain open |
+| [companion-state-sync.md](companion-state-sync.md) | Per-companion experience and equipment (roadmap items 11/12) | Live-verified 2026-08-27: `companion_xp_sync` PASS, ON by default; `companion_gear_sync` FAILED (real bug — equip lands on the player, not the companion), stays OFF |
+| [party-pool-sync.md](party-pool-sync.md) | Syncing the shared party item pool (`CSWPartyTable+0x118`) | Live-verified 2026-08-27: one real double-apply bug found and fixed, a second found and open; `party_pool_sync` stays OFF |
 
 ## World state
 
@@ -132,7 +132,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories |
+| [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories; behaviour-flag negotiation live-verified 2026-08-27 (core mechanism PASS) |
 
 ## Crashes
 

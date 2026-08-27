@@ -363,11 +363,11 @@ public sealed record CoopConfig
 
     /// <summary>
     /// Whether each active companion's experience is shared like the PC's own —
-    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. OFF by default,
-    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_xp_sync = 1</c> turns
-    /// it on.
+    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. Live-verified
+    /// 2026-08-27, default ON (docs/research/companion-state-sync.md §6). <c>companion_xp_sync
+    /// = 0</c> turns it off.
     /// </summary>
-    public bool CompanionXpSync { get; init; }
+    public bool CompanionXpSync { get; init; } = true;
 
     /// <summary>
     /// Whether a client dresses its own copy of a host-driven companion in that companion's

@@ -484,3 +484,59 @@ Two `tools/demo.ps1` instances, both loaded into the same save/module.
 Watch for in the plugin log: `party pool: added/removed '<resref>'...` lines from
 `CheatController.PartyPool.cs`, and any `party pool: ... failed — <LastPartyPoolNote>` refusal,
 which names exactly which of §1's guards fired.
+
+## 7. Live-verified 2026-08-27 — one bug fixed, one open; stays OFF
+
+Two-instance rig (`tools/demo.ps1`), `party_pool_sync=1` on both `coop.ini`s. Two new console
+verbs, `pooladd <resref> [stack]`/`poolremove <resref> [stack]`, were built to reach this test
+at all — they submit through the exact same `CheatKinds.PartyPoolAdd`/`PartyPoolRemove`
+channel `DrainAutomaticPartyPool` already used for the automatic apply half, just from a human
+console line instead — see `docs/CONSOLE.md`.
+
+**Baseline read (test 1): PASS.** On connect, both instances' pools independently reconciled
+to the save's own pre-existing contents identically (`removed 'g_i_adrnaline003' x1`,
+`removed 'g_i_medeqpmnt01' x2`, `removed 'g_w_blstrrfl001' x1` — a leftover from earlier
+manual testing on this save, not a fresh-pool case, but both sides converging to the SAME
+result either way is the property this test checks).
+
+**Host deposits, client reconciles (test 2): a real bug, found and fixed.** `pooladd
+g_w_thermldet01 3` on the host: the client's plugin log showed the deposit applied **twice**
+(`party pool: added 'g_w_thermldet01' x3` at two distinct timestamps ~18 s apart) — a real
+total left double what was actually deposited, not a cosmetic log duplicate. Root cause and
+fix: see the `PartyPoolPump.cs` commit message (an order-of-operations bug in the pump's own
+landed-apply/local-detection interaction — a just-landed apply was misdetected as a fresh
+local action on the very tick it landed, and republished). **Re-tested after the fix**: a
+fresh `pooladd g_w_thermldet01 3` on the host produced exactly ONE `added x3` line on the
+client, confirmed by grepping the full plugin log across a 30 s window (previously two).
+
+**Client deposits, host reconciles (test 3): a SECOND, separate bug, NOT fixed.** Symmetric
+test, `pooladd g_i_medeqpmnt01 4` on the client (after the fix above): the HOST's own log
+showed the deposit applied twice, ~3.3 s apart, immediately after the client's own single,
+correct apply completed. This is a DIFFERENT mechanism from test 2's bug — my fix specifically
+protects a receiving instance's OWN just-landed apply from self-detection, but the depositing
+side (the instance that originates a change via a direct console cheat, bypassing
+`PartyPoolPump`'s own queue entirely) is not covered by that fix, and re-tracing the logic did
+not find an obvious same-tick ordering error there. The leading (**unconfirmed**) hypothesis
+is `KotorGameBridge.PartyPool.cs`'s own `PartyPoolScanIntervalMs = 1000` throttled scan cache
+interacting with `PartyPoolPump`'s per-tick landed/pending tracking — a `TryScanPartyPoolTotals`
+call can return a stale, up-to-1s-old snapshot rather than the true current engine state, which
+the pump's tick-by-tick bookkeeping does not account for. Not fixed this round: the exact
+interaction was not pinned down with confidence, and shipping a second blind fix under the
+same time pressure that produced the first one felt like the wrong trade. Both applies WERE
+bounded (exactly two, not runaway) in every observed case — this is a double-count, not an
+infinite-growth bug.
+
+**Verdict: `party_pool_sync` stays OFF.** One genuine bug was found and fixed live (test 2's
+scenario is now clean); a second, distinct bug remains open (test 3's scenario still
+double-counts). Tests 4-7 of the plan above (client withdraws, stack aggregation, credit
+chit/Pazaak card, reconnect) were not reached this round — the double-count bug takes priority
+over exercising further scenarios on top of it.
+
+**Follow-up work, for whoever picks this back up**: (1) pin down and fix the depositing-side
+double-apply (likely the scan-cache interaction above); (2) `PartyPoolPump` has no direct unit
+test coverage at all (confirmed while investigating this round — every existing party-pool
+test either exercises `PartyPoolDiffRule` in isolation or a real loopback session, neither of
+which drives `PartyPoolPump.Pump()` itself tick-by-tick), so neither bug found this round would
+have been caught by `dotnet test`; a regression test using a fake `IGameBridge`/`ICoopSession`
+through `CoopAgent.PumpOnce()` (the same shape `CompanionStateSyncTests.cs` already uses) is
+worth adding once both bugs are closed, so a third round doesn't rediscover them by hand again.

@@ -68,9 +68,9 @@ actually runs with.
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
-| `companion_xp_sync` | OFF (NEEDS-LIVE) | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_gear_sync` | OFF (NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
-| `party_pool_sync` | OFF | sync the shared party item pool (`CSWPartyTable+0x118`) both ways (NEEDS-LIVE) | [party-pool-sync.md](research/party-pool-sync.md) |
+| `companion_xp_sync` | ON | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_gear_sync` | OFF (live-verified FAILURE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — live pass found the apply lands on the PLAYER, not the companion; stays off until fixed | [companion-state-sync.md](research/companion-state-sync.md) |
+| `party_pool_sync` | OFF (live-verified: one bug fixed, one remains) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
@@ -127,7 +127,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_follow_refresh_final_node` | OFF | follow-AI fix candidate, live-refuted (no effect) | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_extend_final_node` | OFF | follow-AI fix candidate, unconfirmed live | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
-| `companion_gear_sync` | OFF (NEEDS-LIVE) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_gear_sync` | OFF (live-verified FAILURE — see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |
 | `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_roster_sync` | ON | mirror the party roster across instances | [party-reconciliation.md](research/party-reconciliation.md) |

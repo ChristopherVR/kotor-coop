@@ -31,8 +31,9 @@ attaches from outside with `OpenProcess`.
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Companion experience and equipment (`companion_xp_sync`, `companion_gear_sync`) | Built, off until live-verified | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Built, off until live-verified | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Companion equipment (`companion_gear_sync`) | Live-verified FAILURE, stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed, one open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
@@ -205,12 +206,13 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than
   getting a separate copy.
-- **Companion experience and equipment sync ship off by default.** `companion_xp_sync` shares
-  each active companion's XP the same way the party's shared PC XP already is;
-  `companion_gear_sync` dresses a companion released under `companion_local_combat` in its
-  real, current gear instead of a client's stale copy. Both reuse mechanisms already
-  live-verified for the PC (the `stats+0x068` field poke, `Odyssey.EquipItemFromTemplate`),
-  but neither channel itself has been run against the live game yet. See
+- **Companion experience sync is live-verified and on by default.** `companion_xp_sync`
+  shares each active companion's XP the same way the party's shared PC XP already is; a
+  host-side and a client-side script-XP grant each converged to the higher value live.
+  **Companion equipment sync (`companion_gear_sync`) stays off — a real bug.** Live-verified
+  2026-08-27: re-equipping a companion lands the item on the local PLAYER instead, not the
+  companion — `Odyssey.EquipItemFromTemplate`'s caller-object redirect, proven for a phantom,
+  does not appear to hold for a live AI-active party member. See
   [companion-state-sync.md](docs/research/companion-state-sync.md).
 - **Dialogue recruitment sync is live-confirmed for two companions** (`dialogue_recruit_sync`,
   on in the shipped `coop.ini`); a fix for a stale pre-recruit body (companions who are also
@@ -235,17 +237,21 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   forwarded damage still lands, and the damage wire names only the last attacker. In a swarm
   the fight you see and the damage you take come from two mechanisms. See
   [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool syncs, but is off by default and unproven live.** A channel
-  now exists (`party_pool_sync`, off by default) that shares an add/remove to the pool both
-  ways; every offset and engine call it uses is verified against the disassembly, but none of
-  it has been watched land on a running game yet. Until it is turned on and live-verified,
-  gear moved into the party pool on one instance still exists only there. Merchants, the
+- **The party's shared item pool syncs, but a live-verified bug keeps it off by default.**
+  A channel exists (`party_pool_sync`, off by default) that shares an add/remove to the pool
+  both ways. Live-verified 2026-08-27: one real double-apply bug was found and fixed (a
+  receiving instance could misdetect its own just-landed apply as a fresh local action); a
+  second, distinct double-apply on the depositing side was found and is NOT yet fixed. Until
+  that second bug is closed, gear moved into the party pool can land doubled. Merchants, the
   galaxy map and the pre-departure party-select screen are plain single-player UI on each
   instance either way. See [party-pool-sync.md](docs/research/party-pool-sync.md) and
   [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
-- **`coop.ini` is not negotiated.** Game content is fingerprinted per channel at join, but
-  each side runs its own behaviour flags; keep the two files the same. The host's tick rate
-  is adopted automatically.
+- **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
+  compared at join; a difference always warns on both screens (`W_CFG`), and nine
+  host-authoritative keys (`party_sync`, `effect_sync`, `script_item_sync` and six more) are
+  additionally adopted by a disagreeing client at runtime. Live-verified 2026-08-27 — see
+  [mod-compatibility.md](docs/research/mod-compatibility.md)'s "Behaviour-flag negotiation"
+  section. The host's tick rate is adopted automatically, as before.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial
   script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)). Enemies
   target purely by proximity; alignment is per-player by design, no sync channel needed.
