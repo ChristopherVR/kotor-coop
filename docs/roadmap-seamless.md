@@ -1,52 +1,83 @@
 # Roadmap: the remainder of "seamless"
 
-Written 2026-08-21 from a five-domain audit of the codebase and research trail (combat,
-shared world, travel/lifecycle, dialogue/cinematics/minigames, reliability/tooling). Each
-item below was checked against the code, not just the docs — two audit claims were dropped
-because the code had moved past the doc (transition movies are wired and live-verified,
-`b0841bf`; the host's ghost-player wipe suppression is fixed, `CoopHost.cs` "has ever
-published an avatar"). Status words: **Verified-live** / **Implemented-untested** /
-**Partial** / **Missing**.
+Rewritten 2026-08-27 from a six-domain, code-verified audit (combat/companions, shared
+world, session/travel/reliability, dialogue/cinematics/minigames, protocol/tests/quality,
+player experience) run against the refactored tree. The 2026-08-21 version of this file was
+snapshotted before same-day fixes landed and had drifted badly: ten of its rows described
+work that was already done. Every row below was checked against the code, not the docs.
 
-Rig rule: there is ONE live two-instance rig. Items marked 🎮 need it and run one at a time;
-everything else builds and unit-tests in parallel.
+Status words: **Verified-live** / **Built (NEEDS-LIVE)** / **Partial** / **Missing** /
+**Decision needed**.
 
-## Tier 1 — blocks "seamless" today
+Rig rule: there is ONE live two-instance rig. Items marked 🎮 need it and run one at a
+time; everything else builds and unit-tests in parallel.
+
+## Closed since the 2026-08-21 version (for the record)
+
+| Old # | Item | Where it closed |
+|---|---|---|
+| 1 | `local_combat` real hits, lethality, client kill, natural aggro, immediate trigger | Verified-live round 55, `LocalFightCandidateRule.cs` |
+| 2 | Client container/corpse loot never reached the host | `1324f93` 2026-08-21, `Pumps/LootPump.cs:126-144` is symmetric |
+| 3 | Effect sync | **9/9** kinds live-verified both directions (`effect-sync.md` §9, 2026-08-24) |
+| 4 | Mirrored companions can't swing on a client | `companion_local_combat` live-verified with two companions 2026-08-24; ON in the shipped ini |
+| 5 | Logs grow without bound | `LogRotation.cs` (startup) + mid-session rotation (2026-08-27) |
+| 6 | No agent liveness / no in-game failure messages | `AgentLiveness*.cs`, `PortInUseException`, `SessionManager.TimeoutConnect` |
+| 7 | HUD hourglass can't unpause | `PauseButtonHook.cs` + `PauseSanityPatch.cs` |
+| 9 | `PartyPresenceController` lacked `IsPartyRosterFrozen` guard | `a7b8f0d`, `PartyFreezeRule` |
+| 11 | Materialised-loot dedup reset + reconnect resync | `MaterialisedLootHistory.cs` (NEEDS-LIVE) |
+| 13 | Client door refusal / host does not follow | `party_together_fix`, `follow_lead=any`, verified-live |
+| 14 | Mid-session save/load | Phase 1 + phase 2 built; `client_load_rejoin`/`host_load_readopt` ON, live-confirmed 2026-08-24 (`session-save.md`) |
+| 15 | Container loot has no version tripwire | `680c866`, `ContainerLootStore` digest + `LootSyncRequestPacket` (NEEDS-LIVE) |
+| 16 | Packaging + CI | `.github/workflows/ci.yml`, `release.yml`, `tools/package.ps1` |
+| 17 | Reliable*Sender tests | `ReliableSenderTests.cs` covers all five senders |
+| 18 | Persistent connection indicator | `ConnectionIndicatorController` (2026-08-27, NEEDS-LIVE) — was a fading toast before |
+
+## Tier 1 — what a normal two-player playthrough still hits
 
 | # | Item | Status | Where |
 |---|---|---|---|
-| 1 | 🎮 **`local_combat`: PROVEN, live, real lethality, an outright kill, natural aggro, AND an immediate client-side trigger — all confirmed (round 55).** Round 52 proved the mechanism lands real hits; round 53 proved real lethality; round 54 proved a client can land the killing blow, live-root-causing a transient `[W_SAVE]` false alarm along the way, but left natural aggro genuinely open. **Round 55 closed both remaining items.** Host natural aggro: settled decisively, no plugin involvement needed — at true melee range against the same `tar_m10aa` Black Vulkar pool, SEVEN creatures independently aggroed the host through their own unmodified AI within 20 seconds (`12/12` HP to `1/12`), and the same swarm aggroed a client's phantom the same way; the earlier "never notices" reading across every prior round was a line-of-sight/room-geometry gap, not a plugin effect — the identical distance metric separated zero aggro from seven simultaneous aggros almost entirely on whether the spot had a clear line of sight. Client-side trigger: rebuilt around a new pure rule, `LocalFightCandidateRule` (hostile + GIT-identical + real script + in `local_combat_engage_range`, default 11 — the blueprint's own stock `PerceptionRange` — OR the host's own damage report naming this creature as currently hitting the phantom, via the pre-existing `block.IncomingDamageAttacker` channel, no protocol change needed), scored for every eligible candidate once per frame by `EnemyPresenceController.SelectImmediateCandidate` rather than "whichever slot the census enumerated first" — immediate hand-off verified live (armed in the same frame the trigger condition became true, and the very next candidate armed in the same frame a freed slot reopened, not after any further wait), against the identical seven-Vulkar swarm, with two real ordered kills and every other nearby hostile still landing real forwarded hits throughout (no invulnerability with several enemies engaged at once). 25s timeout retained, now purely a fallback ceiling on one fight's own length. | Verified-live | `PhantomHitHook.cs`, `EnemyPresenceController.cs`, `LocalFightCandidateRule.cs`, `IncomingDamageController.cs`, `Odyssey.cs`, `CoopConfig.cs`, `CoopCommandDispatcher.cs`, `WorldDigest.cs`, `SaveIdentitySettle.cs`, `CoopClient.cs`, `CoopHost.cs`; `shared-state-audit.md` §2 round 55 |
-| 2 | **Client container/corpse loot never reaches the host.** `PumpContainerLoot` only publishes removals when `IsEnemyAuthority`; a client emptying a chest leaves the host's copy full — duplication. | Partial (bug) | `CoopAgent.cs:1666-1688` |
-| 3 | 🎮 **RESOLVED 2026-08-22 for six of nine kinds.** `PhantomEffectHook` hooks the engine's generic effect dispatcher (`OnEffectApplied`, not a second per-type detour) and forwards the whole allowlist. Live-verified with the new `applyeffect` staging verb: stun, slow, frightened, choke, forcepush and whirlwind all captured, forwarded and applied on the receiving player's real character, in BOTH directions, with correct duration/magnitude round-tripping (a non-default 3000ms request came back as 3000ms, not the hook's 6000ms fallback) and no regression in `PhantomHitHook`'s damage forwarding. Knockdown/Paralyze/Sleep are still captured but not replayed (unverified `EffectComplex` signature; three `OnApplySetState` sub-codes still unmatched to an English name — see `effect-sync.md` §3-4) and correctly refuse rather than guess. `coop.ini effect_sync=1` by default now. | Verified-live (6/9 kinds) | `PhantomEffectHook.cs`, `PeerEffectController.cs`, `OdysseyEffects.cs`, `CheatController.cs` (`applyeffect`), `docs/research/effect-sync.md` |
-| 4 | **Mirrored companions cannot swing on a client** (action queue cleared every pass); only the host's companions fight. Built 2026-08-21: `CompanionLocalFightRule` releases the ONE companion standing within `companion_local_combat_range` of BOTH this player and the enemy `local_combat` (item 1) is already fighting locally, to its own engine AI — gated on the flag, the roster freeze, and the triple-proximity check; `PartyPresenceController` wires the release/reclaim edges, restoring the host-authoritative health mirror on reclaim. `PeerDamageController`'s existing roster-wide credit set needed no change for a released companion's hits to forward. Design question (whose companions fight, against what, and why the gate is this tight) answered in `docs/research/party-reconciliation.md`'s dated 2026-08-21 entry. `coop.ini companion_local_combat=0` (OFF by default) — unit-tested only, no live pass yet. | Implemented-untested | `CompanionLocalFightRule.cs`, `PartyPresenceController.cs`, `docs/research/party-reconciliation.md` |
-| 5 | **Logs grow without bound** (170 MB, 158 restarts concatenated) and the per-second combat diag line is unthrottled. | Bug | `PluginHost.cs:1112-1144` |
-| 6 | **No agent liveness check.** Agent death = phantoms frozen forever, silently. No in-game message for port-in-use, host-unreachable, or agent-failed-to-start. | Missing | `SharedBlock.cs`, `AgentLauncher.cs`, `UdpChannel.cs:48`, `SessionManager.cs` |
+| 1 | **Party shared-loot pool (`pt_item_repo`, `CSWPartyTable+0x118`) is two unrelated pools.** Gear stashed "in the party" on one instance never exists on the other. Offsets known, no channel. | Missing | new `PartyLootController` + packet; `Odyssey.Party.cs` |
+| 2 | **Items granted by scripts outside dialogue** (OnEnter, OnDeath, cutscene, heartbeat — most quest items) reach only the engine that ran the script. `script_item_sync` pump built 2026-08-27, OFF until live-verified. | Built (NEEDS-LIVE) 🎮 | `Pumps/ScriptItemGrantPump.cs`, `ScriptItemGrantRule` |
+| 3 | 🎮 **Progression never live-verified** against a real vendor purchase (gold ledger) or a cross-side kill (XP max-merge). Code is complete. | Built (NEEDS-LIVE) | `Pumps/PartyPump.cs:159-282` |
+| 4 | 🎮 **Container-loot race**: two clicks on the same chest within one RTT can both hand out loot before either removal lands (`ContainerUseRule` is eventually consistent). Never exercised. | Partial | `Pumps/WorldStatePump.cs:24-52`, `ContainerUseRule.cs` |
+| 5 | **A peer at the main menu / load screen looked like a frozen statue forever.** `FlagAway` built 2026-08-27: agent publishes Away after sustained read failure, peer parks the phantom and toasts. Plugin-side hide is NEEDS-LIVE. | Built (NEEDS-LIVE) 🎮 | `CoopAgent.cs`, `AwayRule`, `PhantomController*.cs` |
+| 6 | **Protocol-version mismatch used to be silence** (the 15 s "no reply" timeout). Now a typed `E_PROTO` Reject both ways (2026-08-27). | Built | `CoopHost.cs`, `CoopClient.cs`, `PacketCodec.PeekTypeAnyVersion` |
+| 7 | **`coop.ini` divergence between peers is unchecked.** Every behaviour flag (`local_combat`, `party_fast_pump`, the load-rejoin gates, `follow_lead`, interpolation) runs from local disk with no negotiation or warning, unlike game content which is fingerprinted per channel. Tick rate is now adopted from the host's Welcome (2026-08-27). | Partial | `CoopConfig.cs`, `Packets/SessionPackets.cs`, `ContentCompatibility.cs` |
+| 8 | **Fog-of-war reveal** (`map_reveal_sync`) — built against the statically verified `SetWorldPointExplored`, OFF, never run. | Built (NEEDS-LIVE) 🎮 | `MapRevealController.cs`, `MapRevealRule.cs` |
+| 9 | **Pazaak is invisible to the mod** (GUI panel, not `GetMiniGame`). `pazaak_detect` read built 2026-08-27, OFF until live-verified; "partner is in a minigame — waiting" HUD line built. Swoop/turret park-and-hide unchanged; co-visible swoop never observed. | Built (NEEDS-LIVE) 🎮 | `MinigameController.cs`, `MinigameNoticeRule` |
+| 10 | **Companion follow-AI last-waypoint stall** — two fix candidates (`party_follow_refresh_final_node`, `party_follow_extend_final_node`), both OFF, A/B inconclusive. Now documented in `coop.ini.example`. | Partial 🎮 | `PartyFollowController.cs` |
+| 11 | 🎮 **Companion released under `companion_local_combat` fights with the client's stale copy of its gear** — no equipment channel for companions. Unmeasured. | Missing | `PartyPresenceController.cs`, `Odyssey.Equipment.cs` |
+| 12 | **Companion XP** is outside the progression channel (only the local PC's `CSWSCreatureStats+0x068`). | Missing | `KotorGameBridge.Party.cs:154-186` |
+| 13 | **Mid-dialogue partner transition**: whether the spectator's copy of the conversation is left orphaned is NEEDS-LIVE. | Partial 🎮 | `DialogueSpectateController.cs`, `Pumps/TransitionPump*.cs` |
 
-## Tier 2 — real gaps a player hits in a normal playthrough
-
-| # | Item | Status | Where |
-|---|---|---|---|
-| 7 | 🎮 HUD hourglass pauses but cannot unpause (second click no-ops, even locally). | Bug | `PauseKeyController.cs`; audit §6 |
-| 8 | 🎮 Minigames (swoop, turret, Pazaak) have zero handling; `CSWCModule::GetMiniGame` (0x00641980) is never read. Other player's experience unmeasured. | Missing | new `MinigameController`, reuse `SpectateController` |
-| 9 | `PartyPresenceController` has no `IsPartyRosterFrozen` guard (roster controller does) — presence mirroring chases companions the engine scripted away. | Partial | `PartyPresenceController.cs` |
-| 10 | 🎮 Dialogue consequences (item/alignment grants on a reward node) reach only the owner. XP and journal already merge; alignment is per-character and correctly diverges. Item grants and recruitment-availability are now built (2026-08-21, see the "Shipped" section of [dialogue-consequences.md](research/dialogue-consequences.md)) — item grants diff-detect and give through the existing giveloot cheat channel (`dialogue_item_sync`, on by default); recruitment pokes the party-table availability flag directly (`dialogue_recruit_sync`, OFF by default — the flag-alone-resolves-a-template question is NEEDS-LIVE). No part of either path has been run against the real game yet. | Implemented-untested | `DialogueGrantSender.cs`, `CoopHost.cs`/`CoopClient.cs`/`CoopAgent.cs`, `CheatController.cs`, `PartyRosterController.cs`, `Odyssey.cs` |
-| 11 | Materialised-loot: dedup set not reset on module change (fixed 2026-08-21). Resync for a peer that reconnects after an op retired: built 2026-08-21 — a bounded per-module history (`MaterialisedLootHistory`) replayed to a (re)joining peer through the same reliable sender, from the same `HandleHello` hook container loot's resync already uses; the client's existing dedup makes a re-offer to a peer that already has it a no-op. No protocol change. NOT live-verified — code-level fix + loopback-socket tests only, not run against the two-instance rig. | Implemented-untested | `MaterialisedLootHistory.cs`, `CoopHost.cs` (`PublishMaterialisedLoot`/`PublishEnemies`/`ResyncMaterialisedLoot`), `enemy-materialisation.md` §6 |
-| 12 | 🎮 Progression never live-verified against a real shop (gold ledger) or cross-side kill (XP max). | Implemented-untested | `CoopAgent.cs:815-909` |
-| 13 | 🎮 **RESOLVED 2026-08-22, lead-swap built the same day.** The blocker found 2026-08-21 was root-caused and fixed: `CSWParty` (the client-side struct `CSWParty::IsPartyTogether` actually reads, distinct from `CSWPartyTable`) can hold a stale, higher member count after a roster reconciliation remove, refusing every client door crossing regardless of this item's own code. `party_together_fix` (new, default ON) clamps it down whenever it diverges — confirmed live on every module load and roster pass. With that fixed, `client_door_refusal`'s own decisive check finally ran: the client crossed `end_door10` cleanly with the refusal off (then was pulled back by THIS item's own pre-existing "host does not follow" logic), and with the refusal on, `TryClearTransitionPending` was confirmed to genuinely stop the transition. **The "host does not follow" asymmetry itself is now closed**: `follow_lead` (coop.ini, default `any`) lets EITHER side's committed crossing become an announce the OTHER follows — `LeadFollowRule` gates the host's own follow on the crossing being eligible (`follow_lead=any`) and safe (the host not itself mid-transition, in dialogue, or in real combat), and `ClientDoorRefusalReason.HostBusy` refuses a client's lead only while the host is genuinely unsafe to interrupt, not as a standing rule. Live-verified end to end: client leads `END_M01AA`→`END_M01AB` through `end_door10`, host follows within 56 ms of the announce, both arrive cleanly (identical phantom positions, no pull-back, no crash), and the pre-existing host-leads/client-follows path re-verified unmodified (786 ms, plugin-initiated regression run). The `HostBusy` reason's live combination (refused specifically because the host is fighting or in dialogue, not just because `follow_lead=host`) is unit-tested exhaustively but NEEDS-LIVE — see `docs/research/transition-smoothness.md` §10.5/§10.7 for what was and was not caught live. | Verified-live | `PartyRosterController.cs` (`SyncClientPartyTogetherState`), `Odyssey.cs` (`TryClampClientPartyCount`), `CoopAgent.cs` (`PumpTravel`, `TryFollowAnnouncedTransition`), `LeadFollowRule.cs`, `ClientDoorRefusalRule.cs`, `TransitionAnnounceWatch.cs`, `docs/research/party-reconciliation.md` (root cause), `docs/research/transition-smoothness.md` §9-10 |
-| 14 | Mid-session save/load. Design: [session-save.md](research/session-save.md). Phase 1 shipped 2026-08-21: a client's progressed character survives to the next session (a "resume tomorrow" sidecar, preferred automatically at the next join) and a host loading a different save mid-session is detected and refused on screen rather than served silently stale. Not live-verified. Phase 2 (deferred): client-side mid-session load auto-rejoin (needs a way to tell a load from an ordinary save), host-side full re-adoption instead of refusal, session-driven (unattended) auto-save. | Partial (phase 1, unit-tested only) | `ClientCharacterPersistence.cs`, `SessionSaveWatch.cs`, `WorldAdoption.cs`; `session-save.md` "Phase 1 shipped" |
-| 15 | Container loot has no version tripwire (retransmit only); tripwires are counters not digests. | Partial | `ReliableLootSender.cs`, `disconnect-reconnect.md` §4 |
-
-## Tier 3 — polish and confidence
+## Tier 2 — structural limits worth stating to players (design decisions, not bugs)
 
 | # | Item | Status |
 |---|---|---|
-| 16 | Packaging script (drop-in zip) and CI (`dotnet test` on push). | Done |
-| 17 | Tests for the four `Reliable*Sender` classes (retry/ack logic, zero direct tests). | Done |
-| 18 | Persistent on-screen connection indicator (today: `status` console verb only). | Missing |
-| 19 | Fog-of-war reveal sync (`SetWorldPointExplored`), merchant inventory, trigger-mines, per-object local variables, time-of-day, alignment sync, host migration, internet play. | Missing — documented out of scope until Tiers 1-2 close |
+| 14 | **One real fight per client at a time** (`_locallyFightingId` is a single slot; other engaged enemies stay mirrored while their forwarded damage still lands) and **last-attacker-only attribution** on the damage wire. Documented internally, not to players. | Decision needed — document in README limitations, log when a second candidate is deferred |
+| 15 | **Only the token owner picks dialogue replies**; alignment is per character by design; romance/companion arcs belong to whoever opens them. | By design — state it in README |
+| 16 | **Doors/placeables are monotonic** — re-locking/re-sealing by a script replicates nowhere. | By design |
+| 17 | **`combat_state_sync` is superseded** by `local_combat` (engine re-derives the in-combat dword in 0–2 ms); a client fighting only mirrored enemies gets no combat music/auto-pause. | Decision needed — retire the flag or document |
+| 18 | **Galaxy map / pre-departure party-select** have zero co-op awareness; each instance runs the vanilla UI locally. | Decision needed |
+| 19 | **3+ peers** are architecturally supported (`MaxPeers=8`) but every live round has been two instances. | 🎮 L |
+
+## Tier 3 — needs new reverse-engineering
+
+| # | Item |
+|---|---|
+| 20 | Merchant/shop inventory (`CSWSStore` layout unknown to the project) |
+| 21 | Swoop race — dispatch chain never fires; blocked on a debugger (`minigames.md`) |
+| 22 | Creature-liveness scan freshness (`DestroyObject`'d bodies) — `liveness_sync` stays OFF |
+| 23 | Per-object local variables, time-of-day, floor mines (deliberately excluded from the trigger relay) |
+| 24 | Internet play: discovery past LAN broadcast, NAT traversal/relay, WAN jitter tuning (`interp_ms` is LAN-tuned), host migration |
 
 ## Execution order
 
-Wave A (parallel, no rig): items 2, 5, 6, 9, 11, 16, 17.
-Wave B (rig, serial): item 1 first; then 7, 12, 13 as one verification pass; then 8.
-Wave C (after 1 closes): items 3 and 4 — both need the combat path to be trustworthy first.
+Wave A (done 2026-08-27, no rig): config truth (`movie_relay` agent default, `coop.ini port=`
+honoured by the menu agent, undocumented keys), `E_PROTO` reject, Welcome tick-rate adoption,
+Away flag, persistent indicator, `script_item_sync`, mid-session log rotation, `MinigameRule`
+wired, Pazaak detect + waiting notice, sender cap contract, missing unit tests.
+
+Wave B (rig, serial): Tier 1 items 3, 2, 5, 8, 9, 4 as one verification pass each; then 13, 11.
+
+Wave C (after B): item 1 (party pool), item 7 (config negotiation), item 12 (companion XP).

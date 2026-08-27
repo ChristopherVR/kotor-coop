@@ -26,13 +26,21 @@ never overwritten.
 2. Click **Co-op** on the main menu.
 3. One player presses **Host**; the other picks that server from the list (or types the
    host's address) and presses **Connect**. A password set in `coop.ini` is asked for.
-4. Load a save or start a new game. Your partner appears next to you.
+4. Load a save. Your partner appears next to you.
+
+What the join actually does: the **host must have a save on disk** (any manual save, or the
+game's own first autosave) — that save is what the client receives. The client keeps their
+**own character** from their own most recent save and is dropped into the host's world at the
+area entrance; the client's own save file is never written. To start a brand-new game
+together, the host plays until the first autosave (or saves once), then hosts.
 
 Press `~` in game for the console: `connect <ip> [password]`, `disconnect`, `reconnect`,
 `say <message>`. Tab completes, Up/Down recalls history.
 
 The host is authoritative for enemies and the party; each player owns their own character.
-Only one conversation runs at a time — the other player watches it live.
+Only one conversation runs at a time — the other player watches it live. If your partner
+goes to the main menu their character disappears and a line says so; a one-line status in
+the top-left always shows the connection state.
 
 ## Requirements
 

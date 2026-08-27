@@ -27,7 +27,11 @@ attaches from outside with `OpenProcess`.
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
 | Minigames — swoop race | Blocked, needs a debugger | [minigames.md](docs/research/minigames.md) |
+| Minigames — Pazaak detection, "waiting" notice | Built, not live-verified (`pazaak_detect` off) | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
+| Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
+| Script-granted items outside dialogue (`script_item_sync`) | Built, off until live-verified | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
+| Fog-of-war reveal (`map_reveal_sync`) | Built, off until live-verified | [map-reveal.md](docs/research/map-reveal.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -217,6 +221,18 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Chain mode serialises proxies, it doesn't merge them.** A second `dinput8` proxy after
   ours works because ours forwards to it; a proxy that always loads the system DLL itself
   must be the last proxy in `dinput8.chain`. Plain "load me" DLLs (`.asi`) go anywhere.
+- **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
+  hostile at a time to its own engine; every other engaged enemy stays a mirrored body whose
+  forwarded damage still lands, and the damage wire names only the last attacker. In a swarm
+  the fight you see and the damage you take come from two mechanisms. See
+  [combat-participation.md](docs/research/combat-participation.md).
+- **The party's shared item pool is not shared.** Gear moved into the party pool on one
+  instance exists only there; items change hands through the ground, containers, corpses and
+  dialogue/script grants. Merchants, the galaxy map and the pre-departure party-select screen
+  are plain single-player UI on each instance. See [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
+- **`coop.ini` is not negotiated.** Game content is fingerprinted per channel at join, but
+  each side runs its own behaviour flags; keep the two files the same. The host's tick rate
+  is adopted automatically.
 - **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial
   script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)). Enemies
   target purely by proximity; alignment is per-player by design, no sync channel needed.
