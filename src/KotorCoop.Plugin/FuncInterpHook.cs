@@ -104,6 +104,13 @@ internal static unsafe class FuncInterpHook
         // A third live-test primitive (2026-08-28, docs/research/dialogue-sync.md's 2026-08-28
         // addendum), registered the same way. Does not shadow a retail verb.
         "startdialog",
+
+        // A fourth live-test primitive (2026-08-28, docs/research/star-forge-finale.md §11):
+        // registered here, unlike "recruit"/"skipline"/etc above, because the live plan for the
+        // solo-segment detector's script-agnostic trigger needs it typed directly at the
+        // in-game console (`removeparty 0` on the host), not only via blockpoke. Does not
+        // shadow a retail verb.
+        "removeparty",
     ];
 
     /// <summary>

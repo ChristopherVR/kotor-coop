@@ -412,6 +412,16 @@ public static class CheatKinds
     /// ⚠ 42 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint StartDialog = 42;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/star-forge-finale.md §11): calls the engine's
+    /// own <c>RemovePartyMember(int nNPC)</c> VM routine, so <c>RemovePartyMemberHook</c>'s
+    /// detour can be exercised without reaching the Bastila dialogue's own entry 70. <c>Amount</c>
+    /// is the NPC roster slot (0-8). See <c>SharedBlock.CheatKindRemoveParty</c>.
+    ///
+    /// ⚠ 43 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint RemoveParty = 43;
 }
 
 /// <summary>

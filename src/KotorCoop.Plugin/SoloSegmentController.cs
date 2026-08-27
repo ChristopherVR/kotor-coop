@@ -33,7 +33,29 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
     private readonly SoloSegmentCatalogue _catalogue =
         new(SoloSegmentCatalogue.ParseExtraModules(PluginConfig.Read("solo_segment_modules")));
 
+    /// <summary>coop.ini <c>solo_segment_any_module</c> (default 0/OFF): drops the module gate
+    /// on the <see cref="RemovePartyMemberHook"/> burst trigger ONLY — the roster-drop-edge
+    /// trigger (<see cref="SoloSegmentMachine.Step"/>) stays catalogue-gated regardless, since it
+    /// has no equivalent "this is definitely a script, not a bench/death" signal on its own. See
+    /// docs/research/star-forge-finale.md §11 and §9.5's own "generalises to ANY future
+    /// forced-solo content this mod hasn't researched yet" reasoning.</summary>
+    private readonly bool _anyModule = PluginConfig.ReadBool("solo_segment_any_module", false);
+
     private readonly SoloSegmentMachine _machine = new();
+
+    /// <summary>Highest <see cref="RemovePartyMemberHook"/> serial already drained, so a capture
+    /// already fed to <see cref="_machine"/> is never fed twice. Same dedup shape
+    /// <see cref="ItemTemplateSpawnController"/> already uses for its own hook ring.</summary>
+    private uint _lastDrainedRemovePartySerial;
+
+    /// <summary>Scratch space for <see cref="DrainRemovePartyMemberHook"/>, reused every frame
+    /// rather than allocated fresh — sized to <see cref="RemovePartyMemberHook.Capacity"/>, the
+    /// most entries a single drain could ever see.</summary>
+    private readonly uint[] _freshSerials = new uint[RemovePartyMemberHook.Capacity];
+
+    private readonly int[] _freshSlots = new int[RemovePartyMemberHook.Capacity];
+    private readonly int[] _freshTicks = new int[RemovePartyMemberHook.Capacity];
+    private readonly int[] _freshOrder = new int[RemovePartyMemberHook.Capacity];
 
     /// <summary>CGuiInGame + this = the party-selection panel pointer
     /// (<c>CSWGuiPartySelection*</c>), non-null exactly while the screen is open. See
@@ -61,6 +83,8 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
     public void Invalidate()
     {
         _machine.Invalidate();
+        RemovePartyMemberHook.Invalidate();
+        _lastDrainedRemovePartySerial = 0;
         Array.Clear(_lastKnownAlive);
         _lastPartyMask = 0;
         block.LocalInSoloSegment = 0;
@@ -113,6 +137,13 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
 
         bool partySelectionOpen = IsPartySelectionOpen();
 
+        SoloSegmentEvent burstEvent = DrainRemovePartyMemberHook(module);
+        if (burstEvent == SoloSegmentEvent.Began)
+        {
+            PluginHost.Log($"solo segment: began in {module} — script trigger "
+                + "(RemovePartyMember burst), roster read not required to have caught up yet");
+        }
+
         SoloSegmentEvent evt = _machine.Step(_catalogue, new SoloSegmentInputs(
             module, companionCount, removedAlive, partySelectionOpen));
 
@@ -128,6 +159,80 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
                 PluginHost.Log("solo segment: ended (roster refilled or the module changed)");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Moves every fresh <see cref="RemovePartyMemberHook"/> capture into
+    /// <see cref="_machine"/>'s own burst detector, one call at a time and in capture order (the
+    /// debounce window cares about relative timing, so entries must be fed oldest-first). Every
+    /// capture gets its own debug log line — deliberately UNCONDITIONAL on whatever
+    /// <see cref="SoloSegmentMachine.NoteRemovePartyMemberCall"/> decides, so a live pass can see
+    /// the wipe fire (or not) regardless of the machine's own decision (docs/research/star-forge-
+    /// finale.md §11). Returns the last <see cref="SoloSegmentEvent.Began"/> seen this pass, if
+    /// any — there is at most one real one per drain, since the machine no-ops every call after
+    /// the first while already active.
+    /// </summary>
+    private SoloSegmentEvent DrainRemovePartyMemberHook(string module)
+    {
+        // Walk every slot rather than tracking which ones wrapped since last pass — the ring is
+        // small (RemovePartyMemberHook.Capacity) and this runs once a frame, the same reasoning
+        // ItemTemplateSpawnController's own identically-shaped drain already uses. Collected
+        // (not fed immediately) because ring INDEX order is not necessarily SERIAL order once
+        // the write cursor has wrapped, and the burst debounce cares about relative call timing
+        // — entries must reach the machine oldest-first, so freshCount entries are sorted by
+        // serial (an insertion sort over at most RemovePartyMemberHook.Capacity items) before
+        // any of them is fed in.
+        int freshCount = 0;
+        uint highest = _lastDrainedRemovePartySerial;
+
+        for (int i = 0; i < RemovePartyMemberHook.Capacity; i++)
+        {
+            RemovePartyMemberHook.Read(i, out int npcSlot, out int tickMs, out uint serial);
+
+            if (serial == 0 || serial <= _lastDrainedRemovePartySerial)
+            {
+                continue;
+            }
+
+            int insertAt = freshCount;
+            while (insertAt > 0 && _freshSerials[_freshOrder[insertAt - 1]] > serial)
+            {
+                _freshOrder[insertAt] = _freshOrder[insertAt - 1];
+                insertAt--;
+            }
+
+            _freshOrder[insertAt] = freshCount;
+            _freshSerials[freshCount] = serial;
+            _freshSlots[freshCount] = npcSlot;
+            _freshTicks[freshCount] = tickMs;
+            freshCount++;
+
+            if (serial > highest)
+            {
+                highest = serial;
+            }
+        }
+
+        _lastDrainedRemovePartySerial = highest;
+
+        SoloSegmentEvent lastBegan = SoloSegmentEvent.None;
+
+        for (int i = 0; i < freshCount; i++)
+        {
+            int j = _freshOrder[i];
+            int npcSlot = _freshSlots[j];
+            int tickMs = _freshTicks[j];
+
+            PluginHost.Log($"solo segment debug: RemovePartyMember slot {npcSlot} in {module}");
+
+            SoloSegmentEvent evt = _machine.NoteRemovePartyMemberCall(_catalogue, module, _anyModule, tickMs);
+            if (evt == SoloSegmentEvent.Began)
+            {
+                lastBegan = evt;
+            }
+        }
+
+        return lastBegan;
     }
 
     /// <summary>Refreshes <see cref="_lastKnownAlive"/> for every slot currently present, and

@@ -123,5 +123,9 @@ internal static class ConsoleVerbCatalog
 
         // A third live-test primitive (2026-08-28): does not shadow a retail verb.
         ("startdialog", "startdialog <npc-tag|id> [dlg-resref]  (starts a conversation with the local player)"),
+
+        // Dev-only, script-agnostic solo-segment detector test primitive (2026-08-28): calls the
+        // real RemovePartyMember(nNPC) directly, no dialogue needed. Does not shadow a retail verb.
+        ("removeparty", "removeparty <slot>  (dev-only: calls the real RemovePartyMember on roster slot 0-8)"),
     ];
 }

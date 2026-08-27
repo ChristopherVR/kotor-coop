@@ -115,6 +115,22 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // The script-agnostic second solo-segment trigger (docs/research/star-forge-finale.md
+        // §11): a detour on every RemovePartyMember VM call, independent of and in addition to
+        // SoloSegmentController's own roster-count poll. Installed unconditionally, like
+        // BarkHook/PhantomHitHook — its debug log line and the `removeparty` dev verb are meant
+        // to work whether or not solo_segment_spectate itself is on; SoloSegmentController's own
+        // existing `_enabled` gate is what keeps the FEATURE (beginning a real segment) behind
+        // that key, unchanged.
+        if (RemovePartyMemberHook.Install(out string removePartyDiagnostic))
+        {
+            Log($"solo segment: {removePartyDiagnostic}");
+        }
+        else
+        {
+            Log($"RemovePartyMember hook NOT installed: {removePartyDiagnostic}");
+        }
+
         // Which dialogue reply the player picks is dispatched and gone between frames,
         // so it is captured by hooking the engine's own reply entry rather than sampled.
         if (DialogueReplyHook.Install(out string replyDiagnostic))

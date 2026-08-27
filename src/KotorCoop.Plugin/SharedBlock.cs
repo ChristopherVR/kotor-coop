@@ -862,4 +862,23 @@ internal partial struct SharedBlock
     /// ⚠ 42, because 7-41 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindStartDialog = 42;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-08-28, docs/research/star-forge-finale.md §11): calls
+    /// the engine's own <c>RemovePartyMember(int nNPC)</c> VM routine (id 575) through
+    /// <c>Odyssey.RemovePartyMemberBySlot</c> — the SAME parameter-stack dispatch pattern
+    /// <c>startdialog</c> already established (push the argument onto the VM's own stack,
+    /// dispatch through the routine table by verified handler address, pop the return) — so
+    /// <c>RemovePartyMemberHook</c>'s own detour can be exercised WITHOUT reaching
+    /// <c>k_sta_bastila.dlg</c>'s entry 70 (§9.3/§9.4's own one-shot-precondition maze). Not a
+    /// staging primitive for the roster itself in the way <c>recruit</c> is — this exists purely
+    /// to fire the real engine call the detector watches for, on demand.
+    ///
+    /// <see cref="OffsetCheatAmount"/> is the NPC roster slot (0-8, the same range
+    /// <c>recruit</c>/<c>Odyssey.PartyRosterSlots</c> already use). Local only — never crosses
+    /// the network by itself.
+    ///
+    /// ⚠ 43, because 7-42 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindRemoveParty = 43;
 }

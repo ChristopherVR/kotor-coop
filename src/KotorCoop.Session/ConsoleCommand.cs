@@ -554,6 +554,19 @@ public enum CoopCommandKind
     /// NPC's own default <c>Conversation</c> field). Local only.
     /// </summary>
     StartDialog,
+
+    /// <summary>
+    /// <c>removeparty &lt;slot&gt;</c> — DEV-ONLY LIVE-TEST PRIMITIVE
+    /// (docs/research/star-forge-finale.md §11). Calls the engine's own real
+    /// <c>RemovePartyMember(int nNPC)</c> VM routine on NPC roster slot
+    /// <see cref="CoopCommand.Amount"/> (0-8), through <c>Odyssey.RemovePartyMemberBySlot</c> —
+    /// the same parameter-stack dispatch pattern <see cref="StartDialog"/> established. Built so
+    /// the plugin's script-agnostic <c>RemovePartyMemberHook</c> detour (the second solo-segment
+    /// trigger) can be exercised without reaching <c>k_sta_bastila.dlg</c>'s own entry 70. A REAL
+    /// removal, not a simulation — the companion stays recruited but leaves the active party, the
+    /// same as a real script call. Local only.
+    /// </summary>
+    RemoveParty,
 }
 
 /// <summary>
@@ -755,6 +768,7 @@ public static partial class ConsoleCommand
         new(["buy"], ParseBuy),
         new(["sell"], ParseSell),
         new(["startdialog"], ParseStartDialog),
+        new(["removeparty"], ParseRemoveParty),
         new(["cheats"], ParseCheats),
     ];
 
