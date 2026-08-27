@@ -353,6 +353,23 @@ public sealed record CoopConfig
     /// <summary>coop.ini <c>map_reveal_sync</c> (plugin key; digest-only here). Default OFF.</summary>
     public bool MapRevealSync { get; init; }
 
+    /// <summary>
+    /// Whether each active companion's experience is shared like the PC's own —
+    /// see <see cref="KotorCoop.Session.AgentSettings.SyncCompanionXp"/>. OFF by default,
+    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_xp_sync = 1</c> turns
+    /// it on.
+    /// </summary>
+    public bool CompanionXpSync { get; init; }
+
+    /// <summary>
+    /// Whether a client dresses its own copy of a host-driven companion in that companion's
+    /// real equipped gear — see
+    /// <see cref="KotorCoop.Session.AgentSettings.SyncCompanionGear"/>. OFF by default,
+    /// NEEDS-LIVE (docs/research/companion-state-sync.md). <c>companion_gear_sync = 1</c> turns
+    /// it on.
+    /// </summary>
+    public bool CompanionGearSync { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -493,6 +510,9 @@ public sealed record CoopConfig
             DialogueRecruitSync = IsTruthy(kv.GetValueOrDefault("dialogue_recruit_sync")),
             LivenessSync = IsTruthy(kv.GetValueOrDefault("liveness_sync")),
             MapRevealSync = IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
+
+            CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
+            CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
         };
     }
 

@@ -508,6 +508,32 @@ companion_local_combat=1
 # companion_local_combat=1.
 companion_local_combat_range=10
 
+# Share each active companion's experience the same way the PC's own already is
+# (sync_progression above): the host's per-slot reading, max-merged against every client's
+# own reading, overwrites each instance's own companion stats block. Roadmap item 11 -
+# docs/research/companion-state-sync.md. Both engines already grant kill XP to every ACTIVE
+# party member independently (CSWPartyTable::DistributeExperience hands the full amount to
+# each member in the active-slot array, not just the PC - docs/research/progression-sync.md
+# section 2), so this channel is expected to matter mainly for script-granted XP aimed at a
+# specific companion; kill XP should already agree without it. OFF by default, NEEDS-LIVE:
+# the read/write mechanism is the identical stats+0x068 field poke the PC's own progression
+# channel already ships with, but nothing here has been observed against the real game yet.
+companion_xp_sync=0
+
+# When companion_local_combat releases a companion to a CLIENT's own engine AI, that AI
+# attacks with whatever gear the CLIENT's copy of the body happens to be wearing - which can
+# be stale the moment the host player has re-equipped that companion (a workbench upgrade, a
+# looted weapon) since the two instances last agreed. This reads the host's real per-companion
+# gear (body/right weapon/left weapon) and hands it to the plugin, which dresses the mirrored
+# body through the same Odyssey.EquipItemFromTemplate path the phantom equipment channel
+# already uses. Roadmap item 12 - docs/research/companion-state-sync.md. Read independently by
+# BOTH halves (this agent-side key gates whether the host reads/publishes and whether a client
+# applies what it receives; the plugin reads its own copy of the same key to gate the actual
+# engine call). Anti-echo: only the host ever reads a companion's gear to publish it - a client
+# never calls the read path at all, so it cannot report its own possibly-stale copy back. OFF
+# by default, NEEDS-LIVE.
+companion_gear_sync=0
+
 # Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
 # choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
 # them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a

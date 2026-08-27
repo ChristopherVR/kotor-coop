@@ -594,6 +594,7 @@ public sealed class CoopAgent
         if (LastReadSucceeded)
         {
             _partyPump.PumpProgression(caps);
+            _partyPump.PumpCompanionExperience(caps);
             _worldStatePump.PumpJournal(caps);
         }
 

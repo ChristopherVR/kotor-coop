@@ -103,8 +103,13 @@ public static class ProtocolConstants
     /// channel additionally makes the client adopt the host's value at runtime. See
     /// docs/research/mod-compatibility.md's "Behaviour-flag negotiation" section and
     /// docs/roadmap-seamless.md Tier 1 item 7.
+    ///
+    /// Version 41: companion-state sync — <see cref="PacketType.CompanionXpSnapshot"/> (51) /
+    /// <see cref="PacketType.CompanionXpReport"/> (52) are new packet types, and
+    /// <see cref="PartyMemberState"/> gained three equip fields on the existing
+    /// <see cref="PacketType.PartySnapshot"/> shape. See docs/research/companion-state-sync.md.
     /// </summary>
-    public const byte Version = 40;
+    public const byte Version = 41;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

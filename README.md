@@ -32,6 +32,7 @@ attaches from outside with `OpenProcess`.
 | Peer at the main menu (`FlagAway`), persistent connection indicator, protocol-mismatch reject | Built 2026-08-27, not live-verified | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md), [connect-flow.md](docs/research/connect-flow.md) |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, off until live-verified | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Built, off until live-verified | [map-reveal.md](docs/research/map-reveal.md) |
+| Companion experience and equipment (`companion_xp_sync`, `companion_gear_sync`) | Built, off until live-verified | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -203,6 +204,13 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than
   getting a separate copy.
+- **Companion experience and equipment sync ship off by default.** `companion_xp_sync` shares
+  each active companion's XP the same way the party's shared PC XP already is;
+  `companion_gear_sync` dresses a companion released under `companion_local_combat` in its
+  real, current gear instead of a client's stale copy. Both reuse mechanisms already
+  live-verified for the PC (the `stats+0x068` field poke, `Odyssey.EquipItemFromTemplate`),
+  but neither channel itself has been run against the live game yet. See
+  [companion-state-sync.md](docs/research/companion-state-sync.md).
 - **Dialogue recruitment sync is live-confirmed for two companions** (`dialogue_recruit_sync`,
   on in the shipped `coop.ini`); a fix for a stale pre-recruit body (companions who are also
   placed NPCs) is implemented and unit-tested but not yet confirmed live. See

@@ -238,7 +238,13 @@ internal static unsafe partial class PluginHost
         //      copy of a just-recruited companion and reuse it instead of spawning a duplicate
         //      body next to it. See docs/research/dialogue-consequences.md's 2026-08-24 "stale
         //      mirrored body" entry. NEEDS-LIVE.
-        _block->Version = 53;
+        // 54 = companion equipment at 0x4000..0x40C0 (block grown 0x4000 -> 0x4100): the host's
+        //      real per-companion gear (body/right weapon/left weapon resrefs), keyed by
+        //      presence slot index, so a client mirroring a companion under
+        //      companion_local_combat dresses it correctly instead of wearing whatever it had
+        //      when the two instances last agreed. See docs/research/companion-state-sync.md.
+        //      NEEDS-LIVE.
+        _block->Version = 54;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

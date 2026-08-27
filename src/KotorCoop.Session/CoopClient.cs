@@ -165,6 +165,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.InteractionLock] = HandleInteractionLock,
             [PacketType.Chat] = HandleChat,
             [PacketType.ProgressionSnapshot] = HandleProgressionSnapshot,
+            [PacketType.CompanionXpSnapshot] = HandleCompanionXpSnapshot,
             [PacketType.ItemSnapshot] = HandleItemSnapshot,
             [PacketType.ContainerLoot] = HandleContainerLoot,
             [PacketType.MaterialisedLoot] = HandleMaterialisedLoot,

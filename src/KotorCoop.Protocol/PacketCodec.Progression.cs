@@ -62,4 +62,74 @@ public static partial class PacketCodec
             ? null
             : new ProgressionReportPacket(peerId, generation, earned, spent, experience);
     }
+
+    public static int Write(Span<byte> buffer, CompanionXpSnapshotPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.CompanionXpSnapshot);
+        w.WriteInt64(packet.ServerTimeMs);
+        w.WriteUInt16(packet.PresentMask);
+
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            w.WriteUInt32(slot < packet.Xp.Length ? packet.Xp[slot] : 0);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static CompanionXpSnapshotPacket? ReadCompanionXpSnapshot(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.CompanionXpSnapshot)
+        {
+            return null;
+        }
+
+        long serverTime = r.ReadInt64();
+        ushort mask = r.ReadUInt16();
+
+        uint[] xp = new uint[ProtocolConstants.PartyRosterSlots];
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            xp[slot] = r.ReadUInt32();
+        }
+
+        return r.Failed ? null : new CompanionXpSnapshotPacket(serverTime, mask, xp);
+    }
+
+    public static int Write(Span<byte> buffer, CompanionXpReportPacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.CompanionXpReport);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt16(packet.PresentMask);
+
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            w.WriteUInt32(slot < packet.Xp.Length ? packet.Xp[slot] : 0);
+        }
+
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static CompanionXpReportPacket? ReadCompanionXpReport(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.CompanionXpReport)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        ushort mask = r.ReadUInt16();
+
+        uint[] xp = new uint[ProtocolConstants.PartyRosterSlots];
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            xp[slot] = r.ReadUInt32();
+        }
+
+        return r.Failed ? null : new CompanionXpReportPacket(peerId, mask, xp);
+    }
 }

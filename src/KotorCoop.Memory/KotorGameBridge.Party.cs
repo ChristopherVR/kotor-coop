@@ -201,6 +201,122 @@ public sealed partial class KotorGameBridge
             && stats != 0;
     }
 
+    // ---- companion experience (2026-08-27, docs/research/companion-state-sync.md) ---------
+    //
+    // Same mechanism as the PC's own experience above (a plain stats+0x068 field), applied per
+    // active NPC roster slot instead of just the local player. Host-authoritative, max-merged
+    // one layer up in Pumps.PartyPump.PumpCompanionExperience — see that method's doc comment
+    // for why a delta would double-count (both engines already grant kill XP to every ACTIVE
+    // party member independently through CSWPartyTable::DistributeExperience).
+
+    public bool SupportsCompanionProgressionSync => _player is not null;
+
+    /// <summary>
+    /// Reads the experience of every currently-active (spawned) party companion, keyed by NPC
+    /// roster slot (0..8). Only a slot with a live body is reported present — a
+    /// recruited-but-benched companion has no stats block to read.
+    /// </summary>
+    public bool TryReadCompanionExperience(uint[] xpBySlot, out ushort presentMask)
+    {
+        Array.Clear(xpBySlot, 0, Math.Min(xpBySlot.Length, PartyNpcSlots));
+        presentMask = 0;
+
+        if (!TryGetPartyTable(out nint partyTable)
+            || !_memory.TryReadInt32(partyTable + PartyCount, out int count)
+            || count is <= 0 or > PartyMaxCompanions)
+        {
+            return false;
+        }
+
+        Dictionary<uint, nint> byId = [];
+        foreach (CreatureRef c in EnumerateCreatures())
+        {
+            byId[c.ObjectId] = c.Address;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
+                || slot is < 0 or >= PartyNpcSlots
+                || slot >= xpBySlot.Length)
+            {
+                continue;
+            }
+
+            if (!_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out uint objectId)
+                || objectId == 0x7F000000
+                || !byId.TryGetValue(objectId, out nint creature)
+                || !_memory.TryReadPointer(creature + CreatureStatsPointer, out nint stats)
+                || stats == 0
+                || !_memory.TryReadUInt32(stats + StatsExperience, out uint xp))
+            {
+                continue;
+            }
+
+            xpBySlot[slot] = xp;
+            presentMask |= (ushort)(1 << slot);
+        }
+
+        // A read that found the table but nobody active is still a genuine "nothing to
+        // report" rather than a failure — an empty party (Endar Spire before Trask joins) is
+        // real, not an error.
+        return true;
+    }
+
+    /// <summary>
+    /// Overwrites each present slot's companion experience with the host's absolute value. A
+    /// slot the mask does not name is left untouched — it is either not this instance's
+    /// business (the host never reported it) or has no live body here to write into.
+    /// </summary>
+    public bool TryWriteCompanionExperience(IReadOnlyList<uint> xpBySlot, ushort presentMask)
+    {
+        if (presentMask == 0 || !TryGetPartyTable(out nint partyTable))
+        {
+            return false;
+        }
+
+        Dictionary<uint, nint>? byId = null;
+        bool anyWritten = false;
+
+        for (int slot = 0; slot < PartyNpcSlots && slot < xpBySlot.Count; slot++)
+        {
+            if ((presentMask & (1 << slot)) == 0)
+            {
+                continue;
+            }
+
+            if (!_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out uint objectId)
+                || objectId == 0x7F000000)
+            {
+                continue;
+            }
+
+            byId ??= BuildCreatureIdMap();
+
+            if (!byId.TryGetValue(objectId, out nint creature)
+                || !_memory.TryReadPointer(creature + CreatureStatsPointer, out nint stats)
+                || stats == 0)
+            {
+                continue;
+            }
+
+            anyWritten |= _memory.TryWrite(stats + StatsExperience, xpBySlot[slot]);
+        }
+
+        return anyWritten;
+    }
+
+    private Dictionary<uint, nint> BuildCreatureIdMap()
+    {
+        Dictionary<uint, nint> byId = [];
+        foreach (CreatureRef c in EnumerateCreatures())
+        {
+            byId[c.ObjectId] = c.Address;
+        }
+
+        return byId;
+    }
+
     /// <summary>
     /// Reads the active companions and where the host's engine has them. Skips the PC (never
     /// a companion) implicitly, because only the active NPC slots are read.
@@ -337,7 +453,7 @@ public sealed partial class KotorGameBridge
         return resref;
     }
 
-    public List<PartyMemberState> ReadPartyMembers()
+    public List<PartyMemberState> ReadPartyMembers(bool includeEquipment = false)
     {
         List<PartyMemberState> members = [];
 
@@ -391,8 +507,22 @@ public sealed partial class KotorGameBridge
                     ? shot
                     : (0u, (ushort)0);
 
+            // Companion gear (2026-08-27, docs/research/companion-state-sync.md): the exact
+            // same per-slot resref read the PC's own equipment channel already uses, applied
+            // to a companion body instead of the local player. Skipped when the caller has not
+            // asked for it (companion_gear_sync off) so PumpParty's every-tick call does not
+            // pay three extra lookups nobody will use.
+            string body = string.Empty, rightWeapon = string.Empty, leftWeapon = string.Empty;
+            if (includeEquipment)
+            {
+                body = ReadEquippedResref(creature, InvSlotBody);
+                rightWeapon = ReadEquippedResref(creature, InvSlotRightWeapon);
+                leftWeapon = ReadEquippedResref(creature, InvSlotLeftWeapon);
+            }
+
             members.Add(new PartyMemberState(
-                (byte)slot, position, facing, animation, health, oneShotSerial, oneShotAnim));
+                (byte)slot, position, facing, animation, health, oneShotSerial, oneShotAnim,
+                body, rightWeapon, leftWeapon));
         }
 
         return members;
@@ -407,6 +537,13 @@ public sealed partial class KotorGameBridge
     private const int BlockPartyPresenceStride = 0x28;
     private const int BlockPartyPresenceCapacity = 4;
 
+    // Companion equipment (block version 54): the host's per-companion gear, keyed by the
+    // SAME presence slot index as BlockPartyPresenceSlots — 4 slots x 3 resrefs (body, right
+    // weapon, left weapon) x 16 ascii bytes. See docs/research/companion-state-sync.md.
+    private const int BlockCompanionEquipSlots = 0x4000;
+    private const int BlockCompanionEquipStride = 0x30;
+    private const int BlockCompanionEquipResrefLength = 16;
+
     /// <summary>
     /// Freezes the local party AI (solo mode) and mirrors the host's companions onto the
     /// matching local creatures by slot.
@@ -418,7 +555,17 @@ public sealed partial class KotorGameBridge
     /// as the plugin-less fallback (the mock game); it never touched the twin, which is
     /// exactly why it was superseded.
     /// </summary>
-    public int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members)
+    public int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members) =>
+        TryWritePartyMembers(members, applyEquipment: false);
+
+    /// <summary>
+    /// Same as <see cref="TryWritePartyMembers(IReadOnlyList{PartyMemberState})"/>, and —
+    /// when <paramref name="applyEquipment"/> is true — also hands each companion's desired
+    /// gear (<see cref="PartyMemberState.EquippedBody"/> and its two siblings) to the plugin's
+    /// companion-equipment region, so <c>PartyPresenceController</c> can dress the mirrored
+    /// body. See docs/research/companion-state-sync.md.
+    /// </summary>
+    public int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members, bool applyEquipment)
     {
         if (!TryGetPartyTable(out nint partyTable))
         {
@@ -482,6 +629,27 @@ public sealed partial class KotorGameBridge
                 }
 
                 _lastWrittenPartyPresence[i] = candidate;
+
+                // Companion gear (2026-08-27, docs/research/companion-state-sync.md): written
+                // every pass this instance opted into applying it, independent of the position
+                // dirty-check above — an unchanged position with a freshly re-equipped
+                // companion must still update the block. Not gated on the module-changed reset
+                // that region uses: empty strings are always a safe "leave it alone" and there
+                // is no stale-across-transition hazard a companion's gear can create the way a
+                // stale door/placeable id can.
+                if (applyEquipment)
+                {
+                    nint equipSlot = _pluginBlock + BlockCompanionEquipSlots + (i * BlockCompanionEquipStride);
+                    string body = candidate?.EquippedBody ?? string.Empty;
+                    string rightWeapon = candidate?.EquippedRightWeapon ?? string.Empty;
+                    string leftWeapon = candidate?.EquippedLeftWeapon ?? string.Empty;
+
+                    _memory.TryWriteAsciiString(equipSlot, body, BlockCompanionEquipResrefLength);
+                    _memory.TryWriteAsciiString(
+                        equipSlot + BlockCompanionEquipResrefLength, rightWeapon, BlockCompanionEquipResrefLength);
+                    _memory.TryWriteAsciiString(
+                        equipSlot + (2 * BlockCompanionEquipResrefLength), leftWeapon, BlockCompanionEquipResrefLength);
+                }
             }
 
             if (moduleChanged || _lastWrittenPartyPresenceCount != (uint)written)

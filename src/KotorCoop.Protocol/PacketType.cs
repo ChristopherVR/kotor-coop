@@ -443,4 +443,27 @@ public enum PacketType : byte
     /// docs/research/cinematics.md.
     /// </summary>
     MidModuleMovie = 50,
+
+    /// <summary>
+    /// host -&gt; clients: absolute per-companion experience, keyed by NPC roster slot (bit N of
+    /// the present mask says slot N's entry is meaningful) — the companion sibling of
+    /// <see cref="ProgressionSnapshot"/>, on its own channel so it can be toggled independently
+    /// (coop.ini <c>companion_xp_sync</c>, OFF by default, NEEDS-LIVE).
+    ///
+    /// Absolute, merges upward by max, for the identical reason
+    /// <see cref="ProgressionSnapshot"/>'s own experience half is: both engines already grant
+    /// kill XP to every ACTIVE party member independently
+    /// (<c>CSWPartyTable::DistributeExperience</c> hands the FULL amount to each member in the
+    /// active-slot array, not just the PC), so a delta would double-count every kill. What
+    /// genuinely diverges is script-granted XP aimed at a specific companion. See
+    /// docs/research/companion-state-sync.md.
+    /// </summary>
+    CompanionXpSnapshot = 51,
+
+    /// <summary>
+    /// client -&gt; host: a peer's own reading of each active companion's experience, same
+    /// packing as <see cref="CompanionXpSnapshot"/>. The host merges every report upward by
+    /// max, exactly like <see cref="ProgressionReport"/>'s experience half.
+    /// </summary>
+    CompanionXpReport = 52,
 }

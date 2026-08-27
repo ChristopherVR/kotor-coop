@@ -57,6 +57,21 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
+    // ---- roadmap item 12: companion equipment (docs/research/companion-state-sync.md,
+    // 2026-08-27). OFF by default, NEEDS-LIVE — the same escape-hatch discipline every other
+    // engine-write feature in this file follows. Dresses a mirrored companion in the gear the
+    // HOST publishes (see OffsetCompanionEquipSlots' own comment), through the identical
+    // Odyssey.EquipItemFromTemplate path PhantomController.ApplyEquipment already uses for a
+    // peer's phantom.
+
+    private readonly bool _companionGearSyncEnabled = PluginConfig.ReadBool("companion_gear_sync", false);
+
+    private readonly uint[,] _appliedEquip = new uint[SharedBlock.PartyPresenceCapacity, SharedBlock.EquipCount];
+
+    private int _equipCooldownFrames;
+
+    private int _equipsLogged;
+
     private readonly uint[] _trackedId = new uint[SharedBlock.PartyPresenceCapacity];
     private readonly nint[] _creature = new nint[SharedBlock.PartyPresenceCapacity];
     private readonly uint[] _appliedOneShot = new uint[SharedBlock.PartyPresenceCapacity];
@@ -397,6 +412,15 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             return false;
         }
 
+        // Gear first, unconditionally — the companion has to already be wearing the right
+        // equipment BEFORE a local-combat release hands it to its own engine AI below, since
+        // once released this controller stops touching the body entirely (see
+        // CompanionLocalFightAction.StayReleased's own remarks).
+        if (_companionGearSyncEnabled)
+        {
+            ApplyCompanionEquipment(slot, objectId);
+        }
+
         // ---- roadmap item 4: companion local combat release gate. See
         // docs/research/party-reconciliation.md, dated entry 2026-08-21, for the full design.
         // Decided BEFORE the claim below, same reasoning as EnemyPresenceController's own
@@ -695,6 +719,77 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _factionKnown[slot] = false;
         _released[slot] = false;
         _smoother.Reset(slot);
+
+        // A different companion (or the same one, freshly re-resolved) may now occupy this
+        // presence slot; forget what gear this controller last believed it applied so a real
+        // change is never mistaken for one already handled.
+        for (int j = 0; j < SharedBlock.EquipCount; j++)
+        {
+            _appliedEquip[slot, j] = 0;
+        }
+    }
+
+    /// <summary>Maps equip index in the shared block to the engine's inventory slot — same
+    /// order <c>PhantomController.EquipInventorySlots</c> already uses.</summary>
+    private static ReadOnlySpan<int> EquipInventorySlots =>
+    [
+        Odyssey.InventorySlotBody,
+        Odyssey.InventorySlotRightWeapon,
+        Odyssey.InventorySlotLeftWeapon,
+    ];
+
+    /// <summary>
+    /// Dresses a mirrored companion in the gear the host published, for each slot whose
+    /// desired resref changed since the last apply. One engine mutation per 30 frames — an
+    /// equip is as heavy as a spawn, the same cooldown
+    /// <see cref="PhantomController.ApplyEquipment"/> already uses.
+    ///
+    /// An empty desired resref is left alone (companion_gear_sync off on the host, or the slot
+    /// could not be read there); a resref this install cannot resolve is remembered as applied
+    /// so a missing mod does not retry forever.
+    /// </summary>
+    private void ApplyCompanionEquipment(int slot, uint objectId)
+    {
+        if (_equipCooldownFrames > 0)
+        {
+            _equipCooldownFrames--;
+            return;
+        }
+
+        for (int j = 0; j < SharedBlock.EquipCount; j++)
+        {
+            byte* resref = block.GetCompanionEquipResref(slot, j);
+
+            int length = 0;
+            uint hash = 2166136261;
+            while (length < 16 && resref[length] != 0)
+            {
+                hash = (hash ^ resref[length]) * 16777619;
+                length++;
+            }
+
+            if (!EquipApplyDecision.ShouldApply(length, hash, _appliedEquip[slot, j]))
+            {
+                continue;
+            }
+
+            _appliedEquip[slot, j] = hash;
+            _equipCooldownFrames = 30;
+
+            bool ok = Odyssey.EquipItemFromTemplate(
+                objectId, resref, length, EquipInventorySlots[j], out int failure);
+
+            if (_equipsLogged < 12)
+            {
+                _equipsLogged++;
+                string name = System.Text.Encoding.ASCII.GetString(resref, length);
+                PluginHost.Log(ok
+                    ? $"party drive: companion 0x{objectId:X} equips {name} (slot {EquipInventorySlots[j]})"
+                    : $"party drive: {name} refused for companion 0x{objectId:X} (failure {failure})");
+            }
+
+            return;
+        }
     }
 
     /// <summary>Planar (X/Y) distance squared — the same test <c>EnemyPresenceController

@@ -82,7 +82,15 @@ internal partial struct SharedBlock
     /// actual end (0x3F08) to the next clean 0x100 boundary, matching every previous growth
     /// here landing on a round number. See docs/research/creature-liveness.md.
     /// </summary>
-    public const int TotalSize = 0x4000;
+    /// <summary>
+    /// Grown from 0x4000 for the companion-equipment channel (version 54,
+    /// docs/research/companion-state-sync.md): the party-roster body identity region's own tail
+    /// (0x3F70) leaves only 0x90 free bytes before 0x4000 — not enough for the 4-slot x 3-resref
+    /// x 16-byte array <see cref="SharedBlock.OffsetCompanionEquipSlots"/> needs (0xC0) — so
+    /// this region starts cleanly at the old boundary, the same choice every earlier growth in
+    /// this file made.
+    /// </summary>
+    public const int TotalSize = 0x4100;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -148,7 +156,8 @@ internal partial struct SharedBlock
     /// old agents: version 2 added the ground-item slots and the appearance field,
     /// version 3 the enemy array, version 4 the door slots, version 5 the equipment
     /// resrefs, version 6 the module-travel request, version 7 shared pause, journal
-    /// apply and the per-peer flags dword.
+    /// apply and the per-peer flags dword. Version 54 (2026-08-27) added
+    /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

@@ -710,6 +710,57 @@ public class SessionIntegrationTests
         await Task.WhenAll(hostTask, clientTask);
     }
 
+    /// <summary>
+    /// Roadmap item 12 (docs/research/companion-state-sync.md): a companion's real equipped
+    /// gear rides <see cref="PartyMemberState"/>'s own equip fields alongside its position, so
+    /// this only needs to prove the wire carries them — the SAME channel
+    /// <see cref="TheHostsPartyReachesTheClient"/> already proves for position/health.
+    /// </summary>
+    [Fact]
+    public async Task CompanionEquipmentRidesThePartySnapshotHostToClient()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        List<PartyMemberState> party =
+        [
+            new PartyMemberState(
+                0, new Vector3f(5f, 6f, -1f), 0.5f, 0x2712, 20,
+                EquippedBody: "g_a_clothes01", EquippedRightWeapon: "g_w_dblsbr01", EquippedLeftWeapon: ""),
+        ];
+
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishParty(party);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        Assert.True(
+            await WaitForAsync(
+                () => client.GetPartyMembers().Any(
+                    m => m.SlotIndex == 0 && m.EquippedRightWeapon == "g_w_dblsbr01"),
+                Timeout,
+                Publish),
+            "the companion's equipped gear never reached the client");
+
+        PartyMemberState mirrored = client.GetPartyMembers().First(m => m.SlotIndex == 0);
+        Assert.Equal("g_a_clothes01", mirrored.EquippedBody);
+        Assert.Equal(string.Empty, mirrored.EquippedLeftWeapon);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
     [Fact]
     public async Task ClientEnemyDamageReachesTheHost()
     {
@@ -1072,6 +1123,69 @@ public class SessionIntegrationTests
         // A client is never authoritative: its own publish is dropped, host keeps its truth.
         client.PublishProgression(9u, 9u);
         Assert.False(host.TryGetProgression(out _, out _));
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
+    /// Roadmap item 11 (docs/research/companion-state-sync.md): the companion sibling of
+    /// <see cref="ProgressionMirrorsFromHostToClient"/> — the host's per-slot snapshot reaches
+    /// the client, and a client's own report reaches the host (the merge arithmetic itself is
+    /// <see cref="CompanionExperienceMerge"/>'s own unit tests' job, not this one's).
+    /// </summary>
+    [Fact]
+    public async Task CompanionExperienceMirrorsFromHostAndAPeerReportReachesTheHost()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        const ushort mask = 0b1; // slot 0 only
+        uint[] hostXp = new uint[ProtocolConstants.PartyRosterSlots];
+        hostXp[0] = 3000;
+
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishCompanionExperience(mask, hostXp);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        Assert.True(
+            await WaitForAsync(
+                () => client.TryGetCompanionExperience(out ushort m, out uint[] x)
+                    && (m & 1) != 0 && x[0] == 3000,
+                Timeout,
+                Publish),
+            "the host's companion experience never reached the client");
+
+        uint[] clientXp = new uint[ProtocolConstants.PartyRosterSlots];
+        clientXp[0] = 5000;
+
+        Assert.True(
+            await WaitForAsync(
+                () => host.GetCompanionExperienceReports().Any(
+                    r => r.PeerId == client.LocalPeerId && r.Xp[0] == 5000),
+                Timeout,
+                () =>
+                {
+                    Publish();
+                    client.ReportCompanionExperience(mask, clientXp);
+                }),
+            "the client's companion-experience report never reached the host");
+
+        // A client is never authoritative for the shared truth: its own publish is dropped.
+        client.PublishCompanionExperience(0xFF, new uint[ProtocolConstants.PartyRosterSlots]);
+        Assert.False(host.TryGetCompanionExperience(out _, out _));
 
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);

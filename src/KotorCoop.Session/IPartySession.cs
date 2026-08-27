@@ -61,4 +61,34 @@ public interface IPartySession
     /// arrived, so a client never mirrors zero over its own values before the first one.
     /// </summary>
     bool TryGetProgression(out uint gold, out uint experience);
+
+    // ---- companion experience (2026-08-27, docs/research/companion-state-sync.md) ---------
+    //
+    // Same shape as the PC's own progression above, keyed by NPC roster slot. coop.ini
+    // companion_xp_sync, OFF by default (NEEDS-LIVE).
+
+    /// <summary>Host only: publish each active companion's absolute experience, keyed by NPC
+    /// roster slot (a set bit in <paramref name="presentMask"/> means that slot's entry in
+    /// <paramref name="xpBySlot"/> is meaningful). Ignored on a client.</summary>
+    void PublishCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot) { }
+
+    /// <summary>Client only: this peer's own reading of each active companion's experience,
+    /// for the host to merge upward by max against every other peer's.</summary>
+    void ReportCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot) { }
+
+    /// <summary>Host only: every client's latest companion-experience report, fresh ones only.
+    /// Empty on a client.</summary>
+    IReadOnlyList<PeerCompanionXp> GetCompanionExperienceReports() => [];
+
+    /// <summary>
+    /// Client only: the host's latest per-companion experience. False until a snapshot has
+    /// arrived, so a client never mirrors an all-absent mask over its own values before the
+    /// first one.
+    /// </summary>
+    bool TryGetCompanionExperience(out ushort presentMask, out uint[] xpBySlot)
+    {
+        presentMask = 0;
+        xpBySlot = new uint[ProtocolConstants.PartyRosterSlots];
+        return false;
+    }
 }

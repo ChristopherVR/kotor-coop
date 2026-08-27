@@ -97,6 +97,17 @@ internal sealed unsafe partial class SharedBlockView
             *(uint*)(slot + 0x20));
     }
 
+    /// <summary>
+    /// Agent -&gt; plugin (docs/research/companion-state-sync.md, roadmap item 12). Pointer to a
+    /// mirrored companion's null-terminated equip resref (16 bytes), keyed by the SAME presence
+    /// slot index <see cref="GetPartyPresence"/> uses — not by NPC roster slot. Same shape as
+    /// <see cref="GetEquipResref"/>, applied to a companion body instead of a phantom.
+    /// </summary>
+    public byte* GetCompanionEquipResref(int presenceIndex, int equipIndex) =>
+        baseAddress + SharedBlock.OffsetCompanionEquipSlots
+        + (Clamp(presenceIndex, SharedBlock.PartyPresenceCapacity) * SharedBlock.CompanionEquipSlotStride)
+        + (Clamp(equipIndex, SharedBlock.EquipCount) * 16);
+
 
     // ---- creature liveness reconciliation -----------------------------------------
 

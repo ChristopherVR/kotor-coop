@@ -205,8 +205,10 @@ public class MidModuleMovieRelayTests
         Assert.True(SharedBlock.OffsetMidModuleMovieSerial >= SharedBlock.OffsetClientDoorRefusalArmed + 4);
         Assert.True(SharedBlock.OffsetMidModulePlayStatus + 4 <= SharedBlock.OffsetPeerEffectSerial);
 
-        // TotalSize did not grow to make room for this region.
-        Assert.Equal(0x4000, SharedBlock.TotalSize);
+        // TotalSize did not grow to make room for THIS region (it grew later, to 0x4100, for
+        // the unrelated companion-equipment channel — see SharedBlock.cs's own version-54
+        // comment).
+        Assert.Equal(0x4100, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

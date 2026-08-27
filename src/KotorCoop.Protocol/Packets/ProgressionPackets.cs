@@ -31,3 +31,32 @@ public sealed record ProgressionReportPacket(
 /// filtering.</summary>
 public readonly record struct PeerProgression(
     uint PeerId, uint Generation, uint GoldEarned, uint GoldSpent, uint Experience);
+
+// ---- companion experience (2026-08-27, docs/research/companion-state-sync.md) -------------
+//
+// The companion sibling of the PC's own experience above, keyed by NPC roster slot (0..8,
+// ProtocolConstants.PartyRosterSlots) rather than carried on the single scalar the PC uses.
+// Same shape and the same reason: both engines already grant kill XP to every ACTIVE party
+// member independently (CSWPartyTable::DistributeExperience hands the FULL amount to each
+// member in the active-slot array, not just the PC — see docs/research/progression-sync.md
+// §2), so this is absolute and merges upward by max, never a delta. A bit in the present
+// mask means that slot's entry in the array is meaningful; a companion with no live body
+// (benched, not yet recruited on this instance) has no bit and its array entry is 0.
+
+/// <summary>
+/// host -&gt; clients: absolute experience for every currently-active companion, keyed by NPC
+/// roster slot. <paramref name="Xp"/> is fixed-length
+/// (<see cref="ProtocolConstants.PartyRosterSlots"/>); only the slots set in
+/// <paramref name="PresentMask"/> are meaningful.
+/// </summary>
+public sealed record CompanionXpSnapshotPacket(long ServerTimeMs, ushort PresentMask, uint[] Xp);
+
+/// <summary>
+/// client -&gt; host: this peer's own reading of each active companion's experience, same
+/// packing as <see cref="CompanionXpSnapshotPacket"/>.
+/// </summary>
+public sealed record CompanionXpReportPacket(uint PeerId, ushort PresentMask, uint[] Xp);
+
+/// <summary>One peer's companion-experience report, as the host sees it after freshness
+/// filtering.</summary>
+public readonly record struct PeerCompanionXp(uint PeerId, ushort PresentMask, uint[] Xp);

@@ -10,10 +10,22 @@ namespace KotorCoop.Protocol;
 /// lost packet is superseded next tick. <paramref name="OneShotSerial"/> and
 /// <paramref name="OneShotAnimation"/> carry the companion's latest fire-and-forget
 /// (a swing, a parry), same scheme as the enemy channel.
+///
+/// <paramref name="EquippedBody"/>/<paramref name="EquippedRightWeapon"/>/
+/// <paramref name="EquippedLeftWeapon"/> (2026-08-27, docs/research/companion-state-sync.md,
+/// roadmap item 12) are the companion's real equipped gear, blueprint resrefs exactly like
+/// <see cref="PlayerState.EquippedBody"/>'s own three fields — reused rather than reinvented
+/// because it is the same fact (a body's visible slots) about a different kind of body. Empty
+/// = slot empty, unreadable, or the sender's <c>companion_gear_sync</c> is off; a client only
+/// ever APPLIES these when it read a nonempty value, so an old sender (or the flag being off)
+/// degrades to exactly today's behaviour rather than stripping a companion's gear. HOST ONLY —
+/// a client never populates these on its own outgoing companion state, since it never drives
+/// the companion's inventory.
 /// </summary>
 public readonly record struct PartyMemberState(
     byte SlotIndex, Vector3f Position, float Facing, uint Animation, int Health,
-    uint OneShotSerial = 0, ushort OneShotAnimation = 0);
+    uint OneShotSerial = 0, ushort OneShotAnimation = 0,
+    string EquippedBody = "", string EquippedRightWeapon = "", string EquippedLeftWeapon = "");
 
 /// <summary>
 /// The host's authoritative party. In co-op the host owns the companions (its own engine
