@@ -3878,3 +3878,296 @@ actually needs, not another repro of the same two already-proven-insufficient ca
 
 `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
 both clean (no code changed). `dotnet test tests/KotorCoop.Tests --no-build`: 2339/2339 passing.
+
+## Round 95 (2026-08-28, static pass, no rig access) — the phase=2 idle stall taken from the
+## engine side: the full jump-table dispatch re-verified byte-for-byte against `tools/kotor1_0_3.db`
+## (correcting a name swap four prior rounds' prose carried), a third, previously undocumented exit
+## from phase 2 found and disassembled (`TestDirectLine==-3` → `IsPartyMember` → `TeleportForward`),
+## and a new fix candidate — `party_follow_phase2_kick` — built on it: pure rule, Odyssey poke,
+## controller wiring, unit tests. NOT YET LIVE-TESTED.
+
+Picks up the previous entry's own "unchanged concrete next step" directly: the phase=2/
+`moveState=0`/`attempts` idle stall — reconfirmed FOUR independent times now (round 88's original
+find, round 91's 13+ minute observation, round 94's 45+ second re-run, this document's own
+running tally) downstream of every previously-shipped fix candidate — has never had its own
+root-cause disassembly. This round had no rig access (per this task's own instruction), so
+everything below is `tools/disasm.py`/`tools/xrefs.py`/`tools/q.py` disassembly against the real
+GOG binary and source-reading only, exactly this project's own established pattern for a
+no-rig-access round.
+
+### VERIFIED: the dispatch table, re-derived from raw bytes and cross-checked against the DB —
+### correcting a name swap that has stood since round 73
+
+Round 73 first named the follow-FSM's dispatch handlers by eyeballing a jump-table read next to
+`tools/kotor1_0_3.db` lookups; every round since (73 through 94) has called phase 3 (0x00511B60)
+"`Moving_To_Path`" and phase 2 (0x00511860) "the phase-2 handler" without a name, or occasionally
+also "Moving_To_Path" by association. This round re-derives the mapping from first principles,
+independent of any prior round's own labels:
+
+1. Read the jump table at `0x0051CCEC` as 12 raw dwords directly (`struct.unpack_from('<I', ...)`,
+   not disassembly) — confirmed it holds addresses `0x51C800, 0x51C827, 0x51C844, ..., 0x51C93D`,
+   12 tightly-packed stub blocks, not handler addresses directly.
+2. Disassembled all 12 stubs in one pass (`tools/disasm.py 0x51C800 0x160`). Each stub (except
+   index 0, phase -1, which is inlined) does `mov ecx, edi` (the creature) then `call <handler>`
+   with a consistent 4-argument stack shape, then jumps to a shared epilogue.
+3. Queried `tools/kotor1_0_3.db` directly for every called address (`SELECT class_name,
+   function_name FROM functions WHERE address=?`), not by proximity or memory.
+
+The result, dispatch index = phase + 1, is now anchored to the DB's own names rather than
+inherited prose:
+
+| index | phase | address | DB name |
+|---|---|---|---|
+| 0 | -1 | 0x51C800 (inline) | (reset: re-snapshot position, phase→5, no `FindPath`) |
+| 1 | 0 | 0x51AC10 | `FindPath` |
+| 2 | 1 | 0x511290 | `Offset` |
+| 3 | **2** | **0x511860** | **`Moving_To_Path`** |
+| 4 | **3** | **0x511B60** | **`Following_Path`** |
+| 5 | 4 | 0x512430 | `Moving_To_Offset` |
+| 6 | 5 | 0x5127D0 | `WaitingForPath` |
+| 7 | 6 | 0x512A60 | `OffsetWaitDest` |
+| 8 | 7 | 0x512B40 | `PathWaitDest` |
+| 9 | 8 | 0x512C20 | `ToOffsetWaitDest` |
+| 10 | 9 | 0x512D00 | `ToPathWaitDest` |
+| 11 | 10 | 0x512DE0 | `TeleportForward` |
+
+**This is a correction, not new information about behaviour**: every prior round's own hex
+addresses and pokes (`record+4 = 3` from `TryAdvanceStalledMovingToPath`, the `phase != 7` guard
+in `TryAdvanceStalledPathDestination`, etc.) were always addressing the right phase value — only
+the ENGLISH NAME attached to phase 2 vs. phase 3 in the surrounding prose was swapped. The task's
+own framing of "phase=2 idle" is therefore precisely `Moving_To_Path` per the DB's own naming, not
+`Following_Path` as a reader following four prior rounds' prose might reasonably have concluded.
+This document's own code comments are corrected going forward (see Files, below) without editing
+the historical rounds above — per this project's own append-only convention for research docs.
+
+### VERIFIED: every transition out of `Moving_To_Path` (0x00511860), enumerated by full disassembly
+
+`tools/disasm.py 0x511860 400` and a follow-on `tools/disasm.py 0x5119E5 500` disassemble the
+handler in full (superseding round 88's own partial read, which stopped before the
+`TestDirectLine` call's full branch structure). Restated precisely (`edi` = the per-member follow
+record, `party+0x24+index*0x88`, confirmed by `edi+4`=phase, `edi+0x18`=PriorPoint,
+`edi+0x5c`=Snapshot, `edi+0x6c`=the accumulator `FollowDiag.MovingToPathAccumulator` already
+reads — all matching round 88's already-established record-relative fields):
+
+1. **Geometric pre-check** (`0x511883-0x511932`): `|PriorPoint − Snapshot|² ` vs.
+   `(MoveBudget·0.7)²` (round 88's own citation, confirmed unchanged). PASS sets a local `ebp = 3`
+   (`Following_Path`'s phase value); FAIL leaves `ebp` at whatever `edi+4` (the CURRENT phase, i.e.
+   2) already reads — a "no advance" default, not yet committed either way.
+2. **Obstacle-avoidance scratch rebuild** (`0x511996-0x511A3C`): reads `edi+0x340`'s own
+   substructure and rebuilds a stack-local scratch record for the upcoming area/line query,
+   initializing one field to the literal `0x7F000000` sentinel — the SAME "not spawned" constant
+   round 74 already documented for `CSWPartyTable+0x0C`'s empty-slot marker.
+3. **`CSWSObject::GetArea` (0x004CB120) then `CSWSArea::TestDirectLine` (0x004BCB70)** — called
+   unconditionally, regardless of step 1's outcome. Its return value (`eax`) branches THREE ways,
+   not two as round 88's own partial read described:
+   - **`eax == 1`** (`0x511AAD`): commits `edi+4 = ebp` — i.e., phase **advances to 3** only if
+     step 1 ALSO passed; otherwise this is a silent no-op re-write of phase 2, but it STILL resets
+     `Snapshot` (`edi+0x5c`) and the accumulator (`edi+0x6c = 0`) — a partial refresh round 88 did
+     not document, since its own read stopped before this branch's full structure.
+   - **`eax == -3`** (`0x511A72`, NEW THIS ROUND, not documented by any prior round): resolves a
+     tracked "other" object id (the same `0x7F000000` sentinel from step 2, run through
+     `CClientExoAppInternal::ServerToClientObjectId` + `CClientExoApp::GetSWParty`) and calls
+     `CSWParty::IsPartyMember` (0x00634620) on it. If IsPartyMember returns **false** — the case
+     any single-companion party is structurally in, since the tracked id is the empty-slot
+     sentinel — commits `edi+4 = 0xA` (**phase 10, `TeleportForward`**) directly, at `0x511AA1`.
+     If IsPartyMember returns true, falls into the same dead-end as the next case.
+   - **anything else** (`0x511AD4`): allocates a `CScriptEvent` (`CServerExoApp::GetServerAIMaster`
+     + `CServerAIMaster::AddEventDeltaTime`, 0x004AED80/0x004B08D0 — matching round 88's own
+     "queues an async re-check that never resolves favourably" finding) and leaves `edi+4`
+     completely untouched. **This is the branch round 88 already live-confirmed as the permanent
+     dead end** — this round's contribution is establishing precisely which OTHER return values
+     the engine itself treats specially (`1`, `-3`) versus which fall into this bucket (everything
+     else), not new live behaviour.
+
+**What this round adds that round 88 did not have**: a genuine THIRD engine-native exit from
+phase 2 — `TestDirectLine == -3` routing to `TeleportForward` — sitting alongside the known accept
+(`==1`, gated on the geometric pre-check) and the known dead end (anything else). Whether live
+`TestDirectLine` calls during an actual stall ever return `-3` specifically, or land in the
+generic dead-end bucket instead, was NOT settled this round (that needs either a live debugger on
+`0x511A72`'s own `cmp eax,-3`, or the same "compute the same comparison ourselves" diagnostic
+trick round 89 used for `PathWaitDest` — `TestDirectLine` itself is a real collision/geometry
+query this plugin cannot cheaply replicate in pure arithmetic the way `PathWaitDest`'s `fcompp`
+was, so that substitute is not available here without further work). **INFERRED, not VERIFIED**:
+this round's working theory for the observed permanent stall is that `TestDirectLine` is landing
+in the generic dead-end bucket (not `-3`) during the documented stalls — otherwise the engine's
+own `-3` branch would already be reaching `TeleportForward` on any single-companion party without
+this plugin's help, which is inconsistent with four rounds of live data showing phase pinned at 2
+for minutes at a time.
+
+### VERIFIED: `TeleportForward` (0x00512DE0), disassembled in full — an engine-native "skip ahead
+### through the recorded trail" recovery, not a value this codebase invented
+
+`tools/disasm.py 0x512DE0 260` plus a follow-on read to its exit. The handler walks
+`CurrentPathNode` forward through the recorded 100-slot circular trail
+(`CSWPartyFollowDataArray::GetPathData`, 0x00634CC0 — the DB's own name; prior rounds' "GetPoint"
+label was a reasonable guess from its addressing shape, not a DB lookup), testing each candidate
+point via `CSWSObject::GetArea` (0x004CB120) + `CSWSArea::TestSafeLocationPoint` (0x004BE5E0) — a
+DIFFERENT check from `TestDirectLine`, confirmed by DB name, not the same call reused — until it
+finds a point that fails the check or reaches the write cursor, wrapping at 100 exactly like
+`PathWaitDest`'s own search. It then commits that node as the new `CurrentPathNode`
+(`ebp+0x24`), writes fresh `TargetPoint`/`Snapshot` from it, zeroes a flag, and — the detail that
+matters most for this round's fix design — **re-enters phase 2 itself**
+(`0x00512EF3: mov dword ptr [ebp+4], 2`), not phase 3 or phase 0. This is structurally different
+from round 88's own disproven `TryAcceptFinalPathNode` (which forced `PathWaitDest`'s phase-3
+output directly, handing `Following_Path`'s handler a segment whose preconditions were never
+re-established, producing the documented 7→3→0→7 cycle): `TeleportForward`'s entire job is
+re-establishing valid preconditions (an obstacle-checked `CurrentPathNode` genuinely ahead of
+where the companion is stuck) before landing back in the SAME phase, which is the reason this
+round treats it as a materially different, better-motivated candidate than the already-disproven
+one — not merely "try a different number."
+
+### Fix candidate: `party_follow_phase2_kick` (default OFF)
+
+Rather than reconstruct `TestDirectLine`'s/`IsPartyMember`'s own multi-argument call shape from
+scratch (an unverified ABI guess this project's own engine-write rule warns against — see
+`docs/CONTRIBUTING.md`'s "Engine-write rules"), the fix pokes ONLY `record+4 = 10` directly, the
+same field and the same value the engine's own `-3` branch already commits, and lets the next
+scheduled `TryDriveFollowLeaderStep` call (already made every frame) route into `TeleportForward`
+through the ordinary jump table — the identical "poke the phase field, let the normal dispatch
+handle the rest" pattern every other fix in this document already uses
+(`TryResetStuckFollowPhase`, `TryAdvanceStalledMovingToPath`, `TryAdvanceStalledPathDestination`,
+`TryAdvanceStalledPathDestinationPhase6`).
+
+**Why this is gated on wall-clock time and leader distance, not `attempts`** (the task's own
+requested shape): the already-shipped, default-ON `TryAdvanceStalledMovingToPath` requires
+`attempts > 0` before it will act on phase 2 at all — a deliberate guard so a companion's
+genuinely first pass through the phase is left alone. Live data across every phase=2 stall this
+document records (round 88's original find, round 91's 13+ continuous minutes, round 94's 45+
+seconds) shows `attempts` (`record+0x44`) reading **exactly 0 for the entire stall duration** —
+per this document's own round-89 disassembly of `WalkUpdateLocation_QuickWalk_FollowLeader`'s
+outer dispatcher (0x0051C7A0-0x0051C7F9), `attempts` only increments if the per-call gate at
+`0x0051C7D0-0x0051C7DF` (`fld [esp+0x14]; fcomp [0x73D700]; ...; jne <skip>`) lets execution reach
+the jump table at all. This round's own trace of `[esp+0x14]`'s producer (`0x0051C716-0x0051C747`:
+the unsigned-wrapped `StepAccumulator` — `creature+0xD0`, the SAME field round 80's
+`TryDriveFollowLeaderStep` already pokes — multiplied by a rate factor and the global time-scale
+multiplier at `0x7439BC`) shows the gate SHOULD normally be open once `party_follow_pokestep`'s
+own poke lands (a positive `StepAccumulator` value), which is consistent with `attempts`
+genuinely climbing during OTHER stall shapes this document records (round 91/94's
+`party follow phase6advance` bursts, `pathNode` climbing under the phase-6/7 fixes) — but is not,
+on its own, sufficient to explain why THIS specific shape (`phase=2`, position frozen, `attempts`
+pinned at 0) persists for minutes at a time regardless. **This gap is flagged, not closed, this
+round**: whether the gate is genuinely closing for a reason specific to this stall shape, or
+`attempts` is being reset by some other mechanism this round's disassembly did not find, is left
+as the concrete next disassembly target (see below) — but it does not block shipping a time-gated
+fix, since `TryAdvanceStalledMovingToPath`'s own `attempts > 0` guard cannot POSSIBLY fire while
+`attempts` never leaves 0, and a wall-clock/distance gate does not depend on it either way.
+
+Implemented as:
+
+- **`Phase2StallRule`** (`src/KotorCoop.Plugin/Phase2StallRule.cs`) — pure, dependency-free
+  decision logic (`ShouldKick(phase, phase2StallSeconds, leaderDistanceSquared,
+  stallThresholdSeconds, kickRangeSquared)`), mirroring `FinalNodeGeometryRule`/
+  `PartyFollowTransitionRule`'s own established pattern; compiled into the test project directly
+  (`tests/KotorCoop.Tests.csproj`'s own "plugin compile-include trick," per `docs/CONTRIBUTING.md`)
+  rather than re-implemented in the test.
+- **`Odyssey.TryKickStalledMovingToPathToTeleportForward`**
+  (`src/KotorCoop.Plugin/Odyssey.DoorTransitions.PathNodes.cs`) — resolves the per-member record
+  exactly like every sibling function in this file, checks `phase == 2`, and pokes
+  `record+4 = Phase2StallRule.TeleportForwardPhase` (10). Logs the before/after transition when
+  `logWrites` (the caller's own `party_follow_finelog` flag) is set, matching
+  `TryAdvanceStalledPathDestinationPhase6`'s own direct-write-logging pattern (round 93's own
+  "concrete next step," applied here from the start rather than added in a follow-up).
+- **`PartyFollowController`** (`src/KotorCoop.Plugin/PartyFollowController.cs`) — new kill switch
+  `party_follow_phase2_kick` (default OFF via `PluginConfig.ReadBool`), a per-slot
+  `_inPhase2Run`/`_phase2RunStart` pair tracking how many CONSECUTIVE seconds phase has
+  continuously read 2 (reset the instant phase reads anything else, or immediately after this
+  fix's own poke fires, so a repeat stall after `TeleportForward`'s own re-entry into phase 2 must
+  accumulate its own fresh duration before firing again), and the call site itself: `Phase2StallRule.ShouldKick` against a 5-second threshold
+  (`Phase2KickStallSeconds` — deliberately longer than the general-purpose
+  `StallThresholdSeconds`/2.0s "reissue ActionFollowLeader" check, since this pokes an actual
+  engine phase field rather than reissuing a queued action) and the SAME
+  `FollowKickRangeSquared` (3 units) every other "is the leader genuinely far enough away to be
+  worth interrupting for" check in this controller already uses.
+
+### Honest status
+
+**NOT LIVE-TESTED.** This round had no rig access, per its own task instructions. Everything above
+is disassembly-grounded (VERIFIED by direct reads against the real GOG binary this session, cross-
+checked against `tools/kotor1_0_3.db`) except the working theory for why `TestDirectLine` never
+seems to return `-3` live and why `attempts` stays pinned at 0 (both explicitly marked INFERRED
+above). The fix itself is a genuinely new mechanism — not a repeat of round 88's disproven
+`TryAcceptFinalPathNode` (different target phase, different precondition story) and not merely a
+relaxed version of the already-shipped `TryAdvanceStalledMovingToPath` (different phase target: 10
+vs. 3) — but per this project's own bar, "built and unit-tested" is not "confirmed," and it ships
+default OFF exactly like every other unconfirmed candidate in this document.
+
+### Live-verification recipe for whoever has the rig next
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on both installs. Set `party_follow_phase2_kick=1`
+   and `party_follow_finelog=1` in `coop.ini` (both, for parity with every prior round's own
+   practice, though the mechanism under test — `PartyFollowController` — only ever drives a
+   companion this instance's own engine genuinely owns).
+2. `tools/demo.ps1`, `END_M01AA`, round 88's own exact recipe on the host: `console 'tp 20 22
+   -1.3'` then `tools/blockpoke.ps1 walk 10 15` (a bare-point `walk`, not `console 'walk ...'` —
+   round 94's own note on this still applies).
+3. Let the companion reach the phase=2 idle stall (position frozen, `phase=2` on the
+   `party follow finelog` line, `attempts` reading 0) and hold for 5+ continuous seconds while
+   still farther than 3 units from the leader.
+4. Watch for `party follow phase2kick: 0x{id} fired phase 2 -> 10 (TeleportForward)` in the plugin
+   log — direct, first-person proof of the write firing, the same standard round 93's own
+   direct-write-logging established.
+5. **If the fix works**: `phase` should read 2 again almost immediately after the log line (per
+   `TeleportForward`'s own disassembled exit, it re-enters phase 2, not 3 or 0) but with
+   `pathNode`/`CurrentPathNode` genuinely advanced and `target`/`snapshot` visibly changed on the
+   SAME or the very next finelog line — and, critically, the companion's real position should
+   subsequently resume moving rather than the stall simply reappearing in the same place. If
+   `pathNode` does NOT advance (the write logs but nothing downstream changes), that would mean
+   `TeleportForward`'s own handler is itself gated on something this round's disassembly did not
+   find (its own `TestSafeLocationPoint`/`GetPathData` calls could plausibly refuse every
+   candidate node for reasons this round could not test without a live area) — worth checking
+   directly rather than assuming success from the log line alone.
+6. **If the fix does nothing observable** (log line fires, but `phase` reads straight back to 2
+   with no `pathNode` change and the stall persists): confirms the phase-2 handler's own internal
+   state (not just the phase field) matters for `TeleportForward` to make progress, and the next
+   disassembly target is `TeleportForward`'s own `TestSafeLocationPoint` failure path — does it
+   have its own dead-end (all 100 candidate nodes rejected, landing back on the ORIGINAL
+   `CurrentPathNode` with no real advance)?
+7. Either way: confirm no regression against the existing baseline (`tools/verify.ps1`'s two
+   party-specific checks, no new phase-cycling, both `swkotor.exe` processes still alive at the
+   end) — the same standard every prior round in this document applies before considering a
+   default flip.
+
+### Concrete next step if this round's own theory needs chasing further
+
+If the live pass above shows the fix firing but making no real difference, the two open items this
+round flags but did not resolve become the priority: (a) a live debugger (or an in-process
+"compute the same test" diagnostic, if one can be built without replicating `TestDirectLine`'s own
+geometry query) on `0x511A72`'s `cmp eax,-3` to see what `TestDirectLine` is actually returning
+during a live stall, and (b) tracing precisely why `attempts` never leaves 0 for this exact shape
+specifically, when the same `StepAccumulator`-poke mechanism is live-confirmed to let `attempts`
+climb freely during the phase-6/7 stalls this document already has direct-write-logging evidence
+for.
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean, x86 confirmed, 0 warnings 0 errors (the one
+pre-existing `PortraitController.cs` `CA2014` warning is unrelated and untouched — not present in
+this build's own output regardless, since `-WarnAsError` would otherwise fail it).
+`dotnet test tests/KotorCoop.Tests --no-build`: **2367/2367 passed** (0 failed, 0 skipped) — 8 new
+tests in `Phase2StallRuleTests.cs` (wrong-phase rejection, not-stalled-long-enough rejection,
+within-kick-range rejection, the positive case, both threshold boundaries, the zero-duration edge
+case, and the two phase constants), exercising `Phase2StallRule` in isolation.
+`Odyssey.TryKickStalledMovingToPathToTeleportForward` and its `PartyFollowController` wiring are
+new unsafe engine-pointer code, same as every prior round's fix candidates, and are NOT exercised
+by the (x86 NativeAOT, unreferenced-by-tests) plugin test project — they can only be verified
+live. No `SharedBlock`/protocol version change — everything this round touches is plugin-internal
+(a new phase-field poke and its own config flag), nothing crosses the wire.
+
+### Files
+
+- `src/KotorCoop.Plugin/Phase2StallRule.cs` (new) — pure stall/distance decision logic, and the
+  disassembly-grounded doc comments for `MovingToPathPhase`/`TeleportForwardPhase`.
+- `src/KotorCoop.Plugin/Odyssey.DoorTransitions.PathNodes.cs` —
+  `TryKickStalledMovingToPathToTeleportForward` (new), with the full disassembly trace of
+  `Moving_To_Path`'s three exits and `TeleportForward`'s own re-entry behaviour in its doc
+  comment.
+- `src/KotorCoop.Plugin/PartyFollowController.cs` — new kill switch `party_follow_phase2_kick`
+  (default OFF), the `_inPhase2Run`/`_phase2RunStart` per-slot tracking pair, and the call site in
+  the existing per-companion loop.
+- `tests/KotorCoop.Tests/Phase2StallRuleTests.cs` (new) — 8 unit tests for `Phase2StallRule`.
+- `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
+  `Phase2StallRule.cs`.
+- `docs/CONFIG.md`, `profiles/coop.ini.example` — documented the new flag, matching the existing
+  two unconfirmed-candidate rows' own format.
+- `docs/research/party-reconciliation.md` — this entry.

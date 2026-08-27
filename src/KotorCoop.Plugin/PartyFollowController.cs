@@ -199,6 +199,30 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     private readonly bool _extendFinalNodeTrail =
         PluginConfig.ReadBool("party_follow_extend_final_node", false);
 
+    /// <summary>ROUND 95 (2026-08-28 static pass, party-reconciliation.md): see
+    /// Odyssey.TryKickStalledMovingToPathToTeleportForward's and Phase2StallRule's own remarks —
+    /// the phase=2 idle stall four independent live A/B rounds (90, 91, 94, the 2026-08-28
+    /// re-run) found downstream of every previously-shipped fix, itself never root-caused. Forces
+    /// the engine's own TeleportForward recovery phase once phase=2 has held continuously for
+    /// <see cref="Phase2KickStallSeconds"/> while the leader is genuinely far away — a
+    /// wall-clock/distance gate, not an <c>attempts</c>-gate, since live data shows <c>attempts</c>
+    /// never leaves 0 for this exact shape. NOT YET LIVE-TESTED — no rig access this round. Kill
+    /// switch (to enable): <c>party_follow_phase2_kick=1</c> (default OFF).</summary>
+    private readonly bool _phase2Kick = PluginConfig.ReadBool("party_follow_phase2_kick", false);
+
+    /// <summary>How long <c>phase</c> must continuously read <see cref="Phase2StallRule.MovingToPathPhase"/>
+    /// before <see cref="_phase2Kick"/> is allowed to fire — long enough that this is clearly not
+    /// a companion's genuine, still-legitimate first pass through the phase (round 88's own
+    /// "engine's own normal path run once" reasoning for its attempts-gated sibling), short
+    /// enough not to leave a co-op partner watching a frozen companion for very long. Deliberately
+    /// longer than <see cref="StallThresholdSeconds"/> (the general "reissue ActionFollowLeader"
+    /// stall check) — this pokes an actual engine phase field, a stronger intervention that
+    /// deserves a higher bar than reissuing an action the queue may already hold.</summary>
+    private const double Phase2KickStallSeconds = 5.0;
+
+    private readonly bool[] _inPhase2Run = new bool[PartyNpcSlots];
+    private readonly double[] _phase2RunStart = new double[PartyNpcSlots];
+
     /// <summary>How many consecutive frames the exact terminal shape must persist before
     /// Odyssey.TryAcceptFinalPathNode is allowed to fire — enough to rule out a single,
     /// possibly-still-legitimate visit, short enough not to add a perceptible extra pause.</summary>
@@ -477,6 +501,46 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     {
                         Odyssey.TryAcceptFinalPathNode(objectId, out _);
                         _finalNodeStallFrames[slot] = 0;
+                    }
+                }
+
+                // ROUND 95: the phase=2 idle stall — see Odyssey.
+                // TryKickStalledMovingToPathToTeleportForward's and Phase2StallRule's own remarks.
+                // Tracks how many CONSECUTIVE seconds phase has continuously read
+                // Phase2StallRule.MovingToPathPhase, independent of _acceptFinalPathNode's own
+                // (phase-7-only) frame counter above.
+                if (_phase2Kick
+                    && Odyssey.TryGetPhaseAndPathNode(objectId, out int phase2Now, out _))
+                {
+                    if (phase2Now == Phase2StallRule.MovingToPathPhase)
+                    {
+                        if (!_inPhase2Run[slot])
+                        {
+                            _inPhase2Run[slot] = true;
+                            _phase2RunStart[slot] = now;
+                        }
+
+                        float p2dx = pos.X - playerPos.X;
+                        float p2dy = pos.Y - playerPos.Y;
+                        float leaderDistSq = (p2dx * p2dx) + (p2dy * p2dy);
+                        double phase2StallSeconds = now - _phase2RunStart[slot];
+
+                        if (Phase2StallRule.ShouldKick(
+                            phase2Now, phase2StallSeconds, leaderDistSq,
+                            Phase2KickStallSeconds, FollowKickRangeSquared))
+                        {
+                            Odyssey.TryKickStalledMovingToPathToTeleportForward(
+                                objectId, _fineLogEnabled, out _);
+
+                            // Restart the run: if TeleportForward's own re-entry into phase 2
+                            // stalls again, it needs to accumulate its own fresh duration before
+                            // this fires a second time, rather than firing every frame thereafter.
+                            _phase2RunStart[slot] = now;
+                        }
+                    }
+                    else
+                    {
+                        _inPhase2Run[slot] = false;
                     }
                 }
             }
