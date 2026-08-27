@@ -23,6 +23,17 @@ namespace KotorCoop.Tests;
 /// <see cref="FakeBridge"/> plus a simulated single-slot cheat round trip in
 /// <see cref="AgentLoop"/> — and did NOT reproduce it. See docs/research/party-pool-sync.md §8
 /// for the full write-up of both results and what is still open.
+///
+/// Root cause 3 (docs/research/party-pool-sync.md §11/§12, 2026-08-28): the OPPOSITE defect —
+/// rapid same-key local changes silently under-counted, and a landed relay racing a further
+/// local change on the same key could lock it out of sync indefinitely — both caused by the
+/// same blanket "exclude this key from detection for up to 2s" guard that fixed root cause 2.
+/// <see cref="ThreeRapidSameKeyLocalDetectionsAreAllPublishedNotSwallowed"/>,
+/// <see cref="ADepositImmediatelyFollowedByAWithdrawalOfTheSameKeyNetsToZeroNotSwallowed"/> and
+/// <see cref="APeerApplyLandingInTheSameTickAsAGenuineLocalDepositOfTheSameKeyCountsBothAsTwo"/>
+/// are the regression pins for the three under-count/lockout shapes found live; the guard is now
+/// count-aware (compare against the expected delta a publish/queued-apply owes, not a blanket
+/// key exclusion) — see <c>PartyPoolPump.cs</c>'s own doc comment.
 /// </summary>
 public class PartyPoolLoopbackTests
 {
@@ -628,6 +639,237 @@ public class PartyPoolLoopbackTests
     }
 
     /// <summary>
+    /// System-level confidence (real sockets, real store/sender/relay) that rapid same-key
+    /// deposits converge correctly end to end: host deposits three times, then — once
+    /// converged — the client deposits three more of the same key, and both sides reach +6.
+    /// The writes are spaced 300ms apart, comfortably past the bridge's own 150ms scan cache
+    /// (so each is independently observed) but that is ALSO comfortably longer than a step-1
+    /// entry's own near-instant self-confirm cycle under either the old or new pump logic — so,
+    /// unlike <see cref="ThreeRapidSameKeyLocalDetectionsAreAllPublishedNotSwallowed"/> below,
+    /// this test does not reliably land INSIDE the old exclusion window and is not itself a
+    /// regression pin for the bug (it passes against the pre-fix code too — the old guard's
+    /// exclusion is only a few milliseconds wide in practice for a self-detected key with
+    /// nothing else touching it, since the very next tick's scan already reconfirms and clears
+    /// it). It stays in the suite as end-to-end assurance that the store/wire/relay layers this
+    /// fix does not touch keep working when the underlying detection mechanism changes.
+    /// </summary>
+    [Fact]
+    public async Task RapidSameKeyDepositsOnEitherSideAreAllCountedNotSwallowed()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            // Three rapid deposits on the HOST - each spaced past the bridge's 150ms scan cache
+            // (so each is independently observed) but all well inside the old 2000ms grace
+            // window that used to exclude a pending key from further detection entirely.
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 1;
+            await Task.Delay(300);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 2;
+            await Task.Delay(300);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 3;
+
+            Assert.True(
+                await WaitForAsync(() => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"host under-counted its own rapid deposits; got {rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(() => rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"client under-counted the host's rapid deposits; got {rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3
+                        && rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3,
+                    TimeSpan.FromSeconds(5)),
+                $"rapid deposits drifted after converging - host={rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            // Symmetry: the CLIENT now deposits three more of the SAME key. The client's own
+            // engine already sits at 3 (reconciled from the host's deposits above), so this
+            // pushes it to 6.
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 4;
+            await Task.Delay(300);
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 5;
+            await Task.Delay(300);
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 6;
+
+            Assert.True(
+                await WaitForAsync(() => rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 6, Timeout),
+                $"client under-counted its own rapid deposits; got {rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(() => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 6, Timeout),
+                $"host under-counted the client's rapid deposits; got {rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 6
+                        && rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 6,
+                    TimeSpan.FromSeconds(5)),
+                $"rapid deposits drifted after converging - host={rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// The actual regression pin for the under-count bug's first mechanism (docs/research/
+    /// party-pool-sync.md §11/§12): three genuine, DISTINCT local deposits of the SAME key,
+    /// each landing well inside the OLD <c>LocalDetectGraceMs</c> (2000ms) exclusion window
+    /// relative to the one before it, must each be individually detected and published — not
+    /// silently swallowed because an earlier one on the same key was still "pending" when the
+    /// next one happened. Deterministic <see cref="ScriptedBridge"/>, one call per tick, so the
+    /// second and third deposits land on the tick immediately after the previous one — no
+    /// wall-clock margin for the old guard's near-instant self-confirm to clear the key first
+    /// (see <see cref="RapidSameKeyDepositsOnEitherSideAreAllCountedNotSwallowed"/> above for why
+    /// the async, real-timing version of this scenario cannot reliably hit the window).
+    ///
+    /// Against the OLD blanket-exclusion guard, this fails: the moment the first deposit is
+    /// detected, the key is excluded from step 1 entirely until either a matching scan or the 2s
+    /// grace expires — so the second and third deposits' own movement is invisible to step 1 the
+    /// whole time, and <c>_lastScan</c> (updated unconditionally every tick regardless of
+    /// exclusion) silently advances past them, leaving no residual diff to ever detect. The
+    /// total sticks at whatever the first grace-protected value was.
+    /// </summary>
+    [Fact]
+    public void ThreeRapidSameKeyLocalDetectionsAreAllPublishedNotSwallowed()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick 1: baseline (silent)
+                new() { [Blaster] = 1 }, // tick 2: first deposit
+                new() { [Blaster] = 2 }, // tick 3: second deposit, before the first is confirmed
+                new() { [Blaster] = 3 }, // tick 4: third deposit, before the second is confirmed
+                new() { [Blaster] = 3 }, // tick 5: steady
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            Assert.Equal(3, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The other half of the same under-count bug (docs/research/party-pool-sync.md §11): a
+    /// deposit detected and published, then — BEFORE any confirming scan can reconfirm it landed
+    /// — a genuine withdrawal of the SAME key. Under the old blanket-exclusion guard this key
+    /// stayed excluded from detection for up to 2000ms REGARDLESS of what a fresh scan showed
+    /// (only an EXACT match to the original target cleared it early), so a withdrawal landing
+    /// inside that window was invisible: <c>_lastScan</c> silently advanced to the post-
+    /// withdrawal value every tick regardless (it is updated unconditionally), so once the grace
+    /// window finally expired there was no residual diff left to detect at all — the withdrawal
+    /// was gone without a trace, leaving a phantom deposit in the store forever. This uses a
+    /// <see cref="ScriptedBridge"/> (deterministic, no wall-clock luck needed) to force the
+    /// withdrawal into the tick immediately after the deposit, before any reconfirming scan.
+    /// </summary>
+    [Fact]
+    public void ADepositImmediatelyFollowedByAWithdrawalOfTheSameKeyNetsToZeroNotSwallowed()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick1: baseline (silent, empty pool)
+                new() { [Blaster] = 5 }, // tick2: deposit detected & published
+                [], // tick3: withdrawal lands BEFORE any confirming scan - back to 0
+                [], // tick4: steady at 0 - nothing further should move
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            Assert.Equal(0, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The second, permanent-lockout half of the same under-count bug (docs/research/party-
+    /// pool-sync.md §11's mechanism 2): a peer's op has already updated THIS instance's store
+    /// (<see cref="ICoopSession.PartyPoolTotals"/>) and a reconcile apply is queued/pending for
+    /// it, when a genuine LOCAL deposit of the SAME key lands in the SAME scan window as the
+    /// queued apply's own effect. The two are indistinguishable in the raw engine number (one
+    /// combined jump), so the fix must publish exactly the EXCESS beyond what the pending apply
+    /// alone explains — not the full observed jump (double-counts the peer's own contribution,
+    /// already in the store) and not nothing (drops the genuine local deposit, and — under the
+    /// OLD code — permanently locks the key out of further detection/reconcile, since the
+    /// pending entry never matches a fresh scan that also carries the extra local change).
+    /// Deterministic <see cref="ScriptedBridge"/>: no client, no wire — this isolates the pure
+    /// pump mechanism, seeding the peer's own contribution directly into the store the way
+    /// <c>CoopClient.HandlePartyPoolOp</c>/<c>CoopHost.HandlePartyPoolOp</c> would.
+    /// </summary>
+    [Fact]
+    public void APeerApplyLandingInTheSameTickAsAGenuineLocalDepositOfTheSameKeyCountsBothAsTwo()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick1: baseline (silent, empty pool) - seeds _lastScan = empty
+                [], // tick2: still 0 in the engine - the queued apply has not landed yet. This is
+                    // the tick where step 2's reconcile notices the store (seeded with the peer's
+                    // Add below, just before this PumpOnce) disagrees with the engine and queues
+                    // an apply, registering a pending target of 1.
+                new() { [Blaster] = 2 }, // tick3: BOTH the peer apply's own +1 AND a genuine local
+                                          // +1 deposit land together, observed as one combined
+                                          // jump from 0 to 2.
+                new() { [Blaster] = 2 }, // tick4: steady - nothing further should move.
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            agent.PumpOnce(); // tick1: baseline
+
+            // Simulate a peer's op having already been applied to this instance's own store -
+            // exactly what CoopHost/CoopClient's HandlePartyPoolOp does before the pump ever
+            // looks at PartyPoolTotals again.
+            host.PartyPool.Record(PartyPoolOpKind.Add, Blaster, 1);
+
+            agent.PumpOnce(); // tick2: reconcile queues the apply, registers the pending target
+            agent.PumpOnce(); // tick3: the combined jump - must publish only the excess (+1)
+            agent.PumpOnce(); // tick4: steady
+
+            Assert.Equal(2, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
     /// The depositing-side duplicate live-reproduced 2026-08-28
     /// (docs/research/party-pool-sync.md §9): a HOST-originated <c>pooladd</c>, applied through
     /// the REAL single-slot staging-cheat round trip, ends up applied to the host's own engine
@@ -725,13 +967,25 @@ public class PartyPoolLoopbackTests
     /// item whose resref briefly failed to resolve — see docs/research/party-pool-sync.md's
     /// KotorGameBridge.PartyPool.cs remarks) — before recovering (0→3→3).
     ///
-    /// Run against a DELIBERATELY REVERTED copy of root cause 2's fix (comment out the
-    /// <c>justDetected</c>/<c>_localDetectExpiry</c> block in <c>PartyPoolPump.cs</c>), this
-    /// test fails: step 1 misreads the glitch as two FURTHER genuine local changes (a real
-    /// Remove then a real Add), leaving <see cref="PartyPoolStore.Version"/> at 3 instead of 1 —
-    /// the exact "republish my own recent local action" shape root cause 1 already named for a
-    /// different trigger (a landed AUTOMATIC apply). Against the current (fixed) code, the
-    /// glitch is absorbed and <c>Version</c> stays 1.
+    /// ⚠ SUPERSEDED, 2026-08-28 (docs/research/party-pool-sync.md §12, root cause 3): this
+    /// test's original assertion (<c>Version</c> staying at 1 — the whole 3→0→0→3→3 wobble
+    /// silently absorbed as noise) depended on <c>LocalDetectGraceMs</c>'s blanket "exclude this
+    /// key from ANY further detection for 2s" guard — the exact mechanism §11 found causes a
+    /// genuine, same-key, same-window local change (a real withdrawal, not a glitch) to be
+    /// silently dropped instead, because the guard cannot tell the two apart without ALSO
+    /// swallowing real data. The replacement (count-aware: compare only against a queued apply's
+    /// own expected value, publish any further difference immediately, no time-based exclusion
+    /// for a self-detected change at all) no longer distinguishes "a transient scan glitch that
+    /// will self-heal" from "a genuine change that happens to net back to the pre-deposit value"
+    /// — nothing can, without either window (both are literally the same sequence of numbers).
+    /// Given that choice, this codebase's own multiset design philosophy (§2.1: "a store's stock
+    /// genuinely goes up and down repeatedly... a one-way ratchet is wrong here too") makes NOT
+    /// losing genuine data the right default, even at the cost of two extra (Remove-then-Add)
+    /// wire ops on the rare occasion a real scan glitch happens to net back to the exact
+    /// pre-deposit value. The FINAL total (what actually matters — no data is lost or doubled)
+    /// still converges correctly; only the intermediate op count changed. See
+    /// <see cref="ADepositImmediatelyFollowedByAWithdrawalOfTheSameKeyNetsToZeroNotSwallowed"/>
+    /// for the regression test covering the case this trade was made for.
     /// </summary>
     [Fact]
     public void AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning()
@@ -759,9 +1013,13 @@ public class PartyPoolLoopbackTests
                 agent.PumpOnce();
             }
 
+            // The FINAL total is still exactly right — nothing lost, nothing doubled — even
+            // though the wobble is no longer silently absorbed (Version is now 3: Add 3, the
+            // glitch's own Remove 3, then the recovery's own Add 3 — see the class remarks
+            // above for why this trade was made).
             Assert.Equal(3, host.PartyPoolTotals.GetValueOrDefault(Blaster));
             Assert.Equal(
-                1u,
+                3u,
                 host.PartyPool.Version);
         }
         finally
