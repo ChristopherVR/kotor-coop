@@ -77,6 +77,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.PartySelectOk] = "partyselect ok",
         [CoopCommandKind.Faction] = "faction 0x14",
         [CoopCommandKind.PazaakEnd] = "pazaak end",
+        [CoopCommandKind.Buy] = "buy Larrim_Store g_w_blstrpstl001",
+        [CoopCommandKind.Sell] = "sell Larrim_Store g_w_blstrpstl001",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

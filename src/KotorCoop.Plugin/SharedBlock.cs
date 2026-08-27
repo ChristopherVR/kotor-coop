@@ -807,4 +807,36 @@ internal partial struct SharedBlock
     /// ⚠ 39, because 7-38 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindPazaakEnd = 39;
+
+    /// <summary>
+    /// DEV VERB (2026-08-28, docs/research/store-sync.md's 2026-08-28 addendum): buys up to
+    /// <see cref="OffsetCheatAmount"/> units of a resref from a store, through the REAL
+    /// <c>CSWGuiStore::BuyItem</c> click handler (<c>Odyssey.BuyFromStore</c>) — gold and item
+    /// both move through the engine's own path, the same call a real click makes. Requires the
+    /// target store's own GUI to already be open (<c>openstore</c> first) — refuses otherwise.
+    ///
+    /// <see cref="OffsetCheatTarget"/> nonzero = the store's object id, and
+    /// <see cref="OffsetCheatText"/> is then the bare resref. <see cref="OffsetCheatTarget"/>
+    /// zero means the store was given as a TAG: <see cref="OffsetCheatText"/> then packs
+    /// <c>"&lt;tag&gt;|&lt;resref&gt;"</c> (a pipe, never a legal tag/resref character) —
+    /// <see cref="OffsetCheatText"/> is the only string field this channel has, and a store's
+    /// identity and the item's resref are both needed at once, unlike every existing
+    /// single-string verb (<c>giveloot</c>'s owner id is always numeric; <c>openstore</c> needs
+    /// only one string). Same packing convention <see cref="CheatKindStoreSell"/> uses.
+    ///
+    /// ⚠ 40, because 7-39 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindStoreBuy = 40;
+
+    /// <summary>
+    /// DEV VERB (2026-08-28, docs/research/store-sync.md's 2026-08-28 addendum): sells up to
+    /// <see cref="OffsetCheatAmount"/> units of a resref from the local player's own inventory
+    /// to a store, through the REAL <c>CSWGuiStore::SellItem</c> click handler
+    /// (<c>Odyssey.SellToStore</c>). Same field layout, same open-GUI requirement and same
+    /// tag-packing convention as <see cref="CheatKindStoreBuy"/> — see that constant's own doc
+    /// comment.
+    ///
+    /// ⚠ 41, because 7-40 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindStoreSell = 41;
 }

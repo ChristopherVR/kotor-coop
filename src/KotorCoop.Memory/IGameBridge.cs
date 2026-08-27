@@ -377,6 +377,28 @@ public static class CheatKinds
     /// ⚠ 39 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint PazaakEnd = 39;
+
+    /// <summary>
+    /// DEV VERB (docs/research/store-sync.md's 2026-08-28 addendum): buys a resref from a
+    /// store through the REAL <c>CSWGuiStore::BuyItem</c> click handler, so gold and item both
+    /// move through the engine's own path. Requires the target store's own GUI already open.
+    /// <c>Target</c> nonzero = store object id (<c>Text</c> then the bare resref); <c>Target</c>
+    /// zero means the store was a TAG (<c>Text</c> packs <c>"tag|resref"</c>). <c>Amount</c> is
+    /// the count. See <c>SharedBlock.CheatKindStoreBuy</c>.
+    ///
+    /// ⚠ 40 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint StoreBuy = 40;
+
+    /// <summary>
+    /// DEV VERB (docs/research/store-sync.md's 2026-08-28 addendum): sells a resref from the
+    /// local player's own inventory to a store through the REAL <c>CSWGuiStore::SellItem</c>
+    /// click handler. Same field layout as <see cref="StoreBuy"/>. See
+    /// <c>SharedBlock.CheatKindStoreSell</c>.
+    ///
+    /// ⚠ 41 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint StoreSell = 41;
 }
 
 /// <summary>

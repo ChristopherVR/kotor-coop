@@ -192,4 +192,127 @@ internal sealed unsafe partial class CheatController
         PluginHost.Log($"openstore: store {what} - ShowStoreGui called, panel populated");
         Answer(SharedBlock.CheatStatusApplied, $"store {what}: opened");
     }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-28 addendum): buys a resref
+    /// from a store through the REAL <see cref="Odyssey.BuyFromStore"/> (the GUI's own Buy
+    /// click handler) — gold and item both move through the engine's own path. See
+    /// <see cref="SharedBlock.CheatKindStoreBuy"/>'s own doc comment for the field packing:
+    /// <see cref="SharedBlock.CheatTarget"/> nonzero names the store by object id and
+    /// <see cref="SharedBlock.CheatText"/> is then the bare resref; <see cref="SharedBlock.CheatTarget"/>
+    /// zero means the store was a tag, packed as <c>"tag|resref"</c> in
+    /// <see cref="SharedBlock.CheatText"/>.
+    /// </summary>
+    private void Buy() => Trade(isBuy: true, player: 0);
+
+    /// <summary>Sell side of <see cref="Buy"/> — see that method's own doc comment and
+    /// <see cref="SharedBlock.CheatKindStoreSell"/>.</summary>
+    private void Sell(nint player) => Trade(isBuy: false, player);
+
+    /// <summary>
+    /// Shared body for <see cref="Buy"/>/<see cref="Sell"/>: resolves the store (by id or tag),
+    /// unpacks the resref out of <see cref="SharedBlock.CheatText"/>'s single string field
+    /// (packed with the store's own tag when no numeric id was given — see
+    /// <see cref="SharedBlock.CheatKindStoreBuy"/>), then drives <see cref="Odyssey.BuyFromStore"/>
+    /// or <see cref="Odyssey.SellToStore"/> for <see cref="SharedBlock.CheatAmount"/> units
+    /// (default 1, clamped to 100 — a typo should not loop hundreds of engine calls).
+    /// </summary>
+    private void Trade(bool isBuy, nint player)
+    {
+        string verb = isBuy ? "buy" : "sell";
+        uint storeId = block.CheatTarget;
+
+        byte* text = block.CheatText;
+        int totalLength = 0;
+        while (totalLength < SharedBlock.CheatTextLength - 1 && text[totalLength] != 0)
+        {
+            totalLength++;
+        }
+
+        byte* tagBytes = text;
+        int tagLength = 0;
+        byte* resrefBytes;
+        int resrefLength;
+
+        if (storeId != 0)
+        {
+            resrefBytes = text;
+            resrefLength = totalLength;
+        }
+        else
+        {
+            int pipe = -1;
+            for (int i = 0; i < totalLength; i++)
+            {
+                if (text[i] == (byte)'|')
+                {
+                    pipe = i;
+                    break;
+                }
+            }
+
+            if (pipe < 0)
+            {
+                Answer(SharedBlock.CheatStatusRefused, $"{verb}: no store tag/id given");
+                return;
+            }
+
+            tagLength = pipe;
+            resrefBytes = text + pipe + 1;
+            resrefLength = totalLength - pipe - 1;
+        }
+
+        if (resrefLength == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"{verb}: no resref given");
+            return;
+        }
+
+        nint store;
+        string what;
+
+        if (storeId != 0)
+        {
+            store = Odyssey.ResolveStoreBase(storeId);
+            what = $"0x{storeId:X}";
+
+            if (store == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"{verb}: {Odyssey.LastStoreNote}");
+                return;
+            }
+        }
+        else
+        {
+            store = CreatureFinder.FindStoreByTag(new ReadOnlySpan<byte>(tagBytes, tagLength));
+            what = Encoding.ASCII.GetString(tagBytes, tagLength);
+
+            if (store == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"no store tagged '{what}' found here");
+                return;
+            }
+
+            storeId = *(uint*)(store + 0x04); // CSWSObject + this = the object id.
+        }
+
+        int count = Math.Clamp(block.CheatAmount > 0 ? block.CheatAmount : 1, 1, 100);
+        string resref = Encoding.ASCII.GetString(resrefBytes, resrefLength);
+
+        bool applied = isBuy
+            ? Odyssey.BuyFromStore(storeId, resrefBytes, resrefLength, count, out int moved)
+            : Odyssey.SellToStore(player, storeId, resrefBytes, resrefLength, count, out moved);
+
+        if (!applied)
+        {
+            PluginHost.Log($"{verb}: '{resref}' x{count} store {what} failed - {Odyssey.LastStoreNote}");
+            Answer(SharedBlock.CheatStatusEngineRefused, $"{verb} '{resref}' failed: {Odyssey.LastStoreNote}");
+            return;
+        }
+
+        string note = moved < count ? $" (only {moved} available)" : string.Empty;
+        string direction = isBuy ? "from" : "to";
+        PluginHost.Log($"{verb}: {verb} '{resref}' x{moved} {direction} store {what}{note}");
+        Answer(SharedBlock.CheatStatusApplied, $"{verb} '{resref}' x{moved} {direction} store {what}{note}");
+    }
 }

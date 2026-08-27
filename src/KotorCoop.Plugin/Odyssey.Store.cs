@@ -404,4 +404,236 @@ internal static unsafe partial class Odyssey
 
         return true;
     }
+
+    // ---- buy/sell: drive the real GUI button handlers directly (2026-08-28 addendum) -------
+    //
+    // Task: `buy`/`sell` dev verbs that move gold through the ENGINE'S OWN path, not a bare
+    // store-repository poke. `CSWSStore::SellItem`/`AcquireItem` (§1.4/§1.5 above) do NOT touch
+    // gold themselves (§1.7's own open question) — fresh disasm this pass of their ONE caller
+    // each (`tools/xrefs.py 0x5c6f70` / `0x5c7610`, already cited in §1.4) settles it:
+    // `CSWGuiStore::BuyItem 0x006C0BE0` / `CSWGuiStore::SellItem 0x006C0D80` (both named in
+    // `tools/kotor1_0_3.db`, VERIFIED) are the GUI panel's own Buy/Sell button click handlers,
+    // both `__thiscall(panel, item) -> void`, `ret 4` (ONE stack arg: the store-stock/inventory
+    // item pointer to move).
+    //
+    // Full VERIFIED trace of BOTH (fresh disasm, this pass): each independently re-resolves
+    // the ACTING PLAYER through `CServerExoApp::GetPlayerCreatureId 0x4AEA40` ->
+    // `GetCreatureByGameObjectID 0x4AE770`, and the OPEN STORE through the panel's own
+    // `+0x2278` (`StorePanelObjectIdOffset`, already declared above) ->
+    // `GetStoreByGameObjectID 0x4AE7B0` — i.e. NEITHER the player NOR the store is a parameter;
+    // the panel and the item are the only inputs. Both then, in order:
+    //   1. `CSWGuiStore::GetItemBuyValue 0x6C0790` / `GetItemSellValue 0x6C07F0` (panel
+    //      methods, one arg = the item) price the item;
+    //   2. `CSWSCreature::SetGold 0x4EDD90` (one arg, ABSOLUTE not delta) writes the player's
+    //      new total, computed against a RUNNING CACHED INT at panel `+0x2270` — see the
+    //      correction below;
+    //   3. the store's own native `SellItem 0x5C6F70` / `AcquireItem 0x5C7610` actually moves
+    //      the item (buy: `push item; push player; ecx=store; call 0x5c6f70`; sell, the
+    //      finite-stack tail: `push splitOrRemovedItem; ecx=store; call 0x5c7610`);
+    //   4. `PopulateStoreItemListBox 0x6C1840` / `PopulateInventoryItemListBox 0x6C0850`
+    //      refresh the two on-screen lists, and the cached gold int is written back to the
+    //      currency label.
+    // Gold changes through the SAME call a real click makes (step 2) — this closes §1.7/§2.5's
+    // own "no gold movement found inside SellItem/AcquireItem themselves" note: it was never
+    // supposed to be there, it is one level up, in the GUI handler.
+    //
+    // CORRECTION to §1.2/§1.7's own NEEDS-LIVE item ("CSWGuiStore+0x2270 = a cached resolved
+    // pointer, exact identity unconfirmed"): it is not a pointer of any kind. `PopulateStore`
+    // (0x006C0610, already partially quoted in §1.2) calls `CSWSCreature::GetGold 0x4EDD60` on
+    // the resolved PC and stores the plain INT result at `+0x2270`; `BuyItem`/`SellItem` both
+    // read-modify-write that same int (subtract the buy price / add the sell price) before
+    // handing it to `SetGold`. It is the panel's own cached "gold currently displayed on the
+    // currency label" int, settled by this pass's fresh disasm without needing a live process.
+    //
+    // One `BuyItem`/`SellItem` call moves exactly ONE unit of the given stack — the store's own
+    // native decrement-by-1-or-unlink logic (§1.5) still runs underneath. Buying/selling
+    // `count` units means calling it `count` times, RE-RESOLVING a matching item pointer fresh
+    // before each call (a full unlink invalidates the previous one; `FindFirstMatchingItem`
+    // below re-walks the live repository every time, exactly like `RemoveStoreStack` already
+    // does for the sync channel).
+    //
+    // Both handlers need the TARGET store's own GUI already open — there is no store parameter
+    // to hand them, only whatever `panel+0x2278` already names — so both verbs below refuse
+    // (rather than silently acting on the wrong store) unless the currently open panel's own
+    // store id matches the one asked for. This is the task's own "refuse if the store GUI isn't
+    // open" rule, made precise: it is not merely "a store" that must be open, it is THIS one.
+
+    /// <summary>CGuiInGame::ShowStoreGui already declares <see cref="InGameGuiStoreOffset"/>
+    /// and <see cref="StorePanelObjectIdOffset"/>; resolves the currently open store panel, or
+    /// 0 with <see cref="LastStoreNote"/> set.</summary>
+    private static nint ResolveOpenStorePanel()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            LastStoreNote = "no in-game GUI resolved (not in a loaded module)";
+            return 0;
+        }
+
+        nint panel = *(nint*)(gui + InGameGuiStoreOffset);
+        if (panel == 0)
+        {
+            LastStoreNote = "no store GUI is open";
+        }
+
+        return panel;
+    }
+
+    /// <summary>CSWGuiStore::BuyItem(panel, item) 0x006C0BE0, ret 4. VERIFIED, fresh disasm
+    /// this pass — see the section header above for the full trace.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> GuiBuyItemFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006C0BE0;
+
+    /// <summary>CSWGuiStore::SellItem(panel, item) 0x006C0D80, ret 4. VERIFIED, fresh disasm
+    /// this pass — see the section header above for the full trace.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> GuiSellItemFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006C0D80;
+
+    /// <summary>Walks a <c>CItemRepository</c> for the first live item whose Tag matches
+    /// (the same resref proxy <see cref="TagEqualsIgnoreCase"/> already relies on), or 0.
+    /// Re-walked fresh by every caller rather than cached: a prior buy/sell in the same loop
+    /// can unlink or resize the very entry a stale index would have pointed at.</summary>
+    private static nint FindFirstMatchingItem(nint repo, byte* resrefAscii, int resrefLength)
+    {
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 4096)
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            uint id = *(uint*)(ids + (nint)(i * 4));
+            nint item = ResolveItemBase(id);
+            if (item != 0 && TagEqualsIgnoreCase(item, resrefAscii, resrefLength))
+            {
+                return item;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Buys up to <paramref name="count"/> units of the first store-stock item whose tag
+    /// matches <paramref name="resrefAscii"/> from store <paramref name="storeObjectId"/>,
+    /// through the REAL <c>CSWGuiStore::BuyItem</c> click handler — gold and item both move
+    /// through the engine's own path (see the section header above). Requires the store's own
+    /// GUI to already be open and matching <paramref name="storeObjectId"/>. Infinite-stock
+    /// items are valid targets here (unlike the sync channel's own scan) — a manual buy against
+    /// one is exactly what a real click would do (§1.5: the engine spawns a copy, the store's
+    /// own stock never moves).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool BuyFromStore(
+        uint storeObjectId, byte* resrefAscii, int resrefLength, int count, out int bought)
+    {
+        bought = 0;
+        LastStoreNote = string.Empty;
+
+        nint panel = ResolveOpenStorePanel();
+        if (panel == 0)
+        {
+            return false;
+        }
+
+        uint openStoreId = *(uint*)(panel + StorePanelObjectIdOffset);
+        if (openStoreId != storeObjectId)
+        {
+            LastStoreNote =
+                $"the open store is 0x{openStoreId:X}, not the requested 0x{storeObjectId:X} - open it first";
+            return false;
+        }
+
+        nint repo = ResolveStoreRepo(storeObjectId);
+        if (repo == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            nint item = FindFirstMatchingItem(repo, resrefAscii, resrefLength);
+            if (item == 0)
+            {
+                break;
+            }
+
+            GuiBuyItemFn(panel, item);
+            bought++;
+        }
+
+        if (bought == 0)
+        {
+            LastStoreNote = $"no stock matching that resref in store 0x{storeObjectId:X}";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Sells up to <paramref name="count"/> units of the first item in
+    /// <paramref name="player"/>'s own inventory whose tag matches
+    /// <paramref name="resrefAscii"/> to store <paramref name="storeObjectId"/>, through the
+    /// REAL <c>CSWGuiStore::SellItem</c> click handler. Requires the store's own GUI to already
+    /// be open and matching <paramref name="storeObjectId"/>.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool SellToStore(
+        nint player, uint storeObjectId, byte* resrefAscii, int resrefLength, int count, out int sold)
+    {
+        sold = 0;
+        LastStoreNote = string.Empty;
+
+        nint panel = ResolveOpenStorePanel();
+        if (panel == 0)
+        {
+            return false;
+        }
+
+        uint openStoreId = *(uint*)(panel + StorePanelObjectIdOffset);
+        if (openStoreId != storeObjectId)
+        {
+            LastStoreNote =
+                $"the open store is 0x{openStoreId:X}, not the requested 0x{storeObjectId:X} - open it first";
+            return false;
+        }
+
+        if (player == 0)
+        {
+            LastStoreNote = "no player resolved";
+            return false;
+        }
+
+        nint repo = *(nint*)(player + CreatureItemRepo);
+        if (repo == 0)
+        {
+            LastStoreNote = "player has no item repository";
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            nint item = FindFirstMatchingItem(repo, resrefAscii, resrefLength);
+            if (item == 0)
+            {
+                break;
+            }
+
+            GuiSellItemFn(panel, item);
+            sold++;
+        }
+
+        if (sold == 0)
+        {
+            LastStoreNote = "no matching item in inventory";
+            return false;
+        }
+
+        return true;
+    }
 }

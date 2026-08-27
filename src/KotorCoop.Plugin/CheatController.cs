@@ -254,6 +254,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 PazaakEnd();
                 break;
 
+            case SharedBlock.CheatKindStoreBuy:
+                Buy();
+                break;
+
+            case SharedBlock.CheatKindStoreSell:
+                Sell(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

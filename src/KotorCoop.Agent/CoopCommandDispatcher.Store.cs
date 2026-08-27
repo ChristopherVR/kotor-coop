@@ -71,4 +71,44 @@ public sealed partial class CoopCommandDispatcher
 
         SendCheat(new CheatRequest(CheatKinds.OpenStore, Text: token));
     }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-28 addendum): buys
+    /// <paramref name="count"/> units of <paramref name="resref"/> from the store named by
+    /// <paramref name="storeToken"/> (an object id or a tag), through
+    /// <see cref="CheatKinds.StoreBuy"/>. See <see cref="Sell"/> for the sell side and
+    /// <c>SharedBlock.CheatKindStoreBuy</c>'s own doc comment for the field packing this
+    /// mirrors: <paramref name="storeToken"/> parsing as a numeric id sends it as
+    /// <c>Target</c> (with <paramref name="resref"/> as the bare <c>Text</c>); a tag sends
+    /// <c>Target=0</c> and packs <c>"token|resref"</c> into <c>Text</c> instead — the ONE
+    /// string field the wire cheat request has, and this verb needs two independent strings at
+    /// once (unlike <c>openstore</c>, which only ever needs one).
+    /// </summary>
+    private void Buy(string storeToken, string resref, int count) => Trade(CheatKinds.StoreBuy, storeToken, resref, count, "buy");
+
+    /// <summary>Sell side of <see cref="Buy"/> — see that method's own doc comment.</summary>
+    private void Sell(string storeToken, string resref, int count) => Trade(CheatKinds.StoreSell, storeToken, resref, count, "sell");
+
+    private void Trade(uint kind, string storeToken, string resref, int count, string verb)
+    {
+        if (storeToken.Length == 0)
+        {
+            Reply($"{verb}: no store tag or id given");
+            return;
+        }
+
+        if (resref.Length == 0)
+        {
+            Reply($"{verb}: no resref given");
+            return;
+        }
+
+        if (ConsoleCommand.TryParseObjectId(storeToken, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(kind, Target: objectId, Text: resref, Amount: count));
+            return;
+        }
+
+        SendCheat(new CheatRequest(kind, Text: $"{storeToken}|{resref}", Amount: count));
+    }
 }

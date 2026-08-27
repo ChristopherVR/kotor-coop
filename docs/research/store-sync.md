@@ -939,3 +939,168 @@ primitive exists in this codebase yet. `store_sync` stays at its default OFF in 
 and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean (no source changed this pass beyond
 the unrelated `build.ps1` `$env:Platform` environment fix recorded in `companion-state-sync.md`'s
 own 2026-08-28 entry).
+
+## Addendum (2026-08-28): `buy`/`sell` — the click-injection gap the previous pass named,
+## closed by calling the CLICK HANDLERS themselves instead of injecting a click
+
+The prior pass's own verdict, restated exactly: "there is still no way to stage a real store
+transaction from this project's own console primitives... buying/selling has no equivalent
+workaround yet." This pass closes that gap without injecting a click at all — the same trick
+`openstore` already used against `ShowStoreGui`, applied one level further down the chain.
+
+### The two functions, VERIFIED (fresh disasm, this pass)
+
+`tools/q.py sql` names both directly (confirming `tools/kotor1_0_3.db`'s own naming, not
+guessed): **`CSWGuiStore::BuyItem` `0x006C0BE0`** and **`CSWGuiStore::SellItem`
+`0x006C0D80`** — the GUI panel's own Buy/Sell button click handlers, `__thiscall(this=panel,
+item) -> void`, `ret 4` (one stack argument each: the item pointer to move). Full disasm of
+both, cross-checked against `tools/xrefs.py 0x5c6f70`/`0x5c7610` (each engine-side
+`SellItem`/`AcquireItem` has exactly one caller — §1.4 already established this; this pass
+disassembles that one caller instead of leaving it untraced):
+
+```
+CSWGuiStore::BuyItem(panel, item)                     0x006C0BE0, ret 4
+  edi = CServerExoApp::GetPlayerCreatureId 0x4AEA40(server)        -- the ACTING PLAYER's id
+  edi = CServerExoApp::GetCreatureByGameObjectID 0x4AE770(server, edi)
+  ebp = CServerExoApp::GetStoreByGameObjectID 0x4AE7B0(server, panel+0x2278)   -- THE OPEN STORE
+  CSWSCreature::GetItemRepository 0x4EF770(edi, 1)      -- refuses if the player has none
+  CSWGuiManager::PlayGuiSound 0x40A140(panel+0x18, 9)   -- the Buy click sound
+  eax = CSWGuiStore::GetItemBuyValue 0x6C0790(panel, item)          -- the price
+  edx = panel+0x2270 - eax ; panel+0x2270 = edx         -- see the correction below
+  CSWSCreature::SetGold 0x4EDD90(edi, edx)              -- ABSOLUTE, not a delta
+  CSWSStore::SellItem 0x5C6F70(ebp, item, edi)           -- the item ACTUALLY moves (§1.4/§1.5)
+  CSWGuiStore::PopulateStoreItemListBox 0x6C1840(panel)  -- refresh both lists, currency label
+
+CSWGuiStore::SellItem(panel, item)                     0x006C0D80, ret 4      -- SAME shape,
+  ... identical resolve of edi(player)/ebp(store) via the same two calls ...    mirrored:
+  eax = CSWGuiStore::GetItemSellValue 0x6C07F0(panel, item)
+  edx = panel+0x2270 + eax ; panel+0x2270 = edx          -- ADD, not subtract
+  CSWSCreature::SetGold 0x4EDD90(edi, edx)
+  CSWSStore::AcquireItem 0x5C7610(ebp, itemToGive)        -- the store's own native routine
+  CSWGuiStore::PopulateInventoryItemListBox 0x6C0850(panel)
+```
+
+**Confirms, directly, §1.7's own open question** ("no gold movement inside
+`SellItem`/`AcquireItem` themselves... INFERRED that the GUI handler is where it happens — not
+traced"): the GUI handler is exactly where it happens, one call (`SetGold`) per handler, and it
+is the ONLY gold-moving call either handler makes.
+
+### Correction to §1.2/§1.7: `CSWGuiStore+0x2270` is a cached GOLD INT, not a pointer
+
+§1.7 left this an open NEEDS-LIVE item: "the exact meaning of `CSWGuiStore`'s `+0x2270` field
+(cached `CSWSStore*` vs. some other resolved owner) was not independently confirmed." Settled
+by static disasm alone, no live process needed: `PopulateStore` (`0x006C0610`, already quoted
+in §1.2) calls `CSWSCreature::GetGold 0x4EDD60` on the resolved PC and stores the plain INT
+result at `+0x2270`; `BuyItem`/`SellItem` (above) both read-modify-write that same int (minus
+the buy price / plus the sell price) before handing it straight to `SetGold`. It is the panel's
+own cached "gold currently shown on the currency label" running total, not a pointer of any
+kind — the §1.2 comment's own "(or the owner it resolves through — see NEEDS-LIVE below)"
+hedge is resolved in favour of neither guess.
+
+### The design: call the click handlers directly, refuse unless THIS store's GUI is open
+
+Neither handler takes the player or the store as a parameter — both are re-resolved from
+scratch every call (`GetPlayerCreatureId`/`GetCreatureByGameObjectID` for the player,
+`panel+0x2278` -> `GetStoreByGameObjectID` for the store, exactly `openstore`'s own resolve
+chain). The only external input either needs is the PANEL and an ITEM POINTER — so `buy`/`sell`
+below refuse outright unless the target store's own GUI is already open (`openstore` first) and
+its `panel+0x2278` matches the requested store's id; there is no way to hand either function a
+store that is not the one currently on screen, matching the task's own "refuse if the store GUI
+isn't open" instruction exactly, made precise (it is not "a store", it is THIS store).
+
+One call moves exactly one unit of the given stack — the store's own native decrement-by-1-or-
+unlink logic (§1.5) still runs underneath every call. `count > 1` means calling the handler
+`count` times, re-walking the live repository fresh before each call (`FindFirstMatchingItem`,
+the same resref-as-tag-proxy match `TagEqualsIgnoreCase`/`RemoveStoreStack` already use) rather
+than caching an index — a full unlink on a `count`-1 stack invalidates the previous match.
+Infinite-stock items are valid `buy` targets (unlike the sync channel's own scan, which
+deliberately excludes them, §2.1): a manual buy against one is exactly what a real click does
+(§1.5 — the engine spawns a copy, the store's own stock never moves), so there is no reason to
+refuse it here.
+
+### What was built
+
+`src/KotorCoop.Plugin/Odyssey.Store.cs` — `GuiBuyItemFn`/`GuiSellItemFn` (the two delegates
+above), `ResolveOpenStorePanel`, `FindFirstMatchingItem`, `BuyFromStore(storeObjectId, resref,
+resrefLength, count, out bought)`, `SellToStore(player, storeObjectId, resref, resrefLength,
+count, out sold)`. `src/KotorCoop.Plugin/CheatController.Store.cs` — `Buy()`/`Sell(player)`,
+sharing a `Trade(isBuy, player)` body that unpacks the store id/tag and resref out of the wire
+request (see the field-packing note below), clamps count to `[1, 100]` (a typo should not loop
+hundreds of engine calls), and reports how many actually moved if the store ran out partway
+through. `SharedBlock.CheatKindStoreBuy = 40` / `CheatKindStoreSell = 41`,
+`IGameBridge.CheatKinds.StoreBuy = 40` / `StoreSell = 41` (mirrored, `CheatKindSyncTests`
+covers both by construction). `CheatController.cs`'s dispatch switch gained the two cases.
+
+**The field-packing problem, and why it needed a new convention**: `buy`/`sell` need BOTH a
+store identity (tag or id) AND an item resref at once — unlike every existing single-string
+verb (`giveloot`'s target is always a numeric owner id; `openstore` needs only one string
+total). The wire cheat request has exactly one string field (`CheatText`, 32 bytes). Resolution:
+when the store is given as a numeric id, it travels in the existing numeric `CheatTarget` field
+and `CheatText` carries the bare resref (identical shape to `giveloot`). When the store is a
+TAG, `CheatTarget` is sent as 0 and `CheatText` packs `"<tag>|<resref>"` — a pipe is not a legal
+character in either a GFF tag or a resref, so the split is unambiguous. `startdialog` (next
+addendum, below) needed the identical shape for an NPC tag + an optional dialog resref and
+reuses the same convention.
+
+**Session/Agent**: `src/KotorCoop.Session/ConsoleCommand.cs` — `CoopCommandKind.Buy`/`Sell`,
+verb table rows. `src/KotorCoop.Session/ConsoleCommand.Items.cs` — `ParseBuy`/`ParseSell`
+(shared `ParseStoreTrade`): `<store-tag|id> <resref> [count]`, count optional (default 1).
+`src/KotorCoop.Agent/CoopCommandDispatcher.Store.cs` — `Buy`/`Sell`, sharing a `Trade` body that
+performs the numeric-vs-tag split described above. `CoopCommandDispatcher.cs`'s dispatch
+dictionary gained the two entries. `src/KotorCoop.Plugin/ConsoleVerbCatalog.cs` and
+`FuncInterpHook.cs` both gained `buy`/`sell` — reachable at the real `~` console, not
+blockpoke-only, same as `openstore`/`pazaak`/`setglobal`. `docs/CONSOLE.md` gained both rows.
+
+**Tests**: `tests/KotorCoop.Tests/ConsoleCommandVerbTableCoverageTests.cs` gained sample lines
+for both new `CoopCommandKind`s (`EveryNonSentinelKindHasASampleLine`/`SampleLineParsesToItsKind`
+cover them by construction); `ConsoleCompletionEngineTests`'s catalog-sync assertions
+(`EveryCatalogVerbParsesToACoopCommand`, `NoCoopVerbShadowsARetailConsoleVerb`) cover the two new
+catalog entries the same way, with no new test code needed (`buy`/`sell` are not in
+`console-cheats.md`'s retail verb table). Full suite green,
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError` both
+clean.
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| `CSWGuiStore::BuyItem 0x006C0BE0` / `SellItem 0x006C0D80` full control flow (player/store re-resolve, price lookup, `SetGold`, native `SellItem`/`AcquireItem` call, list refresh) | VERIFIED (fresh disasm, this pass, cross-checked against `tools/kotor1_0_3.db`'s own naming) |
+| `CSWGuiStore+0x2270` is a cached gold INT (not a pointer) | VERIFIED (fresh disasm of `PopulateStore`'s own write, `GetGold 0x4EDD60`) — closes §1.7's NEEDS-LIVE item |
+| Gold moves through `SetGold`, absolute not delta, inside the GUI handler | VERIFIED (fresh disasm) — closes §1.7/§2.5's "not traced" note |
+| `Odyssey.BuyFromStore`/`SellToStore` (this pass's own new code) | Implemented, unit-tested at the console/dispatcher layer; **NEEDS-LIVE** for the engine call itself |
+| The full `buy`/`sell` console round trip | Implemented; **NEEDS-LIVE** |
+
+### Live test plan (NOT yet run)
+
+Two `tools/demo.ps1` instances (or one is enough for `buy`/`sell` alone — no sync channel
+involved, this is a bare engine-call verb like `openstore`), both `pwsh
+src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` first.
+
+1. `warp tar_m02aa` (Larrim's shop, per this doc's own earlier live pass — the real tag,
+   `Larrim_Store`, not the doc's original `kebla_yurt_shop` guess).
+2. `openstore Larrim_Store` — confirm it opens cleanly (already live-confirmed by the
+   2026-08-28 root-cause pass above).
+3. `census`/`item`/`items` (or just watch the store's on-screen list) to find a real stocked
+   resref, e.g. `g_w_blstrpstl001` if Larrim carries one — substitute whatever the save
+   actually shows.
+4. `buy Larrim_Store g_w_blstrpstl001` — confirm: (a) the plugin log line
+   `buy: bought '<resref>' x1 from store 'Larrim_Store' (0x...)`, (b) the item genuinely
+   appears in the player's own inventory (`items`), (c) the on-screen gold counter and
+   `CSWSCreature`'s own gold both decreased by the item's real buy price, (d) the store's own
+   on-screen stock count for that resref decreased by one (or, for an infinite-flagged entry,
+   stayed the same — §1.5).
+5. `sell Larrim_Store <resref just bought>` — confirm the item leaves the player's inventory,
+   gold increases by the sell price, and the store's stock count increases (or, again, stays
+   flat for an infinite entry — though a fresh sell can never target one, since the store never
+   had it to begin with).
+6. `buy Larrim_Store <resref> 3` — a `count > 1` buy in one call; confirm three separate
+   `BuyItem` calls actually ran (three separate log-visible price deductions, or a stock count
+   that dropped by exactly 3, not 1).
+7. `buy Larrim_Store <resref>` **without** `openstore` first (or with a DIFFERENT store's GUI
+   open) — confirm the refusal ("no store GUI is open" / "the open store is 0x..., not the
+   requested 0x... - open it first") rather than a crash or a silent no-op.
+8. `sell Larrim_Store <resref the player never had>` — confirm a clean "no matching item in
+   inventory" refusal, not a crash.
+
+Watch for in the plugin log: `buy:`/`sell:` lines from `CheatController.Store.cs`, and any
+`... failed - <LastStoreNote>` refusal, which names exactly which guard fired.
