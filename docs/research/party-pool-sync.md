@@ -540,3 +540,95 @@ which drives `PartyPoolPump.Pump()` itself tick-by-tick), so neither bug found t
 have been caught by `dotnet test`; a regression test using a fake `IGameBridge`/`ICoopSession`
 through `CoopAgent.PumpOnce()` (the same shape `CompanionStateSyncTests.cs` already uses) is
 worth adding once both bugs are closed, so a third round doesn't rediscover them by hand again.
+
+---
+
+## 8. 2026-08-27 addendum, round 2 — root cause 2 investigated, still open (no rig)
+
+This pass picked up exactly where §7 left off: root cause 1 (the ordering bug above) is
+confirmed fixed in `PartyPoolPump.cs` and stayed untouched here — no re-fix was needed or
+made. This addendum instead targets root cause 2, the depositing-side duplicate §7 left open,
+and closes §7's other follow-up item (`PartyPoolPump` had no direct unit test coverage) along
+the way.
+
+⚠ **Worktree-base note, for whoever reads this next.** This pass's isolation worktree had
+branched from `main` BEFORE §7's fixes (root cause 1, the item-tag cache fix, the
+`pooladd`/`poolremove` verbs) had landed — see
+`kotor-coop-worktree-base-and-shared-checkout.md`: an isolation worktree's base can be well
+behind `main` even mid-round. The investigation below re-derived and re-applied root cause 1's
+fix by hand before realising the branch was stale, then merged `main` in directly (bringing the
+real fix, the real dev verbs, and §7 itself) once that became clear. The merge is clean;
+nothing here duplicates or reverts §7.
+
+**`tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`** is the unit coverage §7's follow-up work
+item 2 asked for: a real host, real client, real sockets, real `CoopAgent` pump loop on each
+side (a fake `IGameBridge` stands in for the actual game process — see the file's own doc
+comments for exactly what it reproduces and why), driving `PartyPoolPump.Pump()` tick-by-tick
+through `CoopAgent.PumpOnce()` rather than exercising the store/sender in isolation the way
+every pre-existing party-pool test does. Run against a DELIBERATELY REVERTED copy of root cause
+1's fix (the pre-`PartyPoolPump.cs`-fix ordering), all four tests fail with a duplicated total
+on the RECEIVING side (`host=5, client=10`, `a deposit doubled after first converging`, etc.) —
+matching §7 test 2's live symptom exactly. Against the current (fixed) ordering, all four pass.
+This is a real failing-then-passing regression pin for root cause 1, on top of `main`'s own
+fix — the first this channel has had at the `PartyPoolPump` level.
+
+**Root cause 2 — the depositing-side duplicate (§7 test 3) — was investigated this round and
+NOT reproduced**, despite deliberately targeting the leading (self-described "unconfirmed")
+hypothesis from the live round that found it: `KotorGameBridge.PartyPool.cs`'s
+`PartyPoolScanIntervalMs = 1000` scan-result cache interacting with `PartyPoolPump`'s per-tick
+`_lastScan`/`_pendingApplyTarget` bookkeeping. `PartyPoolLoopbackTests.cs`'s `FakeBridge`
+reproduces that cache mechanism line-for-line (same "throttled call returns the same stale
+snapshot" shape as the real `TryScanPartyPoolTotals`, just on a test-controlled interval), and
+each deposit test's `AgentLoop` additionally simulates the ONE mechanism a normal GUI-dragged
+deposit never goes through but `pooladd`'s console-cheat deposit does — a single-slot,
+non-instantaneous cheat round trip (`_pendingCheatSerial`'s real gate: at most one apply in
+flight, landing after a randomised tens-to-low-hundreds-of-ms delay, deliberately uncorrelated
+with both the bridge cache and the heavy-pump cadence). Configurations tried, all clean (no
+duplicate observed):
+
+- The compressed/stress config used in the permanent suite: 150 ms bridge cache,
+  `HeavyPumpIntervalMs = 0` (the pump runs on every tick — far more pump ticks per cache
+  window than production ever produces), held for 8 s after first convergence.
+- The exact production ratio — both the bridge cache and `HeavyPumpIntervalMs` at the real
+  1000 ms, independent uncorrelated epochs exactly like the real bridge and the real heavy-pump
+  gate — sampled continuously for 25 s after depositing. (This was a throwaway experiment,
+  `PartyPoolExperimentTests.cs`, run and then deleted rather than kept in the suite, since it
+  duplicates the permanent tests' shape once the config is a parameter — the interesting
+  finding is the negative result, recorded here.)
+- A late/lost ack forcing several retransmit-backoff rounds before the depositing peer's op is
+  finally acknowledged (`ADepositSurvivesALateHostAckWithoutDoublingEitherSide`).
+- A full blackout-and-reconnect after a deposit, exercising `ResyncPartyPool`'s `Set`-based
+  resync on top of an already-converged stack (`AReconnectAfterADepositDoesNotDoubleIt`).
+
+None doubled, on either side, in any of these. That is reasonably strong evidence AGAINST the
+bridge-scan-cache hypothesis specifically — the mechanism was reproduced faithfully and stress
+tested well past production's own timing ratios without producing the symptom. It does not
+prove root cause 2 does not exist; it narrows where it must live. Everything on the
+C#-testable side of this channel — `PartyPoolPump`, `PartyPoolStore`, `ReliablePartyPoolSender`,
+`CoopHost.PartyPool.cs`/`CoopClient.PartyPool.cs`'s wire/echo logic, and
+`KotorGameBridge.PartyPool.cs`'s own caching — was exercised under real concurrency (real
+background threads, real sockets, real timers) and held up. What was **not**, and could not be
+without a live rig, exercised here: the native plugin round trip itself
+(`CheatController.PartyPoolAdd`/`Odyssey.PartyPool.cs`'s `AddItemToPartyPool` spawn-then-
+transfer) and the `SendCheat`/shared-block staging-cheat ACK protocol
+(`CoopCommandDispatcher.cs`'s `SendCheat`/`ReflectCheatAnswer`/`_pendingCheatSerial`) under
+genuine game-frame timing — the one difference between a `pooladd` console deposit and an
+ordinary GUI drag this round could reason about but not run. That is the next place to look,
+and it needs a rig: watch whether the HOST's plugin log shows `CheatKinds.PartyPoolAdd` (or the
+reconcile-driven automatic apply) processed twice for what was, on the wire, a single relayed
+op — if so, the duplicate is native-side or in the cheat-ack protocol, not in anything this
+addendum's tests cover.
+
+**`party_pool_sync` stays OFF** (`AgentSettings.PartyPoolSyncEnabled` defaults false; nothing
+in this pass changed that default) — root cause 2 is still open.
+
+**Updated live test plan, on top of §6/§7 above:**
+
+1. Re-run §7 test 3 (client deposits via `pooladd`, watch the HOST's plugin log) specifically
+   watching timestamps on every `party pool: added/removed '<resref>'` line the HOST logs, and
+   cross-reference against the HOST's own network log for how many DISTINCT `PartyPoolOp`
+   packets it received/relayed for that key in the same window — if the wire only ever carried
+   one op but the plugin log shows two applies, the bug is in the native round trip; if the
+   wire itself carried the op (or the automatic-apply queue drained) twice, that is now a
+   further C#-testable lead this pass did not find a way to trigger, and is worth a regression
+   test once identified. Everything else in §6 (tests 4-8) is still bench-only/not yet run.
