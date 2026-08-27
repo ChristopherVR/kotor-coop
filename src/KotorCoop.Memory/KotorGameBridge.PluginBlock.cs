@@ -623,6 +623,16 @@ public sealed partial class KotorGameBridge
     private const int BlockLocalDialogueForced = 0x3F1C;
     private const int BlockRemoteDialogueForced = 0x3F20;
 
+    // Container-lock explicit arbitration (SharedBlock version 55, region 0x40C0..0x40D0) —
+    // closes the container-loot race, docs/roadmap-seamless.md Tier 1 item 4. See
+    // SharedBlock.Dialogue.cs's own region comment for the full "cheat-style request/serial"
+    // reasoning — the plugin can only ever ASK this agent for an arbitration decision across
+    // the process boundary, never call ICoopSession directly.
+    private const int BlockLocalContainerLockRequestTargetId = 0x40C0;
+    private const int BlockLocalContainerLockRequestSerial = 0x40C4;
+    private const int BlockContainerLockResponseSerial = 0x40C8;
+    private const int BlockContainerLockResponseGranted = 0x40CC;
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;

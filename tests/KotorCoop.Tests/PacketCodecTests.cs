@@ -957,9 +957,80 @@ public class PacketCodecTests
             buffer,
             new InteractionClaimPacket(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true));
 
-        buffer[length - 6] = 0x7F; // the kind byte: TargetId(4) + Active(1) trail it now
+        // the kind byte: Active(1) + TargetId(4) + RequestSerial(4) trail it now
+        buffer[length - 10] = 0x7F;
 
         Assert.Null(PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionClaimRoundTripsAnExplicitRequestSerial()
+    {
+        // The container-loot race fix (docs/roadmap-seamless.md Tier 1 item 4): a nonzero
+        // RequestSerial is what turns an ordinary per-tick republish into an explicit,
+        // synchronously-answered arbitration request — see PacketType.LockResponse's remarks.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original = new(
+            PeerId: 5, "end_m01aa", Tag: string.Empty, InteractionKind.Container, Active: true,
+            TargetId: 0x131, RequestSerial: 0x9001);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadInteractionClaim(buffer[..length]));
+    }
+
+    [Fact]
+    public void InteractionClaimDefaultsRequestSerialToZero()
+    {
+        // Every pre-existing caller (the ordinary per-tick republish) constructs this packet
+        // without naming RequestSerial at all; it must keep meaning "not an explicit request".
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        InteractionClaimPacket original = new(5, "end_m01aa", "end_trask", InteractionKind.Conversation, true);
+
+        Assert.Equal(0u, original.RequestSerial);
+
+        int length = PacketCodec.Write(buffer, original);
+        InteractionClaimPacket? decoded = PacketCodec.ReadInteractionClaim(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(0u, decoded.RequestSerial);
+    }
+
+    [Fact]
+    public void LockResponseRoundTripsGranted()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        LockResponsePacket original = new(
+            PeerId: 3, InteractionKind.Container, TargetId: 0x131, RequestSerial: 0x9001, Granted: true);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadLockResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void LockResponseRoundTripsDenied()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        LockResponsePacket original = new(
+            PeerId: 3, InteractionKind.Container, TargetId: 0x131, RequestSerial: 0x9001, Granted: false);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadLockResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void LockResponseRejectsAnUnknownKind()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new LockResponsePacket(3, InteractionKind.Container, 0x131, 0x9001, true));
+
+        // the kind byte: TargetId(4) + RequestSerial(4) + Granted(1) trail it now
+        buffer[length - 10] = 0x7F;
+
+        Assert.Null(PacketCodec.ReadLockResponse(buffer[..length]));
     }
 
     [Fact]

@@ -83,6 +83,17 @@ internal static unsafe class ContainerUseHook
     /// <c>dialogue_exclusive</c>'s own naming.</summary>
     public static bool Enabled;
 
+    /// <summary>
+    /// From coop.ini <c>container_lock_arbitration</c> (default ON — docs/research/container-sync.md),
+    /// meaningless while <see cref="Enabled"/> is false. Closes the container-loot race
+    /// (docs/roadmap-seamless.md Tier 1 item 4): a fresh click on an object nobody is CURRENTLY
+    /// known to hold is DEFERRED — the engine's own open is swallowed exactly like a
+    /// peer-held refusal — instead of allowed outright, so <see cref="InteractionLockController"/>
+    /// gets a chance to ask the host to arbitrate before either player's panel opens. See
+    /// <see cref="AllowNextOpen"/> and <see cref="LatestDeferred"/>.
+    /// </summary>
+    public static bool ArbitrationEnabled;
+
     private static bool _installed;
 
     /// <summary>Verify-bytes-or-refuse, like every patch in this plugin: an unrecognised
@@ -208,6 +219,48 @@ internal static unsafe class ContainerUseHook
         _lastAttemptId = 0;
         _lastAttemptSerial = 0;
         _sequence = 0;
+        _grantedId = 0;
+        _lastDeferredId = 0;
+        _lastDeferredSerial = 0;
+        _deferSequence = 0;
+    }
+
+    // ---- arbitration deferral (container_lock_arbitration) -------------------------------
+    //
+    // A fresh click on an object nobody is KNOWN to hold (the loop above found no peer-held
+    // entry) is not allowed outright while ArbitrationEnabled: it is captured here instead, so
+    // InteractionLockController can ask the host to arbitrate before letting the real open run.
+    // Same "OnOpenInventory only ever runs on the main thread" reasoning as the refresh half
+    // above — no lock needed, a plain field is enough.
+
+    /// <summary>The single container id allowed to open on its NEXT attempt, regardless of
+    /// <see cref="ArbitrationEnabled"/> — set by <see cref="InteractionLockController"/> the
+    /// instant a request is granted, and consumed (cleared back to 0) the moment that attempt
+    /// is seen, so a grant is good for exactly one re-issued click.</summary>
+    private static uint _grantedId;
+
+    /// <summary>Marks <paramref name="id"/> as pre-approved for its next <c>OpenInventory</c>
+    /// attempt. Idempotent to call more than once before the click actually lands (a re-issue
+    /// that is slow to arrive simply keeps the same id armed).</summary>
+    public static void AllowNextOpen(uint id) => _grantedId = id;
+
+    /// <summary>Withdraws a grant that was never consumed — a module change, or the deferral
+    /// state machine giving up on a request it does not want honoured after all (there is
+    /// currently no such path, but withdrawing is one call and a stale grant silently letting a
+    /// LATER, unrelated click on the same numeric id through would be a real, if rare, bug).</summary>
+    public static void WithdrawGrant() => _grantedId = 0;
+
+    private static uint _lastDeferredId;
+    private static uint _lastDeferredSerial;
+    private static uint _deferSequence;
+
+    /// <summary>The most recently DEFERRED open attempt's placeable id, and the serial it was
+    /// captured at (0 = nothing captured yet). Same shape as <see cref="LatestAttempt"/> — a
+    /// poller compares the serial against its own last seen value.</summary>
+    public static uint LatestDeferred(out uint serial)
+    {
+        serial = _lastDeferredSerial;
+        return _lastDeferredId;
     }
 
     // ---- the capture half: what THIS instance's own attempts looked like ----------------
@@ -276,9 +329,33 @@ internal static unsafe class ContainerUseHook
                     continue;
                 }
 
+                // A peer's own KNOWN hold always wins, even over a re-issued click we just
+                // granted ourselves — the peer's claim is by definition newer information than
+                // whatever this instance decided a few frames ago.
                 _blockedCount++;
                 _lastBlockedId = id;
                 _lastBlockedPeerId = _heldPeerIds[i];
+                return 1;
+            }
+
+            if (id == _grantedId)
+            {
+                // The re-issued click after a grant (or arbitration disabled and this id
+                // happened to match a stale grant — impossible in practice since Invalidate
+                // clears it, but the equality check is what makes this one-shot regardless).
+                _grantedId = 0;
+                _lastAttemptId = id;
+                _lastAttemptSerial = ++_sequence;
+                return 0;
+            }
+
+            if (ArbitrationEnabled)
+            {
+                // Neither a known peer hold nor a grant we already issued: swallow the click
+                // exactly like a refusal (identical ret-8 stack effect, see the class remarks)
+                // and let InteractionLockController ask the host before this goes any further.
+                _lastDeferredId = id;
+                _lastDeferredSerial = ++_deferSequence; // written last
                 return 1;
             }
 

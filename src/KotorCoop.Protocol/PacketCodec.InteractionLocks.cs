@@ -15,6 +15,7 @@ public static partial class PacketCodec
         w.WriteUInt8((byte)packet.Kind);
         w.WriteUInt8(packet.Active ? (byte)1 : (byte)0);
         w.WriteUInt32(packet.TargetId); // version 37: InteractionKind.Container's placeable id
+        w.WriteUInt32(packet.RequestSerial); // TODO(version): 0 = the ordinary per-tick level
         return w.Failed ? 0 : w.Position;
     }
 
@@ -32,6 +33,7 @@ public static partial class PacketCodec
         byte kind = r.ReadUInt8();
         byte active = r.ReadUInt8();
         uint targetId = r.ReadUInt32();
+        uint requestSerial = r.ReadUInt32();
 
         // ⚠ An unknown kind is DROPPED rather than coerced. A lock whose release rules this
         // build does not know is worse than no lock at all, because it is the OWNER that
@@ -41,7 +43,44 @@ public static partial class PacketCodec
             return null;
         }
 
-        return new InteractionClaimPacket(peerId, module, tag, (InteractionKind)kind, active != 0, targetId);
+        return new InteractionClaimPacket(
+            peerId, module, tag, (InteractionKind)kind, active != 0, targetId, requestSerial);
+    }
+
+    /// <summary>host -&gt; the single requesting peer: the answer to one arbitration request. See
+    /// <see cref="LockResponsePacket"/>.</summary>
+    public static int Write(Span<byte> buffer, LockResponsePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.LockResponse);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteUInt8((byte)packet.Kind);
+        w.WriteUInt32(packet.TargetId);
+        w.WriteUInt32(packet.RequestSerial);
+        w.WriteBool(packet.Granted);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static LockResponsePacket? ReadLockResponse(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.LockResponse)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        byte kind = r.ReadUInt8();
+        uint targetId = r.ReadUInt32();
+        uint requestSerial = r.ReadUInt32();
+        bool granted = r.ReadBool();
+
+        if (r.Failed || kind > (byte)InteractionKind.Container)
+        {
+            return null;
+        }
+
+        return new LockResponsePacket(peerId, (InteractionKind)kind, targetId, requestSerial, granted);
     }
 
     public static int Write(Span<byte> buffer, InteractionLockPacket packet)

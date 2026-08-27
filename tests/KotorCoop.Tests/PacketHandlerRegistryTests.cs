@@ -40,7 +40,7 @@ public class PacketHandlerRegistryTests
         PacketType.PartySnapshot, PacketType.PartyRoster, PacketType.DialogueSnapshot,
         PacketType.TriggerRelay, PacketType.PhantomDamage, PacketType.PeerEffect, PacketType.Bark,
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.MidModuleMovie,
-        PacketType.InteractionLock, PacketType.Chat, PacketType.ProgressionSnapshot,
+        PacketType.InteractionLock, PacketType.LockResponse, PacketType.Chat, PacketType.ProgressionSnapshot,
         PacketType.CompanionXpSnapshot,
         PacketType.ItemSnapshot, PacketType.ContainerLoot, PacketType.MaterialisedLoot,
         PacketType.CreatureLiveness, PacketType.Pong,

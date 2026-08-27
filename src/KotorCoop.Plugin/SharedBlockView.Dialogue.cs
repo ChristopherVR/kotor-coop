@@ -152,4 +152,30 @@ internal sealed unsafe partial class SharedBlockView
         *(uint*)(baseAddress + SharedBlock.OffsetInteractionLockTargetIds
             + (Clamp(index, SharedBlock.InteractionLockCapacity) * SharedBlock.InteractionLockTargetIdStride));
 
+
+    // ---- container-lock explicit arbitration (docs/roadmap-seamless.md Tier 1 item 4) -----
+
+    /// <summary>Plugin-written; the placeable id a deferred click wants arbitrated, or 0.
+    /// Set alongside <see cref="LocalContainerLockRequestSerial"/> — write the target id
+    /// FIRST, the serial LAST, so the agent never sees a fresh serial pointing at an id that
+    /// has not landed yet.</summary>
+    public uint LocalContainerLockRequestTargetId
+    {
+        get => *U32(SharedBlock.OffsetLocalContainerLockRequestTargetId);
+        set => *U32(SharedBlock.OffsetLocalContainerLockRequestTargetId) = value;
+    }
+
+    /// <summary>Plugin-written; the serial naming the request above. 0 = nothing pending.</summary>
+    public uint LocalContainerLockRequestSerial
+    {
+        get => *U32(SharedBlock.OffsetLocalContainerLockRequestSerial);
+        set => *U32(SharedBlock.OffsetLocalContainerLockRequestSerial) = value;
+    }
+
+    /// <summary>Agent-written; the serial <see cref="ContainerLockResponseGranted"/> answers.</summary>
+    public uint ContainerLockResponseSerial => *U32(SharedBlock.OffsetContainerLockResponseSerial);
+
+    /// <summary>Agent-written; whether the request named by
+    /// <see cref="ContainerLockResponseSerial"/> was granted.</summary>
+    public bool ContainerLockResponseGranted => *U32(SharedBlock.OffsetContainerLockResponseGranted) != 0;
 }

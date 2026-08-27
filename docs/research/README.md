@@ -88,7 +88,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [placeables-containers.md](placeables-containers.md) | Extending door-style sync to placeables, containers, traps | Design + implemented (unit-tested); NOT live-verified on the two-instance rig |
-| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B |
+| [container-sync.md](container-sync.md) | Container/corpse open-close sync and the use-lock | Implemented, live-verified, ON by default; `container_fast_pump` off pending a live A/B; `container_lock_arbitration` (closes the container-loot race) built + unit-tested 2026-08-27, ON by default (fails safe), NEEDS-LIVE |
 | [item-identity.md](item-identity.md) | What a `CSWSItem` carries that its blueprint does not | Implemented; apply path live-tested via the console item-identity loop |
 | [quest-sync.md](quest-sync.md) | Non-monotonic globals, journal removal, the Lamport-clock fix | Implemented, live-verified, ON by default |
 | [map-reveal.md](map-reveal.md) | Fog-of-war sync around a peer's position | Implemented; live-verified 2026-08-27 (engine call, peer tracking, transition survival, frame cost), default ON. On-screen M-key appearance unconfirmed (screenshot tooling broken) |

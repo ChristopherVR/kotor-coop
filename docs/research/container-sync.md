@@ -1048,3 +1048,193 @@ assembly is x86 NativeAOT and carries no unit test coverage, per this project's 
 it is exercised by the live rig above instead). Both plugin builds
 (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 warnings, 0 errors, across
 the round's several rebuild/redeploy cycles.
+
+## 11. `container_lock_arbitration` (2026-08-27) — closes roadmap-seamless.md Tier 1 item 4, the
+container-loot race; built and unit-tested this round, **not yet run against the live game**
+
+Picks up the item the roadmap has carried since it was first written: *"two clicks on the same
+chest within one RTT can both hand out loot before either removal lands (`ContainerUseRule` is
+eventually consistent)."* The most recent attempt (also 2026-08-27, logged in the roadmap table)
+staged both players on a known footlocker and fired `useplaceable` on both within ~200ms via
+`tools/blockpoke.ps1`, but the container turned out to already be emptied by an earlier test round
+against the same persistent save — the race itself was never actually exercised. This round does
+not repeat that live attempt (no rig session was available); it builds the fix the race needs and
+unit-tests it as thoroughly as a fix that depends on real network timing and a real engine click
+can be tested without one, then lays out exactly what a live pass still needs to run.
+
+### 11.1 Why the existing lease alone cannot close the race
+
+§2.1/§5 above already give the host's arbiter first-fresh-claim-wins semantics
+(`ContainerUseRule.MayClaim`) — that part was never the gap. The gap is *when* a caller finds out.
+`InteractionLockController.PublishLocalClaim` publishes the local player's claim once a tick,
+`CoopHost`/`CoopClient` broadcast the resulting lock set once a tick, and `ContainerUseHook` only
+ever consults whatever that broadcast last said. Two players clicking the same never-yet-claimed
+container inside one round trip both read "nobody holds this" from that stale snapshot and both
+let `OpenInventory` run — the claim each click *also* publishes has not reached the host, let alone
+come back, before either engine call happens. Nothing about that sequence is a bug in the arbiter
+itself; it is a caller that never waited for an answer.
+
+### 11.2 The fix: an explicit, synchronously-answered request layered on the same store
+
+Rather than inventing a second lock-keeping structure, this pass adds a REQUEST/RESPONSE pair that
+asks the exact same `InteractionLockStore.Claim` decision the existing lease already computes, and
+gets a direct answer instead of waiting for the next broadcast to (maybe) reflect it:
+
+- **Protocol** (`src/KotorCoop.Protocol/Packets/InteractionLocksPackets.cs`,
+  `PacketCodec.InteractionLocks.cs`, `PacketType.cs`). `InteractionClaimPacket` gains
+  `RequestSerial` (0 = the ordinary per-tick republish, unchanged; nonzero = "answer this one
+  specifically"). A new packet, `LockResponsePacket`/`PacketType.LockResponse = 56`, carries the
+  host's answer back to the SINGLE requesting peer (unicast, not broadcast) — Grant and Deny are
+  the same packet with a `Granted` bool rather than two wire types, since both halves of the reply
+  need to name the identical (kind, targetId, serial) triple. TODO(version): both are additive
+  (a new field appended to an existing packet, a new packet type nothing else touches) and ship
+  without their own `ProtocolConstants.Version` bump — that counter is owned by another agent this
+  wave; whoever bumps it next should fold this in.
+- **Session** (`CoopHost.InteractionLocks.cs`, `CoopClient.InteractionLocks.cs`,
+  `IInteractionLockSession.cs`). `RequestContainerLock(module, targetId, requestSerial)` /
+  `TryGetLockResponse(requestSerial, out granted)` are the two new members every session
+  implements. A CLIENT's `RequestContainerLock` sends one `InteractionClaimPacket` with the serial
+  set; its `TryGetLockResponse` reads back whatever `LockResponsePacket` last arrived. The HOST's
+  own implementation never touches the network at all — `RequestContainerLock` calls
+  `InteractionLockStore.Claim` in-process and `TryGetLockResponse` already has the answer on the
+  same call, which is the whole "host and client are symmetric, no host/client branch on the
+  calling side" property the task asked for: the caller always does
+  `session.RequestContainerLock(...)` then polls `session.TryGetLockResponse(...)`, and it works
+  identically whichever role the local instance is playing. `CoopHost.HandleInteractionClaim` now
+  unicasts a `LockResponsePacket` back to the sender whenever `RequestSerial != 0`; the ordinary
+  per-tick republish (`RequestSerial == 0`) is completely unaffected and gets no reply, exactly as
+  before this pass.
+- **Plugin -&gt; agent bridge** (`SharedBlock.Dialogue.cs` version 55, region `0x40C0..0x40D0`,
+  `SharedBlockView.Dialogue.cs`, `IDialogueBridge.cs`/`KotorGameBridge.Dialogue.cs`,
+  `KotorGameBridge.PluginBlock.cs`). The plugin cannot call `ICoopSession` directly — it only ever
+  reads/writes the shared block, and the agent process is the only half that can reach the session
+  — so this adds the same "cheat-style request/serial" shape every console command's own ack
+  channel already uses: plugin -&gt; agent `LocalContainerLockRequestTargetId`/
+  `LocalContainerLockRequestSerial`, agent -&gt; plugin `ContainerLockResponseSerial`/
+  `ContainerLockResponseGranted`. `WorldStatePump.PumpContainerLockArbitration` (called from the
+  existing `PumpInteractionLocks`, every tick) is the forwarder: a NEW serial from the plugin
+  becomes exactly one `session.RequestContainerLock` call, and every tick it also copies whatever
+  `session.TryGetLockResponse` currently has back into the block. No `SharedBlock.TotalSize`
+  growth — the region lands in the 0x40 free bytes left after the companion-equipment growth to
+  `0x4100` (version 54).
+- **Plugin: the deferral state machine.** `ContainerUseHook` gains `ArbitrationEnabled`
+  (`container_lock_arbitration`) and a one-shot grant allow-list (`AllowNextOpen`/`_grantedId`).
+  On a click, the existing peer-held refusal loop runs FIRST and unchanged (a peer's own KNOWN
+  hold always wins outright, exactly as before); a click that clears that loop and is not already
+  pre-approved is now DEFERRED — swallowed with the identical `ret 8` stack effect the peer-held
+  refusal already uses (see `ContainerUseHook`'s own remarks on why that needs no synthesised
+  failure value) — instead of allowed outright, and captured for `InteractionLockController` to
+  see (`LatestDeferred`, the same "capture a serial, poll it" shape `LatestAttempt` already used
+  for the open-confirm logic). `ContainerLockArbiter` (`src/KotorCoop.Plugin/ContainerLockArbiter.cs`,
+  compiled into the test project via the plugin compile-include trick — see
+  docs/CONTRIBUTING.md — since it touches no `Odyssey`/`SharedBlockView`) is the pure click -&gt;
+  pending -&gt; grant/deny/timeout -&gt; re-issue/refuse state machine:
+  `InteractionLockController.ContainerArbitration.cs` drives it every frame (not the existing
+  ten-frame `ApplyPeerLocks` cadence — a grant has to be acted on within a couple of frames), turns
+  a fresh deferred click into a request published to the shared block, and on the outcome either
+  calls `Odyssey.UseObject` to re-issue the click (Granted, or TimedOut's fail-safe fallback) or
+  shows the existing "&lt;name&gt; is looting that" notice machinery with a generic name (Denied —
+  the bare deny carries no holder identity; the ordinary peer-held refresh picks that up on its
+  own next pass for any FURTHER attempt). The re-issued click runs back through the identical hook:
+  the peer-held loop is checked again (our own hold is filtered out of it, same as every other
+  local-vs-peer distinction in this file), then the one-shot grant allow-list lets it through.
+
+### 11.3 Why ON by default: the fallback fails safe, and that is the whole argument
+
+`container_lock_arbitration=1` ships as the default. The reasoning the task asked for explicitly:
+if the host never answers within `ContainerLockArbiter.TimeoutMs` (300ms — chosen against this
+file's own §10.2/§10.3 measurements of a real claim+broadcast round trip, 250-440ms, so the
+deadline is comfortably above ordinary LAN jitter without reading as "container appears not to
+work"), the deferred click simply proceeds exactly as `ContainerUseHook` behaved before this pass
+existed — `AllowNextOpen` plus a re-issued click, logged. A lost request, a lost response, or a
+peer running a build old enough to never answer at all are all the SAME failure shape from the
+requester's side (no answer), and all fall back to the pre-arbitration behaviour rather than a
+refusal — a request that times out can never make a container LESS usable than it already was, only
+(rarely, on a bad connection) slower to open by up to 300ms. That asymmetry — fail open, never fail
+closed — is what makes ON safe as a default despite this round having no live confirmation that the
+request/response round trip itself works end to end against the real game.
+
+### 11.4 What is genuinely tested this round, and by what
+
+- **Codec pinning** (`PacketCodecTests.cs`): `InteractionClaimPacket.RequestSerial` round-trips
+  (including the pre-existing zero-default every OLD caller still relies on) and rejects an
+  unknown kind at its new byte offset; `LockResponsePacket` round-trips both Grant and Deny and
+  rejects an unknown kind.
+- **The pure deferral state machine** (`ContainerLockArbiterTests.cs`, 11 tests): idle -&gt; pending
+  on `BeginRequest` (and refuses to start with a zero id or zero serial — 0 is reserved wire-wide
+  for "nothing pending"); `Poll` returns Granted/Denied and drops back to idle on a matching
+  response, Waiting while nothing has arrived and the deadline has not passed, TimedOut (and back
+  to idle) once it has; a fresh request can start again once idle; `Reset` drops an in-flight
+  request without acting on it, for the module-change case.
+- **The loopback race itself** (`ContainerLockArbitrationTests.cs`, real `CoopHost` + TWO real
+  `CoopClient`s over loopback UDP — the same pattern `ThreePeerSessionTests.cs` already
+  established for other multi-peer bugs):
+  `TwoClientsRequestingTheSameContainerWithinOneMillisecondExactlyOneIsGranted` sends both
+  clients' requests back-to-back on one thread (as close to simultaneous as the task's own "within
+  1ms" framing asks for) at the SAME container id, asserts exactly one comes back granted
+  (`oneGranted ^ twoGranted`), has the winner release through the ordinary per-tick claim
+  (`Active: false`, the same shape a real close already used before this pass), and confirms the
+  loser can then be granted. `TheHostsOwnRequestResolvesSynchronouslyInProcess` and
+  `AHostLocalReRequestForItsOwnHeldContainerIsIdempotent` pin the host-local, no-network path
+  directly (first request granted immediately, a re-request for the SAME hold succeeds by
+  re-entrancy — the identical rule `ContainerUseRule.MayClaim`'s second bullet already gives a
+  client). `AClientIsDeniedAContainerTheHostAlreadyHoldsLocally` confirms the host's own in-process
+  clicks are not a silent exception to the arbiter a peer can race against.
+- **Full suite**: `dotnet test tests/KotorCoop.Tests --no-build` — 2131/2131 passed on a clean run
+  (one `ValueScannerTests` timing flake and the documented `CoopCommandDispatcherTests` UDP-port
+  flake each independently reproduced as failing alone once and passing on an isolated re-run,
+  neither related to this feature — see docs/CONTRIBUTING.md's own note on the latter). Both
+  `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`
+  (without `-Install` — no live rig was up this round) are clean, 0 warnings, 0 errors.
+
+### 11.5 NEEDS-LIVE — what this round could NOT confirm
+
+Everything above is reasoned from the code and proven by tests that do not touch the real engine.
+**Not run this round, for the honest reason that no rig session was available**, in the shape
+§3/§5's own live-test scripts already establish for this file:
+
+1. **The request/response round trip against the real game.** Whether the plugin's shared-block
+   write (`LocalContainerLockRequestTargetId`/`Serial`) actually reaches
+   `WorldStatePump.PumpContainerLockArbitration` and back with the SharedBlock version-55 offsets
+   this pass hand-transcribed in two files (`SharedBlock.Dialogue.cs` and
+   `KotorGameBridge.PluginBlock.cs`) — every prior SharedBlock growth in this file's own history
+   needed at least one live-measured correction to a hand-transcribed offset or write order, so
+   this one should be assumed unverified until it is read back from a running process.
+2. **The race itself, staged for real** (the exact scenario the roadmap's own last attempt tried
+   and could not reach): `end_m01aa` with a FRESH, never-looted footlocker (the last attempt's own
+   footlocker was already emptied by an earlier round on the same persistent save — pick a
+   DIFFERENT id via a bare `useplaceable` sweep, or use a save that has not run this container-sync
+   file's own earlier live passes). Teleport both players onto the container (`tp 10.8 21.87`, §5's
+   own technique, to remove walk-latency as a confound) and fire `useplaceable <id>` on both
+   instances within about 1 RTT of each other via `tools/blockpoke.ps1` (the same primitive the
+   roadmap's own attempt used). Expected with `container_lock_arbitration=1`: exactly one side's
+   loot panel actually opens (confirmed via `Odyssey.IsPlaceableOpen`, the same `+0x338` read §5
+   already uses); the plugin log on the granted side shows `container: arbitration granted
+   0x...; re-issuing open`, and on the denied side `container: arbitration denied 0x... (a peer
+   got there first)` plus the "Another player is looting that" HUD line (this round's fallback
+   text — the bare Deny carries no holder identity, see §11.2).
+3. **A genuine item removal only happens once.** `loottake <id>` (docs/CONSOLE.md; removes a real
+   item through the engine's own `RemoveItem` and gives an equivalent copy locally — the console
+   primitive built specifically because no injected click can drive the container GUI, see
+   docs/research/dialogue-consequences.md) on the granted side, then the same verb on the denied
+   side, should show the denied side refused (nothing left to take, or the container empty) rather
+   than a second, independent copy of the same loot appearing.
+4. **The A/B against `container_lock_arbitration=0`** on the identical staged race, to confirm the
+   OLD failure mode (both sides' panels open) is what this pass actually fixes rather than
+   something the test rig's own staging already avoided by construction.
+5. **The timeout's fail-open path, forced.** Block the response specifically (not the whole link —
+   `tools/blockpoke.ps1`-style datagram-level control, or briefly pausing the host's own agent
+   process for slightly over 300ms right after a click) and confirm the deferred click still opens
+   after the timeout, logged, rather than hanging or silently refusing.
+
+Until 1-5 run, this feature's status is **Built (NEEDS-LIVE)** — see
+docs/roadmap-seamless.md Tier 1 item 4's updated row.
+
+### 11.6 Test suite and build
+
+`dotnet test tests/KotorCoop.Tests --no-build`: **2131/2131 passed** on a clean isolated run (see
+§11.4's own note on the two unrelated flakes observed across two full-suite runs this round, each
+independently confirmed non-reproducing when filtered to its own test class alone).
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` (no `-Install`, no live rig this round): clean, 0
+warnings, 0 errors, x86 architecture confirmed on the produced `dinput8.dll`.

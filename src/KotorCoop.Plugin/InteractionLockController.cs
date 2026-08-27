@@ -22,7 +22,7 @@ namespace KotorCoop.Plugin;
 ///
 /// Kill switch: <c>interaction_locks=0</c> in coop.ini.
 /// </summary>
-internal sealed unsafe class InteractionLockController(SharedBlockView block)
+internal sealed unsafe partial class InteractionLockController(SharedBlockView block)
 {
     private readonly bool _enabled = PluginConfig.ReadBool("interaction_locks", true);
 
@@ -201,6 +201,8 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         _seenBlockedCount = 0;
         _containerNoticeUntilMs = 0;
         _containerNoticeLength = 0;
+
+        InvalidateContainerArbitration();
     }
 
     /// <summary>
@@ -258,6 +260,10 @@ internal sealed unsafe class InteractionLockController(SharedBlockView block)
         // ten-frame cadence would show the notice up to a third of a second late.
         PollContainerRefusals();
         DrawContainerNotice();
+
+        // Same reasoning: a deferred click's grant/deny has to be acted on within a couple of
+        // frames (docs/roadmap-seamless.md Tier 1 item 4), not on the ten-frame cadence below.
+        PollContainerArbitration();
 
         if (_countdown > 0)
         {

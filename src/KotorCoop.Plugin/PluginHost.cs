@@ -244,7 +244,14 @@ internal static unsafe partial class PluginHost
         //      companion_local_combat dresses it correctly instead of wearing whatever it had
         //      when the two instances last agreed. See docs/research/companion-state-sync.md.
         //      NEEDS-LIVE.
-        _block->Version = 54;
+        // 55 = container-lock explicit arbitration at 0x40C0..0x40D0 (no TotalSize growth): a
+        //      plugin -> agent request (target id + serial) and an agent -> plugin response
+        //      (serial + granted bit), closing the container-loot race by asking the host to
+        //      arbitrate a fresh click BEFORE the engine's own OpenInventory runs, instead of
+        //      leaving it to the eventually-consistent per-tick claim/lock level to converge.
+        //      See docs/roadmap-seamless.md Tier 1 item 4 and docs/research/container-sync.md's
+        //      container_lock_arbitration section. NEEDS-LIVE.
+        _block->Version = 55;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

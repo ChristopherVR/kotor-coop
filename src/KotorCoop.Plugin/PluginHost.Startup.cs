@@ -187,10 +187,25 @@ internal static unsafe partial class PluginHost
         // The container half of the same one-at-a-time rule — see ContainerUseHook and
         // docs/research/container-sync.md.
         ContainerUseHook.Enabled = PluginConfig.ReadBool("container_locks", true);
+
+        // Closes the container-loot race (docs/roadmap-seamless.md Tier 1 item 4): default ON
+        // because the fallback fails SAFE — if the host never answers within
+        // ContainerLockArbiter.TimeoutMs, the deferred click simply proceeds exactly as it did
+        // before this flag existed (see docs/research/container-sync.md's
+        // container_lock_arbitration section for the reasoning). Meaningless (and left off)
+        // when container_locks itself is off, since there is then no gate to defer at all.
+        ContainerUseHook.ArbitrationEnabled =
+            ContainerUseHook.Enabled && PluginConfig.ReadBool("container_lock_arbitration", true);
+
         if (ContainerUseHook.Install(out string containerGateDiagnostic))
         {
             Log($"container: {containerGateDiagnostic}"
-                + (ContainerUseHook.Enabled ? string.Empty : " (disabled by coop.ini)"));
+                + (ContainerUseHook.Enabled ? string.Empty : " (disabled by coop.ini)")
+                + (ContainerUseHook.Enabled
+                    ? (ContainerUseHook.ArbitrationEnabled
+                        ? "; container_lock_arbitration=1 (host-arbitrated)"
+                        : "; container_lock_arbitration=0 (legacy eventually-consistent claim)")
+                    : string.Empty));
         }
         else
         {

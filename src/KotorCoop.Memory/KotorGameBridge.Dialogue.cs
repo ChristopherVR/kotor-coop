@@ -193,6 +193,48 @@ public sealed partial class KotorGameBridge
     }
 
     /// <summary>
+    /// Reads the plugin's own pending explicit container-lock arbitration request, if any. The
+    /// serial is read FIRST, then the target id — the mirror image of the plugin's own write
+    /// order (target id first, serial last, see <c>SharedBlock.Dialogue.cs</c>'s remarks), which
+    /// is what makes the pair safe to read without a lock: a value torn between the two reads is
+    /// seen as an OLD serial paired with a NEW id, and the caller's own "have I already
+    /// forwarded this serial" check simply treats it as nothing new yet, rather than acting on a
+    /// serial/id pair that never actually existed together.
+    /// </summary>
+    public bool TryReadContainerLockRequest(out uint targetId, out uint requestSerial)
+    {
+        targetId = 0;
+        requestSerial = 0;
+
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryReadUInt32(_pluginBlock + BlockLocalContainerLockRequestSerial, out requestSerial);
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockLocalContainerLockRequestTargetId, out targetId);
+        return ok;
+    }
+
+    /// <summary>
+    /// Hands the plugin the arbiter's answer to one request. The granted bit is written LAST,
+    /// after the serial it answers — same ordering rule as every other agent-&gt;plugin pair in
+    /// this file (e.g. <see cref="WriteRemoteDialogue"/>'s active flag): the plugin must never
+    /// see a matching serial with a stale granted bit still sitting behind it.
+    /// </summary>
+    public bool WriteContainerLockResponse(uint requestSerial, bool granted)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockContainerLockResponseSerial, requestSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockContainerLockResponseGranted, granted ? 1u : 0u);
+        return ok;
+    }
+
+    /// <summary>
     /// Tells the plugin which conversation a peer owns, so it can open the same one locally
     /// and follow the owner's picks. The active flag is written LAST: the plugin acts on it,
     /// and it must never see "follow a conversation" before it knows whose.
