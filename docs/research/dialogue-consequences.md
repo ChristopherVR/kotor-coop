@@ -1684,3 +1684,101 @@ found placeable id from a `census`-style sweep, or simply walk near one of the 6
 sweep already enumerated) and re-run `useplaceable` there; walk (or `walkto`) a dropped item's
 position for the ground-pickup control. Both controls are otherwise ready to run exactly as
 written above.
+
+## Live pass (2026-08-27, follow-up round): the container/corpse-loot control run — FAILED first, fixed, re-run PASS — flipped ON by default
+
+### The blocker this round had to solve first: `useplaceable` cannot loot anything
+
+`useplaceable` only replicates the network half of a real click (it opens the
+interaction lock so the mirror machinery reacts, per its own doc comment) — it never
+moves an item, and no injected click can drive the engine's own container GUI on this
+rig. A new dev-only console verb, `loottake [tag|id]` (`CheatKinds.LootTake` = 29,
+`SharedBlock.CheatKindLootTake`, `CoopCommandKind.LootTake`), reproduces a genuine take
+through two real, already-verified engine calls instead: `Odyssey.TryTakeFirstContainerItem`
+removes the container's first item via the same `CSWSPlaceable::RemoveItem` primitive
+`TryWriteContainerLoot`'s apply path already uses (reading the item's Tag first, since
+`RemoveItem` deletes the object), then `Odyssey.GiveItemToInventory` gives an equivalent
+copy to the local player — the same two building blocks `scriptgive` and the peer-apply
+path already use, just composed to fire both the removal signal
+(`CollectContainerLootRemovals`) and the new-inventory-row signal (`ReadPossessedItems`)
+a real take produces. Same target resolution as `useplaceable` (object id / tag /
+nearest container). Dev-only, blockpoke-only, matching `quittomenu`/`scriptgive`'s own
+convention. `dotnet test`: 2118/2118 green before this pass touched the rig.
+
+### Finding a real corpse with real loot needed live trial and error
+
+Footlockers in the rig's modules were consistently empty (matches this doc's own
+earlier note). A slain enemy's corpse becomes a real `[container]`-tagged placeable
+(confirmed via the plugin's own placeable-sweep log, which now tags corpses distinctly
+from ordinary placeables) — but only for a NEW object id assigned to the corpse, not the
+creature's own id (`loottake <creature-id>` correctly refuses: "does not resolve to a
+container here"). Several corpses held only `g_i_credits001` (a pseudo-item `GiveItemToInventory`
+cannot spawn — `loottake` correctly reports the container-side removal succeeded but the
+give-back failed, and leaves the container empty rather than lying about a give that
+didn't happen). One corpse (`0x90` in `end_m01ab`, killed via `slay` then closed to
+within 15m via `tp`) held a real weapon, `g_w_ionblstr01`.
+
+### First run: FAILED — a real double-report, exactly the risk this control was written to catch
+
+`pwsh tools\blockpoke.ps1 -ProcId <host> console 'loottake'` → `took 'g_i_drdrepeqp001'
+(0x71) from 0x7E ... and gave it to the player`. The HOST's own `agent1.log`:
+
+```
+[19:52:30] * took 'g_i_drdrepeqp001' (0x71) from 0x7E (the nearest container
+[19:52:30] * script item grant: 1 new item(s) in the local PC's inventory outside dialogue: g_i_drdrepeqp001
+```
+
+The suppression ledger did NOT catch it — exactly the failure mode Control 2/3 exists to
+catch, on the very sub-case this doc's own earlier round flagged as "most likely to
+fail live".
+
+### Root cause: an ordering bug, not a timing-budget bug
+
+`CoopAgent.PumpOnce` ran `_lootPump.PumpContainerLoot(caps)` on the heavy ~1 Hz pass
+(gated by `HeavyPumpIntervalMs`) and `_scriptItemGrantPump.PumpScriptItemGrants(...)` on
+the fast per-tick path (self-throttled to its own, INDEPENDENTLY-clocked ~1s interval,
+`ScriptItemGrantSampleIntervalMs`) — earlier in the same method. `RecentlySyncedItems`'s
+5s budget is not the problem: the ledger records "before" semantics, so a suppression
+entry recorded AFTER `ScriptItemGrantPump` has already published a grant cannot un-ring
+that bell no matter how long the budget window is. With the two pumps' calls in the
+wrong relative order and on independently-phased ~1s timers, `ScriptItemGrantPump` could
+(and here, did) sample the new inventory row before `PumpContainerLoot`'s own throttled
+scan ever got a chance to notice the removal and feed the ledger.
+
+**Fix.** `PumpContainerLoot` moved off the heavy pass onto the fast per-tick path,
+called immediately BEFORE `PumpScriptItemGrants` every tick (`CoopAgent.cs`). Calling it
+every tick costs nothing extra: `CollectContainerLootRemovals` already self-throttles its
+own expensive scan to once a second internally (`_nextLootScanTicks`), so this is a cheap
+early-return on all but the one tick a second the scan is actually due — it now always
+gets a chance to run, and record, ahead of the script-item sample in the same call.
+
+### Second run, same recipe, on a fresh corpse: PASS
+
+`loottake` on a new corpse (`0x90`, `g_w_ionblstr01`, freshly built agent carrying the
+fix) → `took 'g_w_ionblstr01' (0x12) from 0x90 ... and gave it to th[e player]` at
+20:03:55. No `script item grant` line for it anywhere in the host's full log, checked
+both immediately after and several seconds later. The client's own log shows the
+resref once, from a completely unrelated, earlier materialised-enemy-loot event
+(20:02:29, a different channel) — not a duplicate of this one.
+
+### Controls 1 and the core claim re-confirmed on the same (fixed) build
+
+- **Core claim** (`scriptgive g_w_blstrpstl001`): `* script item grant: 1 new item(s)
+  ... g_w_blstrpstl001` — still correctly detected as untracked.
+- **Control 1** (`giveloot 0x7FFFFFFF g_w_lghtsbr01`, a human staging a give against
+  their own character): no `script item grant` line for `g_w_lghtsbr01` anywhere —
+  still correctly suppressed.
+
+### Verdict: all three required controls now PASS — `script_item_sync` flipped ON by default
+
+Every item this round's own live-test plan required is now answered: the core grant
+detection, the manual-giveloot negative control, and — the one that actually surfaced a
+real bug — the container/corpse-loot control. `CoopConfig.ScriptItemSync` /
+`AgentSettings.ScriptItemSync` default to `true`; `profiles/coop.ini.example` and
+`docs/CONFIG.md` updated to match. `script_item_sync=0` still turns it back off.
+
+Not re-exercised this round: the ground-pickup control (walking over a dropped item) —
+lower risk by construction (`WorldStatePump.PumpItems`'s suppression feed runs on the
+SAME already-per-tick-adjacent cadence issue does not apply to it the way it did to the
+heavy-pass-gated container scan), and every control that WAS run passed clean on the
+first try after the ordering fix, so this was not chased further this round.
