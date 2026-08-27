@@ -969,3 +969,149 @@ Both `swkotor.exe` processes stayed healthy (`Get-Process`, `Responding=True`) t
 after. No crash. `dotnet build KotorCoop.slnx -warnaserror` and
 `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean — no source changed this pass, a live
 rig session only.
+
+## 12. 2026-08-28, round 5 — §11's under-count/lockout fixed: the echo guard is now count-aware,
+## not key-blanket
+
+Picked up exactly where §11 left off: "redesign `_pendingApplyTarget` to hold a covered QUANTITY
+per key... so a NEW local change past that quantity is still detected even while an earlier one
+for the same key is still settling." No rig this round (isolation worktree, no live game
+process) — the brief was to reproduce §11's two mechanisms in `PartyPoolLoopbackTests.cs` first,
+then fix `PartyPoolPump.cs`, matching the discipline every other round in this document has
+followed for a non-live pass.
+
+### 12.1 Root cause, restated precisely
+
+§11 named two "independent-but-compounding gaps in the SAME exclusion mechanism," both stemming
+from `_pendingApplyTarget`/`_localDetectExpiry` treating "this key is currently in flight" as a
+**boolean** with no notion of *how many distinct local events* that covers:
+
+1. A step-1 detection registered a 2-second blanket exclusion (`LocalDetectGraceMs`) for the
+   key. A SECOND genuine local change to the same key inside that window was invisible to step 1
+   in its entirety — not delayed, **lost**: `_lastScan` is updated unconditionally every tick
+   regardless of exclusion, so by the time the window expired there was no residual diff left to
+   find against.
+2. A step-2 queued-apply entry had no expiry at all and, critically, nothing re-armed it if the
+   local engine total kept moving further while it waited — so a landed relay racing a further
+   local change on the same key could lock that key out of BOTH steps indefinitely.
+
+### 12.2 The fix
+
+`_pendingApplyTarget` no longer means "exclude this key from detection." It now means "this key
+owes the engine a specific TARGET value, not yet confirmed" — and, critically, **only step 2's
+queued applies register an entry in it at all**. A step-1 self-detection no longer registers
+anything: the change is already true in the engine the instant it is observed, so there is no
+"landing" to wait for at all, and (per §12.4 below) no time-boxed grace window is needed either
+— the class doc comment in `PartyPoolPump.cs` calls this "root cause 3" and gives the full
+reasoning.
+
+`PartyPoolPump.Pump()`'s step 1 is now a single per-key loop over the union of `_lastScan`'s and
+the fresh scan's keys:
+
+- **No movement since the last scan** (`actual == prior`): skip. If a queued apply is
+  outstanding for this key, it simply has not landed yet — keep waiting, unchanged from before.
+- **Movement, no pending entry**: an ordinary genuine local change. The FULL movement is
+  published immediately — no exclusion window at all, so a second, third, or Nth rapid change to
+  the same key is never invisible while an earlier one is "settling," because there is no
+  settling period for a self-detected change.
+- **Movement, a pending entry exists** (a step-2 apply in flight for this key): compare the
+  fresh value against the entry's `target` (the value that apply ALONE should produce). An exact
+  match is the apply landing cleanly — nothing new to report, the store already accounts for its
+  own contribution. Anything else publishes exactly the **excess** beyond `target` (not the raw
+  movement, which would double-count the apply's own already-accounted-for contribution) — this
+  is the literal "expect this key to move by +N; a later read that differs by exactly N is an
+  echo; any FURTHER difference beyond N is a genuine new local change and must be published"
+  rule the task asked for. Either way the pending entry is cleared: if the apply turns out not to
+  have actually landed after all, the very next reconcile pass (step 2, using the fresh engine
+  value against the now-updated store) re-queues whatever gap remains, so nothing is lost by
+  resolving the expectation here.
+
+`Without()`-based exclusion survives only in step 2's reconcile (no second apply queued for a
+key that already has one in flight) — step 1 no longer excludes anything.
+
+### 12.3 Why this closes both of §11's mechanisms
+
+Mechanism 1 (rapid same-key deposits under-counting): with no step-1 exclusion at all, each
+tick's movement is diffed and published on its own — three deposits landing on three consecutive
+ticks are three consecutive publishes, not one grace-protected value with the rest silently lost.
+
+Mechanism 2 (a landed relay racing a further local deposit permanently locking a key): the
+step-2 entry no longer waits for an EXACT match indefinitely. The moment a fresh scan shows
+movement, it is resolved one way or the other in the SAME tick — either confirmed (delta 0,
+target reached) or excess-published (delta ≠ 0, whatever the true combined cause). There is no
+state a key can get stuck in: every tick with movement either does nothing (waiting, unchanged
+total) or fully resolves the pending entry.
+
+### 12.4 A deliberate, documented trade: root cause 2's own glitch-immunity
+
+Root cause 2's original fix (§10.2) gave a step-1 detection its own 2-second grace window
+specifically so a TRANSIENT one-or-two-tick scan disagreement (a stale scan-cache read, a
+resref-resolution miss) would self-heal without republishing. Because a step-1 detection no
+longer registers a pending entry at all, that specific glitch-immunity is gone: a transient dip
+that fully reverts to the pre-deposit value is no longer distinguishable, by this mechanism, from
+a genuine withdrawal that happens to net back to the same number — and per this round's own task
+brief, that ambiguity must resolve in favour of publishing (never silently dropping data).
+`PartyPoolLoopbackTests.AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning`'s
+own scripted 3→0→0→3→3 wobble is a case in point: the FINAL total is still exactly correct (3,
+nothing lost, nothing doubled) but `PartyPoolStore.Version` is now 3 instead of 1 (Add 3, the
+glitch's own Remove 3, the recovery's own Add 3) — three real wire ops instead of one, for a
+scenario that never happens on a healthy scan path in the first place. This codebase's own
+multiset design philosophy (§2.1: "a store's stock genuinely goes up and down repeatedly... a
+one-way ratchet is wrong here too") makes this the right trade: correctness over avoiding a rare
+extra pair of ops during scan noise. The test's docstring and assertions were updated in place to
+record this rather than silently changing behaviour a reader would otherwise assume was still
+guaranteed.
+
+### 12.5 New regression coverage
+
+Four new tests in `PartyPoolLoopbackTests.cs`, all verified to FAIL against the pre-fix code and
+PASS against the fix:
+
+- `ThreeRapidSameKeyLocalDetectionsAreAllPublishedNotSwallowed` — deterministic `ScriptedBridge`,
+  three deposits on three consecutive ticks, reaches 3 (pre-fix: 1 — the second and third
+  deposits' movement is silently lost while the first key is excluded).
+- `RapidSameKeyDepositsOnEitherSideAreAllCountedNotSwallowed` — the real two-instance async rig
+  (host x3, then client x3, +6 both sides): kept as end-to-end store/wire/relay confidence, but
+  documented as NOT a reliable pre-fix regression pin (the old guard's exclusion window is only a
+  few milliseconds wide in practice for a self-detected key with nothing else touching it, since
+  the very next tick's own scan already reconfirms and clears it — real wall-clock spacing can't
+  reliably land inside that window, hence the scripted test above as the actual pin).
+- `ADepositImmediatelyFollowedByAWithdrawalOfTheSameKeyNetsToZeroNotSwallowed` — deterministic
+  `ScriptedBridge`, a withdrawal landing the tick immediately after a deposit (before any
+  confirming scan), nets to 0 (pre-fix: stuck at 5 — the phantom-deposit shape of mechanism 1).
+- `APeerApplyLandingInTheSameTickAsAGenuineLocalDepositOfTheSameKeyCountsBothAsTwo` —
+  deterministic `ScriptedBridge`, a step-2 pending apply (target 1, seeded via
+  `PartyPoolStore.Record` the way a peer op would) and a genuine local deposit landing in the
+  SAME scan as one combined jump (0→2); the fix publishes exactly the excess (+1), total reaches
+  2 (pre-fix: stuck at 1 — mechanism 2's lockout, the apply's pending entry never matches its
+  original target again once a second change lands on the same key).
+
+`AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning`'s `Version` assertion
+was updated from 1 to 3 (see §12.4); its final-total assertion (3) is unchanged. All other
+pre-existing `PartyPoolLoopbackTests` (root cause 1 and 2's own regression pins) pass unchanged —
+neither fix's own protection was touched, only step 1's detection mechanism around them.
+
+### 12.6 Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged, still default `false`/`0`) — this pass changed only `PartyPoolPump.cs` and its own
+test suite, not the shipped default.
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build
+--filter "FullyQualifiedName~PartyPool"`: 34/34 passing (up from 30 — four new tests, one
+pre-existing test's expectations updated per §12.4). Full suite: see this round's own commit for
+the exact pass/fail count (run with `--no-build` after the filtered run above).
+
+**NEEDS-LIVE, unchanged in spirit from §11's own closing paragraph and §10.4's before it**: this
+pass had no rig (isolation worktree, no live game process) — the fix and its regression coverage
+are bench-only. The concrete next live-test step is exactly what this round's own task brief
+described: re-run §11's `pooladd g_w_thermldet01` x3 on the HOST then x3 on the CLIENT (with
+`script_item_sync=0`/`dialogue_item_sync=0` on both to avoid the cross-channel contamination §11
+found on its first, non-isolated attempt), and confirm both pools converge to exactly +6 with no
+drops and no doubles in either log — the exact bar §11 recorded as failed (host stuck at 3,
+client's own local deposits never reaching the wire at all). If that reproduces cleanly, this
+fix is confirmed sufficient; if a residual gap remains, it is most likely in the native plugin
+round trip or the shared-block cheat-serial handshake under real game-frame timing — the same
+category of gap §8/§10 already named and were unable to drive from C# alone, since this round's
+fix operates entirely on the `PartyPoolPump.cs` side of that boundary and cannot itself rule out
+a native-layer contribution to any residual live discrepancy.

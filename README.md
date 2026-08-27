@@ -36,7 +36,7 @@ attaches from outside with `OpenProcess`.
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Body-slot re-equip live-confirmed 2026-08-28 (925 ms/235 ms propagation); weapon-slot bug root-caused and fixed in code (wrong internal slot encoding), NEEDS-LIVE — stays off | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Live-verified, one bug fixed; a second (the depositing side — reproduced 2026-08-28 on the host's own deposit, not on a client's) is still open — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Live-verified: two double-apply bugs fixed; a later live pass found a different under-count/lockout bug in the same echo guard, fixed 2026-08-28 (bench-only this round, needs a live re-test) — stays off | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Merchant store stock (`store_sync`) | Stays off — the 2026-08-28 `PopulateStoreItemListBox` crash is root-caused and fixed (`ShowStoreGui` was missing two arguments) — NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off — a 2026-08-28 live pass opened the real door but never reached the detection precondition (the roster wipe fires from the Bastila dialogue, not the door), so the spectate machinery is still unexercised | [star-forge-finale.md](docs/research/star-forge-finale.md) |
@@ -222,8 +222,10 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
   hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still
   lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool syncs, but a live-verified double-apply bug keeps it off by
-  default** (`party_pool_sync`, one fixed, one open on the depositing side — status table above).
+- **The party's shared item pool syncs, but keeps failing new live-verified bugs, so it stays
+  off by default** (`party_pool_sync` — status table above): two double-apply bugs and, most
+  recently, an under-count/lockout bug in the same echo guard, fixed 2026-08-28 pending a live
+  re-test.
 - **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live**
   (`solo_segment_spectate`): parks the other player's input/camera on the fight instead of a
   second combatant wandering in. The detection precondition itself has not yet been reached
