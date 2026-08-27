@@ -82,6 +82,7 @@ internal static unsafe class MinigameController
 
     private static bool _wasInMiniGame;
     private static bool _wasInPazaak;
+    private static bool _bannerLogged;
 
     /// <summary>The local player's minigame state as of the last <see cref="OnFrame"/>
     /// pass. False both when the engine says so and when the chain could not be read (no
@@ -94,6 +95,12 @@ internal static unsafe class MinigameController
 
     public static void OnFrame()
     {
+        if (!_bannerLogged)
+        {
+            _bannerLogged = true;
+            PluginHost.Log($"minigame: pazaak_detect={(PazaakDetectEnabled ? 1 : 0)} (from coop.ini, read once)");
+        }
+
         nint clientInternal = ReadClientInternal();
 
         nint miniGame = clientInternal == 0 ? 0 : ReadMiniGamePointer(clientInternal);
@@ -104,17 +111,31 @@ internal static unsafe class MinigameController
         if (PazaakDetectEnabled && clientInternal != 0)
         {
             pazaak = Deref(clientInternal + ClientPazaakOffset);
-            pazaakActive = LooksLikeDataPointer(pazaak);
+
+            // LIVE FINDING (2026-08-28): the value observed at this offset while a hand is
+            // genuinely running is the literal integer 1, not a plausible heap address — this
+            // class's own doc comment (and the original design) assumed "the pointer itself is
+            // the flag" meant a real CPazaakData*, and gated on LooksLikeDataPointer(pazaak)
+            // (a > 0x10000 range check) the same way every other raw-pointer field here does.
+            // That guard silently ate every real Pazaak session: a live A/B (pazaak console
+            // verb, pazaak_detect=1) showed clientInternal correctly resolving and the field
+            // flipping 0 -> 1 the instant StartPazaakGame ran, while Odyssey.IsPazaakRunning()
+            // (a bare `!= 0` check, matching the VERIFIED disassembly of the real engine's own
+            // CClientExoApp::GetPazaakIsRunning — `mov eax,[ecx+4]; mov eax,[eax+0x70]; ret`,
+            // no shape check anywhere in it) read the SAME field as true at the SAME moment.
+            // The range check was simply the wrong extra filter for this one field; matching
+            // the verified engine function's own bare-nonzero contract is what fixes it.
+            pazaakActive = pazaak != 0;
 
             if (pazaakActive != _wasInPazaak)
             {
                 _wasInPazaak = pazaakActive;
 
                 // Its own edge log, separate from the combined one below and carrying the
-                // raw pointer value, exactly so a live pass can confirm CClientExoAppInternal
-                // +0x70 really is what starts/stops tracking a Pazaak hand (item 8 task 1).
+                // raw value, exactly so a live pass can confirm CClientExoAppInternal+0x70
+                // really is what starts/stops tracking a Pazaak hand (item 8 task 1).
                 PluginHost.Log(pazaakActive
-                    ? $"pazaak: entered (CPazaakData* 0x{pazaak:X}) — peers will park this player's phantom"
+                    ? $"pazaak: entered (CPazaakData field 0x{pazaak:X}) — peers will park this player's phantom"
                     : "pazaak: left — back in the shared world");
             }
         }
@@ -174,11 +195,4 @@ internal static unsafe class MinigameController
     }
 
     private static nint Deref(nint p) => p == 0 ? 0 : *(nint*)p;
-
-    /// <summary>Range-only pointer sanity, matching every other file's own private copy of
-    /// this guard (e.g. <c>Odyssey.Dialogue.Spectate.cs</c>'s <c>LooksLikeDataPointer</c>) —
-    /// item 8 task 1's "the plugin's usual readable-pointer guard". A Pazaak pointer is never
-    /// dereferenced here (only compared to null-ness for the flag), but it is still worth
-    /// rejecting an implausible value before logging it as if it were real.</summary>
-    private static bool LooksLikeDataPointer(nint p) => p is > 0x10000 and < 0x7FFF0000;
 }

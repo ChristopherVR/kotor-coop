@@ -2941,3 +2941,115 @@ Nothing in this addendum has been run against the game.
 4. Whether the hand, once started, can be ended cleanly (`EndPazaakGame 0x005EDDC0`+`0x10`
    sibling — not wired to a verb this pass, since ending was out of scope for "verify detection
    fires") or whether it needs to run to completion / be quit through its own GUI.
+
+## Live pass (2026-08-28): the positive path run end to end — a real bug found and fixed;
+## `pazaak_detect` flips ON
+
+Two-instance rig (`tools/demo.ps1`), `pazaak_detect=1` on both `coop.ini`s, both `warp
+tar_m03aa` (the Upper City cantina, per §23.6's own recommendation, reachable by console warp
+with no story progress). `pazaak` (bare) fired on the host via `tools/blockpoke.ps1 console`.
+
+### A real bug: the edge detector was over-filtering the field, and never fired
+
+**First attempt: `pazaak: entered` never logged, despite `IsPazaakRunning()` (Odyssey.Pazaak.cs,
+a separate, freshly-computed read of the identical offset chain) correctly reading `True`
+immediately after `StartPazaakGame` ran** (`cheat: pazaak hand started ... running now: True`).
+A throwaway diagnostic (logging `clientInternal`/`pazaak`/`pazaakActive` every ~2s, not
+committed) found the exact value at `CClientExoAppInternal+0x70` the instant a hand starts is
+the **literal integer `1`**, not a plausible heap address:
+
+```
+minigame: pazaak diag clientInternal=0x2BB8380 pazaak=0x0 pazaakActive=False wasInPazaak=False
+[... pazaak console cheat fires, StartPazaakGame runs ...]
+minigame: pazaak diag clientInternal=0x2BB8380 pazaak=0x1 pazaakActive=False wasInPazaak=False
+```
+
+`MinigameController.OnFrame` gated `pazaakActive` on `LooksLikeDataPointer(pazaak)` — the
+`p is > 0x10000 and < 0x7FFF0000` range guard §23.1 borrowed from every other raw-pointer field
+in this plugin, on the stated assumption that "the pointer itself is the flag" meant a real
+`CPazaakData*` worth sanity-checking before logging. That assumption was live-disproven: the
+value `1` fails the guard outright (`1 < 0x10000`), so `pazaakActive` stayed `false` forever,
+silently. `Odyssey.IsPazaakRunning()` (§4's own VERIFIED disassembly of the real engine's
+`CClientExoApp::GetPazaakIsRunning` — `mov eax,[ecx+4]; mov eax,[eax+0x70]; ret`, no shape check
+anywhere in the function) has no such guard and read `True` correctly the whole time — which is
+exactly what made the two readers disagree and made this findable at all.
+
+**Fix**: `pazaakActive = pazaak != 0` — dropping the range guard for this one field, matching
+the verified engine function's own bare-nonzero contract exactly. `LooksLikeDataPointer` became
+dead code once the only caller was removed and was deleted (`private static readonly` fields
+initialised once are correct and were NOT the problem here — a `pazaak_detect=1` banner log
+added during this round's diagnosis confirmed `PazaakDetectEnabled` itself read `true` from
+`coop.ini` from the very first frame, ruling out the more exotic "static init runs before
+`PluginConfig.UseDirectory`" hypothesis this round also considered before finding the real
+cause). `src/KotorCoop.Plugin/MinigameController.cs`; `dotnet build KotorCoop.slnx -warnaserror`
+and `src/KotorCoop.Plugin/build.ps1 -WarnAsError` both clean, 0 warnings/errors, after the fix.
+
+### Re-run after the fix: latch, park, and toast all PASS
+
+Fresh rig, rebuilt/reinstalled plugin on both GOG installs, both warped to `tar_m03aa` together,
+`pazaak` fired on the host:
+
+```
+HOST   [03:28:08.011] pazaak: StartPazaakGame(deck 0, opponent the engine's own default opponent) called - running now: True
+HOST   [03:28:08.014] pazaak: entered (CPazaakData field 0x1) — peers will park this player's phantom
+HOST   [03:28:08.015] minigame: entered (Pazaak) — peers will park this player's phantom
+CLIENT [03:28:08.135] peer left: destroyed phantom 0xAD (slot 0)          <- park, 124ms later
+CLIENT [03:28:08]     * Lanik is in a minigame - waiting                  <- the chat toast (agent2.log)
+```
+
+**Latch**: PASS — `PlayerState.FlagInMinigame` flips and reaches the wire (the client's own
+`MinigameAnnouncer` diffing a REMOTE peer's flag is exactly what produced the toast line, so the
+flag genuinely crossed the network, not just flipped locally on the host).
+**Park**: PASS — the client destroyed the host's phantom within 124ms of the flag going up, the
+same "destroyed, not frozen" behaviour §9.4 already established for swoop/turret, now confirmed
+for Pazaak specifically.
+**Toast**: PASS — `MinigameAnnouncer`'s "<name> is in a minigame - waiting" line fired on the
+client under the SHIPPED default (`minigame_hide_peer=1`), confirming §23.3's own follow-up fix
+(the agent-side announcer, built specifically because the plugin-side HUD notice is structurally
+blind under the hide-peer default) works for Pazaak, not just the swoop/turret case it was
+built and previously tested against.
+
+### Clear: NOT independently confirmed — a real, named gap in the TEST PRIMITIVE, not a live
+### failure of real gameplay
+
+Attempted by warping the host away from `tar_m03aa` to `end_m01aa` (a real, successful module
+transition — confirmed live, `where` read back `module end_m01aa`) while the hand was still
+"running." **`pazaak: left`/`minigame: exited` never fired, and a full-log grep found no exit
+line at all after the transition.** Root cause, read from `CClientExoAppInternal::EndPazaakGame`
+(`0x005F3950`, fresh disassembly this round): `CClientExoAppInternal+0x70` is cleared
+(`mov dword ptr [esi+0x70], 0`) **only by this one function** — nothing else in the traced
+call graph touches it, and a module transition alone does not call it. `pazaak` (the console
+primitive) starts a hand with `nMaxWager=0` and an empty end-script specifically so no wager
+screen appears (§4's own nwscript.nss cross-check: `nMaxWager <= 0` means "the wager screen
+will not show up"), which also means there is no GUI completion path this synthetic hand can
+ever reach on its own — `EndPazaakGame` was never going to fire without either a real wager
+hand played to completion through the actual GUI (blocked by the same mouse-click-injection gap
+`docs/research/session-save.md` already documents) or a NEW console primitive built to call
+`EndPazaakGame` directly, which `EndPazaakGame`'s own disassembly (this round) shows takes at
+least two stack arguments and performs credit/gold-payout and Pazaak-card-repository cleanup
+calls beyond the simple field clear — not something this round was willing to call blind,
+without first fully tracing what those arguments mean, per this project's own "verify a
+researched offset live before shipping the write" rule. **Left as a genuinely open item**, not
+worked around: the CLEAR direction of `MinigameController`'s own code is bit-for-bit symmetric
+with the ENTER direction (`pazaak != 0`, same as the ENTER side now uses) and the real engine's
+own `EndPazaakGame` genuinely does clear the field when called — so ordinary gameplay (a player
+finishing a real, wagered hand through the actual GUI) has every reason to work, but this round
+did not itself watch it happen. A future round: build `pazaak end` (or similar) once
+`EndPazaakGame`'s full argument shape is traced, or find a way to drive the real GUI to a natural
+completion.
+
+### Verdict: `pazaak_detect` flips ON
+
+Three of the four items this round set out to confirm (latch, park, toast) are live-PASS, and a
+real, previously-silent bug (the range-guard over-filtering the field) is fixed and confirmed
+fixed by the same live pass. The fourth (clear) is an honestly-named open item tied to this
+round's own test primitive lacking a way to end a hand, not a demonstrated failure of the
+underlying mechanism — the code path is symmetric and the real engine function that clears the
+field was read and understood, just not exercised. Given the decisive positive evidence and the
+low blast radius of the remaining gap (worst case: a peer's phantom stays parked/hidden for the
+rest of a session after a console-only, no-wager test hand — not a path a real player's own
+completed hand should hit), `pazaak_detect` is flipped to `1` (ON) in
+`profiles/coop.ini.example` and `docs/CONFIG.md`. `dotnet test tests/KotorCoop.Tests --no-build`:
+2339/2339 passing (unchanged — this round's fix touches only plugin-side pointer-shape logic
+with no test-project counterpart, per `MinigameController`'s existing "not exercised by the
+64-bit test project" status).
