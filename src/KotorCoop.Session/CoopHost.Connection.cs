@@ -11,6 +11,29 @@ namespace KotorCoop.Session;
 /// </summary>
 public sealed partial class CoopHost
 {
+    /// <summary>
+    /// Answers a Hello whose version byte does not match ours. Reached only through
+    /// <see cref="Handle"/>'s lenient fallback (<see cref="PacketCodec.PeekTypeAnyVersion"/>),
+    /// because the strict path a real Hello would otherwise take (<see cref="HandleHello"/>)
+    /// never sees this datagram — <see cref="PacketCodec.PeekType"/> already folded it into
+    /// <see cref="PacketType.None"/>. The Reject is written in OUR current wire format
+    /// (<see cref="ProtocolConstants.Version"/>); an older client cannot strictly parse it
+    /// either, which is exactly why <see cref="CoopClient"/>'s own Handle has the matching
+    /// lenient fallback — see its remarks.
+    /// </summary>
+    private void HandleVersionMismatch(IPEndPoint from, byte peerVersion)
+    {
+        _channel.NoteVersionMismatch();
+
+        int rejectLength = PacketCodec.Write(
+            _replyBuffer,
+            new RejectPacket($"E_PROTO: host is v{ProtocolConstants.Version}, you are v{peerVersion}"));
+        if (rejectLength > 0)
+        {
+            _channel.Send(from, _replyBuffer.AsSpan(0, rejectLength));
+        }
+    }
+
     private void HandleHello(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
         if (PacketCodec.ReadHello(span) is not { } hello)

@@ -124,6 +124,21 @@ public sealed partial class CoopClient
             // against any more.
             _saveSettle.Reset();
             RefineCompatibility();
+
+            // Adopt the host's tick rate rather than blindly running our own — see
+            // WelcomePacket.TickRate's doc for why the two settings can legitimately
+            // disagree (a host that raised or lowered its rate; a client whose coop.ini
+            // still names the old default). Clamped: a single wire byte is otherwise
+            // unbounded, and 0 would divide by zero building the tick timer's period.
+            int hostTickRate = Math.Clamp((int)welcome.TickRate, MinTickRate, MaxTickRate);
+            if (hostTickRate != _settings.TickRate)
+            {
+                Console.Error.WriteLine(
+                    $"[coop] adopting host tick rate {hostTickRate} Hz (local setting was "
+                    + $"{_settings.TickRate} Hz)");
+            }
+
+            _effectiveTickRate = hostTickRate;
         }
     }
 
@@ -277,6 +292,33 @@ public sealed partial class CoopClient
         {
             _rejectReason = reject.Reason;
         }
+    }
+
+    /// <summary>
+    /// A Reject from a host running a DIFFERENT protocol version. The strict header check
+    /// (<see cref="PacketCodec.PeekType"/>, what every ordinary handler dispatches on)
+    /// already folded this datagram into <see cref="PacketType.None"/> — a host on a
+    /// mismatched build wrote its Reject in ITS current wire format
+    /// (<see cref="CoopHost.HandleVersionMismatch"/>), which our strict reader cannot parse
+    /// any more reliably than genuine garbage. Recover just the type and version with
+    /// <see cref="PacketCodec.PeekTypeAnyVersion"/> — NEVER the body, whose layout for a
+    /// version we do not speak is not something we can trust — and surface the mismatch
+    /// through the exact same field <see cref="HandleReject"/> uses, so it reaches the
+    /// player the same way an ordinary Reject does (<see cref="GetStats"/>'s Status line).
+    /// Returns false for anything else, so the caller falls through to the ordinary
+    /// malformed-datagram handling.
+    /// </summary>
+    private bool TryHandleVersionMismatchReject(ReadOnlySpan<byte> span)
+    {
+        PacketType looseType = PacketCodec.PeekTypeAnyVersion(span, out byte hostVersion);
+        if (looseType != PacketType.Reject || hostVersion == ProtocolConstants.Version)
+        {
+            return false;
+        }
+
+        _channel.NoteVersionMismatch();
+        _rejectReason = $"protocol mismatch: host is v{hostVersion}, you are v{ProtocolConstants.Version}";
+        return true;
     }
 
     private void HandlePong(IPEndPoint from, ReadOnlySpan<byte> span, long now)

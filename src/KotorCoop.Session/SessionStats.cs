@@ -16,6 +16,12 @@ public sealed record SessionStats
 
     public long PacketsDropped { get; init; }
 
+    /// <summary>Datagrams that carried our magic and a recognised type but a protocol
+    /// version we do not speak — a peer on a different co-op build, counted separately from
+    /// <see cref="PacketsDropped"/> because "wrong version" and "garbage" want different
+    /// player-facing messages.</summary>
+    public long VersionMismatches { get; init; }
+
     public long BytesSent { get; init; }
 
     public long BytesReceived { get; init; }

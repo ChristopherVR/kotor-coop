@@ -203,6 +203,7 @@ public sealed partial class CoopHost : ICoopSession
             PacketsSent = _channel.PacketsSent,
             PacketsReceived = _channel.PacketsReceived,
             PacketsDropped = _channel.MalformedPackets,
+            VersionMismatches = _channel.VersionMismatchPackets,
             BytesSent = _channel.BytesSent,
             BytesReceived = _channel.BytesReceived,
             LastInboundAgeMs = _lastInboundMs == 0 ? 0 : SessionClock.NowMs - _lastInboundMs,
@@ -418,6 +419,23 @@ public sealed partial class CoopHost : ICoopSession
         long now = SessionClock.NowMs;
         _lastInboundMs = now;
         _recvIntervals.Record(now);
+
+        if (type == PacketType.None)
+        {
+            // The strict header check (PacketReader.ReadHeader, what PeekType uses) folds a
+            // version-mismatched datagram into None indistinguishably from garbage — so a
+            // player on a different co-op build sent a perfectly well-formed Hello and got
+            // nothing back, forever, until their own 15 s "no reply from host" timeout fired.
+            // PeekTypeAnyVersion recovers the type and version WITHOUT trusting the body (a
+            // version we do not speak may not lay its fields out the same way), so all this
+            // may safely do is answer with a typed Reject — never parse the rest of it.
+            PacketType looseType = PacketCodec.PeekTypeAnyVersion(span, out byte peerVersion);
+            if (looseType == PacketType.Hello && peerVersion != ProtocolConstants.Version)
+            {
+                HandleVersionMismatch(datagram.From, peerVersion);
+                return;
+            }
+        }
 
         if (_handlers.TryGetValue(type, out PacketHandler? handler))
         {

@@ -17,6 +17,13 @@ public sealed partial class CoopClient : ICoopSession
     private const int JournalResyncIntervalMs = 500;
     private const int LootResyncIntervalMs = 500;
 
+    /// <summary>Sane bounds for a host-announced <see cref="WelcomePacket.TickRate"/>. A
+    /// single wire byte is otherwise unbounded (0 would divide by zero building the tick
+    /// timer's period, and a huge value would busy-loop), so a value outside this range is
+    /// clamped rather than trusted outright — see <see cref="HandleWelcome"/>.</summary>
+    private const int MinTickRate = 5;
+    private const int MaxTickRate = 60;
+
     private readonly SessionSettings _settings;
     private readonly IPEndPoint _hostEndPoint;
     private readonly UdpChannel _channel;
@@ -87,6 +94,22 @@ public sealed partial class CoopClient : ICoopSession
     private bool _resyncOnConnect;
 
     /// <summary>
+    /// The tick rate actually driving <see cref="RunAsync"/>'s send/poll loop right now.
+    /// Starts at the local <see cref="SessionSettings.TickRate"/> (nothing has told us
+    /// otherwise yet) and is overwritten in <see cref="HandleWelcome"/> once the host
+    /// announces its own — see <see cref="WelcomePacket.TickRate"/>'s doc for why the two can
+    /// disagree. <c>volatile</c>: written on the receive-loop thread, read every tick by
+    /// <see cref="RunAsync"/>'s own thread.
+    /// </summary>
+    private volatile int _effectiveTickRate;
+
+    /// <summary>The tick rate this client is actually running at — the local setting until a
+    /// Welcome arrives, the host's announced rate (clamped) after. Exposed for
+    /// <c>lagstats</c>-style readouts and tests; drives <see cref="RunAsync"/>'s send/poll
+    /// cadence, not merely reported alongside it.</summary>
+    public int EffectiveTickRate => _effectiveTickRate;
+
+    /// <summary>
     /// When the host's world snapshot stopped listing this client, or 0 while it still does.
     ///
     /// ⚠ THE ONE-WAY OUTAGE. Silence is the only disconnect signal this client had, and a
@@ -105,6 +128,7 @@ public sealed partial class CoopClient : ICoopSession
     {
         _settings = settings;
         _hostEndPoint = hostEndPoint;
+        _effectiveTickRate = settings.TickRate;
 
         // Bind an ephemeral port: two clients on one machine must not fight over 27015.
         _channel = new UdpChannel(0);
@@ -184,6 +208,7 @@ public sealed partial class CoopClient : ICoopSession
             PacketsSent = _channel.PacketsSent,
             PacketsReceived = _channel.PacketsReceived,
             PacketsDropped = _channel.MalformedPackets,
+            VersionMismatches = _channel.VersionMismatchPackets,
             BytesSent = _channel.BytesSent,
             BytesReceived = _channel.BytesReceived,
             LastInboundAgeMs = _lastInboundMs == 0 ? 0 : now - _lastInboundMs,
@@ -207,13 +232,31 @@ public sealed partial class CoopClient : ICoopSession
     {
         Task receiveLoop = ReceiveLoopAsync(cancellationToken);
 
-        using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(1000.0 / _settings.TickRate));
-
         try
         {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            // Owned entirely by this method/thread — HandleWelcome (receive-loop thread)
+            // only ever writes _effectiveTickRate, never touches the timer itself.
+            // PeriodicTimer's period is fixed at construction, so adopting a different
+            // host-announced rate means swapping the instance, not mutating one in place.
+            int runningTickRate = _effectiveTickRate;
+            PeriodicTimer timer = new(TimeSpan.FromMilliseconds(1000.0 / runningTickRate));
+            try
             {
-                Tick();
+                while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    Tick();
+
+                    if (_effectiveTickRate != runningTickRate)
+                    {
+                        runningTickRate = _effectiveTickRate;
+                        timer.Dispose();
+                        timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000.0 / runningTickRate));
+                    }
+                }
+            }
+            finally
+            {
+                timer.Dispose();
             }
         }
         catch (OperationCanceledException)
@@ -411,6 +454,11 @@ public sealed partial class CoopClient : ICoopSession
         ReadOnlySpan<byte> span = datagram.Span;
         long now = SessionClock.NowMs;
         PacketType type = PacketCodec.PeekType(span);
+
+        if (type == PacketType.None && TryHandleVersionMismatchReject(span))
+        {
+            return;
+        }
 
         // ⚠ NOT EVERY PACKET PROVES WE ARE STILL IN THE SESSION. The liveness clock is the
         // only thing that notices a dropped link, and a Pong or an op ack is sent by the host
