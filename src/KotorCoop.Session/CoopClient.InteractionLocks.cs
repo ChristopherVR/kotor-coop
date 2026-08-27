@@ -133,14 +133,19 @@ public sealed partial class CoopClient
             return;
         }
 
+        // A PRIVATE buffer, not _sendBuffer: this is called from the plugin-pump thread while
+        // RunAsync's tick loop is encoding its own packets into _sendBuffer on another thread.
+        // Sharing it corrupted the request (the host dropped it as malformed), so the first
+        // click silently lost the race it was supposed to win.
+        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
         int length = PacketCodec.Write(
-            _sendBuffer,
+            buffer,
             new InteractionClaimPacket(
                 _localPeerId, module, string.Empty, InteractionKind.Container, true, targetId,
                 requestSerial));
         if (length > 0)
         {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            _channel.Send(_hostEndPoint, buffer.AsSpan(0, length));
         }
     }
 

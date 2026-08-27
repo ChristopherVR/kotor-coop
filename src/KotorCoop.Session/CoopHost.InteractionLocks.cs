@@ -148,12 +148,15 @@ public sealed partial class CoopHost
         // it, exactly as before this feature existed.
         if (claim.RequestSerial != 0)
         {
+            // Private buffer: this runs on the receive loop while Tick() is encoding broadcasts
+            // into _sendBuffer on the tick thread — see CoopClient.RequestContainerLock.
+            byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
             int length = PacketCodec.Write(
-                _sendBuffer,
+                buffer,
                 new LockResponsePacket(claim.PeerId, claim.Kind, claim.TargetId, claim.RequestSerial, granted));
             if (length > 0)
             {
-                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                _channel.Send(peer.EndPoint, buffer.AsSpan(0, length));
             }
         }
     }
