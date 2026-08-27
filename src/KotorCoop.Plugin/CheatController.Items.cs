@@ -166,6 +166,67 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's
+    /// script-item-sync round): gives an item straight into THIS instance's own player's
+    /// inventory through the SAME <see cref="Odyssey.GiveItemToInventory"/> call
+    /// <see cref="GiveLoot"/> already uses for its local-player sentinel — but, unlike every
+    /// console-driven item path in this file, on PURPOSE calling no agent-side suppression
+    /// hook. <see cref="GiveLoot"/>'s local-player branch is fed by
+    /// <c>CoopCommandDispatcher.GiveLoot</c>, which calls <c>CoopAgent.NoteLocalItemGiven</c>
+    /// before the cheat ever reaches the plugin — the correct behaviour for a HUMAN typing
+    /// <c>giveloot</c> at their own console, and exactly the suppression path
+    /// <c>script_item_sync</c>'s own live-test plan needs as its NEGATIVE control. This verb is
+    /// the POSITIVE control: an item that appears in the local player's inventory with nothing
+    /// upstream having recorded it first is indistinguishable, from
+    /// <c>ScriptItemGrantPump</c>'s own sampling diff, from a genuine OnEnter/OnDeath/heartbeat
+    /// script calling <c>CreateItemOnObject</c>/<c>GiveItem</c> — which is real engine behaviour
+    /// this codebase has no console primitive to trigger on demand (no known object's event
+    /// script in the rig's reachable modules has been confirmed to grant an item; see that
+    /// round's own NEEDS-LIVE item 4). Built for exactly the reason <c>quittomenu</c> was:
+    /// keyboard-typing the retail <c>giveitem</c> verb needs digits/characters
+    /// <c>tools/sendkey.ps1</c> does not have scan codes for ('0', '_'), on top of the standing
+    /// risk that injected keystrokes are not reliably delivered at all.
+    /// </summary>
+    private void ScriptGive()
+    {
+        uint localId = Odyssey.GetPlayerObjectId();
+        if (localId == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "scriptgive: no local player to give to");
+            return;
+        }
+
+        byte* text = block.CheatText;
+        int length = 0;
+        while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
+        {
+            length++;
+        }
+
+        if (length == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, "no item resref given");
+            return;
+        }
+
+        string resref = Encoding.ASCII.GetString(text, length);
+        int stack = block.CheatAmount;
+
+        uint itemId = Odyssey.GiveItemToInventory(localId, text, length, Math.Max(1, stack), out int failure);
+        if (itemId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"'{resref}' did not spawn onto 0x{localId:X} (failure {failure}; wrong resref?)");
+            return;
+        }
+
+        PluginHost.Log($"scriptgive: '{resref}' (0x{itemId:X}) placed directly on 0x{localId:X} - "
+            + "no suppression ledger entry was recorded for this, ON PURPOSE");
+        Answer(SharedBlock.CheatStatusApplied, $"gave '{resref}' (0x{itemId:X}) to the local player, untracked");
+    }
+
+    /// <summary>
     /// Reads one live item's per-instance identity, and pokes whichever of the five fields
     /// the request named — through <see cref="Odyssey.ApplyItemIdentity"/>, the very function
     /// the ground-item channel calls on a peer's dropped item.

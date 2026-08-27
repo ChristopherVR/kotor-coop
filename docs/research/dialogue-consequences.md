@@ -1600,3 +1600,87 @@ Full suite: see the commit this section ships with.
    bit, per this pass's own constraint not to touch `ProtocolConstants.Version`) is the right
    capability to ride — it has never been exercised for a script-outside-dialogue grant, only for
    the conversation-token channel it was designed around.
+
+## Live pass (2026-08-27): the core claim and one control CONFIRMED; two controls not exercised — stays OFF
+
+Item 4's own concrete-positive-repro problem (nothing in this codebase can fire an
+OnEnter/OnDeath/heartbeat script that grants an item, on demand, in a reachable module) is
+solved the same way `quittomenu` solved the FlagAway round's navigation problem: a new dev-only
+console verb, `scriptgive <resref> [stack]` (`CheatKinds.ScriptGive` = 26,
+`SharedBlock.CheatKindScriptGive`, `CoopCommandKind.ScriptGive`), gives an item straight into the
+LOCAL player's inventory through the same `Odyssey.GiveItemToInventory` call `giveloot`'s
+local-player sentinel already uses — but, unlike every other console item verb, calls NO
+agent-side suppression hook (`CoopAgent.NoteLocalItemGiven`). To `ScriptItemGrantPump`'s own
+sampling diff, a `scriptgive`d item and a genuine script grant are the same event: a new row
+that appeared in `ReadPossessedItems` with no upstream channel having recorded it first. Same
+files touched as `quittomenu` (`Odyssey.GiveItemToInventory` reused, not new;
+`CheatController.Items.cs`, `SharedBlock.cs`/`IGameBridge.cs`, `ConsoleCommand.cs`/
+`ConsoleCommand.Items.cs`, `CoopCommandDispatcher.cs`, `docs/CONSOLE.md`). `dotnet test
+tests/KotorCoop.Tests`: 1980/1980 green (`CoopCommandDispatcherTests`'s own two UDP-port-bind
+flakes reproduced and cleared on a solo rerun, per CONTRIBUTING.md's own note — not a
+regression).
+
+### The core claim — CONFIRMED
+
+Both instances connected in `END_M01AA` (block version 53), `script_item_sync=1` on both.
+`pwsh tools\blockpoke.ps1 -ProcId <host> console 'scriptgive g_w_blstrpstl001'` answered `gave
+'g_w_blstrpstl001' (0x132) to the local player, untracked`. Three independent log lines, on
+different processes, agree:
+
+```
+host plugin:  scriptgive: 'g_w_blstrpstl001' (0x132) placed directly on 0x7FFFFFFF - no
+              suppression ledger entry was recorded for this, ON PURPOSE
+host agent:   * script item grant: 1 new item(s) in the local PC's inventory outside dialogue:
+              g_w_blstrpstl001
+client agent: * dialogue grant: received 1 item(s) from peer 1 (''), queueing
+client plugin: materialise: gave loot 'g_w_blstrpstl001' (0x131) to stand-in 0x7FFFFFFF for
+              the local player (dialogue grant) - stack 1, charges 0/0, upgrades 0x0
+```
+
+The empty partner tag (`''`) is exactly as designed — §"What shipped" notes the script channel
+publishes with "an empty partner tag (there is no conversation to name)". End to end: the
+OWNER's instance detected an untracked inventory row, published it through the SAME
+give-loot cheat channel §3's in-dialogue grants already use, and the PEER applied it through the
+SAME `Odyssey.ApplyItemIdentity` call — once, cleanly, no crash. Polled both agent logs for
+3 more seconds afterward: neither side re-reported or re-broadcast the same grant (the client's
+own `ScriptItemGrantPump`, now sampling an inventory that also contains this item, did not
+re-detect it — the suppression feed point at `LootPump.PumpMaterialisedLoot`, draining
+`session.DrainDialogueGrants()` before the automatic-give queue, worked as designed).
+
+### Control 1 (manual `giveloot` targeting the local player) — CONFIRMED suppressed
+
+`giveloot 0x7FFFFFFF g_w_lghtsbr01` on the host (a human staging a give against their own
+character, the exact shape `CoopCommandDispatcher.GiveLoot`'s `NoteLocalItemGiven` call exists
+for) produced no `script item grant` line on either side — the suppression ledger correctly
+recognised it as already-accounted-for and did not double-report it as a script grant.
+
+### Controls 2 and 3 (ground pickup, container/corpse loot) — NOT exercised this round
+
+`useplaceable` (blank = nearest container) refused: `the sweep found 64 placeable(s) but none
+close enough / none with inventory (status -3)` — nothing in `END_M01AA` at the player's current
+position was in the 15 m `PlaceableUseRange`, and no time was spent this round finding or
+navigating to a specific footlocker/corpse. Ground pickup needs either real player movement (an
+injected-input class this codebase's own standing notes call unreliable for anything but a
+console keystroke) or a click on a floor item, neither attempted this round.
+
+This matters because §2 of this same round's own NEEDS-LIVE list names container/corpse loot as
+**"the sub-case most likely to fail live"**: `TryGetItemResref`'s tag-as-resref proxy is a
+heuristic that can leave a removal unresolved and therefore unsuppressed. That risk is
+completely unaddressed by what this round actually ran.
+
+### Verdict: stays OFF
+
+The core mechanism and one of three required controls are now genuinely live-confirmed — a
+real improvement over "nothing in this round has been run against the real game." But
+`script_item_sync`'s own live-test plan explicitly requires all three negative controls before
+calling it clean, and the one most likely to surface a real bug (container/corpse loot) was not
+run. **`script_item_sync` was NOT flipped to `1` by default** — `profiles/coop.ini.example` and
+`CoopConfig.ScriptItemSync`'s code default both stay `0`. The two rig `coop.ini`s used for this
+pass were edited to `script_item_sync=1` for the test session only (not committed as a default
+change).
+
+**Recommended for the next round with rig access:** navigate to a known footlocker (`tp` plus a
+found placeable id from a `census`-style sweep, or simply walk near one of the 64 placeables this
+sweep already enumerated) and re-run `useplaceable` there; walk (or `walkto`) a dropped item's
+position for the ground-pickup control. Both controls are otherwise ready to run exactly as
+written above.

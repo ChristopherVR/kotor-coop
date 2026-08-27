@@ -65,7 +65,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [dialogue-sync.md](dialogue-sync.md) | Synchronizing conversations across two instances | Implemented, live-verified |
 | [dialogue-join-latency.md](dialogue-join-latency.md) | Why a joiner's subtitles lag | Measured; this doc's own A/B found no confirmed improvement (superseded in practice by dialogue-skip-desync.md's decisive case) |
 | [dialogue-skip-desync.md](dialogue-skip-desync.md) | Rapid mid-sentence skip desyncing a peer | Root-caused, fixed, live-verified; `dialogue_fast_join=1` flipped ON the same day |
-| [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON) |
+| [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON). `script_item_sync` live-verified 2026-08-27 (partial): core grant + one of three controls confirmed clean, container/corpse loot control unrun — stays OFF |
 | [click-to-join-and-vo.md](click-to-join-and-vo.md) | Click-to-join annulment, and a voice-over gag | Both root-caused, fixed |
 | [bark-replay.md](bark-replay.md) | Why replaying an NPC bark crashed the process | Root-caused, fixed, live-verified |
 

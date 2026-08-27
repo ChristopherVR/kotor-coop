@@ -215,6 +215,17 @@ public static class CheatKinds
     /// ⚠ 25 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint QuitToMenu = 25;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's script-item-sync
+    /// round): gives an item straight into the local player's inventory with NO suppression-ledger
+    /// entry recorded, simulating an untracked script grant (OnEnter/OnDeath/heartbeat) for
+    /// testing <c>script_item_sync</c>. See <c>SharedBlock.CheatKindScriptGive</c>. <c>Address</c>
+    /// is the resref, <c>Amount</c> the stack size. Local only.
+    ///
+    /// ⚠ 26 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint ScriptGive = 26;
 }
 
 /// <summary>

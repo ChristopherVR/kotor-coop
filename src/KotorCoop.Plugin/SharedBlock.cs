@@ -568,4 +568,20 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindQuitToMenu = 25;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's
+    /// script-item-sync round): gives an item straight into THIS instance's own player's
+    /// inventory through <c>Odyssey.GiveItemToInventory</c> with NO agent-side suppression-ledger
+    /// entry recorded, ON PURPOSE — simulating exactly what an OnEnter/OnDeath/heartbeat script
+    /// granting an item looks like to <c>ScriptItemGrantPump</c>'s sampling diff, which this
+    /// codebase otherwise has no console primitive to trigger on demand. <c>CheatText</c> is the
+    /// resref, <c>CheatAmount</c> the stack size. See <c>CheatController.Items.cs</c>'s own
+    /// <c>ScriptGive</c> doc comment for the full reasoning and why <c>giveloot</c>'s existing
+    /// local-player sentinel cannot be reused for this (it IS suppressed, on purpose — it is the
+    /// feature's own negative control).
+    ///
+    /// ⚠ 26, because 7-25 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindScriptGive = 26;
+
 }

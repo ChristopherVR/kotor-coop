@@ -357,6 +357,19 @@ public enum CoopCommandKind
     /// only: this never crosses the network by itself.
     /// </summary>
     QuitToMenu,
+
+    /// <summary>
+    /// <c>scriptgive &lt;resref&gt; [stack]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/dialogue-consequences.md's script-item-sync round). Gives an item straight
+    /// into THIS instance's own player's inventory with no suppression-ledger entry recorded, on
+    /// purpose — simulating exactly what a script (OnEnter/OnDeath/heartbeat) granting an item
+    /// looks like to <c>ScriptItemGrantPump</c>'s own sampling diff, since this codebase has no
+    /// other way to trigger that scenario on demand. <see cref="CoopCommand.Address"/> is the
+    /// resref, <see cref="CoopCommand.Amount"/> the stack size (default 1). NOT the same as
+    /// <c>giveloot</c>'s local-player sentinel, which IS suppressed on purpose (the feature's own
+    /// negative control) — this verb exists specifically to bypass that. Local only.
+    /// </summary>
+    ScriptGive,
 }
 
 /// <summary>
@@ -542,6 +555,7 @@ public static partial class ConsoleCommand
         new(["selectreply"], ParseSelectReply),
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),
+        new(["scriptgive"], ParseScriptGive),
         new(["cheats"], ParseCheats),
     ];
 
