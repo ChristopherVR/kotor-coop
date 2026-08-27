@@ -306,4 +306,17 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.Equip, Address: token, Password: rest[1], Amount: slot);
     }
+
+    // grantgold <amount>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GrantGold.
+    private static CoopCommand ParseGrantGold(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int amount))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "grantgold needs one signed amount, e.g. grantgold 500 or grantgold -200");
+        }
+
+        return new CoopCommand(CoopCommandKind.GrantGold, Amount: amount);
+    }
 }

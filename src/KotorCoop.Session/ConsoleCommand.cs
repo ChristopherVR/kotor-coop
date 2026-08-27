@@ -428,6 +428,20 @@ public enum CoopCommandKind
     /// 5 left weapon; 0/omitted defaults to the right-weapon slot). Local only.
     /// </summary>
     Equip,
+
+    /// <summary>
+    /// <c>grantgold &lt;amount&gt;</c> — LIVE-TEST PRIMITIVE (docs/research/progression-sync.md's
+    /// live test plan). Adds a signed delta straight to the party wallet
+    /// (<c>CSWPartyTable+0xFC</c>), through the SAME <c>KotorGameBridge.TryReadProgression</c>/
+    /// <c>TryWriteProgression</c> field read/write the shipped <c>progression_sync</c> channel
+    /// already uses — no plugin/cheat-channel round trip, purely an agent-side external memory
+    /// write, matching that doc's own "safest write" recommendation. Simulates a vendor
+    /// purchase/sale (a genuine one needs a GUI click this rig cannot reliably deliver) so
+    /// <c>PartyPump.PumpProgression</c>'s own local-gold-change detection organically picks it
+    /// up and forwards it, the same as it would a real trade. <see cref="CoopCommand.Amount"/>
+    /// is the signed delta. Local only.
+    /// </summary>
+    GrantGold,
 }
 
 /// <summary>
@@ -619,6 +633,7 @@ public static partial class ConsoleCommand
         new(["poolremove"], ParsePoolRemove),
         new(["grantxp"], ParseGrantXp),
         new(["equip"], ParseEquip),
+        new(["grantgold"], ParseGrantGold),
         new(["cheats"], ParseCheats),
     ];
 

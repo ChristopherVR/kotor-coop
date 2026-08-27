@@ -271,6 +271,7 @@ public sealed partial class CoopCommandDispatcher(
 
         [CoopCommandKind.GrantXp] = GrantXp,
         [CoopCommandKind.Equip] = Equip,
+        [CoopCommandKind.GrantGold] = c => GrantGold(c.Amount),
 
         [CoopCommandKind.Cheats] = CheatsCommand,
     };

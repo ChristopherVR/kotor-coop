@@ -69,6 +69,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.PoolRemove] = "poolremove g_w_blstrpstl001",
         [CoopCommandKind.GrantXp] = "grantxp me 500",
         [CoopCommandKind.Equip] = "equip me g_w_blstrpstl001",
+        [CoopCommandKind.GrantGold] = "grantgold 500",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

@@ -43,4 +43,34 @@ public sealed partial class CoopCommandDispatcher
         SendCheat(new CheatRequest(
             CheatKinds.Equip, Target: target, Text: command.Password ?? string.Empty, Amount: command.Amount));
     }
+
+    /// <summary>
+    /// Adds a signed delta straight to the party wallet, through the SAME agent-side field
+    /// read/write the shipped <c>progression_sync</c> channel already uses
+    /// (<c>KotorGameBridge.TryReadProgression</c>/<c>TryWriteProgression</c>) — no plugin
+    /// round trip. Simulates a vendor trade so <c>PartyPump.PumpProgression</c>'s own
+    /// local-gold-change detection organically picks it up, the way it would a real purchase.
+    /// </summary>
+    private void GrantGold(int delta)
+    {
+        if (!bridge.TryReadProgression(out uint gold, out uint experience))
+        {
+            Reply("grantgold: no player loaded (not in a module yet)");
+            return;
+        }
+
+        long after = gold + (long)delta;
+        if (after < 0)
+        {
+            after = 0;
+        }
+
+        if (!bridge.TryWriteProgression((uint)after, experience))
+        {
+            Reply($"grantgold: write refused (gold {gold} -> {after})");
+            return;
+        }
+
+        Reply($"gold {gold} -> {after}");
+    }
 }

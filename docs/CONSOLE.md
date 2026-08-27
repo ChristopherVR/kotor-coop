@@ -63,6 +63,7 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `poolremove` | `<resref> [stack]` | yours to stage, local | removes a resref stack from the shared party item pool, the removal counterpart to `pooladd` |
 | `grantxp` | `<id\|me> <amount>` | yours to stage, local | adds a signed XP delta to a creature's `CSWSCreatureStats::experience`, simulating a script-granted award aimed at one creature — the live-test primitive for `companion_xp_sync`'s merge (see docs/research/companion-state-sync.md) |
 | `equip` | `<id\|me> <resref> [slot]` | yours to stage, local | re-equips a creature (1 body, 4 right weapon — default, 5 left weapon) through `Odyssey.EquipItemFromTemplate`, the same call the phantom equipment channel already ships, aimed at a live companion body — the live-test primitive for `companion_gear_sync` |
+| `grantgold` | `<amount>` | yours to stage, local | adds a signed delta to the party wallet through the same agent-side field read/write `progression_sync` already uses — the live-test primitive for gold convergence (no GUI vendor purchase needed) |
 | `cheats` | — | any player | prints this verb list |
 
 ### The `slay` / `destroyobject` authority split

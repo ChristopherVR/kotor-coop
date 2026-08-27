@@ -342,6 +342,7 @@ public static partial class ConsoleCommand
         "  poolremove <resref> [stack]  remove a resref stack from the shared party item pool",
         "  grantxp <id|me> <amount>     add a signed xp delta to a creature (script-grant sim)",
         "  equip <id|me> <resref> [slot]  re-equip a creature (1 body, 4 right weapon, 5 left)",
+        "  grantgold <amount>           add a signed gold delta to the party wallet (trade sim)",
         "retail console cheats, already co-op-safe (they touch only your game):",
         "  giveitem <resref> | givecredits <n> | addexp <n> | addlevel | heal",
         "  revealmap | infiniteuses | invulnerability | whereami | bright | turbo",
