@@ -263,10 +263,29 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
     /// A no-op when either body fails to resolve or is already inside
     /// <see cref="PlayerAttackMeleeRange"/> — <see cref="Odyssey.AttackTarget"/> is left to
     /// report its own failure for a target it genuinely cannot find.
+    ///
+    /// LIVE-FOUND 2026-08-27 (Endar Spire playthrough smoke, step 4): this is only ever
+    /// called with <c>attacker == LocalPlayerSentinelId</c> (0x7FFFFFFF) — the call site
+    /// guards it — but <see cref="Odyssey.ResolveServerObject"/> walks
+    /// <c>CServerExoApp::GetGameObject</c>'s generic object array, which does not contain the
+    /// sentinel: it returned 0 for the attacker on every live attempt beyond melee range, so
+    /// this function silently no-op'd and the round-71 fix never actually engaged — the exact
+    /// failure round 71 itself was written to close, now reopened one level deeper. Confirmed
+    /// live: `attack 0x7FFFFFFF 0x1A` from 6m away logged `test: 0x7FFFFFFF ordered to attack
+    /// 0x1A` (i.e. <see cref="Odyssey.AttackTarget"/> itself accepts the sentinel directly, it
+    /// does not need array resolution) but no `test: closed range for ...` line ever appeared
+    /// and the target's hp never moved. The attacker's real pointer is one call away —
+    /// <see cref="Odyssey.GetPlayerCreaturePointer"/>, the same
+    /// <c>CServerExoApp::GetPlayerCreature</c> lookup `tp`/`walkto`/every other player-facing
+    /// cheat already uses — so resolve the attacker through that instead of the generic
+    /// array walk; the target (a real object id from `census`) still goes through
+    /// <see cref="Odyssey.ResolveServerObject"/> as before.
     /// </summary>
     private void CloseToMeleeRangeIfNeeded(uint attacker, uint target)
     {
-        nint attackerCreature = Odyssey.ResolveServerObject(attacker);
+        nint attackerCreature = attacker == LocalPlayerSentinelId
+            ? Odyssey.GetPlayerCreaturePointer()
+            : Odyssey.ResolveServerObject(attacker);
         nint targetCreature = Odyssey.ResolveServerObject(target);
         if (attackerCreature == 0 || targetCreature == 0)
         {
