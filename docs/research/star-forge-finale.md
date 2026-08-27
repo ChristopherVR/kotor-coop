@@ -816,3 +816,276 @@ Both processes stayed healthy throughout (`Get-Process swkotor` — `Responding=
 confirmed after the session). No crash. `dotnet build KotorCoop.slnx -warnaserror` and
 `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean — no source changed this pass, live
 rig session only.
+
+## 9. The wipe chain, resolved end to end (2026-08-28): trigger → dlg node graph → the exact
+## script and node, and why every prior `startdialog`/console attempt could never reach it
+
+RESEARCH ONLY, static analysis only — no rig touched this pass (deliberately: the brief for
+this round was docs-only). This closes the concrete-next-step every prior round of this doc
+left open: **build a `.dlg`-node script-walker** to find exactly which node inside
+`k_sta_bastila.dlg` calls `k_psta_door.ncs` and under what condition.
+
+### 9.1 Method: `tools/kotorfiles.py`'s existing GFF walker already IS the `.dlg`-node
+### script-walker — it just needed to be pointed at `EntryList`/`ReplyList`/`StartingList`
+
+No new C# code was needed. `tools/kotorfiles.py`'s `GFF`/`GFFStruct` classes (`gff.root`,
+`struct["ListLabel"]` returning a `List[GFFStruct]`, `struct.get("Field")`) already decode
+KOTOR's `.dlg` GFF structs generically — `DLG ` is just GFF V3.2 with three top-level lists
+(`EntryList`, `ReplyList`, `StartingList`) whose own struct members happen to be named
+`Script`/`Text`/`Speaker`/`RepliesList`/`EntriesList`/`Active`. A ~40-line Python script
+(scratchpad only, not committed — same precedent as `minigames.md`'s `ncsdump2`) imported
+`kotorfiles` as a library, loaded `k_sta_bastila.dlg` out of `sta_m45ac_s.rim`, and ran a
+plain BFS over the two mutually-referencing lists (an Entry's `RepliesList` gives reply
+indices, a Reply's `EntriesList` gives entry indices — the walk alternates) from each of
+`StartingList`'s 6 candidate starting entries, stopping at the first entry whose own `Script`
+field equals `k_psta_door` (the wipe script §3.3/the 2026-08-28 `startdialog` round already
+named). **VERIFIED**, read directly out of the real GOG `k_sta_bastila.dlg` (472 structs, 83
+`EntryList` entries, 103 `ReplyList` entries, 6 `StartingList` candidates) — every claim below
+is that walker's own output, not re-derived from memory.
+
+A second scratchpad tool (a throwaway `net10.0-windows` console app referencing
+`KotorCoop.Memory` directly — same non-committed precedent) disassembled the specific `.ncs`
+files this walk implicated, using `NcsReader.Disassemble` + `FindActionCalls` against §1's own
+expanded action table plus four more routines resolved by the same call-shape reasoning this
+pass needed: none of `#42`/`#548`/`#213`/`#92` were resolved to names (consistent with §7's
+"did not resolve routines #200/#229/#548/#582" — this pass adds #42/#213/#92 to that same
+INFERRED-shape-only, not-independently-confirmed list); their *call shape* (a single-arg
+boolean gate immediately before a `JumpIfZero`, or a tag-lookup immediately followed by an
+action) was legible enough for this pass's purpose without a name.
+
+### 9.2 The verified chain: trigger OnEnter → dialogue StartingList → a 7-node linear
+### cutscene chain with exactly one real player choice (which doesn't matter) → the wipe
+
+**Step 1 — the trigger really does start the conversation itself, no click needed.**
+`k45_init_bastila.utt`'s `ScriptOnEnter` = `k_psta_init_bast` (already found by the prior
+2026-08-28 round). This pass disassembled it: after a gate at offset 645-752 —
+`GetPartyMemberByIndex(0) == GetEnteringObject()` (**VERIFIED** call shape: routine 577 then
+routine 25 then an object-typed `Equal`, `type=22`) **AND** a second, unresolved routine-548
+based condition, combined with `LogicalAnd` — the script looks up both `"sta_invis_bast_conv"`
+and `"Bastila"` by tag (routine `#229`, offset 795/839), runs an unresolved single-arg boolean
+check (`#42`, offset 892) on the result, and if that passes, calls **`ActionStartConversation`
+(routine 204, argcount 11, offset 989)** directly — the exact same engine entry point
+`dialogue-sync.md`'s own `startdialog` verb uses, but issued by the GAME's own script against
+whatever object the trigger resolved, not synthetically. **VERIFIED**: this is a real,
+unconditional-once-gated `ActionStartConversation` call sitting in the trigger's own `OnEnter`,
+not a hypothesis.
+
+**Step 2 — `StartingList` picks the branch, and only one of six branches leads anywhere near
+the wipe.** `k_sta_bastila.dlg`'s `StartingList` has 6 candidates, evaluated in authored order,
+first whose `Active` condition script returns true wins (**VERIFIED** GFF data; standard
+BioWare `.dlg` semantics, matching this doc's own live-tested fact that a fresh `startdialog`
+call landed on entry 61 — index 2 of this list):
+
+| # | entry | condition script | what it checks (disassembled) | leads to the wipe? |
+| --- | --- | --- | --- | --- |
+| 0 | 77 | `sta_bast_lasttst` | `GetGlobalBoolean("K_PSTA_BASTSAVE") == 1` | BFS: no path to entry 70 |
+| 1 | 72 | `k_sta45_bastevil` | `GetGlobalNumber("G_FinalChoice") == 1` | BFS: no path to entry 70 |
+| **2** | **61** | **`k_sta_basttalk0`** | **`GetGlobalNumber("Sta_BastTalk") == 0`** | **YES — the only branch that reaches it** |
+| 3 | 51 | `k_sta_basttalk1` | `GetGlobalNumber("Sta_BastTalk") == 1` | BFS: no path (confirmed reachable subtree = entries 51-60 only, dead-ends) |
+| 4 | 46 | `k_sta_basttalk2` | `GetGlobalNumber("Sta_BastTalk") == 2` | BFS: no path to entry 70 |
+| 5 | 0 | `k_sta_basttalk3` | `GetGlobalNumber("Sta_BastTalk") == 3` | BFS: no path to entry 70 |
+
+All six condition scripts are ~110-byte one-liners; the table above is their entire logic,
+**VERIFIED** by full disassembly of each. `Sta_BastTalk` is a plain NWScript global number,
+defaulting to 0 on a fresh save (no explicit initialiser found or needed).
+
+**Step 3 — the branch itself, entry 61 to entry 70, is a straight line with exactly one real
+choice that doesn't matter.** Walking `EntryList`/`ReplyList` from entry 61 (**VERIFIED**, the
+BFS's own path, cross-checked node-by-node against the raw GFF dump):
+
+```
+entry 61  Script=k_sta_basttalk_1  (no text — the scene-staging beat, see 9.3)
+  -> reply 79 (silent, 1 option)              -> entry 62  Script=k_sta_bastmove (moves the
+                                                            real "sta_bastila" NPC creature
+                                                            into position — see 9.4's open risk)
+  -> reply 80 (silent, 1 option)              -> entry 63  "Revan - I knew you'd come for me."
+                                                            (strref 21176, Bastila speaking)
+  -> THREE real reply choices here, ALL converge back to entry 67:
+       reply 85 "I'm <FullName> now, Bastila. Revan is no more." (strref 21228) -> entry 66 (direct)
+       reply 83 (strref 21227, k_sta_bastcon+20)                                -> entry 64 -> reply 82 (IsChild) -> entry 67
+       reply 81 (strref 21226)                                                  -> entry 65 -> reply 84 (IsChild) -> entry 67
+  -> entry 66  "Sadly, I know this is true... you rejected the dark side." (strref 21179)
+  -> reply 86 (silent)                        -> entry 67  "Now you must pay the price. Here on
+                                                            the Star Forge the power of the dark
+                                                            side is at its strongest. This time
+                                                            you will not defeat me!" (strref 21180)
+  -> reply 87 (silent, VO only)                -> entry 68  Script=k_psta_stasis   (no text)
+  -> reply 88 (silent)                         -> entry 69  Script=k_psta_stasis2  (no text)
+  -> reply 89 (silent)                         -> entry 70  Script=k_psta_door     <-- THE WIPE
+  -> reply 90 (silent)                         -> entry 71  Script=k_psta_pcwalk   (no text)
+  -> reply 91 Script=k_sta_bastatt (the 74 KB combat-AI-sized script — likely starts the fight;
+                                     not traced further this pass) -> EntriesList empty (dialogue ends)
+```
+
+**VERIFIED**: every entry/reply struct, its `Script`/`Text`/`RepliesList`/`EntriesList` field,
+and the reply-choice convergence (81/83/85 all reach entry 67, two of them via `IsChild=1`
+back-references) were read directly out of the GFF, not inferred from names. The player's
+choice at entry 63 is real (three different strref'd lines) but narratively cosmetic here — it
+does not gate the wipe. **Every other link on this path has exactly one option with an empty
+`Active` condition** — a pure forced cutscene chain, seven "commit the reply" actions
+(`selectreply`-shaped) from entry 61 to entry 70, none of them player-skippable, none of them
+conditionally gated at the link level.
+
+**Step 4 — the wipe script itself, corrected.** `k_psta_door.ncs` (2480 bytes) does call
+`RemovePartyMember` nine times — **but not by tag**, correcting §3.3's own citation:
+`RemovePartyMember(0)`, `RemovePartyMember(1)`, … `RemovePartyMember(8)` — nine **plain integer
+NPC-slot constants**, back to back (`PushConstant int N` immediately before each `CallEngine
+routine=575 argcount=1`, offsets 999-1146, **VERIFIED**, no string constant precedes any of
+them). This matches NWScript's real `RemovePartyMember(int nNPC)` signature (an `NPC_*`
+enumerated constant, not a tag) far better than a tag-lookup reading would. **Immediately
+after**, a *separate* block (offsets 1154-1476) does nine `#200`-style tag lookups by name —
+`"Bastila"`, `"Carth"`, `"Jolee"`, `"Cand"`, `"HK47"`, `"Juhani"`, `"T3M4"`, `"Zaalbar"`,
+`"Mission"` — each followed by a validity check (`#42`) and (not traced further this pass,
+each companion's continuation branch was not individually unrolled) presumably a
+hide/reposition/effect call on that companion's own physical body, now that they are off the
+roster but still physically standing in the room. **§3.3's "nine RemovePartyMember calls, by
+tag lookup against Bastila/Carth/…" conflated these two adjacent-but-distinct call blocks** —
+the removal is unconditional and index-based; the tag lookups are a second, subsequent pass
+over the same nine companions for a different purpose.
+
+### 9.3 The precondition every `startdialog`/console attempt this doc's own prior rounds tried
+### actually skipped — found, not just guessed
+
+**`Sta_BastTalk` is a one-shot global, and it is bumped the INSTANT entry 61 is merely
+*reached* — before the wipe, before the player can do anything, unconditionally.**
+`k_sta_basttalk_1.ncs` (entry 61's own `Script`, 2167 bytes) is entry 61's action: among other
+things (staging the party at `sta_way_party0`/`1`/`2`, `SetPartyLeader`, jumping the
+NPC-tagged `sta_bastila` object into view) it contains, at offset 870-939:
+
+```
+870: push "Sta_BastTalk"; CallEngine 580 (GetGlobalNumber)   -- read Sta_BastTalk
+893: push 1; Add                                              -- +1
+923: push "Sta_BastTalk"; CallEngine 581 (SetGlobalNumber)    -- write it straight back
+```
+
+**VERIFIED**, full disassembly. This runs the moment the entry-61 node fires — it does not
+wait for the player to advance past it, and it does not check whether the conversation
+subsequently reaches the wipe. The practical consequence, matching this doc's own
+2026-08-28 `startdialog` round's live log **exactly**: the FIRST `startdialog 0xAA
+k_sta_bastila` call that session reached `StartDialog` and landed on **entry node 61**
+(`Sta_BastTalk` was 0, `k_sta_basttalk0` correctly won `StartingList`'s evaluation) — but by
+the time that node had merely been reached, `Sta_BastTalk` was already 1, whether or not the
+chain continued any further. The SECOND `startdialog 0xAA k_sta_bastila` call that same
+session landed on **"node 52/83"** — this pass's own BFS from entry 52 (**VERIFIED**, a
+fresh walk, not the same one used for the wipe path) confirms entry 52 is `StartingList[3]`'s
+own branch: `entry 51` (`k_sta_basttalk1`, `Sta_BastTalk == 1`) → `reply 65` → **entry 52**,
+exactly the node the live log reported, and that branch's entire reachable subtree (entries
+52-60) never reconnects to entry 70 (**VERIFIED**, second BFS). **This is not a coincidence of
+node numbers — it is the fingerprint of the exact mechanism**: the first call's mere arrival at
+entry 61 permanently retired the `Sta_BastTalk == 0` branch for the rest of that save, and
+every subsequent `startdialog` call (this doc records exactly two, both in the same session)
+was mathematically guaranteed to land somewhere in the `Sta_BastTalk == 1` branch instead,
+which this pass's BFS proves has no path to `k_psta_door` at all. **The console approach did
+not fail to find the right node — it found it once, correctly, on the very first call, and the
+act of finding it consumed the one-shot precondition needed to reach it again.**
+
+A second, independent gate likely also mattered and remains **NEEDS-LIVE**: `k_psta_init_bast.ncs`'s
+own trigger-OnEnter gate (9.2 step 1) requires `GetEnteringObject() == GetPartyMemberByIndex(0)`
+— i.e. the object that crossed the trigger boundary must be the actual party leader/PC. The
+prior 2026-08-28 round's `walkto` attempt into this trigger's own coordinates produced no
+`dialogue: engine reached StartDialog` line at all, which is consistent with either this gate
+or the unresolved `#42` validity check on the `"Bastila"`-tagged object failing — **not
+independently distinguished this pass**, since `startdialog`'s object-id override (used
+successfully afterward) sidesteps this whole gate by calling `ActionStartConversation` from a
+different caller context entirely (queued on the local player, per `dialogue-sync.md`'s own
+addendum), which is exactly why it could succeed where the trigger-walk attempt did not.
+
+### 9.4 The console recipe that WILL fire the wipe — a testable, specific hypothesis, NEEDS-LIVE
+
+Not yet run — this doc's own convention (RESEARCH ONLY, no rig this pass) applies here too.
+Concretely, on a save that has never yet reached this dialogue branch (or after resetting the
+one-shot precondition):
+
+1. `setglobal Sta_BastTalk 0` on the HOST (idempotent safety — guarantees `StartingList`
+   candidate index 2 wins even if a prior attempt already bumped it; harmless on a genuinely
+   fresh save where it is already 0). Optionally also `setglobal K_PSTA_BASTSAVE 0` and
+   `setglobal G_FinalChoice 0` if either might already be set, so candidates 0/1 don't
+   pre-empt candidate 2.
+2. `startdialog 0xAA k_sta_bastila` **once** — per 9.3, this should land on entry 61.
+3. **Exactly seven** `selectreply 0` calls, back to back, with no other `startdialog` call in
+   between and as little delay as possible: 61→62 (may need `k_sta_bastmove`'s `ActionJumpToObject`
+   on the real `sta_bastila` NPC creature to actually resolve — see the open risk below) →
+   63→66 (slot 0 = reply 85, the shortest of the three converging choices, skipping the
+   flavor-only entries 64/65) →67→68→69→**70 (the wipe fires here)**.
+4. Confirm via `tools/partystate.ps1` (`companions` count drops from 1-2 to 0) or the plugin
+   log around `RemovePartyMember` if such a diagnostic exists; if not, the roster-count read
+   `SoloSegmentController` itself already watches is the ground truth per §8.1.
+5. **Do not retry with a second `startdialog` call if a step fails partway** — per 9.3,
+   `Sta_BastTalk` is already 1 the moment step 2 lands, so a bare retry is guaranteed to reach
+   the dead `Sta_BastTalk == 1` branch instead. Re-run `setglobal Sta_BastTalk 0` before every
+   single attempt.
+
+**One open risk this pass could not resolve without the rig**: entry 62's own script
+(`k_sta_bastmove.ncs`) explicitly jumps/moves the object tagged `"sta_bastila"` (the real NPC
+creature, distinct from the `sta_invis_bast_conv` placeable `startdialog` targets) to a
+waypoint tagged `STA_BAST_JUMP2`. If that NPC creature is not actually present/spawned when
+`startdialog` is used to force the conversation synthetically (unconfirmed — the 2026-08-28
+`startdialog` round only ever confirmed the placeable `0xAA`, never the creature `sta_bastila`
+itself, e.g. via `census` or a direct tag probe), this step could silently stall the action
+queue exactly the way the prior round's "conversation appeared to end" symptom reads. **A
+sensible pre-flight check for the live pass**: confirm `sta_bastila` (the creature tag)
+resolves to a valid, spawned object *before* attempting step 2 above — if it does not, that is
+likely the true blocker, independent of the `Sta_BastTalk` finding, and would need its own
+fix (find whatever spawns/positions the real Bastila NPC, likely earlier module `OnEnter`
+content this pass did not trace).
+
+### 9.5 What the solo-segment detector should key on if the wipe stays unreachable: hooking
+### `RemovePartyMember` directly — assessed, not built
+
+The task asked for a cost assessment of this alternative, given `solo_segment_spectate`'s own
+detection (§8.1) has never once observed a real drop edge across five live-rig rounds. Hooking
+`ExecuteCommandRemovePartyMember 0x00541C00` (routine 575, the VM's own action handler,
+**VERIFIED** address per §1's table) directly, rather than inferring a "solo segment" from a
+roster-count diff `Odyssey.TryReadPartyRoster` observes indirectly:
+
+**Pros.** Fires at the exact moment of ground truth, not a polled diff — no dependency on the
+pump cadence noticing the roster count change before something else does. Immune to false
+negatives from the polling gap this pass's own live rounds kept hitting (the conversation
+"went quiet" between polls). Immune to false positives §8.1 already worried about (party
+never-recruited, death) since it fires only on the actual engine call, not a state read.
+Generalises to ANY future forced-solo content this mod hasn't researched yet (a different
+`RemovePartyMember`-driven scene in a mod, or DLC-shaped content), not just the two catalogued
+modules — the module gate (`SoloSegmentCatalogue`) could still be applied as a *filter* on top
+of the hook rather than as the sole detection mechanism.
+
+**Cons / cost.** This is a different SHAPE of hook than anything `docs/CONTRIBUTING.md`'s
+engine-write rules or this project's existing detours (`DialogueGateHook.OnStartDialog`, a
+`CSWSObject::StartDialog` prologue tap) have done: those hook a **method on an object
+instance** reached via a vtable slot/adjustor thunk (per the "vtable slots, not addresses"
+project rule); `ExecuteCommandRemovePartyMember` is a **VM action-routine handler**, called
+from the single dispatch table `CSWVirtualMachineCommands::InitializeCommands` fills (§1) —
+every `RemovePartyMember(...)` call in the WHOLE GAME, from any script, in any module, funnels
+through this one function. A hook here needs its own `FINDING-OFFSETS.md`-style live
+verification pass (confirm the prologue bytes at `0x00541C00` match what static disassembly
+shows, the same category of check `DialogueGateHook`'s own address already had) before
+shipping, and needs to read the routine's own argument (the `int nNPC` on the VM stack, not an
+object handle) to know WHICH companion, which this project's stack-reading conventions
+(`NcsReader`'s own stack-offset fields) can express but nothing here has read a live VM stack
+argument out of running memory yet — that specific technique is unproven in this codebase.
+It also fires **nine times per wipe** (one per `RemovePartyMember` call, 9.2 step 4), so the
+consuming code needs the same kind of debounce/coalesce-into-one-event logic
+`MinigameAnnouncer`/`AwayAnnouncer`'s diff-per-tick shape already uses elsewhere, or nine
+redundant "solo segment began" events fire back to back.
+
+**Assessment**: comparable effort to the existing `DialogueGateHook.OnStartDialog` detour (a
+single well-understood function-prologue hook plus one new address to live-verify) — MEDIUM,
+not a new category of risk, and it is a genuinely more direct signal than the roster-count
+poll `SoloSegmentController` currently uses. **Recommended as the next concrete step** if
+9.4's console recipe also fails to reach the wipe live, since it would let a future round
+detect the wipe (and thus test the actual spectate/input-lock machinery §8.2 exists for)
+without needing to solve the `.dlg`-node-reachability puzzle at all — the hook fires on the
+REAL trigger's own script, from ordinary play, with no console driving needed.
+
+### 9.6 Provenance
+
+Read: `k_sta_bastila.dlg` (GFF, full `EntryList`/`ReplyList`/`StartingList` walk),
+`k45_init_bastila.utt`, `k_psta_init_bast.ncs`, `k_sta_basttalk0/1/2/3.ncs`,
+`sta_bast_lasttst.ncs`, `k_sta45_bastevil.ncs`, `k_sta_basttalk_1.ncs`, `k_sta_bastmove.ncs`,
+`k_psta_stasis.ncs`, `k_psta_stasis2.ncs`, `k_psta_door.ncs`, `k_psta_pcwalk.ncs` — all
+extracted from the real GOG install's `modules/sta_m45ac_s.rim` via `tools/kotorfiles.py`,
+disassembled via `src/KotorCoop.Memory/GameFiles/NcsReader.cs`/`NwscriptActions.cs` through a
+throwaway console app (not committed, same precedent as `minigames.md`'s `ncsdump2`) and a
+throwaway Python GFF-walker script (not committed) built directly on `tools/kotorfiles.py`'s
+own `GFF`/`GFFStruct` classes — no new project code, no rig, no game launched.
+`dotnet build KotorCoop.slnx -warnaserror`: clean (unaffected — nothing in `src/` changed this
+pass).
