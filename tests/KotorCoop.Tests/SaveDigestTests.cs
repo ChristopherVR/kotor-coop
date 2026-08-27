@@ -191,14 +191,22 @@ public sealed class SaveDigestTests : IDisposable
 
         // ⚠ The contract that protects the transition: the FIRST ask never does the disk
         // work on the caller's thread. It answers 0 = unknown (which can only ever warn)
-        // and computes in the background.
-        Assert.Equal(0u, cache.SaveIdentity);
-        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        // and computes in the background. The background job is a real thread started by
+        // the getter, so on a fast machine with this tiny fake save it can finish before the
+        // getter reads the field back — the first answer is then already the final digest.
+        // Either is correct; what is NOT allowed is a first answer that is neither 0 nor the
+        // value the background job eventually publishes (a partial or stale read).
+        uint firstIdentity = cache.SaveIdentity;
+        uint firstGit = cache.ModuleGit("end_m01aa");
 
         Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
 
-        Assert.NotEqual(0u, cache.SaveIdentity);
-        Assert.NotEqual(0u, cache.ModuleGit("end_m01aa"));
+        uint identity = cache.SaveIdentity;
+        uint git = cache.ModuleGit("end_m01aa");
+        Assert.NotEqual(0u, identity);
+        Assert.NotEqual(0u, git);
+        Assert.True(firstIdentity == 0 || firstIdentity == identity, $"first identity answer {firstIdentity} is neither unknown nor the final {identity}");
+        Assert.True(firstGit == 0 || firstGit == git, $"first GIT answer {firstGit} is neither unknown nor the final {git}");
         Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
         Assert.Equal(cache.ModuleGit("end_m01aa"), cache.ModuleGit("END_M01AA")); // module names are case-insensitive
 
