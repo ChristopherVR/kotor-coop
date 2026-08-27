@@ -42,7 +42,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
 | [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | Design → implemented, live-verified both directions, ON by default |
 | [galaxy-map-and-party-select.md](galaxy-map-and-party-select.md) | Galaxy map travel and the pre-departure party-select screen (roadmap Tier 2 #18) | RE + design; the movie/roster channels already cover it for free, the announce edge and client-side suppression are the real, unbuilt gaps |
-| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | First RE coverage of this content; design gaps identified, NEEDS-LIVE throughout |
+| [star-forge-finale.md](star-forge-finale.md) | Lehon through the Star Forge and both endings: every forced solo/party-split beat, the Malak drain mechanic | RE coverage complete; the headline gap (Bastila/Malak duel co-op behaviour) is decided and BUILT as `solo_segment_spectate` (§8), default OFF, NEEDS-LIVE — everything else stays NEEDS-LIVE throughout |
 
 ## Combat
 

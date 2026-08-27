@@ -34,6 +34,7 @@ attaches from outside with `OpenProcess`.
 | Companion experience and equipment (`companion_xp_sync`, `companion_gear_sync`) | Built, off until live-verified | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Built, off until live-verified | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
+| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off until live-verified | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
 and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
@@ -243,6 +244,13 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   galaxy map and the pre-departure party-select screen are plain single-player UI on each
   instance either way. See [party-pool-sync.md](docs/research/party-pool-sync.md) and
   [docs/roadmap-seamless.md](docs/roadmap-seamless.md).
+- **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live.**
+  `solo_segment_spectate` parks the other player's input and camera on the fighting player's
+  duel instead of letting a second real combatant wander into a fight the base game designed
+  for one; the input lock in particular reuses two levers (`commandable`, `HoldCreatureStill`)
+  neither of which has been watched stop a real WASD press yet. Until it is turned on and
+  live-verified, a peer physically present in `sta_m45ac`/`sta_m45ad` mirrors normally, same
+  as every other module. See [star-forge-finale.md](docs/research/star-forge-finale.md).
 - **`coop.ini` is not negotiated.** Game content is fingerprinted per channel at join, but
   each side runs its own behaviour flags; keep the two files the same. The host's tick rate
   is adopted automatically.

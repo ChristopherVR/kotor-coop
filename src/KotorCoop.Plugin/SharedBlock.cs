@@ -160,6 +160,8 @@ internal partial struct SharedBlock
     /// <see cref="OffsetCompanionEquipSlots"/> — see SharedBlock.Party.cs. Version 55
     /// (2026-08-27) added <see cref="OffsetBehaviourOverrideMask"/>/
     /// <see cref="OffsetBehaviourOverrideValues"/> — see SharedBlock.BehaviourOverrides.cs.
+    /// (2026-08-27, v56) added <see cref="OffsetLocalInSoloSegment"/> — see
+    /// SharedBlock.SoloSegment.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

@@ -31,6 +31,9 @@ namespace KotorCoop.Session;
 ///                               ; live-pass section)
 ///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
 ///                               ; docs/research/party-pool-sync.md
+///   solo_segment_spectate = 0  ; the OWNER's fight, the other player spectates during a
+///                               ; story-forced solo segment (NEEDS-LIVE, default off) -
+///                               ; docs/research/star-forge-finale.md
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -386,6 +389,21 @@ public sealed record CoopConfig
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
 
+    /// <summary>
+    /// Story-forced solo segments (the Star Forge's Bastila and Malak duels —
+    /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/>, docs/research/star-forge-finale.md
+    /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
+    /// writes locally the instant its plugin reports it owns an active segment, and the other
+    /// player's plugin parks their input/camera on the fight instead of letting them wander
+    /// into a 1-on-1 duel the base game designed for one player. OFF by default, NEEDS-LIVE —
+    /// nothing here has been exercised against a real Star Forge save yet. coop.ini
+    /// <c>solo_segment_spectate = 1</c> turns it on. Shares the SAME key with the plugin's own
+    /// independent read (<c>SoloSegmentController</c>/<c>SoloSegmentSpectateController</c>,
+    /// <c>PluginConfig.ReadBool</c>), the same "one coop.ini key, two files" pattern
+    /// <c>minigame_hide_peer</c>/<c>pazaak_detect</c> already use.
+    /// </summary>
+    public bool SoloSegmentSpectateEnabled { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -530,6 +548,7 @@ public sealed record CoopConfig
             CompanionXpSync = IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
+            SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
         };
     }
 

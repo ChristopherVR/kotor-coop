@@ -288,6 +288,14 @@ public sealed partial class KotorGameBridge
             flags |= PlayerState.FlagDowned;
         }
 
+        // Plugin-published (SoloSegmentController): this player's own local roster just got
+        // stripped by story script in a catalogued module (the Bastila/Malak duels — see
+        // docs/research/star-forge-finale.md). A LEVEL, republished every tick like FlagDowned.
+        if (IsLocalPlayerInSoloSegment)
+        {
+            flags |= PlayerState.FlagSoloSegment;
+        }
+
         // A release of a MIRRORED pause, announced for a short window so a lost datagram
         // does not lose it. The plugin counts them; the transition to a new count starts the
         // window. See PlayerState.FlagPauseReleased.

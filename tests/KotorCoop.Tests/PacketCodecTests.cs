@@ -330,6 +330,28 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void SoloSegmentFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        // FlagSoloSegment (docs/research/star-forge-finale.md) rides the same Flags dword
+        // every other presence bit already does — pins it exactly like the minigame/away
+        // flags above.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState soloSegment = SampleState with
+        {
+            Flags = PlayerState.FlagInCombat | PlayerState.FlagSoloSegment,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, soloSegment));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.True(decoded.State.IsInSoloSegment);
+        Assert.True(decoded.State.IsInCombat);
+        Assert.False(decoded.State.IsInMinigame);
+        Assert.False(decoded.State.IsAway);
+    }
+
+    [Fact]
     public void ClearingTheAwayFlagRoundTrips()
     {
         // A stuck bit on the wire would leave a returned player parked forever.

@@ -410,3 +410,137 @@ evidence is cited above). Did not trace the exact `ApplyEffectToObject` instruct
 read/write-global evidence that the heal is conditioned on the drain state. Did not resolve
 routines `#200`/`#229`/`#548`/`#582` to names (their call *shape* was enough for this pass's
 questions). Did not open a live game or the rig at any point.
+
+---
+
+## 8. Design shipped (2026-08-27): `solo_segment_spectate`
+
+Gap #1 (§6) forced the product decision this doc's task named up front: **the OWNER's fight;
+the other human SPECTATES, they do not enter the 1-on-1.** Built as `solo_segment_spectate`
+(agent- and plugin-side coop.ini key, default OFF, NEEDS-LIVE — no rig access for this pass
+either, same as the research above).
+
+### 8.1 Detection
+
+A story-forced solo segment begins when the local companion roster (`CSWPartyTable`'s own
+count, via `Odyssey.TryReadPartyRoster` — see `party-reconciliation.md`) drops from one or two
+companions to zero, IN one of `SoloSegmentCatalogue`'s modules, via a real drop edge rather than
+a level read — which is what makes it distinguishable from three false-positive shapes an
+earlier draft of this brief flagged by name:
+
+* **The player never having recruited anyone yet** (the Endar Spire, companion count 0
+  throughout) — excluded because the very FIRST observation a fresh `SoloSegmentMachine` makes
+  can never itself read as a drop; only a transition FROM &gt;=1 companions DOWN TO 0 counts.
+* **A death** — excluded by requiring every companion who just left the roster to have been
+  alive (current hit points &gt; 0) the last time `SoloSegmentController` actually observed them
+  present. In practice this is close to vacuous for KOTOR1 (party members go temp-dead, not
+  dead, and `RemovePartyMember` is not how a down is represented), but the check costs nothing
+  and the brief asked for it explicitly.
+* **The party-select screen** — excluded by reading `CGuiInGame+0x78`
+  (`CSWGuiPartySelection*`, the same offset `galaxy-map-and-party-select.md` §2 documents, and
+  the SAME one `Odyssey.Dialogue.Follow.cs`'s own class comment records having once been
+  confused with the dialogue panel at `+0x3C` — this feature's own detection reuses the offset
+  correctly, not the mistake). A drop observed while that panel is open never begins a segment.
+  In practice this defence is mostly belt-and-braces here too: `galaxy-map-and-party-select.md`
+  §2's own finding is that the party-select screen's only confirmed shipped trigger is the Taris
+  swoop-taxi system, nowhere near the Star Forge, so the module gate (only `sta_m45ac`/
+  `sta_m45ad` qualify) already excludes ordinary party-select usage almost entirely on its own.
+
+The catalogue is exactly the two modules §3.3/§3.5 verified by reading the real compiled
+scripts — `sta_m45ac` (the shield-generator floor and Bastila's chamber; `k_psta_door.ncs`'s
+nine `RemovePartyMember` calls fire at the door tagged `k45_door_bast1`) and `sta_m45ad`
+(Malak's chamber — not a second solo-gating event, a *continuation* of the same forced-solo
+state carried across the ordinary `k45_door_malak` door crossing, per §3.5). **Not** `sta_m45ab`
+(the droid-horde production floor, §3.4 — full party, no `RemovePartyMember` anywhere in it): an
+earlier draft of this feature's own brief named that module by mistake, and the shipped
+`SoloSegmentCatalogue` uses this doc's own verified modules instead. Extendable at runtime via
+coop.ini `solo_segment_modules` for a future mod's own forced-solo content.
+
+A segment ends when the roster refills (a companion count of 1+ again — the vanilla behaviour
+after Malak dies, per §3.3's own INFERRED note that the party stays empty from the Bastila door
+through Malak, restored only after the escape) or the module changes.
+
+### 8.2 The wire and the two reactions
+
+The owner's instance publishes `PlayerState.FlagSoloSegment` (bit 128 — a new wire bit on the
+existing `Flags` dword, not a `ProtocolConstants.Version` bump by itself) for the whole duration.
+Two DELIBERATELY ASYMMETRIC reactions follow from it — asymmetric because, unlike
+`FlagInMinigame`/`FlagAway`, the flag-bearer must stay VISIBLE (the spectator's camera needs a
+live body to follow):
+
+* **The owner** (driven by its OWN local flag, needing nothing from any peer): hides every
+  remote peer from what it writes locally — `SoloSegmentRule.ShouldHideAllPeers`, applied in
+  `CoopAgent.PumpOnce`'s peer-visibility filter, the same "simply absent from what gets written"
+  idiom the minigame/away filters already use — so the duel script never sees a second body.
+* **The spectator** (driven by a REMOTE peer's flag, gated on being in the same module):
+  `SoloSegmentSpectateController` parks input, points the camera at the owner's phantom (reusing
+  `Odyssey.SetCameraFollowServerObject`/`RestoreCameraToControlledCreature`, the exact engine
+  funnel `SpectateController`'s down-spectate camera already uses and verified live for —
+  `spectate-camera.md`), and stops crediting this player's own damage against the owner's enemy
+  mirror (a `PeerDamageController` gate, on top of the input lock, not instead of it). A HUD
+  line ("`<name>` is fighting alone - spectating", plugin-side `PostTextLine` row 8/10) and a
+  chat toast (`SoloSegmentAnnouncer`, agent-side, the same diff-per-tick shape
+  `MinigameAnnouncer`/`AwayAnnouncer` already use) both fire on the entering edge.
+
+⚠ **The input lock is the one genuinely unverified lever, and the live pass should treat
+confirming it as the headline question.** Two levers, stacked: `creature+0xE8`
+(`Odyssey.ObjCommandable`) set to 0, and `Odyssey.HoldCreatureStill` reasserted every pass (the
+identical mechanism `InteractionLockController` already uses to hold an NPC someone is talking
+to still). Neither has been watched stop a real WASD press or a real mouse-click attack — see
+`SoloSegmentSpectateController`'s own doc comment for the full reasoning, including
+`party-reconciliation.md`'s own "trap 5" finding that `commandable` alone does NOT stop a queued
+AI follow action (a different code path from the local player's own real-time input, but the
+closest existing measurement this project has).
+
+### 8.3 Live test plan (NOT yet run — no rig access for this pass)
+
+Two `tools/demo.ps1` (or manual) instances, both on a save that has reached the Star Forge, OR —
+much faster — a save staged directly at the door with `warp`, the retail console cheat this
+mod's own co-op layer already shadows to go through the session properly (`console-cheats.md`
+§2):
+
+1. **Reach the module.** `warp sta_m45ac` on the HOST (the owner of the fight — pick whichever
+   player will hold the token). Both instances should land together the normal way
+   `TravelController`'s warp already keeps two players in sync.
+2. **Trigger the strip for real, not synthetically.** `opendoor k45_door_bast1` (the existing
+   `CheatKindOpenDoor` staging verb — "open an ORDINARY door... the engine's own door-use
+   action", `console-cheats.md` §3) on the HOST, so the real `k_psta_door.ncs` OnOpen script
+   runs and fires its nine genuine `RemovePartyMember` calls, rather than reproducing the effect
+   by hand. If `opendoor`'s OnOpen path does not reach this door's script for some reason not
+   yet understood, the fallback is `firescript <id> fire` (`console-cheats.md` §3) against the
+   door's own resolved object id — untested for a DOOR specifically (every existing `firescript`
+   use in this codebase's own history was against a CREATURE's `+0x260`/`+0x270` slot, per
+   `Odyssey.cs`'s own `FireCreatureScriptSlot0x260` naming; whether a door's OnOpen lives at the
+   same offset is itself unconfirmed).
+3. **Watch the owner's own log** for `solo segment: began in sta_m45ac — this fight is yours...`
+   and confirm `block.LocalInSoloSegment`/the published `PlayerState.FlagSoloSegment` bit both
+   flip (a `blockpoke`-style read, or just trusting the log line — the wire round-trip itself is
+   already codec-pinned by `PacketCodecTests.SoloSegmentFlagRoundTripsIndependentlyOfTheOther
+   PresenceFlags`).
+4. **On the SPECTATOR's screen**, confirm in order: the chat toast ("`<owner>` is fighting alone
+   - spectating"), the HUD notice line, the camera snapping to the owner's phantom, and — the
+   headline unverified item — that WASD/mouse input genuinely does nothing to the spectator's
+   own PC for the duration. Try an attack too, and confirm (via the owner's own HP bar, or the
+   plugin's damage-dealt log) that nothing the spectator does registers against Malak/the
+   Bastila-duel target even if some input DOES leak through.
+5. **Peer-visibility check.** On the OWNER's screen, confirm the spectator's phantom is genuinely
+   gone (not merely invisible) — no `coop_phantom`-tagged body standing in `sta_m45ac`, the same
+   `creatures.ps1`-style check `client-control-lock.md`'s own teardown story used.
+6. **End the segment two ways**: let the fight resolve normally (Bastila dies or is spared,
+   `STA_BASTILA_DEAD`/`STA_MALAK_DEAD` per §3.3/§3.5) and confirm the flag clears and control/
+   camera hand back cleanly; separately, cross into `sta_m45ad` via `k45_door_malak` while still
+   roster-empty and confirm the segment stays ACTIVE across the door (§3.5's "continuation", not
+   a fresh `Began` — the log should show no second `began in sta_m45ad` line, only the
+   already-active state persisting).
+7. **Regression**: with `solo_segment_spectate = 0` (the shipped default), repeat step 2 and
+   confirm nothing in this whole feature engages — the spectator's phantom stays mirrored
+   exactly as before, matching §3.3's own "the open question" description of the UNMODIFIED
+   behaviour this feature replaces.
+
+Watch for in the plugin log: `solo segment: began in ...`/`solo segment: ended ...` (owner side),
+`solo segment: spectating 0x... — input parked, camera follows` / `solo segment: ... — control is
+yours again` (spectator side) — and, on the owner's agent log, nothing new naming the peer at
+all, which is itself the evidence the hide filter worked (an absent peer produces no line, the
+same "removed" ambiguity `client-control-lock.md`'s own spawn-drain story flags as worth a
+positive "nothing left standing" report rather than silence — here the positive signal is the
+`RemoteCount`/peer-slot readout, not a dedicated log line).

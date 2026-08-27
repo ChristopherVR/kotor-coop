@@ -54,8 +54,11 @@ internal static unsafe partial class PluginHost
 
         // Camera first, and before PhantomController's despawn pass: the follow behaviour
         // holds a raw client-creature pointer, so a camera left on a phantom outlives the
-        // body by however long the give-back takes.
+        // body by however long the give-back takes. The solo-segment spectate camera is the
+        // same hazard as the down-spectate one, plus a clamped commandable flag on the LOCAL
+        // player's own creature that must not survive a disconnect either.
         _spectate?.ReleaseSession();
+        _soloSegmentSpectate?.ReleaseSession();
         _controlReturn?.ReleaseSession();
 
         // Then the bodies: faction and the min-1-hp pin, which are SAVED state.
@@ -66,6 +69,7 @@ internal static unsafe partial class PluginHost
         _interactionLocks?.ReleaseSession();
         _partyRoster?.ReleaseSession();
         _portraits?.ReleaseSession();
+        _soloSegment?.ReleaseSession();
 
         // And last, the BODIES the session put in the world. Armed rather than done here,
         // because a destroy can be refused; DrainSessionSpawns finishes the job.
@@ -194,6 +198,8 @@ internal static unsafe partial class PluginHost
         _connectMenu?.Invalidate();
         _death?.Invalidate();
         _spectate?.Invalidate();
+        _soloSegment?.Invalidate();
+        _soloSegmentSpectate?.Invalidate();
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();
         _movieRelay?.Invalidate();

@@ -188,7 +188,13 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         // An empty set makes the hook's dealt path a single comparison and stop, which is
         // how the fight's OWNER opts out: its own damage is already authoritative, nobody
         // will ever read its ledger, and this sits inside every damage event in the game.
-        if (!block.DamageDealtEnabled)
+        //
+        // Also empty while THIS instance is spectating a peer's story-forced solo segment
+        // (docs/research/star-forge-finale.md) — belt and braces alongside
+        // SoloSegmentSpectateController's own input lock: even if a WASD press somehow lands a
+        // swing on the owner's enemy mirror, it must never be credited into that fight's
+        // ledger. See SoloSegmentSpectateController.IsSpectating's own doc comment.
+        if (!block.DamageDealtEnabled || SoloSegmentSpectateController.IsSpectating)
         {
             PhantomHitHook.WatchAttackers([]);
             return;

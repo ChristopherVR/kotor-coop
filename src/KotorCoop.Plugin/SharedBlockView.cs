@@ -25,6 +25,15 @@ internal readonly record struct RemoteView(
     /// any future plugin-side consumer (a HUD indicator) that wants the reason.</summary>
     public const uint FlagAway = 64;
 
+    /// <summary>Matches <c>PlayerState.FlagSoloSegment</c> — this peer is the OWNER of an
+    /// active story-forced solo segment (docs/research/star-forge-finale.md §3.3/§3.5).
+    /// Carried verbatim through the existing <see cref="Flags"/> dword like
+    /// <see cref="FlagInMinigame"/>/<see cref="FlagAway"/>; no block layout change. Unlike
+    /// those two this does NOT park the flag-bearer's own phantom — see
+    /// <c>KotorCoop.Protocol.SoloSegmentRule</c>'s own doc comment for why the asymmetry is
+    /// deliberate: the owner must stay visible for the spectator's camera to follow.</summary>
+    public const uint FlagSoloSegment = 128;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
@@ -32,6 +41,8 @@ internal readonly record struct RemoteView(
     public bool InMinigame => (Flags & FlagInMinigame) != 0;
 
     public bool Away => (Flags & FlagAway) != 0;
+
+    public bool InSoloSegment => (Flags & FlagSoloSegment) != 0;
 }
 
 /// <summary>One enemy's authoritative state, as published by the owning peer.

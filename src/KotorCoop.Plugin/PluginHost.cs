@@ -88,6 +88,8 @@ internal static unsafe partial class PluginHost
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
+    private static SoloSegmentController? _soloSegment;
+    private static SoloSegmentSpectateController? _soloSegmentSpectate;
     private static Thread? _worker;
     private static volatile bool _running = true;
 
@@ -251,7 +253,10 @@ internal static unsafe partial class PluginHost
         //      reach the plugin controllers that gate on them, closing the gap
         //      docs/research/mod-compatibility.md's "Behaviour-flag negotiation" section named.
         //      NEEDS-LIVE.
-        _block->Version = 55;
+        // 56 = solo-segment spectate at 0x40C8 (one dword level, "this instance's local player
+        //      is the active owner of a story-forced solo segment"). See
+        //      SharedBlock.SoloSegment.cs and docs/research/star-forge-finale.md. NEEDS-LIVE.
+        _block->Version = 56;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

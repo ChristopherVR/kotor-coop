@@ -75,6 +75,7 @@ actually runs with.
 | `companion_xp_sync` | OFF (NEEDS-LIVE) | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_gear_sync` | OFF (NEEDS-LIVE) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_pool_sync` | OFF | sync the shared party item pool (`CSWPartyTable+0x118`) both ways (NEEDS-LIVE) | [party-pool-sync.md](research/party-pool-sync.md) |
+| `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
 
 ¹ The property's own C# doc comment used to claim this was OFF by default while the actual
 parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
@@ -154,6 +155,8 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
 | `pazaak_detect` | OFF⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
+| `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
 
 ³ The code fallback (used only if the key is entirely absent) is OFF for both
 `companion_local_combat` and `dialogue_recruit_sync`. The shipped `profiles/coop.ini.example`
@@ -186,6 +189,13 @@ survives a module transition with no crash, and costs nothing measurable in fram
 ON in both `PluginConfig.ReadBool`'s own fallback and `profiles/coop.ini.example`. The exact
 on-screen M-key appearance was not visually confirmed this round (screenshot tooling is broken
 on the rig) — see `docs/research/map-reveal.md`'s "Live pass" section.
+¹¹ `solo_segment_spectate` is read TWICE off the same key, by two independent readers, the same
+split `pazaak_detect`⁹ and `movie_relay`² already use: `CoopConfig.SoloSegmentSpectateEnabled`
+(agent side) is what makes `CoopAgent.PumpOnce`'s own peer-visibility filter hide every remote
+peer while the local player owns an active segment; `PluginConfig.ReadBool("solo_segment_spectate",
+...)` (plugin side, in-process) gates both the owner-side detection that sets the wire flag in
+the first place AND the spectator-side reaction (input lock, camera, damage gate) on the OTHER
+player's instance. Both default OFF; setting it in `coop.ini` turns every half on together.
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

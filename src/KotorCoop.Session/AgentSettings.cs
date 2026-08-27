@@ -258,4 +258,18 @@ public sealed record AgentSettings
     /// docs/research/party-pool-sync.md for the full design and the NEEDS-LIVE items.
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
+
+    /// <summary>
+    /// When true, a story-forced solo segment (the Star Forge's Bastila and Malak duels — see
+    /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/> and
+    /// docs/research/star-forge-finale.md §3.3/§3.5) makes the OWNER's agent hide every remote
+    /// peer from what it writes locally (<see cref="KotorCoop.Protocol.SoloSegmentRule.ShouldHideAllPeers"/>,
+    /// applied in <see cref="CoopAgent.PumpOnce"/>'s own peer-visibility filter) while the
+    /// plugin's own copy of this same coop.ini key gates the OWNER-side detection
+    /// (<c>SoloSegmentController</c>) and the SPECTATOR-side reaction (input lock, camera
+    /// follow, damage gate — <c>SoloSegmentSpectateController</c>). OFF by default,
+    /// NEEDS-LIVE — nothing here has been exercised against a real Star Forge save yet. coop.ini
+    /// <c>solo_segment_spectate</c>.
+    /// </summary>
+    public bool SoloSegmentSpectateEnabled { get; init; }
 }
