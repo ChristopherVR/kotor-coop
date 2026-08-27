@@ -590,3 +590,162 @@ into an inventory was never something this session told the plugin to create, so
 record for it on either side, and the sender still has only the Tag to report. See
 `docs/research/dialogue-consequences.md`'s 2026-08-28 round for why that remaining gap does not
 change the case for keeping `script_item_sync` on, and for the NEEDS-LIVE re-test plan.
+
+---
+
+## 13. Closing the `k_computer_spike` gap at the source: `ItemTemplateSpawnHook` (2026-08-28)
+
+§12 and `docs/research/dialogue-consequences.md`'s 2026-08-28 round both left the same case
+open: an item a VANILLA script places directly into a creature's inventory —
+`CreateItemOnObject("g_i_progspike01", GetFirstPC())`, the exact call
+`docs/research/playthrough-endar-spire.md` step 5 live-confirmed diverges from its Tag
+(`k_computer_spike`) — was never something this session told the plugin to spawn, so the
+`_spawnedItemResrefs` cache §12.2 built had no record of it either. This round closes that
+at the source, by watching the engine's own `CreateItemOnObject` VM command execute.
+
+### 13.1 Hook point chosen, with evidence
+
+**Not `CSWSItem::LoadFromTemplate` (0x005608B0) itself**, even though it is the true choke
+point for every templated item body in the game (24 call sites, `tools/xrefs.py 0x5608b0`).
+Re-disassembling it this round (`tools/disasm.py 0x5608B0 300`) confirms §12.1's own finding
+again — the incoming `CResRef*` argument is used only to open the GFF resource
+(`call 0x6fa7e6` then the GFF constructor `0x411240`) before handing off to
+`LoadDataFromGff 0x0055FCD0`; nothing writes it into the object under construction — and adds
+a NEW finding the task asked this round to check: **the object id is not assigned yet inside
+`LoadFromTemplate`.**
+
+Tracing one full call site (`CSWVirtualMachineCommands::ExecuteCommandCreateItemOnObject`,
+`0x0052F570` — `tools/disasm.py 0x52F570 700`) shows why:
+
+- `CSWSItem::Constructor 0x005530A0`'s ONE parameter is forwarded UNCHANGED all the way down
+  through `CSWSObject::Constructor 0x004CFCB0` to `CGameObject::Constructor 0x004D7D60`, which
+  writes it straight into `CGameObject+0x04` — `tools/q.py offsets CGameObject` lists that
+  offset as `Id`. So the item's own id is a CONSTRUCTOR PARAMETER, not something the
+  constructor invents.
+- At the call site: `0x0052F669 push 0x7f000000` (the engine's own `OBJECT_INVALID` constant)
+  immediately precedes `0x0052F670 call 0x5530a0`. **VERIFIED: the item is constructed with
+  id = OBJECT_INVALID**, and `LoadFromTemplate` is called nine instructions later
+  (`0x0052F689`) with that id still unassigned.
+
+The item is given a REAL id somewhere inside the inventory-placement sequence that runs AFTER
+`LoadFromTemplate` returns — the vtable calls on the target creature at `0x0052F6EC`/
+`0x0052F70A`/`0x0052F71A` (whichever of merge-into-an-existing-stack/`AddItem`/`AcquireItem`
+the stack logic picks). This round did not trace which SPECIFIC virtual call performs the
+write — it did not need to, because by `0x0052F748` (`mov esi, dword ptr [eax + 0x14]`, where
+`eax` is the exact item `LoadFromTemplate` built, reloaded from `[esp+0x40]` two instructions
+earlier) the id is final on every path that reaches it. This is, in fact, the SAME read
+`ExecuteCommandCreateItemOnObject` itself uses to hand the created item's id back to the
+calling script (`esi` feeds the VM's own result-push call at `0x0052F7CA`/`0x5d10d0`) — so
+whatever this hook captures is, by construction, exactly what the SCRIPT ITSELF believes it
+just created, including in the "merged into an existing stack" case, since `eax` here is
+unconditionally the item this call's OWN `LoadFromTemplate` produced, never whatever it may
+have merged into.
+
+**So the hook is `ExecuteCommandCreateItemOnObject`, at `0x0052F748`** — the one point inside
+it where both facts (the resolved resref AND the final object id) are simultaneously
+available, exactly the "hook the caller that has both" fallback the task named up front. It
+is also the SAME VM command `giveloot`/`scriptgive`/`storeinsert`/`partypooladd` already use
+(`Odyssey.GiveItemToInventory`), so this closes the gap for every one of those paths too, not
+only a vanilla script's own call.
+
+The splice itself, VERIFIED byte-for-byte against the disassembly:
+
+```
+0x0052F740  8b442440   mov eax, dword ptr [esp + 0x40]   ; the item LoadFromTemplate built
+0x0052F744  85c0       test eax, eax
+0x0052F746  747c       je 0x52f7c4                        ; anchor only — never touched
+0x0052F748  8b7014     mov esi, dword ptr [eax + 0x14]    ; OVERWRITTEN: the id, final
+0x0052F74B  eb77       jmp 0x52f7c4                        ; OVERWRITTEN: unconditional exit
+```
+
+The two overwritten instructions are exactly 5 bytes — precisely a `jmp rel32`, so no
+instruction is left half-overwritten. The resref this item was built from is STILL on the
+stack at this point: the `CResRef` local `LoadFromTemplate` was called with
+(`lea ecx, [esp+0x1c]; push ecx` at `0x0052F679`, consumed by the callee's own `ret 4`) lives
+at the SAME `[esp+0x1C]` the whole way to `0x0052F748` — every intervening instruction in the
+disassembly was checked and none writes to `[esp+0x1C..0x2B]` (the only nearby writes touch
+`[esp+4]`, `[esp+8]`, `[esp+0x40]`, `[esp+0x48]` and `[esp+0x4C]`), and `esp` itself is
+provably at the same net depth at `0x0052F740` as it was right after `LoadFromTemplate`
+returned at `0x0052F696` (both read the identical literal `[esp+0x40]` for the same local).
+
+**This is the plugin's first MID-FUNCTION splice** — every other hook in this plugin patches
+a function's TRUE ENTRY, where an SEH-frame-establishing prologue has to be relocated with
+care (see `ContainerUseHook`'s own remarks). `0x0052F748` sits well past that setup, so the
+splice only relocates the two instructions it replaces. To compensate for being novel, TWO
+byte sequences are verified before patching, not one: 8 bytes of LEADING CONTEXT immediately
+before the splice (never overwritten) and the 5 bytes actually replaced — see
+`ItemTemplateSpawnHook.cs`'s own `Anchor`/`Prologue` fields.
+
+### 13.2 The ring, and the drain
+
+`SharedBlock.ItemTemplateSpawns.cs` (version 58, region `0x4100..0x4604`, `TotalSize` grown
+to `0x4700` — the `0x40E0..0x4100` gap the container-lock arbitration region left is only
+`0x20` bytes, nowhere near the `64 x 0x14 + 4` this needs): a bounded ring of 64
+`(object id u32, 16-byte resref)` entries with a monotonically increasing write cursor
+(counts every entry EVER written, never wrapped or reset — only the SLOT a given write lands
+in wraps). Payload written before the cursor, so a reader that checks the cursor first can
+never observe a half-written slot — the same discipline every other ring in this block
+already follows.
+
+`ItemTemplateSpawnHook` (the detour) writes into its OWN small local capture ring
+(16 entries, matching `BarkHook`'s shape) rather than the shared block directly — it runs
+inside the engine's own call stack, and every other hook in this plugin keeps that path free
+of anything beyond a fixed-size array write. `ItemTemplateSpawnController.OnFrame` (called
+every frame, alongside `BarkController`) copies whatever the hook captured into the shared
+block's ring through `SharedBlockView.PublishItemTemplateSpawn`.
+
+On the agent side, `ItemTemplateSpawnRing` (`KotorCoop.Memory`, no engine dependency) is the
+pure arithmetic for draining it: given the cursor value last consumed and the value the block
+reports now, which (0-indexed) cursor values are new, which physical slot each lives in, and
+how many were overwritten before the drain ever got to them (only possible if more than 64
+entries land between two drains — see §13.3's NEEDS-LIVE list for why this is not expected in
+practice). `KotorGameBridge.DrainItemTemplateSpawns` (called unconditionally every tick from
+`CoopAgent.PumpOnce`, immediately before `PumpContainerLoot`/`PumpScriptItemGrants` — same
+"order matters" reasoning that comment already documents) uses it to read new entries and
+feed each one into `RememberSpawnedItemResref` — the SAME `_spawnedItemResrefs` cache §12.2's
+ground-item spawn tracking already populates. `TryGetItemResref` needed no change at all: it
+already checks that cache first, and now has a second, independent writer feeding it.
+
+### 13.3 NEEDS-LIVE
+
+Nothing in this round could be live-verified (no rig this round). In order of what would
+invalidate the most:
+
+1. **The splice installs and the anchor/prologue bytes match.** `kotorcoop-plugin.log`
+   should read `item-template spawns at 0x52F748 (stub 0x...)`. A mismatch means either this
+   binary is not byte-identical to what was disassembled (wrong build) or one of the 24
+   `LoadFromTemplate` call sites this round did not trace changes the compiled bytes around
+   `0x0052F740..0x0052F74D` in a way this analysis missed.
+2. **The id captured really is final, not a stray `OBJECT_INVALID`.** `firescript` a vanilla
+   script that runs `CreateItemOnObject("g_i_progspike01", GetFirstPC())` (or `scriptgive
+   g_i_progspike01`, which reaches the identical VM command) and confirm the plugin log
+   records a real, non-`0x7F000000` id — `ItemTemplateSpawnHook`'s own guard already refuses
+   to record `OBJECT_INVALID`, so silence here (not a wrong record) is the failure mode to
+   watch for.
+3. **The resref decodes correctly.** The same test should show the AGENT side (`items`/
+   `item 0x<id>`) reporting `g_i_progspike01`, not `k_computer_spike` — this is the actual
+   fix, and the one thing pure analysis cannot prove.
+4. **The end-to-end repro the task named.** `firescript` the same
+   `CreateItemOnObject("g_i_progspike01", GetFirstPC())` on the HOST, then `giveloot` on the
+   CLIENT and confirm it spawns `g_i_progspike01` — where before this round it answered
+   `'k_computer_spike' did not spawn onto 0x7FFFFFFF (failure 8; wrong resref?)`
+   (`docs/research/playthrough-endar-spire.md` step 5's own live log).
+5. **A burst does not overrun the ring.** `ItemTemplateSpawnHook`'s own 16-entry local
+   capture ring and the block's 64-entry ring are both sized well past anything one script or
+   cheat produces in a frame; `LastItemTemplateSpawnLostCount` (agent-side) should read 0
+   through an ordinary session. Seeing it nonzero would mean either capacity needs raising or
+   the drain cadence needs tightening — see `ItemTemplateSpawnRing`'s own remarks for why a
+   drain cadence that keeps every gap under 64 writes can never lose one.
+6. **The block version skew is clean.** After `build.ps1 -Install`, an agent from before this
+   change must report "plugin shared block not found" rather than attaching and reading the
+   wrong offsets — the intended effect of the 57 -&gt; 58 bump.
+
+### 13.4 What this does NOT change
+
+`RememberSpawnedItemResref`'s "first writer wins" rule (§12.2) is unchanged: whichever of the
+two writers — this ring, or the ground-item spawn tracking — reports an id first keeps it.
+Both can only ever report a resref THIS SESSION'S OWN ENGINE actually used to construct the
+body, so there is no case where the two disagree about the SAME id. The Tag-proxy fallback
+path (§8.2, §12.1) is untouched byte-for-byte, and remains what a peer's report of an id THIS
+session never itself created (a body spawned entirely on the OTHER side, forwarded only as a
+Tag over the wire) still falls back to.

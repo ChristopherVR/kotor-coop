@@ -560,6 +560,7 @@ internal static unsafe partial class PluginHost
         _mapReveal?.OnFrame();
         _portraits?.OnFrame();
         _barks?.OnFrame();
+        _itemTemplateSpawns?.OnFrame();
         _interactionLocks?.OnFrame();
 
         // After the companion mirror and the portraits, because it decides what the player is

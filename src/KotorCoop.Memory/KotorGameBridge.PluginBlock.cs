@@ -633,6 +633,18 @@ public sealed partial class KotorGameBridge
     private const int BlockContainerLockResponseSerial = 0x40D8;
     private const int BlockContainerLockResponseGranted = 0x40DC;
 
+    // Item-template-spawn ring (shared block version 58, region 0x4100..0x4604, TotalSize
+    // grown to 0x4700). Mirrors SharedBlock.OffsetItemTemplateSpawn*. See
+    // docs/research/item-identity.md §13 and KotorGameBridge.ItemTemplateSpawns.cs.
+    private const int BlockItemTemplateSpawnRing = 0x4100;
+    private const int BlockItemTemplateSpawnRingCapacity = 64;
+    private const int BlockItemTemplateSpawnEntryStride = 0x14;
+    private const int BlockItemTemplateSpawnIdOffset = 0x00;
+    private const int BlockItemTemplateSpawnResrefOffset = 0x04;
+    private const int BlockItemTemplateSpawnResrefLength = 16;
+    private const int BlockItemTemplateSpawnCursor =
+        BlockItemTemplateSpawnRing + (BlockItemTemplateSpawnRingCapacity * BlockItemTemplateSpawnEntryStride);
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;

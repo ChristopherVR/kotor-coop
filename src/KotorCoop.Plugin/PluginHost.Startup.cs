@@ -95,6 +95,26 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // Closes docs/research/item-identity.md §12's own open gap: a live CSWSItem retains
+        // no template resref of its own, so an item a vanilla script places directly in
+        // inventory (or a giveloot/scriptgive/storeinsert/partypooladd cheat, which funnels
+        // through the identical VM command) could previously only ever be described by its
+        // Tag, which sometimes genuinely diverges (docs/research/playthrough-endar-spire.md
+        // step 5's live-confirmed g_i_progspike01/k_computer_spike). Opt-out because it is
+        // this plugin's first MID-FUNCTION splice (see ItemTemplateSpawnHook's own remarks) —
+        // default ON, but new enough to want an escape hatch beyond the usual prologue guard.
+        if (PluginConfig.ReadBool("item_template_spawn_sync", true))
+        {
+            if (ItemTemplateSpawnHook.Install(out string itemTemplateSpawnDiagnostic))
+            {
+                Log($"item-template spawns: {itemTemplateSpawnDiagnostic}");
+            }
+            else
+            {
+                Log($"item-template spawn hook NOT installed: {itemTemplateSpawnDiagnostic}");
+            }
+        }
+
         // Which dialogue reply the player picks is dispatched and gone between frames,
         // so it is captured by hooking the engine's own reply entry rather than sampled.
         if (DialogueReplyHook.Install(out string replyDiagnostic))
