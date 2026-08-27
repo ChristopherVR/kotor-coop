@@ -1089,3 +1089,88 @@ throwaway Python GFF-walker script (not committed) built directly on `tools/koto
 own `GFF`/`GFFStruct` classes — no new project code, no rig, no game launched.
 `dotnet build KotorCoop.slnx -warnaserror`: clean (unaffected — nothing in `src/` changed this
 pass).
+
+---
+
+## 10. Live pass (2026-08-28, rig round): §9.4's console recipe run for real — entry 61 reached
+## reliably, twice, but the chain stalls immediately after; the roster never wipes, so every
+## spectate lever (hide/lock/camera/toast/restore) stays unverified this round too
+
+Two-instance rig (`tools/demo.ps1`), `solo_segment_spectate=1` written into both `coop.ini`s
+before launch. `warp sta_m45ac` on the HOST landed BOTH instances in the module together (the
+co-op `warp` verb's own "the peer follows" behaviour — confirmed via `blockpoke.ps1 ... state`
+reading `module 'sta_m45ac'` on both sides, no separate client-side warp needed). Party roster
+baseline: `partystate.ps1` read `companions 1` on both instances throughout setup.
+
+### The recipe: reaches entry 61 twice, cleanly, exactly as §9.4 predicted
+
+`setglobal Sta_BastTalk 0` on the HOST (confirmed already 0 on a fresh save) → `startdialog 0xAA
+k_sta_bastila` **once**. The plugin log showed `dialogue: engine reached StartDialog` and
+`dialogue-node-pub: #1 node -1 -> 61` immediately — **exactly the entry §9.3 predicted for the
+`Sta_BastTalk == 0` branch.** Confirmed a second, independent time later in the same session
+(after resetting `Sta_BastTalk` back to 0 — the reset itself reported `'Sta_BastTalk' (number) 1
+-> 0`, proving the global really had been bumped to 1 by the first attempt's mere arrival at
+entry 61, matching §9.3's "one-shot" finding exactly): a fresh `startdialog` call produced
+`dialogue-node-pub: #2 node -1 -> 61` again. **Entry 61 is reliably, repeatably reachable
+through this console recipe — that part of §9.4's plan is now live-confirmed, not just
+reasoned.**
+
+### The chain does not advance past entry 61, despite seven clean `selectreply` calls
+
+Issued **exactly seven** `selectreply 0` calls on the first attempt (spread over roughly two
+minutes, well clear of the "hammering re-commits against a stale panel" pacing warning
+`console-cheats.md` documents for this verb) and one more on the second, cleaner attempt. Every
+single call logged `dialogue: selectreply committed slot 0` / `cheat: reply slot 0 committed
+(status 1)` — the API-level call always reports success. **But `dialogue-node-pub` never logged
+a second transition in either attempt** — the node counter stayed at 61 for the rest of each
+session, and `blockpoke.ps1 ... dialogue` read empty `speaker`/`partner`/`line` fields within
+seconds of the first `selectreply`, in both attempts. `partystate.ps1`'s `companions` count
+stayed at **1** on both instances for the whole round — **the wipe did not fire.**
+
+This is the exact symptom the earlier "conversation appeared to end" live rounds reported, and
+it lands precisely where §9.4's own open risk said it might: **entry 62's script,
+`k_sta_bastmove.ncs`, tries to move the real `sta_bastila`-tagged NPC creature into position**
+(distinct from the `sta_invis_bast_conv` placeable `startdialog` targets, which only exists to
+give the console verb an object to aim at). This round had no tag-resolution console primitive
+available to directly confirm whether that creature is spawned at this point in a save staged
+straight at the door via `warp` (the same gap §9.4 itself flagged as unconfirmed) — `resolve`
+only takes a hex object id, and no `firescript`/`census`-style verb in this codebase resolves a
+bare tag to an id. **Not independently distinguished this round**: whether entry 62's script is
+silently failing to resolve `sta_bastila` and aborting the conversation, or blocking forever
+waiting on an action that can never complete, or something else entirely — only that the
+symptom (repeatable arrival at 61, then nothing) matches the predicted failure mode exactly.
+
+A black screen was observed on BOTH instances throughout this test (no geometry, HUD, or dialogue
+text rendered, just a bare frame-rate counter in the corner on the client). **Not conclusively
+tied to the dialogue stall** — no screenshot was taken between the `warp` landing and the first
+`startdialog` call, so whether the black screen predates the recipe entirely (a dark default
+`warp` landing spot in this module, unrelated to any of this) or was caused by entry 61's own
+staging script (`k_sta_basttalk_1`, which repositions the party and jumps the camera) was not
+distinguished. Recorded as an open observation, not a finding.
+
+### The spectate levers: not exercised this round — the wipe never happened
+
+Because the roster never dropped, `SoloSegmentController` never had a drop edge to detect:
+neither plugin log (`kotorcoop-plugin.log`) on either instance shows a single `solo segment:
+...` line anywhere in the session. **Phantom hide, input lock, camera follow, the toast, and the
+restore-on-refill/module-change behaviour are all still unverified live** — none of §8.3's test
+plan past step 1 could be exercised, since step 1 itself (reach a genuine roster-empty state)
+did not succeed. No crash on either instance across the whole round (`Responding=True`
+throughout, confirmed after the final `selectreply` attempt).
+
+### Verdict: `solo_segment_spectate` stays OFF; the wipe chain itself is confirmed reachable,
+### the block is narrowed to "entry 62 onward", not the `StartingList`/`Sta_BastTalk` mechanism
+
+§9's static analysis of the `StartingList`/`Sta_BastTalk` gate is now live-corroborated — the
+recipe reaches entry 61 exactly as predicted, twice, reproducibly. The remaining gap is
+downstream of that, inside the 61→70 linear chain itself, and the leading suspect is still
+§9.4's own flagged risk (the real `sta_bastila` creature's spawn state). **Concrete next step**:
+before the next rig round retries this, add a tag-resolution console primitive (or extend
+`resolve`/`census` to accept a bare tag) so `sta_bastila`'s live spawn state can be checked
+directly rather than inferred from the failure's shape — or pursue §9.5's `RemovePartyMember`
+hook instead, which sidesteps the `.dlg`-reachability question entirely by detecting the wipe
+from real, un-forced play. `solo_segment_spectate` stays at its default (`0`, OFF) in
+`coop.ini`/`AgentSettings`/`CoopConfig`/`profiles/coop.ini.example` — no default was flipped
+this round. `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: both clean (no source changed this pass — a live-verification round
+only).

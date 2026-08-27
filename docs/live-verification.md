@@ -1335,3 +1335,23 @@ default if clean) and item 4 (baseline/tests/build).
 | 4 | `verify.ps1` baseline / full suite / native build (post-flip, fresh rig) | **PASS** — 40/9 verify.ps1 result matches the documented 40-42/7-9 baseline (the 2 non-baseline failures are the same documented flaky substitutions); `dotnet test` 2355/2355; both native builds clean | `companion-state-sync.md` §12 |
 
 `companion_gear_sync` is now ON by default. No crash on either instance across the whole round.
+
+## Rig pass (2026-08-28): `solo_segment_spectate` — the wipe chain's `Sta_BastTalk`/entry-61
+## gate is live-confirmed for the first time; the chain still stalls before the wipe itself
+
+Task: `star-forge-finale.md` §9.4's console recipe (`setglobal Sta_BastTalk 0` → `startdialog
+0xAA k_sta_bastila` once → 7× `selectreply 0`), with `solo_segment_spectate=1` on both, to
+confirm the roster wipe and then the phantom-hide/input-lock/camera-follow/toast/restore levers.
+
+**Not flipped ON.** `warp sta_m45ac` brought both instances into the module together.
+`startdialog` reliably reached entry 61 twice in the same session (confirmed via
+`Sta_BastTalk` reading back `1` after the first attempt, reset to `0` before the second) —
+live-confirming §9's static analysis of the `StartingList` gate for the first time. But neither
+attempt advanced past entry 61 despite 7 clean `selectreply 0` calls each reporting success at
+the API level; `partystate.ps1` held `companions 1` throughout on both instances, so the wipe
+never fired and none of the spectate levers got a chance to engage (no `solo segment: ...` line
+appeared in either plugin log). Full detail, including the leading suspect (entry 62's script
+possibly depending on the real `sta_bastila` NPC's spawn state) and the concrete next step (a
+tag-resolution console primitive, or pursuing the `RemovePartyMember`-hook alternative), in
+`docs/research/star-forge-finale.md`'s new §10. No crash on either instance.
+`solo_segment_spectate` stays at its default OFF.
