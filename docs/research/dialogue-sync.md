@@ -1602,3 +1602,213 @@ builds (`src/KotorCoop.Plugin/build.ps1 -Install`, both GOG installs) clean, 0 w
 verification pass with job 1's `InteractionLockController.cs` fix). No crash, no new exception in
 either plugin log across the whole session (same `FIRST-CHANCE exception (0x406D1388)` benign
 startup diagnostic as every other round, nothing new).
+
+## Addendum (2026-08-28): `startdialog` — a dev verb that starts a conversation without
+## walking into a trigger, built by reusing the VM routine-table dispatch, NOT a raw StartDialog call
+
+Task: a `startdialog <npc-tag|id> [dlg-resref]` verb so scripted conversations
+(`k_sta_bastila.dlg` named specifically) can be triggered without navigating to their real
+trigger — `star-forge-finale.md`'s own live pass never reached Bastila's duel because walking
+into `k45_init_bastila` never fired it. Built. **NEEDS-LIVE** — see the plan below.
+
+### Why NOT call `CSWSObject::StartDialog` directly (the `openstore`-style shortcut declined)
+
+`store-sync.md`'s own `openstore` addendum set the precedent this task pointed at: skip the VM
+command handler's own argument-popping machinery and call the clean C++ function underneath
+directly. This pass tried exactly that first, and stopped once fresh disasm showed why it is
+NOT safe here the way it was for `ShowStoreGui`.
+
+`CSWSObject::StartDialog 0x004CF490` (VERIFIED, `tools/kotor1_0_3.db` and `dialogue-sync.md`'s
+own headline table) is `__thiscall(this, uint listenerId, CExoString* privateConversation,
+CExoString* defaultConversation)` — `tools/q.py sql` confirms `param_size_bytes=12` (3 stack
+args). Fresh disasm of its ONE caller, `CSWVirtualMachineCommands::
+ExecuteCommandBeginConversation 0x0052E9F0` (VERIFIED, `tools/xrefs.py 0x4cf490` — exactly one
+caller, matching `dialogue-sync.md`'s own §1 finding), traced both of `StartDialog`'s two call
+sites there in full:
+
+```
+ExecuteCommandBeginConversation 0x0052E9F0 (this = the VM command dispatch context, NOT a
+                                             creature — its own ecx+8/ecx+4 fields feed the
+                                             SAME id-resolve chain other Execute* handlers use)
+  esi = CServerExoApp::GetActionConversation 0x004AF020(server)   -- the QUEUED action's own
+                                                                      staged data, a SERVER-
+                                                                      GLOBAL "current action"
+                                                                      blob, not a per-object field
+  ... resolves TWO participants (ecx=ebx+8's id, and either OBJECT_INVALID's own party-leader
+      substitution or [firstResolved+0x17C]) via CGameObjectArray::GetGameObject 0x004D8230,
+      landing in esi/edi ...
+  ebp = [esi + 0x180]          -- read ONCE, off one of the TWO RESOLVED PARTICIPANTS, not off
+                                   a bare id or a caller-owned local — passed as StartDialog's
+                                   3RD argument (a CExoString*, per the DB's own param size)
+  push ebp ; push &localCExoString ; push <listenerId> ; ecx=<speaker> ; call 0x4cf490
+```
+
+Inside `StartDialog` itself: the 2nd argument (`&localCExoString`, the "private conversation"
+override) is tested via what reads as `CExoString::IsEmpty` (`0x5e5290`); if EMPTY, `StartDialog`
+does NOT fall back to its own 3rd argument — it instead makes a VIRTUAL CALL through the SPEAKER
+object's OWN vtable slot `+0x80` to fetch a default resref, and copy-constructs THAT into a
+local. Both the 2nd and 3rd arguments are therefore values the ENGINE builds by resolving two
+separate participant objects and reading fields off THEM — not bare ids, not values this plugin
+can safely invent. Calling `StartDialog` directly would mean either (a) fabricating a
+`CExoString*` pointing at real, correctly-shaped memory for "no override" (recoverable — an
+empty, zero-initialised `CExoString` local is a reasonable guess), or (b) somehow supplying
+`esi+0x180`'s real value for a participant this code never independently resolves — genuinely
+unclear without a great deal more tracing of what that field is (a per-object "cached
+conversation partner" resref? something else?), and a wrong guess here is exactly the class of
+bug `store-sync.md`'s own 2026-08-28 "Live pass" section hit for `openstore`'s first attempt (a
+crash inside `PopulateStoreItemListBox`, from a similarly-plausible-looking but wrong argument).
+**Declined, not attempted against a live process.**
+
+### The design actually built: dispatch through the VM's own routine table
+
+`src/KotorCoop.Plugin/Odyssey.ActionQueue.cs`'s existing `MoveToLocation` already solved the
+identical shape of problem for `ActionMoveToLocation` (NWScript routine 21): rather than
+hand-crafting the C++ function underneath, it pushes REAL values onto the VM's own parameter
+stack (`CVirtualMachine::StackPushInteger/String/Object/EngineStructure`, all VERIFIED,
+pre-existing bindings) and calls the routine's OWN handler with `(implementer, routineId,
+argCount)` — exactly the calling convention a compiled script's own CALL instruction would use,
+letting the ENGINE build every downstream struct itself. `walkto`/`usedoor` already ship on this
+exact mechanism, live-verified.
+
+`ActionStartConversation` is NWScript routine **204**, handler
+`CSWVirtualMachineCommands::ExecuteCommandActionStartConversation 0x0052D5B0` — VERIFIED,
+`docs/research/star-forge-finale.md` §1 (the `InitializeCommands` routine-table scan method,
+cross-checked against two independently-known ids from the same scan). This pass reused that
+citation rather than re-deriving it, and — matching `MoveToLocation`'s own defence-in-depth —
+`Odyssey.StartConversation` re-checks the table entry against the expected handler address
+LIVE, every call, refusing rather than dispatching to whatever else might now live at
+`table[204]` if the citation turns out wrong or the binary differs.
+
+Fresh disasm of `0x0052D5B0` itself (this pass) confirms it pops its NWScript parameters off the
+REAL VM stack via `CVirtualMachine::StackPopObject 0x5D10C0` (unconditionally, the mandatory
+`oObject`) and, gated on the caller-supplied `nParams` count, `StackPopString 0x5D1080`
+(`sDialogResRef`) then a further run of `StackPopInteger 0x5D1000` calls for the trailing
+optional int parameters (`bIgnoreStartRange`, `iAnimation`, ...) — the standard NWScript
+optional-argument popping idiom this codebase's own `SpawnCreature`/`MoveToLocation` already
+push against. Pushing exactly 1 or 2 arguments (`oObject`, optionally `sDialogResRef`) and
+dispatching with the matching `argCount` reproduces a bare
+`ActionStartConversation(oObject)`/`ActionStartConversation(oObject, sDialogResRef)` script call
+precisely — no fabricated structs, no guessed field, the engine resolves everything else itself
+exactly as it would for a real script.
+
+### Who queues on whom: the LOCAL PLAYER is the actor, the NPC is the argument
+
+The one design choice this pass had to settle from convention rather than a fresh trace:
+`ActionStartConversation` queues its action on OBJECT_SELF (the OWNER of the action queue that
+will run it), and `dialogue-sync.md`'s own existing "Implementation" section (the
+`AIActionDialogObject` force-flag round) already documents the answer: **"a real click queues
+it on the PC; a scripted ambush typically queues it on the ambushing NPC via `AssignCommand`."**
+For a player-driven console verb — the direct analogue of a real click, not a scripted ambush —
+the LOCAL PLAYER must be the queuing object: `DialogueSpectateController.PublishLocal` detects a
+NEW local conversation off the LOCAL PLAYER's own `obj+0x34` going non-null (the SAME field
+`StartDialog` writes, `dialogue-sync.md`'s own headline fact); queuing on the NPC instead would
+leave the player's own `+0x34` untouched and the existing spectate/lock machinery
+(`DialogueGateHook`, `DialogStateWatchHook`) would never notice the conversation this verb just
+started. So `startdialog <npc-tag|id>` redirects the VM's caller-object id to the LOCAL PLAYER
+(the same `ImplHasCallerObject`/`ImplCallerObjectId` redirect-and-restore dance
+`MoveToLocation` already does) and pushes the NPC as the `oObject` argument — i.e. the exact
+shape of a real click, `ActionStartConversation(oNpc)` queued on the player.
+
+### The action is QUEUED, not immediate
+
+Same caveat `MoveToLocation` already documents for itself: this does not run synchronously. It
+queues onto the player's action queue and executes once the queue reaches it — in practice the
+very next tick if nothing else is queued ahead of it, since a `startdialog` call is not expected
+to race a real walk/attack action. Runs through the REAL, completely unmodified
+action-queue -> `AIActionDialogObject` -> `BeginConversation` -> `CSWSObject::StartDialog` chain
+this whole document already maps, so every existing hook this codebase built to OBSERVE that
+chain (`DialogueGateHook`'s `StartDialog` prologue tap, `DialogStateWatchHook`) sees it exactly
+as it would a real click or a scripted trigger — nothing about this verb's mechanism bypasses
+them, unlike a hypothetical raw `StartDialog` call would have (see above).
+
+### What was built
+
+`src/KotorCoop.Plugin/Odyssey.Dialogue.StartConversation.cs` (new file) —
+`RoutineActionStartConversation = 204`, `ExpectedActionStartConversation = 0x0052D5B0`,
+`StartConversation(playerObjectId, npcObjectId, dialogResref, out failure)`: resolves the VM
+implementer, verifies the routine-table entry, redirects OBJECT_SELF to the player, pushes
+`sDialogResRef` (if non-empty) then `oObject` (reverse declaration order, matching
+`MoveToLocation`'s own documented push order), dispatches, restores OBJECT_SELF, verifies the
+VM stack came back stack-neutral. `SharedBlock.CheatKindStartDialog = 42`,
+`IGameBridge.CheatKinds.StartDialog = 42` (mirrored, `CheatKindSyncTests` covers both).
+`src/KotorCoop.Plugin/CheatController.Dialogue.cs` — `StartDialog(playerId)`: resolves the NPC
+by id or tag (`CreatureFinder.FindByTag`, the same primitive `pazaak`'s own opponent resolution
+already uses), unpacks the optional dialog resref out of the wire request's packed text field
+(see below), calls `Odyssey.StartConversation`. `CheatController.cs`'s dispatch switch gained
+the one case.
+
+**Field packing**: identical convention to `buy`/`sell` (`store-sync.md`'s own 2026-08-28
+addendum) and for the same reason — `startdialog` needs BOTH an NPC identity (tag or id) AND an
+optional dialog resref override at once, and the wire cheat request has exactly one string
+field. Numeric NPC id -> `CheatTarget` carries it, `CheatText` carries the bare (optionally
+empty) resref override. NPC tag -> `CheatTarget=0`, `CheatText` packs `"<tag>"` (no override) or
+`"<tag>|<dlg-resref>"` (override present) — the same pipe-delimited shape, reused rather than
+inventing a second convention.
+
+**Session/Agent**: `src/KotorCoop.Session/ConsoleCommand.cs` — `CoopCommandKind.StartDialog`,
+verb table row. `src/KotorCoop.Session/ConsoleCommand.Cheats.cs` — `ParseStartDialog`:
+`<npc-tag|id> [dlg-resref]`, resref validated as a resref (max 16 chars, matching
+`SharedBlock.ItemResrefLength`'s own dialog-adjacent convention — a DLG resref, same 16-char
+engine cap as an item resref) when given. `src/KotorCoop.Agent/CoopCommandDispatcher.Dialogue.cs`
+(new file) — `StartDialog(npcToken, dialogResref)`, performing the numeric-vs-tag split.
+`CoopCommandDispatcher.cs`'s dispatch dictionary gained the entry.
+`src/KotorCoop.Plugin/ConsoleVerbCatalog.cs` and `FuncInterpHook.cs` both gained `startdialog` —
+reachable at the real `~` console, not blockpoke-only, same as `buy`/`sell`/`openstore`.
+`docs/CONSOLE.md` gained the row.
+
+**Tests**: `tests/KotorCoop.Tests/ConsoleCommandVerbTableCoverageTests.cs` gained a sample line
+for the new `CoopCommandKind` (covered by construction the same way every other kind is);
+`ConsoleCompletionEngineTests`'s catalog-sync assertions cover the new catalog entry with no new
+test code (`startdialog` is not in `console-cheats.md`'s retail verb table). Full suite green,
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError` both
+clean.
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| `CSWSObject::StartDialog 0x4CF490` signature `(this, uint listenerId, CExoString* privateConversation, CExoString* defaultConversation)`, its ONE caller `ExecuteCommandBeginConversation`, and both argument sources (a server-global "current action" blob via `GetActionConversation`, and a field read off a SEPARATELY RESOLVED participant object) | VERIFIED (fresh disasm, this pass) — the reason a raw `StartDialog` call was declined |
+| `ActionStartConversation` = NWScript routine 204, handler `0x0052D5B0` | VERIFIED (`star-forge-finale.md` §1's own citation, reused, not re-derived) |
+| `0x0052D5B0`'s own VM-stack-popping shape (`StackPopObject` unconditional, `StackPopString`/`StackPopInteger` gated on `nParams`) | VERIFIED (fresh disasm, this pass) — confirms pushing 1-2 args and dispatching with the matching `argCount` reproduces a real script call |
+| "A real click queues `ActionStartConversation` on the PC" (the design's own choice of actor) | Documented convention (`dialogue-sync.md`'s own prior "Implementation" section), not independently re-traced this pass |
+| `Odyssey.StartConversation`/`CheatController.StartDialog` (this pass's own new code) | Implemented, unit-tested at the console/dispatcher layer; **NEEDS-LIVE** for the engine call itself |
+| The full `startdialog` console round trip, and whether it actually reaches `k_sta_bastila.dlg` | Implemented; **NEEDS-LIVE** |
+
+### Live test plan (NOT yet run)
+
+One `tools/demo.ps1` instance is enough (no sync channel involved — this is a bare engine-call
+verb, like `openstore`/`pazaak`). `pwsh src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError`
+first.
+
+1. `warp sta_m45ac` (the Star Forge shield-generator floor — `star-forge-finale.md` §3.3 names
+   Bastila's chamber here, door tags `k45_door_bast1`/`2`).
+2. `census`/`resolve` to confirm `sta_invis_bast_conv` (the task's own named tag — an invisible
+   conversation-owner placeholder, matching how `k_psta_door.ncs`'s own `ActionStartConversation`
+   call is scripted per §3.3) is actually present and resolvable on this save; substitute
+   whatever the real GIT tag turns out to be if it differs (the same "confirm against the real
+   save, don't trust a doc's own earlier guess" discipline `store-sync.md`'s own `Larrim_Store`
+   correction already established).
+3. `startdialog sta_invis_bast_conv k_sta_bastila` — confirm: (a) the plugin log line
+   `startdialog: ActionStartConversation queued on the player, targeting '...' (dlg
+   'k_sta_bastila')`, (b) within a frame or two, `DialogueGateHook`'s own `StartDialog` tap
+   fires (its existing log line), (c) the conversation genuinely appears on screen (a real node,
+   real VO/text — not a silent no-op), (d) `census`/a live read confirms the LOCAL PLAYER's own
+   `obj+0x34` is now non-null, matching the design's "player is the actor" choice.
+4. `skipline`/`selectreply <n>` (both pre-existing verbs) to navigate the conversation once
+   started, confirming it behaves like any other conversation this codebase already drives.
+5. `startdialog <a tag with no NPC here>` — confirm a clean "no npc tagged '...' found here"
+   refusal, not a crash.
+6. `startdialog sta_invis_bast_conv` with NO resref — confirm it either starts the NPC's own
+   default `Conversation` field (if that placeholder has one baked in) or refuses cleanly if it
+   has none; either is an acceptable outcome, a crash is not.
+7. Repeat step 3 while another conversation is already active, or while a modal screen (galaxy
+   map, party select) is up, to see how the queued action behaves against those conditions —
+   not traced this pass (the routine-table dispatch itself has no such precondition gate the
+   way `ShowStoreGui`'s three checks do; whatever `AIActionDialogObject`/`BeginConversation`
+   themselves refuse on is untested).
+
+Watch for in the plugin log: `startdialog:` lines from `CheatController.Dialogue.cs`, any
+`... refused (failure N)` (the failure code names which of `Odyssey.StartConversation`'s own
+guards fired — 1 no VM, 2 routine table mismatch, 4 VM mid-script, 5 stack push failed, 6
+dispatch returned nonzero, 9 stack not neutral after the call), and `DialogueGateHook`'s own
+existing `StartDialog` log line for confirmation the real engine chain actually ran.

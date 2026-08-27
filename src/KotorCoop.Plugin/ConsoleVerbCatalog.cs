@@ -116,5 +116,12 @@ internal static class ConsoleVerbCatalog
         ("setglobal", "setglobal <name> <int|true|false|on|off>  (writes a script global by name)"),
         ("pazaak", "pazaak [npc-tag|id] [deck]  (starts a Pazaak hand; blank = engine's own default opponent)"),
         ("openstore", "openstore <resref|tag|id>  (opens the store GUI against a resolved store)"),
+
+        // Two more live-test primitives (2026-08-28): none shadows a retail verb.
+        ("buy", "buy <store-tag|id> <resref> [count]  (the store's own GUI must already be open)"),
+        ("sell", "sell <store-tag|id> <resref> [count]  (the store's own GUI must already be open)"),
+
+        // A third live-test primitive (2026-08-28): does not shadow a retail verb.
+        ("startdialog", "startdialog <npc-tag|id> [dlg-resref]  (starts a conversation with the local player)"),
     ];
 }

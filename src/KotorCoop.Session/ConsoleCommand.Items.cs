@@ -419,4 +419,46 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.OpenStore, Address: rest[0]);
     }
+
+    // buy <store-tag|id> <resref> [count]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Buy.
+    private static CoopCommand ParseBuy(string[] rest) => ParseStoreTrade(rest, CoopCommandKind.Buy, "buy");
+
+    // sell <store-tag|id> <resref> [count]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Sell.
+    private static CoopCommand ParseSell(string[] rest) => ParseStoreTrade(rest, CoopCommandKind.Sell, "sell");
+
+    /// <summary>Shared shape for <see cref="ParseBuy"/>/<see cref="ParseSell"/>: a store
+    /// tag/id, an item resref, and an optional count (default 1). The store's own GUI must
+    /// already be open (via <c>openstore</c>) — this parser only validates shape, the plugin
+    /// checks and refuses a mismatched/closed store live.</summary>
+    private static CoopCommand ParseStoreTrade(string[] rest, CoopCommandKind kind, string verb)
+    {
+        string usage = $"{verb} <store-tag|id> <resref> [count]  e.g. {verb} Larrim_Store g_w_blstrpstl001 [3] "
+            + "(the store's own GUI must already be open - see openstore)";
+
+        if (rest.Length is < 2 or > 3)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!IsTargetToken(rest[0]))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not a store tag or object id - {usage}");
+        }
+
+        if (!IsResRef(rest[1], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not an item resref - {usage}");
+        }
+
+        int count = 1;
+        if (rest.Length == 3 && (!int.TryParse(rest[2], out count) || count <= 0))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"count '{rest[2]}' is not a positive number");
+        }
+
+        return new CoopCommand(kind, Address: rest[0], Password: rest[1], Amount: count);
+    }
 }

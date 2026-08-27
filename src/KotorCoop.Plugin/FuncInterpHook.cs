@@ -95,6 +95,15 @@ internal static unsafe class FuncInterpHook
         // (docs/research/minigames.md) and openstore (docs/research/store-sync.md). None
         // shadows a retail verb — checked the same way every other staging cheat above was.
         "setglobal", "pazaak", "openstore",
+
+        // Two more live-test primitives (2026-08-28, docs/research/store-sync.md's 2026-08-28
+        // addendum): registered here, same as setglobal/pazaak/openstore above, so a rig
+        // session can type them directly at the in-game console. None shadows a retail verb.
+        "buy", "sell",
+
+        // A third live-test primitive (2026-08-28, docs/research/dialogue-sync.md's 2026-08-28
+        // addendum), registered the same way. Does not shadow a retail verb.
+        "startdialog",
     ];
 
     /// <summary>

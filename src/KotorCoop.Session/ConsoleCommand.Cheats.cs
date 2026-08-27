@@ -281,6 +281,34 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
     }
 
+    // startdialog <npc-tag|id> [dlg-resref]  - LIVE-TEST PRIMITIVE, see
+    // CoopCommandKind.StartDialog.
+    private static CoopCommand ParseStartDialog(string[] rest)
+    {
+        const string usage = "startdialog <npc-tag|id> [dlg-resref]  e.g. startdialog "
+            + "sta_invis_bast_conv k_sta_bastila";
+
+        if (rest.Length is < 1 or > 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!IsTargetToken(rest[0]))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not an npc tag or object id - {usage}");
+        }
+
+        if (rest.Length == 2 && !IsResRef(rest[1], maxLength: 16))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a dialog resref - {usage}");
+        }
+
+        return new CoopCommand(
+            CoopCommandKind.StartDialog, Address: rest[0], Password: rest.Length == 2 ? rest[1] : string.Empty);
+    }
+
     private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
 
     /// <summary>

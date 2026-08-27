@@ -520,6 +520,40 @@ public enum CoopCommandKind
     /// (uninjectable) GUI. Takes no arguments beyond the literal <c>end</c>. Local only.
     /// </summary>
     PazaakEnd,
+
+    /// <summary>
+    /// <c>buy &lt;store-tag|id&gt; &lt;resref&gt; [count]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/store-sync.md's 2026-08-28 addendum). Buys <c>count</c> (default 1)
+    /// units of <c>resref</c> from the named store through <c>CSWGuiStore::BuyItem</c> — the
+    /// REAL Buy-button click handler, so gold and item both move through the engine's own
+    /// path. Requires the store's own GUI to already be open (<c>openstore</c> first) and
+    /// matching the store named here — refused otherwise. <see cref="CoopCommand.Address"/> is
+    /// the store's tag or object id, <see cref="CoopCommand.Password"/> the item resref,
+    /// <see cref="CoopCommand.Amount"/> the count. Local only.
+    /// </summary>
+    Buy,
+
+    /// <summary>
+    /// <c>sell &lt;store-tag|id&gt; &lt;resref&gt; [count]</c> — the sell side of
+    /// <see cref="Buy"/>: sells <c>count</c> units of <c>resref</c> out of the local player's
+    /// own inventory to the named store through <c>CSWGuiStore::SellItem</c>. Same field
+    /// layout and same open-GUI requirement as <see cref="Buy"/>. Local only.
+    /// </summary>
+    Sell,
+
+    /// <summary>
+    /// <c>startdialog &lt;npc-tag|id&gt; [dlg-resref]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/dialogue-sync.md's 2026-08-28 addendum). Starts a conversation between
+    /// the local player and the named NPC through the engine's own
+    /// <c>ActionStartConversation</c> VM routine, queued on the player exactly as a real click
+    /// would be — so scripted conversations (e.g. <c>k_sta_bastila.dlg</c>) can be triggered
+    /// without walking into their trigger, through the SAME action-queue/<c>BeginConversation</c>/
+    /// <c>StartDialog</c> chain a real click reaches, observed by the existing dialogue hooks
+    /// normally. <see cref="CoopCommand.Address"/> is the NPC's tag or object id;
+    /// <see cref="CoopCommand.Password"/> is the optional dialog resref override (blank = the
+    /// NPC's own default <c>Conversation</c> field). Local only.
+    /// </summary>
+    StartDialog,
 }
 
 /// <summary>
@@ -718,6 +752,9 @@ public static partial class ConsoleCommand
         new(["openstore"], ParseOpenStore),
         new(["partyselect"], ParsePartySelect),
         new(["faction"], ParseFaction),
+        new(["buy"], ParseBuy),
+        new(["sell"], ParseSell),
+        new(["startdialog"], ParseStartDialog),
         new(["cheats"], ParseCheats),
     ];
 
