@@ -1,3 +1,4 @@
+using KotorCoop.Plugin;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 using Xunit;
@@ -329,5 +330,46 @@ public class PartyPoolTests
 
         Assert.Equal(
             new PartyPoolDiffRule.Delta(UpgradedSaber, PartyPoolOpKind.Add, 1), Assert.Single(deltas));
+    }
+
+    // ---- stack matcher (RemovePartyPoolStack's resref-vs-Tag precedence, docs/research/
+    // party-pool-sync.md §13/§14) -----------------------------------------------------------
+
+    /// <summary>The ring remembers this item's own spawn and confirms it — the ordinary case for
+    /// a stack removed moments after it was deposited.</summary>
+    [Fact]
+    public void SpawnRingMatchIsTrusted()
+    {
+        Assert.True(PartyPoolStackMatcher.Matches("g_i_progspike01", "g_i_progspike01", tagMatches: false));
+    }
+
+    /// <summary>
+    /// The exact live symptom (docs/research/party-pool-sync.md §13.2): the ring says this item's
+    /// resref does NOT match, even though the item's live Tag happens to. The ring's answer wins —
+    /// it is the authoritative signal once it has one, precisely because a just-inserted item's
+    /// Tag is the field under suspicion, not to be trusted as a tie-breaker against it.
+    /// </summary>
+    [Fact]
+    public void SpawnRingDisagreementOverridesATagMatch()
+    {
+        Assert.False(PartyPoolStackMatcher.Matches("g_w_blstrpstl001", "g_i_progspike01", tagMatches: true));
+    }
+
+    /// <summary>Case-insensitive, matching this codebase's own convention for every other resref
+    /// comparison (<c>TagEqualsIgnoreCase</c>).</summary>
+    [Fact]
+    public void SpawnRingComparisonIsCaseInsensitive()
+    {
+        Assert.True(PartyPoolStackMatcher.Matches("G_I_PROGSPIKE01", "g_i_progspike01", tagMatches: false));
+    }
+
+    /// <summary>No ring entry for this item's id at all — evicted, a module change cleared it, or
+    /// it predates this plugin session. Tag is the only signal left, exactly RemovePartyPoolStack's
+    /// pre-fix behaviour for every candidate.</summary>
+    [Fact]
+    public void NoRingEntryFallsBackToTag()
+    {
+        Assert.True(PartyPoolStackMatcher.Matches(null, "g_i_progspike01", tagMatches: true));
+        Assert.False(PartyPoolStackMatcher.Matches(null, "g_i_progspike01", tagMatches: false));
     }
 }

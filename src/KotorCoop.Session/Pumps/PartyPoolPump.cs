@@ -205,6 +205,13 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
             _pendingApplies.Enqueue(
                 new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
             _pendingApplyTarget[delta.Key] = desired.GetValueOrDefault(delta.Key);
+
+            // This instance now owes its own engine an apply — the very next scan needs to be
+            // fresh so the apply's landing (and anything else that moves in the meantime) is
+            // seen as soon as it is true, not delayed behind a cache window that started
+            // ticking before we had any reason to look again. Same reasoning as
+            // PublishDetected's own call below.
+            bridge.InvalidatePartyPoolScanCache();
         }
     }
 
@@ -220,6 +227,12 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         log($"party pool: local {kind.ToString().ToLowerInvariant()} of {count}x "
             + $"'{key.Resref}' detected, publishing");
         session.PublishPartyPoolOp(kind, key, count);
+
+        // A genuine local change just happened — the bridge's own scan cache (up to 1s stale,
+        // see KotorGameBridge.PartyPool.cs) must not be allowed to mask a SECOND rapid change to
+        // the same or another key behind the rest of that window. See
+        // docs/research/party-pool-sync.md §14.
+        bridge.InvalidatePartyPoolScanCache();
     }
 
     /// <summary>Called by whatever already arbitrates the single-slot staging-cheat channel (the

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace KotorCoop.Plugin;
 
@@ -151,6 +152,46 @@ internal static unsafe class ItemTemplateSpawnHook
         {
             resRef[b] = ResRef[(i * ResRefBytes) + b];
         }
+    }
+
+    /// <summary>
+    /// Finds the most-recently captured resref for <paramref name="objectId"/> still resident in
+    /// this ring, trimmed at the first NUL (a CResRef is a fixed <c>char[16]</c>, not a C string,
+    /// but NUL-padded in practice — the same cut-at-first-null discipline this codebase already
+    /// uses reading a live Tag). Searched newest-first from the write cursor so a (should-not-
+    /// happen, but not impossible after enough churn) id reuse resolves to the most recent spawn.
+    ///
+    /// Used by <c>Odyssey.PartyPool.cs</c>'s <see cref="PartyPoolStackMatcher"/> call as the
+    /// PRIMARY match signal for <c>RemovePartyPoolStack</c> — see that class's own remarks and
+    /// docs/research/party-pool-sync.md §13/§14 for why a fresh spawn capture is trusted over the
+    /// item's own (occasionally still-settling) live Tag field.
+    ///
+    /// Null when this ring never captured a spawn for this id: evicted by <see cref="Capacity"/>
+    /// more recent spawns, a module change (<see cref="Invalidate"/>) cleared it, or the item
+    /// predates this plugin session / was never created through <c>CreateItemOnObject</c> at all
+    /// — the caller's own Tag-based fallback is the only signal left in that case.
+    /// </summary>
+    public static string? TryGetResRef(uint objectId)
+    {
+        for (int step = 0; step < Capacity; step++)
+        {
+            int i = (((_write - 1 - step) % Capacity) + Capacity) % Capacity;
+            if (Serials[i] == 0 || ObjectId[i] != objectId)
+            {
+                continue;
+            }
+
+            int baseIndex = i * ResRefBytes;
+            int length = 0;
+            while (length < ResRefBytes && ResRef[baseIndex + length] != 0)
+            {
+                length++;
+            }
+
+            return length == 0 ? null : Encoding.ASCII.GetString(ResRef, baseIndex, length);
+        }
+
+        return null;
     }
 
     /// <summary>A module change reassigns every object id, so a not-yet-drained entry would

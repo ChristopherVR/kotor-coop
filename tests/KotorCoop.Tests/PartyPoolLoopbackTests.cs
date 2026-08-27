@@ -102,6 +102,73 @@ public class PartyPoolLoopbackTests
     }
 
     /// <summary>
+    /// A DETERMINISTIC stand-in for <c>KotorGameBridge.PartyPool.cs</c>'s own throttled scan
+    /// cache, used only by
+    /// <see cref="ASecondRapidLocalChangeIsNotMaskedBehindTheRestOfAnAlreadyStaleScanWindow"/>:
+    /// reproduces the real cache/throttle mechanism line for line, exactly like
+    /// <see cref="FakeBridge"/>, but driven by a test-controlled <see cref="Clock"/> field instead
+    /// of <c>Environment.TickCount64</c> and a real timer — so a test can advance "time" by exact,
+    /// tiny increments deterministically, with no real thread, no <c>Task.Delay</c>, and no risk
+    /// of a background pump tick consuming the fix's one-shot invalidation before the test gets a
+    /// chance to observe it (which real wall-clock timing could not rule out — see
+    /// docs/research/party-pool-sync.md §14).
+    /// </summary>
+    private sealed class ThrottledFakeBridge(long scanIntervalTicks) : IGameBridge
+    {
+        public Dictionary<PartyPoolStackKey, int> TrueEngineState { get; } = [];
+
+        /// <summary>The test-controlled "now" — advanced explicitly between <c>PumpOnce()</c>
+        /// calls, never by real elapsed time.</summary>
+        public long Clock;
+
+        private Dictionary<PartyPoolStackKey, int> _lastScan = [];
+        private bool _everScanned;
+        private long _nextScanAt;
+
+        public string Description => "party-pool-loopback-throttled-fake";
+
+        public bool IsAttached => true;
+
+        public bool CanWriteRemotes => true;
+
+        public bool SupportsPartyPool => true;
+
+        public bool TryReadLocalState(out PlayerState state)
+        {
+            state = new PlayerState(Vector3f.Zero, 0f, Module, 20, 0);
+            return true;
+        }
+
+        public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
+
+        public bool TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+        {
+            if (_everScanned && Clock < _nextScanAt)
+            {
+                totals = _lastScan;
+                return true;
+            }
+
+            _nextScanAt = Clock + scanIntervalTicks;
+            _lastScan = new Dictionary<PartyPoolStackKey, int>(TrueEngineState);
+            _everScanned = true;
+            totals = _lastScan;
+            return true;
+        }
+
+        /// <summary>Mirrors <c>KotorGameBridge.PartyPool.cs</c>'s own fix exactly: forces the
+        /// NEXT call above to bypass the throttle.</summary>
+        public void InvalidatePartyPoolScanCache()
+        {
+            _nextScanAt = long.MinValue;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>
     /// A DETERMINISTIC stand-in for the bridge, used only by
     /// <see cref="AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning"/>:
     /// each call to <see cref="TryScanPartyPoolTotals"/> returns the NEXT dictionary from a
@@ -711,6 +778,68 @@ public class PartyPoolLoopbackTests
 
             await cts.CancelAsync();
             await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// The AGENT-side half of docs/research/party-pool-sync.md §14's two freshness bugs:
+    /// <c>KotorGameBridge.PartyPool.cs</c>'s own scan-result cache (reproduced exactly by
+    /// <see cref="ThrottledFakeBridge"/>) can serve a snapshot up to <c>scanIntervalTicks</c>
+    /// stale. Before the fix, once ONE real (non-cached) scan ran — whether from the throttle
+    /// naturally expiring or (after this fix) from an explicit invalidation — it unconditionally
+    /// re-armed a FRESH full-length cache window from that scan's own timestamp, regardless of
+    /// whether anything actually changed. A second genuine local change landing shortly after the
+    /// first was detected would then be served the FIRST change's now-stale value for up to
+    /// another full window — i.e. the third `pooladd` in a rapid burst could easily land inside
+    /// the window the SECOND's own confirming scan had just re-armed, reading as if only the
+    /// first ever happened. <c>PartyPoolPump.cs</c> now calls
+    /// <c>bridge.InvalidatePartyPoolScanCache()</c> the instant it detects (or queues an apply
+    /// for) a change, forcing the VERY NEXT scan to be genuine no matter how recently the cache
+    /// was last armed.
+    ///
+    /// Fully deterministic: <see cref="ThrottledFakeBridge.Clock"/> is advanced by exactly ONE
+    /// tick between the two deposits — deliberately far short of another full
+    /// <c>scanIntervalTicks</c> window — so this fails against the pre-fix code (the second
+    /// deposit would need <c>Clock</c> to reach <c>1000 + scanIntervalTicks</c> before the
+    /// re-armed cache would ever let it through) and passes only because the detection of the
+    /// first deposit itself forced the second scan to be real.
+    /// </summary>
+    [Fact]
+    public void ASecondRapidLocalChangeIsNotMaskedBehindTheRestOfAnAlreadyStaleScanWindow()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            ThrottledFakeBridge bridge = new(scanIntervalTicks: 1000);
+            CoopAgent agent = new(
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            // tick 1 @ clock 0: baseline scan (empty pool) - silent, per the pump's own
+            // first-scan-is-silent rule.
+            agent.PumpOnce();
+
+            // The first genuine deposit. Advance the clock past the cache's own natural window
+            // so this is observed the ordinary way (nothing about THIS read depends on the fix).
+            bridge.TrueEngineState[Blaster] = 1;
+            bridge.Clock = 1000;
+            agent.PumpOnce();
+
+            Assert.Equal(1, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+
+            // A SECOND genuine deposit, one tick later - nowhere near another full
+            // scanIntervalTicks window from the confirming scan above. Without the fix this
+            // reads as the still-cached value of 1 (no diff, nothing published); with it, the
+            // first deposit's own detection already forced this scan to be real.
+            bridge.TrueEngineState[Blaster] = 2;
+            bridge.Clock = 1001;
+            agent.PumpOnce();
+
+            Assert.Equal(
+                2, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+        }
+        finally
+        {
+            host.Dispose();
         }
     }
 
