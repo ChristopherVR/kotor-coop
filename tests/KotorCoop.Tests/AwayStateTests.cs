@@ -158,6 +158,95 @@ public class AwayStateTests
         Assert.Empty(session.PublishedStates);
     }
 
+    /// <summary>
+    /// Models the fixed real bridge's contract for the 2026-08-27 FlagAway live failure
+    /// (docs/research/disconnect-reconnect.md §10): before the fix, TryReadLocalState
+    /// "succeeded" against a transitional-named ghost creature reacquired right after a quit to
+    /// the main menu, so this consecutive-failure counter never advanced. After the fix
+    /// (KotorGameBridge.Player.cs, gated on the shared KotorGameBridge.IsTransitionalModuleName —
+    /// see TransitionalModuleNameTests for that check in isolation), a ghost read is exactly a
+    /// failed TryReadLocalState from CoopAgent's point of view, which is what AwayBridge with
+    /// ReadShouldSucceed = false models here. One such tick, well under AwayRule's ~1s
+    /// threshold, must not flip IsAway — a ghost seen for a single tick is indistinguishable
+    /// from any other transient blip and must recover silently.
+    /// </summary>
+    [Fact]
+    public void AGhostCreatureReadCountsAsAFailureButOneTickAloneDoesNotTripAway()
+    {
+        AwayBridge bridge = new();
+        AwaySession session = new();
+        CoopAgent agent = new(bridge, session, new AgentSettings());
+
+        agent.PumpOnce(); // primes LastLocalState with a real read
+        session.PublishedStates.Clear();
+
+        bridge.ReadShouldSucceed = false; // stands in for one ghost-shaped failed read
+        agent.PumpOnce();
+
+        Assert.False(agent.IsAway);
+        Assert.Empty(session.PublishedStates);
+    }
+
+    /// <summary>
+    /// An ordinary module transition also makes TryReadLocalState's module read momentarily
+    /// fall back to a transitional "areaXX" name (the very same shape a genuine ghost creature
+    /// has) before the new module settles — that is WHY IsTransitionalModuleName is shared
+    /// between the encounter-disarm path and TryReadLocalState rather than only ever firing off
+    /// a quit-to-menu. A real transition settles in well under AwayRule's ~1s threshold, so a
+    /// burst of failures shorter than the threshold, followed by a resumed read, must never
+    /// latch Away — exactly the "briefly stalled" case the whole design exists to distinguish
+    /// from "quit twenty minutes ago".
+    /// </summary>
+    [Fact]
+    public void ANormalTransitionUnderOneSecondDoesNotTripAway()
+    {
+        AwayBridge bridge = new();
+        AwaySession session = new();
+        AgentSettings settings = new();
+        CoopAgent agent = new(bridge, session, settings);
+
+        agent.PumpOnce(); // primes LastLocalState
+
+        bridge.ReadShouldSucceed = false;
+        for (int i = 0; i < AwayRule.Threshold(settings.PollRate) - 1; i++)
+        {
+            agent.PumpOnce(); // the transition's own transitional-name window
+        }
+
+        Assert.False(agent.IsAway);
+
+        bridge.ReadShouldSucceed = true; // the new module settles
+        session.PublishedStates.Clear();
+        agent.PumpOnce();
+
+        Assert.False(agent.IsAway);
+        PlayerState published = Assert.Single(session.PublishedStates);
+        Assert.False(published.IsAway);
+    }
+
+    /// <summary>Same shape as ASustainedReadDroughtPublishesAwayAndKeepsRepublishingIt, framed
+    /// explicitly for the ghost-creature case this section documents: a player who quit to the
+    /// main menu and stayed there produces a ghost-shaped failed read every tick, forever, not
+    /// just for one transition-sized burst — and that must trip and hold Away.</summary>
+    [Fact]
+    public void ASustainedGhostCreatureReadTripsAway()
+    {
+        AwayBridge bridge = new();
+        AwaySession session = new();
+        AgentSettings settings = new();
+        CoopAgent agent = new(bridge, session, settings);
+
+        agent.PumpOnce();
+
+        bridge.ReadShouldSucceed = false; // the ghost never resolves back to the real player
+        for (int i = 0; i < AwayRule.Threshold(settings.PollRate); i++)
+        {
+            agent.PumpOnce();
+        }
+
+        Assert.True(agent.IsAway);
+    }
+
     [Fact]
     public void ASustainedReadDroughtPublishesAwayAndKeepsRepublishingIt()
     {

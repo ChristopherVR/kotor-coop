@@ -99,6 +99,41 @@ public sealed partial class KotorGameBridge : IGameBridge
 
     public IReadOnlyList<CreatureRef> Phantoms => _phantoms;
 
+    /// <summary>
+    /// True for "area1"/"area1F"-style names: what the module reads as while a transition is
+    /// in flight. Not a module on disk — an object id wearing a module's clothes — and every
+    /// pointer the scan holds while one is showing belongs to a world being freed.
+    ///
+    /// Shared by two concerns, which is why it lives here rather than in either partial:
+    /// <see cref="DisableLocalEncounters"/> (KotorGameBridge.Encounters.cs) refuses to write
+    /// into a transitional world, and <see cref="TryReadLocalState"/> (KotorGameBridge.Player.cs)
+    /// treats a transitional-named read as a failed read rather than adopting it as the player.
+    /// The latter was missing until 2026-08-27 (live-verified FAILED first —
+    /// docs/research/disconnect-reconnect.md §10): a genuine "quit to the main menu" tears the
+    /// player object down, the cached pointer correctly stops validating, but the very next
+    /// tick's scan-based re-resolve (<see cref="TryResolve"/>) reacquires a transitional-looking
+    /// ghost — module <c>'area1'</c>, plausible hit points — that passes every cheap validation
+    /// <see cref="StillLooksLikeThePlayer"/> applies, so the read "succeeds" against a ghost and
+    /// <see cref="KotorCoop.Session.AwayRule"/>'s consecutive-failure counter never advances.
+    /// </summary>
+    internal static bool IsTransitionalModuleName(string module)
+    {
+        if (module.Length <= 4 || !module.StartsWith("area", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        for (int i = 4; i < module.Length; i++)
+        {
+            if (!Uri.IsHexDigit(module[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private void OnFailure()
     {
         _consecutiveFailures++;

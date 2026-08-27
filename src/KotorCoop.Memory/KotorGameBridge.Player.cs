@@ -139,6 +139,25 @@ public sealed partial class KotorGameBridge
             module = $"area{areaId:X}";
         }
 
+        // ⚠ A TRANSITIONAL MODULE NAME MEANS THIS IS A GHOST, NOT A FAILURE TO CATCH LATER.
+        // Live-measured 2026-08-27 (docs/research/disconnect-reconnect.md §10): quitting to the
+        // main menu correctly invalidates the cached player pointer, but the very next tick's
+        // scan-based TryResolve reacquires a transitional-looking placeholder (module 'area1',
+        // plausible hit points) that passes every cheap check StillLooksLikeThePlayer applies.
+        // Before this check, that "succeeded" against the ghost, so AwayRule's consecutive-
+        // failure counter reset to 0 every tick and the Away flag never latched no matter how
+        // long the player sat at the main menu. Treat it exactly like any other failed read:
+        // publish nothing new this tick and let the next scan try again — the SAME "areaXX"
+        // fallback also fires for a fraction of a second during an ordinary module transition
+        // (IsTransitionalModuleName is shared with DisableLocalEncounters for exactly that
+        // reason), which is fine: a real transition settles in well under AwayRule's ~1s
+        // threshold, so this alone must never trip Away on its own.
+        if (IsTransitionalModuleName(module))
+        {
+            OnFailure();
+            return false;
+        }
+
         // A module change rebuilds every object in the game, so every cached ADDRESS is now
         // meaningless. The caches exist because scanning for them is what starved this pump;
         // dropping them exactly here is what keeps them honest.

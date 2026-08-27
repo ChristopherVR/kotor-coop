@@ -39,29 +39,6 @@ public sealed partial class KotorGameBridge
     private const int EncounterDisarmRefreshMs = 15_000;
 
     /// <summary>
-    /// True for "area1"/"area1F"-style names: what the module reads as while a transition is
-    /// in flight. Not a module on disk — an object id wearing a module's clothes — and every
-    /// pointer the scan holds while one is showing belongs to a world being freed.
-    /// </summary>
-    private static bool IsTransitionalModuleName(string module)
-    {
-        if (module.Length <= 4 || !module.StartsWith("area", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        for (int i = 4; i < module.Length; i++)
-        {
-            if (!Uri.IsHexDigit(module[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
     /// Turns off every encounter in the local module. Called on the instance that does NOT
     /// own enemies. Encounter spawns are the one engine-side source of object-id drift — a
     /// creature spawned by an encounter in one instance and not the other shifts the id

@@ -210,6 +210,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 ScriptGive();
                 break;
 
+            case SharedBlock.CheatKindLootTake:
+                LootTake(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

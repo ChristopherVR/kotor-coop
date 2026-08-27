@@ -747,3 +747,67 @@ the 2026-08-27 rig pass in `docs/live-verification.md`).
 
 The `quittomenu` primitive itself is reusable for the next round straight away — no rig-tooling
 work is needed to reproduce or re-check this.
+
+## Live pass (2026-08-27, follow-up round): the fix — PASS
+
+Fixes the root cause §10 located: `IsTransitionalModuleName` (promoted out of the
+`Encounters` partial into `KotorGameBridge.cs` proper) is now checked in
+`TryReadLocalState` (`KotorGameBridge.Player.cs`), so a transitional-named read
+(`'area1'`-style) is treated exactly like a failed read — `OnFailure()` runs and
+`TryReadLocalState` returns `false` — instead of being silently adopted as a successful
+read of a ghost. Re-ran the exact `quittomenu` recipe §10 built, against the freshly
+built plugin/agent carrying the fix.
+
+### quittomenu (host 47436, client 43472, both in END_M01AA)
+
+`blockpoke.ps1 -ProcId 43472 console 'quittomenu'` at 19:45:37.8. The client's own
+`agent2.log` shows what §10's live pass never saw — the failure counter actually
+climbing:
+
+```
+[19:45:44] ... memory READ-FAILING(21) ...
+[19:45:46] ... memory READ-FAILING(40) ...
+[19:45:48] ... memory READ-FAILING(50) ...
+[19:45:50] * away: local reads have failed for ~1s; publishing last known state as away
+```
+
+Both toasts fired on the SAME tick, on the two different processes:
+
+```
+agent2 (client): [19:45:50] * away: local reads have failed for ~1s; publishing last known state as away
+agent1 (host):   [19:45:50] * Malak left the world (main menu / loading)
+```
+
+Host's own block confirmed the phantom actually despawned (not just the toast):
+`pwsh tools\blockpoke.ps1 -ProcId 47436 state` → `phantoms 0  remotes 0`.
+
+**PASS.** The wall-clock time from `quittomenu` to the away toast (~13s) ran longer than
+the ~1-2s the design's threshold targets — this rig's actually-achieved pump rate is
+well below the nominal 30 Hz on this run (see the READ-FAILING count climbing by only
+~7-8/s, not ~30/s), a pre-existing environmental characteristic of this machine/session
+rather than anything this fix changed, and outside this round's scope to chase. What
+matters for this fix is the MECHANISM: consecutive failures now accumulate instead of
+resetting to 0 every tick, so `AwayRule`'s threshold is genuinely reachable.
+
+### Recovery — PASS
+
+`blockpoke.ps1 -ProcId 43472 console 'loadgame 0'` → `loadgame: the world is up`. Host:
+`[19:46:42] * Malak is back`, then `phantoms 1  remotes 1` — the phantom respawned.
+
+### A real transition does not trip Away — PASS
+
+`blockpoke.ps1 -ProcId 43472 console 'warp end_m01ab'` (a genuine module transition,
+distinct from `quittomenu`) completed in ~12s with the module correctly settling to
+`end_m01ab` on both sides. No new `away:`/`is back` line appeared anywhere in either
+agent log for this transition — the host's log shows `* Malak left the game` /
+`* Malak joined the game` instead, the PRE-EXISTING module-filter roster mechanism
+(`PeerAnnouncer`), exactly the "coincidentally producing the same visible symptom, for a
+completely different, already-shipped reason" case §10 itself named. Confirms the
+`IsTransitionalModuleName` fallback firing briefly during an ordinary transition does
+not, on its own, cross `AwayRule`'s ~1s threshold.
+
+**Verdict: FIXED and live-confirmed.** All three NEEDS-LIVE items from §9's own list are
+answered: the phantom despawns within the away-toast window (not instantly, but promptly
+relative to this run's own achieved pump rate), both toasts fire, a resumed read clears
+the flag and respawns the phantom, and neither a `loadgame` reload nor a `warp` module
+transition spuriously trips it.

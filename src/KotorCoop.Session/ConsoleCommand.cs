@@ -370,6 +370,21 @@ public enum CoopCommandKind
     /// negative control) — this verb exists specifically to bypass that. Local only.
     /// </summary>
     ScriptGive,
+
+    /// <summary>
+    /// <c>loottake [tag|id]</c> — LIVE-TEST PRIMITIVE (docs/research/dialogue-consequences.md's
+    /// script-item-sync round, Controls 2/3: container/corpse loot, flagged "most likely to fail
+    /// live" and never actually exercised by the prior round because no injected click can drive
+    /// the container GUI). Same target resolution as <c>useplaceable</c> (blank = nearest
+    /// container) via <see cref="CoopCommand.Address"/>, but instead of sending a UseObject
+    /// message this removes the container's first item through the real engine
+    /// <c>CSWSPlaceable::RemoveItem</c> call and gives an equivalent copy straight to the local
+    /// player — reproducing both halves of a genuine container/corpse take (a real removal AND a
+    /// real new inventory row) so the suppression-ledger feed point at
+    /// <c>LootPump.PumpContainerLoot</c> is exercised the same way a real take would exercise it.
+    /// Local only.
+    /// </summary>
+    LootTake,
 }
 
 /// <summary>
@@ -556,6 +571,7 @@ public static partial class ConsoleCommand
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),
         new(["scriptgive"], ParseScriptGive),
+        new(["loottake"], ParseLootTake),
         new(["cheats"], ParseCheats),
     ];
 

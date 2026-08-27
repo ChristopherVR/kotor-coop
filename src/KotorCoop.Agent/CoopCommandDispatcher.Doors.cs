@@ -56,6 +56,20 @@ public sealed partial class CoopCommandDispatcher
         SendCheat(new CheatRequest(CheatKinds.UsePlaceable, Text: token));
     }
 
+    /// <summary>The script-item-sync container/corpse-loot live-test primitive — same dispatch
+    /// shape as <see cref="UsePlaceable"/>, for <c>loottake</c>. See
+    /// <c>CoopCommandKind.LootTake</c> and docs/research/dialogue-consequences.md.</summary>
+    private void LootTake(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.LootTake, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.LootTake, Text: token));
+    }
+
     /// <summary>The close-side counterpart to <see cref="UsePlaceable"/>, added when the
     /// container-sync live-verify pass found no way to close what <c>useplaceable</c> opened
     /// — see <c>CoopCommandKind.ClosePlaceable</c> and docs/research/container-sync.md.</summary>

@@ -613,4 +613,20 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindScriptGive = 28;
 
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's script-item-sync
+    /// round, Controls 2/3): removes the target container/corpse's first item through the real
+    /// <c>CSWSPlaceable::RemoveItem</c> call (<c>Odyssey.TryTakeFirstContainerItem</c> — the same
+    /// primitive <c>TryWriteContainerLoot</c>'s apply path already uses) and gives an equivalent
+    /// copy to the local player via <c>Odyssey.GiveItemToInventory</c>, reproducing BOTH halves
+    /// of a real container/corpse take (a removal AND a new inventory row) through two verified
+    /// engine calls, since a GUI click cannot be delivered reliably on this rig. See
+    /// <c>CheatController.World.cs</c>'s own <c>LootTake</c> doc comment. Same target fields as
+    /// <c>CheatKindUsePlaceable</c> (<c>CheatTarget</c> = object id, or <c>CheatText</c> = tag,
+    /// blank = nearest container).
+    ///
+    /// ⚠ 29, because 7-28 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindLootTake = 29;
+
 }

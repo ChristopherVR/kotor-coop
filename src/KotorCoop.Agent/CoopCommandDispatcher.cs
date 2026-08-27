@@ -262,6 +262,8 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.ScriptGive] = c => SendCheat(new CheatRequest(
             CheatKinds.ScriptGive, Text: c.Address ?? string.Empty, Amount: c.Amount)),
 
+        [CoopCommandKind.LootTake] = c => LootTake(c.Address ?? string.Empty),
+
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

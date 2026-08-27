@@ -87,6 +87,33 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.UsePlaceable, Address: rest[0]);
     }
 
+    // loottake [tag|id]  - LIVE-TEST PRIMITIVE, same target shape as useplaceable — see
+    // CoopCommandKind.LootTake.
+    private static CoopCommand ParseLootTake(string[] rest)
+    {
+        if (rest.Length > 1)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "loottake takes one container, e.g. loottake end_chest01 "
+                    + "(or bare, for the nearest container)");
+        }
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.LootTake);
+        }
+
+        if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a placeable tag or object id");
+        }
+
+        return new CoopCommand(CoopCommandKind.LootTake, Address: rest[0]);
+    }
+
     // CONTAINER-SYNC LIVE-PASS ADDITION: the close-side counterpart, same shape — see
     // CoopCommandKind.ClosePlaceable.
     private static CoopCommand ParseClosePlaceable(string[] rest)

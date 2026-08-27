@@ -64,6 +64,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.LoadGame] = "loadgame 0",
         [CoopCommandKind.QuitToMenu] = "quittomenu",
         [CoopCommandKind.ScriptGive] = "scriptgive g_w_blstrpstl001",
+        [CoopCommandKind.LootTake] = "loottake",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

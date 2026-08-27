@@ -250,6 +250,24 @@ public static class CheatKinds
     /// ⚠ 28 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint ScriptGive = 28;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-27, docs/research/dialogue-consequences.md's script-item-sync
+    /// round, Controls 2/3 — "the sub-case most likely to fail live" and the one the prior round
+    /// could not reach): reproduces a genuine container/corpse loot take through TWO real engine
+    /// calls instead of the GUI click neither this codebase nor its test rig can deliver
+    /// reliably — removes the target container's FIRST item (the same real
+    /// <c>CSWSPlaceable::RemoveItem</c> primitive <c>TryWriteContainerLoot</c>'s apply path
+    /// already uses) and gives an equivalent copy straight to the local player, so both the real
+    /// <c>CollectContainerLootRemovals</c> removal signal AND the real inventory-row-appeared
+    /// signal fire, exactly as they would from a real take — unlike <c>scriptgive</c>, which
+    /// fabricates only the second half with no container involved at all. See
+    /// <c>SharedBlock.CheatKindLootTake</c>. <c>Address</c>/<c>Target</c> name the container
+    /// (tag or object id; blank = nearest), same shape as <c>UsePlaceable</c>. Local only.
+    ///
+    /// ⚠ 29 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint LootTake = 29;
 }
 
 /// <summary>

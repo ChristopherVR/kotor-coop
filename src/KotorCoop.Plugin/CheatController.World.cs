@@ -1,3 +1,4 @@
+using System.Text;
 using static KotorCoop.Plugin.Vec3;
 
 namespace KotorCoop.Plugin;
@@ -423,6 +424,113 @@ internal sealed unsafe partial class CheatController
                 ? $"placeable 0x{placeableId:X}: use sent (the container/interaction-lock "
                     + "machinery reacts to it like a real click)"
                 : $"placeable 0x{placeableId:X}: UseObject failed (no client or no message object)");
+    }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/dialogue-consequences.md's script-item-sync round,
+    /// Controls 2/3 — the sub-case flagged "most likely to fail live" and the one the prior
+    /// round could not reach: <c>useplaceable</c> only replicates the network half of a real
+    /// click, so it opens the interaction lock but never actually moves an item, and no
+    /// injected click can drive the container GUI that would). Same target resolution as
+    /// <see cref="UsePlaceable"/> (object id / tag / nearest container), but instead of sending
+    /// a UseObject message this removes the container's first item through
+    /// <see cref="Odyssey.TryTakeFirstContainerItem"/> — the real
+    /// <c>CSWSPlaceable::RemoveItem</c> primitive <see cref="Odyssey.RemoveContainerItem"/>
+    /// already uses to apply a PEER's removal — and gives an equivalent copy straight to the
+    /// local player via <see cref="Odyssey.GiveItemToInventory"/>. Both halves of a real
+    /// container/corpse take (a genuine removal <c>CollectContainerLootRemovals</c>'s next scan
+    /// detects, AND a genuine new row <c>ReadPossessedItems</c>'s next sample sees) fire through
+    /// two verified engine calls — unlike <c>scriptgive</c>, which fabricates only the second
+    /// half with no container involved at all, this exercises the suppression-ledger feed point
+    /// at <c>LootPump.PumpContainerLoot</c> the same way a real take would.
+    /// </summary>
+    private void LootTake(nint player)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+
+        nint placeable;
+        string what;
+        int seen = 0;
+
+        if (requestedId != 0)
+        {
+            placeable = Odyssey.ResolvePlaceable(requestedId);
+            what = $"0x{requestedId:X}";
+
+            if (placeable == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"{what} does not resolve to a container here");
+                return;
+            }
+        }
+        else if (text.Length > 0)
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            placeable = OdysseyPlaceables.FindPlaceableByTag(tag, length);
+            what = $"'{text}'";
+        }
+        else
+        {
+            OdysseyPlaceables.LogPlaceableSweep(player);
+            placeable = OdysseyPlaceables.FindNearestContainer(player, out seen);
+            what = "the nearest container";
+        }
+
+        if (placeable == 0)
+        {
+            Answer(SharedBlock.CheatStatusRefused, seen == 0
+                ? "the sweep found no placeables at all in this module"
+                : $"the sweep found {seen} placeable(s) but none close enough / none with inventory");
+            return;
+        }
+
+        uint placeableId = OdysseyPlaceables.GetPlaceableObjectId(placeable);
+        float distance = Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(placeable));
+
+        if (distance > PlaceableUseRange)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"placeable 0x{placeableId:X} ({what}) is {distance:F1}m away, too far to loot");
+            return;
+        }
+
+        byte* tagBuffer = stackalloc byte[SharedBlock.CheatTextLength];
+        if (!Odyssey.TryTakeFirstContainerItem(
+                placeable, tagBuffer, SharedBlock.CheatTextLength - 1, out uint itemId, out int tagLength))
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"placeable 0x{placeableId:X} ({what}) has no takeable item "
+                    + "(empty, or its first item's tag is unreadable)");
+            return;
+        }
+
+        string resref = Encoding.ASCII.GetString(tagBuffer, tagLength);
+        uint localId = Odyssey.GetPlayerObjectId();
+        uint givenId = Odyssey.GiveItemToInventory(localId, tagBuffer, tagLength, 1, out int giveFailure);
+        bool gave = givenId is not (0 or Odyssey.ObjectInvalid);
+
+        PluginHost.Log(
+            $"loottake: removed '{resref}' (0x{itemId:X}) from container 0x{placeableId:X} ({what}) "
+            + $"and gave a fresh copy ({(gave ? $"0x{givenId:X}" : $"FAILED, failure {giveFailure}")}) "
+            + "to the local player - a real removal + a real new inventory row, feeding the SAME "
+            + "CollectContainerLootRemovals/ScriptItemGrantPump paths a GUI take would");
+
+        Answer(
+            gave ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            gave
+                ? $"took '{resref}' (0x{itemId:X}) from 0x{placeableId:X} ({what}) and gave it to "
+                    + $"the player as 0x{givenId:X}"
+                : $"took '{resref}' (0x{itemId:X}) from 0x{placeableId:X} but could not give it back "
+                    + $"to the player (failure {giveFailure}) - the container's copy is GONE regardless");
     }
 
     /// <summary>

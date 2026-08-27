@@ -538,6 +538,24 @@ public sealed class CoopAgent
             _partyPump.PumpPartyRoster(caps);
         }
 
+        // ⚠ ORDER MATTERS, AND USED NOT TO. PumpContainerLoot moved here (off the heavy 1 Hz
+        // pass, which is where it lived until a live loottake round on 2026-08-27 caught it
+        // double-reporting) SPECIFICALLY so it runs immediately BEFORE the script-item sample
+        // below, every tick. Before this fix the two ran on independently-clocked ~1s timers
+        // (HeavyPumpIntervalMs for this call, ScriptItemGrantSampleIntervalMs for the one
+        // below) with no ordering guarantee between them: a real container/corpse take could
+        // have its new inventory row sampled and reported by ScriptItemGrantPump BEFORE this
+        // pump's own throttled scan ever got a chance to detect the removal and feed
+        // RecentlySyncedItems — a suppression entry recorded after the fact cannot un-report
+        // something already published. Calling it every tick costs nothing extra:
+        // CollectContainerLootRemovals self-throttles its own expensive scan to once a second
+        // internally (`_nextLootScanTicks`) regardless of how often the caller asks, so this
+        // is a cheap early-return on all but the one tick a second the scan is actually due —
+        // it just now ALWAYS gets to run, and record, before the script-item pump can sample
+        // past it. See docs/research/dialogue-consequences.md's script-item-sync section for
+        // the live evidence (Controls 2/3).
+        _lootPump.PumpContainerLoot(caps);
+
         // Script-item grants: called every tick, same as the two fast-path calls above, so it
         // always reads _dialoguePump.IsOwningConversation as of THIS tick regardless of which
         // of the two branches above (or below, on the legacy cadence) last updated it. Cheap
@@ -610,7 +628,8 @@ public sealed class CoopAgent
             _worldStatePump.PumpPlaceables(caps);
         }
 
-        _lootPump.PumpContainerLoot(caps);
+        // PumpContainerLoot itself moved to the fast per-tick path above, ahead of the
+        // script-item-grant sample — see that call site's own doc for why.
 
         // Off by default (coop.ini party_pool_sync) — a researched-but-not-yet-live-verified
         // offset chain and engine calls, per the project's engine-write rules. See

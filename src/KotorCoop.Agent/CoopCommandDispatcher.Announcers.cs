@@ -119,18 +119,12 @@ public sealed partial class CoopCommandDispatcher
 
         SessionStats stats = session.GetStats();
 
-        // manager.Phase distinguishes the FIRST handshake (Connecting) and a refused one
-        // (Failed) from an ordinary live session; within a live session, the live
-        // stats.Connected flag is what actually tells a mid-session drop-and-recover apart
-        // from steady state — manager.Phase stays Connected throughout a blackout, because
-        // that field describes the MANAGED lifecycle, not the tick-by-tick link.
-        ConnectionIndicatorState state = manager.Phase switch
-        {
-            SessionPhase.Connecting => ConnectionIndicatorState.Connecting,
-            SessionPhase.Failed => ConnectionIndicatorState.Failed,
-            SessionPhase.Disconnected => ConnectionIndicatorState.Disconnected,
-            _ => stats.Connected ? ConnectionIndicatorState.Connected : ConnectionIndicatorState.Reconnecting,
-        };
+        // See ConnectionPhaseMapping for the full reasoning (and the 2026-08-27 live failure
+        // that motivated it): manager.Phase alone cannot tell "the very first handshake" apart
+        // from "giving up and re-Helloing after an outage" — SessionManager.Poll sets
+        // SessionPhase.Connecting for both the instant stats.Connected goes false. The live
+        // stats.Reconnecting flag (CoopClient only) is what actually distinguishes them.
+        ConnectionIndicatorState state = ConnectionPhaseMapping.Resolve(manager.Phase, stats);
 
         ConnectionSnapshot snapshot = new(state, stats.PeerCount);
         _kotor?.SetConnectStatus(snapshot.Pack());

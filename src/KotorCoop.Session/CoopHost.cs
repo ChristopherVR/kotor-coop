@@ -202,6 +202,7 @@ public sealed partial class CoopHost : ICoopSession
         return new SessionStats
         {
             Connected = true,
+            Reconnecting = false, // a host never reconnects to itself; see SessionStats.Reconnecting
             LocalPeerId = HostPeerId,
             PeerCount = peerCount,
             PacketsSent = _channel.PacketsSent,

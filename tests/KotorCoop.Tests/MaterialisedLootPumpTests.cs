@@ -175,7 +175,16 @@ public class MaterialisedLootPumpTests
     {
         LootBridge bridge = new();
         LootSession session = new();
-        CoopAgent agent = new(bridge, session, new AgentSettings { CombatPumpIntervalMs = 0 });
+
+        // ScriptItemSync = false: this file's PossessedQueries instrumentation asserts the
+        // MATERIALISED-loot pump's own sweep is one call per tick, not one per death — since
+        // script_item_sync defaulted ON (2026-08-27, docs/research/dialogue-consequences.md),
+        // ScriptItemGrantPump independently samples the local player's own possessed items
+        // every tick too, which would otherwise show up as a second, unrelated entry in the
+        // same shared query list and break that assertion for a reason that has nothing to do
+        // with what this file tests.
+        CoopAgent agent = new(
+            bridge, session, new AgentSettings { CombatPumpIntervalMs = 0, ScriptItemSync = false });
         return (agent, bridge, session);
     }
 

@@ -168,13 +168,19 @@ public sealed record CoopConfig
     /// any conversation (an OnEnter trigger, an OnDeath script, a cutscene, a heartbeat
     /// script) is diffed and forwarded the same way <see cref="DialogueItemSync"/> already
     /// forwards a reward node's grant — docs/research/dialogue-consequences.md's
-    /// script-item-sync section. OFF by default, live-verification pending: unlike the other
-    /// item channels, a false positive here (an ordinary pickup misread as a script grant)
-    /// mints a real duplicate item on the peer's engine rather than a cosmetic desync, so it
-    /// stays opt-in until the suppression ledger has been proven live.
-    /// <c>script_item_sync = 1</c> turns it on.
+    /// script-item-sync section. ON by default since 2026-08-27: all three of the channel's own
+    /// required live controls (a genuine script grant via <c>scriptgive</c>, a manual
+    /// <c>giveloot</c> against the local player, and — the one flagged "most likely to fail" and
+    /// finally exercised via the new <c>loottake</c> primitive — a real container/corpse take)
+    /// are now live-confirmed suppressed correctly. Getting there needed a real fix: the
+    /// container/corpse-loot control DID double-report on the first live run, because
+    /// <c>PumpContainerLoot</c> and this channel's own sample ran on independently-clocked ~1s
+    /// timers with no ordering guarantee, so a suppression entry could land after the very
+    /// report it was supposed to prevent — see <c>CoopAgent.PumpOnce</c>'s own remarks on why
+    /// <c>PumpContainerLoot</c> now runs immediately ahead of the script-item sample every tick.
+    /// <c>script_item_sync = 0</c> turns it back off.
     /// </summary>
-    public bool ScriptItemSync { get; init; }
+    public bool ScriptItemSync { get; init; } = true;
 
     /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
