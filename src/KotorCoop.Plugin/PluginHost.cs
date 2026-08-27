@@ -70,6 +70,7 @@ internal static unsafe partial class PluginHost
     private static BarkController? _barks;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
+    private static PartySelectSuppressionController? _partySelectSuppression;
     private static ControlReturnController? _controlReturn;
     private static MenuLoadController? _menuLoad;
     private static ConnectMenuController? _connectMenu;

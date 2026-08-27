@@ -192,6 +192,21 @@ interaction_locks=1
 # fixes the party seat, which is what a partial or aborted conversation gets wrong.
 party_roster_sync=1
 
+# Suppress a CLIENT's own copy of the retail party-selection screen (CSWGuiPartySelection -
+# the pre-departure "who's coming with you" picker; its only positively-confirmed trigger is
+# the Taris swoop-taxi system, k_pebn_loc01..09) the instant it opens, instead of letting the
+# player pick: this instance's own choice is not the one that matters, since party_roster_sync
+# above converges the client's roster from whatever the HOST picks through the unmodified
+# retail screen regardless. Uses the same panel-teardown idiom the native server-browser panel
+# already ships with (mark the panel for the engine's own next-frame sweep) rather than poking
+# anything in the party table directly. Posts "party is chosen by the host" once. NEEDS-LIVE:
+# the panel/vtable offset itself is verified, but whether suppressing via the sweep (instead of
+# the retail Back/Done path) skips something the panel's own exit_script would otherwise run is
+# an open question - see docs/research/galaxy-map-and-party-select.md's dated 2026-08-27
+# section. ON by default; per-instance and only meaningful on a client (a host's own read of
+# "am I a client with a live host roster" is always false, so its own screen is left alone).
+party_select_host_only=1
+
 # --- companion follow-AI fix candidates (unverified) --------------------------------
 # Two candidate fixes for the companion follow-AI's terminal-stall shape
 # (docs/research/party-reconciliation.md). Both default OFF; neither has cleared this

@@ -133,6 +133,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_roster_sync` | ON | mirror the party roster across instances | [party-reconciliation.md](research/party-reconciliation.md) |
 | `dialogue_recruit_sync` | OFF³ | recruit a companion through the real network path on the peer | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
 | `pause_button_hook` | ON | hook the in-game pause button | — |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, ...) | [effect-sync.md](research/effect-sync.md) |
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |

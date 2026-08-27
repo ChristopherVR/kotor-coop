@@ -203,6 +203,7 @@ internal static unsafe partial class PluginHost
         ContainerUseHook.Invalidate();
         ContainerCloseHook.Invalidate();
         _partyRoster?.Invalidate();
+        _partySelectSuppression?.Invalidate();
 
         // ⚠ THIS LINE WAS MISSING, so the spectate controller's ENTIRE teardown had never run
         // in the history of the mod — every other controller here was reset on a module change
