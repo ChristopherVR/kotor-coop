@@ -826,3 +826,160 @@ flip.
 `src/KotorCoop.Session/CoopHost.StoreV2.cs`, `src/KotorCoop.Session/CoopClient.StoreV2.cs`,
 `src/KotorCoop.Session/IStoreSession.cs`, `tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs`,
 this document.
+
+---
+
+## 8. 2026-08-29, second rig round (against §7's fixes) — item 1: a NEW, distinct client-side
+## defect (a reconcile-apply landing re-detected and re-published as a fresh intent), no
+## exponential doubling this time; item 2: inconclusive on the client half (pre-existing
+## `tar_m02aa` environment hazard blocked `openstore` for the whole session) but a genuine,
+## unexplained host->client divergence confirmed at the engine level; both flags stay OFF
+
+Task: re-run the queue's items 1/2 against `main` merged forward through §7's own fixes
+(retire-by-confirmed-snapshot-movement, cloned-under-lock belief, store-removal debounce,
+absent-store=unknown). Two-instance rig (`tools/demo.ps1`), both game directories freshly
+`build.ps1 -Install -WarnAsError`'d (both deployed `dinput8.dll` 2,060,288 bytes / identical
+timestamp `08/29/2026 04:07:14`; both `KotorCoop.Session.dll` confirmed by byte-scan to contain
+`PartyPoolPumpV2`). `coop.ini` reset to `profiles/coop.ini.example` on both, then
+`party_pool_sync=2`/`store_sync=2` plus `dialogue_item_sync=0`/`script_item_sync=0` (isolated from
+the start this round, per §6.1's own lesson — no cross-channel contamination observed).
+
+### 8.1 Item 1 — `party_pool_sync=2`: DISQUALIFIED again, but by a DIFFERENT mechanism than §6's
+### doubling — a client reconcile-apply landing gets re-detected as a fresh local action
+
+`END_M01AA`, no warp. Ambient noise on both instances settled cleanly first (a single bounded
+deposit each for `g_i_medeqpmnt01`/`g_w_blstrpstl001`/`g_a_clothes01`, exactly matching §2.4's
+predicted shape — no ramp, confirmed stable for 90s before testing). Three rapid HOST
+`pooladd g_i_medeqpmnt01`s, each confirmed individually. **No exponential doubling was observed
+this round** — every logged movement stayed single-digit, unlike §6.2's clean 1,2,4,8,18,34,66,130
+ramp. But after all activity settled (60s+ of no new `party pool v2:` lines, re-confirmed after a
+further 2 minutes idle with zero change), the two engines had permanently DIVERGED: summing every
+`added '<key>' xN`/`removed '<key>' xN to/from the party pool` line for `g_i_medeqpmnt01` gives a
+net of **+3 on the host, 0 on the client** — a real, unrecovered, 3-unit split that did not
+self-heal across 4+ minutes of idle time, contradicting the "2 min idle -> stable" clause (it WAS
+stable, just stable on the wrong number).
+
+**Root cause, read directly from the client's own log.** The client's detect-log line
+(`Pumps/PartyPoolPumpV2.cs` line 342, tagged `"party pool: local {kind} of {count}x '{key}'
+detected, requesting (serial N)"` — no `v2` in this specific tag, unlike the apply-drain line) fired
+TWICE for `g_i_medeqpmnt01` in this session, and in both cases it fired within 0-2 seconds of that
+SAME key's own reconcile-apply landing (the immediately preceding `party pool v2: submitting
+{kind} of {count}x .../ removed/added ...` pair):
+
+```
+[04:11:55] * party pool v2: submitting remove of 1x 'g_i_medeqpmnt01' through the party-pool channel
+[04:11:55] * removed 'g_i_medeqpmnt01' x1 from the party pool
+[04:11:57] * party pool: local remove of 1x 'g_i_medeqpmnt01' detected, requesting (serial 4)   <- re-detected its OWN reconcile landing
+...
+[04:14:00] * party pool v2: submitting remove of 4x 'g_i_medeqpmnt01' through the party-pool channel
+[04:14:00] * removed 'g_i_medeqpmnt01' x4 from the party pool
+[04:14:02] * party pool: local remove of 4x 'g_i_medeqpmnt01' detected, requesting (serial 8)   <- same shape again
+```
+
+Both false intents were accepted and applied by the HOST (`host`'s own log shows a matching
+`party pool v2: submitting remove of Nx .../ removed Nx` at the same moment for each), so the
+HOST's own canonical engine — the single source of truth §2.1 exists to protect — was reduced by
+movements that were never real player or ambient actions, only the client catching up to
+something the host already knew. This is the exact class §1.2/§2.5 claims mode 2 eliminates by
+construction ("a receiver's own convergence can never itself become a new fact for the publisher
+to react to, because the publisher never reads the receiver's engine at all") — except here it is
+not the RECEIVER's convergence directly read by the host; it is the receiver's own convergence
+being MIS-CLASSIFIED as a fresh local change by its own detect step and re-published as a genuine
+intent, which the host then (correctly, per its own rules) accepts and applies. §7's fix closed
+the specific doubling shape found in §6 (a whole-outstanding-ledger wipe on weak evidence); this
+is a different leak in the same neighbourhood, not yet root-caused to a specific line — a
+plausible next step is checking whether `_reconcileInFlight`'s clearing (the `actual ==
+inFlightTarget || actualMoved` branch, `PartyPoolPumpV2.cs` around line 266) can clear on the SAME
+tick the detect check below it (line 329, after the `continue` at line 291 skips it) still sees a
+stale `_lastActual`/`detectTarget` pairing that has not yet absorbed the just-cleared reconcile,
+one tick later. No crash; both instances stayed `Responding=True` throughout (re-confirmed after
+the divergence, and again after a further 2-minute idle wait). `party_pool_sync` stays OFF.
+
+### 8.2 Item 2 — `store_sync=2`: the client half could not be exercised (pre-existing `tar_m02aa`
+### environment hazard, distinct from `tp`'s known z-height poison — this round never used `tp`),
+### but the host->client engine divergence that resulted is itself worth recording
+
+Rig restarted clean: `party_pool_sync=0` (unsafe to run alongside item 1's still-open defect, per
+§6.3's own precedent), `store_sync=2`, `dialogue_item_sync=0`/`script_item_sync=0` kept isolated.
+ONE relocating `warp tar_m02aa` (this session's only warp, host only — the client follows
+automatically). Both instances landed in `tar_m02aa` cleanly (`who` confirmed both sides), no
+crash, `status` showed zero liveness anomalies on both. The host's own store GUI cleared the
+documented ambient-modal trap in 1 retry (`skipline`/`selectreply 0`) and stayed open for the rest
+of the session. **The client's store GUI never opened at all, for the entire ~13-minute session**:
+its very first `openstore Larrim_Store` refused with `"another modal screen is up"`; the documented
+`skipline`/`selectreply 0`/`partyselect ok` retry loop was run 8 times over several minutes with no
+change in the refusal reason. Unlike the module's own documented `duros`-conversation trap, this
+was not blocked by an active conversation — `skipline` itself replied `"no target: no active
+conversation here to skip a line in"` every time, and the client's own gait line showed `hp 12/12`,
+`not in combat`, `"nobody here is fighting"` throughout, with `standup` replying `"you are already
+up"` (the local PC itself was never down). The client's own log repeatedly printed `"your party is
+down — a peer can still revive you"` (a companion, not the PC) starting seconds after the warp,
+coinciding with a real fight the client's own gait briefly reported (`[fighting]`, per the host's
+`who`) — plausibly a hostile encounter at the `tar_m02aa` warp-in point downing a companion. Moving
+the host directly onto the client's position (`goto Malak`) to trigger the documented
+proximity-based peer-revive, then waiting a further 2.5 minutes, produced no change. This is a
+DIFFERENT trigger than `store-sync.md`'s own documented `tar_m02aa` hazard (that one required an
+explicit `tp ... 0` z-height fall — this round never issued `tp` at all), so it is recorded here as
+a distinct, not-yet-explained variant of the same module's general instability for the next round
+to watch for.
+
+**What could still be checked despite the client being locked out of its own store GUI.** Host
+sell: `scriptgive g_w_ionblstr01` then `sell Larrim_Store g_w_ionblstr01` on the host succeeded at
+the engine level (`items 99` on the host: object `0x82` `g_w_ionblstr01` in store `0x74` read stack
+1 -> 2). The client's own `items 99`, taken ~5 minutes later, still read the SAME object id `0x82`
+in the SAME store `0x74` at stack **1** — the sale never mirrored, a genuine, persistent
+host-vs-client divergence for a single, simple, uncontested sell. Code inspection offers a partial
+explanation, distinct from a proven root cause: `Pumps/StorePumpV2.cs`'s `PumpClient` returns
+immediately (line ~118-125) whenever `bridge.TryScanOpenStore` fails to find ANY store open THIS
+tick — before ever reaching the snapshot-vs-belief reconcile logic below. The file's own header
+comment claims *"the reconcile-apply itself needs no GUI open... only fresh detection is
+store-gated"*, but that is only true for a store the client has reconciled at least once before (so
+a reconcile is already queued and continues draining independently via the dispatcher); for a store
+never opened even once in a session, the client's PumpClient can never build the `keys` set for that
+store's object id in the first place, so it can never begin converging toward the host's snapshot at
+all — a narrower guarantee than the doc comment states, and one this round's environment hazard
+exposed directly (the client legitimately could not open `Larrim_Store` even once, so its reconcile
+for that store never started). Whether this fully explains the observed divergence, or whether a
+genuine wire/reconcile defect also contributes, is NOT settled this round — worth re-testing with a
+client that can actually reach `openstore`. The client buy-back and "host re-buy refused" checks
+were **not reached** for the same reason. No crash; both instances stayed `Responding=True`
+throughout. `store_sync` stays OFF.
+
+### 8.3 Item 3 — flip defaults: NOT REACHED (same as the prior round — both flags still disqualified
+### or inconclusive). `profiles/coop.ini.example`, `CoopConfig`/`AgentSettings` defaults,
+`CONFIG.md`, and the README/roadmap/research-README rows are all unchanged.
+
+### 8.4 Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors, against the
+  freshly-fast-forward-merged `main` (`1e7abca`).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed; both deployed `dinput8.dll` byte-identical (2,060,288 bytes, same
+  timestamp); both `KotorCoop.Session.dll` confirmed by byte-scan to contain `PartyPoolPumpV2`. A
+  second standalone `build.ps1 -WarnAsError` re-run at the end of the session (no source changes)
+  was also clean.
+- `dotnet test tests/KotorCoop.Tests --no-build` (rig down): **2511/2511 passed**, 0 failures, one
+  run, no flake.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides: **41 passed, 8 failed** — exactly the documented
+  40-42/7-9 baseline range, the same specific 8 known failures (`phantom damageable, not a sink`;
+  `the peer really loses those hit points`; `a client hit costs the enemy real hit points`; `a
+  downed player is reported to the agent`; `the co-op revive stands the player back up`; `every
+  engine call signature matches the binary` at 197/199; `a container opened on the client is held
+  and shown open on the host`; `no per-frame spam`). No regression, no crash.
+
+**Verdict**: `party_pool_sync`/`store_sync` **stay OFF (mode 0)** — item 1 is disqualified by a
+new, distinct, reproducible defect (not the doubling §7 already fixed); item 2's client-dependent
+checks are inconclusive (blocked by an environment hazard, not by a proven `store_sync` defect
+alone) but the plain host-sell-never-mirrors result stands as real, live-observed evidence
+regardless of that hazard's exact cause. No crash in either round. **Concrete next steps, ranked**:
+(a) instrument `PartyPoolPumpV2.cs`'s `_reconcileInFlight` clear-and-continue path
+(~line 266-291) to log `detectTarget`/`_lastActual` on the SAME tick a reconcile lands, to catch
+the false re-detection in the act rather than inferring it from timestamps; (b) get a client
+past `tar_m02aa`'s `openstore` block in a way that survives a full store recipe (a different warp
+target module entirely may be simpler than continuing to fight this one's ambient hazards); (c)
+re-test the host-sell-mirror specifically with a client whose store GUI IS open, to separate the
+"never opened" explanation in §8.2 from a genuine wire defect.
+
+**Files touched this round**: none — bench/rig-only verification pass, no source changes. This
+document only.
