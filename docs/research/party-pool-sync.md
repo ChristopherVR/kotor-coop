@@ -1404,3 +1404,247 @@ field this codebase should be reading instead of `+0x10` — the same "read the 
 its documented call convention" fix that closed the `sell`/`GetItemRepository` defect earlier
 this session. No source changes this round beyond the diagnostic logging itself (already
 committed alongside `followkick`, see `docs/live-verification.md`).
+
+## 16. 2026-08-29 — §15's own closing ask answered by disassembly: `InsertItem` bails out on a
+## flag bit the party pool's repository is ALWAYS constructed with; switched to the engine's own
+## `AddItem`, which is not gated the same way — fixed, NEEDS-LIVE, stays OFF
+
+Task: §15's own concrete next target — disassemble `CItemRepository::InsertItem` 0x0055D2C0
+itself, find either the missing increment condition or the true count/capacity field — plus this
+round's own wider brief (trace `AddItem`'s full tail, decide whether it is safe to call, settle
+the possessor question, confirm the read side). No rig this round (isolation worktree); this pass
+is static RE, source fix, and build/test verification only, matching every prior no-rig round's
+own discipline in this document.
+
+### 16.1 Root cause, found on `InsertItem`'s very first two instructions
+
+Fresh full disassembly of `CItemRepository::InsertItem` 0x0055D2C0
+(`tools/disasm.py 0x0055D2C0 400`), VERIFIED:
+
+```
+0x0055D2C0  test byte ptr [ecx+8], 1     ; ecx = this (repo); test bit 0 of the byte at repo+0x08
+0x0055D2C4  jne 0x55d326                 ; SET -> jump straight to `ret 8` — nothing else runs
+0x0055D2C6  mov eax, [esp+8]             ; (bit 0 CLEAR only, from here on) eax = index arg
+0x0055D2CA  test eax, eax
+0x0055D2CC  jl 0x55d2ea                  ; index < 0 -> append path
+0x0055D2CE  cmp eax, [ecx+0x10]          ; index vs item_count
+0x0055D2D1  jge 0x55d2ea                 ; index >= count -> also append path
+        ; [0 <= index < count]: overwrite that slot's id, tail-jump into 0x00616940
+0x0055D2EA  ...                          ; APPEND path: grow the array via
+                                          ; CExoArrayList::Allocate 0x005E03C0 if count==capacity
+                                          ; (repo+0x14, a THIRD field this document had not
+                                          ; previously named), write items_list[count]=id,
+                                          ; item_count++ (repo+0x10) — confirms §1.3's own
+                                          ; original reading of the append path was correct...
+                                          ; for a repository this bit is CLEAR on.
+```
+
+**The first two instructions are an unconditional bail-out**: whenever bit 0 of the repository's
+own `+0x08` byte is set, `InsertItem` does `ret 8` immediately — no array touch, no grow, no
+`item_count` write, nothing. Every other instruction in the function, including the append path
+that §1.3 originally (correctly, for a bit-0-clear repo) documented, is unreachable when that bit
+is set.
+
+**`+0x08` is a real, load-bearing field this document had not previously named at all** —
+`CItemRepository`'s size (24/`0x18`, VERIFIED against `tools/q.py sql "select size from classes
+where class_name='CItemRepository'"`) leaves exactly one dword of room between the documented
+`+0x04` ("new item" counter) and `+0x0C` (`items_list`), and this pass's own fresh disasm of
+`CItemRepository::Constructor` 0x0055D290 (below) confirms it is written there, not merely read.
+
+### 16.2 `CItemRepository::Constructor` (0x0055D290) — a SECOND stack argument sets that bit,
+### preserving whatever else is there
+
+VERIFIED, full disasm, and cross-checked against `tools/q.py`'s own `param_size_bytes=8` for this
+function (two stack dwords, i.e. genuinely `__thiscall(this, int parentId, int flag)`, not the
+one-argument reading this document previously assumed):
+
+```
+mov edx, [esp+4]        ; edx = arg1 = parentId
+...                       ; zero +0x0C/+0x10/+0x14 (items_list/item_count/capacity), write
+                          ; +0x00 = parentId
+mov edx, [esp+8]         ; edx = arg2 = flag
+mov ecx, [eax+8]         ; ecx = existing +0x08 (whatever the allocator left there)
+xor ecx, edx
+mov edx, [eax+8]
+and ecx, 1               ; ecx = bit0(existing) XOR bit0(flag)
+xor edx, ecx             ; edx = existing with ONLY bit0 replaced by flag's bit0
+mov [eax+8], edx
+```
+
+This is a compiler-generated "set one bitfield bit from a bool argument, leave the rest of the
+byte alone" sequence — `Constructor(this, parentId, bool someFlag)` sets `+0x08`'s bit 0 to
+`someFlag`, nothing else.
+
+### 16.3 `CSWPartyTable::GetPartyItems` (0x00563340) constructs the party pool's repository with
+### that flag TRUE — the party pool's own repository is the one this bug always fires against
+
+`tools/xrefs.py 0x55d290` lists exactly 6 call sites to the Constructor. Fresh disasm of each
+call site's own argument setup, VERIFIED:
+
+| Caller | Owner type | Constructor's arg2 (the flag) |
+| --- | --- | --- |
+| `CSWSCreature::Constructor` 0x004F7A10 (a creature's own `+0xA30` backpack) | creature | a register already proven `0` by a `cmp eax, ebx` null-check idiom right above the call — **0** |
+| `CSWSPlaceable::Constructor` 0x005877E0 (a container's `+0x36C` repo) | placeable | same idiom, same register, proven `0` — **0** |
+| `CSWSStore::Constructor` 0x005C6AB0 (a store's `+0x230` repo) | store | same idiom, same register, proven `0` — **0** |
+| `CSWPartyTable::GetPartyItems` 0x00563340 (the party pool, `+0x118`) | — | **1** (see below) |
+| `CSWPartyTable::TransferInventory` 0x005641E0 | — | not chased this pass, out of scope (transient repo, not `+0x118`) |
+| `CSWPartyTable::CreateParty` 0x00565760 | — | not chased this pass, out of scope (transient repo, not `+0x118`) |
+
+**Only `GetPartyItems` passes a nonzero flag, and the party pool's own repository is the ONLY one
+of the four persistent repositories this codebase touches (party pool, creature backpack,
+placeable container, store) constructed with the bug-triggering bit set.** This is confirmed,
+not inferred — placeable and store repositories share the SAME null-check-proven-zero register
+idiom `CSWSCreature::Constructor` uses, so `InsertItem` is not broken for containers or stores by
+this defect. (`InsertItemIntoStore` in `Odyssey.Store.cs` is therefore left unchanged this
+round — see §16.6.)
+
+**How `GetPartyItems` produces a `1`, worth recording precisely because it very nearly reads as a
+compiler bug**: at `0x00563388`, `push 1` executes immediately before `call 0x004AEA40`
+(`CServerExoApp::GetPlayerCreatureId`, whose docs-cited call shape was `GetPlayerCreatureId(1)`).
+Fresh disasm of that call's OWN target, `CServerExoAppInternal::GetPlayerCreatureId` 0x004B4CB0
+(reached via the thunk at 0x004AEA40, `mov ecx,[ecx+4]; jmp 0x4b4cb0`), shows it is a bare
+`__thiscall(this)` that reads NO stack argument at all and does a plain `ret` (no immediate —
+pops nothing beyond the return address). **The docs' own prior reading of "`GetPlayerCreatureId(1)`"
+was wrong about what the `1` is for** — it is never consumed by that call at all. It is staged
+early (a compiler scheduling choice) and survives untouched across the call, landing as
+`Constructor`'s own second stack argument once `push eax` (the resolved player id) is pushed
+immediately after and `call 0x0055D290` executes. **The literal constant `1` that
+`GetPartyItems` happens to push for a completely different, unrelated reason is what sets the
+party pool's own repository `+0x08` bit 0** — an accidental-looking but entirely real and
+consistent piece of retail engine code, reproduced identically across every observation this
+round made of it (the flag never varies; it is a compile-time constant, not runtime data).
+
+### 16.4 `CItemRepository::AddItem` (0x0055D330) — full disasm this pass; NOT gated the same way,
+### and is what the party pool needs
+
+Full disassembly (`tools/disasm.py 0x0055D330 1300`), VERIFIED. Signature correction from this
+document's own prior (partial) reading: `__thiscall(this=repo, CSWSItem** ppItem, int wantMerge,
+int arg3, int markNewItem)`, `ret 0x10` (4 stack dwords, matching `tools/q.py`'s own
+`param_size_bytes=16`) — the FIRST argument is a pointer TO an item pointer (in/out), not a bare
+item pointer: on a successful merge the callee writes the EXISTING stack's pointer back into
+`*ppItem`; on a credit-chit/Pazaak-card conversion it clears `*ppItem` to 0 after deleting the
+incoming item (both already partially documented in §1.4; the by-reference shape is new this
+pass and explains both writes cleanly).
+
+**A real, literal call site, fully traced, gave the exact argument shape to copy**:
+`CSWSStore::AddItemToInventory` 0x005C70C0 — a small, single-purpose "give item to this
+repository" wrapper, `tools/xrefs.py 0x55d330`'s 38 callers narrowed to this one specifically
+because it has nothing else going on (no GUI, no gold, just four literal pushes):
+
+```
+push 1        ; arg4 = markNewItem = 1
+push 0        ; arg3 = 0
+push 1        ; arg2 = wantMerge = 1
+push ebx      ; arg1 = ppItem (the caller's own item-pointer-pointer)
+call 0x55d330
+```
+
+**Confirms, for a bit-0-SET repository (the party pool), `item_count` DOES get updated — the
+opposite of `InsertItem`**: with `wantMerge=1`, `AddItem` first walks every existing entry via
+`CSWSItem::MergeItem` 0x00553F90 looking for a mergeable stack (same tag id + same `+0x264` byte);
+when nothing merges, it falls through to a SEPARATE append block (`0x0055D73C-0x0055D774`) that
+runs the SAME grow-the-array-then-append-then-`item_count++` sequence `InsertItem`'s own
+(unreachable, for this repo) append path uses — this append block is **not** gated on the `+0x08`
+bit at all. Only `InsertItem`'s own top-of-function check is. This directly answers this round's
+own §16 question: **`AddItem` is the correct, and now the only working, primitive for linking an
+item into the party pool's repository.**
+
+**Possessor — settles §1.6/§2.4's own open question.** A SEPARATE branch, gated on bit-0-SET
+specifically (`0x0055D6FE-0x0055D728`, reached only for the party pool), resolves a creature via
+`0x004AE920` (the same lower-level lookup `GetPlayerCreatureId`'s own body calls internally) and
+calls `CSWSItem::SetPossessor` 0x00553210 on the item before the array-append runs. **Yes — the
+party pool needs a possessor write on a fresh add, and the engine's own `AddItem` already does
+it**; `AddItemToPartyPool` no longer has to reason about this by hand (its prior doc comment's own
+"NEEDS-LIVE: the possessor semantics... were not independently observed" is resolved by using the
+primitive that already gets it right, rather than by independently guessing).
+
+**The "GUI message" tail — corrects this document's own prior framing, and narrows the risk.**
+§1.4 previously reasoned the notification was gated to a store/placeable owner and therefore
+inert for a creature-owned repository. Closer tracing this pass shows that reading was wrong in
+its specifics: the block at `0x0055D5B6-0x0055D610` compares the repository owner's `+0x08` type
+byte against two literal constants — read directly from the retail binary's own `.rdata`
+(`tools/disasm.py`'s helper script extended to read raw bytes at a VA): `[0x746634] = 5` and
+`[0x746635] = 6`. Per this project's own `kotor-coop-object-type-field-trap` finding (a live,
+driveable creature's low byte reads `5`), **type `5` is CREATURE** — so the notification IS
+reachable for a creature-owned repository, i.e. the party pool, not excluded from it as
+previously assumed. What DOES gate it, and matters more: **it only runs on a MERGE SUCCESS**
+(`wantMerge=1` AND an existing compatible stack found) — the merge-search loop's own "no match"
+exit (`jmp 0x0055D6C2`) skips this block entirely, so a brand-new key's first deposit into the
+pool never reaches it. When it does run (a second-or-later deposit of an already-present stack),
+it resolves to a getter+notify pair (`0x004AEDB0`, a plain field-offset getter with no stack args
+of its own — its own two pushed args are, by the same "staged early, never popped" mechanism as
+§16.3's `push 1`, actually consumed by the FOLLOWING call — then `0x00569FC0`, called on the
+getter's result) that was not traced further than confirming its shape matches the local,
+non-networked client/server notification bus `docs/research/container-sync.md` already documents
+and this codebase already treats as safe-when-unobserved elsewhere (progression-sync.md's
+credits-readout precedent). **NEEDS-LIVE**: watching one merge-deposit (the same resref added
+twice) for any visible glitch with no stash panel open is the concrete open item this leaves —
+this pass's own confidence is "matches an established safe pattern," not "independently proven
+inert" the way §1.4 originally overclaimed.
+
+Gold/Pazaak-card special-casing (§1.4) is unchanged by this pass's own re-read: still deletes the
+incoming item and writes nothing to `item_count`, confirmed again in the fresh full trace.
+
+### 16.5 Read side: no change needed
+
+`KotorGameBridge.PartyPool.cs`'s `TryScanPartyPoolTotals` reads `repo+0x0C`/`repo+0x10`
+(`items_list`/`item_count`) — the EXACT two fields both `InsertItem`'s own (bit-0-clear-only)
+append path and `AddItem`'s own (bit-0-agnostic) append path write together in the same two
+instructions (`items_list[count]=id; count++`). Once `item_count` is actually being updated (by
+calling `AddItem` instead of the always-no-op `InsertItem`), the agent's existing read path is
+already correct and needs no change — this directly answers this round's own item 4.
+
+### 16.6 The fix
+
+`src/KotorCoop.Plugin/Odyssey.PartyPool.cs`: added `RepositoryAddItemFn` (0x0055D330, the 5-arg
+`__thiscall` shape from §16.4). `AddItemToPartyPool` now calls
+`RepositoryAddItemFn(repo, (nint)(&itemLocal), 1, 0, 1)` — the exact literal argument shape
+`CSWSStore::AddItemToInventory` uses (§16.4) — instead of `RepositoryInsertItemFn(repo, item,
+-1)`, after still unlinking from the player's own backpack via `RepositoryRemoveItemFn` (unchanged
+— `AddItem` only links INTO its own repo, it does not know to unlink from elsewhere first). The
+existing "two lookups, one frame" diagnostic (§13.3/§15) is kept and extended: it now also reports
+whether `itemLocal` came back unchanged (a fresh array entry), cleared (a gold/Pazaak conversion),
+or repointed (a merge into an existing stack), so a live re-test can read the mechanism straight
+off the log line instead of inferring it from `item_count` alone.
+
+`Odyssey.Store.cs`'s `InsertItemIntoStore` is **unchanged** — §16.3's table shows a store's own
+repository is always constructed with the flag clear (`CSWSStore::Constructor`'s own single call
+site, the SAME null-check-proven-zero-register idiom every non-party-pool repository uses), so
+`InsertItem` already works there; switching it to `AddItem` as well was out of this round's scope
+per the task's own "if the same" qualifier, since it is not.
+
+`RepositoryInsertItemFn`'s own delegate and doc comment are kept (still used by
+`InsertItemIntoStore`), rewritten to state the bail-out precisely instead of the prior
+(incomplete) reading of its append path alone.
+
+### 16.7 Tests
+
+No new pure-logic surface was introduced — the fix is a native delegate retarget with a verified
+different call shape and literal arguments, not new branching C# logic, so there is nothing novel
+to unit-test in isolation the way `PartyPoolStackMatcher`/`PartyPoolDiffRule` were for earlier
+rounds. `dotnet build KotorCoop.slnx -warnaserror` and `pwsh src/KotorCoop.Plugin/build.ps1
+-WarnAsError` both clean (0 warnings, 0 errors) with the new delegate and call site.
+`dotnet test tests/KotorCoop.Tests --no-build`: full suite unaffected (native plugin code is not
+exercised by the managed test suite; no existing test references
+`AddItemToPartyPool`/`RepositoryInsertItemFn`/`InsertItemIntoStore` directly — confirmed by
+`grep -rl` across `tests/` and `src/` before making this change).
+
+### 16.8 Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged) — this is a native engine-call fix with no rig available this round to confirm it live.
+**This is believed to be the actual, complete fix for the defect §7-§15 spent nine rounds
+chasing and narrowing** (every one of those rounds' own C#-side fixes to `PartyPoolPump.cs` — root
+causes 1-3 — remain independently correct and untouched; they were always downstream of this
+native defect, never wrong on their own terms, just unable to fully converge while the native
+insert silently no-op'd underneath them). **Concrete next live-test step** — the same one §14.4
+already called for, now finally unblocked by a root cause instead of two hypotheses: `pooladd
+g_i_progspike01` immediately followed by `poolremove` of the same resref (§13.2's exact
+reproduction) should now succeed instead of failing "no matching stack found"; `pooladd`
+`g_w_thermldet01` x3 rapid on the HOST then x3 on the CLIENT (§11's own reproduction) should now
+converge both sides to exactly +6; and the new diagnostic's own `itemLocal` line should show
+`unchanged (fresh entry)` for a first deposit of a new key and `changed to 0x... (merged...)` for
+a second deposit of an already-present one — confirming the mechanism directly rather than
+inferring it from `item_count` alone. If any of these still fail, the failure mode has moved past
+everything §7-§16 have collectively covered and is worth a fresh "two lookups, one frame" pass
+on whatever the new failure is, rather than re-litigating `InsertItem`/`AddItem` again.
