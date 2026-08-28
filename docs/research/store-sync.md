@@ -2494,3 +2494,137 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
 tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
 verification only.
+
+## Fix (2026-08-29, no-rig round): the client buy-back gap root-caused and closed — `_engineBelief`
+## and `_wireTarget` replace the single conflated `_knownEngineTotals` dictionary, the SAME
+## over-exclusion class the party pool's own root cause 3 fixed. `store_sync` stays OFF.
+
+Task: root-cause the prior round's own leading hypothesis ("a client's own buy of a key it had
+only just finished applying a remote insert for never satisfies the pending-target equality check
+again") with an actual failing loopback test, then fix it the same way
+`docs/research/party-pool-sync.md` §11-§12 fixed the party pool's own equivalent bug. No rig this
+round — static analysis, a new failing test, a code fix, and the full suite.
+
+### Root cause, confirmed by reading (not guessing at) `Pumps/StorePump.cs`
+
+The prior round's hypothesis was half right and half backwards. The OLD `StorePump` kept a SINGLE
+dictionary, `_knownEngineTotals`, doing two incompatible jobs at once: "what does a REAL scan of
+the store say this key currently is" and "what does THIS PUMP's own optimistic post-apply belief
+say it will be once a queued apply lands." The apply path (`SetEngineBelief`) set BOTH
+`_knownEngineTotals[key]` and the pending-target tracker `_pendingApplyTarget[key]` to the exact
+same value, at the exact same instant — the moment an apply was QUEUED, not when it actually
+executed in the real engine (that happens later, through the single-slot arbitrated cheat channel,
+which can lag behind by more than one tick). A separate "has this apply landed?" check at the top
+of every `Pump()` call then compared `_knownEngineTotals[key]` against `_pendingApplyTarget[key]`
+— trivially equal on the very next tick, REGARDLESS of whether the real engine had caught up yet,
+because nothing had touched either value since they were set equal to each other. This let the
+pending-target exclusion clear itself far too early relative to the real apply.
+
+That alone would tend to produce SPURIOUS noise (a premature "landed" clear followed by a stray
+Remove/Add pair once the real apply actually lands later) rather than a permanent lockout. The
+LOOPBACK TEST written this round (below) found the sharper, genuinely destructive half: once a
+pending target existed for a key, the OLD code's per-key loop began with `if (actual == prior)
+continue` — "nothing moved since the last scan, keep waiting" — using the PRE-apply `prior`
+snapshot, even for a key with a pending target. The buy-back race collapses exactly onto this: a
+mirrored insert lands for real, and the SAME instance's own local buy consumes it, close enough in
+time that the FIRST scan the pump ever takes of that key sees it net right back to its PRE-INSERT
+value — `actual == prior` by coincidence, even though a real insert AND a real removal both
+genuinely happened in between. The old code's `continue` fired on that equality and never even
+looked at the pending target, so the buy was never detected, never published, and the stale
+pending entry (now permanently orphaned, since nothing will ever again produce a scan that
+disagrees with the ALREADY-STALE `prior`) sat there inert. This is the exact live symptom
+docs/research/store-sync.md's 2026-08-28 rig round reported: the host's own re-buy of the "sold"
+item succeeded minutes later, because the client's buy-back was never told to anyone.
+
+### The fix: two dictionaries, one authority each — `_engineBelief` and `_wireTarget`
+
+`Pumps/StorePump.cs` now separates the two jobs the old `_knownEngineTotals` conflated:
+
+- **`_engineBelief`** (was `_knownEngineTotals`): this pump's belief of a store's real contents,
+  written ONLY from an actual fresh scan (`ReplaceStore`) — never optimistically by the apply path.
+- **`_wireTarget`** (was `_pendingApplyTarget`): the value the WIRE currently expects a pending
+  key to reach. Resolved ONLY by comparing it against the NEXT real scan of that key — never by
+  comparing anything to a copy of itself.
+
+Per-key resolution in step 1 now checks the pending target FIRST, UNCONDITIONALLY (not gated
+behind "did `actual` differ from `prior`"): if the key has a `_wireTarget` entry, `actual` is
+compared straight against `target`, regardless of what `prior` says. An exact match is the apply
+landing cleanly (echo, pending cleared, nothing published). Anything else — including the buy-back
+race's own "actual happens to equal the OLD prior" case — is `excess = actual - target`, published
+as the genuine local change it is, and the pending entry is cleared either way (if the apply had
+not actually landed, the next drain in step 2 re-arms a fresh target from the now-current belief).
+Only a key with NO pending entry uses the old `actual == prior` short-circuit — for that case it is
+correct: no side channel exists to contradict it.
+
+One more fix the loopback test surfaced: the per-key loop's key set used to be built only from
+`_engineBelief` (sliced to this store) and the fresh scan — a key with a pending target that
+appears in NEITHER (exactly the buy-back race, where the key nets back to absent/zero on both
+sides of the tick) was never even VISITED by the loop. `_wireTarget`'s own keys (filtered to the
+open store) are now unioned in too, so a pending key is always reachable.
+
+Step 2 (apply) keeps the existing raw-delta-application design (the 2026-08-28 "Bug 4" fix's own
+rule (c): never "set to wire total" for a plain Add/Remove) but now computes each op's target from
+whichever is more current — a still-pending `_wireTarget` entry if one exists, otherwise
+`_engineBelief` — so two ops for the same key arriving close together (a sell then an immediate
+re-sell) converge on the right CUMULATIVE total rather than each one re-deriving its target from a
+belief the first one has not caught up to yet.
+
+### Loop breaker (new, per the task brief)
+
+A key that racks up more than 10 published-or-applied ops within a rolling 10-second window is
+presumed to be a feedback loop rather than genuine human play at that rate. `StorePump` freezes it
+(skips publishing and applying anything further for it) for one more window, logs once
+(`store: loop breaker tripped for '<resref>' in store 0x<id> — <n> ops within 10000ms, freezing
+and requesting a resync`), and calls the new `ICoopSession.RequestStoreResync()` — a client sends a
+`StoreSyncRequestPacket` immediately (bypassing the periodic digest tripwire, via a LOCAL stack
+buffer rather than the shared `_replyBuffer`, since this can be called from the pump's own thread);
+the host, already authoritative, just re-runs its own `ResyncStore`. `_engineBelief` keeps tracking
+the key's real scanned value the whole time it is frozen (via the unconditional `ReplaceStore`
+call every tick) — only the wire-facing publish/apply actions are suppressed, so the freeze cannot
+itself desync this instance's own local read.
+
+### Tests
+
+`tests/KotorCoop.Tests/StoreLoopbackTests.cs` gained five new end-to-end tests (real host, real
+client, real sockets, real `CoopAgent` pump loop):
+
+- `ClientBuyBackOfAMirroredKeyIsDetectedAndPublished` — the failing-first reproduction. Drives the
+  CLIENT's own `CoopAgent.PumpOnce()` MANUALLY (not through the shared auto-draining `AgentLoop`)
+  so the test can force the exact race deterministically: capture the queued apply for a host's
+  mirrored sell WITHOUT applying it, then land it AND remove the key again (the buy-back) in the
+  same instant before the next `PumpOnce()` — guaranteeing the pump's first ever fresh scan of the
+  key already reflects the buy. Failed against the code as of the prior round's own hypothesis
+  (confirmed live before the fix: host's copy stayed at the pre-buy-back quantity indefinitely);
+  passes now.
+- `SellThenImmediateResellOnHostConvergesToTheCumulativeTotal` — two rapid sells of the same
+  brand-new key, back to back; the client must reflect BOTH units, not one lost or double-counted.
+- `BothSidesSellingTheSameKeyConvergesToTheSum` — host and client both sell into the same brand-new
+  key at roughly the same time; both sides must converge to the SUM of both contributions.
+- `ReconnectAfterABuyBackStaysConvergedAtZero` — the ordinary (non-raced) buy-back shape, then a
+  real blackout + reconnect; the depleted key must stay correctly empty on the rejoining client,
+  not resurrect the item.
+- `LoopBreakerFreezesARunawayKeyThenReconvergesOnceItSettles` — 25 rapid distinct changes to one
+  key (`Task.Delay(20)` apart, well over the 10-per-10s threshold) confirms the breaker trips
+  (asserts the log line) and that both sides eventually agree again (on whatever value the freeze
+  settled at — not asserted as a specific number, since the freeze can legitimately cut off
+  publishing before the very last settle was itself observed) once the resync it requests has run
+  its course.
+
+All prior `StoreLoopbackTests`/`StoreTests` cases pass unchanged against the new code — the redesign
+is a pure internal restructuring of `StorePump`'s own bookkeeping; no wire format, `StoreStore`, or
+`StoreDiffRule` change.
+
+`store_sync` stays default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`) — this fix
+is loopback-verified only, not live-verified; the next rig round should re-run
+docs/research/store-sync.md's own §6 buy-back recipe (`scriptgive`, `openstore` both, `sell` on the
+host, `buy` back on the client as soon as the mirror is visible) before this channel is considered
+for another flip-on attempt.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~Store"`: 177/177 passed
+(172 pre-existing + 5 new). Full suite, `dotnet test tests/KotorCoop.Tests --no-build --filter
+"FullyQualifiedName!~HeavyPacketLossStillConverges"` (excluding the one suite CI itself excludes,
+per docs/CONTRIBUTING.md): **2448/2448 passed**, foreground, no regressions. (A first full-suite
+run without that exclusion also showed `CoopCommandDispatcherTests`' two UDP-port-binding cases
+failing alongside it; both pass cleanly re-run alone, matching docs/CONTRIBUTING.md's own
+documented flake for that suite under concurrent port binding — not a regression from this change.)

@@ -37,7 +37,7 @@ attaches from outside with `OpenProcess`.
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Stays off — the native insert defect is root-caused (an unconditional bail-out on the party pool's own repository flag bit); a crash found mid-fix is CLOSED live (3/3, `InsertItem` bracketed by a transient flag clear); held back only by a `poolremove` identity-key mismatch and an unclean aggregate-reconciliation reading | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — `buy` and the fixed `sell` are both live-confirmed working end to end (item and gold move correctly, verified three independent ways, 2026-08-28); the automatic wire mirror to the other instance was never observed to fire, the one remaining blocker | [store-sync.md](docs/research/store-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — `buy` and `sell` are both live-confirmed working end to end and the wire mirror now fires within a tick, but a 2026-08-28 rig round found a client's own buy-back of a just-mirrored key was never detected/published for 2+ minutes; root-caused and fixed 2026-08-29 (loopback-verified only, not yet re-tested live) | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -229,9 +229,10 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   instead of a second combatant wandering in. Every lever fired live 2026-08-28 except that the
   input lock has only been confirmed to engage its own mechanism, never confirmed to stop a real
   PHYSICAL WASD press, since injected keystrokes never reach this game.
-- **The shared merchant store channel (`store_sync`) is built but stays off** — `buy` and the
-  fixed `sell` are both live-confirmed to move the real item and gold; the automatic wire mirror to
-  the other instance was never observed to publish, the one remaining blocker.
+- **The shared merchant store channel (`store_sync`) is built but stays off** — `buy` and `sell`
+  are both live-confirmed to move the real item and gold, and the wire mirror fires within a tick;
+  a 2026-08-28 rig round found a client's own buy-back of a just-mirrored key was never
+  detected/published for 2+ minutes, root-caused and fixed 2026-08-29 but not yet re-tested live.
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See

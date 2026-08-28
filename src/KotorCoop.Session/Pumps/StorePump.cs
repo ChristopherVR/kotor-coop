@@ -10,15 +10,16 @@ namespace KotorCoop.Session.Pumps;
 ///
 /// 1. <b>Detect.</b> Only possible for whichever store is open THIS tick (a store's stock can only
 ///    be READ while a local player has that store's GUI open — §2.3/§2.6, no per-area store
-///    enumeration was found). Diffs a fresh scan of that one store against the LAST scan this pump
-///    took of it (skipping any key with an apply already in flight) to find a genuine local
-///    buy/sell and publish it, ALONG WITH the local baseline value the delta was computed against
-///    (<see cref="ICoopSession.PublishStoreOp"/>'s <c>localBaselineIfUnknown</c> — see that
-///    member's own remarks for why: a store's PRISTINE, never-transacted stock is a real, nonzero
-///    number nobody ever put on the wire, so the very first op ever recorded for a key needs this
-///    hint to avoid computing against a false zero baseline). When no store is open, or a
-///    DIFFERENT store is open than last tick, step 1 does nothing for the store that just closed —
-///    its last scan already reflected every change made while it was open.
+///    enumeration was found). Diffs a fresh scan of that one store against <see cref="_engineBelief"/>
+///    (this pump's OWN belief of the store's contents, updated ONLY from real scans — see that
+///    field's own remarks) to find a genuine local buy/sell and publish it, ALONG WITH the local
+///    baseline value the delta was computed against (<see cref="ICoopSession.PublishStoreOp"/>'s
+///    <c>localBaselineIfUnknown</c> — see that member's own remarks for why: a store's PRISTINE,
+///    never-transacted stock is a real, nonzero number nobody ever put on the wire, so the very
+///    first op ever recorded for a key needs this hint to avoid computing against a false zero
+///    baseline). When no store is open, or a DIFFERENT store is open than last tick, step 1 does
+///    nothing for the store that just closed — its last scan already reflected every change made
+///    while it was open.
 /// 2. <b>Apply.</b> Drains <see cref="ICoopSession.DrainStoreOps"/> — every REMOTE op this
 ///    session's wire layer has genuinely accepted since the last drain (never one this instance
 ///    itself published; <c>CoopHost</c>/<c>CoopClient</c> only enqueue there from their own
@@ -39,31 +40,49 @@ namespace KotorCoop.Session.Pumps;
 ///      "known limitation" note for this narrow case). Once THIS instance eventually scans that
 ///      store itself, its own first-open baseline adoption (§ below) picks up the truth directly.
 ///
-/// Echo suppression, engine layer: <c>_pendingApplyTarget</c>, tracking the engine total a queued
-/// apply should PRODUCE so the very next scan does not misread the pump's own application as a
-/// fresh local change — unchanged in shape from before this pass, just fed by the apply path
-/// above instead of a snapshot diff.
+/// ⚠ ROOT CAUSE (2026-08-29, docs/research/store-sync.md's own write-up): the PRIOR shape of this
+/// pump tracked a SINGLE dictionary (<c>_knownEngineTotals</c>) for two different jobs at once —
+/// "what does a real scan say this key is" AND "what does this pump's own optimistic post-apply
+/// belief say" — and set BOTH to the exact same value, at the exact same instant, the moment an
+/// apply was QUEUED (not when it actually landed). A separate "has this apply landed?" check then
+/// compared that SAME dictionary against the pending target it had JUST been set to match,
+/// trivially true on the very next tick regardless of whether the queued apply had genuinely
+/// executed in the real engine yet (that happens later, through the single-slot arbitrated cheat
+/// channel, which can lag by more than one tick). This is the SAME over-exclusion class the party
+/// pool's own root cause 3 fixed (docs/research/party-pool-sync.md §11-§12): a pending key's own
+/// echo-suppression window closed before the thing it was protecting against had actually
+/// happened, so a genuine local change to the SAME key that landed in the gap — the buy-back case,
+/// docs/research/store-sync.md's own 2026-08-28 rig-round finding — either produced a spurious,
+/// self-contradicting Remove/Add pair (if the real apply lagged behind the premature "landed"
+/// clear) or, worse, got silently absorbed into what looked like the apply's own delayed landing
+/// (if the local change and the real apply's landing were ever observed by the SAME fresh scan),
+/// never separately detected or published.
 ///
-/// ⚠ BUG 4, THE VIRGIN-STORE WIPE, AND THE FLOORED-FIRST-REMOVE, BOTH FIXED THIS PASS
-/// (2026-08-28, docs/research/store-sync.md's own write-up — read it for the full story). The
-/// PRIOR shape of step 2 diffed this pump's ENTIRE local engine belief (including a store's
-/// pristine, never-transacted stock) against <c>ICoopSession.StoreTotals</c> as if that
-/// dictionary's silence always meant "the session desires zero of this key". It does not:
-/// <c>StoreTotals</c> only ever holds a key someone has actually transacted — a virgin store's
-/// stock is simply ABSENT, indistinguishable from "explicitly depleted to zero" by
-/// <see cref="StoreDiffRule.Diff"/>'s own logic. Merely opening the same virgin store on two
-/// <c>store_sync=1</c> instances, with zero buy/sell activity, was enough to have the old step 2
-/// read every stocked key's absence from the (necessarily empty) wire truth as "remove the entire
-/// quantity" — live-confirmed to empty a real store's stock on both sides. Investigating the fix
-/// surfaced a SECOND, independent defect the snapshot-diffing shape had been masking: a Remove
-/// (buy) as the very FIRST op ever recorded for a key floored against an unseeded zero baseline
-/// (<c>before=0, after=max(0, 0-delta)=0</c>) and was silently swallowed — <c>StoreStore.Record</c>
-/// reported "no change" and the op never even reached the wire. Both are closed by the redesign
-/// above: detection now threads the true local baseline through to
-/// <see cref="StoreStore.Record"/> (closing the floor), and application is driven by the RAW OPS
-/// that actually reached the wire rather than by re-diffing two possibly-incomparable absolute
-/// snapshots (closing the wipe, structurally — a store nobody has transacted in never produces an
-/// op, so there is nothing for step 2 to ever apply).
+/// <b>The fix: two dictionaries, one authority each.</b> <see cref="_engineBelief"/> is written
+/// ONLY from a real fresh scan (<see cref="ReplaceStore"/>) — never optimistically. <see
+/// cref="_wireTarget"/> is the value the WIRE currently expects a pending key to reach; it is
+/// consulted, never trusted on its own, and is resolved ONLY by comparing it against the next real
+/// scan of that key (exactly <see cref="PartyPoolPump"/>'s own step 1 loop): no movement since the
+/// last real scan means the apply simply has not landed yet — keep waiting. Movement that matches
+/// the target exactly is the apply landing cleanly — an echo, nothing to report, pending cleared.
+/// Movement that does NOT match the target is treated as movement all the way to the target (the
+/// apply's own already-accounted-for contribution) PLUS whatever is left over — publish exactly
+/// the EXCESS beyond the target, then clear the pending entry either way: if the apply turns out
+/// not to have actually landed yet, the very next tick's comparison (against the fresh
+/// <see cref="_engineBelief"/> this tick's scan just wrote) starts clean, and step 2's own next
+/// drain (if any) re-arms a fresh target from there. Nothing is ever permanently excluded: a
+/// pending entry is resolved by the FIRST scan that disagrees with the pre-apply baseline, not by
+/// a self-referential check that could never fail.
+///
+/// <b>Loop breaker.</b> A key that racks up more than <see cref="LoopBreakerMaxOpsPerWindow"/> ops
+/// (published OR applied, either counts) within <see cref="LoopBreakerWindowMs"/> is presumed to be
+/// caught in a feedback loop rather than genuinely being bought and sold that fast by a human —
+/// this pump freezes it (skips publishing/applying anything further for it) for one more window,
+/// logs once, and asks the session for an authoritative resync
+/// (<see cref="ICoopSession.RequestStoreResync"/>) instead of continuing to reason about it
+/// incrementally. <see cref="_engineBelief"/> keeps tracking the key's real scanned value the
+/// whole time it is frozen (so the freeze does not desync THIS instance's own local read) — only
+/// the wire-facing publish/apply actions are suppressed.
 /// </summary>
 internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action<string> log)
 {
@@ -73,21 +92,32 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
 
     /// <summary>This pump's own belief of every store's stock it has ever learned about — seeded
     /// on a store's first local open (baseline, no diff) and kept up to date afterward by every
-    /// subsequent open's scans, PLUS by every apply this pump itself has queued (updated
-    /// optimistically the moment the apply is queued, not when it lands — see the echo-suppression
-    /// remarks above). Step 1 diffs a fresh open-store scan against the slice of this dictionary
-    /// for that one store; the apply step (above) consults it ONLY to decide whether a Set resync
-    /// is safe to convert into a delta (a key absent here has no engine belief to compute against).</summary>
-    private readonly Dictionary<StoreStackKey, int> _knownEngineTotals = [];
+    /// subsequent open's REAL scans only (<see cref="ReplaceStore"/>). Never written
+    /// optimistically by the apply path any more — see the class remarks' root-cause section for
+    /// why that used to defeat <see cref="_wireTarget"/>'s own purpose.</summary>
+    private readonly Dictionary<StoreStackKey, int> _engineBelief = [];
 
     private uint _openStoreId;
 
     private bool _openStoreBaselined;
 
-    /// <summary>Keys with an apply already queued, mapped to the engine total that apply is
-    /// expected to produce once it lands. Excluded from step 1's detection until a scan confirms
-    /// it.</summary>
-    private readonly Dictionary<StoreStackKey, int> _pendingApplyTarget = [];
+    /// <summary>Keys with an apply already queued (or in flight through the cheat channel),
+    /// mapped to the engine total the WIRE currently expects that key to reach. Resolved only by
+    /// comparing it against the next REAL scan of the key — see the class remarks.</summary>
+    private readonly Dictionary<StoreStackKey, int> _wireTarget = [];
+
+    /// <summary>A stack total above this threshold within one rolling window is presumed to be a
+    /// feedback loop, not a human buying/selling that fast — see the class remarks' "loop
+    /// breaker" section. Deliberately generous: this pump's own heavy-pump cadence is ~1 Hz, so 10
+    /// genuine, distinct transactions on the SAME key inside one 10s window is already an unusual
+    /// amount of real play to rule out before assuming a bug.</summary>
+    private const int LoopBreakerMaxOpsPerWindow = 10;
+
+    private const long LoopBreakerWindowMs = 10_000;
+
+    private readonly Dictionary<StoreStackKey, (long WindowStartMs, int Count)> _opRate = [];
+
+    private readonly Dictionary<StoreStackKey, long> _frozenUntilMs = [];
 
     public void Pump(SessionCapabilities caps)
     {
@@ -96,26 +126,7 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
             return;
         }
 
-        // Resolve applies that have landed, exactly like PartyPoolPump.
-        if (_pendingApplyTarget.Count > 0)
-        {
-            List<StoreStackKey>? landed = null;
-            foreach ((StoreStackKey key, int target) in _pendingApplyTarget)
-            {
-                if (_knownEngineTotals.GetValueOrDefault(key) == target)
-                {
-                    (landed ??= []).Add(key);
-                }
-            }
-
-            if (landed is not null)
-            {
-                foreach (StoreStackKey key in landed)
-                {
-                    _pendingApplyTarget.Remove(key);
-                }
-            }
-        }
+        long nowMs = SessionClock.NowMs;
 
         // ---- step 1: detect a genuine local buy/sell, only for the store open THIS tick -----
         if (bridge.TryScanOpenStore(out uint storeObjectId, out IReadOnlyDictionary<StoreStackKey, int> openStoreScan))
@@ -125,48 +136,93 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 // A different store opened (or the first one this session) — this pump has no
                 // fresh scan of it yet to diff against, so seed one silently. If this store was
                 // seen before (a peer already named it, or we opened it earlier this session),
-                // _knownEngineTotals may already hold stale entries for it; ReplaceStore below
-                // folds the fresh scan in as the new truth for exactly this store's keys.
+                // _engineBelief may already hold stale entries for it; ReplaceStore below folds
+                // the fresh scan in as the new truth for exactly this store's keys.
                 _openStoreId = storeObjectId;
                 _openStoreBaselined = false;
             }
 
-            Dictionary<StoreStackKey, int> priorForThisStore = SliceByStore(_knownEngineTotals, storeObjectId);
+            Dictionary<StoreStackKey, int> priorForThisStore = SliceByStore(_engineBelief, storeObjectId);
 
             if (!_openStoreBaselined)
             {
                 // Design rule (a): a store's first LOCAL read, with nothing to diff against yet,
                 // publishes NOTHING — it simply becomes this pump's own baseline going forward.
-                ReplaceStore(_knownEngineTotals, storeObjectId, openStoreScan);
+                ReplaceStore(_engineBelief, storeObjectId, openStoreScan);
                 _openStoreBaselined = true;
             }
             else
             {
-                Dictionary<StoreStackKey, int> priorForDetect = Without(priorForThisStore, _pendingApplyTarget.Keys);
-                Dictionary<StoreStackKey, int> scanForDetect = Without(openStoreScan, _pendingApplyTarget.Keys);
-
-                foreach (StoreDiffRule.Delta delta in StoreDiffRule.Diff(priorForDetect, scanForDetect))
+                // Every key any side knows about, once — matching StoreDiffRule's own two
+                // passes, but resolved key by key here (not via StoreDiffRule.Diff) so a pending
+                // entry's echo/excess logic can run inline, exactly like PartyPoolPump's own step
+                // 1 loop. A key pending an apply is unioned in even when it appears in NEITHER
+                // the prior belief NOR this fresh scan — the exact buy-back race
+                // (docs/research/store-sync.md's own 2026-08-28 finding): a mirrored insert
+                // immediately bought back can net the engine straight back to its PRE-INSERT
+                // value within a single scan interval, so the key would otherwise never even be
+                // visited here at all.
+                HashSet<StoreStackKey> keys = new(priorForThisStore.Keys);
+                keys.UnionWith(openStoreScan.Keys);
+                foreach (StoreStackKey pendingKey in _wireTarget.Keys)
                 {
-                    log($"store: local {delta.Kind.ToString().ToLowerInvariant()} of {delta.Count}x "
-                        + $"'{delta.Key.Resref}' detected in store 0x{storeObjectId:X}, publishing");
-
-                    // The true local baseline THIS delta was computed against — see
-                    // PublishStoreOp's own remarks for why StoreStore.Record needs this the first
-                    // time a key is ever recorded (design rule (a)/(c) — closes the "floored first
-                    // Remove is silently swallowed" defect this pass also found).
-                    int localBaseline = priorForDetect.GetValueOrDefault(delta.Key);
-                    session.PublishStoreOp(delta.Kind, delta.Key, delta.Count, localBaseline);
+                    if (pendingKey.StoreObjectId == storeObjectId)
+                    {
+                        keys.Add(pendingKey);
+                    }
                 }
 
-                ReplaceStore(_knownEngineTotals, storeObjectId, openStoreScan);
+                foreach (StoreStackKey key in keys)
+                {
+                    int prior = priorForThisStore.GetValueOrDefault(key);
+                    int actual = openStoreScan.GetValueOrDefault(key);
+
+                    if (_wireTarget.TryGetValue(key, out int target))
+                    {
+                        // A queued apply is (or was) in flight for this key. Resolved against the
+                        // WIRE'S OWN target, deliberately NOT gated behind "did actual move from
+                        // prior" — the buy-back race above is exactly the case where it did not
+                        // (the insert and the buy-back can net back to the SAME value the pre-tick
+                        // scan already held). Movement that lands EXACTLY on target is the apply
+                        // landing cleanly — nothing new to report. Anything else is a genuine local
+                        // change entangled with the apply's own landing; publish only the EXCESS
+                        // beyond the target, then resolve the pending entry either way — if the
+                        // apply had not actually landed yet, the next drain (step 2) re-arms a
+                        // fresh target from this tick's now-current belief.
+                        _wireTarget.Remove(key);
+
+                        int excess = actual - target;
+                        if (excess != 0 && !NoteOpAndCheckFrozen(key, nowMs))
+                        {
+                            PublishDetected(key, excess, prior);
+                        }
+
+                        continue;
+                    }
+
+                    if (actual == prior)
+                    {
+                        // No apply pending, and nothing moved since the last real scan.
+                        continue;
+                    }
+
+                    if (!NoteOpAndCheckFrozen(key, nowMs))
+                    {
+                        // No apply pending for this key — an ordinary genuine local change. The
+                        // full movement since the last real scan is published immediately.
+                        PublishDetected(key, actual - prior, prior);
+                    }
+                }
+
+                ReplaceStore(_engineBelief, storeObjectId, openStoreScan);
             }
         }
         else if (_openStoreId != 0)
         {
             // No store open now, but one was last tick — nothing further to detect for it (its
             // last scan already captured everything; see the type's own remarks). Just stop
-            // tracking "the open store" — _knownEngineTotals keeps whatever that store's last
-            // scan said.
+            // tracking "the open store" — _engineBelief keeps whatever that store's last scan
+            // said.
             _openStoreId = 0;
             _openStoreBaselined = false;
         }
@@ -174,6 +230,11 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
         // ---- step 2: apply every REMOTE op the wire layer has genuinely accepted -------------
         foreach (StoreOpPacket op in session.DrainStoreOps())
         {
+            if (NoteOpAndCheckFrozen(op.Key, nowMs))
+            {
+                continue;
+            }
+
             if (_pendingApplies.Count >= MaxPendingApplies)
             {
                 log($"store: dropping apply for '{op.Key.Resref}' in store 0x{op.Key.StoreObjectId:X}"
@@ -181,22 +242,33 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 continue;
             }
 
+            // Every subsequent op for the SAME key builds on whatever the wire already expects
+            // (a still-pending target if one exists, otherwise this pump's own real-scan belief)
+            // — never on a stale belief left over from before an EARLIER queued-but-not-yet-landed
+            // apply for the same key. This is what makes back-to-back ops for one key (a sell then
+            // an immediate re-sell) converge to the right cumulative total instead of each one
+            // re-deriving its target from a belief the first one hasn't caught up to yet.
+            int baseline = _wireTarget.TryGetValue(op.Key, out int pending)
+                ? pending
+                : _engineBelief.GetValueOrDefault(op.Key);
+
             if (op.Kind == StoreOpKind.Set)
             {
                 // Absolute resync target — only safe to convert into a delta against an engine
-                // belief THIS pump already holds (own prior scan, or a prior apply's optimistic
-                // update). A key with no entry here has never been locally observed by this
-                // instance at all; guessing "Add[target] from nothing" would very likely be wrong
-                // (this instance's own true pristine baseline is unknown to this Set) — left
-                // alone, matching docs/research/store-sync.md's own documented open limitation for
-                // this narrow case.
-                if (!_knownEngineTotals.TryGetValue(op.Key, out int currentBelief))
+                // belief THIS pump already holds (own prior scan, or a prior apply's own target).
+                // A key with no entry in EITHER has never been locally observed by this instance
+                // at all; guessing "Add[target] from nothing" would very likely be wrong (this
+                // instance's own true pristine baseline is unknown to this Set) — left alone,
+                // matching docs/research/store-sync.md's own documented open limitation for this
+                // narrow case. Once THIS instance eventually scans that store itself, the
+                // first-open baseline branch above picks up the truth directly.
+                if (!_wireTarget.ContainsKey(op.Key) && !_engineBelief.ContainsKey(op.Key))
                 {
                     continue;
                 }
 
                 int target = op.CountDelta;
-                int diff = target - currentBelief;
+                int diff = target - baseline;
                 if (diff == 0)
                 {
                     continue;
@@ -206,7 +278,7 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 ushort applyCount = (ushort)Math.Min(Math.Abs(diff), ushort.MaxValue);
 
                 _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(applyKind, op.Key, applyCount));
-                SetEngineBelief(op.Key, target);
+                _wireTarget[op.Key] = target;
             }
             else
             {
@@ -215,31 +287,10 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 // affected store: a relative delta needs no baseline knowledge at all.
                 _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(op.Kind, op.Key, op.CountDelta));
 
-                // BUG (found 2026-08-29 by StoreLoopbackTests.SellOnHostAddingABrandNewKeyMirrorsToClient,
-                // matching the live "sell's own wire mirror never published" symptom
-                // docs/research/store-sync.md's own 2026-08-28 pass reported): this USED TO update
-                // engine-belief bookkeeping (and therefore arm the echo-suppression guard,
-                // _pendingApplyTarget) only for a key this pump ALREADY had SOME belief about
-                // (TryGetValue gate below, removed this pass). The old comment's reasoning — "a
-                // store never locally scanned cannot be mis-detected by step 1 anyway" — is true
-                // for a store, but wrong for a KEY: a peer's sell of an item THIS store has never
-                // stocked before is exactly the case where the key is brand new to
-                // _knownEngineTotals even though the STORE itself is already open/baselined here.
-                // Skipping the guard for that key left it unarmed, so the very next real scan
-                // (once the queued apply landed in the engine) read the key's freshly-nonzero
-                // total as a FRESH LOCAL CHANGE — step 1 published its own Add for the exact same
-                // units a peer just sold, double-counting a single sell as two. Tracking belief
-                // unconditionally matches this class's own documented design for Add/Remove
-                // ("correct regardless of whether this pump has ever scanned the affected store")
-                // — for a store this instance never opens, the entry sits harmlessly unread since
-                // step 1 never runs against it; for one it opens LATER for the first time, the
-                // baseline branch's own ReplaceStore call (§ above) discards this optimistic value
-                // in favour of the fresh scan anyway, per design rule (a).
-                int before = _knownEngineTotals.GetValueOrDefault(op.Key);
-                int after = op.Kind == StoreOpKind.Add
-                    ? before + op.CountDelta
-                    : Math.Max(0, before - op.CountDelta);
-                SetEngineBelief(op.Key, after);
+                int target = op.Kind == StoreOpKind.Add
+                    ? baseline + op.CountDelta
+                    : Math.Max(0, baseline - op.CountDelta);
+                _wireTarget[op.Key] = target;
             }
         }
     }
@@ -249,21 +300,75 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
     public bool TryDequeuePendingApply(out CoopAgent.PendingStoreApply next) =>
         _pendingApplies.TryDequeue(out next);
 
-    /// <summary>Updates this pump's own optimistic belief of a key's engine total (after an apply
-    /// has been QUEUED, not yet landed) and arms <see cref="_pendingApplyTarget"/> so step 1 does
-    /// not misread the pump's own application as a fresh local change once it lands.</summary>
-    private void SetEngineBelief(StoreStackKey key, int value)
+    /// <summary>Publishes a signed, already-resolved local delta for one key — a positive
+    /// <paramref name="delta"/> is an Add, negative is a Remove. Shared by both branches of the
+    /// per-key loop above: an ordinary genuine local change (the full movement) and a pending
+    /// key's excess beyond its target.</summary>
+    private void PublishDetected(StoreStackKey key, int delta, int localBaseline)
     {
-        if (value > 0)
+        StoreOpKind kind = delta > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
+        uint count = (uint)Math.Abs(delta);
+
+        log($"store: local {kind.ToString().ToLowerInvariant()} of {count}x "
+            + $"'{key.Resref}' detected in store 0x{key.StoreObjectId:X}, publishing");
+
+        session.PublishStoreOp(kind, key, count, localBaseline);
+    }
+
+    /// <summary>True if <paramref name="key"/> is currently frozen (already tripped the loop
+    /// breaker, still cooling down) — the caller must skip publishing/applying anything for it
+    /// this tick. Does NOT itself count an op; see <see cref="NoteOpAndCheckFrozen"/> for the
+    /// side-effecting counterpart used at each actual publish/apply site.</summary>
+    private bool IsFrozen(StoreStackKey key, long nowMs)
+    {
+        if (!_frozenUntilMs.TryGetValue(key, out long until))
         {
-            _knownEngineTotals[key] = value;
-        }
-        else
-        {
-            _knownEngineTotals.Remove(key);
+            return false;
         }
 
-        _pendingApplyTarget[key] = value;
+        if (nowMs < until)
+        {
+            return true;
+        }
+
+        // Cooldown elapsed — give the key a clean slate.
+        _frozenUntilMs.Remove(key);
+        _opRate.Remove(key);
+        return false;
+    }
+
+    /// <summary>Notes one more publish/apply event toward <paramref name="key"/>'s rolling-window
+    /// count and trips the loop breaker (freezing the key and requesting a resync, once per
+    /// episode) the moment the count exceeds <see cref="LoopBreakerMaxOpsPerWindow"/> within
+    /// <see cref="LoopBreakerWindowMs"/>. Returns true if the key is now frozen (either just
+    /// tripped, or already was) — the caller must skip the action it was about to take.</summary>
+    private bool NoteOpAndCheckFrozen(StoreStackKey key, long nowMs)
+    {
+        if (IsFrozen(key, nowMs))
+        {
+            return true;
+        }
+
+        (long windowStartMs, int count) = _opRate.TryGetValue(key, out (long, int) entry) ? entry : (nowMs, 0);
+        if (nowMs - windowStartMs > LoopBreakerWindowMs)
+        {
+            windowStartMs = nowMs;
+            count = 0;
+        }
+
+        count++;
+        _opRate[key] = (windowStartMs, count);
+
+        if (count <= LoopBreakerMaxOpsPerWindow)
+        {
+            return false;
+        }
+
+        _frozenUntilMs[key] = nowMs + LoopBreakerWindowMs;
+        log($"store: loop breaker tripped for '{key.Resref}' in store 0x{key.StoreObjectId:X} — "
+            + $"{count} ops within {LoopBreakerWindowMs}ms, freezing and requesting a resync");
+        session.RequestStoreResync();
+        return true;
     }
 
     private static Dictionary<StoreStackKey, int> SliceByStore(
@@ -310,25 +415,5 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
         {
             target[key] = value;
         }
-    }
-
-    private static Dictionary<StoreStackKey, int> Without(
-        IReadOnlyDictionary<StoreStackKey, int> source, IReadOnlyCollection<StoreStackKey> excluded)
-    {
-        if (excluded.Count == 0)
-        {
-            return new Dictionary<StoreStackKey, int>(source);
-        }
-
-        Dictionary<StoreStackKey, int> result = [];
-        foreach ((StoreStackKey key, int value) in source)
-        {
-            if (!excluded.Contains(key))
-            {
-                result[key] = value;
-            }
-        }
-
-        return result;
     }
 }

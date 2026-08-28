@@ -182,4 +182,9 @@ public sealed partial class CoopHost
             _storeSender.Acknowledge(ack.PeerId, ack.OpSequence);
         }
     }
+
+    /// <summary>See <see cref="IStoreSession.RequestStoreResync"/>'s own remarks. The host is
+    /// already the authority for this channel — there is nobody to ask — so this just re-runs
+    /// its own resync broadcast, exactly as if a client had asked for one.</summary>
+    public void RequestStoreResync() => ResyncStore(SessionClock.NowMs);
 }

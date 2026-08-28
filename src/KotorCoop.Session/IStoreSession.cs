@@ -53,6 +53,18 @@ public interface IStoreSession
     /// every tick and applies each op DIRECTLY to the local engine — see that type's own class doc
     /// for the full design (docs/research/store-sync.md's 2026-08-28 redesign).</summary>
     IReadOnlyList<StoreOpPacket> DrainStoreOps() => [];
+
+    /// <summary>
+    /// Requests an authoritative resync of this channel from scratch. Used exactly once by
+    /// <c>Pumps.StorePump</c>'s own loop breaker (docs/research/store-sync.md's 2026-08-29
+    /// "engineBelief/wireTarget" redesign): when a single key's op rate exceeds the runaway
+    /// threshold, the pump freezes that key rather than keep reacting to what might be a
+    /// feedback loop, and asks for the merged truth instead of trying to reason its way out
+    /// incrementally. A client sends a fresh sync request immediately (bypassing the periodic
+    /// digest tripwire); the host, already authoritative, just re-broadcasts its own current
+    /// knowledge, since there is nobody else for it to ask.
+    /// </summary>
+    void RequestStoreResync() { }
 }
 
 /// <summary>A reusable empty dictionary singleton for the default interface member above, so a
