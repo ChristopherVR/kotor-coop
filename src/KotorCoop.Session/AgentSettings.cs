@@ -269,6 +269,10 @@ public sealed record AgentSettings
     /// read the two reconciled.</summary>
     public int PartyPoolSyncMode { get; init; }
 
+    /// <summary>See <see cref="CoopConfig.PartyPoolTrace"/> — rig-only per-tick diagnostics for
+    /// both mode-2 shared-inventory pumps.</summary>
+    public bool PartyPoolTrace { get; init; }
+
     /// <summary>The mode <see cref="CoopAgent.PumpOnce"/> actually dispatches on: this mode if it
     /// was explicitly set to something other than 0, otherwise <see cref="PartyPoolSyncEnabled"/>
     /// mapped to 1/0 — so code (and every existing test) that only ever set the bool keeps

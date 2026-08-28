@@ -432,6 +432,19 @@ public sealed record CoopConfig
     public int PartyPoolSyncMode { get; init; }
 
     /// <summary>
+    /// <c>party_pool_trace</c>: rig-only, per-tick diagnostic logging for BOTH mode-2 shared
+    /// inventory pumps (<c>Pumps/PartyPoolPumpV2.cs</c> and its store sibling
+    /// <c>Pumps/StorePumpV2.cs</c> — one key, since the two share every bookkeeping mechanism and
+    /// a failure in one is diagnosed with the other's lines beside it). Prints
+    /// actual/belief/snapshot/rawMovement/expected/outstanding/published/target/reconcile per key
+    /// on every tick that key has ANY non-trivial state, which is what
+    /// docs/research/shared-inventory-v2.md §10's own "concrete next steps" asked for after three
+    /// live rounds each had to infer a root cause from timestamps alone. OFF by default: on a
+    /// busy pool this is several lines a second, useful on a rig and nowhere else.
+    /// </summary>
+    public bool PartyPoolTrace { get; init; }
+
+    /// <summary>
     /// Story-forced solo segments (the Star Forge's Bastila and Malak duels —
     /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/>, docs/research/star-forge-finale.md
     /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
@@ -614,6 +627,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
             PartyPoolSyncMode = ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")),
+            PartyPoolTrace = IsTruthy(kv.GetValueOrDefault("party_pool_trace")),
             SoloSegmentSpectateEnabled = !kv.ContainsKey("solo_segment_spectate")
                 || IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
             StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
