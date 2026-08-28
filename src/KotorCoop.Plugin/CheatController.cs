@@ -274,6 +274,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 SetGold(player);
                 break;
 
+            case SharedBlock.CheatKindFollowKick:
+                FollowKick();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

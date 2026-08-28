@@ -479,4 +479,62 @@ internal static unsafe partial class Odyssey
 
         return true;
     }
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/party-reconciliation.md Round 96's own
+    /// "concrete next step" (b)): forces <c>record+4 = 10</c> (<c>TeleportForward</c>)
+    /// UNCONDITIONALLY, regardless of the companion's current phase — unlike
+    /// <see cref="TryKickStalledMovingToPathToTeleportForward"/>, which only fires from phase 2
+    /// (<see cref="Phase2StallRule.MovingToPathPhase"/>). Round 96 found a DIFFERENT,
+    /// consistently-reproducible freeze in phase 7 (<c>PathWaitDest</c>) that the phase-2 fix's
+    /// own precondition never reaches, so this exists purely to answer one live question on
+    /// demand: does the SAME poke that recovers a phase-2 stall also un-stick a phase-7 one, or
+    /// is <c>TeleportForward</c>'s own re-entry gated on something phase 7 never satisfies? Not
+    /// a fix candidate by itself — a raw diagnostic poke, reachable only through the
+    /// <c>followkick</c> dev verb, never from the automatic per-frame pass.
+    ///
+    /// Returns false when the party index does not resolve (no companion at that server object
+    /// id, or no client world yet). <paramref name="phaseBefore"/>/<paramref name="phaseAfter"/>
+    /// report the observed transition either way (equal when nothing was in fact written — this
+    /// function always writes, so they only match if phase already read 10).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryForceTeleportForward(
+        uint companionServerObjectId, out int phaseBefore, out int phaseAfter)
+    {
+        phaseBefore = 0;
+        phaseAfter = 0;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        phaseBefore = *(int*)(record + 4);
+        *(int*)(record + 4) = Phase2StallRule.TeleportForwardPhase;
+        phaseAfter = *(int*)(record + 4);
+
+        PluginHost.Log(
+            $"party follow followkick: 0x{companionServerObjectId:X} forced "
+            + $"phase {phaseBefore} -> {phaseAfter} (TeleportForward), unconditional dev poke");
+
+        return true;
+    }
 }

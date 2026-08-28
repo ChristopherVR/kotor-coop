@@ -433,6 +433,17 @@ public static class CheatKinds
     /// ⚠ 44 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint SetGold = 44;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/party-reconciliation.md Round 96): dumps a
+    /// companion's follow-record fields then forces <c>record+4 = 10</c> (<c>TeleportForward</c>)
+    /// unconditionally, regardless of current phase — unlike the automatic
+    /// <c>party_follow_phase2_kick</c> pass, which only fires from phase 2. <c>Amount</c> is the
+    /// party-roster slot (0-8). See <c>SharedBlock.CheatKindFollowKick</c>.
+    ///
+    /// ⚠ 45 is the highest number taken now. Take the next FREE one for a new verb.
+    /// </summary>
+    public const uint FollowKick = 45;
 }
 
 /// <summary>

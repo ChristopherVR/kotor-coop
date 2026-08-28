@@ -219,4 +219,69 @@ internal sealed unsafe partial class CheatController
         PluginHost.Log($"removeparty: RemovePartyMember({slot}) dispatched through the VM routine table");
         Answer(SharedBlock.CheatStatusApplied, $"party slot {slot} removed");
     }
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (see <see cref="SharedBlock.CheatKindFollowKick"/>,
+    /// docs/research/party-reconciliation.md Round 96): dumps NPC roster slot
+    /// <see cref="SharedBlockView.CheatAmount"/>'s follow-record fields (phase, attempts,
+    /// target point, current path node) to the plugin log, then forces
+    /// <c>record+4 = 10</c> (<c>TeleportForward</c>) UNCONDITIONALLY through
+    /// <see cref="Odyssey.TryForceTeleportForward"/> — regardless of the companion's current
+    /// phase, unlike the automatic <c>party_follow_phase2_kick</c> pass (phase 2 only). A raw
+    /// diagnostic poke for answering Round 96's own open question live, not a staging primitive
+    /// for normal roster changes.
+    /// </summary>
+    private void FollowKick()
+    {
+        int slot = block.CheatAmount;
+        if (slot is < 0 or >= SharedBlock.PartyRosterSlots)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"followkick: slot must be 0-{SharedBlock.PartyRosterSlots - 1} (got {slot})");
+            return;
+        }
+
+        uint objectId = Odyssey.GetPartyRosterObjectId(slot);
+        if (objectId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"followkick: no NPC in roster slot {slot}");
+            return;
+        }
+
+        nint creature = Odyssey.ResolveServerObject(objectId);
+        if (creature == 0)
+        {
+            Answer(
+                SharedBlock.CheatStatusNoTarget,
+                $"followkick: roster slot {slot} (0x{objectId:X}) does not resolve here");
+            return;
+        }
+
+        if (Odyssey.TryGetFollowDiagnostics(creature, objectId, out Odyssey.FollowDiag diag) && diag.Valid)
+        {
+            PluginHost.Log(
+                $"followkick: 0x{objectId:X} BEFORE — phase={diag.PhaseIndex} attempts={diag.PhaseAttempts} "
+                + $"target=({diag.TargetPoint.X:F2},{diag.TargetPoint.Y:F2},{diag.TargetPoint.Z:F2}) "
+                + $"pathNode={diag.CurrentPathNode} destNode={diag.DestNode} "
+                + $"writeCursor={diag.WriteCursor} creMoveState={diag.CreMoveState}");
+        }
+        else
+        {
+            PluginHost.Log($"followkick: 0x{objectId:X} — no follow record to dump before the poke (index<=0?)");
+        }
+
+        if (!Odyssey.TryForceTeleportForward(objectId, out int phaseBefore, out int phaseAfter))
+        {
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"followkick: roster slot {slot} (0x{objectId:X}) has no follow-party index to poke");
+            return;
+        }
+
+        PluginHost.Log($"followkick: 0x{objectId:X} AFTER — phase {phaseBefore} -> {phaseAfter} (forced)");
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"0x{objectId:X} phase {phaseBefore} -> {phaseAfter} (forced TeleportForward)");
+    }
 }
