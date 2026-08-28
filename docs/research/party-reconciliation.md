@@ -4642,3 +4642,81 @@ held when mirroring ended) then at 1 (treatment: expect `phase7release: 0x{id} r
 -1 on unmirror` at release, then genuine `FindPath`-driven movement), three reps each leg. Nothing
 about this round's own findings elsewhere touches follow-AI code at all — Round 98's own static RE
 is unaffected and needs no revisiting, only the live pass it was always waiting on.
+
+## Round 100 (2026-08-28, rig round) — the A/B finally run: CONTROL clean (no line, as expected);
+## TREATMENT produced NO `phase7release` line either, despite every precondition looking satisfied
+## — narrowed to inside `TryReleaseFollowPhaseOnUnmirror` itself, not to the config gate or the
+## `_trackedId` cache. One rep each leg (time budget), not the three the recipe asked for;
+## `party_follow_phase7_release` stays OFF
+
+Task: this round's own queue item 3 — Round 98's own A/B recipe. Two-instance rig, a single
+recruited companion already in the save (party slot 0, host object id confirmed mirrored on the
+client — `party drive: mirroring 1 of the host's companions`).
+
+### CONTROL (`party_follow_phase7_release=0`, the shipped default)
+
+Host leader teleported a large distance twice (`tp 5 5 0` -> `tp 60 60 0` -> `tp 5 5 0`) while the
+client mirrored the companion, then `disconnect` on the client. `session: released — undoing what
+it did to this game` and `party drive: released 1 companion(s) back to your own game` both fired;
+no `phase7release` line anywhere in the client's plugin log, matching the control leg's own
+expectation exactly. No crash (both processes confirmed alive and responding afterward), though
+the client's own player character was independently downed by ambient combat around the same
+window and the client fell back to the main menu (`world: unannounced teardown - treating as a
+load, not a transition`) — unrelated to this flag (the downed-state/menu-drop is a known hazard of
+this test area's own ambient hostiles, not a `party_follow_phase7_release` symptom).
+
+### TREATMENT (`party_follow_phase7_release=1`, `party_follow_finelog=1`, fresh session)
+
+Same recipe on a freshly restarted rig (`END_M01AA`, save's own companion, confirmed mirroring).
+`party_follow_finelog`'s own spam confirms the companion's follow record was genuinely alive and
+NOT at the reset sentinel at the moment of disconnect: `phase=5`, `attempts` cycling, real
+`pos`/`leaderPos` values, moments before the leader was teleported twice
+(`tp 5 5 0` -> `tp 60 60 0` -> `tp 5 5 0`) and the client disconnected. `session: released` and
+`party drive: released 1 companion(s) back to your own game` both fired exactly as in the control
+leg — but **no `phase7release` line appeared this time either.** No crash, no regression (both
+processes alive and responding afterward).
+
+**This is a genuine, narrowed negative result, not merely "unconfirmed."** Read against the
+source directly (`PartyPresenceController.cs`, `Odyssey.DoorTransitions.StallRecovery.cs`) this
+round to rule out the obvious explanations before writing it up:
+
+- The config value WAS read correctly on this process — `party_follow_finelog`'s own output
+  (default OFF) proves `PluginConfig.ReadBool` picked up this session's coop.ini, and
+  `party_follow_phase7_release` is read the identical way.
+- `ReleaseSession()`'s call order (`ReleaseAllHeld()` first, `ReleaseFollowPhaseForTracked()`
+  second, `Invalidate()` last) is correct per its own comment, and `ReleaseAllHeld()` does NOT
+  clear `_trackedId` (its own doc comment says so explicitly) — so `_trackedId[i]` is still
+  populated when `ReleaseFollowPhaseForTracked()` runs.
+- **Independent proof `_trackedId[i]` really was nonzero at release time**: `ReleaseAllHeld()`'s
+  own gate (`!_factionKnown[i] || !_heldNeutral[i] || _trackedId[i] == 0`) shares the exact same
+  array, and it DID restore exactly 1 companion (`released 1 companion(s)`) — which is only
+  possible if `_trackedId[i] != 0` for that slot. So `ReleaseFollowPhaseForTracked()`'s own loop
+  must have called `Odyssey.TryReleaseFollowPhaseOnUnmirror(_trackedId[i], out _)` for the real
+  companion id.
+
+That places the defect **inside `TryReleaseFollowPhaseOnUnmirror` itself** — one of its own early
+returns (`client == 0`, `party == 0`, `GetPartyIndexFn(...) <= 0`) or `FollowPhaseReleaseRule
+.ShouldRelease(phase)` unexpectedly reading `false` at the exact release instant, none of which
+distinguish themselves in the log today (the function logs only on the write path, never on any
+of its own refusal branches) — the same class of silent-refusal gap this project's own house style
+(`docs/CONSOLE.md`'s "every staging cheat that fails says what it saw") exists specifically to
+avoid, just not yet applied to this function. **Not root-caused further this round** (time budget
+consumed by items 1-2's own detours); the concrete next step is adding a one-line refusal log to
+each of `TryReleaseFollowPhaseOnUnmirror`'s own early-return branches (mirroring
+`CheatController`'s own established convention) so the NEXT live pass can tell "the call never
+happened" from "the call happened and one specific guard refused it" without needing this round's
+own indirect `_trackedId`-via-`ReleaseAllHeld` proof chain.
+
+### Verdict
+
+`party_follow_phase7_release` stays OFF — not because the treatment leg showed a regression (it
+showed nothing at all, same as control), but because the fix has now been directly observed NOT
+to fire under conditions that should trigger it, which is stronger and more useful evidence than
+"NOT LIVE-TESTED" was. Only one rep was run per leg this round (not the recipe's own three) —
+time budget went to instrumenting why the treatment leg produced no observable effect rather than
+repeating an already-negative result twice more. No crash or regression either leg.
+
+Build: no source change this round (live re-verification + read-only source investigation only).
+`dotnet build KotorCoop.slnx -warnaserror` / `src/KotorCoop.Plugin/build.ps1 -WarnAsError` /
+`dotnet test tests/KotorCoop.Tests --no-build` all clean, per this session's own end-of-round
+verification pass (see docs/live-verification.md).
