@@ -65,11 +65,46 @@ public interface IWorldStateBridge
         return false;
     }
 
+    /// <summary>
+    /// The same request, but able to ask for the MID-SESSION replay
+    /// (<c>CSWGuiSaveLoad::LoadGame</c>'s <c>bFromMainMenu == 0</c> branch) rather than the
+    /// main-menu-only one. Needed by the new-character join: retail chargen has already put
+    /// the player in a world by the time their character exists, so the adoption that follows
+    /// is by definition mid-session. <c>inSession: false</c> is exactly
+    /// <see cref="TryRequestAdoptedWorldLoad(out string)"/>.
+    /// </summary>
+    bool TryRequestAdoptedWorldLoad(bool inSession, out string diagnostic) =>
+        TryRequestAdoptedWorldLoad(out diagnostic);
+
     /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/>.</summary>
     bool TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
     {
         applied = 0;
         status = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Arms the plugin's new-character capture: it watches for the character retail chargen
+    /// writes to <c>Temp\pifo.ifo</c> and stashes it where the adoption load cannot truncate
+    /// it. coop.ini <c>join_mode = newcharacter</c>. False (with a reason) for bridges with no
+    /// in-process plugin.
+    /// </summary>
+    bool TryArmNewCharacterCapture(out string diagnostic)
+    {
+        diagnostic = "no in-process plugin to arm a character capture on";
+        return false;
+    }
+
+    /// <summary>Polls the capture armed by <see cref="TryArmNewCharacterCapture"/>:
+    /// <paramref name="state"/> is one of <c>SharedBlock.JoinChargenState*</c> (0 idle, 1
+    /// armed, 2 captured, 3 failed) and <paramref name="bytes"/> is the size of what was
+    /// captured — the honest evidence, since a zero-byte pifo would otherwise report
+    /// "captured" too.</summary>
+    bool TryGetNewCharacterCapture(out uint state, out uint bytes)
+    {
+        state = 0;
+        bytes = 0;
         return false;
     }
 

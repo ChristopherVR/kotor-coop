@@ -41,6 +41,12 @@ public static class PluginMenuLoader
     private const int BlockAdoptWorldLogin = 0x3320;
     private const int BlockAdoptWorldApplied = 0x3324;
 
+    // SharedBlock's new-character (coop.ini join_mode = newcharacter) capture region,
+    // 0x4780..0x47A0 — SharedBlock.OffsetJoinChargenRequest and friends.
+    private const int BlockJoinChargenRequest = 0x4780;
+    private const int BlockJoinChargenState = 0x4788;
+    private const int BlockJoinChargenBytes = 0x478C;
+
     /// <summary>
     /// Reads which module a save is standing in, from SAVEGAME.sav's ERF key list: the
     /// entry typed 2055 (.sav) IS the module (e.g. END_M01AA). The engine's LoadModule
@@ -191,45 +197,8 @@ public static class PluginMenuLoader
         ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false,
         bool inSession = false)
     {
-        block = 0;
-
-        PatternScanner scanner = new(memory);
-        BytePattern signature = BytePattern.Parse(KotorGameBridge.PluginSignature);
-
-        // The lifecycle can report "main menu" seconds before the plugin has allocated
-        // its block (the phase check reads engine state, the block appears when the
-        // game's startup calls DirectInput8Create), so a single scan races it. Retry
-        // briefly; the plugin side then waits for the real menu on its own.
-        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-
-        while (block == 0 && DateTime.UtcNow < deadline)
+        if (!TryFindBlock(memory, out block, out diagnostic))
         {
-            foreach (nint candidate in scanner.ScanAll(signature, ScanScope.PrivateCommitted, limit: 4))
-            {
-                // A live plugin's heartbeat advances; a stale block in freed memory does not.
-                if (!memory.TryReadUInt32(candidate + BlockHeartbeat, out uint first))
-                {
-                    continue;
-                }
-
-                Thread.Sleep(60);
-
-                if (memory.TryReadUInt32(candidate + BlockHeartbeat, out uint second) && second != first)
-                {
-                    block = candidate;
-                    break;
-                }
-            }
-
-            if (block == 0)
-            {
-                Thread.Sleep(2000);
-            }
-        }
-
-        if (block == 0)
-        {
-            diagnostic = "plugin shared block not found (is dinput8.dll installed and the version matched?)";
             return false;
         }
 
@@ -309,5 +278,110 @@ public static class PluginMenuLoader
         status = 0;
         return memory.TryReadUInt32(block + BlockMenuLoadApplied, out applied)
             && memory.TryReadInt32(block + BlockMenuLoadStatus, out status);
+    }
+
+    /// <summary>
+    /// Finds the plugin's shared block, proving it live before handing it back.
+    ///
+    /// Two things make this more than a scan, and both were learned the hard way. The
+    /// lifecycle can report "main menu" seconds before the plugin has allocated its block —
+    /// the phase check reads engine state, the block appears when the game's startup calls
+    /// <c>DirectInput8Create</c> — so a single scan races it. And a STALE block in freed
+    /// memory still matches the signature, so a candidate is accepted only once its heartbeat
+    /// has been seen to ADVANCE.
+    ///
+    /// Extracted from <see cref="TryRequestLoad"/> so <see cref="TryArmNewCharacterCapture"/>
+    /// finds the same block the same way, rather than growing a second, subtly different copy
+    /// of this.
+    /// </summary>
+    public static bool TryFindBlock(ProcessMemory memory, out nint block, out string diagnostic)
+    {
+        block = 0;
+
+        PatternScanner scanner = new(memory);
+        BytePattern signature = BytePattern.Parse(KotorGameBridge.PluginSignature);
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+
+        while (block == 0 && DateTime.UtcNow < deadline)
+        {
+            foreach (nint candidate in scanner.ScanAll(signature, ScanScope.PrivateCommitted, limit: 4))
+            {
+                if (!memory.TryReadUInt32(candidate + BlockHeartbeat, out uint first))
+                {
+                    continue;
+                }
+
+                Thread.Sleep(60);
+
+                if (memory.TryReadUInt32(candidate + BlockHeartbeat, out uint second) && second != first)
+                {
+                    block = candidate;
+                    break;
+                }
+            }
+
+            if (block == 0)
+            {
+                Thread.Sleep(2000);
+            }
+        }
+
+        if (block == 0)
+        {
+            diagnostic = "plugin shared block not found (is dinput8.dll installed and the version matched?)";
+            return false;
+        }
+
+        diagnostic = $"plugin shared block at 0x{block:X}";
+        return true;
+    }
+
+    /// <summary>
+    /// Arms the plugin's new-character capture — coop.ini <c>join_mode = newcharacter</c>.
+    ///
+    /// The plugin then watches for <c>Temp\pifo.ifo</c> to be written by the game's own
+    /// character creation (<c>CSWCCreature::SaveCharGenCreature</c> 0x6123E0, the chargen
+    /// entry in docs/research/character-login-chain.md §2's exhaustive writer list) and copies
+    /// it to the carried-character stash the adoption load restores from. The serial IS the
+    /// whole request — there is nothing else to say — so unlike <see cref="TryRequestLoad"/>
+    /// there is no "write the payload first" ordering to respect here.
+    /// </summary>
+    public static bool TryArmNewCharacterCapture(
+        ProcessMemory memory, out nint block, out string diagnostic)
+    {
+        if (!TryFindBlock(memory, out block, out diagnostic))
+        {
+            return false;
+        }
+
+        // Continue from whatever serial the block holds — the plugin outlives agents.
+        if (!memory.TryReadUInt32(block + BlockJoinChargenRequest, out uint serial)
+            || !memory.TryWrite(block + BlockJoinChargenRequest, serial + 1))
+        {
+            diagnostic = "could not write the new-character capture request";
+            return false;
+        }
+
+        diagnostic = $"new-character capture armed (request {serial + 1})";
+        return true;
+    }
+
+    /// <summary>
+    /// Reads back what the armed capture has done: <paramref name="state"/> is one of
+    /// <c>SharedBlock.JoinChargenState*</c> (0 idle, 1 armed, 2 captured, 3 failed) and
+    /// <paramref name="bytes"/> is the size of what was captured.
+    ///
+    /// ⚠ READ THE BYTES, NOT JUST THE STATE. A zero-byte pifo is not "no file" — it is the
+    /// exact wreckage a source-less <c>FileCopy</c> leaves (world-adoption.md §7) and the
+    /// engine's login turns it into a blank level-1 stranger rather than an error. The plugin
+    /// already refuses to report a short capture; the size is here so the agent can say so too.
+    /// </summary>
+    public static bool TryReadNewCharacterCapture(
+        ProcessMemory memory, nint block, out uint state, out uint bytes)
+    {
+        bytes = 0;
+        return memory.TryReadUInt32(block + BlockJoinChargenState, out state)
+            && memory.TryReadUInt32(block + BlockJoinChargenBytes, out bytes);
     }
 }
