@@ -5,18 +5,27 @@ namespace KotorCoop.Session;
 
 /// <summary>
 /// CoopHost — the party pool's v2 channel (<c>party_pool_sync=2</c>): publish-don't-detect. See
-/// docs/research/shared-inventory-v2.md §2.4. The host never compares anything here — it just
-/// republishes whatever <c>Pumps.PartyPoolPumpV2</c> hands it from a fresh engine scan, and
-/// write-throughs an accepted intent's effect into that same belief immediately so the next
-/// publish cycle already reflects it, without waiting for the engine apply to actually land.
+/// docs/research/shared-inventory-v2.md §2.4/§2.1 and §7's 2026-08-29 defect write-up. The host
+/// does EXACTLY two things here — republish whatever <c>Pumps.PartyPoolPumpV2</c> hands it from a
+/// fresh engine scan (<see cref="PublishPartyPoolSnapshotV2"/>), and apply an accepted client
+/// intent to its own engine at most once, idempotent by (peer, serial)
+/// (<see cref="HandlePartyPoolIntentV2"/>'s dedup + <see cref="DrainPartyPoolIntentsV2"/>). It
+/// NEVER writes an intent's guessed effect into its own belief ahead of the real engine scan —
+/// §7 found that this file used to do exactly that ("write-through"), which meant a broadcast
+/// snapshot could carry a value the host's own engine had not actually produced yet, later
+/// silently overwritten (or not) by the very next real scan depending on timing: a genuine
+/// departure from §2.1's "the host publishes... a direct read of the host's own game", and a
+/// second, independent source of belief instability alongside the concurrent-dictionary race §7
+/// also fixed here. <see cref="_partyPoolBeliefV2"/> is now written ONLY by
+/// <see cref="PublishPartyPoolSnapshotV2"/>, i.e. only ever a verbatim copy of the most recent
+/// real scan.
 /// </summary>
 public sealed partial class CoopHost
 {
-    /// <summary>This instance's belief of the pool's current contents — written wholesale from a
-    /// real scan (<see cref="PublishPartyPoolSnapshotV2"/>) and write-through-adjusted the moment
-    /// an intent is accepted (<see cref="HandlePartyPoolIntentV2"/>). Never compared against
-    /// anything; the next real scan simply overwrites whatever an intent's write-through
-    /// guessed.</summary>
+    /// <summary>This instance's belief of the pool's current contents — written wholesale, ONLY
+    /// from a real scan (<see cref="PublishPartyPoolSnapshotV2"/>). Never mutated from an intent
+    /// directly (§7, 2026-08-29) — an accepted intent's effect reaches this dictionary only once
+    /// the real engine apply has actually landed and the next scan reads it back.</summary>
     private Dictionary<PartyPoolStackKey, int> _partyPoolBeliefV2 = [];
 
     private uint _partyPoolGenerationV2;
@@ -81,12 +90,16 @@ public sealed partial class CoopHost
     public IReadOnlyList<uint> DrainAckedPartyPoolIntentsV2() => [];
 
     /// <summary>
-    /// A client's intent arrived. Dedups by (peer, serial) — a retransmitted copy of an already
-    /// -accepted intent is acked again (idempotent to the client, which only needs ONE ack to
-    /// eventually arrive) but not applied a second time or written through twice. A genuinely new
-    /// intent is write-through-applied into <see cref="_partyPoolBeliefV2"/> immediately (so the
-    /// very next publish cycle already reflects it) and queued for
-    /// <c>Pumps.PartyPoolPumpV2</c> to apply to the real engine through the staging-cheat channel.
+    /// A client's intent arrived — <c>ApplyClientIntent(serial)</c>, the ONLY host-side
+    /// apply-to-engine path (§7, 2026-08-29). Dedups by (peer, serial): a retransmitted copy of
+    /// an already-accepted intent is acked again (idempotent to the client, which only needs ONE
+    /// ack to eventually arrive) but never queued for a second engine apply. A genuinely new
+    /// intent is queued for <c>Pumps.PartyPoolPumpV2</c> to apply to the real engine through the
+    /// staging-cheat channel, exactly once — and is NOT also written into
+    /// <see cref="_partyPoolBeliefV2"/> here; that dictionary is touched only by
+    /// <see cref="PublishPartyPoolSnapshotV2"/>, so the next broadcast reflects this intent only
+    /// once the real apply has actually landed and a real scan reads it back (§2.1's "a direct
+    /// read of the host's own game", now literal).
     /// </summary>
     private void HandlePartyPoolIntentV2(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
@@ -107,20 +120,6 @@ public sealed partial class CoopHost
                 while (_partyPoolIntentDedupHistoryV2.Count > MaxRememberedIntentsV2)
                 {
                     _partyPoolIntentDedupV2.Remove(_partyPoolIntentDedupHistoryV2.Dequeue());
-                }
-
-                int before = _partyPoolBeliefV2.GetValueOrDefault(intent.Key);
-                int after = intent.Kind == PartyPoolOpKind.Add
-                    ? before + intent.Count
-                    : Math.Max(0, before - intent.Count);
-
-                if (after > 0)
-                {
-                    _partyPoolBeliefV2[intent.Key] = after;
-                }
-                else
-                {
-                    _partyPoolBeliefV2.Remove(intent.Key);
                 }
             }
         }
@@ -164,10 +163,20 @@ public sealed partial class CoopHost
         _lastPartyPoolV2BroadcastMs = now;
         _partyPoolGenerationV2++;
 
+        // §7 (2026-08-29): defence in depth, alongside removing HandlePartyPoolIntentV2's own
+        // write-through above. Before that removal, a bare reference copy here handed Paginate —
+        // running OUTSIDE this lock — the SAME live Dictionary instance the intent handler
+        // mutated IN PLACE concurrently (the receive loop's own task, racing the Tick task here):
+        // Dictionary<TKey,TValue> is explicitly not safe for a reader to enumerate while another
+        // thread mutates it (root cause 5's own "unguarded cross-thread queue" class,
+        // reintroduced here). PublishPartyPoolSnapshotV2 now only ever REPLACES the field's
+        // reference wholesale under the lock, never mutates a previously-captured reference in
+        // place, so this clone is no longer covering an active race — kept anyway so a future
+        // in-place mutator (a resync helper, a debug tool) can never reintroduce one silently.
         Dictionary<PartyPoolStackKey, int> belief;
         lock (_gate)
         {
-            belief = _partyPoolBeliefV2;
+            belief = new Dictionary<PartyPoolStackKey, int>(_partyPoolBeliefV2);
         }
 
         foreach (PartyPoolSnapshotPacketV2 page in

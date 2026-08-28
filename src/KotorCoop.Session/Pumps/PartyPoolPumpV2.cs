@@ -98,25 +98,46 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
 
     /// <summary>
     /// ⚠ An acked intent is NOT dropped from <see cref="_outstanding"/> the instant the ack
-    /// arrives — the ack only confirms the HOST accepted it and wrote it through into its own
-    /// belief; the client's NEXT scheduled snapshot BROADCAST (throttled independently, ~1s) is
-    /// what actually carries that fact to this instance. Dropping on ack alone would, for one or
-    /// more ticks, make <c>target</c> fall back to a stale snapshot value that has not yet
-    /// caught up — read as "the local engine now disagrees with a STABLE target", which is
-    /// exactly the shape a genuine local action takes, producing a SPURIOUS duplicate intent for
-    /// the very same transaction that was just acked. Instead, an acked entry is marked (not
-    /// removed) and kept contributing to <see cref="OutstandingNet"/> until
-    /// <see cref="AckGraceMs"/> has elapsed since the ack — comfortably more than one broadcast
-    /// interval (with one resend's worth of margin for a lost cycle), so by the time it is
-    /// finally dropped the snapshot has almost certainly already absorbed it, and the drop
-    /// itself is read as a (harmless, no-op) "target moved" rather than a fresh local action.
+    /// arrives — the ack only confirms the HOST accepted it and QUEUED it for its own engine to
+    /// apply; the client's NEXT scheduled snapshot BROADCAST (throttled independently, ~1s), once
+    /// the host's own scan has actually observed the apply land, is what carries that fact to
+    /// this instance. Dropping on ack alone would, for one or more ticks, make <c>target</c> fall
+    /// back to a stale snapshot value that has not yet caught up — read as "the local engine now
+    /// disagrees with a STABLE target", which is exactly the shape a genuine local action takes,
+    /// producing a SPURIOUS duplicate intent for the very same transaction that was just acked
+    /// (§5's own "Bug 2"). Instead, an acked entry is marked (not removed) and kept contributing
+    /// to <see cref="OutstandingNet"/> until EITHER the snapshot is observed to have genuinely
+    /// moved to reflect it (<see cref="ReconcileTarget"/>'s own evidence-based clearing, the
+    /// primary and normally-fast path) OR, as a last-resort safety net,
+    /// <see cref="AckGraceMs"/> has elapsed since the ack.
+    ///
+    /// <b>§7 (2026-08-29)</b>: this safety net used to be 2,500&#160;ms — "comfortably more than
+    /// one broadcast interval". That bound assumed a single in-flight apply; it does NOT hold
+    /// under a burst of several accepted intents queued back-to-back, because every accepted
+    /// intent's real engine apply must still drain through the single-slot arbitrated
+    /// staging-cheat channel ONE AT A TIME (root cause 7's own single-slot discipline), so the
+    /// Nth intent in a burst can wait roughly N times one apply's own landing latency before the
+    /// host's NEXT scan (let alone its next broadcast) ever reflects it. A live-rig-shaped test
+    /// (ten rapid successive client deposits) reproduced exactly the failure this comment used to
+    /// warn against: the timer fired BEFORE the snapshot had caught up, the client re-detected
+    /// its own still-pending deposit as a fresh local action, and republished it — a genuine,
+    /// reproducible instance of the exact re-derivation this design exists to forbid. Raised to a
+    /// value that comfortably outlasts a realistic backlog rather than a single round trip; the
+    /// evidence-based path above still retires the entry promptly in the ordinary case; this only
+    /// changes how long a genuinely stuck-forever entry (the accepted apply never lands at all,
+    /// e.g. a refused/failed engine call) is willing to wait before giving up.
     /// </summary>
-    private const long AckGraceMs = 2_500;
+    private const long AckGraceMs = 15_000;
 
     private sealed class OutstandingIntent(uint serial, int delta, long queuedAtMs)
     {
         public uint Serial { get; } = serial;
-        public int Delta { get; } = delta;
+
+        /// <summary>Mutable (§7, 2026-08-29): <see cref="RetireOutstandingBy"/> shrinks this
+        /// toward zero as confirmed snapshot movement partially covers it, rather than only ever
+        /// removing the whole entry outright.</summary>
+        public int Delta { get; set; } = delta;
+
         public long QueuedAtMs { get; } = queuedAtMs;
         public long AckedAtMs { get; set; } = -1;
     }
@@ -186,12 +207,6 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
             int snapshotValue = snapshot.GetValueOrDefault(key);
             int actual = scan.GetValueOrDefault(key);
 
-            // `detectTarget` (snapshot + outstanding) is ONLY ever valid for the DETECTION
-            // check at the bottom of this loop ("is this movement already explained, so don't
-            // report ANOTHER intent") — see ReconcileTarget's own remarks for why a
-            // RECONCILE-APPLY must never target it directly.
-            int detectTarget = snapshotValue + OutstandingNet(key);
-
             // ⚠ Compares the RAW host snapshot value, never detectTarget (which also includes
             // this pump's OWN outstanding-intent adjustment) — an outstanding entry shrinking
             // (an ack) must never, by itself, read as "the host's truth changed" or "a fresh
@@ -202,6 +217,31 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
 
             bool actualMoved = _lastActual.TryGetValue(key, out int priorActual) && priorActual != actual;
             _lastActual[key] = actual;
+
+            // §7 (2026-08-29): the ONLY place outstanding is ever retired from confirmation
+            // evidence — §2.2's own "retired by however much, not necessarily all at once, the
+            // moment a NEW snapshot's own value has moved in the same direction" rule, applied
+            // literally. Retires ONLY the amount THIS movement accounts for, oldest-entry-first —
+            // never the whole ledger just because this instance's own `actual` happens to already
+            // sit past `snapshotValue` (found live via
+            // RepeatedClientAmbientChurnConvergesExactlyWithBoundedHostApplies: a client's own
+            // `actual` reflects EVERY local change instantly, so it is almost always ahead of a
+            // still-catching-up snapshot even while SEVERAL of its own intents remain genuinely
+            // unconfirmed — the previous per-branch `ClearOutstanding(key)` calls wiped ALL of
+            // them the instant the FIRST one's effect showed up, causing every later one to be
+            // re-detected and re-published as if it were still brand new). Runs before any branch
+            // below so it applies uniformly regardless of which one subsequently fires.
+            if (snapshotMoved)
+            {
+                RetireOutstandingBy(key, snapshotValue - priorSnapshotValue);
+            }
+
+            // `detectTarget` (snapshot + outstanding) is ONLY ever valid for the DETECTION
+            // check at the bottom of this loop ("is this movement already explained, so don't
+            // report ANOTHER intent") — see ReconcileTarget's own remarks for why a
+            // RECONCILE-APPLY must never target it directly. Computed AFTER the retirement above
+            // so a partial retirement this same tick is already reflected.
+            int detectTarget = snapshotValue + OutstandingNet(key);
 
             if (_reconcileInFlight.TryGetValue(key, out int inFlightTarget))
             {
@@ -228,25 +268,12 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
                     _reconcileInFlight.Remove(key);
                     _reconcileQueuedAtMs.Remove(key);
 
-                    // ⚠ The reconcile that just landed may itself have been chasing the RAW
-                    // snapshot on behalf of an outstanding intent this pump published earlier
-                    // (ReconcileTarget's "not yet explained" branch never clears outstanding —
-                    // only ITS "already explained" branch does). The instant the engine's own
-                    // value reaches (or passes, in the right direction) the CURRENT snapshot,
-                    // whatever outstanding entry made the reconcile necessary is now covered —
-                    // retire it here, or it lingers in OutstandingNet forever and permanently
-                    // mis-inflates detectTarget below, misreading the engine's own genuine
-                    // agreement with the host as a phantom local removal (which becomes a fresh
-                    // outstanding entry of its own — observed live: an unbroken Add/Remove flip
-                    // that never settles). Scoped to exactly this landing moment rather than
-                    // every tick unconditionally, so a client legitimately AHEAD of the snapshot
-                    // on its own (a fresh action stacked on top, never queued through THIS
-                    // reconcile) is never wrongly pulled back down to it.
-                    int net = OutstandingNet(key);
-                    if (net != 0 && (net > 0 ? actual >= snapshotValue : actual <= snapshotValue))
-                    {
-                        ClearOutstanding(key);
-                    }
+                    // §7 (2026-08-29): outstanding retirement is now handled ENTIRELY by the
+                    // snapshotMoved-driven RetireOutstandingBy call above, uniformly for every
+                    // branch — this used to ALSO wipe the whole outstanding ledger here whenever
+                    // `actual` merely sat past `snapshotValue`, which is a much weaker (and, as
+                    // found live, actively wrong) condition than "the snapshot's own confirmed
+                    // movement accounts for this much of it". Nothing further to do here.
                 }
                 else
                 {
@@ -393,14 +420,22 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
     /// client's own +3 deposit, once mirrored back in the host's next snapshot, reconciled UP to
     /// +6 — the snapshot already said 3, and the still-outstanding +3 got added again).
     ///
-    /// Once the engine's own current value already sits at or past the raw snapshot in the
-    /// outstanding intents' own direction, they are moot — retired outright (not merely
-    /// excluded from this one computation) rather than waiting out <see cref="AckGraceMs"/>,
-    /// since genuine agreement, not a merely-stale snapshot, is exactly what was just observed;
-    /// the target then IS <paramref name="actual"/> itself (nothing to apply). Otherwise —
-    /// outstanding intents that have NOT yet been reflected — reconcile toward the RAW snapshot
-    /// value alone; outstanding never contributes to what gets APPLIED, only to whether a fresh
-    /// local action gets reported.
+    /// A PURE decision, no side effects (§7, 2026-08-29): it used to also retire the ENTIRE
+    /// outstanding ledger for <paramref name="key"/> whenever the engine's own value merely sat
+    /// at or past the raw snapshot in the outstanding intents' own direction — a much weaker
+    /// condition than "the snapshot's own confirmed movement accounts for this", and wrong
+    /// whenever more than one outstanding intent for the same key is in flight at once (this
+    /// instance's own <paramref name="actual"/> reflects EVERY local change immediately, so it is
+    /// almost always already past a still-catching-up snapshot even while several of its own
+    /// intents remain genuinely unconfirmed — wiping the whole ledger there made every later one
+    /// look brand new again on the very next tick, a real, reproducible over-count). Retirement
+    /// now happens in exactly one place, proportional to confirmed snapshot movement — see
+    /// <see cref="RetireOutstandingBy"/>'s own call site in <see cref="PumpClient"/>. Once the
+    /// engine's own current value already sits at or past the raw snapshot in the outstanding
+    /// intents' own direction, the target is simply <paramref name="actual"/> itself (nothing to
+    /// apply — genuine local agreement, don't roll it back); otherwise the target is the RAW
+    /// snapshot value alone — outstanding never contributes to what gets APPLIED, only to
+    /// whether a fresh local action gets reported.
     /// </summary>
     private int ReconcileTarget(PartyPoolStackKey key, int actual, int snapshotValue)
     {
@@ -411,13 +446,69 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         }
 
         bool explainedByOwnEngine = net > 0 ? actual >= snapshotValue : actual <= snapshotValue;
-        if (!explainedByOwnEngine)
+        return explainedByOwnEngine ? actual : snapshotValue;
+    }
+
+    /// <summary>
+    /// §7 (2026-08-29): retires up to <paramref name="amount"/> worth of outstanding credit for
+    /// <paramref name="key"/>, oldest entry first, restricted to entries moving in the SAME
+    /// direction as <paramref name="amount"/> — the literal reading of
+    /// docs/research/shared-inventory-v2.md §2.2: "retired — by however much, not necessarily all
+    /// at once — the moment a NEW snapshot's own value... has moved in the same direction... an
+    /// exact match is not required". <paramref name="amount"/> is the snapshot's own confirmed
+    /// movement since the previous tick (<c>snapshotValue - priorSnapshotValue</c>), never a
+    /// comparison against this instance's own <c>actual</c> — see <see cref="ReconcileTarget"/>'s
+    /// own remarks for why that comparison alone is unsound once more than one outstanding entry
+    /// is in flight for the same key. An entry only partially covered by <paramref name="amount"/>
+    /// has its own remaining credit shrunk, not removed outright, so nothing is over-retired.
+    /// </summary>
+    private void RetireOutstandingBy(PartyPoolStackKey key, int amount)
+    {
+        if (amount == 0 || !_outstanding.TryGetValue(key, out List<OutstandingIntent>? entries))
         {
-            return snapshotValue;
+            return;
         }
 
-        ClearOutstanding(key);
-        return actual;
+        int direction = Math.Sign(amount);
+        int remaining = Math.Abs(amount);
+
+        List<OutstandingIntent>? fullyRetired = null;
+        foreach (OutstandingIntent entry in entries)
+        {
+            if (remaining == 0 || Math.Sign(entry.Delta) != direction)
+            {
+                continue;
+            }
+
+            int entryMagnitude = Math.Abs(entry.Delta);
+            int take = Math.Min(entryMagnitude, remaining);
+            remaining -= take;
+
+            if (take == entryMagnitude)
+            {
+                (fullyRetired ??= []).Add(entry);
+            }
+            else
+            {
+                entry.Delta -= take * direction;
+            }
+        }
+
+        if (fullyRetired is null)
+        {
+            return;
+        }
+
+        foreach (OutstandingIntent entry in fullyRetired)
+        {
+            entries.Remove(entry);
+            _outstandingBySerial.Remove(entry.Serial);
+        }
+
+        if (entries.Count == 0)
+        {
+            _outstanding.Remove(key);
+        }
     }
 
     private int OutstandingNet(PartyPoolStackKey key)
@@ -456,23 +547,6 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         if (entries.Count == 0)
         {
             _outstanding.Remove(key);
-        }
-    }
-
-    /// <summary>Retires EVERY outstanding entry for one key at once — the raw snapshot already
-    /// matching this instance's own engine (see the <c>snapshotMoved</c> branch above) means the
-    /// host has genuinely caught up, so nothing further is owed for this key regardless of any
-    /// entry's own ack/timeout state.</summary>
-    private void ClearOutstanding(PartyPoolStackKey key)
-    {
-        if (!_outstanding.Remove(key, out List<OutstandingIntent>? entries))
-        {
-            return;
-        }
-
-        foreach (OutstandingIntent entry in entries)
-        {
-            _outstandingBySerial.Remove(entry.Serial);
         }
     }
 
