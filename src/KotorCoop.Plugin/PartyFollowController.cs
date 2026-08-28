@@ -223,6 +223,63 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     private readonly bool[] _inPhase2Run = new bool[PartyNpcSlots];
     private readonly double[] _phase2RunStart = new double[PartyNpcSlots];
 
+    /// <summary>ROUND 105 (party-reconciliation.md): the RUNTIME follow-stall detector — see
+    /// <see cref="FollowStallRule"/>'s own remarks for the disassembly-grounded wedge signature
+    /// it watches for, and <see cref="Odyssey.TryRecoverFollowStall"/> for the four candidate
+    /// recoveries it selects between. Unlike every earlier candidate in this controller this one
+    /// is ON by default: rounds 96/97 reproduced its exact target shape five times out of five,
+    /// and rounds 100-104 established that the release-time fix
+    /// (<c>party_follow_phase7_release</c>) can never reach it because the phase has legitimately
+    /// returned to -1 by the time <c>ReleaseSession</c> runs. Kill switch:
+    /// <c>party_follow_stall_recovery=0</c>.</summary>
+    private readonly bool _stallRecovery = PluginConfig.ReadBool("party_follow_stall_recovery", true);
+
+    /// <summary>Which of <see cref="FollowStallRule"/>'s recoveries
+    /// <see cref="Odyssey.TryRecoverFollowStall"/> applies — <c>party_follow_stall_recovery_method</c>.
+    /// Exists so a live A/B can isolate one write at a time in a single game session (this
+    /// project's standing rule for engine writes) rather than needing a rebuild per candidate.
+    /// See docs/CONFIG.md for the value table.</summary>
+    private readonly int _stallRecoveryMethod =
+        PluginConfig.ReadInt("party_follow_stall_recovery_method", FollowStallRule.MethodPhaseReset);
+
+    /// <summary>Consecutive recoveries fired for this slot, this module, with no confirmed
+    /// recovery in between — <see cref="FollowStallRule"/>'s own anti-spin budget.</summary>
+    private readonly int[] _stallFires = new int[PartyNpcSlots];
+
+    /// <summary>Wall-clock (on <see cref="_clock"/>) of this slot's last recovery fire, or -1
+    /// for "never fired" — which the cooldown check reads as an infinite gap, so the very first
+    /// genuine wedge is never made to wait out a cooldown that has not happened.</summary>
+    private readonly double[] _stallLastFireTime = NeverFired();
+
+    private static double[] NeverFired()
+    {
+        double[] times = new double[PartyNpcSlots];
+        Array.Fill(times, -1.0);
+        return times;
+    }
+
+    /// <summary>Where the companion stood at its last recovery fire — the baseline
+    /// <see cref="FollowStallRule.RecoveryConfirmed"/> measures real movement against.</summary>
+    private readonly Vec3[] _stallFirePos = new Vec3[PartyNpcSlots];
+
+    /// <summary>Whether this slot's "budget exhausted, giving up for this module" line has already
+    /// been logged — logged exactly once, not once per frame.</summary>
+    private readonly bool[] _stallLatchLogged = new bool[PartyNpcSlots];
+
+    /// <summary>Whether this slot has already had <c>party+0x00</c> restored once this module —
+    /// see <see cref="Odyssey.TryGetFollowStallState"/>'s own <c>allowCountRestore</c> parameter.
+    /// This is the per-object latch docs/research/party-reconciliation.md's own per-frame-write
+    /// rule demands: the restore is an ENGINE FIELD WRITE, and this detector runs every frame, so
+    /// it must be able to happen at most once rather than fighting a re-clamp 500 times a
+    /// second.</summary>
+    private readonly bool[] _stallCountRestored = new bool[PartyNpcSlots];
+
+    /// <summary>Last frame's leader position, and whether it is meaningful yet — a wedged
+    /// companion whose leader is actively walking away is worth recovering at any distance (see
+    /// <see cref="FollowStallRule.ShouldRecover"/>'s <c>leaderMoving</c> parameter).</summary>
+    private Vec3 _lastLeaderPos;
+    private bool _leaderTracked;
+
     /// <summary>How many consecutive frames the exact terminal shape must persist before
     /// Odyssey.TryAcceptFinalPathNode is allowed to fire — enough to rule out a single,
     /// possibly-still-legitimate visit, short enough not to add a perceptible extra pause.</summary>
@@ -295,6 +352,17 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
             // this module change (or is simply unstarted) — never compare it against the first
             // real reading the settled frame after this one takes.
             Array.Clear(_tracked);
+
+            // ROUND 105: the stall detector's anti-spin budget is explicitly per-module (see
+            // FollowStallRule's own remarks) — a fresh module is a fresh trail buffer, a fresh
+            // set of follow records, and a fresh right to intervene. Cleared here, alongside the
+            // tracking this branch already resets, so there is exactly one place that decides
+            // what "a new module" invalidates.
+            Array.Clear(_stallFires);
+            Array.Clear(_stallLatchLogged);
+            Array.Clear(_stallCountRestored);
+            Array.Fill(_stallLastFireTime, -1);
+            _leaderTracked = false;
             return;
         }
 
@@ -357,6 +425,36 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         nint player = Odyssey.GetPlayerCreaturePointer();
         Vec3 playerPos = player == 0 ? default : Odyssey.GetPosition(player);
         double now = _clock.Elapsed.TotalSeconds;
+
+        // ROUND 105: is the leader itself walking right now? A companion wedged in the follow
+        // FSM while its leader keeps moving is falling further behind every frame — that is the
+        // literal "walked away and it never resumed following" complaint, and it is worth
+        // recovering at any separation, not only past the 3-unit gate the sibling reissue check
+        // uses. Measured against the same MovedEpsilon float-noise floor as the per-companion
+        // motion test below, so "moving" means the same thing for both.
+        bool leaderMoving = false;
+        if (player != 0)
+        {
+            if (_leaderTracked)
+            {
+                float ldx = playerPos.X - _lastLeaderPos.X;
+                float ldy = playerPos.Y - _lastLeaderPos.Y;
+                leaderMoving = ((ldx * ldx) + (ldy * ldy)) > MovedEpsilon * MovedEpsilon;
+            }
+
+            _lastLeaderPos = playerPos;
+            _leaderTracked = true;
+        }
+        else
+        {
+            _leaderTracked = false;
+        }
+
+        // "Something else is genuinely in charge of this companion right now." The conversation /
+        // roster-freeze / mirrored-session / module-change-frame cases are all already hard
+        // early-returns above, so the only one left to fold in here is a playing movie — the one
+        // engine-owned state that can hold the world still without any of those firing.
+        bool stallSuppressed = Odyssey.IsMoviePlaying();
 
         for (int slot = 0; slot < PartyNpcSlots; slot++)
         {
@@ -542,6 +640,16 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     {
                         _inPhase2Run[slot] = false;
                     }
+                }
+
+                // ROUND 105: the runtime stall detector — see FollowStallRule's own remarks for
+                // why none of the calls above can reach this wedge, and
+                // Odyssey.TryRecoverFollowStall's for what each recovery writes. Runs LAST, after
+                // every already-shipped per-frame fix has had its chance this frame, so it only
+                // ever acts on a record none of them could resolve.
+                if (_stallRecovery)
+                {
+                    DriveStallRecovery(slot, objectId, pos, playerPos, now, leaderMoving, stallSuppressed);
                 }
             }
 
@@ -761,5 +869,148 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                         + $"head was 0x{headType:X}");
             }
         }
+    }
+
+    /// <summary>Human-readable name for a <c>party_follow_stall_recovery_method</c> value — used
+    /// in every log line this detector writes so a live A/B never has to map a bare integer back
+    /// to a behaviour by hand.</summary>
+    private static string MethodName(int method) => method switch
+    {
+        FollowStallRule.MethodPhaseReset => "phasereset",
+        FollowStallRule.MethodFollowLeader => "followleader",
+        FollowStallRule.MethodPositionParty => "positionparty",
+        FollowStallRule.MethodBreakPriorTie => "priortie",
+        _ => $"unknown({method})",
+    };
+
+    /// <summary>
+    /// ROUND 105 (docs/research/party-reconciliation.md): the per-companion half of the runtime
+    /// follow-stall detector. Three things happen here, in this order, and the order matters:
+    ///
+    /// <list type="number">
+    /// <item><b>Confirm the previous fire.</b> If this companion has moved
+    /// <see cref="FollowStallRule.RecoveryConfirmedDistanceSquared"/> since the last recovery was
+    /// written, the recovery WORKED — log it, clear the anti-spin budget, and stop. Real movement
+    /// also means the record cannot currently be wedged, so nothing below needs to run.</item>
+    /// <item><b>Read the wedge signature</b> (<see cref="Odyssey.TryGetFollowStallState"/> —
+    /// plain loads, no engine calls, safe to do every frame for every companion) and hand it,
+    /// plus the timing/anti-spin bookkeeping this class owns, to
+    /// <see cref="FollowStallRule.ShouldRecover"/>.</item>
+    /// <item><b>Fire exactly one recovery</b> and record when/where, so step 1 has a baseline and
+    /// the cooldown has a start.</item>
+    /// </list>
+    ///
+    /// The frozen-duration input is deliberately the SAME <c>_stationarySince</c> bookkeeping this
+    /// controller's older "reissue ActionFollowLeader" stall check already maintains, read one
+    /// frame behind (it is updated later in the same loop) — one motion tracker, not two that can
+    /// disagree about what "still" means.
+    /// </summary>
+    private void DriveStallRecovery(
+        int slot, uint objectId, Vec3 pos, Vec3 leaderPos, double now, bool leaderMoving, bool suppressed)
+    {
+        // 1. Did the last fire work?
+        if (_stallFires[slot] > 0 && _stallLastFireTime[slot] >= 0)
+        {
+            float mdx = pos.X - _stallFirePos[slot].X;
+            float mdy = pos.Y - _stallFirePos[slot].Y;
+            float movedSquared = (mdx * mdx) + (mdy * mdy);
+
+            if (FollowStallRule.RecoveryConfirmed(
+                    movedSquared, FollowStallRule.RecoveryConfirmedDistanceSquared))
+            {
+                PluginHost.Log(
+                    $"party follow stall: recovered 0x{objectId:X} via {MethodName(_stallRecoveryMethod)} "
+                    + $"— moved {MathF.Sqrt(movedSquared):F2}u in "
+                    + $"{now - _stallLastFireTime[slot]:F2}s after {_stallFires[slot]} attempt(s)");
+
+                _stallFires[slot] = 0;
+                _stallLastFireTime[slot] = -1;
+                _stallLatchLogged[slot] = false;
+                return;
+            }
+        }
+
+        // 2. Read the record. allowCountRestore is latched per slot per module — see
+        // _stallCountRestored's own remarks (an engine field write must never be a per-frame one).
+        bool allowRestore = !_stallCountRestored[slot];
+        if (!Odyssey.TryGetFollowStallState(objectId, allowRestore, out Odyssey.FollowStallState state)
+            || !state.Valid)
+        {
+            return;
+        }
+
+        if (state.CountWasRestored)
+        {
+            _stallCountRestored[slot] = true;
+            PluginHost.Log(
+                $"party follow stall: 0x{objectId:X} follow record was hidden by party_together_fix's "
+                + $"own clamp on party+0x00 — restored CSWParty's member count once, index {state.Index} "
+                + "now resolves (round 101's finding, applied to the runtime detector)");
+        }
+
+        double frozenSeconds = _tracked[slot] ? now - _stationarySince[slot] : 0.0;
+        float pdx = pos.X - leaderPos.X;
+        float pdy = pos.Y - leaderPos.Y;
+        float leaderDistanceSquared = (pdx * pdx) + (pdy * pdy);
+        double secondsSinceLastRecovery = _stallLastFireTime[slot] < 0
+            ? double.PositiveInfinity
+            : now - _stallLastFireTime[slot];
+
+        if (!FollowStallRule.ShouldRecover(
+                state.Phase,
+                state.Attempts,
+                state.PathNode,
+                state.DestNode,
+                state.DistSqToTarget,
+                state.DistSqToPrior,
+                frozenSeconds,
+                leaderDistanceSquared,
+                leaderMoving,
+                suppressed,
+                _stallFires[slot],
+                secondsSinceLastRecovery,
+                FollowStallRule.StallThresholdSeconds,
+                FollowStallRule.MinLeaderDistanceSquared,
+                FollowStallRule.MaxConsecutiveRecoveries,
+                FollowStallRule.RecoveryCooldownSeconds))
+        {
+            // The one refusal worth saying out loud: the budget is spent and this companion is
+            // still wedged. Logged once per module, so "the detector gave up" is never silent.
+            if (!_stallLatchLogged[slot]
+                && FollowStallRule.ShouldLatchOff(_stallFires[slot], FollowStallRule.MaxConsecutiveRecoveries)
+                && FollowStallRule.IsWedgedShape(
+                    state.Phase, state.Attempts, state.PathNode, state.DestNode,
+                    state.DistSqToTarget, state.DistSqToPrior))
+            {
+                _stallLatchLogged[slot] = true;
+                PluginHost.Log(
+                    $"party follow stall: 0x{objectId:X} still wedged after "
+                    + $"{FollowStallRule.MaxConsecutiveRecoveries} × {MethodName(_stallRecoveryMethod)} "
+                    + $"— giving up for this module (phase={state.Phase} pathNode={state.PathNode} "
+                    + $"destNode={state.DestNode} writeCursor={state.WriteCursor} "
+                    + $"distSqToTarget={state.DistSqToTarget:F4} distSqToPrior={state.DistSqToPrior:F4})");
+            }
+
+            return;
+        }
+
+        // 3. Fire.
+        bool applied = Odyssey.TryRecoverFollowStall(
+            objectId, _stallRecoveryMethod, allowCountRestore: false, out bool wrote, out string detail);
+
+        // Count a refusal exactly like a fire: a method that cannot apply here must not be retried
+        // on every cooldown for the rest of the session either.
+        _stallFires[slot]++;
+        _stallLastFireTime[slot] = now;
+        _stallFirePos[slot] = pos;
+
+        PluginHost.Log(
+            $"party follow stall: 0x{objectId:X} wedged {frozenSeconds:F1}s at phase={state.Phase} "
+            + $"attempts={state.Attempts} pathNode={state.PathNode} destNode={state.DestNode} "
+            + $"writeCursor={state.WriteCursor} distSqToTarget={state.DistSqToTarget:F4} "
+            + $"distSqToPrior={state.DistSqToPrior:F4} leaderDistSq={leaderDistanceSquared:F2} "
+            + $"leaderMoving={leaderMoving} — recovery {_stallFires[slot]}/"
+            + $"{FollowStallRule.MaxConsecutiveRecoveries} {MethodName(_stallRecoveryMethod)}: "
+            + (applied && wrote ? detail : $"NOT APPLIED ({detail})"));
     }
 }

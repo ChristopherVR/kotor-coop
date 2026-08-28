@@ -343,6 +343,11 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SetGold] = c => SendCheat(new CheatRequest(CheatKinds.SetGold, Amount: c.Amount)),
         [CoopCommandKind.FollowKick] = c => SendCheat(new CheatRequest(CheatKinds.FollowKick, Amount: c.Amount)),
 
+        // Amount carries method*100 + slot — see CoopCommandKind.FollowStall for why this
+        // dev-only verb packs two values into the one integer field CoopCommand has.
+        [CoopCommandKind.FollowStall] = c => SendCheat(new CheatRequest(
+            CheatKinds.FollowStall, Target: (uint)(c.Amount / 100), Amount: c.Amount % 100)),
+
         [CoopCommandKind.Cheats] = CheatsCommand,
     };
 

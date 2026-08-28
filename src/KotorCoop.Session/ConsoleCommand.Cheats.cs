@@ -335,6 +335,28 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.FollowKick, Amount: slot);
     }
 
+    // followstall <slot> [method]  - DEV-ONLY LIVE-TEST PRIMITIVE, see
+    // CoopCommandKind.FollowStall (including why Amount carries method*100+slot).
+    private static CoopCommand ParseFollowStall(string[] rest)
+    {
+        const string usage =
+            "followstall needs a party-roster slot (0-8) and an optional recovery method "
+            + "(1 phasereset, 2 followleader, 3 positionparty, 4 priortie), e.g. followstall 0 1";
+
+        if (rest.Length is not (1 or 2) || !int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        int method = 0;
+        if (rest.Length == 2 && (!int.TryParse(rest[1], out method) || method < 1 || method > 4))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        return new CoopCommand(CoopCommandKind.FollowStall, Amount: (method * 100) + slot);
+    }
+
     private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
 
     /// <summary>
@@ -399,6 +421,10 @@ public static partial class ConsoleCommand
         "                      hook without reaching the Bastila dialogue; local only",
         "  followkick <slot>   dev-only: dump roster slot (0-8)'s follow-record fields, then",
         "                      force record+4=10 (TeleportForward) unconditionally; local only",
+        "  followstall <slot> [method]  dev-only: dump roster slot (0-8)'s follow-record wedge",
+        "                      signature, then apply one follow-stall recovery unconditionally",
+        "                      (1 phasereset, 2 followleader, 3 positionparty, 4 priortie;",
+        "                      omitted = coop.ini's party_follow_stall_recovery_method); local only",
         "  skipline            finish your OWNED conversation's current line/VO right now,",
         "                      in-process (no OS input); no-op if nothing is playing",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
