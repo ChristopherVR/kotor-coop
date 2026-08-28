@@ -69,8 +69,13 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void TopUp(nint player)
     {
-        ushort max = Odyssey.GetMaxHitPoints(player);
-        if (max == 0)
+        // GetEffectiveMaxHitPoints, NOT GetMaxHitPoints: the plain stored-field read is always
+        // zero for a player character (the engine never writes it for one - see
+        // MaxHitPointsRule's own class doc comment), which is why this used to refuse with
+        // "0 max hp" for every player, not just after combat. See docs/research/
+        // playthrough-taris.md's dated follow-up.
+        int max = Odyssey.GetEffectiveMaxHitPoints(player);
+        if (max <= 0)
         {
             // Names the resolved object's own id/vtable/current-hp so a genuinely-zero max can
             // be told apart from GetPlayerCreaturePointer resolving the wrong object — see
@@ -146,7 +151,10 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
-        ushort max = Odyssey.GetMaxHitPoints(target);
+        // GetEffectiveMaxHitPoints, NOT GetMaxHitPoints, for the same reason TopUp uses it: the
+        // target here is always a player character (StandUp's own playerId), whose plain
+        // stored-field max reads zero forever.
+        int max = Odyssey.GetEffectiveMaxHitPoints(target);
         if (max > 0 && hitPoints > max)
         {
             hitPoints = max;

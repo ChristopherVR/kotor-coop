@@ -413,3 +413,116 @@ instruction to document rather than guess at a fix.
 8. **Crash dumps could not be enabled this session** (non-elevated shell) — a tooling/process
    gap for whoever runs the next round, not a code issue. Run from an admin `pwsh` and call
    `tools\crashlog.ps1 -EnableDumps` first.
+
+## Follow-up (2026-08-28): open issue #1 fixed; the minigame-toast finding was a false negative
+
+### `topup`'s "0 max hp" — root cause, and fixed
+
+Read `CheatController.Player.cs`'s `TopUp` against `Odyssey.GetMaxHitPoints`
+(`Odyssey.Health.cs`), which is a one-line read of `CSWSObject+0xE0` — and against
+`KotorGameBridge.Attach.cs`'s own `TryReadMaxHitPoints`, the out-of-process reader this
+project already ships for the dashboard. That comment names the real bug directly: **the
+stored field at +0xE0 is `ushort` zero on EVERY player character, forever** — the engine's own
+`CSWSCreature::GetMaxHitPoints` (0x004ED310) never writes it for a PC; instead it re-sums the
+character's per-level hit points (`level.hitPoints + conModifier`, once per level) every time
+it is asked, and `CSWSObject::GetMaxHitPoints` (the plain field read `topup` used) is only the
+branch the engine takes for doors, placeables and non-PC creatures. So `topup` was never
+reading combat-damaged state — it read an always-zero slot, on every player, the entire time.
+It only LOOKED combat-shaped this round because nobody had tried it before the first fight;
+the one intermediate `max 0 -> 265 -> 12` misread the write-up mentioned is consistent with a
+torn read of the same never-meaningfully-written field, not a separate symptom.
+
+**Fix**: `Odyssey.GetEffectiveMaxHitPoints(nint obj)` (new, `Odyssey.Health.cs`) reproduces the
+engine's real branch in-process — `CreStats`'s own `is_pc` flag selects the stored-field read
+for anything that isn't a PC, or the per-level sum for anything that is — reusing the exact
+offsets `KotorGameBridge.Attach.cs`'s `TryReadMaxHitPoints` already verified LIVE (a level-1 PC
+with a rolled 10 and a +2 CON modifier read back 12, matching a full-health reading exactly).
+The pure "which branch, what sum" decision is factored out into `MaxHitPointsRule.cs`
+(dependency-free, linked into `KotorCoop.Tests.csproj` like every other Plugin arithmetic
+rule) so it is testable without a live process — `MaxHitPointsRuleTests.cs`, 7 tests, pins the
+live-verified 10+2=12 case plus the empty/over-bound "genuinely unresolved, report 0" fallback.
+`TopUp`, its own `ApplyPendingHitPoints` (the `standup` deferred top-up), and
+`DeathController.cs`'s `ApplyPendingHitPoints` (a peer's revive top-up) all switched to the new
+method — all three ever only operate on a player character, so all three hit the identical
+bug. The remaining two callers of the original `GetMaxHitPoints` (`CombatController.cs` and
+`EnemyPresenceController.cs`, both enemy-facing reads) are left untouched on purpose: they read
+a non-PC creature's stored field, which is exactly right for that case and was never the bug.
+
+**NEEDS-LIVE**: the individual pieces (the offsets, the branch, the live-verified 10+2=12 sum)
+are each already confirmed live via `KotorGameBridge.Attach.cs`'s own out-of-process reader;
+combining them into a NEW in-process read path (`Odyssey.GetEffectiveMaxHitPoints`) has not
+itself been run against a live game this round — no rig was available. Next round with rig
+access: get a player's hp driven down by real combat exactly as this round did, then `topup`,
+and confirm it now reports the character's real max (not 0) and heals correctly, on both
+instances, in both the fresh-module and post-combat-transition cases this round reproduced.
+
+Files: `src/KotorCoop.Plugin/MaxHitPointsRule.cs` (new), `src/KotorCoop.Plugin/Odyssey.Health.cs`,
+`src/KotorCoop.Plugin/CheatController.Player.cs`, `src/KotorCoop.Plugin/DeathController.cs`,
+`tests/KotorCoop.Tests/MaxHitPointsRuleTests.cs` (new),
+`tests/KotorCoop.Tests/KotorCoop.Tests.csproj` (linked-source entry). `dotnet build
+KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both clean, 0
+warnings/errors. `dotnet test tests/KotorCoop.Tests --no-build`: green (see the full-suite
+result recorded with the minigame-toast follow-up below).
+
+### The minigame-toast "ZERO notice" finding: a false negative, not a regression
+
+This round's own step 2 wrote: "the CLIENT's plugin log recorded **zero** lines referencing
+pazaak, minigames, or phantom parking of any kind" and concluded the partner gets no notice
+under the shipped `minigame_hide_peer=1`. **That conclusion does not hold up** — checking the
+plugin log was checking the wrong artifact for this specific mechanism, and the mechanism
+itself was already live-verified working, in a DIFFERENT round the same day, before this one.
+
+`MinigameAnnouncer` (`src/KotorCoop.Agent/MinigameAnnouncer.cs`) is deliberately AGENT-side,
+not plugin-side, precisely because the plugin cannot observe a hidden peer's flag (its own
+class doc comment, and `docs/research/minigames.md` §23.3, explain why at length: under
+`minigame_hide_peer=1`, `CoopAgent.PumpOnce`'s `visible` filter and `TryWriteRemotePeers`'s
+own write happen in the same call on the same filtered snapshot, so there is provably no tick
+at which a hidden peer's slot in the shared block is both active and carries the minigame
+flag). `CoopCommandDispatcher.Announcers.cs`'s `AnnouncePeerChanges` feeds
+`MinigameAnnouncer.Observe` from `session.GetRemotePeers()` — the RAW admitted roster the wire
+buffer holds, sampled straight off `CoopHost`/`CoopClient` with **no** minigame filtering at
+all (confirmed by reading both implementations: `GetRemotePeers() => _buffer.Sample(...)`,
+nothing else). `CoopAgent.PumpOnce`'s own hide filter only ever touches its locally-scoped
+`visible` list, which is used for `TryWriteRemotePeers` and the position/combat/pause pumps —
+never for what `GetRemotePeers()` itself returns. So the toast's own wiring was never subject
+to the hide filter in the first place, by construction.
+
+The toast, when it fires, reaches the player through `KotorGameBridge.PostChatLine` — a write
+into the shared block's chat-line field — which `ChatOverlayController` (plugin side) renders
+directly onto the frame as queued text (`Odyssey.PostTextLine`). **It is never written to the
+plugin's own log file.** It IS written to the agent's own log (`Reply`'s `log(text)` call,
+`CoopCommandDispatcher.cs`) — `agent2.log` for the client in this round's own naming, not
+`kotorcoop-plugin.log`. Grepping the plugin log for "minigame" could not have found this line
+even on a fully working build.
+
+This is not merely inferred: `docs/research/minigames.md` §23's "Live pass (2026-08-28)" — an
+EARLIER round the same day as this Taris playthrough — ran the identical shipped configuration
+(`minigame_hide_peer=1`) with the real `pazaak` console primitive and recorded, verbatim:
+
+```
+CLIENT [03:28:08]     * Lanik is in a minigame - waiting                  <- the chat toast (agent2.log)
+```
+
+explicitly noting the line "fired on the client under the SHIPPED default
+(`minigame_hide_peer=1`), confirming §23.3's own follow-up fix ... works for Pazaak." This
+Taris round's own host also ran `pazaak` under the same default and reported the SAME
+`CPazaakData field 0x1` / `minigame: entered (Pazaak)` local detection lines the earlier round
+saw — the flag genuinely fired again — but this round only inspected the plugin log, not
+`agent2.log`, so it could not see the toast that the earlier round already proved exists.
+
+**No code change was needed.** A permanent regression pin was added instead:
+`MinigameAnnouncerLoopbackTests.cs` (new) — real `CoopHost`/`CoopClient`/`CoopAgent` pump loops
+over real sockets, `HidePeersInMinigame` left at its shipped-default `true`, a fake bridge
+standing in for the game process. It drives the client's own `MinigameAnnouncer.Observe` from
+`client.GetRemotePeers()` (the exact call `AnnouncePeerChanges` makes in production) on its own
+independently-scheduled loop, sets the host's fake `FlagInMinigame` on, and asserts BOTH halves
+of the claim at once: the toast fires ("Revan is in a minigame - waiting") AND, at the same
+moment, the client's own block-write bridge (`TryWriteRemotePeers`) received an EMPTY peer
+list — proving the hide filter parked the phantom and the toast fired, simultaneously, from the
+same flag edge, exactly as designed. Passes against the current (unmodified) wiring. Files:
+`tests/KotorCoop.Tests/MinigameAnnouncerLoopbackTests.cs` (new).
+
+**Lesson for future live rounds**: when a channel is documented as agent-side (`AwayAnnouncer`,
+`MinigameAnnouncer`, `SoloSegmentAnnouncer` all share this shape), a live check for its output
+needs to grep the AGENT's log, not the plugin's — see `docs/CONTRIBUTING.md`'s log-location
+table if the two are not obviously named per-instance in a given rig's `%TEMP%` layout.
