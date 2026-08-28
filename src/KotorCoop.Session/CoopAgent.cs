@@ -401,7 +401,8 @@ public sealed class CoopAgent
         // is hidden from what this instance writes locally, so the duel script never sees a
         // second body. Triggered off the LOCAL flag, not a peer's own — unlike the minigame
         // and away filters above, this is not about whether a PEER opted out, it is about
-        // whether THIS instance is mid-duel. coop.ini solo_segment_spectate, default OFF.
+        // whether THIS instance is mid-duel. coop.ini solo_segment_spectate, default ON
+        // (live-verified 2026-08-28 - docs/research/star-forge-finale.md §12).
         SoloSegmentRule soloSegmentRule = new(Enabled: _settings.SoloSegmentSpectateEnabled);
         if (soloSegmentRule.ShouldHideAllPeers(local.IsInSoloSegment))
         {

@@ -1391,3 +1391,114 @@ unit tests — no rig this pass:
   produce the same downstream spectate/input-lock behaviour (§8.2) a real dialogue-driven wipe
   would — this hook observes the SAME engine call a real wipe makes, but has never been watched
   firing from either source on a live process.
+
+## 12. Live pass (2026-08-28, rig round): §11's live plan run end to end — every lever confirmed,
+## `solo_segment_spectate` flipped ON by default
+
+Task: run §11.4's live plan on the two-instance rig (`tools/demo.ps1`), then flip the default if
+clean, per this session's own queue (item 1 of a broader live-verification round covering both
+this feature and `party_follow_phase2_kick`).
+
+### Method
+
+`src/KotorCoop.Plugin/build.ps1 -Install` on both game directories (fresh x86 build, strings
+grep confirmed `RemovePartyMemberBySlot`/`NoteRemovePartyMemberCall` present in both deployed
+`dinput8.dll`s). Both `coop.ini` reset to `profiles/coop.ini.example`, then
+`solo_segment_spectate=1` set on both. `tools/demo.ps1` up (loads `END_M01AA` by default),
+`warp sta_m45ac` on the HOST via the console channel (`tools/blockpoke.ps1 ... console '...'`).
+
+### VERIFIED: the splice installs on both instances
+
+Both plugin logs, at plugin startup, before any warp: `solo segment: RemovePartyMember calls at
+0x541C1E (stub 0x...)` — the exact `HookSite` §11.1 derived, confirmed live for the first time
+(§11.5's own first open item).
+
+### VERIFIED: a single `removeparty 0` logs the debug line, no crash
+
+Host, in `sta_m45ac`: one `removeparty 0` → engine reply `party slot 0 removed`; plugin log
+gains exactly one `solo segment debug: RemovePartyMember slot 0 in sta_m45ac` line. Both
+`swkotor.exe` processes stayed alive and responsive throughout.
+
+### VERIFIED: a tight burst (3 calls within ~330ms) begins a segment
+
+The console channel's own per-invocation process-spawn overhead (a fresh `pwsh` per call) made
+three separate `blockpoke.ps1 console '...'` invocations land roughly 1.05s apart — outside the
+machine's own ~1s debounce window, so the burst never began a segment this way. A small scratch
+script (embedded `Add-Type`, one process, three back-to-back shared-block writes) sent three
+`removeparty 0` commands 156-163ms apart instead (host already had slot 0 removed from the first
+test, so the engine refused all three with `failure 9` — irrelevant, since `HookSite` sits before
+any validity check and fires on every real VM call regardless of outcome, exactly as §11.1
+predicted). Plugin log:
+
+```
+[09:35:28.792] solo segment debug: RemovePartyMember slot 0 in sta_m45ac
+[09:35:28.933] solo segment debug: RemovePartyMember slot 0 in sta_m45ac
+[09:35:28.933] solo segment: began in sta_m45ac — script trigger (RemovePartyMember burst),
+                roster read not required to have caught up yet
+[09:35:29.091] solo segment debug: RemovePartyMember slot 0 in sta_m45ac
+```
+
+`began` fired on the SECOND call, matching `NoteRemovePartyMemberCall`'s own "count reaches 2"
+threshold exactly.
+
+### VERIFIED: the owner's roster genuinely empties; the peer's phantom hides on the owner's side
+
+`tools/partystate.ps1` on the host immediately after: `companions 0`. The client (mirroring):
+`companions 0  soloMode 1`. `tools/blockpoke.ps1 ... state` on the host: `phantoms 0  remotes 0`
+— the client's own phantom is not tracked at all on the owner's instance while the segment is
+active, confirming the agent-side peer-hide filter (`CoopAgent.PumpOnce`,
+`SoloSegmentRule.ShouldHideAllPeers`) engaged.
+
+### VERIFIED: the spectator's input parks, camera follows, and a toast fires
+
+Client plugin log: `solo segment: spectating 0x10D — input parked, camera follows` — the
+`SoloSegmentSpectateController` log line, firing on cue. The client's own agent log
+(`agent2.log`): `* Lanik is fighting alone - spectating` (Lanik = the host's player name) — the
+status-toast/notice text confirming the spectator-side reaction surfaced through the normal
+agent-event path, not just an internal flag.
+
+**Still not verified**: whether the input lock stops a real PHYSICAL WASD press. Injected
+keystrokes never reach this game (docs/live-verification.md), so this remains provable only by
+confirming the mechanism engaged (the log line, the flags it sets) — the same limit §11.5 already
+flagged, unchanged by this pass.
+
+### VERIFIED: `solo_segment_any_module`'s own gate, both directions
+
+With `solo_segment_any_module=0` (the shipped default), the identical burst in an UNCATALOGUED
+module (`END_M01AA`, via `warp end_m01aa`) produced three `solo segment debug:` lines but no
+`began` — the gate correctly holds the burst trigger to the catalogue when the extra key is off.
+Torn the rig down, set `solo_segment_any_module=1` on both `coop.ini`s (read once at plugin
+construction — a restart is required for the flag to take effect, unlike the burst's own
+per-call reads), relaunched (fresh session loads directly into `END_M01AA`), repeated the
+identical burst: `solo segment: began in END_M01AA — script trigger (RemovePartyMember burst),
+roster read not required to have caught up yet` fired, and the client's own spectate log line
+fired in the same uncatalogued module too. No crash either direction.
+
+### VERIFIED: the end condition — a real roster refill ends the segment cleanly
+
+`recruit 0` on the host (still in the `any_module=1` / `END_M01AA` session): engine reply `NPC
+slot 0 recruited and added to the party (0x127)`. ~28 seconds later, plugin log: `solo segment:
+ended (roster refilled or the module changed)` — §11.2's own race-guard fix
+(`_sawEmptyRosterSinceActive`) did not block the real end condition, matching its own design
+intent (the guard only ever delays a FALSE end).
+
+### Verdict: every lever holds; `solo_segment_spectate` flipped ON by default
+
+No crash on either instance across the whole round (install → catalogued burst → uncatalogued
+regression, both directions → end condition). Per this project's own bar ("flip ON only when all
+levers hold"), `solo_segment_spectate` is now ON by default:
+`SoloSegmentController`/`SoloSegmentSpectateController`'s own `PluginConfig.ReadBool` fallback,
+`CoopConfig.SoloSegmentSpectateEnabled`'s own fallback (also fixed to the
+`!ContainsKey(...) || IsTruthy(...)` pattern `CompanionXpSync`/`CompanionGearSync` already use,
+closing the same "key absent falls back to OFF regardless of the shipped default" gap footnote³
+of `docs/CONFIG.md` describes for other features), `profiles/coop.ini.example`, `docs/CONFIG.md`,
+`README.md`, `docs/roadmap-seamless.md`, and this doc's own README.md index row all updated to
+match. `solo_segment_any_module` stays at its own default OFF — it is a testing convenience for
+future forced-solo content, not a feature toggle of its own.
+
+### Files
+
+`src/KotorCoop.Plugin/SoloSegmentController.cs`, `SoloSegmentSpectateController.cs`,
+`src/KotorCoop.Session/CoopConfig.cs`, `CoopAgent.cs`, `src/KotorCoop.Protocol/PlayerState.cs`,
+`profiles/coop.ini.example`, `docs/CONFIG.md`, `README.md`, `docs/roadmap-seamless.md`,
+`docs/research/README.md`, `docs/live-verification.md`.

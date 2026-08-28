@@ -25,17 +25,23 @@ namespace KotorCoop.Plugin;
 ///     <c>InteractionLockController</c> already uses it to hold an NPC someone is talking to —
 ///     clears a queued MOVE-class head action (a click-to-move in flight) without touching a
 ///     fight action, so a mid-swing attack this pass already queued is not yanked.
-/// Neither has been watched stop a real WASD press live. Reuses <c>DialogueSpectateController</c>'s
+/// Neither has been watched stop a real physical WASD press live — injected keystrokes never
+/// reach this game (docs/live-verification.md), so this remains the one unverified half of the
+/// feature even after the 2026-08-28 live pass below. Reuses <c>DialogueSpectateController</c>'s
 /// own precedent for "the safest answer to an unverified input-block question is the engine's
 /// OWN camera/UI-ownership discipline" by ALSO deferring completely to a live conversation and
 /// to the down-spectate camera, the same two things <c>SpectateController</c> defers to.
 ///
 /// Kill switch: <c>solo_segment_spectate=0</c> in coop.ini (shared with
-/// <see cref="SoloSegmentController"/> — one key gates both halves).
+/// <see cref="SoloSegmentController"/> — one key gates both halves; default ON — live-verified
+/// 2026-08-28, this class's own "solo segment: spectating 0x... — input parked, camera follows"
+/// log line fired on cue every time the owner's segment began, both in a catalogued module and
+/// (<c>solo_segment_any_module=1</c>) an uncatalogued one; see
+/// docs/research/star-forge-finale.md §12).
 /// </summary>
 internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block)
 {
-    private readonly bool _enabled = PluginConfig.ReadBool("solo_segment_spectate", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("solo_segment_spectate", true);
 
     /// <summary>Frames between passes — matches <c>SpectateController</c>'s own cadence. The
     /// cadence is a smoothness/cost trade for the camera reassert and the hold; the flag-scan

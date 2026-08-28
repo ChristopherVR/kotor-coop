@@ -730,9 +730,15 @@ party_pool_sync=0
 # the other player's plugin parks their input and camera on the fight instead. Read by two
 # independent files off this one key - CoopConfig.cs (agent side, the peer-hide filter) and
 # PluginConfig.cs (plugin side, the owner-side detection AND the spectator-side reaction) - see
-# CONFIG.md's own footnote for the split. NEEDS-LIVE: nothing here has been exercised against a
-# real Star Forge save yet. Defaults OFF; 1 turns it on.
-solo_segment_spectate=0
+# CONFIG.md's own footnote for the split. Live-verified 2026-08-28 via the script-agnostic
+# RemovePartyMemberHook burst trigger (docs/research/star-forge-finale.md #12): splice installs,
+# a burst begins a segment, the owner's roster genuinely empties, the client's phantom hides on
+# the owner's own instance, the spectator's input parks and camera follows, a real refill ends
+# it - all confirmed live, in both a catalogued module and (solo_segment_any_module=1) an
+# uncatalogued one. The one still-unverified half is whether the input lock stops a real
+# PHYSICAL WASD press (injected keystrokes never reach this game, so it could only be confirmed
+# by the log line showing the levers engaged). Defaults ON; 0 turns it off.
+solo_segment_spectate=1
 
 # Extra modules appended to SoloSegmentCatalogue's base set (sta_m45ac, sta_m45ad) for
 # solo_segment_spectate, comma-separated. Only read by the plugin. Leave unset unless testing

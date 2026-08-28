@@ -75,7 +75,7 @@ actually runs with.
 | `companion_xp_sync` | OFF³ | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_gear_sync` | ON (all three slots — body, right weapon, left weapon — live-confirmed 2026-08-28) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — the 2026-08-27 live-verified FAILURE (apply lands on the PLAYER, not the companion) was root-caused and fixed; a follow-up round found and fixed a weapon-slot-specific `EquipSlotMap` bit-flag encoding bug, then live-confirmed both weapon slots and the body slot, with mid-session propagation under 3s | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_pool_sync` | OFF (live rig, 2026-08-28: a native-side defect found — a freshly-inserted pool item is not reliably found by the very next local read, independent of the C# sync logic) | sync the shared party item pool (`CSWPartyTable+0x118`) both ways | [party-pool-sync.md](research/party-pool-sync.md) |
-| `solo_segment_spectate` | OFF¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — NEEDS-LIVE) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_spectate` | ON¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — live-verified 2026-08-28) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `store_sync` | OFF (live rig, 2026-08-28: wipe-prevention/buy/deplete/infinite-stock/blackout-resync confirmed clean; `sell` cannot find an item confirmed to exist, and unguarded `buy` can underflow the party's gold) | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open | [store-sync.md](research/store-sync.md) |
 | `stun_servers` | two well-known public servers¹² | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
 | `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
@@ -162,7 +162,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 1000ms host-answer timeout (raised from 300ms 2026-08-28 — the real plugin→agent→host round trip never fit in the original budget; live-verified 2026-08-28, correct outcome AND fast-path resolution both confirmed) | [container-sync.md](research/container-sync.md) |
 | `pazaak_detect` | ON⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
 | `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
-| `solo_segment_spectate` | OFF¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_spectate` | ON¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_any_module` | OFF | plugin-only: drops the module gate on `RemovePartyMemberHook`'s own burst trigger ONLY (≥2 `RemovePartyMember` calls within ~1s begins a segment in ANY module, not just the catalogue) — the roster-drop-edge trigger stays catalogue-gated regardless | [star-forge-finale.md](research/star-forge-finale.md) §11 |
 
@@ -229,7 +229,11 @@ split `pazaak_detect`⁹ and `movie_relay`² already use: `CoopConfig.SoloSegmen
 peer while the local player owns an active segment; `PluginConfig.ReadBool("solo_segment_spectate",
 ...)` (plugin side, in-process) gates both the owner-side detection that sets the wire flag in
 the first place AND the spectator-side reaction (input lock, camera, damage gate) on the OTHER
-player's instance. Both default OFF; setting it in `coop.ini` turns every half on together.
+player's instance. Both default ON as of 2026-08-28 (live-verified via the script-agnostic
+`RemovePartyMemberHook` burst trigger — docs/research/star-forge-finale.md §12); setting it to 0
+in `coop.ini` turns every half off together. The one remaining unverified half is whether the
+input lock stops a real PHYSICAL WASD press — injected keystrokes never reach this game, so only
+the levers engaging (the log line, the phantom hide, the parked camera) could be confirmed.
 ¹² `stun.l.google.com:19302,stun1.l.google.com:19302` — this is `CoopConfig`'s fallback when
 the key is entirely absent; a `stun_servers = ` line present but empty is what actually turns
 discovery off (see `PublicAddressDiscovery.ParseServers` and `network-topology.md`'s privacy
