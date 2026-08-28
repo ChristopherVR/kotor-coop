@@ -1897,3 +1897,68 @@ their shipped OFF default.
 already on `main` as of `cbcc0c4`. The two write-ups above (`docs/research/store-sync.md`,
 `docs/research/party-pool-sync.md`) plus this entry are the session's only output — see git
 history for the exact commits.
+
+## Rig pass (2026-08-28): post-transition-crash-verdict queue — `party_pool_sync`'s §26 fix
+## disqualified by a SEVERE runaway (item 1); `store_sync`'s buy-back check inconclusive again plus
+## a NEW blackout+reconnect double-apply/misroute defect (item 2); baseline clean (item 3)
+
+Task: this session's three-item queue, starting from HEAD already equal to `main` at `66430d3`
+("Merge: transition crash verdict") — no merge needed. Full detail in each feature's own research
+doc; this entry is the session-level summary.
+
+### Item 1 — `party_pool_sync`: see `docs/research/party-pool-sync.md`'s new §27. Summary: ran
+§26's own concrete next live step — three rapid host `pooladd g_i_medeqpmnt01`s in `END_M01AA` (no
+warp). Did **not** converge to +3: an unbroken cascade of escalating local-add/local-remove
+detections on both sides amplified the three requests to **535 units on the host and 550 on the
+client** — a ~178-183x overshoot from target, AND a 15-unit cross-instance divergence, before
+settling on its own after ~33 seconds with no crash and no loop-breaker trip. Consistent with (but
+not mechanically re-proven as) a resurgence of §21's original severe-runaway shape, likely
+contaminated by `END_M01AA`'s own ambient item-spawn scripts creating the identical resref
+(`g_i_medeqpmnt01`) the test used, colliding with the §20.2 ambient-noise suppression window.
+§26's serialized-issuer fix closes a different bug (a dropped request) and does not, on this
+evidence, prevent this one. `party_pool_sync` stays OFF, disqualified for a second consecutive live
+round — this round's failure is worse in magnitude than §25's undercounting stall.
+
+### Item 2 — `store_sync`: see `docs/research/store-sync.md`'s new "Live pass (2026-08-28, rig
+### round)" section. Summary: re-ran the established `tar_m02aa`/`Larrim_Store` recipe (ONE
+relocating warp, per the transition-crash verdict). Three clauses re-confirmed clean: no wipe on
+open, the host-sell-to-client mirror (~1s latency, confirmed working even with the client's own
+store GUI never open), and the infinite-stock buy no-op. The client buy-back clause is INCONCLUSIVE
+again — the `tar_m02aa` ambient `duros`/party-select trap did not clear on the client despite 10+
+fast retries and a `tp`-away attempt, this time compounded by a genuine combat encounter at the
+warp-in point (14 enemies, both PCs took damage but survived — `god` mode already active from the
+save). A NEW, previously-undocumented defect was found in the blackout+reconnect clause: a
+reconnect after `netsim blackout 8` double-applied an already-mirrored sell on the client, and the
+duplicate landed in the CLIENT PLAYER's own inventory rather than the store's stock (`items 99`
+confirmed: host's copy shows the sold item at `stack 2`, client's copy shows `stack 1` in the store
+plus a separate `stack 1` tagged `yours`) — total unit count matches across instances, but the
+allocation is wrong, a misroute rather than a simple duplicate. `store_sync` stays OFF, not flipped
+on. No crash this round.
+
+### Item 3 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors (run at the top of this
+  session, before any rig work).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed (identical `dinput8.dll` size/timestamp confirmed both sides).
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2489/2489 passed**, run with the rig down to
+  avoid the documented UDP-port-binding flake — a clean, isolated run.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides (every sync flag at its shipped default): **40 passed,
+  9 failed** — squarely the documented 40-42/7-9 baseline, all nine failures matching the
+  long-documented known set exactly: the 7 core known failures (`phantom damageable, not a sink`;
+  `the peer really loses those hit points`; `a client hit costs the enemy real hit points`; `a
+  downed player is reported to the agent`; `the co-op revive stands the player back up`; `every
+  engine call signature matches the binary` at 197/199; `a container opened on the client is held
+  and shown open on the host`) plus both documented flaky substitutions landing together this run
+  (`an item picked up here vanishes on the peer`, `no per-frame spam`) — this exact combination is
+  itself a previously-documented precedent, not a new failure shape. No regression, no crash.
+
+Both game directories' `coop.ini` were reset back to the plain example template (shipped defaults,
+`auto_start_agent=1` restored) before this session ended; `store_sync` and `party_pool_sync` both
+stay at their shipped OFF default — no `coop.ini.example`/`CONFIG.md`/README changes needed since
+neither flag flipped.
+
+**No source changed this session** — every item was a live-verification pass against the code
+already on `main` as of `66430d3`. The two write-ups above (`docs/research/store-sync.md`,
+`docs/research/party-pool-sync.md`) plus this entry are the session's only output.
