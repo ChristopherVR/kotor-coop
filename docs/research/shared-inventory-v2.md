@@ -424,3 +424,213 @@ every pre-existing mode-1 and unrelated suite — passes with zero failures. `do
 KotorCoop.slnx -warnaserror` is clean (0 warnings, 0 errors). `party_pool_sync=2`/`store_sync=2`
 stay OFF by default, exactly as designed — this pass only strengthens the bench-side confidence
 NEEDS-LIVE already required; nothing here has run against a real game.
+
+---
+
+## 6. 2026-08-29, rig round — Live pass: `party_pool_sync=2` DISQUALIFIED by the exact same
+## exponential-doubling runaway class as mode 1's §21/§27, reproduced twice, including with
+## `dialogue_item_sync`/`script_item_sync` isolated; `store_sync=2` not reached this round
+
+Task: the queue's item 1 — the exact §27 recipe (`docs/research/party-pool-sync.md` §27.1) re-run
+against mode 2. Two-instance rig (`tools/demo.ps1`), both game directories freshly
+`build.ps1 -Install -WarnAsError`'d (both deployed `dinput8.dll` 2,060,288 bytes / identical
+timestamp; both deployed `KotorCoop.Session.dll` confirmed by byte-scan to contain
+`PartyPoolPumpV2`/`StorePumpV2`/`PartyPoolSnapshotPacketV2`). `coop.ini` reset to
+`profiles/coop.ini.example` on both, then `party_pool_sync=2`/`store_sync=2` set on both (the
+queue's own instruction). Both instances loaded into `END_M01AA` (the default starting save, no
+warp — confirmed via `who`: `Malak END_M01AA`).
+
+### 6.1 First attempt: contaminated by `dialogue_item_sync`/`script_item_sync` (both ON by
+### default) — a different channel, but a real amplification nonetheless
+
+Three `pooladd g_i_medeqpmnt01` on the HOST, each confirmed individually
+(`added 'g_i_medeqpmnt01' x1 to the party pool`). Within seconds, both agent logs showed an
+unbroken cascade of `materialise: gave loot 'g_i_medeqpmnt01' ... for the local player (dialogue
+grant)` lines — the `giveloot`/dialogue-grant channel (`CheatController.Items.cs`,
+`DialoguePump`/`LootPump`), NOT `party_pool_sync` — with stack sizes 6, 120, 321, 201, 243, 216,
+18, 369, 576, 9, 288, 1251, 90, 171... interleaved with `party pool: added`/`removed` lines of
+similar magnitude. The cascade stopped on its own after ~2 minutes; both sides converged to the
+SAME total (`items 99`: 82 of 82 on both) — unlike mode 1's own divergent failure, but still a
+two-orders-of-magnitude overshoot. Root-caused to `dialogue_item_sync=1`/`script_item_sync=1`
+(both ON by default in `profiles/coop.ini.example`) — `party-pool-sync.md` §11/§19 already
+documents this exact cross-channel contamination trap and the established practice of isolating
+both flags to `0` before a clean party-pool read; the queue instructions for this round did not
+call for that isolation, so the first attempt inherited it. Recorded here so the next round does
+not waste time rediscovering it, and because it is itself informative: mode 2 did not prevent
+this contamination from reaching a ~180x overshoot either, even though the two sides agreed with
+each other at the end.
+
+### 6.2 Second attempt, `dialogue_item_sync=0`/`script_item_sync=0` isolated: mode 2's OWN
+### client-side pump reproduces a genuine exponential-doubling runaway, unrelated to any other
+### channel
+
+Demo stopped and restarted clean: `coop.ini` reset again, `party_pool_sync=2`/`store_sync=2=2`
+kept, `dialogue_item_sync=0`/`script_item_sync=0` added on both, logs cleared, fresh save load
+(confirmed `who` → `Malak END_M01AA` again). The same three `pooladd g_i_medeqpmnt01` on the HOST,
+each confirmed individually.
+
+**What happened, read directly from the HOST's own agent log
+(`%TEMP%\kotorcoop-demo\agent1.log`), tagged unambiguously `party pool v2:` (the mode-2 pump, not
+mode 1, not the dialogue-grant channel)**: within ~10 seconds, `party pool v2: submitting
+add/remove of Nx '<resref>' through the party-pool channel` lines began an unmistakable
+power-of-two doubling ramp — **and it hit items nobody ever touched**: `g_w_blstrpstl001` and
+`g_a_clothes01` (both presumably `end_m01aa`'s own opening-tutorial gear, never named in this
+round's `pooladd`) rode the identical doubling sequence alongside the targeted
+`g_i_medeqpmnt01`:
+
+```
+01:51:43  add 1x g_w_blstrpstl001 / add 1x g_a_clothes01
+01:51:58  add 2x g_a_clothes01 / add 2x g_w_blstrpstl001      01:51:54/59  add 2x/8x g_i_medeqpmnt01
+01:52:02  remove 4x g_a_clothes01 / remove 4x g_w_blstrpstl001            01:52:03  remove 40x g_i_medeqpmnt01
+01:52:06  add 6x g_w_blstrpstl001 / add 6x g_a_clothes01                  01:52:07  add 112x g_i_medeqpmnt01
+01:52:10  remove 10x / remove 10x                                        01:52:12  remove 315x
+01:52:15  add 18x / add 18x
+01:52:19  remove 34x / remove 34x
+01:52:24  add 66x / add 66x
+01:52:28  remove 130x / remove 130x
+```
+
+The cascade paused for ~2 minutes (last line 01:52:28, nothing until 01:54:24), giving the false
+impression of settling — then resumed a SECOND doubling ramp unprompted (1, 2, 4, 8, 16, 32... on
+`g_w_blstrrfl001`, `g_i_adrnaline003`, `g_i_medeqpmnt01`, `g_w_blstrpstl001`, `g_a_clothes01`
+simultaneously) between 01:54:24 and 01:54:56, at which point observation stopped (not confirmed
+whether it would have resumed a third time). **Final state** (`items 99`): host 66 items total,
+client 72 — a real 6-item cross-instance divergence, the same qualitative failure §27 found for
+mode 1 (host and client disagreeing with EACH OTHER, not just both wrong by the same amount).
+
+**This is mode 2's own client-side pump (`Pumps/PartyPoolPumpV2.cs`), not a cross-channel
+artifact**: the log tag `party pool v2:` is written only by the mode-2 code path
+(`CoopAgent.cs`'s `EffectivePartyPoolSyncMode == 2` branch calling `_partyPoolPumpV2.Pump`), and
+`dialogue_item_sync`/`script_item_sync` were confirmed OFF in both `coop.ini`s before this run.
+This directly contradicts §1.2/§2.5's own "amplification is structurally impossible" argument —
+the mechanism reasoned about there (both sides publish, and what one publishes influences what the
+other compares against) was believed closed by construction because only the client publishes and
+only the host applies. Live evidence says something in the client's own detect/reconcile loop (the
+§5 "Bug 1-4" fixes did not, apparently, close everything) still re-derives a doubling delta each
+cycle against `end_m01aa`'s own ambient noise, even without the op-log's two-way publish. Root
+cause not pinned this round (out of budget for a three-item queue); the doubling-by-exactly-2x
+shape on EVERY cycle, across UNRELATED keys simultaneously, is a strong, specific clue for whoever
+picks this up next — it smells like a single shared multiplier or a target computed from a
+quantity that itself already includes the previous cycle's delta, not per-key independent noise.
+
+### 6.3 Verdict
+
+`party_pool_sync` **stays OFF, not flipped to 2.** Disqualified on the same bar mode 1 failed at
+§21/§25/§27: the recipe's own first clause (three rapid host deposits converging to exactly +3)
+fails, twice, under two different conditions (contaminated and isolated), with the isolated
+condition proving the defect lives in mode 2's own code, not a channel this document blamed for
+mode 1's own §27 finding. No crash; both instances stayed responsive throughout
+(`Get-Process ... Responding=True`). **Store mode 2 (queue item 2) was NOT reached with
+`party_pool_sync` still enabled** — the single-slot arbitrated cheat channel mode 1's root cause 7
+already documented as vulnerable to being clobbered by an unrelated concurrent verb made it unsafe
+to run the store recipe's own console commands (`openstore`/`scriptgive`/`buy`/`sell`) while
+mode 2's party-pool pump could still be mid-cascade; the rig was stopped and restarted with
+`party_pool_sync=0`/`store_sync=2` to get a clean read for the store channel instead (see below).
+**Concrete next step**: root-cause the doubling shape in `Pumps/PartyPoolPumpV2.cs` before any
+further live attempt — in particular whether `OutstandingNet`/`ReconcileTarget` (§2.2/2.3, the
+exact functions the §5 "Bug 2" fix touched) can itself be seeded from a value that already
+reflects a still-in-flight reconcile, producing a target that is always ~2x the true delta.
+
+### 6.4 Store mode 2, same rig round (`party_pool_sync=0`/`store_sync=2` isolated): TWO
+### independent disqualifying defects — a client buy-back never mirrors (a real double-sell), and
+### the host's own store pump wiped then restored nearly the entire pristine stock unprompted
+
+Demo stopped and restarted a second time: `coop.ini` reset, `party_pool_sync=0` (back to
+default — the mode-2 party-pool defect above made it unsafe to run alongside a store test, per
+mode 1's own root-cause-7 single-slot-cheat-channel-clobber precedent), `store_sync=2`,
+`dialogue_item_sync=0`/`script_item_sync=0` kept isolated on both, logs cleared, fresh instances.
+ONE relocating `warp tar_m02aa` on the host (this session's only warp, matching
+`transition-crashes.md`'s own verdict). The documented ambient modal trap (`docs/live-verification.
+md`'s established `skipline`/`selectreply 0`/`partyselect ok` retry loop) cleared in 4 tries on
+the host, 1 try on the client — both `openstore Larrim_Store` succeeded, no wipe observed between
+open and the first deliberate action (clean, matching every prior mode-1 round's own finding for
+this specific clause).
+
+**Host sell → client mirror: clean.** `scriptgive g_w_ionblstr01` then `sell Larrim_Store
+g_w_ionblstr01` on the host; host log `store: local add of 1x 'g_w_ionblstr01' detected in store
+0x74, publishing`; client log, ~2s later, tagged `store v2: submitting add of 1x 'g_w_ionblstr01'
+in store 0x74 through the store channel` / `inserted 'g_w_ionblstr01' x1 into store 0x74`. No
+repeat, no amplification — unlike the party-pool channel above, this specific op did not loop.
+
+**Client buy-back: never detected, reproducing a genuine double-sell.** `setgold 5000` then `buy
+Larrim_Store g_w_ionblstr01` on the CLIENT succeeded (engine-confirmed: `buy 'g_w_ionblstr01' x1
+from store Larrim_Store`, a REAL removal through `CSWGuiStore::BuyItem`). Watched the HOST's own
+agent log for 2+ minutes afterward: **zero** `store v2:` lines referencing `g_w_ionblstr01` ever
+arrived — the client's own detect step (§2.3, the same bridge-scan diff mode 1 always used) never
+noticed its own successful buy as a local change to report. Consequence, proven directly: `setgold
+5000` then `buy Larrim_Store g_w_ionblstr01` on the HOST **succeeded a second time**
+(`buy 'g_w_ionblstr01' x1 from store Larrim_Store`) — the queue's own explicit check
+("host re-buy refused") **fails**. `items 99` afterward showed the store's copy of the object
+(`0x82`) at `stack 1` (dropped from 2 only by the HOST's own second buy, never by the client's
+first one) and a fresh `0xB4 g_w_ionblstr01 yours stack 1` in the host player's own inventory —
+two different players each hold a genuine copy of what should have been one sold unit. This is the
+SAME symptom class `docs/research/store-sync.md`'s own "client buy-back gap" has documented across
+multiple mode-1 rounds (most recently blamed on the `tar_m02aa` ambient-modal trap preventing the
+client from even reaching `openstore`) — but this round's client reached `openstore` on the FIRST
+retry and the buy itself engine-confirmed success, isolating the defect cleanly to the DETECT step
+rather than to the modal trap this document's own prior entries kept blaming.
+
+**NEW, more severe finding: the host's own store pump wiped then restored nearly the store's
+entire pristine stock, unprompted, ~5 minutes after opening.** Starting at the same moment the
+host's own re-buy and an `items 99` query were issued, the host's agent log shows an unbroken
+18-entry cascade tagged `store v2: submitting remove of 1x '<resref>' in store 0x74 through the
+store channel` / `removed '<resref>' x1 from store 0x74` — covering `g_w_vbroswrd01`,
+`g_w_sonicgren01`, `g_w_poisngren01`, `g_i_frarmbnds01`, `g_a_class6001`, `g_i_belt006`,
+`g_w_sonicpstl01`, `k_repair_part` x2, `k_computer_spike` x2, `g_a_class7001`, `g_w_rptnblstr01`,
+`g_w_ionblstr01`, `g_a_class5001`, `g_i_cmbtshot001`, four `g_i_trapkit0xx` entries,
+`g_w_stungren01` x2, `g_w_vbroshort01` — essentially the store's entire base inventory, not
+anything this round's recipe ever touched. ~4-19 seconds later, an `add` cascade of nearly
+identical shape restored every one of those same keys at the same quantities EXCEPT
+`g_w_ionblstr01` (correctly not restored — that unit was legitimately consumed by the host's own
+buy). Net effect after ~20 seconds: the store's total stock was correct again, but for that window
+the HOST's own belief — which mode 2's design makes the sole canonical source every peer
+converges toward (§2.1) — read as almost completely empty, and since the host broadcasts its
+snapshot unconditionally every cycle (§2.1), any peer polling or rendering its own store panel
+during that window would have shown the SAME false wipe. This is the identical shape
+`docs/research/store-sync.md`'s very first live pass found and marked "OPEN, CRITICAL" (a virgin
+store's local baseline diffed against an empty prior belief reads as "should be zero") — later
+reported fixed at the READ side for mode 1, but reproducing here in mode 2's own, textually
+separate pump (`Pumps/StorePumpV2.cs`) roughly five minutes after the store was first opened and
+scanned, not on the very first scan — suggesting whatever triggered this round's wipe is a
+DIFFERENT trigger than mode 1's original "first scan ever" case (a plausible candidate: the
+host's own `items 99` full-inventory query and/or its own `buy` cheat forcing a fresh, larger-scope
+bridge scan that this pump's own belief dictionary had never seen these keys through before,
+mirroring mode 1's original bug's own mechanism one layer later).
+
+**Infinite-stock buy: clean no-op**, re-confirmed even during/around the wipe window — `buy
+Larrim_Store g_w_blstrpstl001` (Larrim's known infinite entry) succeeded with no `store v2:` line
+for that resref ever appearing (infinite entries are filtered out of the snapshot entirely, §2.6).
+Not investigated this round for lack of budget: an incidental, unrelated finding — `setgold`'s own
+gold value went NEGATIVE on the host (`gold -140 -> 5000` read back from a subsequent `setgold`)
+after a burst of `purse: peer 2 contributed +4294962076` / `+0 -3294967077` lines in the host's
+agent log immediately after the client's own `setgold 5000` — a `progression_sync` gold-ledger
+integer-overflow/wraparound, NOT a `store_sync` defect (the wire delta magnitude, ~2^32, is a
+strong sign of a signed/unsigned mismatch somewhere in the gold delta encode/decode path), flagged
+here only so the next round does not mistake it for a `store_sync` symptom. Blackout+reconnect was
+NOT attempted this round — not meaningful to pursue against a channel that already fails its own
+first two clauses this badly, matching `party-pool-sync.md` §27's own precedent for when to stop
+early.
+
+### 6.5 Verdict
+
+`store_sync` **stays OFF, not flipped to 2.** Two independent, reproducible, disqualifying defects
+found in a single round: a client buy-back that never reaches the host (a genuine double-sell,
+directly proven), and a host-side full-stock wipe/restore cascade unprompted by any store action in
+the recipe (the same critical shape mode 1's very first round found, reproducing in mode 2's
+separate implementation). No crash; both instances stayed `Responding=True` throughout. **Concrete
+next steps, ranked**: (a) root-cause the client buy-back detect gap in `Pumps/StorePumpV2.cs`'s
+client-side branch — likely the same family of bug as the party-pool doubling above, since both are
+detect-step defects in freshly-built mode-2 code the loopback tests (§5) did not catch; (b)
+instrument `Pumps/StorePumpV2.cs`'s host-side scan to log WHY a key transitions from "unknown" to
+"known" mid-session well after the store was first opened, to pin what specifically triggered the
+wipe-then-restore cascade (a `buy` cheat, an `items 99` query, or simple time/cadence); (c) the
+`progression_sync` gold-overflow finding is unrelated to this document's own scope but real and
+reproducible — worth its own follow-up before the next round uses `setgold`/`grantgold` near a
+`buy`.
+
+Build/test evidence for this round: `dotnet build KotorCoop.slnx -warnaserror` and `src/
+KotorCoop.Plugin/build.ps1 -Install -WarnAsError` (both game directories) clean before the rig was
+brought up; both deployed `dinput8.dll` confirmed 2,060,288 bytes / identical timestamp, both
+deployed `KotorCoop.Session.dll` confirmed by byte-scan to contain the mode-2 type names. Full
+`dotnet test`/native-build baseline for this session is recorded separately in
+`docs/live-verification.md`.
