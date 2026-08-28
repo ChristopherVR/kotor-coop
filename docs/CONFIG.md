@@ -166,6 +166,8 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `solo_segment_spectate` | ON¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
 | `solo_segment_any_module` | OFF | plugin-only: drops the module gate on `RemovePartyMemberHook`'s own burst trigger ONLY (≥2 `RemovePartyMember` calls within ~1s begins a segment in ANY module, not just the catalogue) — the roster-drop-edge trigger stays catalogue-gated regardless | [star-forge-finale.md](research/star-forge-finale.md) §11 |
+| `removeparty_hook` | ON¹³ | DIAGNOSTIC-only kill key: install `RemovePartyMemberHook`'s mid-function detour on `RemovePartyMember` at all. Off means no script-agnostic solo-segment trigger and no `removeparty` dev verb; `SoloSegmentController`'s own roster-count poll (`solo_segment_spectate`) is unaffected | [transition-crashes.md](research/transition-crashes.md) |
+| `behaviour_override_reader` | ON¹³ | DIAGNOSTIC-only kill key: whether `EffectiveBehaviourFlag.Resolve` (used by all five host-adoptable controllers — `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`) reads `SharedBlock.OffsetBehaviourOverrideMask`/`Values` at all. Off means every one of the five always uses its own local coop.ini value, never the host-adopted one, and the override region of the shared block goes unread | [transition-crashes.md](research/transition-crashes.md) |
 
 ³ The code fallback (used whenever the key itself is absent — whether `coop.ini` is missing
 entirely or just that one line is) is OFF for `companion_local_combat`, `dialogue_recruit_sync`,
@@ -239,6 +241,12 @@ the levers engaging (the log line, the phantom hide, the parked camera) could be
 the key is entirely absent; a `stun_servers = ` line present but empty is what actually turns
 discovery off (see `PublicAddressDiscovery.ParseServers` and `network-topology.md`'s privacy
 note — every query is a UDP datagram to a third party).
+¹³ Added 2026-08-29 as part of a DLL-level bisect of always-installed plugin pieces
+(`docs/research/transition-crashes.md`) — these two, plus the pre-existing
+`item_template_spawn_sync`/`status_indicator`/`minigame_wait_notice`/`party_select_host_only`
+keys, are every always-on hook/controller/reader added to the plugin since 2026-08-27 that
+runs regardless of any other coop.ini feature flag. Diagnostic-only: default ON, meant to stay
+ON in a real install, exist purely so a bisection round can isolate one piece at a time.
 
 ## CLI flags (`KotorCoop.Agent`, `AgentOptions.cs`)
 

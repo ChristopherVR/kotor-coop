@@ -121,14 +121,24 @@ internal static unsafe partial class PluginHost
         // BarkHook/PhantomHitHook — its debug log line and the `removeparty` dev verb are meant
         // to work whether or not solo_segment_spectate itself is on; SoloSegmentController's own
         // existing `_enabled` gate is what keeps the FEATURE (beginning a real segment) behind
-        // that key, unchanged.
-        if (RemovePartyMemberHook.Install(out string removePartyDiagnostic))
+        // that key, unchanged. `removeparty_hook` (default ON) is a DIAGNOSTIC-only kill key —
+        // added 2026-08-29 for the transition-crash DLL bisect (docs/research/transition-crashes.md)
+        // since this is a mid-function detour with no prior escape hatch beyond the usual
+        // verify-bytes-or-refuse guard; not meant to ship OFF.
+        if (PluginConfig.ReadBool("removeparty_hook", true))
         {
-            Log($"solo segment: {removePartyDiagnostic}");
+            if (RemovePartyMemberHook.Install(out string removePartyDiagnostic))
+            {
+                Log($"solo segment: {removePartyDiagnostic}");
+            }
+            else
+            {
+                Log($"RemovePartyMember hook NOT installed: {removePartyDiagnostic}");
+            }
         }
         else
         {
-            Log($"RemovePartyMember hook NOT installed: {removePartyDiagnostic}");
+            Log("RemovePartyMember hook NOT installed: disabled by coop.ini removeparty_hook=0");
         }
 
         // Which dialogue reply the player picks is dispatched and gone between frames,
