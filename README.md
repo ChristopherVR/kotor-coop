@@ -37,7 +37,7 @@ attaches from outside with `OpenProcess`.
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Shared party item pool (`party_pool_sync`) | Stays off — a 2026-08-28 live-rig pass found a native-side defect: a freshly-inserted pool item is not reliably found by the very next local read, independent of the C# sync logic | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live-rig pass confirmed wipe-prevention/buy/deplete/infinite-stock/blackout-resync clean, but found `sell` broken and `buy` can underflow the party's gold | [store-sync.md](docs/research/store-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live-rig pass confirmed wipe-prevention/buy/deplete/infinite-stock/blackout-resync clean and added `buy`'s missing affordability guard; a 2026-08-28/29 pass found `sell` silently reporting success without moving the item, root-caused and fixed via full disassembly of `CSWGuiStore::SellItem`/`CSWSStore::AcquireItem` on 2026-08-29 — NEEDS-LIVE, not yet re-tested against a running game | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -235,9 +235,14 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   PHYSICAL WASD press, since injected keystrokes never reach this game and cannot substitute
   for one.
 - **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28
-  live-rig pass confirmed the wipe-prevention/buy/deplete/infinite-stock/reconnect half clean,
-  but found `sell` never finds an item confirmed to exist and `buy` has no affordability guard
-  (see the status table above).
+  live-rig pass confirmed the wipe-prevention/buy/deplete/infinite-stock/reconnect half clean
+  and added `buy`'s affordability guard; a 2026-08-28/29 pass found `sell` silently reporting
+  success without moving the item (or the item's gold), root-caused on 2026-08-29 to
+  `CSWGuiStore::SellItem`'s own internal player/store/repo re-resolution silently bailing out
+  before touching anything, and fixed by driving the underlying engine primitives
+  (`CSWSStore::AcquireItem`, `GetItemSellValue`, the split-stack helper) directly with
+  `SellToStore`'s own already-validated pointers instead — NEEDS-LIVE, not yet re-tested
+  against a running game (see the status table above).
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See

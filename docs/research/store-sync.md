@@ -1919,3 +1919,228 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 build.ps1 -WarnAsError` both clean this round (see `party-pool-sync.md`'s §17.6 — the same build
 covers both files). No source change to store code this round; `dotnet test tests/KotorCoop.Tests
 --no-build`: 2410/2410 passed.
+
+## Root-cause + fix (2026-08-29): full disassembly of `CSWGuiStore::SellItem`, `SellToStore`
+## stops depending on it
+
+Task: this pass's own queue item — the prior section's own next step, "a fresh full
+disassembly of `CSWGuiStore::SellItem` itself (not merely its call site)." No live rig this
+pass (see `docs/CONTRIBUTING.md`'s parallel-session note; this round ran static-only). Every
+address below is fresh disassembly, `tools/disasm.py` against the sha256-matched GOG
+`swkotor.exe`, cross-checked against `tools/kotor1_0_3.db` (`tools/q.py`).
+
+### `CSWGuiStore::SellItem` 0x006C0D80, full disasm — VERIFIED
+
+`__thiscall(panel, item) -> void`, `ret 4` (confirmed — the sole stack argument sits at
+`[esp+0x28]` measured from the prologue's own stack growth, matching the codebase's existing
+documented calling convention). In order:
+
+```
+edi = [esp+0x28]                                   ; the ONE argument: the item to sell
+ebx = GetCreatureByGameObjectID(GetPlayerCreatureId(server))   ; 0x4AEA40 -> 0x4AE770
+ebp = GetStoreByGameObjectID(server, [panel+0x2278])            ; 0x4AE7B0
+
+test edi,edi; je <tail>        ; item null -> bail, nothing done
+test ebx,ebx; je <tail>        ; player-resolve null -> bail, nothing done
+test ebp,ebp; je <tail>        ; store-resolve null -> bail, nothing done
+eax = GetItemRepositoryFn(ebx, 1)     ; 0x4EF770, arg=1 (party-shared), see §"root cause + fix
+                                       ; (2026-08-28)" above
+test eax,eax; je <tail>        ; repo null -> bail, nothing done
+[esp+0x28] = eax                      ; stash the repo pointer for later
+
+; ---- everything below this line only runs if ALL FOUR of the above passed ----
+play sound (0xB)
+eax = GetItemSellValue(panel, item)          ; 0x6C07F0
+edx = [panel+0x2270] + eax                   ; panel's own cached "displayed gold" int, ADD
+[panel+0x2270] = edx
+SetGold(player, edx)                          ; 0x4EDD90 — gold changes HERE, step 2
+
+if item.StackSize (+0x28C) > 1:
+    newItem = item.SplitItem_2(1)             ; 0x55F280 — splits off exactly 1 unit
+    push newItem
+else:
+    CItemRepository::RemoveItem(stashedRepo, item)   ; 0x555FD0
+    push item
+
+store.AcquireItem(pushedItem)                 ; 0x5C7610 — step 3, see below. RETURN VALUE
+                                                ; NEVER CHECKED by this function.
+PopulateStoreItemListBox(panel); PopulateInventoryItemListBox(panel)   ; refresh both lists
+<tail>: restore registers, ret 4
+```
+
+**This settles the live pass's own open question.** The function has FOUR early, silent
+bail-out gates — item-null, player-resolve-null, store-resolve-null, repo-resolve-null — every
+one of which returns with **zero side effects**: no sound, no price lookup, no gold change, no
+item movement, no list refresh, and (this is the part that matches the live symptom exactly)
+no distinguishable signal in `eax`/any output the caller could check, because the function
+returns `void`. `Odyssey.SellToStore`'s old body called this function and unconditionally
+incremented `sold` — it had no way to tell a real sell from one of these four silent bails
+apart.
+
+**Cross-checked against the 2026-08-29 live pass's own two independent observations, and they
+agree exactly**: (1) gold never changed (`grantgold 0` read back the pre-sell baseline) — gold
+is written at step 2, which is AFTER all four gates, so a gate failure is the only place in
+this function's entire body where gold can fail to change while the call still returns
+normally; (2) the item never moved — items only move at step 3, later still. Both observations
+place the failure at one of the four early gates, not anywhere in the item-transfer logic
+itself (`AcquireItem`, disassembled next) — which also means the STACK-related `SplitItem_2`
+logic and `AcquireItem`'s own Plot-item refusal (found below) are NOT what the 2026-08-29 pass
+observed, even though both are real, separate things worth guarding against.
+
+**Which of the four gates actually failed live was not pinned down this pass** — no rig this
+round to instrument it. `GetItemRepositoryFn`'s own fresh-disasm re-check (0x004EF770,
+already documented above) shows its main branch resolves a fixed, creature-INDEPENDENT
+singleton (`CSWPartyTable::GetPartyItems`) whenever the passed creature's `+0xA88` flag is set
+— true for essentially any live party member — which makes a same-instant repo-resolve
+mismatch between this function's own internal player and `SellToStore`'s C#-supplied one
+unlikely on paper, but the player/store resolve calls themselves were not independently
+instrumented live, so this is INFERRED, not VERIFIED, and is explicitly not chased further
+because the fix below does not need the answer.
+
+### `CSWSStore::AcquireItem` 0x005C7610, full disasm — VERIFIED (re-confirms and extends §1.5)
+
+Already partially quoted in §1.5 above (the Infinite-bit tail). Full trace this pass, from the
+top:
+
+```
+ecx = item (the one argument)
+test ecx,ecx; je <refuse-0>            ; item null -> return 0, nothing touched
+eax = [item + 0x108]                   ; CSWSObject::plot — VERIFIED offset: CSWSItem embeds a
+                                        ; CSWSObject at +0x010 (tools/kotor1_0_3.db), and that
+                                        ; class's own `plot` member sits at +0x0F8
+                                        ; (tools/kotor1_0_3.db), so 0x010+0x0F8 = 0x108
+test eax,eax; jne <refuse-0>           ; PLOT ITEM -> return 0, nothing touched — the SECOND
+                                        ; check the function makes (right after its own
+                                        ; item-null check); AcquireItem takes only the item as
+                                        ; an argument, so there is no separate player/store
+                                        ; null check to run first (unlike SellItem, above)
+item.SetIdentified(1)                  ; 0x554170 — a store's own stock is always Identified
+
+; ---- remove the item from wherever it currently is, via the ITEM'S OWN possessor id,
+;      NOT via any repository pointer the caller supplies ----
+possessorObj = GetGameObject(server, [item + 0x268])    ; 0x4AE750 — item's own possessor id
+if possessorObj resolved:
+    ; branches on possessorObj's own vtable (slot 0x30, then 0x38) to tell a creature
+    ; possessor from a container one, then resolves the actual CREATURE holding it (directly,
+    ; or via the container's own owner) and calls CSWSCreature::RemoveItem on THAT creature
+    ; (0x510EF0) — this is the AUTHORITATIVE unlink, independent of the GUI handler's own
+    ; earlier CItemRepository::RemoveItem/SplitItem_2 step, which is redundant bookkeeping for
+    ; the SOURCE repo's own array/count, not what actually detaches the item from its owner.
+
+; ---- insert into the store's own stock ----
+existingEntry = CompareItem-match against store.item_list (0x553CF0 per candidate)
+if a matching finite entry exists:
+    existingEntry.StackSize++              ; +0x28C, INCREMENTS BY EXACTLY 1 — NOT by the
+                                            ; incoming item's own StackSize (confirms: a
+                                            ; multi-unit source item MUST be split to 1 unit
+                                            ; first, or every unit past the first is silently
+                                            ; discarded)
+    return 1
+elif a matching INFINITE entry exists (§1.5, already VERIFIED prior pass):
+    return 1 without incrementing (the item is still consumed)
+else:
+    store.SetPossessor(item, 0x7F000000, 1, 1)     ; 0x553210
+    store.AddItemToInventory(&item)                 ; 0x5C70C0 — appends a fresh stock entry
+    return <whatever AddItemToInventory returned>   ; NOT an explicit 1 — the ONE path whose
+                                                      ; return value this codebase does not
+                                                      ; trust, see below
+```
+
+Two findings that change how this codebase drives this function:
+
+1. **A Plot-flagged item cannot be sold, full stop — the store's own primitive refuses it
+   before touching anything**, matching KOTOR's well-known "you cannot sell plot items" retail
+   rule. `StoreSellGuard.IsPlotItem` (new, `src/KotorCoop.Plugin/StoreSellGuard.cs`) reproduces
+   this exact test so `sell` reports a specific, useful refusal instead of the store silently
+   declining.
+2. **`AcquireItem`'s return value is not trustworthy in general** — two of its three exit paths
+   explicitly set `eax=1`, but the "append a fresh stock entry" path returns whatever
+   `AddItemToInventory` happened to leave in `eax`, unexamined. The retail GUI handler
+   (`SellItem`, above) never checks this return value at all, and — after investigating a
+   post-hoc verification and deliberately abandoning it (see the callout below) — neither does
+   this codebase's own fix.
+
+**A post-hoc verification was investigated and deliberately NOT shipped.** `CSWSItem.item_repo`
+(`+0x26C`, VERIFIED field, `tools/kotor1_0_3.db`) looked like an obvious oracle — re-read it
+after `AcquireItem` and compare against the store's own `item_list` pointer. `tools/fieldwrites.py
+0x26C` (a byte-scan for every instruction in the whole binary that writes that displacement) was
+run to find who sets it; none of the ~28 hits fall inside `CItemRepository::InsertItem`
+(0x0055D2C0, fully disassembled this pass) or `AddItem` (0x0055D330, partially disassembled) —
+the two primitives `AcquireItem`'s own "append a fresh entry" path calls. Whether `item_repo` is
+populated eagerly by some OTHER path in the insert chain, lazily on next query, or not at all for
+this class, was not resolved this pass. Shipping a verification step built on an unconfirmed
+assumption would have been worse than shipping none — a false negative would silently roll back
+a genuinely successful sell (and worse, do it AFTER already having unlinked or split the source
+item, corrupting inventory state to "fix" a problem that was never real). **This is exactly the
+same discipline `docs/CONTRIBUTING.md`'s engine-write rules already ask for** ("verify a
+researched offset live before shipping the write") — applied here as a reason NOT to ship an
+unverified verification, not merely a reason to verify a plain field write.
+
+### The fix: `SellToStore` stops handing the item to `SellItem` at all
+
+`Odyssey.Store.cs`'s `SellToStore` already independently resolves and validates its own player
+(threaded in by the caller), its own store (`ResolveStoreBase`, cross-checked against the open
+panel's own store id), and its own repo (`GetItemRepositoryFn(player, 1)` — which must have
+already succeeded, since it is what found the item being sold). Rather than hand the item to
+`SellItem` and depend on its own, separately-resolved copies of the same three things agreeing
+— the exact dependency the 2026-08-29 live pass's evidence says broke — `SellToStore` now
+drives `SellItem`'s own underlying primitives directly, with its own already-good pointers:
+
+1. **Refuse a Plot item itself** (`StoreSellGuard.IsPlotItem`, reading `item+0x108`) before
+   doing anything else — a new, specific refusal reason instead of a silent no-op, and the ONE
+   `AcquireItem` refusal this codebase CAN rule out ahead of time.
+2. **Price** via `GetItemSellValueFn` (0x006C07F0) — same call `SellItem` itself makes.
+3. **Unlink or split**: `CItemRepository::RemoveItem` (`repo`, the SAME repo that found the
+   item) for a single unit, or `SplitItemFn` (0x0055F280) for a stack — same logic `SellItem`
+   itself runs, just invoked directly rather than inside it.
+4. **`AcquireItemFn`** (0x005C7610) moves the (split-off or unlinked) item into the store — its
+   return value is deliberately not checked (see the callout above).
+5. **Credit gold** (`SetGoldFn`), mirroring the new total into the panel's own cached
+   currency-label int (`+0x2270`, `StorePanelGoldCacheOffset`) — `BuyItem` reads this SAME
+   cached int, not a fresh `GetGold` call, as ITS OWN arithmetic base (VERIFIED, both
+   functions' disasm), so leaving it stale would desync the NEXT buy on the same open panel.
+6. **Refresh both on-screen lists once** after the whole loop
+   (`PopulateStoreItemListBoxFn`/`PopulateInventoryItemListBoxFn`, the same two calls
+   `SellItem`'s own tail makes per-unit) — VERIFIED safe to call directly outside a GUI click,
+   since they are already part of `BuyItem`'s own tail and `buy` is confirmed working through
+   that exact call.
+
+`GuiSellItemFn` (the `SellItem` delegate itself) is left declared but unused by `SellToStore`
+— it remains the documented, disassembly-verified shape of the real click handler, referenced
+by the trace above, but no longer anything this codebase's own `sell` verb depends on.
+
+### Files, tests
+
+`src/KotorCoop.Plugin/Odyssey.Store.cs` — the section above `SellToStore`, new constants
+(`ItemPlotOffset`, `StorePanelGoldCacheOffset`) and delegates (`GetItemSellValueFn`,
+`AcquireItemFn`, `SplitItemFn`, `PopulateStoreItemListBoxFn`,
+`PopulateInventoryItemListBoxFn`), and `SellToStore` itself rewritten per the six steps
+above. `src/KotorCoop.Plugin/StoreSellGuard.cs` (new) — the pure Plot-item decision rule,
+dependency-free per this codebase's own "plugin compile-include trick"
+(`docs/ARCHITECTURE.md`), added to `tests/KotorCoop.Tests/KotorCoop.Tests.csproj`'s
+`<Compile Include>` list next to `StoreAffordabilityRule.cs`.
+`tests/KotorCoop.Tests/StoreSellGuardTests.cs` (new) — zero/one/any-nonzero-bit-pattern
+coverage of `StoreSellGuard.IsPlotItem`. `docs/CONSOLE.md`'s `sell` row updated to describe
+the new implementation.
+
+Build: `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/build.ps1
+-WarnAsError` clean, `dotnet test tests/KotorCoop.Tests --no-build`: 2413/2413 passed (the
+prior baseline of 2410 plus the 3 new `StoreSellGuardTests`).
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| `CSWGuiStore::SellItem`'s full control flow, its four early silent-bail gates, and that gold/item-movement both sit strictly after all four | VERIFIED (fresh full disasm this pass) |
+| `CSWSStore::AcquireItem`'s Plot-item refusal (`item+0x108`), possessor-based (not repo-pointer-based) unlink, and unreliable return value on its "append fresh entry" path | VERIFIED (fresh full disasm this pass) |
+| The 2026-08-29 live pass's symptom (gold unchanged, item unchanged, no crash) is consistent with one of `SellItem`'s four early gates, not with the Plot-item check or a stack-split defect | VERIFIED by elimination (gold changes strictly after all four gates; the live pass observed no gold change) |
+| WHICH of the four gates specifically failed live | NOT DETERMINED — no rig this pass; INFERRED unlikely to be the repo-resolve gate specifically, given `GetItemRepositoryFn`'s creature-independent singleton resolution, but not proven |
+| The fix (`SellToStore` driving `AcquireItem`/`GetItemSellValue`/`SplitItem` directly with its own already-validated pointers, bypassing `SellItem`'s own internal re-resolution entirely) | Implemented, unit-tested (`StoreSellGuardTests`) at the pure-logic layer; **NEEDS-LIVE** for the engine-call layer itself |
+| Whether `CSWSItem.item_repo` (`+0x26C`) is written by `CItemRepository::InsertItem`/`AddItem` (considered as a post-hoc success oracle, then deliberately dropped) | NOT DETERMINED — `tools/fieldwrites.py 0x26C` found no write inside either function; not chased further since the fix does not depend on the answer |
+| The live re-test this fix needs | NOT RUN this pass (no rig) — the recipe is unchanged from the 2026-08-29 section above: `scriptgive g_w_blstrpstl001`, `openstore Larrim_Store` on both instances, `sell Larrim_Store g_w_blstrpstl001`, then an `items` sweep confirming the item is `held by` the store and gone from the player, and a buy-back from the OTHER instance to confirm the store's own copy is genuinely populated (not just the seller's local state) |
+
+`store_sync` stays default-OFF (`coop.ini` unaffected by this pass) — this fix is not evidence
+of a working end-to-end sell any more than the code it replaced was; it removes the ONE
+mechanism the disassembly-level evidence points at as the cause of the observed no-op, but the
+task's own live re-test recipe above still needs to actually run before `sell` (or
+`store_sync`) can be called confirmed.
