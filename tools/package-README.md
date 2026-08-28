@@ -45,6 +45,17 @@ game's own first autosave) — that save is what the client receives. The client
 area entrance; the client's own save file is never written. To start a brand-new game
 together, the host plays until the first autosave (or saves once), then hosts.
 
+**Never played this game before?** Then you have no save and no character to bring. Set
+`join_mode = newcharacter` in `coop.ini` and step 4 changes: instead of loading a save, choose
+**New Game** and create a character exactly as you normally would. When you finish, you are
+taken into the **host's** world with it rather than into the Endar Spire. Save once afterwards
+and you can put `join_mode` back to `save` (the default) for every join after that.
+
+Related: `auto_adopt_world` (on by default) is what fetches the host's world whenever yours
+does not match theirs. With it off you can still join, but enemies, doors, containers and the
+party stop being shared — the two of you are in worlds that disagree about which object is
+which. Neither setting ever writes your own saves.
+
 Press `~` in game for the console: `connect <ip> [password]`, `disconnect`, `reconnect`,
 `say <message>`. Tab completes, Up/Down recalls history.
 

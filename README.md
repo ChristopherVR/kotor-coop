@@ -99,6 +99,27 @@ the agent itself in the background. Everything optional lives in `coop.ini`
 troubleshooting without needing this repo. CLI equivalent:
 `KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
 
+### Joining: which character you bring
+
+Co-op is one world — the host's — with each player in their own body. How your body gets there
+depends on what you already have, and `coop.ini`'s `join_mode` says which:
+
+| your situation | `join_mode` | what happens |
+| --- | --- | --- |
+| you have a save | `save` (the default) | your save's character is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
+| you have never played this game | `newcharacter` | connect, then choose **New Game** at the main menu and create a character exactly as you normally would. When you finish you are taken into the **host's** world with it, instead of into the Endar Spire |
+
+Either way **your own saves are never touched** — only the autosave slot is written — so
+leaving the session and loading your own game again costs nothing. What you give up when the
+worlds differ is the world you were playing: party, inventory, companions, globals and journal
+all come from the host, because in co-op those are shared. You bring your character; the host
+brings the world.
+
+After a `newcharacter` join, save once. From then on you have a save of your own, and
+`join_mode = save` (the default) does the right thing without being told.
+
+See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the mechanism.
+
 ### Sharing `dinput8.dll` with another mod
 
 Only one file can be called `dinput8.dll`. If another mod already owns it (ReShade, an ASI
