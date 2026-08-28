@@ -983,3 +983,219 @@ re-test the host-sell-mirror specifically with a client whose store GUI IS open,
 
 **Files touched this round**: none — bench/rig-only verification pass, no source changes. This
 document only.
+
+---
+
+## 9. 2026-08-29, client-echo redesign (item 1) + store GUI-gating split (item 2) — the
+## `_reconcileInFlight`/absolute-target detect step replaced with a belief + expectedFromReconcile
+## ledger; store reconcile now runs blind (no GUI needed, matching the apply primitive); a genuine
+## test-timing race found and fixed along the way; both modes stay OFF, at 0
+
+Task: (1) close §8.1's own client-echo defect (a client's reconcile-apply landing gets
+re-detected as a fresh local intent) by tracking every reconcile this pump queues against its own
+engine as an explicit "expected movement" ledger, consumed against future observed movement before
+anything is ever reported as new; model the loopback harness's cheat channel as genuinely
+asynchronous (ticks, not an instant) so the bug reproduces before the fix and vanishes after. (2)
+split `StorePumpV2`'s client-side GUI gate: `Odyssey.Store.cs`'s `InsertItemIntoStore`/
+`RemoveStoreStack` (driving the `StoreInsert`/`StoreRemove` cheats) resolve their target store
+purely by object id (`GetStoreByGameObjectID`, VERIFIED, no GUI read anywhere in either function) —
+reconcile must run for every known store regardless of GUI state; only DETECTING a local buy/sell
+(the scan) needs the GUI open.
+
+### 9.1 Item 1 — root cause and fix
+
+§8.1's own read of the client's log pinned the symptom (a reconcile-apply's own landing
+re-detected and re-published, permanently diverging the host) but not the exact mechanism. Re-
+examining the pre-§9 design here: `_reconcileInFlight` excluded a key from BOTH detection and
+reconcile while a single frozen target was outstanding, clearing on an exact match or "any
+movement" (root cause 6's fix, reused); the DETECT check underneath compared `actual` against an
+ABSOLUTE `detectTarget = snapshotValue + OutstandingNet(key)`, a completely different bookkeeping
+dimension (client-published intents to the HOST) than what the reconcile itself had just landed.
+The exclusion window closing correctly (the reconcile's own value landed) did not guarantee
+`detectTarget` had ALSO caught up to reflect it that same tick — snapshot-driven outstanding
+retirement (§7's `RetireOutstandingBy`) runs on its own schedule, keyed off the snapshot's own
+confirmed movement, not off a reconcile landing. A residual gap between the two, on the very tick
+the exclusion cleared, read as "actual disagrees with the (still stale) absolute target" — a
+spurious local change, exactly §8.1's own symptom.
+
+**Fix**: replace the single-value exclusion and the absolute-target detect comparison with two
+independent mechanisms that no longer share any state:
+
+- **`_belief`** (`Dictionary<Key, int>`): this pump's own last-observed local scan value per key,
+  advancing to the fresh scan value EVERY tick, unconditionally, whether or not the movement since
+  the last tick was reported as anything.
+- **`_expectedFromReconcile`** (`Dictionary<Key, List<ExpectedReconcileMovement>>`): every
+  reconcile-apply this pump has queued against its own engine for a key, not yet confirmed landed
+  by an observed scan movement, with a `Delta` mutable so a movement that only PARTIALLY explains
+  an entry shrinks it rather than only ever consuming it whole, and a 10&#160;second timeout
+  (`ExpectedTimeoutMs`, matching every other in-flight timeout in this family) that drops a stuck
+  entry unconditionally — a scan-cache gap swallowing the intermediate value entirely (the exact
+  permanent-stall shape root cause 6 already named) is presumed resolved rather than left stuck
+  forever.
+
+Every tick, per key: `rawMovement = actual − belief`; `ConsumeExpected` nets it against
+`_expectedFromReconcile`, consuming oldest-first, direction-gated (a movement in the OPPOSITE
+direction of every pending entry — a genuine local action happening while an unrelated reconcile is
+in flight for the same key — is left entirely unconsumed); only the unexplained remainder is EVER
+reported as a fresh intent. `belief` advances to `actual` regardless. This key is NEVER skipped
+wholesale any more (no `continue` while "in flight") — a reconcile and a genuine, independent local
+action for the same key can now coexist and both resolve correctly, instead of one hiding behind
+the other's frozen target.
+
+The old `_outstanding` ledger (client intents published to the HOST, not yet echoed back) is kept,
+unchanged in its own mechanics (§7's evidence-based `RetireOutstandingBy`), but is now consulted
+ONLY by `ReconcileTarget`'s decision of whether reconciling toward the raw snapshot would clobber a
+not-yet-echoed local deposit — it no longer feeds the detect step at all. This is the actual
+structural fix: detection and "am I explaining my own writes" no longer share a bookkeeping
+dimension with "has the host echoed my publish back yet".
+
+Separately, and independent of detection, the reconcile decision itself is now also ledger-based
+rather than a frozen single value: `target = ReconcileTarget(key, belief, snapshotValue)`;
+`projected = belief + ExpectedFromReconcileNet(key)` (what this pump's own already-queued
+reconciles are expected to bring the engine to, once they land); any gap between the two queues
+one more reconcile for exactly the remainder, recomputed fresh every tick — never a value captured
+once, so a target that moves again while an earlier reconcile is still draining through the
+single-slot arbitrated cheat channel is caught the very next tick.
+
+**A second, distinct defect found while building this** (not part of §8.1's own report): the
+first version of this redesign kept the old design's "silently seed belief and defer to the second
+tick" idiom for a key's very first observation, to avoid double-counting two instances
+independently loading identical pristine content. A DELTA-based design cannot recover from that
+seed the way the old ABSOLUTE-target design's one-tick defer could — once `belief` is silently set
+to `actual` on first sight, nothing ever moves again to re-surface the standing value it absorbed,
+so it is lost forever, not merely deferred. Found live via
+`ThreeRapidClientDepositsConvergeToExactlySumOnBothSides` regressing (a genuine +3 local action
+already sitting in the engine before the pump's very first observation was silently eaten, never
+published). **Fix**: no special first-sight branch at all — `belief` simply defaults to 0 for a
+never-seen key via `Dictionary.GetValueOrDefault`, and the SAME detect/reconcile logic runs
+immediately. A standing surplus is now reported on the very first tick instead of deferred one
+tick; the "two instances independently loaded the same pristine content" case this used to guard
+is the same accepted, bounded, at-most-one-time over-count §2.4 already documents, and
+`IdenticalAmbientNoiseOnBothSidesConvergesWithoutASecondRoundOfAmplification` already tolerates
+either outcome (2 or 4) for exactly this reason.
+
+### 9.2 Item 2 — root cause and fix
+
+`Pumps/StorePumpV2.cs`'s `PumpClient` used to `return` immediately whenever
+`bridge.TryScanOpenStore` failed — i.e. whenever the client's own store GUI was closed — skipping
+RECONCILE entirely, not merely detection. Read directly out of `src/KotorCoop.Plugin/
+Odyssey.Store.cs` this pass: `InsertItemIntoStore`/`RemoveStoreStack` (the primitives the
+`StoreInsert`/`StoreRemove` cheats drive) resolve their target store through `ResolveStoreRepo` ->
+`ResolveStoreBase` -> `GetStoreByGameObjectIDFn` (`CServerExoApp::GetStoreByGameObjectID
+0x004AE7B0`, VERIFIED full disassembly, store-sync.md §1.2) — a bare object-id lookup through the
+app's general per-instance object registry, with no GUI read anywhere in either function's body.
+Only `TryScanOpenStore` (reading a store's stock) needs the GUI open. The pre-§9 early return
+conflated the two, so a store the client had reconciled toward before but whose GUI happened to be
+closed THIS tick could never receive a further reconcile at all — matching item 2's own
+"host sells while the client's GUI is closed" requirement failing outright (§8.2's own live-rig
+finding: "a genuine, persistent host-vs-client divergence for a single, simple, uncontested
+sell").
+
+**Fix**: split the gate. RECONCILE (the `target`/`projected`/`reconcileDelta` computation, §9.1's
+own ledger-based mechanism, applied identically here) now runs every tick for every key this
+client's session knows about (`ICoopSession.IsStoreKnownV2`), using `belief` — updated by a real
+scan whenever the relevant store happens to be open THIS tick, otherwise carried forward from
+whatever it last was (or seeded, see below) — regardless of whether that store's GUI is open.
+DETECTION (the belief-delta scan diff that can report a fresh local buy/sell) still only ever runs
+for whichever ONE store is open THIS tick — unchanged from v1's own limitation, since there is no
+way to observe a change in a shop nobody has opened.
+
+First-sight seeding is asymmetric, deliberately: if the key's own store happens to be open THIS
+tick, `belief` seeds from the REAL scan value (respects genuine pristine stock, the same class of
+guard §7.3's "virgin wipe" fix already established on the host side); otherwise there is no way to
+know the real local baseline without a scan, so it seeds 0 — the identical "unknown baseline
+treated as the safest available assumption" shape §2.7 already accepts for the host's own
+cold-start apply surface, now symmetric on the client's reconcile side. This carries the same
+honest, documented limitation §2.7 already names (a store's real pristine stock, never locally
+scanned, can be under-credited until the client itself opens it) — not solved here, not newly
+introduced either; item 2 only concerns the previously-total absence of any reconcile at all while
+the GUI was closed.
+
+### 9.3 A genuine test-timing race, found and fixed in the pre-existing buy-back tests
+
+Item 1's harness change (§9.4) plus item 2's own fix combined to expose a real race in the two
+PRE-EXISTING buy-back scenarios (`StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost`,
+`ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay`, both authored before this pass): the
+reconcile-up to the host's mirrored sell can now land entirely BLIND (the client's GUI was closed
+for the whole time it was in flight, item 2's own point), and with the harness's cheat channel now
+landing in 1-3 TICKS rather than a wall-clock 30-250&#160;ms, it can complete within a handful of
+milliseconds of the test setting `OpenStoreId`. Both tests immediately call `WaitForAsync` on the
+raw engine dictionary (bypassing the pump), then IMMEDIATELY perform the buy-back
+(`TrueStore.Remove`) the instant that resolves. If the reconcile's own landing AND the test's own
+immediate removal both complete before this pump's FIRST live scan of the now-open GUI ever runs
+at all, the pump's `belief` — which only ever updates from a live scan — goes straight from "never
+observed" to observing the ALREADY-removed state, with no intermediate "1" ever witnessed. This is
+not a detection bug: from the pump's own vantage point nothing ever moved, because it genuinely
+never had a chance to see the deposit before the withdrawal erased it — the identical
+"deposit-then-withdraw entirely inside one never-yet-sampled window" shape §7's own Bug 4 already
+documented for the scan-cache gap, now REACHABLE across a much wider window because item 2's own
+fix removed the old "only while the GUI stays open" bound on how long a reconcile can sit
+in-flight, unobserved, before the test's own next action.
+
+**Fix**: a 300&#160;ms settle delay added to both tests between "confirm the engine reconciled"
+and "perform the buy-back" — giving this pump's first live scan of the newly-opened GUI a genuine
+chance to run before the item is yanked away again. This is a test-realism fix, not a production
+code change: a human opening a store and then clicking sell takes far longer than one scan cycle:
+the synchronous, back-to-back scripting these two tests used is what created a race no real
+player's own timing could ever produce.
+
+### 9.4 Harness change (item 1's own explicit ask)
+
+`SharedInventoryV2LoopbackTests.AgentLoopV2`'s simulated single-slot cheat channel changed from a
+wall-clock random delay (30-250&#160;ms) to tick-based (1-3 pump ticks, one per tick, still
+single-slot — `_tick`/`_cheatLandsAtTick` replacing `_cheatLandsAtMs`). This guarantees several
+detect passes genuinely run WHILE a reconcile is in flight, including the exact tick it lands,
+regardless of wall-clock scheduling jitter — the reasoning being that the previous wall-clock delay,
+combined with the fake bridge's own ~150&#160;ms scan-cache throttle, rarely interleaved a landing
+tightly enough against the pump's own detect passes to exercise §8.1's exact race.
+
+### 9.5 Tests
+
+`tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs` gained two new cases and two settle-delay
+fixes to pre-existing ones:
+
+- **`ClientReconcileLandingIsNeverReDetectedAsASpuriousIntent`** (item 1's own repro/fix
+  requirement) — a genuine client-side deposit (so the client's own outstanding ledger for the key
+  is already in play, §8.1's own precondition), then several rounds of HOST-driven bumps fired
+  back-to-back with no per-round wait; every movement AFTER the initial deposit is caused entirely
+  by the client's own reconcile converging toward the host's snapshot, so at most one
+  `"party pool: local ..."` line naming the key is ever legitimate. **Honestly**: re-run several
+  times against the pre-§9 code (`_reconcileInFlight` + an absolute `snapshot + outstanding`
+  detect target), it reproduced the class of defect — the client's own engine overshooting the
+  expected total (one run: expected 12, landed at 14, a spurious extra report reaching the host) —
+  on SOME runs and passed cleanly on others; it is a genuine timing race, not a deterministic
+  repro, matching how §8.1 itself was only caught once in a full live-rig session, not on demand.
+  Against the fixed (post-§9) code it has passed cleanly on every run tried. A first draft of this
+  test that never touched the client's own outstanding ledger for the key at all passed even
+  against the pre-§9 code on every run — that combination alone does not exercise the interaction
+  §8.1's own mechanism depends on. A SEPARATE test-construction pitfall was also found and fixed
+  while building this: firing the host-driven rounds before the host had even confirmed the
+  client's own initial deposit raced this FAKE bridge's own absolute host-side writes against the
+  host's real ADD-semantics accept-intent apply, double-counting by test construction alone (
+  reproduced identically against the FIXED pump code too, which is what exposed it as a test bug
+  rather than a production one) — fixed by waiting for that confirmation before the rapid rounds
+  start, while still not waiting any longer than that.
+- **`StoreHostSellMirrorsToClientEvenWithTheClientsGuiClosed`** (item 2's own repro/fix
+  requirement) — host sells while the client's store GUI is NEVER opened for the whole test (
+  `ClientAgent.Bridge.OpenStoreId` stays 0 throughout); asserts the client's own engine still
+  gains the item and holds it. Fails against the pre-§9 early-return gate (no reconcile ever runs
+  with the GUI closed); passes after the split.
+- `StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost` /
+  `ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay`: 300&#160;ms settle delay added
+  before the buy-back step (§9.3).
+
+### 9.6 Result
+
+`dotnet build KotorCoop.slnx -warnaserror`: 0 warnings, 0 errors. The filtered suite
+(`FullyQualifiedName~SharedInventoryV2|FullyQualifiedName~PartyPool|FullyQualifiedName~Store`, 276
+tests): **all pass**, 0 failures, one run (5m35s — this family is socket/timing-heavy and runs with
+assembly-wide test parallelism disabled, so its wall-clock cost is real, not a flake signal). The
+full suite (`dotnet test tests/KotorCoop.Tests --no-build`): **2,513 tests, all pass, 0 failures**,
+one run (8m41s). `party_pool_sync`/`store_sync` **stay OFF (mode 0) by default**, both explicitly
+confirmed at 0 throughout — this pass is bench/loopback-only, no live rig; the next live round
+should re-run §8's own recipe against a build containing this pass's fixes before either mode is
+considered for a default flip.
+
+**Files touched**: `src/KotorCoop.Session/Pumps/PartyPoolPumpV2.cs`,
+`src/KotorCoop.Session/Pumps/StorePumpV2.cs`,
+`tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs`, this document.
