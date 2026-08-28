@@ -736,12 +736,23 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// <summary>Same cache-and-revalidate as the enemy drive: id and VTABLE must still match
     /// every frame, or the pointer is stale reused memory. Identity is the vtable, never the
     /// <c>+0x08</c> type field — see <see cref="PartyCreatureIdentity"/> for why an exact-5
-    /// comparison there used to freeze a live companion.</summary>
+    /// comparison there used to freeze a live companion. The cache-trust decision itself is
+    /// <see cref="PartyPresenceResolveCacheRule.CanTrustCachedCreature"/> (round 103,
+    /// docs/research/party-reconciliation.md) — see its own doc comment for why a tracked id of
+    /// 0 (exactly what <see cref="Forget"/> leaves behind, including across a disconnect/
+    /// reconnect via <see cref="ReleaseSession"/>) can never be trusted, which is what makes a
+    /// re-entry after release structurally safe without any extra latch here.</summary>
     private nint Resolve(int slot, uint objectId)
     {
         nint cached = _creature[slot];
-        if (cached != 0 && _trackedId[slot] == objectId
-            && PartyCreatureIdentity.IsLiveMatch(*(nint*)cached, *(uint*)(cached + 0x04), objectId))
+        uint trackedId = _trackedId[slot];
+
+        // The unsafe vtable/id read is only ever attempted under the SAME two guards the
+        // original hand-written check used (cached != 0, trackedId == objectId) — this rule
+        // adds a NAMED, tested decision on top of those reads, not a new dereference.
+        bool vtableAndIdMatch = cached != 0 && trackedId == objectId
+            && PartyCreatureIdentity.IsLiveMatch(*(nint*)cached, *(uint*)(cached + 0x04), objectId);
+        if (PartyPresenceResolveCacheRule.CanTrustCachedCreature(cached, trackedId, objectId, vtableAndIdMatch))
         {
             return cached;
         }

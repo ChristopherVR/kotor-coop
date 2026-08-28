@@ -106,13 +106,11 @@ public sealed partial class KotorGameBridge
     // ---- party-presence dirty check (docs/research/lag-audit.md, party_fast_pump entry) ----
     //
     // TryWritePartyMembers's own shared-block writes, per slot: what was actually written the
-    // last time a write reached the block (null = nothing yet, or a module change reset it), and
-    // the module name that write happened under. See PartyPresenceDirtyCheck's own doc comment
-    // for why a module change is an unconditional override rather than folded into the content
-    // comparison.
-    private readonly PartyMemberState?[] _lastWrittenPartyPresence = new PartyMemberState?[BlockPartyPresenceCapacity];
-    private uint? _lastWrittenPartyPresenceCount;
-    private string _partyPresenceModule = string.Empty;
+    // last time a write reached the block (null = nothing yet, or a module change/Reset() cleared
+    // it). Pulled into its own class (round 103, docs/research/party-reconciliation.md) so its
+    // Reset() — called from ClearCoopState() below — is unit-testable without a real game
+    // process; see PartyPresenceWriteCache's own doc comment for why the reset was needed at all.
+    private readonly PartyPresenceWriteCache _partyPresenceCache = new(BlockPartyPresenceCapacity);
 
     public bool SupportsPartySync => _player is not null;
 
@@ -582,16 +580,12 @@ public sealed partial class KotorGameBridge
             // A module change forces every slot below to write unconditionally, even if a
             // companion's reported state looks byte-identical to what this agent last sent —
             // PluginHost's own Invalidate() clears the block's party-presence slots in-process on
-            // a load, independent of this agent's own cache. See PartyPresenceDirtyCheck's doc
-            // comment.
-            bool moduleChanged = !TryReadCurrentModule(out string module)
-                || !string.Equals(module, _partyPresenceModule, StringComparison.OrdinalIgnoreCase);
-            if (moduleChanged)
-            {
-                _partyPresenceModule = module;
-                Array.Clear(_lastWrittenPartyPresence);
-                _lastWrittenPartyPresenceCount = null;
-            }
+            // a load, independent of this agent's own cache. See PartyPresenceWriteCache's own
+            // doc comment for why a module change is an unconditional override rather than
+            // folded into the content comparison, and for why the cache also needs an explicit
+            // Reset() (see ClearCoopState) that a module-changed check alone cannot provide.
+            bool moduleReadFailed = !TryReadCurrentModule(out string module);
+            bool moduleChanged = _partyPresenceCache.NoteModule(module) || moduleReadFailed;
 
             int written = 0;
             for (int i = 0; i < BlockPartyPresenceCapacity; i++)
@@ -605,7 +599,7 @@ public sealed partial class KotorGameBridge
                     written++;
                 }
 
-                if (PartyPresenceDirtyCheck.CanSkipWrite(candidate, _lastWrittenPartyPresence[i], moduleChanged))
+                if (_partyPresenceCache.CanSkipSlot(i, candidate, moduleChanged))
                 {
                     continue;
                 }
@@ -628,7 +622,7 @@ public sealed partial class KotorGameBridge
                     _memory.TryWrite(slot + 0x00, 0u);
                 }
 
-                _lastWrittenPartyPresence[i] = candidate;
+                _partyPresenceCache.RecordSlot(i, candidate);
 
                 // Companion gear (2026-08-27, docs/research/companion-state-sync.md): written
                 // every pass this instance opted into applying it, independent of the position
@@ -652,10 +646,10 @@ public sealed partial class KotorGameBridge
                 }
             }
 
-            if (moduleChanged || _lastWrittenPartyPresenceCount != (uint)written)
+            if (!_partyPresenceCache.CanSkipCount((uint)written, moduleChanged))
             {
                 _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written);
-                _lastWrittenPartyPresenceCount = (uint)written;
+                _partyPresenceCache.RecordCount((uint)written);
             }
 
             return written;

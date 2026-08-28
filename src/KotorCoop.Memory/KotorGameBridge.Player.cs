@@ -454,6 +454,18 @@ public sealed partial class KotorGameBridge
         // for players who no longer exist and push the new ones down the block.
         _slots.Clear();
 
+        // Round 103 (docs/research/party-reconciliation.md): SessionManager keeps this SAME
+        // bridge instance alive across a disconnect and the reconnect that follows it, so this
+        // agent-side write cache is exactly the kind of latch the class comment above warns
+        // about — outside the _pluginBlock guard because the cache must not survive into the
+        // next session even if the plugin momentarily reads unattached right now (a transient
+        // that must not leave stale entries for whenever it re-attaches). Without this, a
+        // reconnect whose first PartySnapshot reads byte-identical to whatever was mirrored
+        // right before the disconnect finds the cache still agreeing with it and skips
+        // rewriting the very PartyPresenceCount level the loop above just zeroed — the
+        // companion mirror never re-arms. See PartyPresenceWriteCache's own doc comment.
+        _partyPresenceCache.Reset();
+
         ReleasePartyFreeze();
     }
 
