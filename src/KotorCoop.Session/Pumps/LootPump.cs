@@ -33,6 +33,23 @@ internal sealed class LootPump(
     /// </summary>
     private const int MaxPendingLoot = 256;
 
+    /// <summary>
+    /// ⚠ ROOT CAUSE 5's OWN SHAPE, fixed here too (2026-08-28, docs/research/party-pool-sync.md
+    /// §24 flagged this exact class as carrying the identical unguarded queue — this pass fixes
+    /// it): <see cref="_pendingLoot"/> is written by <see cref="PumpMaterialisedLoot"/> — called
+    /// from <c>CoopAgent.RunAsync</c>'s own tick loop — and drained by
+    /// <see cref="TryDequeuePendingLoot"/>, called from <c>CoopCommandDispatcher.RunAsync</c>'s
+    /// own INDEPENDENT, separately-scheduled loop (<c>AgentComposition.cs</c> starts both as
+    /// separate tasks with no shared synchronization context). A plain <see cref="Queue{T}"/> is
+    /// not thread-safe for ANY concurrent access, including this exact single-producer/single-
+    /// consumer shape: a concurrent <c>Enqueue</c>/<c>TryDequeue</c> pair (most dangerously while
+    /// an internal array resize is in flight) can silently corrupt the queue's own bookkeeping,
+    /// losing an entry or handing back a stale/duplicate one. Guarded by <see cref="_pendingGate"/>
+    /// below — the same discipline <see cref="Pumps.PartyPoolPump"/>'s own
+    /// <c>_pendingGate</c> applies to its identically-shaped <c>_pendingApplies</c>.
+    /// </summary>
+    private readonly Lock _pendingGate = new();
+
     private readonly Queue<CoopAgent.PendingMaterialisedLootGive> _pendingLoot = new();
 
     /// <summary>The local module <see cref="PumpMaterialisedLoot"/> last issued
@@ -74,14 +91,19 @@ internal sealed class LootPump(
 
             foreach (MaterialisedLootItem item in packet.Items)
             {
-                if (_pendingLoot.Count >= MaxPendingLoot)
+                // Count-check-and-enqueue must be one atomic operation under the SAME lock
+                // TryDequeuePendingLoot takes — see _pendingGate's own doc comment.
+                lock (_pendingGate)
                 {
-                    log($"dropping materialised loot '{item.Resref}' for owner 0x{packet.OwnerEnemyId:X}: "
-                        + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
-                    return;
-                }
+                    if (_pendingLoot.Count >= MaxPendingLoot)
+                    {
+                        log($"dropping materialised loot '{item.Resref}' for owner 0x{packet.OwnerEnemyId:X}: "
+                            + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
+                        return;
+                    }
 
-                _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(packet.OwnerEnemyId, item));
+                    _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(packet.OwnerEnemyId, item));
+                }
             }
         }
 
@@ -96,13 +118,6 @@ internal sealed class LootPump(
 
             foreach (MaterialisedLootItem item in grant.Items)
             {
-                if (_pendingLoot.Count >= MaxPendingLoot)
-                {
-                    log($"dropping dialogue grant '{item.Resref}' from peer {grant.OriginPeerId}: "
-                        + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
-                    return;
-                }
-
                 // This is a PEER's grant — either a genuine dialogue reward or (now that
                 // script-item-sync exists) that peer's OWN script grant, relayed through the
                 // exact same DialogueGrantPacket channel. Either way it is about to be applied
@@ -112,8 +127,20 @@ internal sealed class LootPump(
                 // docs/research/dialogue-consequences.md's script-item-sync section.
                 recentlySyncedItems.Record(item.Resref, 1, Environment.TickCount64);
 
-                _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(
-                    AgentWellKnownIds.LocalPlayerObjectId, item));
+                // Count-check-and-enqueue must be one atomic operation under the SAME lock
+                // TryDequeuePendingLoot takes — see _pendingGate's own doc comment.
+                lock (_pendingGate)
+                {
+                    if (_pendingLoot.Count >= MaxPendingLoot)
+                    {
+                        log($"dropping dialogue grant '{item.Resref}' from peer {grant.OriginPeerId}: "
+                            + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
+                        return;
+                    }
+
+                    _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(
+                        AgentWellKnownIds.LocalPlayerObjectId, item));
+                }
             }
         }
     }
@@ -170,10 +197,15 @@ internal sealed class LootPump(
     /// command dispatcher's pending-cheat-serial check), at most once per ITS tick, so an
     /// automatic give-loot request is submitted through the exact same call path a human's
     /// typed <c>giveloot</c> takes and can never be filed alongside one in flight. Returns
-    /// false with nothing queued to give.
+    /// false with nothing queued to give. Locked under <see cref="_pendingGate"/> — see that
+    /// field's own doc comment: this runs on a thread genuinely independent of
+    /// <see cref="PumpMaterialisedLoot"/>'s own enqueue.
     /// </summary>
     public bool TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive next)
     {
-        return _pendingLoot.TryDequeue(out next);
+        lock (_pendingGate)
+        {
+            return _pendingLoot.TryDequeue(out next);
+        }
     }
 }

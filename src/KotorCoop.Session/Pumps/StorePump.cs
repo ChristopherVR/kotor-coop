@@ -88,6 +88,24 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
 {
     private const int MaxPendingApplies = 256;
 
+    /// <summary>
+    /// ⚠ ROOT CAUSE 5's OWN SHAPE, fixed here too (2026-08-28, docs/research/party-pool-sync.md
+    /// §24 found and fixed the identical unguarded queue in <see cref="Pumps.PartyPoolPump"/> and
+    /// flagged <see cref="Pumps.LootPump"/>'s own <c>_pendingLoot</c> as carrying the same shape;
+    /// this audit pass found this pump carries it too): <see cref="_pendingApplies"/> is written
+    /// by <see cref="Pump"/> — called from <c>CoopAgent.RunAsync</c>'s own tick loop — and
+    /// drained by <see cref="TryDequeuePendingApply"/>, called from
+    /// <c>CoopCommandDispatcher.RunAsync</c>'s own INDEPENDENT, separately-scheduled loop
+    /// (<c>AgentComposition.cs</c> starts both as separate tasks with no shared synchronization
+    /// context). A plain <see cref="Queue{T}"/> is not thread-safe for ANY concurrent access,
+    /// including this exact single-producer/single-consumer shape: a concurrent
+    /// <c>Enqueue</c>/<c>TryDequeue</c> pair (most dangerously while an internal array resize is
+    /// in flight) can silently corrupt the queue's own bookkeeping, losing an entry or handing
+    /// back a stale/duplicate one. Guarded by <see cref="_pendingGate"/> below — the same
+    /// discipline <see cref="Pumps.PartyPoolPump"/>'s own <c>_pendingGate</c> applies.
+    /// </summary>
+    private readonly Lock _pendingGate = new();
+
     private readonly Queue<CoopAgent.PendingStoreApply> _pendingApplies = new();
 
     /// <summary>This pump's own belief of every store's stock it has ever learned about — seeded
@@ -280,13 +298,6 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 continue;
             }
 
-            if (_pendingApplies.Count >= MaxPendingApplies)
-            {
-                log($"store: dropping apply for '{op.Key.Resref}' in store 0x{op.Key.StoreObjectId:X}"
-                    + $" — already holding {MaxPendingApplies} queued, the drain has fallen behind");
-                continue;
-            }
-
             // Every subsequent op for the SAME key builds on whatever the wire already expects
             // (a still-pending target if one exists, otherwise this pump's own real-scan belief)
             // — never on a stale belief left over from before an EARLIER queued-but-not-yet-landed
@@ -322,7 +333,22 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 StoreOpKind applyKind = diff > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
                 ushort applyCount = (ushort)Math.Min(Math.Abs(diff), ushort.MaxValue);
 
-                _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(applyKind, op.Key, applyCount));
+                // Count-check-and-enqueue must be one atomic operation under the SAME lock
+                // TryDequeuePendingApply takes — see _pendingGate's own doc comment: this queue is
+                // drained from a genuinely separate, independently-scheduled thread
+                // (CoopCommandDispatcher.RunAsync), not merely a different call frame.
+                lock (_pendingGate)
+                {
+                    if (_pendingApplies.Count >= MaxPendingApplies)
+                    {
+                        log($"store: dropping apply for '{op.Key.Resref}' in store 0x{op.Key.StoreObjectId:X}"
+                            + $" — already holding {MaxPendingApplies} queued, the drain has fallen behind");
+                        continue;
+                    }
+
+                    _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(applyKind, op.Key, applyCount));
+                }
+
                 _wireTarget[op.Key] = target;
             }
             else
@@ -330,7 +356,17 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 // Add/Remove: apply the RAW DELTA directly — never "set to wire total" (design
                 // rule (c)). Correct regardless of whether this pump has ever scanned the
                 // affected store: a relative delta needs no baseline knowledge at all.
-                _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(op.Kind, op.Key, op.CountDelta));
+                lock (_pendingGate)
+                {
+                    if (_pendingApplies.Count >= MaxPendingApplies)
+                    {
+                        log($"store: dropping apply for '{op.Key.Resref}' in store 0x{op.Key.StoreObjectId:X}"
+                            + $" — already holding {MaxPendingApplies} queued, the drain has fallen behind");
+                        continue;
+                    }
+
+                    _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(op.Kind, op.Key, op.CountDelta));
+                }
 
                 int target = op.Kind == StoreOpKind.Add
                     ? baseline + op.CountDelta
@@ -341,9 +377,16 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
     }
 
     /// <summary>Called by whatever already arbitrates the single-slot staging-cheat channel, at
-    /// most once per ITS tick — mirrors <c>PartyPoolPump.TryDequeuePendingApply</c> exactly.</summary>
-    public bool TryDequeuePendingApply(out CoopAgent.PendingStoreApply next) =>
-        _pendingApplies.TryDequeue(out next);
+    /// most once per ITS tick — mirrors <c>PartyPoolPump.TryDequeuePendingApply</c> exactly.
+    /// Locked under <see cref="_pendingGate"/> — see that field's own doc comment: this runs on
+    /// a thread genuinely independent of <see cref="Pump"/>'s own enqueue.</summary>
+    public bool TryDequeuePendingApply(out CoopAgent.PendingStoreApply next)
+    {
+        lock (_pendingGate)
+        {
+            return _pendingApplies.TryDequeue(out next);
+        }
+    }
 
     /// <summary>Publishes a signed, already-resolved local delta for one key — a positive
     /// <paramref name="delta"/> is an Add, negative is a Remove. Shared by both branches of the
