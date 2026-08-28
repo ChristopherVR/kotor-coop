@@ -526,9 +526,7 @@ public enum PacketType : byte
     /// <see cref="PartyPoolSyncRequest"/> plays for the party pool.</summary>
     StoreSyncRequest = 59,
 
-    // Protocol version 46 covers the six V2 types below.
-    // by whoever integrates parallel work, per docs/CONTRIBUTING.md's "Parallel-session
-    // hazards" and this file's own 39/47/48 skip precedents. Types 60-65 below are new,
+    // Protocol version 46 covers the six V2 types below (60-65).
     // additive wire shapes (docs/research/shared-inventory-v2.md): the host-authoritative
     // "absolute snapshot + client intents" redesign of the party pool and store channels,
     // shipped behind party_pool_sync=2/store_sync=2 — an old build simply never sends or
