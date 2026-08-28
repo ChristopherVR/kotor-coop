@@ -119,11 +119,56 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
 
     private readonly Dictionary<StoreStackKey, long> _frozenUntilMs = [];
 
-    public void Pump(SessionCapabilities caps)
+    /// <summary>The local module this pump last cleared its per-module state for. A store's
+    /// object id is only meaningful within the module it was loaded from — <see cref="_engineBelief"/>/
+    /// <see cref="_wireTarget"/> hold ids, not (module, id) pairs, so carrying either across a
+    /// module change risks judging a NEW module's object id (which the engine is free to reuse
+    /// the numeric value of once the OLD module's GIT is gone — the same id-reuse hazard
+    /// <c>docs/research/enemy-presence-sync.md</c> already documents for creatures) against a
+    /// belief that was never about it. Clearing on every module change is defence in depth: the
+    /// live symptom this class's own root-cause section was fixed for (a client buy on a
+    /// mirrored key never detected) turned out to be <see cref="KotorGameBridge"/>'s own resolve,
+    /// not this — but a store id genuinely IS only ever resolved correctly by
+    /// <c>GetStoreByGameObjectID</c>'s type-checked, per-app registry lookup, which itself is
+    /// scoped to whatever module is currently loaded, so this pump should not pretend to know
+    /// more about a stale id than the engine itself would.</summary>
+    private string _lastModule = string.Empty;
+
+    public void Pump(string module, SessionCapabilities caps)
     {
         if (!bridge.SupportsStore || (caps & SessionCapabilities.Store) == 0)
         {
             return;
+        }
+
+        // Gated on a clean, non-fallback module read (LootPump.PumpMaterialisedLoot's own
+        // established convention) so a brief mid-transition fallback label ("area1F"-style,
+        // ModuleNameGuard.IsFallbackModuleName) never fires a spurious reset — the module truly
+        // changing is what matters, not a transient unreadable read.
+        if (module.Length > 0 && !ModuleNameGuard.IsFallbackModuleName(module)
+            && !string.Equals(module, _lastModule, StringComparison.OrdinalIgnoreCase))
+        {
+            if (_lastModule.Length > 0 && (_engineBelief.Count > 0 || _wireTarget.Count > 0))
+            {
+                log($"store: module changed ({_lastModule} -> {module}) — clearing "
+                    + $"{_engineBelief.Count} known key(s) and {_wireTarget.Count} pending apply/ies "
+                    + "rather than carrying a stale store id's belief into the new module");
+            }
+
+            _lastModule = module;
+            _engineBelief.Clear();
+            _wireTarget.Clear();
+            _openStoreId = 0;
+            _openStoreBaselined = false;
+            _opRate.Clear();
+            _frozenUntilMs.Clear();
+
+            // Anything already queued for the OLD module's store ids must not land in the new
+            // one — CoopAgent's own single-slot cheat-channel drain (TryDequeuePendingApply)
+            // could otherwise apply a stale insert/remove against whatever id the engine now
+            // reuses. Wire-side ops already accepted (session.DrainStoreOps) are re-read fresh
+            // below, so nothing here is lost — only this pump's own optimistic queue is dropped.
+            _pendingApplies.Clear();
         }
 
         long nowMs = SessionClock.NowMs;

@@ -2743,3 +2743,295 @@ both buy-back attempts).
 Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
 -Install -WarnAsError` (both game directories) were run fresh at the top of this session and were
 clean. No source change this round — live re-verification only.
+
+## Root-cause + fix (2026-08-28, no rig this round): the buy-back discrepancy closed at the READ
+## side — a ghost-vulnerable memory scan and a module-unaware belief, not the engineBelief/
+## wireTarget redesign; the crash resolved to an unrelated, pre-existing engine bug. `store_sync`
+## stays OFF.
+
+Task: explain the prior rig round's own discrepancy — the loopback tests
+(`ClientBuyBackOfAMirroredKeyIsDetectedAndPublished` et al.) pass, yet the SAME scenario live
+showed zero detection for 35+ seconds after a client buy-back of a mirrored key, twice, and a
+genuine client-side crash mid-transition — and fix both. No rig this round (isolation worktree, no
+live process); everything below is static code reading, fresh disassembly for the crash address,
+and unit/loopback tests against real host/client/socket code, matching this document's own
+established discipline for a no-rig round.
+
+### Part 1 — the discrepancy: `KotorGameBridge.Store.cs`'s own read is not what the loopback tests
+
+`docs/research/store-sync.md`'s own prior fix round (`Fix (2026-08-29, no-rig round): the client
+buy-back gap root-caused and closed`) redesigned `Pumps/StorePump.cs`'s bookkeeping
+(`_engineBelief`/`_wireTarget` replacing the conflated `_knownEngineTotals`) and proved it correct
+with `StoreLoopbackTests.cs`'s `ClientBuyBackOfAMirroredKeyIsDetectedAndPublished` — a real
+host/client/socket loopback that forces the exact race and passes. The very next rig round ran the
+identical live recipe and it did not hold: 35+ seconds with zero `store: local remove ... detected`
+on the client, and the host's own re-buy of the "sold" item succeeded when it should have been
+refused as absent. **Reading `Pumps/StorePump.cs` end to end finds nothing wrong with it** — every
+branch the loopback tests exercise (pending-target resolution, the buy-back race, the loop breaker)
+is correct by inspection and by five passing tests, matching the prior round's own verdict. The gap
+is not in this class at all: it is in what `StorePump` is HANDED — `bridge.TryScanOpenStore`,
+implemented in `src/KotorCoop.Memory/KotorGameBridge.Store.cs`, which `StoreLoopbackTests.cs`'s own
+`FakeStoreBridge` does not model in the one place that matters.
+
+**`FakeStoreBridge.TryScanOpenStore` is a plain dictionary read — `TrueEngineState` sliced by the
+open store id, always exact, always fresh, never capable of reporting anything but the truth.**
+The REAL `KotorGameBridge.Store.cs`, by contrast, has to find the live `CSWSStore*` FROM SCRATCH
+on every scan, purely by `ReadProcessMemory` (the external agent has no engine call the way
+`Odyssey.Store.cs`'s write side does), and — until this pass — did so with `TryReadStoreRepo`
+sweeping ALL of committed memory (`PatternScanner.ScanAll`, `ScanScope.PrivateCommitted`) for the
+`CSWSStore` vtable word and trusting the FIRST address whose id field happened to match the one
+asked for. **This is exactly the "ghost object" hazard this codebase already found, named, and
+fixed for creatures** (`docs/research/enemy-presence-sync.md`, `src/KotorCoop.Memory/LiveObjectGate.cs`):
+`operator delete` (or, for a store, a module's own teardown/reallocation) leaves the vtable word
+and the object id exactly where they were in a freed-but-not-yet-reused heap block, so a raw
+pattern scan cannot tell a live object from the intact bytes of one that is no longer part of the
+current world. A ghost hit reads a PLAUSIBLE, valid-looking `item_list` pointer — its own
+last-known-good snapshot from whenever that memory was last live — so `TryScanOpenStore` never
+returns false, never logs an error, and just silently reports the SAME stale stock forever. A live
+client buy against the REAL store (resolved, on the plugin side, by the engine's own
+`CServerExoAppInternal::GetStoreByGameObjectID`, which this raw scan never asks) genuinely moves
+the item — `Odyssey.Store.cs`'s `BuyFromStore`/`GuiBuyItemFn` are independently confirmed working
+(this document's own 2026-08-28 pass) — but this bridge's own scan, resolved to a DIFFERENT copy of
+the same object id, never reflects it. This is the literal answer to the task brief's own question:
+**yes, a mirrored insert can land in the store repo the client's GUI shows while this bridge's own
+scan reads a different repo instance** — not because `GetStoreByGameObjectID` and the raw scan
+disagree about which object is "the" store (there is exactly one live `CSWSStore` per id at any
+moment), but because the raw scan has no way to tell a live copy from a stale one and nothing forces
+it to prefer the live one.
+
+Two supporting facts rule out the task brief's other named hypotheses:
+
+- **Not a `CSWSStore::SellItem`/`AcquireItem` identity-reset defect.** §1.5's own disasm (VERIFIED,
+  this document's earlier passes) shows the store's native buy path either spawns a fresh copy
+  (Infinite) or unlinks/decrements the EXISTING stock item in place — it does not rewrite that
+  item's Charges/MaxCharges/Upgrades/Flags, so a `StoreStackKey` computed from a live rescan of the
+  REMAINING stock is unaffected by a buy elsewhere in the same store. This pass additionally
+  compared the plugin's wire-flag encoding (`SharedBlock.ItemIdentityKnown/Identified/Stolen/
+  NonEquippable`, `src/KotorCoop.Plugin/SharedBlock.Items.cs`) against the protocol's
+  (`ItemIdentity.FlagKnown/Identified/Stolen/NonEquippable`, `src/KotorCoop.Protocol/Packets/
+  ItemsPackets.cs`) bit for bit — identical (`1<<0`/`1<<1`/`1<<2`/`1<<3` both sides) — so a
+  mirrored insert's `StoreStackKey` cannot silently diverge from the wire op's own key through a
+  flag-encoding mismatch either.
+- **Not "the scan reads a cached list refreshed only on `PopulateStore`."** `KotorGameBridge.Store.cs`
+  never reads the GUI panel's own list-box widget state at all — it reads the store's
+  `CItemRepository` (`item_count`/`items_list` at the repo's own `+0x10`/`+0xC`) directly via
+  `ReadProcessMemory`, independent of whatever the panel's on-screen list currently shows. The
+  `+0x2278` gate (`StoreGuiObjectId`) is used only to learn WHICH store id is open, not to read
+  anything about its stock.
+
+### The fix: resolve by the engine's own object registry, not a raw byte-pattern guess
+
+`TryReadStoreRepo` (`src/KotorCoop.Memory/KotorGameBridge.Store.cs`) now resolves the store's
+address via `EngineGlobals.TryResolveServerObject` — a transcription of `CGameObjectArray::
+GetGameObject 0x004D8230`, the SAME hash-table walk `CServerExoAppInternal::GetStoreByGameObjectID
+0x004B1AB0` performs internally (§1.2's own disasm: `mov ecx,[ecx+0x1005c] ... call 0x4d8230`) —
+instead of a `PatternScanner` sweep. This is the identical fix `KotorGameBridge.Attach.cs`'s
+`LiveObjectGate`-based census confirmation already applies to creatures, reusing the SAME
+already-unit-tested primitive (`EngineGlobals.TryLookupObject`, proven correct in isolation by
+`LiveObjectGateTests.cs` against a synthetic address space) rather than re-implementing a scan. A
+type-tag check (the resolved object's own vtable word, read fresh, compared against the known
+`CSWSStore` vtable `0x0074BDB8`) reproduces the discipline `GetStoreByGameObjectID`'s own runtime
+type check applies, so an id that resolves to some OTHER live object is refused rather than
+mis-read as a repository pointer. The net effect: the READ side now resolves the EXACT SAME live
+`CSWSStore*` the WRITE side (`Odyssey.Store.cs`'s `GetStoreByGameObjectIDFn`) and the retail
+engine's own `BuyItem`/`SellItem` handlers do, every time, with no possibility of a stale/ghost
+copy — a live client buy is reflected in the very next scan, i.e. within one pump tick, exactly as
+the task brief asked. `PatternScanner`/`BytePattern`/`ScanScope`/`StoreScanLimit` are no longer
+used by this file (the vtable sweep is gone entirely, not merely reordered) — a strict
+simplification as well as a fix, since a per-app hash lookup is also cheaper than a private-memory
+sweep every scan interval.
+
+**Why the loopback tests could not have caught this and still cannot on their own**: `FakeStoreBridge`
+has no memory to scan — it is a pure dictionary standing in for "what a perfect read would report."
+The actual defect lives entirely inside `KotorGameBridge`'s own `ReadProcessMemory`-based resolve,
+which (like every other method in that file) can only be exercised against a real `swkotor.exe`
+process — the same NEEDS-LIVE boundary this codebase already draws around every other
+`EngineGlobals`/`KotorGameBridge` pointer chain (`AppManagerPtr` is a fixed retail address no test
+process can safely fake). What IS testable, and now is: the lookup ARITHMETIC this fix depends on
+(`EngineGlobals.TryLookupObject`) already has its own dedicated, synthetic-address-space unit
+tests (`LiveObjectGateTests.cs`), so this fix reuses proven machinery rather than adding an
+unverified one. Per the task's own "make the fake bridge model the real gate" instruction, this
+pass instead hardened the ONE part of the discrepancy that genuinely was a `StorePump`-level (and
+therefore loopback-testable) gap, found while reproducing the live symptom by hand — see Part 2.
+
+### Part 2 — a second, independent, loopback-provable gap: `StorePump` never scoped its belief to a
+### module
+
+Investigating why the discrepancy could plausibly persist even after the read-side fix surfaced a
+second defect, orthogonal to the memory-scan hazard: `Pumps/StorePump.cs`'s `_engineBelief`/
+`_wireTarget` dictionaries are keyed purely by `StoreStackKey` (which embeds a `StoreObjectId`, not
+a module) — there is no module boundary anywhere in this pump's bookkeeping. A store's object id is
+only meaningful within the module that placed it (`docs/research/store-sync.md` §1.2's own point,
+restated): the engine assigns object ids per-GIT-load, so it is free to reuse the SAME numeric id
+for an entirely unrelated store once a DIFFERENT module loads. A plain close-then-reopen of the
+SAME store already self-heals `_engineBelief` correctly (the pre-existing "no store open" branch in
+step 1 already resets `_openStoreId`/`_openStoreBaselined`, and design rule (a)'s silent
+first-baseline then re-seeds from the fresh scan with no diff) — but `_wireTarget` is untouched by
+that path, and the "store never closes as far as this bridge can tell" case (a fast module load, or
+a pump tick that simply does not land inside the brief gap) skips even that self-healing. Proven by
+two new real host/client/socket loopback tests, one of which fails against the pre-fix tree:
+
+- `AModuleChangeClearsStaleStoreBeliefRatherThanMisreadingTheNewModulesStock` — the module changes
+  WITHOUT the bridge's own "store open" signal ever going through zero (deliberately, to isolate
+  this from the close/reopen self-heal above); the new module's genuinely pristine stock at the
+  SAME reused object id is misread as a delta against the OLD module's belief and published — the
+  op-log `Version` advances on a store nobody ever transacted with in this module. **Confirmed to
+  fail against the pre-fix tree**: `Version 1->2` where the fix holds it at `1`.
+- `AModuleChangeDropsAnyApplyStillQueuedForTheOldModule` — a remote apply queued (but not yet
+  landed) for the OLD module survives, unresolved, in `_wireTarget`; the NEW module's store at the
+  same reused id, which never stocked that key at all, is read as having "lost" it — `StorePump`'s
+  own per-key visit loop unions in every `_wireTarget` key for the current store id regardless of
+  whether the fresh scan mentions it (the buy-back race's own union, `docs/research/store-sync.md`'s
+  prior fix), computes `excess = 0 - target`, and PUBLISHES A SPURIOUS REMOVE — silently zeroing the
+  HOST's own genuine, unrelated stock of that key. **Confirmed to fail against the pre-fix tree**:
+  the host's own `Spike` entry is wiped from the far side.
+
+**The fix**: `Pumps/StorePump.cs`'s `Pump` now takes the local module name (`CoopAgent.cs` threads
+`local.Module` through, the same value `LootPump.PumpMaterialisedLoot`/`ScriptItemGrantPump`/
+`TransitionPump` already read every tick) and, gated on a clean non-fallback read
+(`ModuleNameGuard.IsFallbackModuleName`, matching `LootPump`'s own established "reset a dedup set on
+a module change" convention exactly), clears `_engineBelief`, `_wireTarget`, `_openStoreId`/
+`_openStoreBaselined`, the loop-breaker's `_opRate`/`_frozenUntilMs`, and the pump's own optimistic
+`_pendingApplies` queue the moment the module changes. Logs once, naming how many keys/pending
+applies were dropped, only when there was actually something to drop (silent on a session's very
+first module). This closes both new tests' own failure modes structurally — a fresh module always
+starts this pump from a genuinely blank slate, never inheriting a belief, a pending target, or a
+queued apply that could only ever have been about a DIFFERENT store the engine happened to reuse
+the same numeric id for.
+
+### Files, tests
+
+- `src/KotorCoop.Memory/KotorGameBridge.Store.cs` — `TryReadStoreRepo` rewritten to resolve via
+  `EngineGlobals.TryResolveServerObject` + a vtable type check, replacing the `PatternScanner` sweep
+  entirely; `StoreScanLimit` removed (no longer used).
+- `src/KotorCoop.Session/Pumps/StorePump.cs` — `Pump(string module, SessionCapabilities caps)`
+  (was `Pump(SessionCapabilities caps)`); new `_lastModule` field and the module-change clear
+  described above.
+- `src/KotorCoop.Session/CoopAgent.cs` — the one call site threads `local.Module` through.
+- `tests/KotorCoop.Tests/StoreLoopbackTests.cs` — `FakeStoreBridge.LocalModule` (was a fixed
+  `Module` constant baked into `TryReadLocalState`, now a mutable property so a test can drive a
+  module change); two new loopback tests (above), both independently confirmed to fail against the
+  pre-fix tree before this pass's own fix, matching this file's own established regression-test
+  discipline.
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| `Pumps/StorePump.cs`'s engineBelief/wireTarget redesign itself has no defect — every branch matches its own five pre-existing loopback tests | VERIFIED (code read + passing tests, this pass) |
+| `TryReadStoreRepo`'s raw `PatternScanner` sweep has no liveness confirmation against the engine's own object array — the exact "ghost object" class already found and fixed for creatures | VERIFIED (code read, cross-checked against the identical, already-fixed hazard in `KotorGameBridge.Attach.cs`) |
+| The fix (`EngineGlobals.TryResolveServerObject` + a vtable check, replacing the sweep) resolves the SAME live object the write side and the retail engine's own handlers do | Implemented; reuses already-unit-tested lookup arithmetic (`LiveObjectGateTests.cs`); **NEEDS-LIVE** for the full pointer chain, the same boundary every other method in this file already carries |
+| Item-identity flag encoding (plugin `SharedBlock.Items.cs` vs. protocol `ItemsPackets.cs`) is bit-for-bit identical — ruled out as a `StoreStackKey` mismatch source | VERIFIED (direct comparison, this pass) |
+| The bridge does not read the GUI panel's own list-box cache — ruled out as a "refreshed only on `PopulateStore`" source | VERIFIED (code read, this pass) |
+| `StorePump` had no module boundary in its belief/pending-apply bookkeeping | VERIFIED, reproduced by two new loopback tests, both confirmed to fail pre-fix |
+| The module-scoping fix (`Pump(module, caps)`, clear-on-change) | Implemented; **VERIFIED at the loopback layer** (both new tests pass; full suite green, no regressions) |
+| The live two-instance recipe (`scriptgive`, `openstore` both, `sell` on the host, `buy` back on the client as soon as the mirror is visible — this document's own established §6 recipe) re-run against BOTH fixes together | **NEEDS-LIVE** — no rig this round |
+
+`store_sync` stays default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`) — both fixes
+are loopback/unit-verified only, not live-verified. The next rig round should re-run this document's
+own established buy-back recipe (a resref confirmed NOT already stocked by the target store, per
+the "independent confound" note earlier in this document) and specifically watch whether the
+client's own detection now fires within one tick, as this pass's fix predicts, rather than the
+35+ second silence the prior round observed.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean (no plugin source touched this pass — both
+fixes are agent-side, `KotorCoop.Memory`/`KotorCoop.Session`). `dotnet test tests/KotorCoop.Tests
+--no-build --filter "FullyQualifiedName~Store"`: **179/179 passed** (177 pre-existing + 2 new).
+Full suite, `dotnet test tests/KotorCoop.Tests --no-build --filter
+"FullyQualifiedName!~HeavyPacketLossStillConverges"` (excluding the one suite CI itself excludes,
+per `docs/CONTRIBUTING.md`): **2471/2471 passed**, foreground, no regressions.
+
+## Crash triage (2026-08-28, no rig this round): `0x0023d4b3` resolved — an unrelated, pre-existing
+## engine bug in the retail client's own per-frame update code, NOT reachable by any `store_sync`
+## code path
+
+Task: resolve `swkotor.exe + 0x23d4b3` (the prior rig round's own crash, `docs/live-verification.md`'s
+"Fault offset: 0x0023d4b3") in the symbol database, name the function, and determine whether any
+`store_sync` code path can touch it during a module transition.
+
+### The address, resolved: `CSWCObject::GetServerObject` `0x0063D4B0`, VERIFIED
+
+RVA `0x0023D4B3` + image base `0x00400000` = `0x0063D4B3` (matching the plugin log's own
+`eip 0x63D4B3` line exactly — the two readings the prior round already cross-checked). Bracketing
+functions from `tools/kotor1_0_3.db` (`tools/q.py sql`):
+
+```
+CSWCObject  GetServerObject             0x0063D4B0
+CSWCObject  AttachmentFromServerObject  0x0063D520
+```
+
+`0x63D4B3` is 3 bytes into `GetServerObject`. Fresh disassembly (`tools/disasm.py 0x63D4B0 0x30`),
+VERIFIED:
+
+```
+0x0063D4B0  push esi
+0x0063D4B1  mov  esi, ecx                      ; esi = this (CSWCObject*)
+0x0063D4B3  mov  eax, [esi + 0xF8]              ; <-- THE EXACT CRASHING INSTRUCTION
+0x0063D4B9  test eax, eax
+0x0063D4BB  jne  0x63d50c
+...
+```
+
+`this` is read straight from `ecx` (the calling convention's own object pointer) with NO null
+check anywhere before the dereference at `+0xF8` — the crash is a null (or dangling/freed) `CSWCObject*`
+being passed as `this` into `GetServerObject`. `tools/xrefs.py 0x63D4B0` finds **140 direct call
+sites**, all inside the retail engine's own compiled code (combat/animation/AI per-frame update
+functions, going by the surrounding class names in the symbol DB) — `GetServerObject` is the
+CLIENT-side object's own routine link-back accessor, called constantly during ordinary per-frame
+gameplay logic, not a rare or special-purpose function.
+
+### Not reachable by any `store_sync` code path — VERIFIED by direct search
+
+`grep -rn "0x63D4B0\|GetServerObject" src/` finds **zero** references anywhere in this codebase.
+Every `store_sync` code path — `Pumps/StorePump.cs`'s apply step, `CheatController.Store.cs`'s
+`StoreInsert`/`StoreRemove`/`Buy`/`Sell` handlers, and `Odyssey.Store.cs`'s
+`InsertItemIntoStore`/`RemoveStoreStack`/`BuyFromStore`/`SellToStore` — calls exclusively
+SERVER-side functions (`GetStoreByGameObjectID`, `CItemRepository::InsertItem`/`RemoveItem`,
+`CSWSStore::AcquireItem`/`SellItem`, `CSWSCreature::GetItemRepository`/`GetGold`/`SetGold`). None of
+them touches `CSWCObject` (the CLIENT-side twin class `GetServerObject` belongs to) at all — there
+is no code path, direct or indirect, by which the store sync channel could reach this specific
+function. This matches — and settles — the prior rig round's own honest hedge ("not conclusively
+tied to `store_sync`... no store operation was in flight at the moment of the crash"): it genuinely
+is not tied to it.
+
+### What plausibly IS related: the general "epoch: world unloading" teardown, not this channel
+
+The plugin log's own timeline (`docs/live-verification.md`) shows the crash landing 8 ms after
+`epoch: world unloading; clearing phantom, item, combat and door state` — the SAME general
+per-transition teardown sequence that runs on EVERY module transition, `store_sync` on or off. This
+is the same general SHAPE of bug `docs/research/travel-map-init-crash.md` already documents at a
+DIFFERENT call site (`CSWGuiMainInterface::InitializeMap`'s own unguarded `CServerExoApp::GetModule()`
+null-deref, fixed by calling `CClientExoApp::UnloadModule` in the same teardown window): the client's
+own per-frame update loop dereferencing objects that a transition has begun tearing down, before the
+teardown has fully finished. Here the shape is different in one respect — the null/dangling pointer
+is `this` itself (a `CSWCObject*`), not a return value from an unguarded engine getter — consistent
+with a client object being destroyed (by the SAME phantom/item/combat/door cleanup the plugin log
+names) while some OTHER per-frame walk over the client's own object list still holds a stale
+reference to it and calls `GetServerObject` on it the next frame. **Not chased further this pass**
+(out of this task's own scope, which asked specifically about `store_sync`, and no rig to
+instrument which of the 140 call sites is involved) — flagged here as the concrete next target for
+whoever next has rig time for a general (not store-specific) transition-crash hunt, with the exact
+resolved function/address above so it does not need re-deriving.
+
+### The requested defensive hardening: applied regardless, as good hygiene
+
+Per the task's own instruction ("if a store repository pointer is held across the transition...,
+gate applies on the module and clear the store map on module change"), Part 2's own module-scoping
+fix (above) already does exactly this — `StorePump` never carries a store id, a pending apply, or a
+belief across a module boundary, regardless of whether this specific crash is ever proven related.
+This is defence in depth, not a fix FOR the crash (which this pass could not reach from any
+`store_sync` code path in the first place) — a store id genuinely is only ever safely interpreted
+within the module that placed it, and this pump should not lean on `GetStoreByGameObjectID`'s own
+fail-safe type check as its ONLY protection against a stale id when clearing proactively costs
+nothing.
+
+### Verdict
+
+`store_sync` stays OFF, unaffected by this crash — it is not reachable from any code this channel
+runs, on a module transition or otherwise. The crash itself remains a real, unresolved,
+pre-existing engine-teardown hazard (now named and addressed for the first time: `CSWCObject::
+GetServerObject 0x0063D4B0`, `this+0xF8` deref, no null check, 140 call sites) worth a dedicated,
+non-store-specific investigation next time a rig is available — reproduce a module transition with
+`store_sync=0` (isolating it definitively) and watch for the SAME `0x63D4B3` fault offset, per the
+prior rig round's own suggested next step.
