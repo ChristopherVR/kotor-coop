@@ -91,6 +91,24 @@ public interface IStoreSession
     /// <see cref="IPartyPoolSession.PublishPartyPoolIntentV2"/>'s identical remarks.</summary>
     uint PublishStoreIntentV2(StoreOpKind kind, StoreStackKey key, ushort count) => 0;
 
+    /// <summary>
+    /// Client only: has this session ever received, from the host's own absolute snapshot, at
+    /// least one entry naming <paramref name="storeObjectId"/> — i.e. has the HOST actually
+    /// scanned this store at least once this session (docs/research/shared-inventory-v2.md §2.7's
+    /// "unknown vs. zero" distinction, closed 2026-08-29 §7: a store the host has NEVER opened is
+    /// absent from every snapshot entirely, indistinguishable from "scanned and currently empty"
+    /// without this). A store never named by the host is UNKNOWN, not zero, and
+    /// <c>Pumps.StorePumpV2</c>'s client branch must never treat a local scan of an unknown
+    /// store's stock as evidence of anything — see that type's own gate. Always false on the
+    /// host (there is nothing for it to ask itself — <see cref="CoopHost.IsStoreKnownV2"/>
+    /// overrides with its own real answer purely for interface symmetry and tests). Once true for
+    /// a given id, stays true for the rest of the session (mirrors §2.7's own "once known, stays
+    /// known" precedent) — never reset by a later empty cycle, since the host's OWN snapshot
+    /// dropping every one of a store's entries is a legitimate, ordinary depletion, not proof the
+    /// store became unknown again.
+    /// </summary>
+    bool IsStoreKnownV2(uint storeObjectId) => false;
+
     /// <summary>Host only: every intent this instance's wire layer has accepted since the last
     /// drain, oldest first — see <see cref="IPartyPoolSession.DrainPartyPoolIntentsV2"/>'s
     /// identical remarks.</summary>

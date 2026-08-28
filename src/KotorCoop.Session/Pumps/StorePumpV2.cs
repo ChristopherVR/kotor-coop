@@ -50,13 +50,25 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
     private const long IntentTimeoutMs = 10_000;
 
-    /// <summary>See <see cref="PartyPoolPumpV2.AckGraceMs"/>'s identical remarks.</summary>
-    private const long AckGraceMs = 2_500;
+    /// <summary>See <see cref="PartyPoolPumpV2.AckGraceMs"/>'s identical remarks — raised for the
+    /// identical reason (§7, 2026-08-29). Doubly necessary here: a store's scan is GUI-gated
+    /// (only READING needs the GUI open, §2.6), so while the relevant store's GUI stays closed on
+    /// the host, the evidence-based path (a snapshot that has genuinely moved) cannot fire AT
+    /// ALL, no matter how long this pump waits — <see cref="CoopHost.HandleStoreIntentV2"/>'s own
+    /// write-through exists specifically so the broadcast belief still reflects an accepted
+    /// intent promptly even with the GUI closed, keeping the evidence-based path available in
+    /// that case too; this timer remains the last-resort backstop for when it genuinely
+    /// isn't.</summary>
+    private const long AckGraceMs = 15_000;
 
     private sealed class OutstandingIntent(uint serial, int delta, long queuedAtMs)
     {
         public uint Serial { get; } = serial;
-        public int Delta { get; } = delta;
+
+        /// <summary>See <c>PartyPoolPumpV2.OutstandingIntent.Delta</c>'s identical remarks —
+        /// mutable so <see cref="RetireOutstandingBy"/> can partially shrink it.</summary>
+        public int Delta { get; set; } = delta;
+
         public long QueuedAtMs { get; } = queuedAtMs;
         public long AckedAtMs { get; set; } = -1;
     }
@@ -152,12 +164,21 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
         foreach (StoreStackKey key in keys)
         {
-            int snapshotValue = snapshot.GetValueOrDefault(key);
+            // §7 (2026-08-29), item 3: a store the host has never scanned is UNKNOWN, not zero —
+            // `snapshot.GetValueOrDefault(key)` returning 0 for every one of that store's keys is
+            // indistinguishable, by itself, from "the host scanned it and it is genuinely empty".
+            // Left ungated, this client's own local scan of a real, never-before-shared store's
+            // pristine stock would read as a giant "local deposit" against a false zero baseline
+            // (a real defect: the client's own real stock, not just a spurious wire report). Skip
+            // the key ENTIRELY — no bookkeeping dictionary writes either — so the moment the
+            // store becomes known this pump's ordinary `firstSight` seeding handles it correctly,
+            // exactly as if this were the very first tick this key had ever existed.
+            if (!session.IsStoreKnownV2(key.StoreObjectId))
+            {
+                continue;
+            }
 
-            // detectTarget (snapshot + outstanding) is ONLY ever valid for the DETECTION check
-            // at the bottom of this loop — see ReconcileTarget's own remarks for why a
-            // RECONCILE-APPLY must never target it directly (PartyPoolPumpV2's identical fix).
-            int detectTarget = snapshotValue + OutstandingNet(key);
+            int snapshotValue = snapshot.GetValueOrDefault(key);
             int actual = scan.GetValueOrDefault(key);
 
             // See PartyPoolPumpV2's identical remarks: compares the RAW host snapshot value,
@@ -168,6 +189,23 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
             bool actualMoved = _lastActual.TryGetValue(key, out int priorActual) && priorActual != actual;
             _lastActual[key] = actual;
+
+            // §7 (2026-08-29): see PartyPoolPumpV2's identical remarks — the ONLY place
+            // outstanding is retired from confirmation evidence, proportional to the snapshot's
+            // own confirmed movement, never by comparing against this instance's own `actual`
+            // (unsound the moment more than one outstanding intent is in flight for the same
+            // key — found live via the party-pool version of this exact pump).
+            if (snapshotMoved)
+            {
+                RetireOutstandingBy(key, snapshotValue - priorSnapshotValue);
+            }
+
+            // detectTarget (snapshot + outstanding) is ONLY ever valid for the DETECTION check
+            // at the bottom of this loop — see ReconcileTarget's own remarks for why a
+            // RECONCILE-APPLY must never target it directly (PartyPoolPumpV2's identical fix).
+            // Computed AFTER the retirement above so a partial retirement this same tick is
+            // already reflected.
+            int detectTarget = snapshotValue + OutstandingNet(key);
 
             if (_reconcileInFlight.TryGetValue(key, out int inFlightTarget))
             {
@@ -181,14 +219,10 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
                     _reconcileInFlight.Remove(key);
                     _reconcileQueuedAtMs.Remove(key);
 
-                    // See PartyPoolPumpV2's identical remarks: a reconcile landing on behalf of
-                    // an outstanding intent must retire it HERE, or it lingers in OutstandingNet
-                    // forever and permanently mis-inflates detectTarget below.
-                    int net = OutstandingNet(key);
-                    if (net != 0 && (net > 0 ? actual >= snapshotValue : actual <= snapshotValue))
-                    {
-                        ClearOutstanding(key);
-                    }
+                    // §7 (2026-08-29): outstanding retirement is handled entirely by the
+                    // snapshotMoved-driven RetireOutstandingBy call above now — see
+                    // PartyPoolPumpV2's identical remarks for why the old
+                    // actual-vs-snapshotValue-gated ClearOutstanding call here was unsound.
                 }
                 else
                 {
@@ -303,7 +337,8 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         }
     }
 
-    /// <summary>See <see cref="PartyPoolPumpV2.ReconcileTarget"/>'s identical remarks.</summary>
+    /// <summary>See <see cref="PartyPoolPumpV2.ReconcileTarget"/>'s identical remarks — a PURE
+    /// decision, no side effects (§7, 2026-08-29).</summary>
     private int ReconcileTarget(StoreStackKey key, int actual, int snapshotValue)
     {
         int net = OutstandingNet(key);
@@ -313,13 +348,57 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         }
 
         bool explainedByOwnEngine = net > 0 ? actual >= snapshotValue : actual <= snapshotValue;
-        if (!explainedByOwnEngine)
+        return explainedByOwnEngine ? actual : snapshotValue;
+    }
+
+    /// <summary>See <see cref="PartyPoolPumpV2.RetireOutstandingBy"/>'s identical remarks.</summary>
+    private void RetireOutstandingBy(StoreStackKey key, int amount)
+    {
+        if (amount == 0 || !_outstanding.TryGetValue(key, out List<OutstandingIntent>? entries))
         {
-            return snapshotValue;
+            return;
         }
 
-        ClearOutstanding(key);
-        return actual;
+        int direction = Math.Sign(amount);
+        int remaining = Math.Abs(amount);
+
+        List<OutstandingIntent>? fullyRetired = null;
+        foreach (OutstandingIntent entry in entries)
+        {
+            if (remaining == 0 || Math.Sign(entry.Delta) != direction)
+            {
+                continue;
+            }
+
+            int entryMagnitude = Math.Abs(entry.Delta);
+            int take = Math.Min(entryMagnitude, remaining);
+            remaining -= take;
+
+            if (take == entryMagnitude)
+            {
+                (fullyRetired ??= []).Add(entry);
+            }
+            else
+            {
+                entry.Delta -= take * direction;
+            }
+        }
+
+        if (fullyRetired is null)
+        {
+            return;
+        }
+
+        foreach (OutstandingIntent entry in fullyRetired)
+        {
+            entries.Remove(entry);
+            _outstandingBySerial.Remove(entry.Serial);
+        }
+
+        if (entries.Count == 0)
+        {
+            _outstanding.Remove(key);
+        }
     }
 
     private int OutstandingNet(StoreStackKey key)
@@ -358,20 +437,6 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         if (entries.Count == 0)
         {
             _outstanding.Remove(key);
-        }
-    }
-
-    /// <summary>See <see cref="PartyPoolPumpV2.ClearOutstanding"/>'s identical remarks.</summary>
-    private void ClearOutstanding(StoreStackKey key)
-    {
-        if (!_outstanding.Remove(key, out List<OutstandingIntent>? entries))
-        {
-            return;
-        }
-
-        foreach (OutstandingIntent entry in entries)
-        {
-            _outstandingBySerial.Remove(entry.Serial);
         }
     }
 

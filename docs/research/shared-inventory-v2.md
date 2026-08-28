@@ -634,3 +634,195 @@ brought up; both deployed `dinput8.dll` confirmed 2,060,288 bytes / identical ti
 deployed `KotorCoop.Session.dll` confirmed by byte-scan to contain the mode-2 type names. Full
 `dotnet test`/native-build baseline for this session is recorded separately in
 `docs/live-verification.md`.
+
+---
+
+## 7. 2026-08-29, correctness pass — the doubling's real mechanism found and fixed (client-side
+## outstanding-ledger retirement, not a host self-apply); host apply surface tightened to the
+## letter of §2's design; two store bugs (virgin wipe, absent-store false-deposit) closed;
+## `party_pool_sync`/`store_sync` stay OFF, both modes at 0
+
+This pass set out to verify item-by-item that the HOST does exactly the two things §2 allows —
+scan-and-publish, and apply an accepted client intent once each — and that the CLIENT's reconcile
+logic cannot re-derive an intent from its own reconcile-caused engine movement. Auditing the host
+branch found one real departure from the letter of §2.1 (below), but the actual mechanism behind
+§6.2/§6.3's exponential doubling turned out to live entirely in the CLIENT's outstanding-intent
+ledger, confirmed by writing exactly the host-only and repeated-ambient-churn harnesses item 4
+asked for and watching one of them fail.
+
+### 7.1 The real defect: `ReconcileTarget` retired the WHOLE outstanding ledger on the weakest
+### possible evidence, instead of retiring only what confirmed snapshot movement actually covers
+
+`Pumps/PartyPoolPumpV2.cs`'s `ReconcileTarget(key, actual, snapshotValue)` — introduced by §5's own
+"Bug 2" fix to stop a reconcile-apply from double-counting an already-in-flight intent — decided
+"has the snapshot caught up with what I still owe?" by comparing `actual` (this instance's OWN
+current engine value, which reflects EVERY local change the instant it happens) against
+`snapshotValue` (the host's last-broadcast belief, which necessarily lags). Whenever `actual` sat
+on the correct side of `snapshotValue` in the outstanding ledger's own direction, it called
+`ClearOutstanding(key)` — wiping the **entire** outstanding list for that key in one shot, from
+both the `snapshotMoved` branch and the `_reconcileInFlight` landing branch.
+
+This is sound for exactly one outstanding entry. It is wrong the moment a SECOND, genuinely
+distinct, not-yet-host-applied intent for the same key is also outstanding — which is not a rare
+edge case here, it is the ordinary shape of rapid or repeated local activity (several `pooladd`s in
+a row; ambient script noise recurring every few seconds; several buy/sell clicks before the host's
+single-slot cheat channel has drained the first one). Because `actual` reflects the client's own
+engine immediately, it is very often already past `snapshotValue` in the right direction well
+before the SNAPSHOT itself has caught up to more than the first of several outstanding intents —
+the `explainedByOwnEngine` check has no way to tell "one intent's effect showed up" from "my own
+engine has raced ahead on its own, with several separate intents still genuinely owed". The wipe
+retired credit for intents the host had not applied yet at all. On the very next tick,
+`detectTarget = snapshotValue + OutstandingNet(key)` was short by exactly that wiped amount, so the
+SAME already-published movement was re-detected as "new", re-published under a fresh serial, and
+(once the host got around to it) re-applied — the client's own bookkeeping manufacturing a second,
+real request for something it had already asked for once. Reproduced directly by this pass's own
+`RepeatedClientAmbientChurnConvergesExactlyWithBoundedHostApplies` test (ten rapid, distinct client
+deposits 120&#160;ms apart): the client's own detect log showed nine published serials summing to
+13 units of "new" delta for an engine that only ever moved by 10, and the host settled at 11 while
+the client settled at 10 — a genuine cross-instance divergence of the exact qualitative shape
+§6.2/§6.3 described (not merely both sides agreeing on an inflated number).
+
+**Fix**: `ReconcileTarget` is now a pure decision function with no side effects. Retirement happens
+in exactly one place, driven by the snapshot's own confirmed movement rather than a comparison
+against this instance's `actual` — the literal reading of §2.2's own words, which this
+implementation had never actually followed: *"retired — by however much, not necessarily all at
+once — the moment a NEW snapshot's own value for that key has moved in the same direction... an
+exact match is not required."* A new `RetireOutstandingBy(key, snapshotValue - priorSnapshotValue)`
+runs once per tick, exactly when `snapshotMoved`, and retires outstanding entries oldest-first, up
+to the confirmed amount, restricted to entries moving in the same direction — partially shrinking
+an entry (`OutstandingIntent.Delta` is now mutable) rather than removing more than the evidence
+supports. `AckGraceMs`'s blind timer (previously 2,500&#160;ms) is kept only as a last-resort
+safety net for a genuinely stuck entry (raised to 15,000&#160;ms — the old bound assumed a single
+in-flight apply and did not hold once several accepted intents had to drain one at a time through
+the single-slot arbitrated cheat channel); the evidence-based path above is what normally retires
+an entry, usually within one broadcast cycle. Applied identically to `Pumps/StorePumpV2.cs`.
+
+### 7.2 Host apply-surface audit: the party pool matched §2.1 exactly; the store needed its
+### write-through kept, for a reason the party pool does not share
+
+Per the task's own checklist (intents re-applied while unacked; a reconcile-toward-snapshot branch
+running on the host; a snapshot fed back to the host via the relay), none of those were found —
+`PartyPoolPumpV2.PumpHost`/`StorePumpV2.PumpHost` never call anything but a scan-publish and a
+drain-of-accepted-intents-into-one-apply-each; `session.IsEnemyAuthority` is two static `true`/
+`false` overrides (`CoopHost.Enemies.cs`/`CoopClient.Enemies.cs`), never both branches at once.
+
+One real, narrower departure from §2.1's "the host publishes... a direct read of the host's own
+game": `CoopHost.HandlePartyPoolIntentV2`/`HandleStoreIntentV2` used to write an accepted intent's
+GUESSED effect into the broadcast belief immediately, ahead of the real engine scan ever seeing it
+land. For the party pool this write-through was removed outright — `PartyPoolPumpV2.PumpHost` scans
+UNCONDITIONALLY every tick (no GUI-gating of any kind), so the real scan always catches up on its
+own within one apply-landing cycle, and all party-pool tests (existing and new) pass with the
+write-through gone. Attempting the identical removal for the store broke
+`ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay` (a NEW test, added this pass): a store can
+only be SCANNED while its GUI is open (§2.6) — applying never needed it, only reading does — so
+with the store's GUI closed at the moment a buy-back intent lands (the ordinary, documented case),
+the broadcast belief would never be refreshed by a real scan at all until the GUI reopens, leaving
+`AckGraceMs`'s timer as the ONLY way outstanding could ever retire for that key — which, once it
+fired, reproduced a real second apply on the host. The store's write-through was restored (§2.7's
+own store-specific limitation already accepted a comparable gap; this is the same shape, now
+understood precisely) — it never applies anything the store's own next real scan would not
+independently confirm, it just keeps the evidence-based retirement path in §7.1 reachable even with
+the GUI closed. The party pool's own write-through removal stands, since it was never needed there.
+
+A cross-thread hazard was also tightened while auditing this code, independent of the above: both
+`BroadcastPartyPoolV2` and `BroadcastStoreV2` used to hand `Paginate` a bare reference to the live
+belief dictionary, captured under `_gate` but then enumerated OUTSIDE it while a concurrent intent
+handler could still be mutating the very same `Dictionary` instance on the receive-loop's own task —
+undefined behaviour under `Dictionary<TKey,TValue>`'s own contract, the identical "unguarded
+cross-thread queue" class party-pool-sync.md's root cause 5 already named for mode 1. Both now clone
+under the lock before paginating. Not confirmed as a contributor to §6's own doubling (§7.1 above is
+a complete, deterministic explanation on its own, reproduced without any concurrency involved), but
+a genuine, provable correctness gap worth closing regardless.
+
+### 7.3 Store virgin wipe and absent-store false-deposit, both closed
+
+**Virgin wipe (§6.4)**: `CoopHost.PublishStoreSnapshotV2`'s per-store merge treated a SINGLE scan's
+absence of a previously-known key as proof it left the store, with no protection against
+`KotorGameBridge.TryScanOpenStore` transiently reading back a reduced/zero count while the engine's
+own item repository is mid-mutation (a stack merge/split, a fresh larger-scope re-read forced by an
+unrelated cheat) — the exact live-observed shape (an 18-entry wipe, then an almost-identical
+restore ~4-19&#160;s later). Fixed with a debounce: a key now missing from a fresh scan is not
+removed on the spot — its first-missing moment is recorded, and it is only actually dropped once it
+has read absent continuously for `StoreStaleRemovalConfirmMs` (2,000&#160;ms), i.e. confirmed by a
+SECOND, independent fresh scan of that same store, not a repeat read of a cached one. A genuine
+depletion stays absent across that whole window and is still removed, just up to ~2&#160;s later; a
+one-off transient glitch self-heals on its very next real scan and never touches belief at all.
+
+**Absent-store false-deposit (item 3)**: a store the host has never scanned contributes nothing to
+`_storeBeliefV2`, so every one of its keys reads as snapshot-value 0 — indistinguishable, from the
+client's own detect step, from "the host scanned it and it is genuinely empty". Left unguarded, a
+client opening a real, pristine, never-shared store would read its own real stock as a giant "local
+deposit" against that false zero baseline — not merely a bad wire report, a real risk of the host
+later double-adding that store's own pristine content once it finally scans it for itself. Closed
+with an explicit "known store" signal: the host now tracks every store id its own bridge has ever
+scanned (`_storeKnownIdsV2`, populated unconditionally in `PublishStoreSnapshotV2`, independent of
+whether that scan came back empty) and exposes it via `IStoreSession.IsStoreKnownV2` (a new default
+interface member, false everywhere except `CoopHost`'s own real answer); the client independently
+learns a store id is known the moment ANY entry naming it arrives in a snapshot
+(`CoopClient.StoreV2.cs`'s own `_storeKnownIdsV2`, monotonic — "once known, stays known", mirroring
+§2.7's own precedent) and exposes the identical query. `Pumps/StorePumpV2.cs`'s client branch now
+skips a key ENTIRELY — no bookkeeping writes either — whenever its store is not yet known, so the
+moment it becomes known the pump's ordinary `firstSight` seeding handles it correctly, exactly as if
+that were the very first tick the key had ever existed.
+
+### 7.4 Tests
+
+`tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs` gained six new cases, exercising the
+harness shapes item 4 asked for:
+
+- `HostOnlyPartyPoolAmbientChurnNeverQueuesAHostSideEngineApply` /
+  `HostOnlyStoreAmbientChurnNeverQueuesAHostSideEngineApply` — a host with no peer that ever
+  publishes anything, its own engine bumped every tick for 40 rounds; `AgentLoopV2`'s new
+  `PoolApplyDequeueCount`/`StoreApplyDequeueCount` counters (incremented the instant this side's own
+  pump ever queues an engine apply, landed or not) must read exactly 0 throughout, while a bare
+  observer `CoopClient` (connected, `RunAsync` only, no `AgentLoopV2` of its own) still sees the
+  snapshot track every change — proving the publish half keeps working with nothing to gate it on.
+- `RepeatedClientAmbientChurnConvergesExactlyWithBoundedHostApplies` — the test that caught §7.1:
+  ten rapid, distinct client-side deposits must converge to exactly 10 on both sides and STAY there,
+  with the host's own apply count bounded to a small multiple of 10, never anything exponential.
+- `ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay` — the test that caught §7.2's store
+  write-through gap: a client buy-back (host's own store GUI closed at the moment the intent lands,
+  matching the pre-existing `StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost`'s own
+  scenario) must apply to the host's engine exactly once (`AgentLoopV2.StoreApplyLandings`), held
+  stable for 5 further seconds.
+- `ClientStoreNeverOpenedByHostStaysUnknownAndUntouched` — the test for §7.3's second fix: a client
+  with real, pristine stock in a store the host's `OpenStoreId` never touches for the whole test
+  must never be reported as a deposit, never reconciled, and both sides' `IsStoreKnownV2` must stay
+  false for that store id throughout.
+
+`AgentLoopV2` gained `PoolApplyDequeueCount`/`StoreApplyDequeueCount` (incremented the instant this
+side's own pump ever dequeues an apply, whether or not it later lands) and
+`PoolApplyLandings`/`StoreApplyLandings` (incremented only once the simulated single-slot cheat
+channel actually lands one), used by the new tests above and available for any future test in this
+family.
+
+### 7.5 Result
+
+`dotnet build KotorCoop.slnx -warnaserror`: 0 warnings, 0 errors. The filtered suite
+(`FullyQualifiedName~SharedInventoryV2|FullyQualifiedName~PartyPool|FullyQualifiedName~Store`, 274
+tests) passed cleanly three consecutive runs in a row after the §7.1 fix landed (it reproduced the
+defect reliably before the fix, and failed zero times in three runs after). The full suite
+(`dotnet test tests/KotorCoop.Tests --no-build`, 2,511 tests) passed with zero failures on its
+second run; its first run showed three failures
+(`CoopCommandDispatcherTests.HostingWithBothRejoinGatesOffServesNothing`,
+`CoopCommandDispatcherTests.HostingWithARejoinGateOnServesItsWorldOverWorldTransfer`,
+`StoreLoopbackTests.ReconnectResyncLeavesUntransactedStoresAlone`) — all three unrelated to this
+document's own code (rejoin-gate hosting selection; a mode-1 store reconnect-resync test), and all
+three passed cleanly when re-run in isolation immediately afterward, matching this repository's
+already-documented pattern of environment-flaky tests under full-suite parallel load (see the
+`kotor-coop-live-session-checks` note and the recent `SaveDigestTests` "CI race" fix) rather than a
+regression from this pass's changes.
+
+`party_pool_sync`/`store_sync` **stay OFF (mode 0) by default**, both explicitly confirmed at 0 in
+every test and left unchanged in `profiles/coop.ini.example` — this pass closes bench-side defects
+found by construction and by targeted loopback testing; it does not itself constitute a live pass,
+and the next live round should re-run §6's own exact recipe (three rapid host `pooladd`s;
+`dialogue_item_sync`/`script_item_sync` isolated to 0; the store buy-back and virgin-store-open
+checks) against a build containing this pass's fixes before either mode is considered for a default
+flip.
+
+**Files touched**: `src/KotorCoop.Session/Pumps/PartyPoolPumpV2.cs`,
+`src/KotorCoop.Session/Pumps/StorePumpV2.cs`, `src/KotorCoop.Session/CoopHost.PartyPoolV2.cs`,
+`src/KotorCoop.Session/CoopHost.StoreV2.cs`, `src/KotorCoop.Session/CoopClient.StoreV2.cs`,
+`src/KotorCoop.Session/IStoreSession.cs`, `tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs`,
+this document.

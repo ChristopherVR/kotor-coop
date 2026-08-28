@@ -157,6 +157,25 @@ public class SharedInventoryV2LoopbackTests
         /// <c>--logger detailed</c>.</summary>
         public System.Collections.Concurrent.ConcurrentQueue<string> Logs { get; } = new();
 
+        /// <summary>§7 (2026-08-29), item 4: how many times THIS side's own
+        /// <see cref="CoopAgent.TryDequeuePendingPartyPoolApplyV2"/> has ever returned true — i.e.
+        /// how many times this instance's own pump queued an engine apply at all, whether or not
+        /// it has landed yet. On a HOST-role agent this must stay exactly 0 unless a client has
+        /// genuinely published an accepted intent — the host's own scan/publish branch has no
+        /// path that queues one on its own.</summary>
+        public int PoolApplyDequeueCount;
+
+        /// <summary>Store's mirror of <see cref="PoolApplyDequeueCount"/>.</summary>
+        public int StoreApplyDequeueCount;
+
+        /// <summary>How many times a queued party-pool apply has actually LANDED against
+        /// <see cref="Bridge"/>'s <see cref="FakeBridgeV2.TruePartyPool"/> (i.e. <see cref="Land"/>
+        /// ran for it) — strictly less than or equal to <see cref="PoolApplyDequeueCount"/>.</summary>
+        public int PoolApplyLandings;
+
+        /// <summary>Store's mirror of <see cref="PoolApplyLandings"/>.</summary>
+        public int StoreApplyLandings;
+
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _task;
         private readonly Random _random = new();
@@ -204,11 +223,13 @@ public class SharedInventoryV2LoopbackTests
                     }
                     else if (Agent.TryDequeuePendingPartyPoolApplyV2(out CoopAgent.PendingPartyPoolApply poolNext))
                     {
+                        Interlocked.Increment(ref PoolApplyDequeueCount);
                         _inFlightPool = poolNext;
                         _cheatLandsAtMs = now + 30 + _random.Next(220);
                     }
                     else if (Agent.TryDequeuePendingStoreApplyV2(out CoopAgent.PendingStoreApply storeNext))
                     {
+                        Interlocked.Increment(ref StoreApplyDequeueCount);
                         _inFlightStore = storeNext;
                         _cheatLandsAtMs = now + 30 + _random.Next(220);
                     }
@@ -237,6 +258,8 @@ public class SharedInventoryV2LoopbackTests
                 {
                     Bridge.TruePartyPool.Remove(p.Key);
                 }
+
+                Interlocked.Increment(ref PoolApplyLandings);
             }
             else if (_inFlightStore is { } s)
             {
@@ -250,6 +273,8 @@ public class SharedInventoryV2LoopbackTests
                 {
                     Bridge.TrueStore.Remove(s.Key);
                 }
+
+                Interlocked.Increment(ref StoreApplyLandings);
             }
         }
 
@@ -701,6 +726,272 @@ public class SharedInventoryV2LoopbackTests
                         && rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == 8,
                     TimeSpan.FromSeconds(5)),
                 "no double-apply, no misroute — both sides must settle at exactly 8 and stay there");
+        }
+    }
+
+    // ---- §7 (2026-08-29): regression coverage for the defect this pass found and fixed —
+    // see docs/research/shared-inventory-v2.md §7 for the full write-up. ------------------------
+
+    /// <summary>
+    /// item 4's own host-only harness: a host with NO connected peer that ever publishes
+    /// anything, whose engine receives a fresh "ambient" party-pool change every pump tick.
+    /// <c>PumpHost</c> must do exactly two things — scan and publish — and NEVER queue an engine
+    /// apply of its own; <see cref="AgentLoopV2.PoolApplyDequeueCount"/> must stay exactly 0 for
+    /// the entire run, while a bare observer (a connected <see cref="CoopClient"/> with no
+    /// <see cref="AgentLoopV2"/> of its own, so nothing on that side ever reconciles or publishes
+    /// anything back) still sees the snapshot track every ambient change, proving the publish
+    /// half keeps working.
+    /// </summary>
+    [Fact]
+    public async Task HostOnlyPartyPoolAmbientChurnNeverQueuesAHostSideEngineApply()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient observer = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
+        _ = host.RunAsync(cts.Token);
+        _ = observer.RunAsync(cts.Token);
+
+        using AgentLoopV2 hostAgent = new(host, bridgeScanIntervalMs: 50);
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => observer.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "observer never connected");
+
+            for (int i = 1; i <= 40; i++)
+            {
+                hostAgent.Bridge.TruePartyPool[Thermal] = i;
+                await Task.Delay(20);
+
+                Assert.True(hostAgent.PoolApplyDequeueCount == 0,
+                    $"host queued a party-pool engine apply of its own after {i} pure-ambient "
+                    + "ticks with no client ever connected — a host must only ever "
+                    + "ApplyClientIntent(serial), never anything derived from its own scan");
+            }
+
+            Assert.True(
+                await WaitForAsync(
+                    () => observer.TryGetPartyPoolSnapshotV2(out IReadOnlyDictionary<PartyPoolStackKey, int> t)
+                        && t.GetValueOrDefault(Thermal) == 40,
+                    Timeout),
+                "the observer never saw the host's snapshot track the ambient churn to its final value");
+
+            Assert.Equal(0, hostAgent.PoolApplyDequeueCount);
+        }
+        finally
+        {
+            host.Dispose();
+            observer.Dispose();
+        }
+    }
+
+    /// <summary>Store's mirror of <see cref="HostOnlyPartyPoolAmbientChurnNeverQueuesAHostSideEngineApply"/>.</summary>
+    [Fact]
+    public async Task HostOnlyStoreAmbientChurnNeverQueuesAHostSideEngineApply()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient observer = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
+        _ = host.RunAsync(cts.Token);
+        _ = observer.RunAsync(cts.Token);
+
+        using AgentLoopV2 hostAgent = new(host, bridgeScanIntervalMs: 50);
+        hostAgent.Bridge.OpenStoreId = TestStoreId;
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => observer.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "observer never connected");
+
+            for (int i = 1; i <= 40; i++)
+            {
+                hostAgent.Bridge.TrueStore[StoreBlaster] = i;
+                await Task.Delay(20);
+
+                Assert.True(hostAgent.StoreApplyDequeueCount == 0,
+                    $"host queued a store engine apply of its own after {i} pure-ambient ticks "
+                    + "with no client ever connected");
+            }
+
+            Assert.True(
+                await WaitForAsync(
+                    () => observer.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t)
+                        && t.GetValueOrDefault(StoreBlaster) == 40,
+                    Timeout),
+                "the observer never saw the host's store snapshot track the ambient churn");
+
+            Assert.Equal(0, hostAgent.StoreApplyDequeueCount);
+        }
+        finally
+        {
+            host.Dispose();
+            observer.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// item 4's two-pump harness: the REAL host/client role split, with the CLIENT's engine
+    /// (never the host's) scripted with repeated ambient-style bumps, one every ~120ms — the
+    /// exact recurring-noise shape the live rig round's own doubling symptom looked like. Totals
+    /// on both sides must land on exactly the final value the client's engine reached (no
+    /// amplification across many rounds, not just one), and the host's own apply count must stay
+    /// tightly bounded to roughly the number of distinct client-detected deltas, never anything
+    /// exponential.
+    /// </summary>
+    [Fact]
+    public async Task RepeatedClientAmbientChurnConvergesExactlyWithBoundedHostApplies()
+    {
+        (Rig rig, _) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            const int Rounds = 10;
+            for (int i = 1; i <= Rounds; i++)
+            {
+                rig.ClientAgent.Bridge.TruePartyPool[Thermal] = i;
+                await Task.Delay(120);
+            }
+
+            string Diagnostics() =>
+                $"\nHOST LOG:\n{string.Join('\n', rig.HostAgent.Logs)}"
+                + $"\nCLIENT LOG:\n{string.Join('\n', rig.ClientAgent.Logs)}";
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal) == Rounds, Timeout),
+                $"host never converged to exactly {Rounds}; got "
+                + $"{rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal)}{Diagnostics()}");
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal) == Rounds, Timeout),
+                $"client's own engine never settled at exactly {Rounds}{Diagnostics()}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal) == Rounds
+                        && rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal) == Rounds,
+                    TimeSpan.FromSeconds(5)),
+                $"both sides must STAY at exactly {Rounds} across repeated ambient-style churn — "
+                + $"no amplification, ever. host={rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal)} "
+                + $"client={rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Thermal)}{Diagnostics()}");
+
+            // Bounded, never exponential: 10 genuinely distinct deltas should produce, at most, a
+            // small multiple of 10 host-side applies — a doubling defect of the kind this pass
+            // fixed would blow this bound by orders of magnitude within the same run.
+            Assert.True(rig.HostAgent.PoolApplyDequeueCount <= Rounds * 3,
+                $"host applied {rig.HostAgent.PoolApplyDequeueCount} times for only {Rounds} "
+                + "distinct client-side deltas — not bounded");
+        }
+    }
+
+    /// <summary>
+    /// item 4's own explicit requirement: a client buy-back intent must reach the host and apply
+    /// EXACTLY once — never a second time once the snapshot has caught up and the client's own
+    /// outstanding entry has been retired. Extends
+    /// <see cref="StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost"/>'s own scenario
+    /// with an explicit apply-count assertion, held stable for several seconds after landing.
+    /// </summary>
+    [Fact]
+    public async Task ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay()
+    {
+        (Rig rig, _) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            rig.HostAgent.Bridge.OpenStoreId = TestStoreId;
+            rig.HostAgent.Bridge.TrueStore[StoreBlaster] = 1;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.Client.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t)
+                        && t.GetValueOrDefault(StoreBlaster) == 1,
+                    Timeout),
+                "client never learned of the host's sell");
+
+            rig.ClientAgent.Bridge.OpenStoreId = TestStoreId;
+            Assert.True(
+                await WaitForAsync(() => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1, Timeout),
+                "client's own engine never reconciled up to the host's mirrored sell");
+
+            int applyCountBeforeBuyBack = rig.HostAgent.StoreApplyLandings;
+
+            rig.ClientAgent.Bridge.TrueStore.Remove(StoreBlaster);
+            rig.HostAgent.Bridge.OpenStoreId = 0;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => !rig.HostAgent.Bridge.TrueStore.ContainsKey(StoreBlaster)
+                        || rig.HostAgent.Bridge.TrueStore[StoreBlaster] == 0,
+                    Timeout),
+                "the client's buy-back never reached the host's own engine");
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.HostAgent.StoreApplyLandings == applyCountBeforeBuyBack + 1, Timeout),
+                $"expected exactly one new host-side store apply for the buy-back; got "
+                + $"{rig.HostAgent.StoreApplyLandings - applyCountBeforeBuyBack} so far");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.StoreApplyLandings == applyCountBeforeBuyBack + 1,
+                    TimeSpan.FromSeconds(5)),
+                "the buy-back must never apply to the host's engine a second time");
+        }
+    }
+
+    /// <summary>
+    /// item 3/4: a store the HOST has never opened this session is UNKNOWN, not zero — a client
+    /// with real, pristine stock in such a store must never report it as a fabricated "local
+    /// deposit", and the client's own engine must stay untouched. The host's
+    /// <c>OpenStoreId</c> is never set to <see cref="UnknownStoreId"/> anywhere in this test.
+    /// </summary>
+    [Fact]
+    public async Task ClientStoreNeverOpenedByHostStaysUnknownAndUntouched()
+    {
+        const uint UnknownStoreId = 0x99;
+        StoreStackKey unknownKey = new(UnknownStoreId, "g_w_thermldet01", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        (Rig rig, _) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            rig.ClientAgent.Bridge.TrueStore[unknownKey] = 7;
+            rig.ClientAgent.Bridge.OpenStoreId = UnknownStoreId;
+
+            // Plenty of ticks for the client's own pump to have mis-detected this as a local
+            // deposit against a false zero baseline, if it were going to.
+            await Task.Delay(2_500);
+
+            Assert.False(
+                rig.Client.IsStoreKnownV2(UnknownStoreId),
+                "the client must never learn a store is known without the host ever having named it");
+
+            Assert.False(
+                rig.Host.IsStoreKnownV2(UnknownStoreId),
+                "the host must never come to know a store solely from a client's own local scan");
+
+            Assert.Equal(7, rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(unknownKey));
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(unknownKey) == 7,
+                    TimeSpan.FromSeconds(3)),
+                "an absent-on-host store's client-side stock must stay untouched, never reconciled "
+                + "down against a false zero baseline nor reported as a phantom deposit");
+
+            Assert.Equal(0, rig.HostAgent.StoreApplyDequeueCount);
         }
     }
 }

@@ -29,6 +29,11 @@ public sealed partial class CoopClient
 
     private byte _storeSnapshotV2ExpectedPageCount = 1;
 
+    /// <summary>Every store object id this client has EVER seen named by an entry in a host
+    /// snapshot — see <see cref="IStoreSession.IsStoreKnownV2"/>'s own remarks (§7, 2026-08-29).
+    /// Only ever grows.</summary>
+    private readonly HashSet<uint> _storeKnownIdsV2 = [];
+
     private readonly Queue<uint> _storeIntentAckDrainV2 = new();
 
     private readonly Lock _storeIntentAckDrainV2Gate = new();
@@ -74,6 +79,15 @@ public sealed partial class CoopClient
     }
 
     public IReadOnlyList<StoreIntentPacketV2> DrainStoreIntentsV2() => [];
+
+    /// <summary>See <see cref="IStoreSession.IsStoreKnownV2"/>'s own remarks.</summary>
+    public bool IsStoreKnownV2(uint storeObjectId)
+    {
+        lock (_gate)
+        {
+            return _storeKnownIdsV2.Contains(storeObjectId);
+        }
+    }
 
     public IReadOnlyList<uint> DrainAckedStoreIntentsV2()
     {
@@ -162,6 +176,13 @@ public sealed partial class CoopClient
                 foreach (StoreSnapshotEntry entry in page.Entries)
                 {
                     _storeSnapshotV2Gathering[entry.Key] = entry.Count;
+
+                    // Any entry naming a store proves the HOST has scanned it at least once —
+                    // §7 (2026-08-29), see IStoreSession.IsStoreKnownV2's own remarks. Recorded
+                    // as soon as a page arrives (not gated on the generation fully committing)
+                    // so a partial/superseded gather still teaches this client what it learned,
+                    // matching "once known, stays known".
+                    _storeKnownIdsV2.Add(entry.Key.StoreObjectId);
                 }
             }
 
