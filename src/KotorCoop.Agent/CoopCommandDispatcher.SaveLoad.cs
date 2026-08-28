@@ -46,6 +46,26 @@ public sealed partial class CoopCommandDispatcher
     private bool HostLoadReadoptEnabled =>
         _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? false;
 
+    /// <summary>
+    /// coop.ini <c>auto_adopt_world</c> — ON by default, unlike its two neighbours above,
+    /// because it is the gate on the thing a joiner almost always wants: a world that differs
+    /// from the host's gets ADOPTED instead of played degraded.
+    ///
+    /// ⚠ THIS TOOK OVER <see cref="RejoinTrigger.SaveMismatch"/> FROM
+    /// <see cref="ClientLoadRejoinEnabled"/>, and that is a deliberate behaviour change rather
+    /// than a tidy-up. The two triggers are different questions that happened to share an
+    /// answer: <c>client_load_rejoin</c> is "when I load a save mid-session, put me back in the
+    /// host's world", while this is "when my world simply is not the host's, fix it". A joiner
+    /// who has turned the first off — they never load mid-session — was silently also refusing
+    /// the second, which is the only mechanism that could ever have admitted them to the
+    /// object-id-keyed channels at all. Both default ON, so nothing changes for an install that
+    /// has not opted out of either.
+    /// </summary>
+    private bool? _autoAdoptWorldEnabled;
+
+    private bool AutoAdoptWorldEnabled =>
+        _autoAdoptWorldEnabled ??= loadConfig?.Invoke()?.AutoAdoptWorld ?? true;
+
     /// <summary>Roadmap item 14 phase 2's rejoin decision state — see
     /// <see cref="ClientLoadRejoinRule"/>. Best-effort threading: written synchronously from
     /// this dispatcher's own tick when a rejoin starts, and once more (back to Idle) by the
@@ -223,9 +243,14 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void MaintainWorldServing()
     {
+        // auto_adopt_world joins the OR for the same reason the other two are in it: a client
+        // with it on will fetch this host's world, and the host cannot see which gates any
+        // given client has set. It is ON by default, so in practice a host now serves its world
+        // unless it has explicitly turned all three off — which is the behaviour a joiner who
+        // has never played needs, since there is no other way for them to obtain a world at all.
         bool shouldServe = manager.Current is CoopHost
             && !string.IsNullOrEmpty(gameDirectory)
-            && (ClientLoadRejoinEnabled || HostLoadReadoptEnabled);
+            && (ClientLoadRejoinEnabled || HostLoadReadoptEnabled || AutoAdoptWorldEnabled);
 
         if (!shouldServe)
         {
@@ -306,9 +331,11 @@ public sealed partial class CoopCommandDispatcher
         {
             RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
             RejoinTrigger.HostReload => HostLoadReadoptEnabled,
-            // Same gate as OwnLoad: this is still "the client notices its own world is wrong
-            // and fixes it", just via a level (PersistentSaveMismatchRule) instead of an edge.
-            RejoinTrigger.SaveMismatch => ClientLoadRejoinEnabled,
+            // ⚠ auto_adopt_world, NOT client_load_rejoin — see AutoAdoptWorldEnabled's own doc
+            // comment. This is "the client notices its own world is not the host's and adopts
+            // the host's", which is a different question from "put me back after I load a
+            // save", and had no gate of its own until it needed one for join_mode.
+            RejoinTrigger.SaveMismatch => AutoAdoptWorldEnabled,
             _ => false,
         };
 

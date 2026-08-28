@@ -45,6 +45,8 @@ actually runs with.
 | `port` | `27015`⁸ | UDP port | [network-topology.md](research/network-topology.md) |
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
 | `name` | unset | player/character name shown to peers | — |
+| `join_mode` | `save` | JOINER only: how you get a character into the host's world. `save` = your own save's character (today's behaviour). `newcharacter` = you have no save; go through the game's own New Game / character-creation screens and be taken into the host's world with what you make | [world-adoption.md](research/world-adoption.md) |
+| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts the host's world instead of playing degraded. Also what makes a HOST serve its world by default. Your own saves are never touched — only the autosave slot | [world-adoption.md](research/world-adoption.md) |
 | `server_name` | falls back to `name` | name shown in the server browser | [server-browser.md](research/server-browser.md) |
 | `menu_button` | ON⁷ | show the in-game Co-op menu button | [menu-frame-hook.md](research/menu-frame-hook.md) |
 | `tick_rate` | `0` (keeps the built-in rate) | state send rate in Hz, clamped 5-120 | [lag-audit.md](research/lag-audit.md) |
