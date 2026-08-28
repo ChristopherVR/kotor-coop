@@ -1669,3 +1669,78 @@ additions (needed to type a resref at the live console at all), and this write-u
 `docs/research/party-pool-sync.md`, `docs/research/store-sync.md`,
 `docs/research/party-reconciliation.md` and `docs/research/README.md` — see git history for the
 exact commit(s).
+
+## Rig pass (2026-08-28): store_sync's brand-new-key mirror confirmed live but a new client-buy
+## detection gap found (item 1); party_pool_sync's wildcard identity fix confirmed live but a
+## SEVERE rapid-repeat runaway amplification found (item 2); party_follow_phase7_release's
+## refusal logging confirmed executing on every rep but never caught the target stuck phase
+## (item 3); baseline clean (item 4)
+
+Task: this session's four-item queue, starting from a worktree merged forward onto block v59
+(`party-pool identity matcher with wildcards` + ambient-suppression, `966fe0f`). Full detail in
+each feature's own research doc; this entry is the session-level summary.
+
+### Item 1 — `store_sync`: see `docs/research/store-sync.md`'s new "Live pass (2026-08-28, rig
+### round)" section. Summary: the prior no-rig round's brand-new-key wire-mirror fix is now
+### CONFIRMED live — a host sell genuinely mirrors to the client's copy within one pump tick. But
+### the recipe's own other half failed: a client buy of a key it had only just received via
+### mirror was never detected/published back to the host for 2+ minutes (confirmed by the host
+### successfully re-buying the same "already sold" unit nearly three minutes later). A same-round
+### isolation test with an untouched resref shows client-side detect/publish works in general,
+### narrowing this to keys still armed in `StorePump`'s own `_pendingApplyTarget` guard — not
+### root-caused this round. Infinite-stock no-op and blackout+reconnect resync both clean. Also
+### flags an incidental `setgold`-vs-`grantgold` gold-ledger display defect (engine value stayed
+### safely clamped; only a log line was wrong). `store_sync` stays OFF.
+
+### Item 2 — `party_pool_sync`: see `docs/research/party-pool-sync.md`'s new §21. Summary: block
+### v59's wildcard identity fix for `poolremove` confirmed working live (clean drains on both
+### sides). But three rapid `pooladd` calls of the SAME resref — explicitly part of this item's
+### own recipe — triggered an UNBOUNDED host<->client ping-pong that inflated 3 real deposits into
+### nearly 2,000 phantom units before settling back near zero on its own. Reproduced independently
+### in the other direction with a second resref from the client. No crash (both processes survived
+### a 60s watch and a warp), but a severe correctness catastrophe for a channel meant to ship
+### silently ON. `party_pool_sync` stays OFF, disqualified — worse than either gap §19/20 left
+### open.
+
+### Item 3 — `party_follow_phase7_release` A/B: see `docs/research/party-reconciliation.md`'s new
+### "Round 102". Summary: three reps per leg this time (six rig sessions total). CONTROL clean 2/2
+### (a third rep's own `reconnect` never re-mirrored the companion — inconclusive, not a failure,
+### and itself a new finding: `reconnect` does not reliably re-establish companion mirroring the
+### way a fresh `connect` does). TREATMENT produced a real `phase7release` log line on EVERY rep
+### (3/3) — round 101's own retry/refusal-logging fix genuinely executes now, unlike round 100's
+### total silence — but all three landed on "nothing to do - phase already at the reset sentinel
+### (-1)", not the recipe's own target "reset phase X -> -1" line; this round's staging never
+### caught the companion in a genuinely stuck non-reset phase at release time. Not a regression;
+### the fix's actual corrective behavior remains NEEDS-LIVE. `party_follow_phase7_release` stays
+### OFF. No crash across any of the six rig sessions this item used.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors.
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed and strings-confirmed (`followkick` present in both deployed
+  `dinput8.dll`s).
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2444/2444 passed**, 0 failed, 0 skipped (run
+  twice this session — once before the rig work, once for this baseline — both clean).
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides (every sync flag at its shipped default):
+  **41 passed, 8 failed** — squarely the documented 40-42/7-9 baseline, all eight failures
+  matching the long-documented known set exactly (`phantom damageable, not a sink`; `the peer
+  really loses those hit points`; `a client hit costs the enemy real hit points`; `a downed player
+  is reported to the agent`; `the co-op revive stands the player back up`; `every engine call
+  signature matches the binary` (197/199 this run — same category, count varies run to run); `a
+  container opened on the client is held and shown open on the host`; and the `no per-frame spam`
+  flaky substitution). No new failures, no regression from this session's own work (all four items
+  were live-verification-only passes — no source changed this session).
+
+No crash from any of this session's own testing across all four items and the baseline — both
+`swkotor.exe` processes confirmed alive and responding at the end of every rig session (ten
+restarts total across the four items, item 2's runaway pool amplification and item 3's A/B
+included). Both game directories' `coop.ini` were reset back to the plain example template before
+this session ended; `store_sync`, `party_pool_sync`, and `party_follow_phase7_release` all stay at
+their shipped OFF default.
+
+**No source changed this session** — every item was a live-verification pass against the code
+already on `main` as of `966fe0f`. The four write-ups above (`docs/research/store-sync.md`,
+`docs/research/party-pool-sync.md`, `docs/research/party-reconciliation.md`, this entry) are the
+session's only output — see git history for the exact commits.
