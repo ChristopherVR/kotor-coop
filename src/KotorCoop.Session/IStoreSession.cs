@@ -65,6 +65,41 @@ public interface IStoreSession
     /// knowledge, since there is nobody else for it to ask.
     /// </summary>
     void RequestStoreResync() { }
+
+    // ---- v2: host-authoritative absolute snapshot + client intents (store_sync=2) -----------
+    // See docs/research/shared-inventory-v2.md. Mirrors IPartyPoolSession's own v2 members
+    // exactly, widened by the store's own object id (carried inside StoreStackKey, unchanged).
+
+    /// <summary>Host only: merges a fresh scan of ONE store (<paramref name="storeObjectId"/>,
+    /// carried explicitly rather than inferred from <paramref name="totals"/>'s keys so a store
+    /// that scanned genuinely EMPTY still clears its own stale belief — an empty dictionary alone
+    /// cannot say which store it was empty FOR) into the host's running cross-store belief. See
+    /// docs/research/shared-inventory-v2.md §2.4/§2.6. A client's own call is a no-op.</summary>
+    void PublishStoreSnapshotV2(uint storeObjectId, IReadOnlyDictionary<StoreStackKey, int> totals) { }
+
+    /// <summary>The latest FULLY-gathered publish cycle's absolute totals; false until the first
+    /// complete cycle has arrived — see <see cref="IPartyPoolSession.TryGetPartyPoolSnapshotV2"/>'s
+    /// identical remarks. Always false on the host.</summary>
+    bool TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> totals)
+    {
+        totals = EmptyStoreTotals.Instance;
+        return false;
+    }
+
+    /// <summary>Client only: publishes one bounded REQUEST ("I bought/sold this many in this
+    /// store"), returning the serial minted for it, or 0 if refused outright. See
+    /// <see cref="IPartyPoolSession.PublishPartyPoolIntentV2"/>'s identical remarks.</summary>
+    uint PublishStoreIntentV2(StoreOpKind kind, StoreStackKey key, ushort count) => 0;
+
+    /// <summary>Host only: every intent this instance's wire layer has accepted since the last
+    /// drain, oldest first — see <see cref="IPartyPoolSession.DrainPartyPoolIntentsV2"/>'s
+    /// identical remarks.</summary>
+    IReadOnlyList<StoreIntentPacketV2> DrainStoreIntentsV2() => [];
+
+    /// <summary>Client only: every intent serial acked OR refused since the last drain, oldest
+    /// first — see <see cref="IPartyPoolSession.DrainAckedPartyPoolIntentsV2"/>'s identical
+    /// remarks.</summary>
+    IReadOnlyList<uint> DrainAckedStoreIntentsV2() => [];
 }
 
 /// <summary>A reusable empty dictionary singleton for the default interface member above, so a

@@ -719,6 +719,166 @@ public class PacketCodecTests
         Assert.Null(PacketCodec.ReadStoreOp(buffer[..length]));
     }
 
+    // ---- v2 (host-authoritative absolute snapshot + client intents, docs/research/
+    // shared-inventory-v2.md) — packet types 60-65, PacketCodec.SharedInventoryV2.cs -----------
+
+    [Fact]
+    public void PartyPoolSnapshotV2PacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        PartyPoolStackKey key = new("g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+        PartyPoolSnapshotEntry[] entries = [new PartyPoolSnapshotEntry(key, 7)];
+
+        PartyPoolSnapshotPacketV2 packet = new(12345, 9, 1, 3, entries);
+        int svLength = PacketCodec.Write(buffer, packet);
+        PartyPoolSnapshotPacketV2? svRead = PacketCodec.ReadPartyPoolSnapshotV2(buffer[..svLength]);
+
+        Assert.NotNull(svRead);
+        Assert.Equal(packet.ServerTimeMs, svRead.ServerTimeMs);
+        Assert.Equal(packet.Generation, svRead.Generation);
+        Assert.Equal(packet.PageIndex, svRead.PageIndex);
+        Assert.Equal(packet.PageCount, svRead.PageCount);
+        Assert.Equal(entries, svRead.Entries);
+    }
+
+    [Fact]
+    public void PartyPoolSnapshotV2FitsInOneDatagramAtMaxEntries()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        PartyPoolSnapshotEntry[] entries = [.. Enumerable.Range(0, PartyPoolSnapshotPacketV2.MaxEntriesPerPacket)
+            .Select(i => new PartyPoolSnapshotEntry(
+                new PartyPoolStackKey(
+                    new string('a', ProtocolConstants.MaxResrefLength), 0xFF, 0xFF, 0xFFFFFFFF, 0xFF),
+                (ushort)i))];
+
+        PartyPoolSnapshotPacketV2 packet = new(long.MaxValue, uint.MaxValue, 254, 255, entries);
+        int psLength = PacketCodec.Write(buffer, packet);
+
+        Assert.True(psLength > 0);
+        PartyPoolSnapshotPacketV2? psRead = PacketCodec.ReadPartyPoolSnapshotV2(buffer[..psLength]);
+        Assert.NotNull(psRead);
+        Assert.Equal(PartyPoolSnapshotPacketV2.MaxEntriesPerPacket, psRead.Entries.Count);
+    }
+
+    [Fact]
+    public void PartyPoolIntentV2PacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        PartyPoolStackKey key = new("g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+
+        PartyPoolIntentPacketV2 add = new(1, 42, PartyPoolOpKind.Add, key, 20);
+        int addLength = PacketCodec.Write(buffer, add);
+        Assert.Equal(add, PacketCodec.ReadPartyPoolIntentV2(buffer[..addLength]));
+
+        PartyPoolIntentPacketV2 remove = new(2, 7, PartyPoolOpKind.Remove, key, 5);
+        int removeLength = PacketCodec.Write(buffer, remove);
+        Assert.Equal(remove, PacketCodec.ReadPartyPoolIntentV2(buffer[..removeLength]));
+
+        PartyPoolIntentAckPacketV2 ack = new(3, 42, Accepted: true);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadPartyPoolIntentAckV2(buffer[..ackLength]));
+
+        PartyPoolIntentAckPacketV2 refusal = new(3, 43, Accepted: false);
+        int refusalLength = PacketCodec.Write(buffer, refusal);
+        Assert.Equal(refusal, PacketCodec.ReadPartyPoolIntentAckV2(buffer[..refusalLength]));
+    }
+
+    [Fact]
+    public void PartyPoolIntentV2RejectsSetKindAndZeroCount()
+    {
+        // An intent is a bounded REQUEST, never an absolute declaration — Set (a v1-only,
+        // op-log-relative concept) has no meaning here and must be refused, exactly like a
+        // zero count (not a real transaction) must be.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartyPoolStackKey key = new("g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        int setLength = PacketCodec.Write(buffer, new PartyPoolIntentPacketV2(1, 1, PartyPoolOpKind.Set, key, 5));
+        Assert.Null(PacketCodec.ReadPartyPoolIntentV2(buffer[..setLength]));
+
+        int zeroLength = PacketCodec.Write(buffer, new PartyPoolIntentPacketV2(1, 1, PartyPoolOpKind.Add, key, 0));
+        Assert.Null(PacketCodec.ReadPartyPoolIntentV2(buffer[..zeroLength]));
+    }
+
+    [Fact]
+    public void StoreSnapshotV2PacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+        StoreSnapshotEntry[] entries = [new StoreSnapshotEntry(key, 4)];
+
+        StoreSnapshotPacketV2 packet = new(12345, 9, 1, 3, entries);
+        int ssLength = PacketCodec.Write(buffer, packet);
+        StoreSnapshotPacketV2? ssRead = PacketCodec.ReadStoreSnapshotV2(buffer[..ssLength]);
+
+        Assert.NotNull(ssRead);
+        Assert.Equal(packet.ServerTimeMs, ssRead.ServerTimeMs);
+        Assert.Equal(packet.Generation, ssRead.Generation);
+        Assert.Equal(packet.PageIndex, ssRead.PageIndex);
+        Assert.Equal(packet.PageCount, ssRead.PageCount);
+        Assert.Equal(entries, ssRead.Entries);
+    }
+
+    [Fact]
+    public void StoreSnapshotV2FitsInOneDatagramAtMaxEntries()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        StoreSnapshotEntry[] entries = [.. Enumerable.Range(0, StoreSnapshotPacketV2.MaxEntriesPerPacket)
+            .Select(i => new StoreSnapshotEntry(
+                new StoreStackKey(
+                    uint.MaxValue, new string('a', ProtocolConstants.MaxResrefLength), 0xFF, 0xFF, 0xFFFFFFFF, 0xFF),
+                (ushort)i))];
+
+        StoreSnapshotPacketV2 packet = new(long.MaxValue, uint.MaxValue, 254, 255, entries);
+        int ssfLength = PacketCodec.Write(buffer, packet);
+
+        Assert.True(ssfLength > 0);
+        StoreSnapshotPacketV2? ssfRead = PacketCodec.ReadStoreSnapshotV2(buffer[..ssfLength]);
+        Assert.NotNull(ssfRead);
+        Assert.Equal(StoreSnapshotPacketV2.MaxEntriesPerPacket, ssfRead.Entries.Count);
+    }
+
+    [Fact]
+    public void StoreIntentV2PacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 3, 50, 0x5, ItemIdentity.FlagKnown);
+
+        StoreIntentPacketV2 add = new(1, 42, StoreOpKind.Add, key, 20);
+        int addLength = PacketCodec.Write(buffer, add);
+        Assert.Equal(add, PacketCodec.ReadStoreIntentV2(buffer[..addLength]));
+
+        StoreIntentPacketV2 remove = new(2, 7, StoreOpKind.Remove, key, 5);
+        int removeLength = PacketCodec.Write(buffer, remove);
+        Assert.Equal(remove, PacketCodec.ReadStoreIntentV2(buffer[..removeLength]));
+
+        StoreIntentAckPacketV2 ack = new(3, 42, Accepted: true);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadStoreIntentAckV2(buffer[..ackLength]));
+
+        StoreIntentAckPacketV2 refusal = new(3, 43, Accepted: false);
+        int refusalLength = PacketCodec.Write(buffer, refusal);
+        Assert.Equal(refusal, PacketCodec.ReadStoreIntentAckV2(buffer[..refusalLength]));
+    }
+
+    [Fact]
+    public void StoreIntentV2RejectsSetKindAndZeroCount()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        StoreStackKey key = new(0x1000, "g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        int setLength = PacketCodec.Write(buffer, new StoreIntentPacketV2(1, 1, StoreOpKind.Set, key, 5));
+        Assert.Null(PacketCodec.ReadStoreIntentV2(buffer[..setLength]));
+
+        int zeroLength = PacketCodec.Write(buffer, new StoreIntentPacketV2(1, 1, StoreOpKind.Add, key, 0));
+        Assert.Null(PacketCodec.ReadStoreIntentV2(buffer[..zeroLength]));
+    }
+
     [Fact]
     public void MaterialisedLootPacketsRoundTrip()
     {

@@ -419,6 +419,19 @@ public sealed record CoopConfig
     public bool PartyPoolSyncEnabled { get; init; }
 
     /// <summary>
+    /// <c>party_pool_sync</c> parsed as a small integer rather than a bare bool: <c>0</c> off
+    /// (unchanged default), <c>1</c> the v1 op-log above (byte-for-byte unchanged — a bare
+    /// truthy value like the historical <c>party_pool_sync = 1</c> still parses to <c>1</c>, so
+    /// no shipped config silently changes meaning), <c>2</c> the host-authoritative "absolute
+    /// snapshot + client intents" redesign (docs/research/shared-inventory-v2.md). Independent
+    /// of <see cref="PartyPoolSyncEnabled"/> above (kept, unchanged, for every existing call
+    /// site and test that only ever needed "is this channel on at all"); see
+    /// <see cref="AgentSettings.EffectivePartyPoolSyncMode"/> for how the two are reconciled
+    /// when only one of them was set.
+    /// </summary>
+    public int PartyPoolSyncMode { get; init; }
+
+    /// <summary>
     /// Story-forced solo segments (the Star Forge's Bastila and Malak duels —
     /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/>, docs/research/star-forge-finale.md
     /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
@@ -440,6 +453,10 @@ public sealed record CoopConfig
     /// until it has. See docs/research/store-sync.md.
     /// </summary>
     public bool StoreSyncEnabled { get; init; }
+
+    /// <summary><c>store_sync</c> parsed as a small integer — the store channel's mirror of
+    /// <see cref="PartyPoolSyncMode"/>, identical reasoning.</summary>
+    public int StoreSyncMode { get; init; }
 
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
@@ -596,9 +613,11 @@ public sealed record CoopConfig
             CompanionGearSync = !kv.ContainsKey("companion_gear_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
+            PartyPoolSyncMode = ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")),
             SoloSegmentSpectateEnabled = !kv.ContainsKey("solo_segment_spectate")
                 || IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
             StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
+            StoreSyncMode = ParseSyncMode(kv.GetValueOrDefault("store_sync")),
         };
     }
 
@@ -606,4 +625,20 @@ public sealed record CoopConfig
         value is not null && (value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase)
             || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
             || value.Equals("on", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Parses <c>party_pool_sync</c>/<c>store_sync</c> as a small integer (0/1/2):
+    /// <c>int.TryParse</c> first (clamped to [0, 2] so a stray large number cannot select a mode
+    /// that does not exist), falling back to the existing truthy-string parse mapped to
+    /// <c>1</c> — so an existing <c>= true</c>/<c>= on</c>/<c>= 1</c> config keeps meaning
+    /// exactly what it always meant (v1), and only an explicit <c>= 2</c> opts into
+    /// docs/research/shared-inventory-v2.md's redesign.</summary>
+    private static int ParseSyncMode(string? value)
+    {
+        if (int.TryParse(value, out int mode))
+        {
+            return Math.Clamp(mode, 0, 2);
+        }
+
+        return IsTruthy(value) ? 1 : 0;
+    }
 }

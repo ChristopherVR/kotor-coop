@@ -195,6 +195,14 @@ public sealed partial class CoopHost
             // already is one), so all this needs is to not make them wait out the ordinary
             // 2-second interval for it — see BroadcastCreatureLiveness.
             _forceLivenessBroadcast = true;
+
+            // v2 (party_pool_sync=2/store_sync=2): a rejoining/newly-admitted peer's very first
+            // snapshot cycle IS the complete resync, by construction — see
+            // docs/research/shared-inventory-v2.md §2.7. Forcing it out immediately, exactly
+            // like the liveness channel above, avoids waiting out the ordinary broadcast
+            // interval for it.
+            _forcePartyPoolV2Broadcast = true;
+            _forceStoreV2Broadcast = true;
         }
 
         WelcomePacket welcome = new(

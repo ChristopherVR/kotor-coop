@@ -125,8 +125,10 @@ internal static class AgentComposition
             SyncCompanionXp = config?.CompanionXpSync ?? true,
             SyncCompanionGear = config?.CompanionGearSync ?? true,
             PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
+            PartyPoolSyncMode = config?.PartyPoolSyncMode ?? 0,
             SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
             StoreSyncEnabled = config?.StoreSyncEnabled ?? false,
+            StoreSyncMode = config?.StoreSyncMode ?? 0,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.

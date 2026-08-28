@@ -128,6 +128,15 @@ public static class ProtocolConstants
     /// Version 45: <see cref="PacketType.StoreOp"/> (57) / <see cref="PacketType.StoreAck"/> (58) /
     /// <see cref="PacketType.StoreSyncRequest"/> (59) — the merchant/store stock channel
     /// (<c>store_sync</c>, default OFF, NEEDS-LIVE). See docs/research/store-sync.md.
+    ///
+    /// TODO(version): Version 46 (not yet bumped — reconciled by whoever merges parallel work,
+    /// per docs/CONTRIBUTING.md's "Parallel-session hazards"): <see cref="PacketType.PartyPoolSnapshotV2"/>
+    /// (60) / <see cref="PacketType.PartyPoolIntentV2"/> (61) / <see cref="PacketType.PartyPoolIntentAckV2"/>
+    /// (62) / <see cref="PacketType.StoreSnapshotV2"/> (63) / <see cref="PacketType.StoreIntentV2"/> (64) /
+    /// <see cref="PacketType.StoreIntentAckV2"/> (65) — the host-authoritative "absolute snapshot +
+    /// client intents" redesign of the party pool and store channels
+    /// (<c>party_pool_sync=2</c>/<c>store_sync=2</c>, default OFF, NEEDS-LIVE — mode 1, the
+    /// existing op-log, is unchanged). See docs/research/shared-inventory-v2.md.
     /// </summary>
     public const byte Version = 45;
 
@@ -168,6 +177,26 @@ public static class ProtocolConstants
     /// cap value as <see cref="MaxPartyPoolStacks"/> — see docs/research/store-sync.md.
     /// </summary>
     public const int MaxStoreStacks = 256;
+
+    /// <summary>
+    /// Party-pool snapshot entries per <see cref="PartyPoolSnapshotPacket"/> datagram
+    /// (docs/research/shared-inventory-v2.md, <c>party_pool_sync=2</c>). ~28 bytes each
+    /// (a length-prefixed <see cref="MaxResrefLength"/> resref + charges + max charges +
+    /// upgrades + flags + a count), so a full 32 stays comfortably inside
+    /// <see cref="MaxPacketSize"/> alongside the header/digest/generation/page overhead —
+    /// asserted by a test. A pool holding more than 32 distinct stacks in one cycle (up to
+    /// <see cref="MaxPartyPoolStacks"/>) rides a second (third, ...) page carrying the same
+    /// digest and generation, exactly like <see cref="CreatureLivenessPacket"/>.
+    /// </summary>
+    public const int MaxPartyPoolSnapshotEntriesPerPacket = 32;
+
+    /// <summary>
+    /// Store snapshot entries per <see cref="StoreSnapshotPacket"/> datagram — the same
+    /// reasoning as <see cref="MaxPartyPoolSnapshotEntriesPerPacket"/>, one entry wider (each
+    /// entry additionally carries its own <c>StoreObjectId</c>) so the per-packet cap is
+    /// slightly lower.
+    /// </summary>
+    public const int MaxStoreSnapshotEntriesPerPacket = 28;
 
     /// <summary>
     /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,

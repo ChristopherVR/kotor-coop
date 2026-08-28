@@ -525,4 +525,62 @@ public enum PacketType : byte
     /// <summary>client -&gt; host: my store version/digest disagrees, resync — the same role
     /// <see cref="PartyPoolSyncRequest"/> plays for the party pool.</summary>
     StoreSyncRequest = 59,
+
+    // TODO(version): bump ProtocolConstants.Version on merge — the numeric bump is reconciled
+    // by whoever integrates parallel work, per docs/CONTRIBUTING.md's "Parallel-session
+    // hazards" and this file's own 39/47/48 skip precedents. Types 60-65 below are new,
+    // additive wire shapes (docs/research/shared-inventory-v2.md): the host-authoritative
+    // "absolute snapshot + client intents" redesign of the party pool and store channels,
+    // shipped behind party_pool_sync=2/store_sync=2 — an old build simply never sends or
+    // requests mode 2 and never sees these types.
+
+    /// <summary>
+    /// host -&gt; clients: the party pool's ABSOLUTE per-key stock, as the host's own engine
+    /// currently holds it — the host-authoritative replacement for the <see cref="PartyPoolOp"/>
+    /// op-log (docs/research/shared-inventory-v2.md), gated behind <c>party_pool_sync=2</c>. A
+    /// LEVEL, paged like <see cref="CreatureLiveness"/>, resent whole every publish cycle
+    /// (unreliable — the next cycle is always a full resend, so a lost datagram costs one cycle
+    /// of staleness, never a permanently missed fact). Never relayed — the host is the only
+    /// publisher, and there is no separate resync packet: every cycle already IS the full resync
+    /// (docs/research/shared-inventory-v2.md §2.7).
+    /// </summary>
+    PartyPoolSnapshotV2 = 60,
+
+    /// <summary>
+    /// client -&gt; host ONLY: "I deposited/withdrew this many units of this stack", carrying a
+    /// client-minted serial. NOT a truth-claim about the pool's current total (unlike
+    /// <see cref="PartyPoolOp"/>'s old <c>Add</c>/<c>Remove</c>/<c>Set</c>) — a bounded, one-shot
+    /// REQUEST the host applies to its OWN engine through the identical staging-cheat primitive
+    /// <see cref="PartyPoolOp"/> already used, then reflects back to every peer (including the
+    /// sender) through the next <see cref="PartyPoolSnapshotV2"/> cycle. Never relayed onward —
+    /// the host is the only party that ever asserts a total. See
+    /// docs/research/shared-inventory-v2.md §2.2 for why this structurally cannot amplify the way
+    /// the old op-log could.
+    /// </summary>
+    PartyPoolIntentV2 = 61,
+
+    /// <summary>host -&gt; the sending client: acks (or refuses) one
+    /// <see cref="PartyPoolIntentV2"/> serial — the client drops it from its own "still
+    /// outstanding" reconcile-target adjustment once acked either way (see
+    /// docs/research/shared-inventory-v2.md §2.5's <c>target[K]</c> formula).</summary>
+    PartyPoolIntentAckV2 = 62,
+
+    /// <summary>
+    /// host -&gt; clients: a merchant store's ABSOLUTE per-(store, key) stock, as the host's own
+    /// engine currently holds it — the <see cref="StoreOp"/> op-log's host-authoritative
+    /// replacement, gated behind <c>store_sync=2</c>. Same paged-LEVEL shape as
+    /// <see cref="PartyPoolSnapshotV2"/>; a store's <c>StoreObjectId</c> lives inside each entry's
+    /// own key (unchanged from <see cref="StoreOp"/>), so one cycle can name several stores at
+    /// once.
+    /// </summary>
+    StoreSnapshotV2 = 63,
+
+    /// <summary>client -&gt; host ONLY: "I bought/sold this many units of this stack in this
+    /// store" — the store's mirror of <see cref="PartyPoolIntentV2"/>, identical
+    /// reasoning.</summary>
+    StoreIntentV2 = 64,
+
+    /// <summary>host -&gt; the sending client: acks (or refuses) one <see cref="StoreIntentV2"/>
+    /// serial — the store's mirror of <see cref="PartyPoolIntentAckV2"/>.</summary>
+    StoreIntentAckV2 = 65,
 }

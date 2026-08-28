@@ -263,6 +263,19 @@ public sealed record AgentSettings
     /// </summary>
     public bool PartyPoolSyncEnabled { get; init; }
 
+    /// <summary><c>party_pool_sync</c> as a small integer — see
+    /// <see cref="CoopConfig.PartyPoolSyncMode"/>'s identical remarks. Independent of
+    /// <see cref="PartyPoolSyncEnabled"/> above; use <see cref="EffectivePartyPoolSyncMode"/> to
+    /// read the two reconciled.</summary>
+    public int PartyPoolSyncMode { get; init; }
+
+    /// <summary>The mode <see cref="CoopAgent.PumpOnce"/> actually dispatches on: this mode if it
+    /// was explicitly set to something other than 0, otherwise <see cref="PartyPoolSyncEnabled"/>
+    /// mapped to 1/0 — so code (and every existing test) that only ever set the bool keeps
+    /// selecting v1 exactly as before, and only an explicit <see cref="PartyPoolSyncMode"/> of 2
+    /// opts into docs/research/shared-inventory-v2.md's redesign.</summary>
+    public int EffectivePartyPoolSyncMode => PartyPoolSyncMode != 0 ? PartyPoolSyncMode : (PartyPoolSyncEnabled ? 1 : 0);
+
     /// <summary>
     /// When true, a story-forced solo segment (the Star Forge's Bastila and Malak duels — see
     /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/> and
@@ -284,4 +297,12 @@ public sealed record AgentSettings
     /// has been watched land on a running game yet. See docs/research/store-sync.md.
     /// </summary>
     public bool StoreSyncEnabled { get; init; }
+
+    /// <summary><c>store_sync</c> as a small integer — see <see cref="PartyPoolSyncMode"/>'s
+    /// identical remarks, store's own mirror.</summary>
+    public int StoreSyncMode { get; init; }
+
+    /// <summary>See <see cref="EffectivePartyPoolSyncMode"/>'s identical remarks, store's own
+    /// mirror.</summary>
+    public int EffectiveStoreSyncMode => StoreSyncMode != 0 ? StoreSyncMode : (StoreSyncEnabled ? 1 : 0);
 }
