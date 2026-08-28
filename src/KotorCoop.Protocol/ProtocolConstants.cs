@@ -129,8 +129,7 @@ public static class ProtocolConstants
     /// <see cref="PacketType.StoreSyncRequest"/> (59) — the merchant/store stock channel
     /// (<c>store_sync</c>, default OFF, NEEDS-LIVE). See docs/research/store-sync.md.
     ///
-    /// TODO(version): Version 46 (not yet bumped — reconciled by whoever merges parallel work,
-    /// per docs/CONTRIBUTING.md's "Parallel-session hazards"): <see cref="PacketType.PartyPoolSnapshotV2"/>
+    /// Version 46: <see cref="PacketType.PartyPoolSnapshotV2"/>
     /// (60) / <see cref="PacketType.PartyPoolIntentV2"/> (61) / <see cref="PacketType.PartyPoolIntentAckV2"/>
     /// (62) / <see cref="PacketType.StoreSnapshotV2"/> (63) / <see cref="PacketType.StoreIntentV2"/> (64) /
     /// <see cref="PacketType.StoreIntentAckV2"/> (65) — the host-authoritative "absolute snapshot +
@@ -138,7 +137,7 @@ public static class ProtocolConstants
     /// (<c>party_pool_sync=2</c>/<c>store_sync=2</c>, default OFF, NEEDS-LIVE — mode 1, the
     /// existing op-log, is unchanged). See docs/research/shared-inventory-v2.md.
     /// </summary>
-    public const byte Version = 45;
+    public const byte Version = 46;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
