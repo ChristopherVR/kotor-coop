@@ -7,6 +7,11 @@ characters, travel, fight, loot, talk and pause together.
 
 No game file is modified. Everything lives beside `swkotor.exe` and can be removed again.
 
+**New this release:** companion equipment now syncs live (re-equip a party member and your
+partner's copy updates within a few seconds), the Star Forge's Bastila/Malak duels let the other
+player spectate the fight instead of freezing, and Pazaak hands are correctly detected so your
+partner sees you as "in a minigame" instead of standing idle. All three are on by default.
+
 ## Install — pick one
 
 **A. Extract into the game folder.** Unzip this whole archive into the folder that contains
