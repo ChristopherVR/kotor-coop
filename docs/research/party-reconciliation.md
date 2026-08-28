@@ -5012,3 +5012,276 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
 tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
 verification only.
+
+## Round 103 (2026-08-28, static pass, no rig access) — root-caused round 102's "reconnect does
+## not reliably re-mirror a companion": an AGENT-SIDE write cache that survives a disconnect,
+## because `SessionManager` keeps one `KotorGameBridge` alive across every reconnect. Fixed with
+## an explicit `Reset()` wired into `ClearCoopState()`; a reconnect/loopback test and a pure
+## plugin-side rule test both added. Also: round 102's "already at the reset sentinel" log line,
+## read precisely — the frozen record at release is NOT a stuck phase 5/7, it is the engine's own
+## reset value, -1, already sitting there before release ever runs. `party_follow_phase7_release`
+## stays OFF; its corrective branch has never had anything to correct in any rig rep run against
+## it so far, across two separate live rounds (100 excepted — see below).
+
+Task: this session's queue item — round 102's own new finding, "reconnect does not reliably
+re-establish companion mirroring, unlike a fresh connect." No rig this round; everything below is
+source-reading plus new unit/loopback tests exercising the real production classes end to end
+(where the real engine dependency allows it) or the exact same production logic pulled into a
+directly-testable class (where it does not).
+
+### Where the two halves of the reconnect path actually live
+
+`docs/CONTRIBUTING.md`'s own "client and server halves" note applies doubly here: a `disconnect`/
+`reconnect` on the CLIENT touches three independently-maintained pieces, and round 102's own
+recipe conflated them into one symptom ("mirroring never resumed"). Read in isolation:
+
+1. **The HOST's own broadcast** (`CoopHost.Party.cs`). `PublishParty`/`PublishPartyRoster` store
+   `_party`/`_partyRoster` as LEVELS; `BroadcastParty`/`BroadcastPartyRoster` (called every tick
+   from `CoopHost.Tick`, `CoopHost.cs`) send them to `recipients = [.. _peers.Values]` —
+   EVERY currently-admitted peer, recomputed fresh every tick, unconditionally, "even when
+   nothing has changed" (`BroadcastPartyRoster`'s own doc comment). `HandleHello`
+   (`CoopHost.Connection.cs`) adds a re-admitted peer back into `_peers` synchronously, before
+   the reply (`Welcome`) is even sent. **Conclusion: the host needs no fix here.** Unlike
+   container loot, party pool, store or dialogue grants (all genuinely edge-triggered, reliable
+   channels that DO need `HandleHello`'s `freshlyAdmitted` resync list — see
+   `CoopHost.Connection.cs`), the party/roster channels are LEVELS that were never edge-triggered
+   in the first place, so there is nothing for a resync list entry to add: the very next host tick
+   after a reconnect re-sends the current companion state to the reconnected peer regardless.
+
+2. **The CLIENT's receive path** (`CoopClient.Party.cs`). `HandlePartySnapshot`/
+   `HandlePartyRoster` apply whatever arrives unconditionally, no session-scoped gating.
+   **Conclusion: no fix needed here either** — a fresh `CoopClient` (built new on every
+   `SessionManager.Connect`, per its own class comment) starts with `_party = []` and fills in
+   from the very first `PartySnapshotPacket`, exactly like a first connect.
+
+3. **The AGENT's own write into the shared block** (`KotorGameBridge.Party.cs`,
+   `TryWritePartyMembers`) — **this is where the bug actually was.**
+
+### ROOT CAUSE: an agent-side dirty-check cache that `SessionManager` keeps alive across every
+### reconnect, paired with a `ClearCoopState()` that only ever wrote AROUND it, never through it
+
+`SessionManager.Connect()` (`SessionManager.cs`) always calls `Disconnect()` first, which tears
+down the current `CoopClient`/`CoopAgent` and calls `bridge.ClearCoopState()` — but the `bridge`
+itself (`IGameBridge bridge` — the primary-constructor field `SessionManager` is built with) is
+**never rebuilt**. Its own class comment already says this plainly: "they share the process-lived
+bridge" — a fresh `CoopAgent` per session, the SAME `KotorGameBridge` underneath it, deliberately,
+for every disconnect and reconnect a player does.
+
+`KotorGameBridge.TryWritePartyMembers` (`KotorGameBridge.Party.cs`) held three fields —
+`_lastWrittenPartyPresence[]`, `_lastWrittenPartyPresenceCount`, `_partyPresenceModule` — feeding
+`PartyPresenceDirtyCheck.CanSkipWrite` (`KotorCoop.Memory/PartyPresenceDirtyCheck.cs`, the
+`party_fast_pump` dirty check documented in `docs/research/lag-audit.md`) so a byte-identical
+companion write does not cost a cross-process `WriteProcessMemory` call every tick. That cache was
+cleared on exactly ONE edge: a module change (`moduleChanged`, comparing `TryReadCurrentModule`
+against `_partyPresenceModule`) — never on a session boundary.
+
+`KotorGameBridge.ClearCoopState()` (`KotorGameBridge.Player.cs`), on the other hand, zeroes the
+BLOCK's own `PartyPresenceCount` LEVEL directly, as one entry in `SessionScopedBlockLevels` — a
+raw `_memory.TryWrite(_pluginBlock + offset, 0u)` that has no idea the dirty-check cache exists and
+does not touch it.
+
+Put the two together, exactly as round 102's rig reproduced them: a client mirrors a companion
+(cache: slot 0 holds the companion's last state, count = 1), disconnects (`ClearCoopState` zeroes
+the BLOCK's count to 0, but the AGENT's cache still says "I already wrote count = 1, and slot 0
+already holds this exact position"), then reconnects on the SAME bridge instance. If the host's
+first re-published snapshot after the reconnect reads byte-identical to what was mirrored right
+before the disconnect (the ordinary case — nothing moved while nobody was mirroring it, exactly
+round 102's "nothing moved... or nobody is watching" recipe), `PartyPresenceDirtyCheck.CanSkipWrite`
+answers "skip" for the slot AND `_lastWrittenPartyPresenceCount != written` is false for the count
+— so the write that would rewrite the BLOCK's own zeroed count back up to 1 is silently skipped,
+forever, on every subsequent pass, until something ELSE finally changes the companion's reported
+state enough to break the tie. `PartyPresenceController.OnFrame`'s own gate
+(`count = Math.Min(block.PartyPresenceCount, ...); if (count == 0) return;`) then never sees
+anything above 0, so it never logs `party drive: mirroring N of the host's companions` again —
+exactly round 102's observed silence, and exactly why ordinary player-to-player sync (gait,
+position — a completely different write path, unaffected) kept working fine the whole time.
+
+This is the SAME shape of bug `docs/CONTRIBUTING.md`'s own "changelog narrative" convention calls
+out by name elsewhere in this codebase for module transitions (`_doorModule`/`_placeableModule`/
+`_lootModule`/`_encounterModule` caches, all with the identical "always force a fresh write across
+a boundary" rule) — this cache simply never got the equivalent rule for the SESSION boundary,
+because nothing in the party channel had ever needed one until a reconnect on the same process
+made it observable.
+
+### The host-side check the task asked for — ruled out, not needed
+
+Checked explicitly per this round's own brief: does `HandleHello`'s `freshlyAdmitted` resync list
+need `Party`/`PartyRoster` added to it, the way it already has for container loot, materialised
+loot, dialogue grants, party pool and store? **No** — see point 1 above. Those five channels are
+all genuinely edge-triggered (an op announced once, then never re-mentioned, per
+`docs/research/disconnect-reconnect.md` §2.2/§4.8's own "no version tripwire" language); party and
+party-roster are LEVELS, broadcast unconditionally every host tick regardless of whether anything
+changed, which is a stronger guarantee than an edge-triggered resync would even provide. Confirmed
+by reading `CoopHost.Party.cs`'s `BroadcastParty`/`BroadcastPartyRoster` and their call sites in
+`CoopHost.cs`'s tick loop directly, not inferred.
+
+### The plugin side the task asked about — ruled out, and turned into a tested invariant instead
+### of an inference
+
+Checked the task's own two hypotheses against `PartyPresenceController.cs` directly:
+
+- **"A 'session started' latch that only fires once per process."** No such latch exists.
+  `OnFrame`'s only session-presence gate is `block.Command == SharedBlock.CommandSpawnAndDrive`,
+  read fresh every frame — nothing caches "have I already started this session."
+- **"`ReleaseSession` may leave `_trackedId`/state such that the next `OnFrame` never
+  re-claims."** Traced the exact opposite: `ReleaseSession()` runs `PartyPresenceReleaseOrderRule
+  .Steps(...)` (round 101), whose last step is always `Invalidate()`, which calls `Forget(slot)`
+  for every slot — `Forget` zeroes `_creature[slot]` AND `_trackedId[slot]` (also resetting the
+  per-slot `MotionSmoother`, one-shot cache and equipment cache), and `Invalidate` also resets
+  `_drivenLogged` to `-1` (the sentinel that forces the very next successful drive to log a fresh
+  "mirroring N" line, since no real pass ever reports a negative count). `Resolve(slot, objectId)`
+  only ever trusts a cached pointer when `_trackedId[slot] == objectId` — and `Forget` leaves that
+  field at exactly the ONE value (0) no real candidate id can ever equal (a candidate `objectId`
+  of 0 is already refused earlier in `DriveOne`). So a re-entry after release is not merely
+  "expected to work" — it is structurally forced through the full re-resolve path, with no special
+  casing at all, and no latch to reset because none exists.
+
+Pulled this specific invariant — the re-entry edge itself — out into
+`PartyPresenceResolveCacheRule.CanTrustCachedCreature` so it is a tested fact rather than a read of
+the code: a tracked id of 0 (Forget's own sentinel) can NEVER be trusted as a cache hit, regardless
+of what the cached pointer or a fresh vtable/id read looks like. `Resolve` now calls this rule
+instead of the equivalent hand-written boolean expression — a behavior-preserving refactor, same
+short-circuit order (`cached != 0 && trackedId == objectId` still gates the one unsafe
+dereference), so nothing about the live engine-write behavior changed.
+
+**Conclusion: the plugin side had no bug.** Round 102's symptom was fully explained by the
+agent-side cache above; `PartyPresenceController` was already correctly self-healing on every
+release/re-entry, and now has a named, tested contract saying so instead of only a doc comment.
+
+### The fix
+
+`src/KotorCoop.Memory/PartyPresenceWriteCache.cs` (new) — the three cache fields pulled out of
+`KotorGameBridge.Party.cs` into their own class, so the reset this round adds is directly
+unit-testable without a real game process. `NoteModule`/`CanSkipSlot`/`RecordSlot`/
+`CanSkipCount`/`RecordCount` reproduce the exact prior behavior (verbatim logic, not
+reinterpreted); `Reset()` is the fix — forgets every cache entry, forcing the very next call's
+writes to land unconditionally. `KotorGameBridge.Party.cs`'s `TryWritePartyMembers` now delegates
+to one `PartyPresenceWriteCache _partyPresenceCache` field instead of three raw fields.
+`KotorGameBridge.ClearCoopState()` (`KotorGameBridge.Player.cs`) now calls
+`_partyPresenceCache.Reset()` unconditionally (outside the `_pluginBlock != 0` guard, deliberately
+— the cache must not survive into the next session even if the plugin momentarily reads
+unattached at the exact moment of disconnect), right alongside `_slots.Clear()` and
+`ReleasePartyFreeze()`, the other per-session-boundary resets that method already performs.
+
+`src/KotorCoop.Plugin/PartyPresenceResolveCacheRule.cs` (new) — the re-entry invariant described
+above, wired into `PartyPresenceController.Resolve` (`PartyPresenceController.cs`).
+
+### Tests
+
+- `tests/KotorCoop.Tests/PartyPresenceWriteCacheTests.cs` (new, 10 tests) — the cache's own pure
+  contract, including `WithoutResetAByteIdenticalReconnectSkipsTheVeryWriteThatMustLand` (pins the
+  exact pre-fix bug shape) and `ResetMakesTheFirstPostReconnectWriteLandEvenWithIdenticalContent`
+  (the fix).
+- `tests/KotorCoop.Tests/PartyPresenceReconnectTests.cs` (new) — real `CoopHost`, real
+  `CoopClient`s, real sockets; a `disconnect`/`reconnect` reproduced BY HAND
+  (`SessionManager.TearDownSession`/`Connect`'s own shape: cancel, dispose, `ClearCoopState`, a
+  fresh `CoopClient`+`CoopAgent`, the SAME bridge instance) rather than through a network
+  blackout, because a blackout heals entirely inside `CoopClient` and never calls
+  `bridge.ClearCoopState()` at all — only the console `disconnect`/`reconnect` verbs' own path
+  does. `CoopAgent.PumpOnce()` is called by hand rather than through the background `RunAsync`
+  loop: an earlier version of this test drove the client through the ordinary async pump and
+  found the bug did NOT reproduce — a freshly reconnected `CoopClient`'s own party view starts
+  EMPTY until its first `PartySnapshotPacket` arrives, and pumping through that empty-then-full
+  transition flushes the stale cache "for free" via an ordinary content difference, masking the
+  real bug. In production, `KotorGameBridge.SupportsPartySync` (`_player is not null`) gates
+  `PumpParty` shut until the local player object resolves — independent of the session reconnect,
+  and normally already true from before the disconnect — so the FIRST call
+  `TryWritePartyMembers` ever sees after a reconnect already carries the full, unchanged
+  companion list, never an intervening empty one. The test now waits for the reconnected client
+  to already hold the full companion state before pumping the agent even once, reproducing that
+  ordering directly. **Verified this test actually catches the bug**: with the fix's
+  `_cache.Reset()` call commented out in the test's own faithful bridge stand-in, the test fails
+  with `Assert.Equal() Failure: Expected 1, Actual 0` — the exact round-102 symptom; restored, it
+  passes.
+- `tests/KotorCoop.Tests/PartyPresenceResolveCacheRuleTests.cs` (new, 6 tests) — the plugin-side
+  re-entry invariant, including
+  `ReleasingAndReclaimingTheSameCompanionIdStillForcesAFreshResolve` (the full release-then-
+  reclaim sequence, proving a matching id from BEFORE a release can never short-circuit a fresh
+  resolve after it).
+- `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
+  `PartyPresenceResolveCacheRule.cs` (the `PartyPresenceWriteCache.cs`/`PartyPresenceDirtyCheck.cs`
+  classes live in `KotorCoop.Memory`, referenced normally — no compile-include needed for them).
+
+### What the "already at the reset sentinel" log line actually means, precisely — and whether
+### `party_follow_phase7_release` is moot
+
+The task asked this directly, so stating it without hedging: round 102's own three treatment reps
+all produced
+
+```
+party follow phase7release: 0x127 nothing to do - phase already at the reset sentinel (-1)
+```
+
+— word for word, every time. Per round 101's own refusal-reason logging (this exact branch is
+`ShouldRelease() == false`), this means the follow-FSM record's `phase` field read **-1, the
+engine's OWN reset value**, at the exact moment `ReleaseSession` ran — not phase 5, not phase 7,
+not any non-reset value. **The frozen record at release is not "phase 7" at all; it is already
+sitting at the same value a clean, never-mirrored companion would read.** Round 102's own analysis
+of why (repeated here because it is the load-bearing fact): by the time release actually runs
+(roughly 90+ seconds after the companion first entered a mirrored session in that round's recipe),
+the phase had already legitimately returned to -1 on its own, in every rep tried — including the
+one rep with an explicit 4-second post-teleport pause specifically added to try to catch it stuck.
+
+**Is `party_follow_phase7_release` therefore moot?** For the bug this round actually fixed
+(reconnect not re-mirroring) — yes, unambiguously: that bug lives entirely in
+`PartyPresenceController`'s mirroring gate (`block.PartyPresenceCount`) and the agent-side write
+cache feeding it, a completely different mechanism from the native follow-FSM `phase` field this
+flag touches. Nothing about a stuck phase 5/7 was ever part of the reconnect symptom, and nothing
+this round fixed or could fix touches `party_follow_phase7_release`'s own code path at all.
+
+For the flag's OWN original purpose (giving `PartyFollowController` a clean record to resume
+against instead of one frozen mid-mirror) — the honest answer is NOT yet "remove it", but the
+evidence is trending that way and is worth stating plainly: across every rig rep run against this
+flag's actual target condition so far (round 100's one rep, and round 102's three), only round
+100's single rep ever captured a genuinely non-reset phase pre-disconnect, and even that rep's own
+release-time read was never directly observed (round 100 predates round 101's own refusal-reason
+logging that would have shown it). Every rep that COULD show its own release-time read (all three
+of round 102's) showed -1, already reset, not by this flag's own retry-and-write logic (which is
+gated OFF by default and was OFF for round 102's control leg too) but by something else — most
+likely the ordinary passage of time this round's own recipe allows between "companion arrives and
+is captured mid-phase-5" and "release actually runs", combined with whatever legitimately advances
+the phase machine on its own even while mirrored (an open question this round did not chase
+further, being out of scope for the reconnect fix). **Recommendation, stated as what the evidence
+actually supports rather than overclaiming a negative**: `party_follow_phase7_release` stays OFF,
+as it already was; a future round chasing this specific flag further should treat "can the target
+precondition (a genuinely stuck non-reset phase, still stuck at the moment of release) be
+reproduced at all under realistic play timing" as the open question, ahead of any further work on
+the release-time fix itself, which round 101 already confirmed executes correctly whenever it is
+given something real to act on.
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean, x86 confirmed, 0 warnings 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build` (excluding the known-flaky
+`HeavyPacketLossStillConverges`, run separately): **2460/2460 passed**; `HeavyPacketLossStillConverges`
+alone: passed. 18 new tests total across the three new files above, all green. No `SharedBlock`/
+protocol version change — everything this round touches is either agent-internal
+(`KotorCoop.Memory`) or plugin-internal (`KotorCoop.Plugin`), nothing crosses the wire, so no
+version bump was needed anywhere.
+
+### Files
+
+- `src/KotorCoop.Memory/PartyPresenceWriteCache.cs` (new) — the pulled-out, resettable dirty-check
+  cache.
+- `src/KotorCoop.Memory/KotorGameBridge.Party.cs` — `TryWritePartyMembers` delegates to the new
+  cache instead of three raw fields (behavior-preserving).
+- `src/KotorCoop.Memory/KotorGameBridge.Player.cs` — `ClearCoopState()` now resets the cache.
+- `src/KotorCoop.Plugin/PartyPresenceResolveCacheRule.cs` (new) — the re-entry invariant.
+- `src/KotorCoop.Plugin/PartyPresenceController.cs` — `Resolve` calls the new rule
+  (behavior-preserving).
+- `tests/KotorCoop.Tests/PartyPresenceWriteCacheTests.cs` (new).
+- `tests/KotorCoop.Tests/PartyPresenceReconnectTests.cs` (new).
+- `tests/KotorCoop.Tests/PartyPresenceResolveCacheRuleTests.cs` (new).
+- `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
+  `PartyPresenceResolveCacheRule.cs`.
+- `docs/research/party-reconciliation.md` — this entry.
+- `README.md` — "Honest limitations" updated: the reconnect fix, and the reset-sentinel finding
+  above replacing the stale "showed no effect in its first live A/B" line from round 100 (round
+  101/102 already superseded that specific claim; this pass is what finally updated the prose).
+
+NEEDS-LIVE: the fix itself (an agent-side cache reset with no unsafe/engine-pointer code) is fully
+covered by the pure and loopback tests above and needs no live confirmation the way an engine
+write would — but the next rig round should still confirm it end to end regardless: connect,
+confirm `party drive: mirroring 1 of the host's companions`, `disconnect`, `reconnect`, and confirm
+the SAME log line reappears without a full instance restart, closing round 102's own open item.

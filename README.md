@@ -193,9 +193,16 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   (`control_return=0` opts out). See [control-return.md](docs/research/control-return.md).
 - **A mirrored companion's follow-AI never runs at all, by design, not by stall** — the reclaim
   that stops local AI contesting a driven position also blocks the engine's own follow dispatcher,
-  so a client's companion is host-driven the whole session; only the frozen record at the
-  mirror-release boundary matters, and a reset fix there (`party_follow_phase7_release`) showed no
-  effect in its first live A/B (2026-08-28) — stays off. See [party-reconciliation.md](docs/research/party-reconciliation.md).
+  so a client's companion is host-driven the whole session. A reset fix at the mirror-release
+  boundary (`party_follow_phase7_release`) is confirmed EXECUTING live (2026-08-28) but, across
+  every rig rep run against it so far, finds the follow record already back at the engine's own
+  reset sentinel by the time release runs, never a genuinely stuck phase — its corrective branch
+  has never had anything to correct, so it stays off. See
+  [party-reconciliation.md](docs/research/party-reconciliation.md).
+- **`disconnect` then `reconnect` now reliably re-mirrors a companion** (round 103,
+  2026-08-28) — a prior agent-side caching bug could leave a client's companion mirror silently
+  stuck off after a reconnect whose first update happened to match what was mirrored before the
+  disconnect. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion can't fight for a client** except through `companion_local_combat`
   (on by default), which releases a companion standing close enough to both players and the
   enemy to its own engine AI. See [party-reconciliation.md](docs/research/party-reconciliation.md).
