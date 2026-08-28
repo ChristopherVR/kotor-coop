@@ -23,7 +23,7 @@ attaches from outside with `OpenProcess`.
 | Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Session lifecycle — menu, connect, save/load rejoin | Live-verified; the `host_load_readopt` regression and the STUNT_00 escape-pod crash are both CLOSED — same root cause, a dangling-pointer write storm in `PartySelectSuppressionController`, fixed 2026-08-27 and reconfirmed clean across three independent live re-verifications (last 2026-08-28) | [session-save.md](docs/research/session-save.md), [galaxy-map-and-party-select.md](docs/research/galaxy-map-and-party-select.md) |
 | Three-peer sessions (3+ players) | Live-verified — `demo3.ps1`/`verify3.ps1`, 34/34 checks passed, chat/phantoms/hit-tables all agreeing across three instances | [live-verification.md](docs/live-verification.md) |
-| Companion follow-AI | Live-verified, one known stall left (A/B on two fix candidates reconfirmed inconclusive a fourth time, 2026-08-28; stays off) | [party-reconciliation.md](docs/research/party-reconciliation.md) |
+| Companion follow-AI | Reframed 2026-08-28: never runs for a mirrored companion by design, not by stall; a release-boundary reset fix showed no effect in its first live A/B, stays off | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
@@ -36,8 +36,8 @@ attaches from outside with `OpenProcess`.
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Stays off — a 2026-08-28 live-rig pass found a native-side defect: a freshly-inserted pool item is not reliably found by the very next local read, independent of the C# sync logic | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live-rig pass confirmed wipe-prevention/buy/deplete/infinite-stock/blackout-resync clean and added `buy`'s missing affordability guard; a 2026-08-28/29 pass found `sell` silently reporting success without moving the item, root-caused and fixed via full disassembly of `CSWGuiStore::SellItem`/`CSWSStore::AcquireItem` on 2026-08-29 — NEEDS-LIVE, not yet re-tested against a running game | [store-sync.md](docs/research/store-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Stays off — the native insert defect is root-caused (an unconditional bail-out on the party pool's own repository flag bit); a crash found mid-fix is CLOSED live (3/3, `InsertItem` bracketed by a transient flag clear); held back only by a `poolremove` identity-key mismatch and an unclean aggregate-reconciliation reading | [party-pool-sync.md](docs/research/party-pool-sync.md) |
+| Merchant store stock (`store_sync`) | Stays off — `buy` and the fixed `sell` are both live-confirmed working end to end (item and gold move correctly, verified three independent ways, 2026-08-28); the automatic wire mirror to the other instance was never observed to fire, the one remaining blocker | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -191,21 +191,20 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Only the host can switch party character.** Companions are driven by the host's own AI and
   mirrored to everyone else; control returns to your own character automatically on connect
   (`control_return=0` opts out). See [control-return.md](docs/research/control-return.md).
-- **Companion follow-AI still stalls at the last waypoint of a leg** — two fix candidates make
-  progress but neither closes it (A/B reconfirmed inconclusive a fourth time, 2026-08-28); both
-  stay off by default. See [party-reconciliation.md](docs/research/party-reconciliation.md).
+- **A mirrored companion's follow-AI never runs at all, by design, not by stall** — the reclaim
+  that stops local AI contesting a driven position also blocks the engine's own follow dispatcher,
+  so a client's companion is host-driven the whole session; only the frozen record at the
+  mirror-release boundary matters, and a reset fix there (`party_follow_phase7_release`) showed no
+  effect in its first live A/B (2026-08-28) — stays off. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **A mirrored companion can't fight for a client** except through `companion_local_combat`
   (on by default), which releases a companion standing close enough to both players and the
   enemy to its own engine AI. See [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than getting
   a separate copy.
-- **Companion experience sync is live-verified and on by default** (`companion_xp_sync`).
-  **Equipment sync (`companion_gear_sync`) is also live-verified and on by default** — the
-  weapon-slot bug (the internal slot value passed to the engine's own `EquipItem` call was
-  wrong — a `CSWInventory` byte-offset arithmetic guess instead of the bit-flag value the engine
-  actually expects) is fixed and live-confirmed for both weapon slots and the body slot, with
-  mid-session propagation to the client under 3s. **Dialogue recruitment sync is live-confirmed
-  for two companions**
+- **Companion experience and equipment sync are both live-verified and on by default**
+  (`companion_xp_sync`, `companion_gear_sync`) — gear sync covers body and both weapon slots after
+  a weapon-slot bit-flag encoding bug was found and fixed, with mid-session propagation to the
+  client under 3s. **Dialogue recruitment sync is live-confirmed for two companions**
   (`dialogue_recruit_sync`, on by default); a fix for a stale pre-recruit body is implemented but
   not yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md)
   and [dialogue-consequences.md](docs/research/dialogue-consequences.md).
@@ -221,28 +220,18 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Chain mode serialises `dinput8` proxies, it doesn't merge them** — a proxy that always
   loads the system DLL itself must be last in `dinput8.chain`; "load me" DLLs (`.asi`) go anywhere.
 - **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
-  hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still
-  lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
-- **The party's shared item pool syncs, but keeps failing new live-verified bugs, so it stays
-  off by default** (`party_pool_sync` — status table above): a 2026-08-28 live-rig pass found the
-  latest issue sits below the C# sync logic entirely — a freshly-inserted pool item is not
-  reliably found by the engine's own very next local read.
-- **The Star Forge's Bastila and Malak duels spectate, ON by default and live-verified, with
-  one narrow gap** (`solo_segment_spectate`): parks the other player's input/camera on the
-  fight instead of a second combatant wandering in. Every lever fired live 2026-08-28 (see the
-  status table above), except that the input lock has only been confirmed to engage its own
-  mechanism (the log line, the flags it sets) — never confirmed to actually stop a real
-  PHYSICAL WASD press, since injected keystrokes never reach this game and cannot substitute
-  for one.
-- **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28
-  live-rig pass confirmed the wipe-prevention/buy/deplete/infinite-stock/reconnect half clean
-  and added `buy`'s affordability guard; a 2026-08-28/29 pass found `sell` silently reporting
-  success without moving the item (or the item's gold), root-caused on 2026-08-29 to
-  `CSWGuiStore::SellItem`'s own internal player/store/repo re-resolution silently bailing out
-  before touching anything, and fixed by driving the underlying engine primitives
-  (`CSWSStore::AcquireItem`, `GetItemSellValue`, the split-stack helper) directly with
-  `SellToStore`'s own already-validated pointers instead — NEEDS-LIVE, not yet re-tested
-  against a running game (see the status table above).
+  hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
+- **The party's shared item pool syncs, but stays off by default** (`party_pool_sync` — status
+  table above): the native insert defect is root-caused and a crash found mid-fix is CLOSED live,
+  3/3; a `poolremove` identity mismatch and an unclean aggregate-reconciliation reading remain.
+- **The Star Forge's Bastila and Malak duels spectate, ON by default and live-verified, with one
+  narrow gap** (`solo_segment_spectate`): parks the other player's input/camera on the fight
+  instead of a second combatant wandering in. Every lever fired live 2026-08-28 except that the
+  input lock has only been confirmed to engage its own mechanism, never confirmed to stop a real
+  PHYSICAL WASD press, since injected keystrokes never reach this game.
+- **The shared merchant store channel (`store_sync`) is built but stays off** — `buy` and the
+  fixed `sell` are both live-confirmed to move the real item and gold; the automatic wire mirror to
+  the other instance was never observed to publish, the one remaining blocker.
 - **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest
   compared at join; a difference always warns on both screens (`W_CFG`), and nine
   host-authoritative keys are additionally adopted by a disagreeing client at runtime. See
@@ -255,8 +244,7 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   address is found automatically (STUN) and the port forwarded automatically via UPnP; UPnP-off
   needs a manual forward, named in the `status`/`public_address` output. No relay/hole-punching,
   so a restrictive ("symmetric") NAT with UPnP also off can't be reached. Built and unit-tested
-  against fake responders, not yet watched against a real router. See
-  [network-topology.md](docs/research/network-topology.md).
+  against fake responders, not yet watched against a real router. See [network-topology.md](docs/research/network-topology.md).
 
 ## Documentation map
 
