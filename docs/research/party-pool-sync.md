@@ -2319,3 +2319,109 @@ Build: `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/b
 `SharedBlock.TotalSize` expectation updated from 0x4700 to 0x4800 for this round's version-59
 growth; fixed alongside `TransitionMovieTests.TheBlockVersionMovedInBothHalves`'s own hardcoded
 58).
+
+## 21. 2026-08-28, rig round — §19/20's wildcard identity fix and ambient-deposit fix CONFIRMED
+## live for single/isolated deposits, but a NEW, SEVERE, live-reproduced defect found: rapid
+## same-key `pooladd` (or an ambient script granting the same resref more than once) triggers an
+## UNBOUNDED host<->client ping-pong that inflated 3 real deposits into nearly 2,000 phantom
+## units before settling — no crash, but a severe correctness catastrophe. `party_pool_sync`
+## stays OFF, disqualified
+
+Task: this round's queue item 2 — `end_m01aa` (a fresh module, chosen to avoid tar_m02aa's own
+documented ambient-modal ownership), `party_pool_sync=1` both, `pooladd`/`poolremove` single-item
+round trips, ×3 rapid host + ×3 client, deposit/remove net 0, reconnect resync, 60s stability +
+a warp. Two-instance rig, fresh worktree merged forward onto block v59.
+
+### Single-deposit round trip: wildcard identity CONFIRMED, but a plain `pooladd` already showed
+### an unexplained 2x delta
+
+`pooladd g_i_medeqpmnt01` (default stack 1) on the host reported `added x1` locally, but the
+pump's own very next scan reported `party pool: local add of 2x 'g_i_medeqpmnt01' detected,
+publishing` — a genuine engine delta of 2, not 1, for a single manual deposit request. The
+resulting wire op reached the client (`submitting add of 2x... added x2`), and the CLIENT's own
+next scan re-detected `local add of 2x... detected, publishing` a second time, which the host then
+applied AGAIN. The loop self-terminated after this one extra round trip (unlike the runaway case
+below), leaving 3 total units in the pool for a single 1-unit deposit request — confirmed by
+draining the host with three successive `poolremove g_i_medeqpmnt01` calls (all three succeeded,
+matching each other's default-identity wildcard match cleanly — **block v59's wildcard identity
+fix works correctly live**, ✔ that specific ask from §20 confirmed) before a fourth call refused
+`party pool is empty`. The client independently also drained to empty with zero further removes
+needed, so the two sides' final totals agreed (both 0) — the bug here is an OVER-COUNT that still
+converges, not a divergence, and is plausibly END_M01AA's own ambient scripting (ending/epilogue
+module, likely to grant items on entry) landing outside the §20 ambient-suppression's 1-second
+observation window rather than a wire defect in isolation — see §20's own "first time this scan
+ever looked at this id" caveat. Not fully root-caused this round (no time budget for source
+instrumentation); flagged as a real, live-observed gap in the ambient-suppression window's timing
+assumption.
+
+### THE SEVERE FINDING: three rapid `pooladd` calls of the SAME resref trigger an unbounded
+### exponential host<->client ping-pong
+
+The task's own next step — three back-to-back `pooladd g_w_thermldet01` on the host (issued a few
+seconds apart via `blockpoke.ps1`, each individually confirmed applied: `added x1` three times) —
+did not converge to 3. Instead, both instances' own logs show an escalating, alternating sequence
+of "local add/remove of Nx ... detected, publishing" and "submitting add/remove of Nx ... through
+the party-pool channel" that grew **1, 2, 4, 12, 40, 180, 615, 1068, 906, then a remove of 1938,**
+before further oscillation eventually settled the key back to **zero** (both instances refused
+`poolremove g_w_thermldet01` with `no matching stack found`, confirmed on BOTH sides independently).
+The identical pattern reproduced in the OTHER direction with a second, independent resref
+(`g_i_progspike01`, three rapid `pooladd` calls issued from the CLIENT this time): `3, 1, 8, 21,
+40, 140, ...` — ruling out "specific to one resref" or "specific to host-origin" as the
+explanation; this is a general defect in the channel's own detect/reconcile loop under rapid
+same-key repetition. `PartyPoolPump`'s own "suspiciously large stack" diagnostic (§20.3, threshold
+99) correctly fired and logged the runaway (`240x`, `855x` observed), confirming that diagnostic
+itself works, though it is cosmetic and does not stop the amplification.
+
+**Mechanism (INFERRED, not proven this round — no time budget for source-level instrumentation or
+a loopback reproduction):** each side's step-1 detect appears to be re-reading its OWN just-landed
+apply (from the other side's publish) as a fresh local change and republishing the FULL delta
+rather than recognizing it as the pending apply landing cleanly — the same class of "receiver
+misreads its own applied op as new" bug `store-sync.md`'s "brand-new key" fix closed for
+`StorePump`, but seemingly not fully closed here for `PartyPoolPump` under RAPID repetition
+specifically (a single, isolated deposit — §19's own recipe — did not show this magnitude of
+runaway; only back-to-back same-key adds did). `PartyPoolPump.cs`'s own `_pendingApplyTarget`
+guard (armed only by step 2's reconcile, per its class-level doc comment's "root cause 3" fix) is
+the most likely place the exact-match check is failing to recognize a landed apply as such when
+MULTIPLE local mutations of the same key interleave with the apply's own landing within the same
+few ticks — each publish clears the pending entry immediately if the value differs at all from the
+target (`excess = actual - target`, published even when nonzero for reasons unrelated to a second
+genuine local change), which could explain a growing-not-shrinking sequence if `target` itself is
+stale by the time the comparison runs. This is a hypothesis, not a confirmed root cause; the next
+round's concrete target is a loopback test that fires `PublishPartyPoolOp`/drains the apply queue
+in the same rapid-repeat shape this round used live, with the pump's own internal
+`_pendingApplyTarget`/`_lastScan` state logged at each step.
+
+### No crash, but a real correctness catastrophe
+
+Both `swkotor.exe` processes stayed alive and `Responding=True` throughout the entire escalation
+(confirmed immediately after the runaway settled, again after a further 60s stability watch, and
+again after a `warp tar_m02aa` transition) — this is NOT a crash-class defect like §17's `AddItem`
+finding, but arguably a more concerning one for a channel meant to ship silently ON: a real player
+picking up several of the same grenade/stim in quick succession (an entirely ordinary KOTOR
+gameplay action) could plausibly trigger this same amplification, inflating a shared party
+resource by orders of magnitude with no crash and no error to notice it by.
+
+### Reconnect resync and remaining recipe items
+
+Not separately exercised this round beyond what the runaway's own churn already covered (both
+sides remained `connected`, `liveness anomalies: 0`, throughout) — no additional time budget after
+the runaway's own investigation and drain. Net deposit/remove-to-zero WAS confirmed, just not at
+the total the recipe expected (0 was reached only after passing through nearly 2,000 phantom units
+first, not by a clean 1-for-1 cancellation).
+
+### Verdict
+
+`party_pool_sync` **stays OFF**, disqualified by this round's own finding — worse in kind than
+§19/20 left open (an identity-match gap and an ambient-suppression timing edge case are narrow;
+an unbounded rapid-repeat amplification is not). Block v59's own two ostensible fixes (wildcard
+identity matching, ambient-deposit suppression) were each independently exercised and the
+identity-matcher fix DID work correctly live; the ambient-suppression fix's own live behaviour was
+inconclusive (a single isolated deposit still showed unexplained excess, plausibly a timing-window
+miss rather than a suppression-logic bug). The rapid-repeat runaway is a NEW defect this round
+found, unrelated to either v59 change, and is the concrete blocker for this channel's next
+attempt.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
+tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
+verification only.
