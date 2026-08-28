@@ -1789,3 +1789,220 @@ and strings-confirmed (`pooladd`/`poolremove` present in both deployed `dinput8.
 UTF-16LE `strings` scan). `dotnet test tests/KotorCoop.Tests --no-build`: 2410/2410 passed — the
 `FuncInterpHook.cs` fix touches no C# logic under test (it is a native-only allowlist), so no new
 tests were added for it; nothing regressed.
+
+## 18. 2026-08-29, round 6 — a SAFE insert primitive: back to `InsertItem`, bracketed by a
+## transient bit-0 clear, avoiding `AddItem` entirely; found, by fresh disasm, that the crash's
+## real trigger is broader than §17 left it and that the task's own "known-safe" `AcquireItem`
+## alternative is exposed to the identical defect; no rig this round, stays OFF
+
+Task: §17's own closing recommendation (option (c) — stop calling `AddItem`'s notify path
+altogether) plus a wider brief: disassemble every `CItemRepository::+0x08` bit-0 reader and
+`CSWSMessage::WriteRepositoryUpdate`'s own gate, disassemble how the retail engine's own "give
+item to a live party member" paths (`CSWSCreature::AcquireItem` 0x005158E0, the one `buy`
+already uses per `docs/research/store-sync.md`) call the repository primitives, and ship whichever
+primitive is actually safe. No rig this round (isolation worktree, matching every prior round's
+own no-rig discipline) — static RE, source fix, and build/test verification only.
+
+### 18.1 Every `CItemRepository::+0x08` bit-0 reader, VERIFIED by fresh disasm of the whole class
+
+`tools/q.py sql "select * from functions where class_name='CItemRepository'"` lists 14 methods.
+Ten were not previously disassembled for this specific question:
+`CalculateContentsWeight`/`ClearItems`/`ClearNewItems`/`Destructor`/`FindItemWithBaseItemType`/
+`FindItemWithTag`/`GetItemInRepository`/`ItemListGetItem`/`ItemListGetItemObjectID`/`SetParentId`.
+Fresh disasm of each this round: **none of them reads or writes `+0x08` at all** — every `+0x08`
+touch anywhere near these functions is unrelated (`appMgr+0x08` = `serverApp`, a completely
+different structure at a completely different base address). Combined with `InsertItem`'s own
+top-of-function bail-out (§16.1), `AddItem`'s own several reads (§16.4/§18.2 below), and
+`Constructor`'s own write (§16.2), **the complete, exhaustive list of `CItemRepository::+0x08`
+bit-0 touches in this binary is: `Constructor` (writes it), `InsertItem` (reads it once, as an
+unconditional bail-out), `AddItem` (reads it three separate times, none of which is the actual
+crash gate — see §18.2).** `RemoveItem` (§1.3, previously disassembled) also does not touch it.
+
+### 18.2 `AddItem`'s own three `+0x08` reads, and why NONE of them gates the crash
+
+Full fresh disasm of `AddItem` 0x0055D330 (`tools/disasm.py 0x55d330 1350`, VERIFIED, 428 lines —
+extending §16.4's own partial trace to the complete function body):
+
+1. `0x0055D4C7 test byte ptr[ebx+8],1 / je 0x55d4e7` — bit-0-SET only: formats the item's own
+   name into a scratch buffer (`0x5ea130` on `[edi]+0x280`, `[edi]` = the incoming `*ppItem`).
+   Display-only; no crash-adjacent call.
+2. `0x0055D523 test byte ptr[ebx+8],1 / je 0x55d578` — inside the `wantMerge==1` merge-search
+   loop: bit-0-SET only, does a SECOND, name-based "already have one" pre-check before the
+   loop's own unconditional match test (see item 3). Bit-0-CLEAR repositories skip straight to
+   that unconditional check instead.
+3. `0x0055D57A-0x0055D59B` (**unconditional, NOT gated by `+0x08` at all**): compares the
+   iterated candidate's `+0xc`/`+0x264` fields against the incoming item's own; on a match, calls
+   `CSWSItem::MergeItem` 0x00553F90, and `cmp eax,1 / je 0x55d5b6` jumps into the notify block
+   (0x0055D5B6-0x0055D610: resolves a message object via `CServerExoApp::GetSWSMessage`
+   0x004AEDB0, calls `CSWSMessage::SendServerPlayerItemUpdate_DestroyItem` 0x00569FC0 — VERIFIED
+   by symbol name this round, correcting §16.4's own "not traced past that" reading) — **this is
+   the ONLY place `AddItem` itself reaches network-message code, and it fires for ANY repository
+   (store, creature backpack, party pool) on a genuine template match + successful merge,
+   completely independent of the party pool's own `+0x08` bit.** §16.4's framing of this as a
+   party-pool-specific concern was itself imprecise; corrected here.
+4. `0x0055D6EE test al,1 / je 0x55d776` (`al` = incoming item's own `+0x08` byte, a DIFFERENT
+   object's flags than the repository's — a coincidental same-offset field on `CSWSItem`, not a
+   second repository check): bit-0-SET only, resolves the local player
+   (`0x004AE920`) and calls `CSWSItem::SetPossessor` 0x00553210 — the possessor-write branch §16.4
+   already found and this round's fix reproduces by hand (§18.4).
+
+None of these four reads is what actually crashed 3/3 in §17's own live rig, because §17's own
+diagnostic showed **no merge occurred** on the logged call (`itemLocal unchanged (fresh entry)`)
+— see §18.3.
+
+### 18.3 The REAL trigger: `markNewItem`, not the merge notify — `WriteRepositoryUpdate` runs from
+### a completely separate, later, per-tick network sweep, with an unguarded null-deref
+
+`AddItem`'s tail (0x0055D786-0x0055D7A7, unconditional on `+0x08`, gated only by the caller's own
+`markNewItem` argument — `[ebp+0x14]`): on ANY successful insert, if `markNewItem != 0`, ORs bit 7
+into the item's own `+0x288` byte (the NewItem flag `RemoveItem`, §1.3, already documents clearing
+on removal) and increments the repository's own `+0x04` "new item" counter. Both this codebase's
+prior call and `CSWSCreature::AcquireItem`'s own call (§18.5) pass `markNewItem=1`.
+
+`tools/xrefs.py 0x56e360` (`CSWSMessage::WriteRepositoryUpdate`, the function that actually
+crashes at 0x0056E549) lists exactly two callers, both inside
+`CSWSMessage::WriteGameObjUpdate_MajorGUIPanels` 0x00577670, itself called from
+`CSWSMessage::SendServerToPlayerGameObjUpdate` 0x00578200 — VERIFIED, `tools/q.py`'s own function
+table names both. **`AddItem` never calls `WriteRepositoryUpdate` itself, directly or indirectly
+— it only arms the "new item" bookkeeping that this SEPARATE, per-player game-object network sync
+sweep later consumes.** This matches §17.2's own observed symptom exactly: every one of the 3/3
+crashes was preceded by a LOGGED, successful, non-merging add (`itemLocal unchanged (fresh
+entry)`), with the crash itself arriving separately — immediately in one case, ~150ms later in
+the other two — consistent with a later sweep pass picking up the just-armed NewItem bookkeeping,
+not with the in-function merge-notify block (which never ran, per the diagnostic's own report).
+
+Fresh disasm of `WriteRepositoryUpdate` 0x0056E360 (`tools/disasm.py`, 251 instructions across
+two dumps) finds the actual defect: it walks the repository's own "new item" list via a helper at
+0x005CA520, resolves each entry's item id via `ItemListGetItemObjectID` 0x005560E0 +
+`GetGameObjectByID` 0x004AE760 into `edi`, and at 0x0056E549 —
+`mov dl, byte ptr [edi + 0x18]` — dereferences `edi` **with no null/validity check anywhere on
+the immediately preceding branches**: `edi` is zero-initialized at function entry and only ever
+reassigned inside a conditional block gated on the helper's own returned index being non-negative;
+neither that reassignment nor the `ecx==0` branch a few lines earlier (`0x0056E3FE`, a DIFFERENT
+local) actually tests `edi` itself before the dereference. **This is a genuine, unconditional
+retail defect in dead multiplayer network-sync bookkeeping** — armed the instant `markNewItem=1`
+is passed to `AddItem` (or, per §18.6, previously also live-fired via other engine paths that
+mark items new), independent of whether a merge ever happens.
+
+### 18.4 Why the task brief's own "known-safe" `AcquireItem` alternative does NOT avoid this
+
+Fresh full disasm of `CSWSCreature::AcquireItem` 0x005158E0 this round (previously never traced):
+its own "give to the buyer's/PC's own inventory" branch (target `== OBJECT_INVALID`, the ordinary
+case) resolves the repository via `GetItemRepository(creature, 1)` 0x004EF770 exactly as
+`docs/research/store-sync.md` already documented, then calls `AddItem` with the LITERAL argument
+shape `(ppItem, wantMerge=1, arg3=edi=0, markNewItem=1)` —
+**byte-for-byte identical to this codebase's own prior `AddItemToPartyPool` call.** `edi` is
+proven 0 in this branch by an `xor edi,edi` at function entry never touched again before the call
+(the alternate branch, a target OTHER than the caller's own creature, DOES set `edi` to a resolved
+target creature pointer — out of scope here, since `AddItemToPartyPool` never uses that branch).
+
+**Conclusion: `AcquireItem` is exposed to the identical `markNewItem=1` trigger (§18.3) and the
+identical merge-notify trigger (§18.2 item 3) as the codebase's own prior direct `AddItem` call.**
+It is not a safer primitive — the task brief's own framing ("known to work: `scriptgive` creates
+items... without crashing") most plausibly reflects that `scriptgive`/`buy` testing never
+happened to deposit a template-duplicate stack, and no round's live test window was ever held open
+long enough afterward to catch a delayed `WriteRepositoryUpdate` sweep the way §17's own 150ms gap
+did. Routing `AddItemToPartyPool` through `AcquireItem` instead of calling `AddItem` directly would
+not have fixed anything.
+
+### 18.5 The fix: `InsertItem`, bracketed by a transient `+0x08` bit-0 clear — avoids both triggers
+### by construction, not by argument-tuning
+
+Since neither of `AddItem`'s two crash triggers (§18.2 item 3, §18.3) is reachable through
+`InsertItem`'s own append path (§16.1's own fully-verified disasm: grow-if-needed,
+`items_list[count]=id`, `item_count++`, nothing else — no merge search, no NewItem bit, no
+counter increment), and `InsertItem`'s ONLY defect against the party pool is its own top-of-
+function bail-out on `+0x08` bit 0 (§16.1), the fix restores the pre-§16 call
+(`CItemRepository::InsertItem`) but brackets it with a transient clear of that one bit for the
+duration of the single call — `Odyssey.PartyPool.cs`'s new `WithRepoBit0Cleared(repo, action)`:
+read the byte, clear bit 0, run the call, restore the ORIGINAL byte (not merely re-set bit 0,
+preserving whatever else might be there) in a `finally`. Synchronous, MAIN THREAD ONLY, no engine
+re-entrancy between the clear and the restore — two memory writes bracketing one native call, the
+same discipline this codebase's own engine-write rules already require.
+
+The possessor write `AddItem`'s own bit-0-set branch used to provide for free (§16.4,
+0x0055D6FE-0x0055D728: `SetPossessor(item, resolvedPlayerId, arg3, arg3, OBJECT_INVALID)` with
+`arg3=0` in every observed call) is now reproduced by hand:
+`SetPossessorFn(item, playerObjectId, 0, 0, ObjectInvalid)`, reusing the caller's own already-known
+player id rather than re-resolving it via `0x004AE920`. Net effect: the exact same array link and
+the exact same possessor write a fresh (non-merging) `AddItem` deposit used to perform, with
+neither crash trigger ever armed.
+
+**Deliberate behavioural regression, by design, not oversight**: a deposit of a resref+identity
+key that ALREADY has a matching entry in the pool no longer merges natively — it becomes a second,
+discrete array entry (`InsertItem`'s append path has no merge concept at all). This is judged
+acceptable, not merely tolerated, because this channel's own content-keyed aggregation
+(docs/research/party-pool-sync.md §2.1) was ALREADY the source of truth for stack totals at the
+store/wire layer — no existing code (`RemovePartyPoolStack`'s own Tag+identity matching, the
+read-side `KotorGameBridge.PartyPool.cs` scan) depended on the engine's own native merge state for
+correctness; both already treat the repository as a flat array of discrete entries to sum over.
+
+`RepositoryAddItemFn`'s own delegate is kept declared, undisassembled-history preserved in its doc
+comment, but is no longer called anywhere — left in place as a documented reference for whoever
+next attempts to actually fix (rather than route around) `WriteRepositoryUpdate`'s own missing
+null check, e.g. by patching/detouring 0x0056E549 itself. That is out of scope for this round: it
+would require hooking retail code well outside anything this project's write-rules currently
+sanction casually, for a benefit (native stack merging + the NewItem "!" UI indicator on a party-
+pool deposit) this round judges not worth the risk against the working, if slightly less featureful,
+`InsertItem`-based fix.
+
+### 18.6 `InsertItemIntoStore` re-checked — still not on a replicated repo
+
+Re-verified this round, fresh disasm of `CSWSStore::Constructor` 0x005C6AB0's own single call to
+`CItemRepository::Constructor` (`0x005C6B44`): the flag (second) argument is `edi`, proven zero by
+an `xor edi,edi` at function entry (`0x005C6AD6`) never touched again before the call. A store's
+own repository is therefore still constructed with `+0x08` bit 0 CLEAR — confirming §16.3's own
+finding independently, this round, from scratch — so `Odyssey.Store.cs`'s `InsertItemIntoStore`
+needs no bit-clear bracket and is unchanged.
+
+### 18.7 Files changed
+
+`src/KotorCoop.Plugin/Odyssey.PartyPool.cs`: new `RepositoryFlagsOffset` constant (`0x08`, named
+in place of the previous bare literal), new `WithRepoBit0Cleared(nint repo, Action action)`
+helper, `AddItemToPartyPool` now calls `RepositoryInsertItemFn` inside that bracket instead of
+`RepositoryAddItemFn` directly, followed by an explicit `SetPossessorFn` call; the "two lookups,
+one frame" diagnostic is kept (item-count before/after, post-insert array-membership walk) with
+the now-inapplicable `itemLocal`/merge-tracking removed (there is nothing for `InsertItem` to
+repoint, since it takes a bare item pointer, not a `CSWSItem**`). Doc comments on
+`RepositoryInsertItemFn` and `RepositoryAddItemFn` rewritten to carry this round's own findings
+(§18.1-18.4) in place of §16's now-superseded reasoning. No protocol, session, memory, or agent
+files touched — this is a native-plugin-only, single-file fix, matching §16's own scope.
+
+### 18.8 VERIFIED / INFERRED / NEEDS-LIVE summary
+
+| Item | Status |
+| --- | --- |
+| Every `CItemRepository::+0x08` bit-0 reader/writer across all 14 class methods | VERIFIED, fresh disasm this pass (§18.1) |
+| `AddItem`'s three own `+0x08` reads, none of which gates the crash | VERIFIED, full fresh disasm (§18.2) |
+| The merge-notify block calls `GetSWSMessage`/`SendServerPlayerItemUpdate_DestroyItem`, fires for ANY repository on a real merge, independent of `+0x08` | VERIFIED, fresh disasm + symbol names (§18.2 item 3) |
+| `markNewItem=1` unconditionally arms the NewItem bit + repo counter on every successful insert | VERIFIED, fresh disasm (§18.3) |
+| `WriteRepositoryUpdate` is called ONLY from the per-player network sync sweep (`WriteGameObjUpdate_MajorGUIPanels`/`SendServerToPlayerGameObjUpdate`), never from `AddItem` itself | VERIFIED, `tools/xrefs.py` + fresh disasm (§18.3) |
+| The crash instruction (0x0056E549) dereferences an unchecked, possibly-null `edi` | VERIFIED, fresh disasm (§18.3) |
+| `CSWSCreature::AcquireItem`'s self-deposit branch passes the IDENTICAL argument shape as this codebase's prior direct `AddItem` call, and is exposed to the same two triggers | VERIFIED, fresh disasm (§18.4) |
+| `InsertItem`'s append path touches neither the NewItem bit, the repo counter, nor any merge/notify code | VERIFIED, re-confirmed against the full fresh disasm (§18.5, building on §16.1) |
+| `CSWSStore::Constructor`'s own repository flag argument is proven zero | VERIFIED, re-confirmed fresh disasm this round (§18.6, independent of §16.3) |
+| The fix (`InsertItem` + transient bit-0 clear + explicit `SetPossessor`) avoids both known crash triggers | Implemented, build clean; **NEEDS-LIVE** — no rig this round, matching §16's own original verdict before §17's live pass found the `AddItem` regression |
+| Whether a duplicate-resref deposit reads correctly as two discrete entries end-to-end (spawn, unlink, insert, read-side scan, wire sync) | NEEDS-LIVE — the array-level mechanics are verified in isolation; a full live deposit was not re-run this round |
+
+### 18.9 Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged) — this round produces a build-clean, fully-reasoned-from-disassembly fix for §17's own
+confirmed 3/3 crash, but, like §16 before the crash was found, has NOT been live-tested against a
+real rig. **The concrete next live-test step, exactly matching §17.4's own closing ask, now
+finally on the primitive believed actually safe**: re-run §17's own 3/3 reproduction
+(`pooladd g_i_medeqpmnt01`, then `pooladd g_w_thermldet01` fresh restart, then the `warp
+tar_m02aa` auto-deposit path) and confirm the host survives all three; additionally, specifically
+re-run a deposit of a resref ALREADY present in the pool (the case that used to reach `AddItem`'s
+own merge-notify block) to confirm §18.5's "becomes a second discrete entry" prediction reads
+correctly end-to-end, not merely in the diagnostic log line. If any of these still crash, the
+failure has moved past everything §16-§18 collectively cover and is worth a fresh instrumented
+pass on `WriteRepositoryUpdate`'s own callers rather than re-litigating `InsertItem`/`AddItem`
+again.
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors. `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: clean NativeAOT win-x86 build (dinput8.dll, 2006 KB). `dotnet test
+tests/KotorCoop.Tests --no-build`: 2410/2410 passed, unchanged from the pre-fix baseline — the fix
+touches only native delegate targets and their bracketing logic, no C#-testable pure logic was
+added or changed (matching §16.7's own note that this class of fix has nothing new to unit-test in
+isolation).

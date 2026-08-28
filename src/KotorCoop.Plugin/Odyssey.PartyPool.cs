@@ -20,6 +20,13 @@ internal static unsafe partial class Odyssey
 
     private const int PartyTableItemRepo = 0x118;
 
+    /// <summary>CItemRepository + this = the one-byte flags field whose bit 0 gates
+    /// <c>InsertItem</c>'s bail-out (docs/research/party-pool-sync.md §16) and is set TRUE only
+    /// for the party pool's own repository (<c>CSWPartyTable::GetPartyItems</c>'s own construction
+    /// call — every other repository in this codebase, creature backpack/placeable/store, is
+    /// constructed with it clear). VERIFIED, fresh disasm, §16/§18.</summary>
+    private const int RepositoryFlagsOffset = 0x08;
+
     /// <summary>CSWSCreature + this = the creature's OWN backpack CItemRepository* (distinct
     /// from the equip-slot CSWInventory* at +0xA2C). VERIFIED, docs/research/item-identity.md
     /// §"creature backpack".</summary>
@@ -57,59 +64,100 @@ internal static unsafe partial class Odyssey
     /// is `test byte ptr [repo+8],1 / jne &lt;ret&gt;` — an unconditional bail-out, before touching
     /// anything, whenever bit 0 of the repository's own <c>+0x08</c> byte is set. **The party
     /// pool's own repository is constructed with that bit SET** (see
-    /// <see cref="RepositoryAddItemFn"/>'s own doc comment) — so <c>InsertItem</c> is a
-    /// guaranteed, silent, total no-op against it: not "sometimes stale," genuinely does nothing,
-    /// confirmed live 6/6 (docs/research/party-pool-sync.md §15's own before/after
-    /// <c>item_count</c> diagnostic). This is the root cause the diagnostic pinned. NO LONGER
-    /// USED for the party pool for that reason — <see cref="AddItemToPartyPool"/> now calls
-    /// <see cref="RepositoryAddItemFn"/> instead. Still declared and still used by
-    /// <c>Odyssey.Store.cs</c>'s own <c>InsertItemIntoStore</c>: a store's repository is
-    /// constructed with the SAME bit clear (VERIFIED, fresh disasm of
+    /// <see cref="RepositoryAddItemFn"/>'s own doc comment for why that bit exists and who else
+    /// reads it) — so a bare call against the live party-pool repo is a guaranteed, silent,
+    /// total no-op: not "sometimes stale," genuinely does nothing, confirmed live 6/6
+    /// (docs/research/party-pool-sync.md §15's own before/after <c>item_count</c> diagnostic).
+    ///
+    /// <see cref="AddItemToPartyPool"/> (docs/research/party-pool-sync.md §18) calls this
+    /// primitive anyway, by transiently CLEARING that one bit for the duration of the single call
+    /// (<see cref="WithRepoBit0Cleared"/>) — its append path (grow the backing array via
+    /// <c>CExoArrayList::Allocate</c> 0x005E03C0 if <c>count==capacity</c>, write
+    /// <c>items_list[count]=id</c>, <c>item_count++</c>) is fully verified, side-effect-free
+    /// beyond that array link, and — unlike <see cref="RepositoryAddItemFn"/> — never touches the
+    /// item's own NewItem bit (<c>item+0x288</c> bit 7) or the repository's own "new item"
+    /// counter (<c>repo+0x04</c>), which is what actually arms the crash documented on
+    /// <see cref="RepositoryAddItemFn"/>'s own doc comment. This is why <c>InsertItem</c>, not
+    /// <c>AddItem</c>, is the party pool's own add primitive as of §18.
+    ///
+    /// Also still used, unmodified, by <c>Odyssey.Store.cs</c>'s own <c>InsertItemIntoStore</c>: a
+    /// store's repository is constructed with the SAME bit clear (VERIFIED, fresh disasm of
     /// <c>CSWSStore::Constructor</c> 0x005C6AB0's own single call to
-    /// <c>CItemRepository::Constructor</c> — its second argument is the register already proven
-    /// zero by the null-check idiom right above it), so this bug does not reach stores.
+    /// <c>CItemRepository::Constructor</c>, RE-CONFIRMED this pass — its second (flag) stack
+    /// argument is <c>edi</c>, proven zero by an <c>xor edi,edi</c> at function entry never
+    /// touched again before the call), so no bit-clear dance is needed there — a bare call already
+    /// works.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, int, void> RepositoryInsertItemFn =
         (delegate* unmanaged[Thiscall]<nint, nint, int, void>)0x0055D2C0;
 
     /// <summary>
     /// CItemRepository::AddItem(CSWSItem** ppItem, int wantMerge, int arg3, int markNewItem)
-    /// 0x0055D330 — VERIFIED, full disasm this pass (docs/research/party-pool-sync.md §16). The
-    /// FULL "give item to this repository" engine primitive, and the only one that actually links
-    /// an item into the party pool's own repository — see the section header above for why
-    /// <c>InsertItem</c> cannot.
+    /// 0x0055D330 — VERIFIED, full disasm (docs/research/party-pool-sync.md §16-18). The FULL
+    /// "give item to this repository" engine primitive.
     ///
-    /// Signature correction from this codebase's own prior reading: the first stack argument is
-    /// a <c>CSWSItem**</c> (in/out), not a bare <c>CSWSItem*</c> — on a MERGE, the callee writes
-    /// the EXISTING stack's pointer back into <c>*ppItem</c>; on a credit-chit/Pazaak-card
-    /// conversion, it clears <c>*ppItem</c> to 0 after deleting the incoming item. Argument shape
-    /// and literal values (<c>wantMerge=1, arg3=0, markNewItem=1</c>) are copied verbatim from the
-    /// one clean, single-purpose retail call site this pass found and fully traced,
-    /// <c>CSWSStore::AddItemToInventory</c> 0x005C70C0 (<c>tools/xrefs.py 0x55d330</c> lists 38
-    /// callers total; this one was picked because it is a thin wrapper with only 4 literal
-    /// pushes and nothing else going on, unlike the GUI button handlers).
+    /// docs/research/party-pool-sync.md §17 found this **crashes the host 3/3 times, live**, when
+    /// used against the party pool. §18's own fresh full disasm (this pass) narrows why, past
+    /// §17's own "not narrowed further" verdict, and settles that the task brief's own leading
+    /// hypothesis (an argument tweak, or routing through <c>CSWSCreature::AcquireItem</c>
+    /// 0x005158E0 instead) does NOT reliably avoid it:
     ///
-    /// Full VERIFIED trace of what actually runs for a party-pool (bit-0-set) repository, no
-    /// existing matching stack (the common case — a brand-new resref+identity key):
-    /// <c>wantMerge=1</c> makes it walk every existing entry via <c>CSWSItem::MergeItem</c>
-    /// 0x00553F90 first; when nothing merges, it falls through to the SAME
-    /// grow-the-backing-array-then-append-then-increment-<c>item_count</c> sequence
-    /// <c>InsertItem</c>'s own (never reached, for this repo) append path uses — this is NOT
-    /// gated by the +0x08 bit at all, only <c>InsertItem</c>'s top-of-function bail-out is. A
-    /// fresh insert additionally calls <c>CSWSItem::SetPossessor</c> 0x00553210 on the item
-    /// (bit-0-set branch only, 0x0055D6FE-0x0055D728) — settling this document's own §1.6/§16
-    /// open question: yes, the party pool needs a possessor write on add, and the engine's own
-    /// primitive already does it, so the plugin no longer has to guess.
+    /// <list type="number">
+    /// <item>A merge-search loop (<c>wantMerge==1</c> only, gated by
+    /// <c>cmp [ebp+0xc],1 / jne 0x55d655</c> at the very top) walks existing entries and, on a
+    /// candidate whose <c>+0xc</c>/<c>+0x264</c> fields match the incoming item, calls
+    /// <c>CSWSItem::MergeItem</c> 0x00553F90; a return of 1 jumps into a notify block
+    /// (0x0055D5B6-0x0055D610) that resolves a per-connection message object
+    /// (<c>CServerExoApp::GetSWSMessage</c> 0x004AEDB0) and calls
+    /// <c>CSWSMessage::SendServerPlayerItemUpdate_DestroyItem</c> 0x00569FC0 on it — telling a
+    /// (nonexistent, in retail single-player) network peer the OLD stack was destroyed by the
+    /// merge. This trigger is NOT gated by the repository's own <c>+0x08</c> bit 0 — it fires for
+    /// ANY repository (store, creature backpack, party pool) whenever a genuine same-template
+    /// merge happens, gated only by <c>wantMerge</c> and <c>MergeItem</c>'s own return value.</item>
+    /// <item>SEPARATELY, and more importantly for what §17's own 3/3 live crashes actually showed
+    /// (every one logged <c>itemLocal unchanged (fresh entry)</c> — i.e. NO merge happened on the
+    /// call that was logged): every successful insert with <c>markNewItem!=0</c> (both this
+    /// codebase's own prior call AND <c>CSWSCreature::AcquireItem</c>'s own call, traced this
+    /// pass, pass <c>markNewItem=1</c>) unconditionally sets the just-inserted item's NewItem bit
+    /// (<c>item+0x288</c> bit 7, 0x0055D786-0x0055D7A7) and increments the repository's own "new
+    /// item" counter (<c>repo+0x04</c>). <c>tools/xrefs.py 0x56e360</c> shows
+    /// <c>CSWSMessage::WriteRepositoryUpdate</c> 0x0056E360 (the function that actually crashes,
+    /// at 0x0056E549) is called from exactly two sites, BOTH inside
+    /// <c>CSWSMessage::WriteGameObjUpdate_MajorGUIPanels</c> 0x00577670, itself called from
+    /// <c>CSWSMessage::SendServerToPlayerGameObjUpdate</c> 0x00578200 — the per-player
+    /// server-&gt;client full game-object network sync sweep, NOT anything <c>AddItem</c> calls
+    /// directly. This sweep, on a LATER pass (matching §17's own observed ~150ms-to-immediate
+    /// gap), walks whichever item the repository's own "new item" bookkeeping names as pending
+    /// sync (via <c>ItemListGetItemObjectID</c> 0x005560E0 + <c>GetGameObjectByID</c> 0x004AE760)
+    /// and, at 0x0056E549 (<c>mov dl, byte ptr [edi+0x18]</c>), dereferences the resolved object
+    /// with **no null/validity check at all** on the immediately preceding branches — a genuine,
+    /// unconditional retail defect in dead multiplayer bookkeeping, armed by <c>markNewItem=1</c>
+    /// alone, independent of whether a merge ever happened.</item>
+    /// </list>
     ///
-    /// The "GUI message" tail this codebase's prior pass declined to use <c>AddItem</c> over
-    /// (§1.4) only runs on a MERGE SUCCESS (an existing matching stack was found) — a brand-new
-    /// key's first deposit never reaches it at all. When it does run, it is the same local,
-    /// non-networked client/server notification bus <c>docs/research/container-sync.md</c>
-    /// already documents and this codebase already treats as safe-when-unobserved elsewhere
-    /// (progression-sync.md's credits-readout precedent) — VERIFIED as a getter+notify pair
-    /// (0x004AEDB0 resolves a per-connection sub-object, 0x00569FC0 posts to it), not fully
-    /// traced past that. NEEDS-LIVE: watching a real merge-deposit for any visible glitch is
-    /// still an open item — see docs/research/party-pool-sync.md §16.
+    /// **Because <c>CSWSCreature::AcquireItem</c>'s own self-deposit call site passes the
+    /// IDENTICAL argument shape this codebase's prior call did
+    /// (<c>wantMerge=1, arg3=0, markNewItem=1</c>, traced this pass), it is exposed to the same
+    /// two triggers — it is not a provably safer primitive, only an untested one; its "known to
+    /// work" reputation most likely reflects that live testing never happened to deposit a
+    /// duplicate-template stack nor watch a full ~150ms+ window afterward, not that it sidesteps
+    /// either defect.** For that reason <see cref="AddItemToPartyPool"/> (§18) does not call this
+    /// primitive, or <c>AcquireItem</c>, at all — it uses <see cref="RepositoryInsertItemFn"/>
+    /// instead (see that field's own doc comment), whose append path never sets the NewItem bit
+    /// or the counter and never runs a merge search, so neither trigger can arm.
+    ///
+    /// Signature (unchanged from §16): first stack argument is a <c>CSWSItem**</c> (in/out) — on a
+    /// MERGE, the callee writes the EXISTING stack's pointer back into <c>*ppItem</c>; on a
+    /// credit-chit/Pazaak-card conversion, it clears <c>*ppItem</c> to 0 after deleting the
+    /// incoming item. A fresh insert additionally calls <c>CSWSItem::SetPossessor</c> 0x00553210
+    /// on the item (bit-0-set branch only, 0x0055D6FE-0x0055D728, with the caller's own
+    /// <c>arg3</c> reused for the middle two arguments) — <see cref="AddItemToPartyPool"/> now
+    /// reproduces that possessor write by hand via <see cref="SetPossessorFn"/> instead, since it
+    /// no longer calls this function to get it for free.
+    ///
+    /// NOT CALLED against the party pool. Declared and left in place only as a documented,
+    /// disassembled reference for whoever next tries to fix the underlying retail defect (see
+    /// docs/research/party-pool-sync.md §18's own "future work" note) rather than route around it.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, int, int, int, void> RepositoryAddItemFn =
         (delegate* unmanaged[Thiscall]<nint, nint, int, int, int, void>)0x0055D330;
@@ -254,27 +302,71 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Runs <paramref name="action"/> with the party pool repository's own <c>+0x08</c> flags
+    /// byte's bit 0 (see <see cref="RepositoryFlagsOffset"/>) temporarily CLEARED, restoring the
+    /// original byte (not just re-setting bit 0 — preserves any other bit already there)
+    /// immediately afterward. Synchronous, MAIN THREAD ONLY, no engine call in between the clear
+    /// and the restore — this is a two-instruction bracket around one native call, not a
+    /// standing state change. See <see cref="RepositoryInsertItemFn"/>'s own doc comment for why
+    /// this exists: it lets the party pool use <c>CItemRepository::InsertItem</c>'s own fully
+    /// verified, side-effect-free append path instead of the crash-prone
+    /// <see cref="RepositoryAddItemFn"/>.
+    /// </summary>
+    private static void WithRepoBit0Cleared(nint repo, Action action)
+    {
+        byte* flags = (byte*)(repo + RepositoryFlagsOffset);
+        byte original = *flags;
+        *flags = (byte)(original & ~1);
+        try
+        {
+            action();
+        }
+        finally
+        {
+            *flags = original;
+        }
+    }
+
+    /// <summary>
     /// Adds <paramref name="count"/> units of a resref+identity stack to the shared party pool:
     /// spawns the item straight into the local player's own inventory (the same
     /// <c>CreateItemOnObject</c> VM routine <see cref="GiveItemToInventory"/> already wraps —
     /// there is no VM path that targets the pool directly, since it is not a scriptable
     /// object), applies its identity, then unlinks it from the player's own backpack and links
-    /// it into the pool's repository via <see cref="RepositoryAddItemFn"/>. No floor placement,
-    /// no duplicate object — the item never exists anywhere except (briefly) the player's own
-    /// pack and then the pool.
+    /// it into the pool's repository via <see cref="RepositoryInsertItemFn"/>. No floor
+    /// placement, no duplicate object — the item never exists anywhere except (briefly) the
+    /// player's own pack and then the pool.
     ///
-    /// BUG FIX (docs/research/party-pool-sync.md §16, live-diagnosed in §15): this used to call
-    /// <c>CItemRepository::InsertItem</c>, which — VERIFIED, fresh disasm — bails out as its
-    /// very first instruction whenever the repository's own <c>+0x08</c> bit 0 is set, and the
-    /// party pool's repository is ALWAYS constructed with that bit set
-    /// (<c>CSWPartyTable::GetPartyItems</c>'s own construction call). Every prior deposit
-    /// therefore silently did nothing beyond spawning and unlinking the item from the player's
-    /// backpack — <c>item_count</c> never moved, confirmed live 6/6. Now calls the engine's own
-    /// <c>CItemRepository::AddItem</c> instead, which is NOT gated the same way and additionally
-    /// calls <c>CSWSItem::SetPossessor</c> on a fresh insert itself — this method no longer needs
-    /// to reason about possessor semantics by hand; the engine's own primitive handles it exactly
-    /// as a genuine hand-deposited stash item would get it. See
-    /// <see cref="RepositoryAddItemFn"/>'s own doc comment for the full trace.
+    /// BUG FIX HISTORY: §16 switched this from <c>InsertItem</c> (a guaranteed no-op against the
+    /// party pool's own repository — see <see cref="RepositoryInsertItemFn"/>'s own doc comment)
+    /// to <c>CItemRepository::AddItem</c>. §17's own live rig then found THAT crashes the host
+    /// 3/3. §18 (docs/research/party-pool-sync.md) found, by fresh disassembly, that the crash's
+    /// two triggers (a native-merge notify call, and — the one that actually matches §17's own
+    /// observed symptom — the NewItem-bit/counter bookkeeping <c>AddItem</c> unconditionally sets
+    /// on every insert, later consumed by a crashing, unguarded null-deref inside the retail
+    /// engine's own per-tick network sync sweep) are BOTH armed by <c>AddItem</c> alone, not by
+    /// anything <c>InsertItem</c>'s own append path touches, and are NOT avoided by routing
+    /// through <c>CSWSCreature::AcquireItem</c> either (same argument shape, same exposure — see
+    /// <see cref="RepositoryAddItemFn"/>'s own doc comment for the full trace and reasoning).
+    ///
+    /// This method therefore reverts to <c>InsertItem</c> for the actual array link — restoring
+    /// §16's "guaranteed no-op" defect in the process, so it now BRACKETS the call with
+    /// <see cref="WithRepoBit0Cleared"/>, transiently clearing the one flag bit that makes
+    /// <c>InsertItem</c> bail out against this specific repository, so its own fully-verified,
+    /// side-effect-free append path (grow-if-needed, <c>items_list[count]=id</c>,
+    /// <c>item_count++</c>, nothing else) runs instead. It then reproduces, by hand, the one
+    /// thing <c>AddItem</c>'s own bit-0-set branch used to do for free: a possessor write
+    /// (<c>CSWSItem::SetPossessor(item, playerObjectId, 0, 0, OBJECT_INVALID)</c> — the exact
+    /// literal argument shape §16.4's own disassembly of that branch found, reusing the caller's
+    /// own player id rather than re-resolving it) — see <see cref="SetPossessorFn"/>'s own doc
+    /// comment. Net effect: the SAME array link and the SAME possessor write <c>AddItem</c> used
+    /// to perform for a fresh (non-merging) deposit, with neither of its two crash triggers ever
+    /// armed. Native merging (stacking into an identical existing entry) is intentionally NOT
+    /// reproduced here — this codebase's own content-keyed aggregation already happens at the
+    /// store/wire layer (docs/research/party-pool-sync.md §2.1), never relied on the engine's own
+    /// merge for correctness, and a duplicate-resref deposit simply becomes a second, discrete
+    /// array entry, which every existing read/remove path (Tag+identity matching, not native
+    /// merge state) already handles correctly.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -324,24 +416,21 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        // Unlink from the player's own backpack, link into the pool via the engine's own
-        // AddItem primitive — see RepositoryAddItemFn's own doc comment for why InsertItem
-        // (used here before docs/research/party-pool-sync.md §16) is a guaranteed no-op against
-        // this specific repository, and why AddItem's own possessor write (bit-0-set branch)
-        // means this method no longer needs to guess at SetPossessor semantics itself.
+        // Unlink from the player's own backpack, link into the pool via InsertItem's own
+        // (fully-verified, side-effect-free) append path — see WithRepoBit0Cleared's and
+        // RepositoryInsertItemFn's own doc comments for why the bit needs clearing here and why
+        // this avoids both of AddItem's crash triggers (docs/research/party-pool-sync.md §18).
         //
-        // DIAGNOSTIC (docs/research/party-pool-sync.md §13.3's own "two lookups, one frame"
-        // ask, kept and extended for §16's fix): dump the repo pointer and its item_count field
-        // immediately before and after the call, on the SAME call, plus whatever AddItem left in
-        // itemLocal (unchanged = a fresh array entry; changed = merged into an existing stack,
-        // the incoming id no longer live) — so a live round can distinguish "no-op" (count
-        // unchanged, itemLocal unchanged, id not found — the OLD, now-fixed symptom) from a
-        // genuine merge (count unchanged BY DESIGN, itemLocal now names the existing stack) from
-        // a fresh append (count+1, itemLocal unchanged, id found).
+        // DIAGNOSTIC (docs/research/party-pool-sync.md §13.3's own "two lookups, one frame" ask,
+        // kept through every round since): dump the repo pointer and its item_count field
+        // immediately before and after the call, plus whether the item's own id shows up in the
+        // post-insert array walk — so a live round can tell "no-op" (count unchanged, id not
+        // found — §15/§16's now-fixed symptom) from a genuine append (count+1, id found) without
+        // guessing from log timing alone.
         int countBefore = *(int*)(repo + RepositoryItemCount);
         RepositoryRemoveItemFn(playerRepo, item);
-        nint itemLocal = item;
-        RepositoryAddItemFn(repo, (nint)(&itemLocal), 1, 0, 1);
+        WithRepoBit0Cleared(repo, () => RepositoryInsertItemFn(repo, item, -1));
+        SetPossessorFn(item, playerObjectId, 0, 0, ObjectInvalid);
         int countAfter = *(int*)(repo + RepositoryItemCount);
         nint idsAfter = *(nint*)(repo + RepositoryItemArray);
         bool foundAfter = false;
@@ -357,16 +446,9 @@ internal static unsafe partial class Odyssey
             }
         }
 
-        string mergeNote = itemLocal == item
-            ? "unchanged (fresh entry)"
-            : itemLocal == 0
-                ? "cleared (converted — gold/Pazaak?)"
-                : $"changed to 0x{itemLocal:X} (merged into an existing stack)";
-
         PluginHost.Log(
             $"party pool: add diag — repo 0x{repo:X}, item_count {countBefore}->{countAfter}, "
-            + $"0x{itemId:X} {(foundAfter ? "IS" : "is NOT")} in the post-add array walk, "
-            + $"itemLocal {mergeNote}");
+            + $"0x{itemId:X} {(foundAfter ? "IS" : "is NOT")} in the post-insert array walk");
 
         return true;
     }
