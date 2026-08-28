@@ -116,4 +116,19 @@ public sealed partial class CoopClient
             _storeSender.Acknowledge(ack.PeerId, ack.OpSequence);
         }
     }
+
+    /// <summary>See <see cref="IStoreSession.RequestStoreResync"/>'s own remarks. Sent from a
+    /// LOCAL BUFFER, not the shared <c>_replyBuffer</c> other handlers here use — this can be
+    /// called from <c>Pumps.StorePump</c>'s own tick thread, a different thread than the one
+    /// that owns <c>_replyBuffer</c>, so it must not share mutable state with it.</summary>
+    public void RequestStoreResync()
+    {
+        Span<byte> buffer = stackalloc byte[32];
+        int length = PacketCodec.Write(
+            buffer, new StoreSyncRequestPacket(_localPeerId, _storeStore.Version, _storeStore.Digest));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, buffer[..length]);
+        }
+    }
 }

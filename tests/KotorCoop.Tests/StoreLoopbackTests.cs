@@ -600,6 +600,373 @@ public class StoreLoopbackTests
         }
     }
 
+    /// <summary>
+    /// The exact rig-round finding docs/research/store-sync.md's 2026-08-28 live pass reported:
+    /// a host sells a BRAND NEW key, it mirrors to the client, and the client IMMEDIATELY buys it
+    /// back (before the client's own pump has independently confirmed, via a clean scan, that the
+    /// mirrored insert landed on its own). Before the 2026-08-29 engineBelief/wireTarget fix, this
+    /// genuine local removal could be silently absorbed into (or permanently excluded by) the
+    /// echo-suppression guard armed for the just-applied insert — the live symptom was the host's
+    /// own re-buy of the "sold" item succeeding minutes later, because the host was never told the
+    /// client had bought it back.
+    ///
+    /// Drives the CLIENT's own agent pump manually (not through the shared auto-draining
+    /// <see cref="AgentLoop"/>) so this test can force the exact race: the queued apply for the
+    /// mirrored insert and the client's own buy-back land in the SAME tick, so the pump's first
+    /// ever fresh scan of the key already reflects the buy, never observing the insert's target
+    /// "land cleanly" on its own — the scenario docs/research/store-sync.md's own hypothesis names
+    /// as the one the old code could never recover from.
+    /// </summary>
+    [Fact]
+    public async Task ClientBuyBackOfAMirroredKeyIsDetectedAndPublished()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(host, "host");
+
+        FakeStoreBridge clientBridge = new();
+        CoopAgent clientAgent = new(
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+        List<string> clientLogs = [];
+        clientAgent.Log = msg => clientLogs.Add(msg);
+
+        Assert.True(
+            await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+            "host/client never connected");
+
+        static void DrainApply(FakeStoreBridge b, CoopAgent.PendingStoreApply next)
+        {
+            int before = b.TrueEngineState.GetValueOrDefault(next.Key);
+            int after = next.Kind == StoreOpKind.Add
+                ? before + next.Count
+                : Math.Max(0, before - next.Count);
+
+            if (after > 0)
+            {
+                b.TrueEngineState[next.Key] = after;
+            }
+            else
+            {
+                b.TrueEngineState.Remove(next.Key);
+            }
+        }
+
+        hostAgent.Bridge.TrueEngineState[Blaster] = 40;
+        clientBridge.TrueEngineState[Blaster] = 40;
+        hostAgent.Bridge.OpenStoreId = StoreId;
+        clientBridge.OpenStoreId = StoreId;
+
+        // Baseline both sides (design rule (a): a virgin store's first read publishes nothing).
+        for (int i = 0; i < 20; i++)
+        {
+            clientAgent.PumpOnce();
+            while (clientAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply next))
+            {
+                DrainApply(clientBridge, next);
+            }
+
+            await Task.Delay(15);
+        }
+
+        // The host sells a brand-new key the store never stocked before.
+        hostAgent.Bridge.TrueEngineState[Spike] = 1;
+
+        // Pump the client, auto-draining every OTHER key as usual, until the wire mirror for
+        // Spike has been queued as a pending apply — captured WITHOUT applying it yet.
+        CoopAgent.PendingStoreApply? queued = null;
+        for (int i = 0; i < 400 && queued is null; i++)
+        {
+            clientAgent.PumpOnce();
+            while (clientAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply next))
+            {
+                if (next.Key.Equals(Spike))
+                {
+                    queued = next;
+                }
+                else
+                {
+                    DrainApply(clientBridge, next);
+                }
+            }
+
+            if (queued is null)
+            {
+                await Task.Delay(5);
+            }
+        }
+
+        Assert.True(
+            queued.HasValue,
+            "client never queued an automatic apply for the mirrored sell - client logs:\n"
+            + string.Join('\n', clientLogs));
+
+        // THE RACE: land the queued apply AND the client's own buy-back in the same instant,
+        // before calling PumpOnce again - the pump's very first fresh scan of this key already
+        // reflects the buy, never observing the mirrored insert's own target land cleanly on its
+        // own first.
+        DrainApply(clientBridge, queued.Value);
+        clientBridge.TrueEngineState.Remove(Spike);
+
+        // Let the client keep pumping normally; the fix under test must still detect and publish
+        // this genuine local removal even though it raced the pending apply's own confirmation.
+        for (int i = 0; i < 400; i++)
+        {
+            clientAgent.PumpOnce();
+            while (clientAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply next))
+            {
+                DrainApply(clientBridge, next);
+            }
+
+            await Task.Delay(5);
+        }
+
+        Assert.True(
+            await WaitForAsync(
+                () => !hostAgent.Bridge.TrueEngineState.ContainsKey(Spike), TimeSpan.FromSeconds(10)),
+            "the host's copy never reflected the client's buy-back of the just-mirrored key - "
+            + $"host Spike={hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}. Client logs:\n"
+            + string.Join('\n', clientLogs));
+
+        Assert.True(
+            await StaysAsync(
+                () => !hostAgent.Bridge.TrueEngineState.ContainsKey(Spike)
+                    && !clientBridge.TrueEngineState.ContainsKey(Spike)
+                    && hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40,
+                TimeSpan.FromSeconds(3)),
+            "the buy-back over- or under-corrected after first converging, or touched the "
+            + "unrelated Blaster stack");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
+    /// The SAME player sells twice, back to back, before the first sell's mirror has necessarily
+    /// even reached the peer — both units must be reflected on the client, not just one (a lost
+    /// second op) and not more than two (a double-counted first op).
+    /// </summary>
+    [Fact]
+    public async Task SellThenImmediateResellOnHostConvergesToTheCumulativeTotal()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            await Task.Delay(300);
+
+            // Two rapid sells of a brand-new key, back to back, with only a couple of
+            // milliseconds between them - deliberately faster than either side's own ~1Hz-class
+            // scan cadence would need to treat them as two independent events.
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 1;
+            await Task.Delay(5);
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 2;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2, Timeout),
+                "client's copy never reflected BOTH rapid sells; got "
+                + $"{rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}. "
+                + string.Join('\n', rig.HostAgent.Logs));
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2
+                        && rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40,
+                    TimeSpan.FromSeconds(5)),
+                "the double sell over- or under-corrected after first converging");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// Both players sell into the SAME brand-new key at roughly the same time — the final total
+    /// on both sides must be the SUM of both contributions, not just one (a lost contributor) and
+    /// not double either one.
+    /// </summary>
+    [Fact]
+    public async Task BothSidesSellingTheSameKeyConvergesToTheSum()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            await Task.Delay(300);
+
+            // Host sells 1, client sells 1 of the same never-before-stocked key, within
+            // milliseconds of each other.
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 1;
+            rig.ClientAgent.Bridge.TrueEngineState[Spike] = 1;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2,
+                    Timeout),
+                "the two sides' sells of the same key never converged to the sum - "
+                + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}, "
+                + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 2,
+                    TimeSpan.FromSeconds(5)),
+                "the summed total over- or under-corrected after first converging");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// A reconnect exercised right after a buy-back scenario has settled: the depleted key must
+    /// stay correctly empty on the rejoining client, not resurrect the item the host never
+    /// actually still has (the SAME "resync must not double or resurrect" guarantee
+    /// <see cref="ReconnectResyncLeavesUntransactedStoresAlone"/> pins for a still-stocked key,
+    /// exercised here for a key that ended at ZERO instead).
+    /// </summary>
+    [Fact]
+    public async Task ReconnectAfterABuyBackStaysConvergedAtZero()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            await Task.Delay(300);
+
+            // Host sells a brand-new key, mirrors to the client, then the client buys it right
+            // back out - the ordinary (non-raced) shape of the buy-back, which the auto-draining
+            // AgentLoop rig can exercise directly since the fix no longer depends on winning a
+            // tight race to behave correctly.
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 1;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 1, Timeout),
+                "client never mirrored the host's sell before the buy-back leg");
+
+            rig.ClientAgent.Bridge.TrueEngineState.Remove(Spike);
+
+            Assert.True(
+                await WaitForAsync(
+                    () => !rig.HostAgent.Bridge.TrueEngineState.ContainsKey(Spike), Timeout),
+                "host never learned about the client's buy-back before the reconnect");
+
+            uint originalId = rig.Client.LocalPeerId;
+
+            rig.Client.Network.StartBlackout(6_000);
+
+            Assert.True(
+                await WaitForAsync(() => !rig.Client.IsConnected, TimeSpan.FromSeconds(10)),
+                "client never noticed the blackout");
+            Assert.True(
+                await WaitForAsync(() => rig.Host.GetRemotePeers().Count == 0, TimeSpan.FromSeconds(10)),
+                "host never expired the blacked-out peer");
+            Assert.True(
+                await WaitForAsync(() => rig.Client.IsConnected, TimeSpan.FromSeconds(30)),
+                "client never rejoined after the blackout ended");
+            Assert.Equal(originalId, rig.Client.LocalPeerId);
+
+            Assert.True(
+                await StaysAsync(
+                    () => !rig.HostAgent.Bridge.TrueEngineState.ContainsKey(Spike)
+                        && !rig.ClientAgent.Bridge.TrueEngineState.ContainsKey(Spike)
+                        && rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40,
+                    TimeSpan.FromSeconds(5)),
+                "the reconnect resync resurrected the bought-back item, or disturbed the "
+                + "unrelated Blaster stack - "
+                + $"host Spike={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}, "
+                + $"client Spike={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// The loop breaker: a single key racking up far more distinct local changes than any
+    /// plausible human buy/sell rate within one rolling window must freeze rather than keep
+    /// republishing forever, and must still re-converge (via the resync it requests) once the key
+    /// settles down.
+    /// </summary>
+    [Fact]
+    public async Task LoopBreakerFreezesARunawayKeyThenReconvergesOnceItSettles()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            await Task.Delay(300);
+
+            // Far more distinct changes to the SAME key than the breaker's own threshold allows,
+            // well within one rolling window - a feedback loop (or a pathological macro), not
+            // genuine play.
+            for (int i = 0; i < 25; i++)
+            {
+                rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40 - (i % 2);
+                await Task.Delay(20);
+            }
+
+            // Let the key settle on a single final value.
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Logs.Any(l => l.Contains("loop breaker tripped")),
+                    TimeSpan.FromSeconds(10)),
+                "the loop breaker never tripped for a runaway key - client logs:\n"
+                + string.Join('\n', rig.ClientAgent.Logs));
+
+            // Both sides must eventually agree again — not necessarily on 40 specifically (the
+            // freeze may have cut off publishing before the final settle was itself observed),
+            // but on THE SAME value as each other, once the breaker's own resync has run its
+            // course.
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)
+                        == rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster),
+                    TimeSpan.FromSeconds(25)),
+                "the runaway key never re-converged after the loop breaker froze it - "
+                + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+                + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
     [Fact]
     public async Task InfiniteStockBuyProducesNoOp()
     {
