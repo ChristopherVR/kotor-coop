@@ -1,7 +1,10 @@
 namespace KotorCoop.Plugin;
 
 // Vanilla-script item-template-spawn ring (version 58, region 0x4100..0x4604, TotalSize
-// grown to 0x4700 to hold it).
+// grown to 0x4700 to hold it). Version 59 (docs/research/party-pool-sync.md §20) widened each
+// entry from 0x14 to 0x18 for a per-entry "created by our own cheat, not a vanilla script" flag
+// (ItemTemplateSpawnIsCheatOffset) — the ring now spans 0x4100..0x4700 and the cursor moves to
+// 0x4700..0x4704, so TotalSize grew again to 0x4800.
 //
 // docs/research/item-identity.md §12 and docs/research/dialogue-consequences.md's
 // 2026-08-28 round both re-confirmed the same gap and left it open: a live CSWSItem never
@@ -28,28 +31,31 @@ namespace KotorCoop.Plugin;
 internal partial struct SharedBlock
 {
     /// <summary>
-    /// Plugin -&gt; agent. A bounded ring of (object id, 16-byte resref) pairs, one per
-    /// <c>CreateItemOnObject</c> call this instance's own engine actually executed and
+    /// Plugin -&gt; agent. A bounded ring of (object id, 16-byte resref, cheat flag) triples, one
+    /// per <c>CreateItemOnObject</c> call this instance's own engine actually executed and
     /// produced a real item for (a failed create, or one whose id never resolved past
     /// <c>OBJECT_INVALID</c>, is never entered — see <c>ItemTemplateSpawnHook</c>).
     ///
-    /// Entry stride <see cref="ItemTemplateSpawnEntryStride"/> (0x14): object id (u32) at
+    /// Entry stride <see cref="ItemTemplateSpawnEntryStride"/> (0x18): object id (u32) at
     /// <see cref="ItemTemplateSpawnIdOffset"/>, then 16 raw bytes at
     /// <see cref="ItemTemplateSpawnResrefOffset"/> — a CResRef is <c>char[16]</c>, not a C
     /// string and not necessarily NUL-terminated, the same convention
-    /// <see cref="BarkResRefOffset"/> already uses for the identical reason. Occupies
-    /// <see cref="ItemTemplateSpawnRingCapacity"/> (64) entries, 0x4100..0x4600.
+    /// <see cref="BarkResRefOffset"/> already uses for the identical reason — then a dword flags
+    /// field (version 59, only bit 0 defined) at <see cref="ItemTemplateSpawnIsCheatOffset"/>.
+    /// Occupies <see cref="ItemTemplateSpawnRingCapacity"/> (64) entries, 0x4100..0x4700.
     /// </summary>
     public const int OffsetItemTemplateSpawnRing = 0x4100;
 
-    /// <summary>How many (id, resref) pairs the ring remembers before an unread one is
+    /// <summary>How many (id, resref, flags) triples the ring remembers before an unread one is
     /// overwritten. Generous past anything one script/cheat burst produces in the time
     /// between two agent drains — the same "past the failure, not a limit that bites"
     /// reasoning <see cref="OffsetItemTemplateSpawnCursor"/>'s own overflow note relies on.</summary>
     public const int ItemTemplateSpawnRingCapacity = 64;
 
-    /// <summary>4 (id) + 16 (resref) bytes per entry.</summary>
-    public const int ItemTemplateSpawnEntryStride = 0x14;
+    /// <summary>4 (id) + 16 (resref) + 4 (flags) bytes per entry. Grew from 0x14 (version 58) to
+    /// 0x18 in version 59 for <see cref="ItemTemplateSpawnIsCheatOffset"/> — see
+    /// docs/research/party-pool-sync.md §20.</summary>
+    public const int ItemTemplateSpawnEntryStride = 0x18;
 
     public const int ItemTemplateSpawnIdOffset = 0x00;
 
@@ -57,6 +63,21 @@ internal partial struct SharedBlock
 
     /// <summary>A CResRef is a fixed <c>char[16]</c>.</summary>
     public const int ItemTemplateSpawnResrefLength = 16;
+
+    /// <summary>
+    /// Plugin -&gt; agent, version 59. Dword flags for this ring entry; bit 0
+    /// (<see cref="ItemTemplateSpawnIsCheatBit"/>) is set when
+    /// <c>ItemTemplateSpawnHook.NextSpawnIsCheat</c> was true at the moment this entry's own
+    /// <c>CreateItemOnObject</c> call ran — i.e. this instance's own code (a human's console
+    /// cheat, an automatic wire-apply, <c>Odyssey.AddItemToPartyPool</c>'s own deposit) made the
+    /// call, NOT a vanilla script's heartbeat/plot logic. See
+    /// <c>ItemTemplateSpawnHook.NextSpawnIsCheat</c>'s own doc comment for why nothing else can
+    /// derive this distinction, and docs/research/party-pool-sync.md §20 for the party-pool
+    /// ambient-noise suppression it exists to feed.
+    /// </summary>
+    public const int ItemTemplateSpawnIsCheatOffset = 0x14;
+
+    public const uint ItemTemplateSpawnIsCheatBit = 1u << 0;
 
     /// <summary>
     /// Plugin -&gt; agent. A count of entries EVER written, never wrapped or reset — the slot

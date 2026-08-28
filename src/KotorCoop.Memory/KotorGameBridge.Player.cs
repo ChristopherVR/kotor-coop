@@ -173,6 +173,8 @@ public sealed partial class KotorGameBridge
             // stale (id -> resref) fact surviving a module change would be actively wrong
             // rather than merely uninformative — see the cache's own doc comment.
             ClearSpawnedItemResrefCache();
+            ClearItemCreationObservationCache();
+            ClearPartyPoolSuppressionCache();
         }
 
         // Visible equipment travels as blueprint resrefs. An item's tag matches its

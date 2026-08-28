@@ -273,7 +273,14 @@ internal static unsafe partial class PluginHost
         //      item a vanilla script (or scriptgive/giveloot) creates directly in inventory.
         //      See SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13.
         //      NEEDS-LIVE.
-        _block->Version = 58;
+        // 59 = widened each item-template-spawn ring entry (0x14 -> 0x18) with a per-entry
+        //      "created by our own cheat, not a vanilla script" flag, set by
+        //      ItemTemplateSpawnHook.NextSpawnIsCheat around the two GiveItemToInventory/
+        //      EquipItemFromTemplate call sites that reach CreateItemOnObject. Feeds
+        //      party_pool_sync's ambient-script-noise suppression — see
+        //      SharedBlock.ItemTemplateSpawns.cs and docs/research/party-pool-sync.md §20.
+        //      NEEDS-LIVE, flag stays OFF.
+        _block->Version = 59;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

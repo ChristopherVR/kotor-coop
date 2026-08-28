@@ -1156,4 +1156,134 @@ public class PartyPoolLoopbackTests
             host.Dispose();
         }
     }
+
+    // ---- suspicious stack size diagnostic (docs/research/party-pool-sync.md §19/§20:
+    // ambient-script sentinel/overflow stack sizes like x65535/x6783/x38937) ------------------
+
+    /// <summary>
+    /// The exact pathological values docs/research/party-pool-sync.md §19.1 observed live from
+    /// the module's own duros-registration script — logged ONCE, not once per tick, even though
+    /// the pump scans (and therefore would otherwise re-observe) the same steady total on every
+    /// subsequent pass.
+    /// </summary>
+    [Fact]
+    public void ASuspiciouslyLargeStackLogsExactlyOnceNotOnEveryTick()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick 1: baseline (silent)
+                new() { [Blaster] = 65535 }, // tick 2: the pathological deposit
+                new() { [Blaster] = 65535 }, // tick 3: steady — already logged, must not repeat
+                new() { [Blaster] = 65535 }, // tick 4: steady again
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            List<string> logs = [];
+            agent.Log = logs.Add;
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            List<string> suspiciousLines =
+                logs.Where(line => line.Contains("suspiciously large stack", StringComparison.Ordinal)).ToList();
+
+            Assert.Single(suspiciousLines);
+            Assert.Contains("65535", suspiciousLines[0]);
+            Assert.Contains(Blaster.Resref, suspiciousLines[0]);
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>An ordinary, plausible deposit (a handful of grenades, medpacs, whatever) never
+    /// trips the diagnostic — this is a "say something odd happened" line, not routine
+    /// noise.</summary>
+    [Fact]
+    public void AnOrdinaryStackSizeNeverLogsTheSuspiciousWarning()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick 1: baseline
+                new() { [Blaster] = 5 }, // tick 2: ordinary deposit
+                new() { [Blaster] = 5 }, // tick 3: steady
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            List<string> logs = [];
+            agent.Log = logs.Add;
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            Assert.DoesNotContain(logs, line => line.Contains("suspiciously large stack", StringComparison.Ordinal));
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>Two DIFFERENT keys each get their own one-time warning — the "logged once"
+    /// budget is per key, not a single global latch that the first oversized stack exhausts for
+    /// every other key that follows.</summary>
+    [Fact]
+    public void EachDistinctOversizedKeyGetsItsOwnOneTimeWarning()
+    {
+        PartyPoolStackKey saber = new("g_w_dblsbr001", 0, 0, 0, ItemIdentity.FlagKnown);
+
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick 1: baseline
+                new() { [Blaster] = 65535 }, // tick 2: first oversized key
+                new() { [Blaster] = 65535, [saber] = 38937 }, // tick 3: second oversized key joins
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            List<string> logs = [];
+            agent.Log = logs.Add;
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            List<string> suspiciousLines =
+                logs.Where(line => line.Contains("suspiciously large stack", StringComparison.Ordinal)).ToList();
+
+            Assert.Equal(2, suspiciousLines.Count);
+            Assert.Contains(suspiciousLines, line => line.Contains(Blaster.Resref, StringComparison.Ordinal));
+            Assert.Contains(suspiciousLines, line => line.Contains(saber.Resref, StringComparison.Ordinal));
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
 }

@@ -136,17 +136,41 @@ internal static unsafe class ItemTemplateSpawnHook
     private static readonly uint[] ObjectId = new uint[Capacity];
     private static readonly byte[] ResRef = new byte[Capacity * ResRefBytes];
     private static readonly uint[] Serials = new uint[Capacity];
+    private static readonly bool[] IsCheat = new bool[Capacity];
 
     private static int _write;
     private static uint _sequence;
 
+    /// <summary>
+    /// Set TRUE by <c>Odyssey.GiveItemToInventory</c> (<c>Odyssey.Equipment.cs</c>), bracketing
+    /// only the single VM call that reaches <c>ExecuteCommandCreateItemOnObject</c> — the exact
+    /// call this hook splices — and cleared again immediately after, in a <c>finally</c>.
+    ///
+    /// This is THE only derivable signal for "was this creation OUR OWN code (a human's
+    /// console cheat, an automatic wire-apply, our own <c>AddItemToPartyPool</c> deposit)
+    /// rather than a vanilla script's own heartbeat/plot logic": both routes funnel through the
+    /// IDENTICAL VM command (this class's own remarks, and
+    /// <c>Odyssey.GiveItemToInventory</c>'s own doc comment), so nothing at the hook site
+    /// itself can tell them apart — the only place that genuinely knows is the caller, at the
+    /// instant it makes the call. See docs/research/party-pool-sync.md §20 for why this matters:
+    /// suppressing a script's own party-pool deposit from being republished as a player action
+    /// needs exactly this bit, and nothing less specific reproduces it correctly (a naive "was
+    /// this item created recently" test cannot distinguish our own <c>pooladd</c> from an
+    /// ambient script's <c>CreateItemOnObject(GetFirstPC())</c> — both are "recent" by
+    /// construction).
+    ///
+    /// MAIN THREAD ONLY, synchronous around one call — never left set across a frame boundary.
+    /// </summary>
+    public static bool NextSpawnIsCheat;
+
     /// <summary>Reads one captured entry by slot index (wrapped). A zero <paramref
     /// name="serial"/> means this slot has never been written.</summary>
-    public static void Read(int index, out uint objectId, out uint serial, Span<byte> resRef)
+    public static void Read(int index, out uint objectId, out uint serial, out bool isCheat, Span<byte> resRef)
     {
         int i = ((index % Capacity) + Capacity) % Capacity;
         objectId = ObjectId[i];
         serial = Serials[i];
+        isCheat = IsCheat[i];
 
         for (int b = 0; b < ResRefBytes && b < resRef.Length; b++)
         {
@@ -202,6 +226,7 @@ internal static unsafe class ItemTemplateSpawnHook
         {
             Serials[i] = 0;
             ObjectId[i] = 0;
+            IsCheat[i] = false;
         }
 
         _write = 0;
@@ -336,6 +361,7 @@ internal static unsafe class ItemTemplateSpawnHook
             }
 
             ObjectId[slot] = id;
+            IsCheat[slot] = NextSpawnIsCheat;
 
             // Serial last: the reader trusts a slot only once this says it is complete.
             Serials[slot] = ++_sequence;

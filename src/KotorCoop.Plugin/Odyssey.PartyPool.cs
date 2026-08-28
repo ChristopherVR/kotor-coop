@@ -289,16 +289,28 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>True when a resolved item's non-stack identity (charges/max/upgrades/flags)
-    /// matches the requested stack key.</summary>
+    /// matches the requested stack key. Thin engine-facing wrapper over
+    /// <see cref="PartyPoolIdentityMatcher"/> (the pure, independently-tested rule — see its own
+    /// remarks for the charge clamp and the <see cref="SharedBlock.CheatFieldUnchanged"/>
+    /// wildcard docs/research/party-pool-sync.md §20 added): converts this item's raw engine
+    /// bits to wire shape and masks a wildcard request past the identity-bits mask before
+    /// handing both off, since the pure class has no <see cref="SharedBlock"/>/engine-offset
+    /// dependency of its own.</summary>
     private static bool StackIdentityMatches(
         in ItemIdentityFields fields, uint charges, uint maxCharges, uint upgrades, uint flags)
     {
-        uint wireBits = EngineBitsToWireFlags(fields.BitFlags);
-        uint wireBitsOnly = flags & (SharedBlock.ItemIdentityIdentified | SharedBlock.ItemIdentityStolen
-            | SharedBlock.ItemIdentityNonEquippable);
+        (uint safeCharges, uint safeMaxCharges) =
+            PartyPoolIdentityMatcher.SafeChargeFields(fields.Charges, fields.MaxCharges);
 
-        return fields.Charges == charges && fields.MaxCharges == maxCharges
-            && fields.Upgrades == upgrades && wireBits == wireBitsOnly;
+        uint wireBits = EngineBitsToWireFlags(fields.BitFlags);
+        uint wireBitsOnly = flags == PartyPoolIdentityMatcher.Wildcard
+            ? PartyPoolIdentityMatcher.Wildcard
+            : flags & (SharedBlock.ItemIdentityIdentified | SharedBlock.ItemIdentityStolen
+                | SharedBlock.ItemIdentityNonEquippable);
+
+        return PartyPoolIdentityMatcher.Matches(
+            safeCharges, safeMaxCharges, fields.Upgrades, wireBits,
+            charges, maxCharges, upgrades, wireBitsOnly);
     }
 
     /// <summary>
@@ -455,9 +467,17 @@ internal static unsafe partial class Odyssey
 
     /// <summary>
     /// Removes <paramref name="countToRemove"/> units of a resref+identity stack from the
-    /// shared party pool, greedily over whichever live items currently match (by Tag and
-    /// identity), reducing an oversized stack in place or unlinking a whole matching item when
-    /// it is entirely consumed. <see cref="CSWSItem.SetPossessor"/> ("SetPossessorFn") marks
+    /// shared party pool, greedily over whichever live items currently match (by Tag/spawn-ring
+    /// resref and identity), reducing an oversized stack in place or unlinking a whole matching
+    /// item when it is entirely consumed. <paramref name="charges"/>/<paramref name="maxCharges"/>/
+    /// <paramref name="upgrades"/>/<paramref name="flags"/> each accept
+    /// <see cref="SharedBlock.CheatFieldUnchanged"/> as a WILDCARD (see
+    /// <see cref="StackIdentityMatches"/>'s own remarks) — the wire-driven apply
+    /// (<c>CoopCommandDispatcher.DrainAutomaticPartyPool</c>) always passes the exact
+    /// <c>PartyPoolStackKey</c> fields a scan reported, but a human's own bare
+    /// <c>poolremove &lt;resref&gt;</c> has no identity to give, and coercing that to a literal
+    /// 0 used to demand an exact match against whatever an ambient script's own deposit
+    /// actually carries. <see cref="CSWSItem.SetPossessor"/> ("SetPossessorFn") marks
     /// every fully-unlinked item OBJECT_INVALID afterward, matching
     /// <c>CSWSPlaceable::RemoveItem</c>'s own post-removal step — the item becomes an inert
     /// orphan on this instance, never referenced again, the same fate a container-loot removal

@@ -2092,3 +2092,230 @@ Build: `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/b
 -WarnAsError` clean (both game directories reinstalled and strings-confirmed), `dotnet test
 tests/KotorCoop.Tests --no-build`: 2413/2413 passed. No source change this round — this is a live
 re-verification pass only.
+
+## 20. 2026-08-28 — robustness pass on §19's two open gaps: the `poolremove` identity-key
+## mismatch fixed with a wildcard rule; ambient-script party-pool deposits now suppressed at
+## the source instead of merely surviving them; no rig this round, stays OFF
+
+Task: make the content-keyed multiset key robust against exactly the two shapes §19 left open —
+(1) §19.2's own live "identity-key mismatch" (a bare `poolremove` refusing an ambient-deposited
+stack), and (2) the ambient module's own item-granting script noise that made §19.3's cross-side
+aggregate reconciliation unreadable in the first place. No rig this round (isolation worktree) —
+root-cause audit, source fix, and build/test verification only, matching every prior no-rig
+round's own discipline.
+
+### 20.1 Root cause 1 (§19.2's "identity-key mismatch"): `poolremove`'s console verb has no way
+### to name charges/upgrades/flags, and coercing "unspecified" to a literal 0 demanded an exact
+### match nothing but a freshly-constructed item has
+
+Audit of every field `PartyPoolStackKey` carries against what `RemovePartyPoolStack`/
+`StackIdentityMatches` actually compared (this task's own item 1 ask): the AUDIT itself came back
+clean on the shape that matters most — stack size was ALREADY excluded from identity comparison
+(`StackIdentityMatches` never read `fields.StackSize`), matching `PartyPoolStackKey`'s own design
+(§2.1: resref + the four non-quantity `ItemIdentity` fields, count handled entirely outside the
+key). The real defect was narrower and exactly where §19.2 left it: `poolremove <resref> [stack]`
+(`ConsoleCommand.Items.cs`'s `ParsePoolRemove`) has no syntax for charges/upgrades/flags at all,
+so every one of those fields reaches `CheatController.PartyPoolRemove` as
+`SharedBlock.CheatFieldUnchanged` — which the OLD code coerced to a literal `0` before calling
+`RemovePartyPoolStack`. An ambient script's own deposit essentially never has all-zero identity
+(`Charges` defaults to 50 on a freshly loaded item, per docs/research/item-identity.md §1's own
+`CSWSItem::Constructor` citation), so a bare `poolremove` demanded an exact match against a value
+the depositing side never had reason to produce.
+
+**Fix.** `CheatFieldUnchanged` now reaches `RemovePartyPoolStack` UNCOERCED, and
+`StackIdentityMatches` (via the new pure `PartyPoolIdentityMatcher.Matches`,
+`src/KotorCoop.Plugin/PartyPoolIdentityMatcher.cs`) treats it as a per-field WILDCARD — "match any
+value for this field" — rather than a literal request for `0xFFFFFFFF`. This only changes a
+human's own bare `poolremove <resref>`: the wire-driven apply
+(`CoopCommandDispatcher.DrainAutomaticPartyPool`) always supplies concrete fields straight from a
+scanned `PartyPoolStackKey`, which are byte-ranged (Charges/MaxCharges/Flags) or a real upgrade
+mask and can never coincidentally equal the sentinel in practice — the same accepted risk profile
+`CheatFieldUnchanged` already carries for every other item-identity cheat channel in this codebase
+(SetItem, Store).
+
+**A second, closely-related fix in the same audit.** `Odyssey.PartyPool.cs`'s
+`ReadItemFields`/`StackIdentityMatches` read Charges/MaxCharges as bare `uint`s straight off the
+live item — UNLIKE `KotorCoop.Memory.ItemIdentityLayout.Decode` (the scan side that builds the
+wire `PartyPoolStackKey` in the first place), which already clamps a garbage MaxCharges (above the
+0..255 GFF-byte range — docs/research/item-identity.md §1.1's own "charges 50/1768092" measured
+example) down to the Charges value. This asymmetry meant a wire-driven remove, built from a scan
+that safely clamped a garbage field, could never match the SAME live item again on a later read,
+because the live re-read would still show the raw garbage the scan had already repaired. Fixed by
+duplicating the identical clamp (`PartyPoolIdentityMatcher.SafeChargeFields` — the plugin cannot
+reference `KotorCoop.Memory`, NativeAOT win-x86 vs the agent's x64, so this is the same
+project-wide "verified offset, independently re-derived on each side of the boundary" pattern
+`TagEqualsIgnoreCase`/`EngineBitsToWireFlags` already use) on the plugin side, so both ends of a
+scan-then-remove round trip derive the identical key for the identical item.
+
+**Tests.** `PartyPoolIdentityMatcher` is a new pure, unsafe-pointer-free class (compiled into
+`KotorCoop.Tests.csproj` per this repo's "plugin pure arithmetic" convention, matching
+`PartyPoolStackMatcher`'s own precedent) — nine new `[Fact]`/`[Theory]` cases in
+`PartyPoolTests.cs`: an exact match, a single-mismatched-field refusal, every-field-wildcarded
+matching any live value (the direct §19.2 regression pin), a mix of wildcard and concrete fields,
+the charge clamp on both an out-of-range MaxCharges and an out-of-range Charges, in-range values
+passing through untouched, and the load-bearing "a key derived from a clamped scan still matches
+the same live item's raw garbage MaxCharges on a later read" case.
+
+### 20.2 Root cause 2 (§19.3's unreadable aggregate — ambient scripts deposit into this exact
+### repository, and BOTH instances run the same scripts, so a naive publish doubles them)
+
+KOTOR's own `k_*` heartbeat/plot scripts can call `CreateItemOnObject(resref, GetFirstPC())`,
+which — for the local player specifically — deposits into the SAME `CItemRepository` this whole
+channel scans (§19.1/§19.3's own live evidence: the ambient duros-registration script's adds/
+removes landed through the identical `InsertItem`-bracketed path party-pool test traffic used, and
+were visible IN the party-pool test window). Both instances run the identical script content, so
+each side creates its OWN separate copy of the same deposit — if this pump published either side's
+detection as an ordinary local player action, the merged total would double it, exactly the
+`ContainerLootStore`-vs-multiset distinction §2.1 already draws (these are NOT removed-pair facts
+safe to re-declare; they are cumulative counts).
+
+**Why suppression can't be resref-keyed like `RecentlySyncedItems`.** That mechanism (used by
+`ScriptItemGrantRule` to stop a script's OWN inventory grant from being double-reported alongside
+an already-synced pickup/loot/giveloot) works because those channels explicitly WANT the script
+grant published — the question there is only "was this specific row already accounted for by
+something else." Here the opposite is true: an ambient party-pool deposit must NEVER be published
+at all (both sides make their own), so a resref-keyed consume-on-match budget is the wrong shape —
+what is needed is a durable "was this item's OWN creation recent and NOT something our own code
+did" fact, checked once per item id, forever.
+
+**Why the distinction can only come from the CALLER, not the hook site.** The task's own leading
+question — can `ItemTemplateSpawnHook` derive "VM script vs our cheat" itself — has a definite
+negative answer, re-confirmed this round: `Odyssey.GiveItemToInventory` (which
+`AddItemToPartyPool`, `SetItem`, `GiveLoot`, `EquipItemFromTemplate` and `storeinsert` all funnel
+through) reaches `CSWVirtualMachineCommands::ExecuteCommandCreateItemOnObject` — the EXACT same VM
+command a vanilla script's own `CreateItemOnObject` call reaches
+(docs/research/item-identity.md §13.1's own citation) — so nothing observable AT the hook site
+(0x0052F748, mid-function, well past any caller-identifying context) can tell the two apart. The
+only place that genuinely knows is the CALLER, at the instant it makes the call.
+
+**Fix: a per-entry cheat flag on the item-template-spawn ring (SharedBlock version 59).**
+`ItemTemplateSpawnHook.NextSpawnIsCheat` (`src/KotorCoop.Plugin/ItemTemplateSpawnHook.cs`) is a
+static bool, bracketed tightly (`try`/`finally`) around the ONE VM call in each of
+`Odyssey.GiveItemToInventory` and `Odyssey.EquipItemFromTemplate` that reaches
+`ExecuteCommandCreateItemOnObject` — the two, and only two, call sites in this plugin that reach
+it (`grep`-verified). The hook's own capture (`OnItemTemplateSpawn`) reads this flag at the exact
+instant it fires and stores it alongside the (object id, resref) pair it already captured. The
+ring's own entry stride grew from 0x14 to 0x18 (`SharedBlock.ItemTemplateSpawnIsCheatOffset`,
+bit 0 = cheat) to carry it; `SharedBlock.TotalSize` grew from 0x4700 to 0x4800 to hold the wider
+ring. `PluginHost.cs`'s `_block->Version` and `KotorGameBridge.PluginSignature`'s own version byte
+both moved from 58 (0x3A) to 59 (0x3B) together — `ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves`
+and `TransitionMovieTests.TheBlockVersionMovedInBothHalves` both updated and re-passing.
+
+**Agent side.** `KotorGameBridge.ItemTemplateSpawns.cs`'s `DrainItemTemplateSpawns` now records,
+for EVERY drained ring entry (not only cheat ones), an `ItemCreationObservation` (isCheat, the
+AGENT's own wall-clock time it learned the fact — a faithful proxy for true creation time, since
+the drain runs unconditionally every tick per docs/research/item-identity.md §13.2, so the
+observation lags true creation by at most one tick). `KotorGameBridge.PartyPool.cs`'s scan then
+calls `IsAmbientPartyPoolNoise(itemId, now)` per live pool item: if a creation observation exists,
+is NOT cheat-flagged, and was observed within 1000ms of the FIRST time this scan ever looked at
+this id, the item's stack is excluded from the aggregate entirely — permanently, not just for that
+tick.
+
+**Why the decision is made ONCE, not re-checked every scan.** This is the load-bearing design
+choice, not an afterthought: if suppression were re-evaluated on every pass, an item correctly
+excluded on tick 1 (fresh, non-cheat) would start being COUNTED the moment the 1-second window
+elapsed on some LATER tick — and that "sudden appearance" would read to `Pumps.PartyPoolPump`'s
+own step-1 diff as a brand-new genuine local change, reproducing the exact double-count bug this
+section exists to prevent, merely delayed by however long the item sat unsuppressed before the
+window ran out. Framed the way §2.1 already frames every other design choice in this channel: an
+ambient item that is never counted is, from the sync layer's perspective, simply not part of the
+multiset at all, on either side, ever — correct, because both instances independently hold their
+own equivalent physical copy without any wire op ever being needed to converge them. The decision
+(`_partyPoolSuppressionDecided`/`_partyPoolAmbientSuppressed`, `KotorGameBridge.PartyPool.cs`) is
+therefore cached per item id and never revisited, cleared only on a module change (object ids are
+module-scoped) or a generous 4096-entry defensive cap past the repository's own hard count limit.
+
+**What this does NOT suppress.** A human's own `pooladd` (manual console verb) and the automatic
+wire-apply channel (`CoopCommandDispatcher.DrainAutomaticPartyPool`, replaying a PEER's own
+change) both route through `AddItemToPartyPool` -&gt; `GiveItemToInventory`, which is now
+bracketed — so both are marked cheat and never suppressed, exactly the "player-driven pool moves…
+publish" half of this task's own ask. A GUI drag-and-drop of an item that has been sitting in a
+backpack for any length of time was never freshly created at the moment it entered the pool, so it
+falls outside the 1-second window and is counted normally regardless of how it was originally
+created. The suppression is also purely additive on top of the existing read: with no plugin
+attached, `TryGetItemCreationObservation` never has an answer, `IsAmbientPartyPoolNoise` always
+returns false, and every item counts exactly as it did before this round.
+
+**Tests.** `PartyPoolAmbientSuppressionTests.cs` (new file, eight `[Fact]`s): no creation fact
+never suppresses; a fresh non-cheat creation IS suppressed; a fresh CHEAT creation is never
+suppressed (the load-bearing "our own pooladd must not be mistaken for ambient noise" case); a
+non-cheat creation outside the window is not suppressed; a suppression decision is PERMANENT even
+once the window would have expired (the regression pin for the "re-checking would reproduce the
+bug on a delay" reasoning above); a not-suppressed decision is equally permanent; different item
+ids are decided independently; and the window boundary itself is exclusive (`<`, not `<=`),
+matching `RecentlySyncedItems`' own comparison convention. Seeded through
+`KotorGameBridge.RememberItemCreation`/`IsAmbientPartyPoolNoise(id, nowMs)` — both `internal`,
+granted to the test assembly the identical way `RememberSpawnedItemResref` already is — with
+`nowMs` threaded through explicitly rather than read from `Environment.TickCount64`, so the window
+boundary is pinned deterministically rather than raced against a real timer.
+
+### 20.3 Stack-size clamp/validation (this task's own tail ask)
+
+Re-confirmed rather than re-implemented: `ItemIdentityLayout.Decode` (the scan side) already
+`Math.Clamp`s a raw stack-size read to `[1, ushort.MaxValue]` before it is ever aggregated — the
+type itself (`ItemIdentity.StackSize` is a `ushort`) makes "clamp to 65535" the natural ceiling
+already in force, not a change this round needed to make. What WAS missing is a way to notice a
+pathological value without a live-attach probe: `Pumps.PartyPoolPump` now logs a one-time-per-key
+diagnostic (`_warnedSuspiciousStackSize`, threshold 99 — nothing in base-game KOTOR content or
+scripting stacks past a few dozen of anything) whenever a key's total exceeds it, naming the exact
+values §19.1 observed live (65535/6783/38937) as the expected shape rather than a mystery. This
+never changes what gets published or applied, only whether the pump SAYS something happened.
+Deliberately NOT implemented: reading a `.uti` template's own max-stack field via `GameFiles` — no
+verified GFF field name for a per-item stack cap exists in this codebase's own research
+(docs/research/item-identity.md's own §"What is deliberately NOT carried" catalogues every `.uti`
+field this project has actually disassembled a save/load routine for, and a per-item numeric stack
+ceiling is not among them); encoding an unverified field name would violate this project's own
+"VERIFIED, not guessed" bar for a research doc claim, for a diagnostic the simpler one-time log
+already serves. **Tests**: three new `[Fact]`s in `PartyPoolLoopbackTests.cs` — a suspiciously
+large stack (65535, the exact live-observed value) logs exactly once across three ticks holding it
+steady; an ordinary stack (5) never logs it; and two distinct oversized keys each get their own
+independent one-time warning.
+
+### 20.4 Files changed
+
+`src/KotorCoop.Plugin/PartyPoolIdentityMatcher.cs` (new, pure): the wildcard-aware identity match
+rule and the charge clamp. `src/KotorCoop.Plugin/Odyssey.PartyPool.cs`: `StackIdentityMatches`
+delegates to it. `src/KotorCoop.Plugin/CheatController.PartyPool.cs`: `PartyPoolRemove` no longer
+coerces `CheatFieldUnchanged` to 0. `src/KotorCoop.Plugin/ItemTemplateSpawnHook.cs`:
+`NextSpawnIsCheat`, the `IsCheat` capture array, `Read`'s widened signature.
+`src/KotorCoop.Plugin/Odyssey.Equipment.cs`: brackets both `CreateItemOnObject` call sites.
+`src/KotorCoop.Plugin/ItemTemplateSpawnController.cs`,
+`src/KotorCoop.Plugin/SharedBlockView.ItemTemplateSpawns.cs`,
+`src/KotorCoop.Plugin/SharedBlock.ItemTemplateSpawns.cs`, `src/KotorCoop.Plugin/SharedBlock.cs`,
+`src/KotorCoop.Plugin/PluginHost.cs`: the ring's widened stride and the version 59 bump.
+`src/KotorCoop.Memory/KotorGameBridge.cs`: `PluginSignature`'s version byte.
+`src/KotorCoop.Memory/KotorGameBridge.PluginBlock.cs`: the mirrored offset/stride constants.
+`src/KotorCoop.Memory/KotorGameBridge.ItemTemplateSpawns.cs`: the new `ItemCreationObservation`
+cache. `src/KotorCoop.Memory/KotorGameBridge.PartyPool.cs`: `IsAmbientPartyPoolNoise` and its
+call from the scan loop. `src/KotorCoop.Memory/KotorGameBridge.Player.cs`: clears both new caches
+on module change. `src/KotorCoop.Session/Pumps/PartyPoolPump.cs`: the suspicious-stack-size
+diagnostic. Tests: `tests/KotorCoop.Tests/PartyPoolTests.cs` (nine new identity-matcher cases),
+`tests/KotorCoop.Tests/PartyPoolAmbientSuppressionTests.cs` (new file, eight cases),
+`tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs` (three new stack-size-diagnostic cases),
+`tests/KotorCoop.Tests/TransitionMovieTests.cs` (the version-59 expectation),
+`tests/KotorCoop.Tests/MidModuleMovieRelayTests.cs` (the TotalSize 0x4800 expectation),
+`tests/KotorCoop.Tests/KotorCoop.Tests.csproj` (the new compile-include).
+
+### 20.5 Verdict
+
+`party_pool_sync` stays OFF (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged) — this round is a build-clean, fully-reasoned source fix for both of §19's own closing
+gaps, but, like every round since §16 before a rig confirmed it, has NOT been live-tested. The
+concrete next live-test step: re-run §19's own recipe (a module with an active ambient
+item-granting script, `pooladd`/`poolremove` on both sides, a rapid multi-add burst) and confirm
+(a) `poolremove <resref>` now succeeds against an ambient-deposited stack with no charges/upgrades
+named, (b) the party-pool test's own aggregate reconciliation is finally readable — no ambient
+duros-registration-style noise interleaved with genuine test traffic in either side's log — and
+(c) the suspicious-stack-size diagnostic fires for any pathological value the ambient script still
+produces, confirming it is cosmetic (a log line) and not a behavioural change. If (b) still cannot
+be read cleanly, the suppression's own 1-second window or its "decide once" permanence is the next
+thing to instrument, not the identity-matcher fix, which (a) can confirm independently.
+
+Build: `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/build.ps1
+-WarnAsError` clean (NativeAOT win-x86, 2008 KB). `dotnet test tests/KotorCoop.Tests --no-build
+--filter "FullyQualifiedName~PartyPool"`: 61/61 passed. Full `dotnet test tests/KotorCoop.Tests
+--no-build` regression sweep: 2435/2435 passed (one pre-existing, unrelated test —
+`MidModuleMovieRelayTests.TheRegionDoesNotOverlapAnyExistingField` — needed its own hardcoded
+`SharedBlock.TotalSize` expectation updated from 0x4700 to 0x4800 for this round's version-59
+growth; fixed alongside `TransitionMovieTests.TheBlockVersionMovedInBothHalves`'s own hardcoded
+58).

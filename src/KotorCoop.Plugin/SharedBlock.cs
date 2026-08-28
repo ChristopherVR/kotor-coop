@@ -99,7 +99,14 @@ internal partial struct SharedBlock
     /// to the next clean 0x100 boundary past that (0x4700), the same choice every earlier
     /// growth in this file made.
     /// </summary>
-    public const int TotalSize = 0x4700;
+    /// <summary>
+    /// Grown from 0x4700 for the item-template-spawn ring's per-entry cheat flag (version 59,
+    /// docs/research/party-pool-sync.md §20): widening each entry from 0x14 to 0x18 pushes the
+    /// ring itself to 0x4100..0x4700 and the cursor to 0x4700..0x4704, so this rounds up to the
+    /// next clean 0x100 boundary past that, the same choice every earlier growth in this file
+    /// made.
+    /// </summary>
+    public const int TotalSize = 0x4800;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -173,7 +180,10 @@ internal partial struct SharedBlock
     /// SharedBlock.SoloSegment.cs. Version 57 (2026-08-27) added the container-lock explicit
     /// arbitration channel — see SharedBlock.Dialogue.cs. Version 58 (2026-08-28) added
     /// <see cref="OffsetItemTemplateSpawnRing"/>/<see cref="OffsetItemTemplateSpawnCursor"/> —
-    /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13.
+    /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13. Version 59
+    /// (2026-08-28) widened each item-template-spawn ring entry with
+    /// <see cref="ItemTemplateSpawnIsCheatOffset"/> — see SharedBlock.ItemTemplateSpawns.cs and
+    /// docs/research/party-pool-sync.md §20.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;
