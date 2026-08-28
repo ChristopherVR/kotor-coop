@@ -86,6 +86,28 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
     /// malformed peer must not grow this without limit.</summary>
     private const int MaxPendingApplies = 256;
 
+    /// <summary>
+    /// ⚠ ROOT CAUSE 5 (2026-08-28, docs/research/party-pool-sync.md §24): <see cref="_pendingApplies"/>
+    /// is written by <see cref="Pump"/> — called from <c>CoopAgent.RunAsync</c>'s own tick loop —
+    /// and drained by <see cref="TryDequeuePendingApply"/>, called from
+    /// <c>CoopCommandDispatcher.RunAsync</c>'s own INDEPENDENT, separately-scheduled loop
+    /// (<c>AgentComposition.cs</c> starts both as separate tasks with no shared synchronization
+    /// context — confirmed this pass). A plain <see cref="Queue{T}"/> is not thread-safe for ANY
+    /// concurrent access, including this exact single-producer/single-consumer shape: a
+    /// concurrent <c>Enqueue</c>/<c>TryDequeue</c> pair (most dangerously while an internal
+    /// array resize is in flight) can silently corrupt the queue's own bookkeeping, losing an
+    /// entry or handing back a stale/duplicate one — non-deterministically, depending on
+    /// scheduling, and only when both sides are genuinely active at once. This is exactly the
+    /// shape §21/§23's residual "smaller" defect had: asymmetric (sometimes the depositing side,
+    /// sometimes the receiving side), non-deterministic (reproduced once, not the next identical
+    /// run), and bounded (a handful of units, never the unbounded root-cause-4 runaway, since a
+    /// torn queue read corrupts at most the ONE entry involved, not a compounding feedback loop).
+    /// Guarded by <see cref="_pendingGate"/> below — the same discipline <see cref="PartyPoolStore"/>/
+    /// <see cref="ReliablePartyPoolSender"/> already apply to every field either of THEIR own
+    /// cross-thread callers touches.
+    /// </summary>
+    private readonly Lock _pendingGate = new();
+
     private readonly Queue<CoopAgent.PendingPartyPoolApply> _pendingApplies = new();
 
     /// <summary>This instance's own last-scanned engine totals — the step 1 baseline every
@@ -220,11 +242,29 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                 PublishDetected(key, excess, now);
             }
 
-            if (_applyInFlight.Contains(key) && actual == wireTotal.GetValueOrDefault(key))
+            // ROOT CAUSE 6 (2026-08-28, docs/research/party-pool-sync.md §24): this used to
+            // require actual == wireTotal.GetValueOrDefault(key) exactly — sound only if the
+            // wire never moves again while ONE apply is in flight. It routinely does (a second
+            // deposit of the same key arriving mid-flight, live-reproduced by
+            // RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides):
+            // the queued apply was sized for an OLDER, smaller wire target, so `actual` can only
+            // ever reach THAT number, never the newer one — the exact-match check then never
+            // fires again, EVER, for this key: _applyInFlight stays set, step 2 keeps excluding
+            // the key from reconcile, and the engine sticks at whatever the one landed apply
+            // produced no matter how many further deposits arrive on the wire. A genuine,
+            // permanent stall, not a transient one.
+            //
+            // The fix needs no stored target at all (this class's whole point since root cause
+            // 4): AddItemToPartyPool/RemovePartyPoolStack apply their FULL requested delta in one
+            // synchronous engine-side call (§2.4/§1.3) — there is no OBSERVABLE partial-landing
+            // state a poll-based scan could ever catch mid-flight, so any movement seen for a key
+            // that is currently in flight IS, by construction, that one queued apply landing in
+            // full. `actual != belief` was already established above (the `continue` guard), so
+            // reaching this line at all already means "a distinct entry currently in flight for
+            // this key just moved" — clear it unconditionally and let step 2, re-reading the
+            // store fresh below, notice and queue for whatever gap (if any) remains right now.
+            if (_applyInFlight.Contains(key))
             {
-                // The apply this instance was chasing for this key has fully landed — nothing
-                // left to converge toward, so reconcile below is free to notice a NEW gap (a
-                // further deposit that arrived while this one was in flight) and queue for it.
                 _applyInFlight.Remove(key);
             }
         }
@@ -264,15 +304,23 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         // instance owes the engine that many more units), a Remove delta means desired < engine.
         foreach (PartyPoolDiffRule.Delta delta in PartyPoolDiffRule.Diff(engineForReconcile, desiredForReconcile))
         {
-            if (_pendingApplies.Count >= MaxPendingApplies)
+            // See _pendingGate's own doc comment (root cause 5, §24): the count check and the
+            // enqueue must be one atomic operation under the SAME lock TryDequeuePendingApply
+            // takes — this queue is drained from a genuinely separate, independently-scheduled
+            // thread (CoopCommandDispatcher.RunAsync), not merely a different call frame.
+            lock (_pendingGate)
             {
-                log($"party pool: dropping apply for '{delta.Key.Resref}' — already holding "
-                    + $"{MaxPendingApplies} queued, the drain has fallen behind");
-                continue;
+                if (_pendingApplies.Count >= MaxPendingApplies)
+                {
+                    log($"party pool: dropping apply for '{delta.Key.Resref}' — already holding "
+                        + $"{MaxPendingApplies} queued, the drain has fallen behind");
+                    continue;
+                }
+
+                _pendingApplies.Enqueue(
+                    new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
             }
 
-            _pendingApplies.Enqueue(
-                new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
             _applyInFlight.Add(delta.Key);
 
             // This instance now owes its own engine an apply — the very next scan needs to be
@@ -395,9 +443,16 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
 
     /// <summary>Called by whatever already arbitrates the single-slot staging-cheat channel (the
     /// command dispatcher's pending-cheat-serial check), at most once per ITS tick — mirrors
-    /// <c>LootPump.TryDequeuePendingLoot</c> exactly.</summary>
-    public bool TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply next) =>
-        _pendingApplies.TryDequeue(out next);
+    /// <c>LootPump.TryDequeuePendingLoot</c> exactly. Locked under <see cref="_pendingGate"/> —
+    /// see that field's own doc comment (root cause 5, §24): this runs on a thread genuinely
+    /// independent of <see cref="Pump"/>'s own enqueue.</summary>
+    public bool TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply next)
+    {
+        lock (_pendingGate)
+        {
+            return _pendingApplies.TryDequeue(out next);
+        }
+    }
 
     private static Dictionary<PartyPoolStackKey, int> Without(
         IReadOnlyDictionary<PartyPoolStackKey, int> source, IReadOnlyCollection<PartyPoolStackKey> excluded)

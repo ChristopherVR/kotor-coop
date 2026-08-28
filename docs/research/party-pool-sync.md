@@ -2746,3 +2746,172 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 -Install -WarnAsError` (both game directories, strings-confirmed `RequestPartyPoolResync` present
 in both deployed `KotorCoop.Session.dll`s) were run fresh at the top of this session and were
 clean. No source change this round — live re-verification only.
+
+---
+
+## 24. 2026-08-28 — root causes 5 and 6 found and fixed: the unguarded `_pendingApplies` queue,
+## and the real, deterministically-reproduced defect — `_applyInFlight`'s exact-match clear
+## condition permanently stalls a key once a second wire-side change arrives while its apply is
+## still in flight. No rig this round; two new deterministic regression tests (one live-failing
+## before the fix), `party_pool_sync` stays OFF
+
+Task: this session's queue item — pick up exactly where §23 left off (a bounded, roughly +1-to-+4
+over-count on rapid same-key deposits in either direction, and a genuine cross-instance divergence,
+9 vs 7, surviving a blackout+reconnect resync) and find the actual mechanism with a deterministic
+two-pump scripted test, not another round of live guessing. Isolation worktree, no rig — bench-only,
+matching every prior no-rig round's own discipline. HEAD already included §23 (`a7833b7`) at the
+start of this pass; no merge was needed.
+
+### 24.1 Root cause 5: `PartyPoolPump.cs`'s `_pendingApplies` is a plain `Queue<T>` shared, with
+### no lock, between two genuinely independent threads
+
+`PartyPoolPump.cs`'s `_pendingApplies` (`Queue<CoopAgent.PendingPartyPoolApply>`) is **written**
+by `Pump()`'s own step 2, called from `CoopAgent.RunAsync`'s tick loop, and **drained** by
+`TryDequeuePendingApply`, called from `CoopCommandDispatcher.DrainAutomaticPartyPool` on
+`CoopCommandDispatcher.RunAsync`'s own loop — confirmed this pass to be a genuinely SEPARATE task
+from `CoopAgent.RunAsync` (`AgentComposition.cs` starts both independently — `dispatcher.RunAsync`
+and, via `SessionManager`, `agent.RunAsync` — with no shared synchronization context; both are
+plain `async Task`s scheduled on the .NET thread pool, free to run on different OS threads at the
+same instant). `Queue<T>` is documented as not thread-safe for ANY concurrent access, including
+this exact single-producer/single-consumer shape: a concurrent `Enqueue`/`TryDequeue` pair — most
+dangerously while `Enqueue`'s own internal array resize is in flight — can silently lose an entry
+or hand back a stale/duplicate one, non-deterministically, depending on scheduling. This is
+EXACTLY the shape §21/§23's residual defect had on its face: asymmetric (sometimes the depositing
+side, sometimes the receiving side), non-deterministic (reproduced once, not the next identical
+run), and bounded (a torn queue read corrupts at most the one entry involved, never a compounding
+feedback loop the way root cause 4's frozen-snapshot amplification did).
+
+**Fix.** `_pendingGate` (`Lock`, matching `PartyPoolStore`/`ReliablePartyPoolSender`'s own
+discipline for every field either of THEIR cross-thread callers touch) now guards every access:
+the count-check-and-enqueue in step 2 (one atomic operation under the lock, not two), and
+`TryDequeuePendingApply`. `LootPump.cs`'s own `_pendingLoot` has the IDENTICAL unguarded shape
+(`TryDequeuePendingLoot`'s own doc comment is literally what this class's `TryDequeuePendingApply`
+says it mirrors) — flagged here as a related, out-of-scope defect for whoever next touches that
+channel, not fixed this pass (this task's brief was party-pool sync specifically).
+
+**Verification.** `PartyPoolLoopbackTests.ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`
+hammers exactly this: one thread races `CoopAgent.PumpOnce()` (8,000 distinct-key enqueues, one
+per call — each key used exactly once, so a correct queue must hand every single one back exactly
+once) against a separate, genuinely independent OS `Thread` spinning
+`TryDequeuePendingPartyPoolApply` continuously (no poll delay, to maximise exposure to the
+dangerous resize window). Passes reliably against the fix. Manually reverted (both lock sites,
+temporarily, in this pass) and re-run to confirm this is a real regression pin, not a test that
+would pass either way — **however this did NOT reproduce a failure under the reverted code in the
+runs attempted this pass** (see §24.3 below for why this is recorded as an open gap rather than
+silently dropped). The fix is kept regardless: an unguarded `Queue<T>` shared across two
+independently-scheduled threads is undefined behaviour by the BCL's own contract, real in this
+codebase's actual threading model (confirmed by reading `AgentComposition.cs`), and worth fixing
+on that basis alone even where a short bench run could not force the corruption to manifest.
+
+### 24.2 Root cause 6, the one this pass actually caught red-handed: `_applyInFlight`'s exact-match
+### clear condition permanently stalls a key once a second wire-side change arrives mid-flight
+
+Building the task's own ask — a deterministic two-pump test for ×3 rapid deposits, asserting exact
+convergence, not just "bounded ops" (§22's own tests already covered bounded-ness; the task wanted
+the EXACT number) — immediately caught a real, reproducible defect that has nothing to do with
+`_pendingApplies`'s thread-safety at all.
+
+`PartyPoolLoopbackTests.RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides`
+extends §9/§23's own real-cheat-channel `DispatcherLoop` shape to BOTH host and client (§23's own
+live recipe drove the host's `pooladd` through the real single-slot channel but the pre-existing
+test suite never gave the CLIENT an independent `DispatcherLoop` of its own, so the client's own
+receiving-side apply-queue race was never actually exercised by any test before this pass) and
+three rapid deposits instead of one. **This test FAILED before any fix, deterministically, every
+time it was run**: `client's own engine never caught up to its converged store; got 1` — the
+client's STORE correctly converged to 3 (the wire worked), but the client's own simulated engine
+got stuck at 1 (the first deposit's own landed apply) FOREVER, never receiving the second or third.
+
+**Mechanism, precisely.** `PartyPoolPump.Pump()`'s step 1 used to clear `_applyInFlight[key]` only
+when `actual == wireTotal.GetValueOrDefault(key)` — an EXACT match against the wire total AS READ
+AT THE TOP OF THIS TICK. That is sound only if the wire never moves again for this key while the
+one queued apply is in flight. It routinely does: a queued apply is sized for whatever the wire
+said at the MOMENT it was queued (say, wire=1), and the apply's own trip through the arbitrated,
+single-slot staging-cheat channel is not instantaneous. If a SECOND deposit arrives (wire=2, then
+wire=3) before the first apply lands, `actual` — once the first apply DOES land — can only ever
+reach the number that ONE apply was sized for (1), never the newer wire total (3): the exact-match
+check `actual == wireTotal` (1 == 3) never fires, `_applyInFlight` never clears, and step 2's
+reconcile keeps excluding this key from ever queueing a further apply — forever, since nothing
+else in the class ever clears the set for a key it excludes this way. A genuine, PERMANENT stall,
+not a transient one: unlike root cause 4's unbounded escalating amplification, this is a quiet
+under-count that never self-heals and never even logs anything (no loop-breaker trip, since
+nothing is being published — the key is just silently stuck).
+
+**Why this reads as §21/§23's own "smaller" defect family even though its OWN direct symptom is
+an under-count, not an over-count.** A stuck receiving-side key does not merely sit still: the
+NEXT genuine local action on that same key (an unrelated future deposit, an ambient script event,
+or simply the moment `_applyInFlight` finally interacts with `ExcessBeyondWire`'s own excess
+computation once the key eventually DOES move for an unrelated reason) is measured against a
+`belief`/`gap` pair that has been silently wrong since the stall began — precisely the kind of
+"stale bookkeeping compared against a moving target" shape root cause 4 was purged of everywhere
+ELSE in this class except this one remaining spot. §23's own asymmetric, non-deterministic,
+bounded-magnitude over-counts are the natural signature of a stall on ONE side interacting with an
+`ExcessBeyondWire` computation on either side once the stuck state finally gets perturbed — this
+pass did not attempt to re-derive §23's exact live numbers (9 vs 7, +1 to +4) from this mechanism
+by hand, since the fix removes the stale state entirely rather than requiring that reconstruction,
+but the shape match (asymmetric, non-deterministic, bounded, involving a receiving-side apply
+specifically) is exact.
+
+**The fix needs no stored numeric target at all** — this class's whole design principle since root
+cause 4 (`docs/research/party-pool-sync.md` §22: "never a value captured once and trusted across
+multiple ticks"). `Odyssey.AddItemToPartyPool`/`RemovePartyPoolStack` apply their FULL requested
+delta in one synchronous engine-side call (§2.4/§1.3) — there is no OBSERVABLE partial-landing
+state a poll-based scan could ever catch mid-flight, so any movement seen for a key that is
+currently `_applyInFlight` IS, by construction, that one queued apply landing in full, never a
+partial fragment of it. Since step 1 already establishes `actual != belief` before reaching this
+check (the `continue` guard above it), the fix is simply to clear `_applyInFlight` unconditionally
+whenever that check is reached for an in-flight key — no comparison against `wireTotal` needed at
+all. Step 2, re-reading the store fresh immediately afterward (the same "step 2 always sees step
+1's own updates within the same tick" invariant this class has held since root cause 1), then
+naturally notices and queues for whatever gap (if any) still remains, using the CURRENT wire, not
+a frozen one.
+
+### 24.3 What this pass could not do: mechanically confirm root cause 5's own regression test fails
+### pre-fix
+
+The lock added for root cause 5 was temporarily reverted (both call sites) and
+`ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries` re-run
+several times against the unguarded code; it did not fail in the attempts made this pass. This
+does not mean the race is not real — `Queue<T>`'s own documented contract makes the unguarded
+version undefined behaviour regardless of whether a short bench run happens to force the exact
+timing window (an array resize landing inside a concurrent `TryDequeue`'s own read) — but it does
+mean this specific test is NOT, on the evidence gathered this pass, a mechanically-confirmed
+failing-before-passing-after regression pin for root cause 5 the way root cause 6's own test is.
+Recorded honestly per this document's own tagging discipline rather than glossed over. A stronger
+forcing function (explicit `Thread.Yield()`/`Thread.Sleep(0)` interleaving at the exact
+Enqueue/TryDequeue boundary, or a purpose-built harness that pauses one thread mid-resize) is the
+concrete next step if this ever needs a firmer pin; the fix itself is not in question either way.
+
+### 24.4 Files changed
+
+`src/KotorCoop.Session/Pumps/PartyPoolPump.cs`: `_pendingGate` (`Lock`) added, guarding
+`_pendingApplies`'s count-check/enqueue and `TryDequeuePendingApply`; the `_applyInFlight` clear
+condition in step 1 simplified from `actual == wireTotal.GetValueOrDefault(key)` to an
+unconditional clear once reached (root cause 6). Both changes documented in the class's own doc
+comment alongside the existing root-cause history.
+`tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`: three new tests —
+`ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries` (root
+cause 5's own stress test, §24.1/§24.3), `RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides`
+(root cause 6's own regression pin — FAILS deterministically pre-fix, PASSES post-fix, both
+confirmed this pass), `ABlackoutDuringRapidHostDepositsConvergesBothSidesToTheSameCorrectTotalAfterResync`
+(§23's own blackout+resync divergence recipe, reproduced through the real cheat channel on both
+sides rather than direct engine writes — this pass's most direct bench-level check of hypothesis
+(b) from the task brief; passes against the fix, and was not separately confirmed failing
+pre-fix given the time already spent confirming root cause 6's own more direct pin).
+
+### 24.5 Verdict
+
+`party_pool_sync` **stays OFF** (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged, still default `false`/`0`) — this pass fixed two real defects (one deterministically
+reproduced and confirmed fixed; one a genuine thread-safety hazard fixed on its own merits, not
+mechanically confirmed as the live symptom's exact trigger) but, per this project's own engine-
+write rules, a bench-only pass earns the fix landing, not the flag flipping. **Concrete next live
+step**: re-run §21/§23's own exact recipes (three rapid same-key `pooladd`s on the host, then the
+client; the blackout+reconnect divergence check) against this fix and confirm the live symptoms
+(the bounded +1-to-+4 over-count, the 9-vs-7 divergence) are actually gone, not merely that the
+bench-level mechanism this pass found and fixed no longer reproduces in a simulated rig.
+
+Build: `dotnet build KotorCoop.slnx -warnaserror` clean. `src/KotorCoop.Plugin/build.ps1
+-WarnAsError` clean (no plugin-side source changed this pass; rebuilt to confirm nothing else
+regressed). `dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~PartyPool"`:
+68/68 passed (65 pre-existing + 3 new). Full suite: see this pass's own closing build/test note
+below.
