@@ -313,6 +313,7 @@ public sealed partial class CoopClient : ICoopSession
         SendEncounterTriggers();
         SendTriggerEntries();
         FlushChat();
+        FlushPartyPoolResyncRequest();
         FlushBarks();
         FlushTransitionMovies();
         FlushTransitionAnnounce();
