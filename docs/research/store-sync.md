@@ -2628,3 +2628,118 @@ per docs/CONTRIBUTING.md): **2448/2448 passed**, foreground, no regressions. (A 
 run without that exclusion also showed `CoopCommandDispatcherTests`' two UDP-port-binding cases
 failing alongside it; both pass cleanly re-run alone, matching docs/CONTRIBUTING.md's own
 documented flake for that suite under concurrent port binding — not a regression from this change.)
+
+---
+
+## Live pass (2026-08-28, rig round) — the prior round's own §"client buy-back gap" fix RE-TESTED
+## live and did NOT hold: host's own copy of the store never learned about the client's buy-back,
+## contradicting the fix's own claim; also a genuine client-side crash during a module transition,
+## not conclusively tied to `store_sync` but observed under it. `store_sync` stays OFF
+
+Task: this session's queue item 3 — `warp tar_m02aa`; `scriptgive g_w_ionblstr01` (the doc's own
+established finite resref — `g_w_blstrpstl001` is Larrim's infinite entry) host; `openstore
+Larrim_Store` both; `sell` on the host; client buys it back; host's copy should lose it and a
+host re-buy should be refused as absent; gold granted once per side; reconnect resync.
+`party_pool_sync=0` this round (reset after that channel's own queue item), `store_sync=1` both.
+Two-instance rig, fresh session, commands via `tools/blockpoke.ps1 -ProcId <pid> console '<verb>'`.
+
+### A real client-side crash, mid-session, during a module transition — not conclusively caused by
+### `store_sync`, but the first thing this round's own recipe hit
+
+The first attempt at this recipe warped the client briefly to `end_m01aa` (to force a genuinely
+FRESH arrival at `tar_m02aa`, after the documented ambient-modal trap — see below — left an
+`openstore` retry loop stuck deep with no recovery, matching this doc's own 2026-08-28 "a stale
+attempt many retries deep never recovered" note). Mid-transition, the CLIENT's plugin log shows a
+dense burst of `death: game-over suppressed; the session decides` lines (over a thousand, spanning
+roughly 3 seconds, matching the `no per-frame spam` category `docs/live-verification.md` already
+tracks as a known-flaky check — not obviously new), immediately followed by:
+
+```
+[18:09:42.257] travel: moving to module 'end_m01aa' on the session's authority
+[18:09:42.269] epoch: world unloading; clearing phantom, item, combat and door state
+[18:09:42.277] FIRST-CHANCE access violation (0xC0000005) at 0x63D4B3, eip 0x63D4B3, esp 0x1AFB80
+[18:09:42.278] agent reports 0 remote peer(s)
+[18:09:46.479] agent reports 1 remote peer(s)
+```
+
+The plugin log ends there. Windows' own Application event log confirms a real fatal crash at the
+same wall-clock second: `Faulting application name: swkotor.exe ... Exception code: 0xc0000005 ...
+Fault offset: 0x0023d4b3 ... Faulting process id: 0xAFA8` (0xAFA8 = 44968 decimal, the client's own
+pid this round) — matching the plugin log's `0x63D4B3` exactly once the typical 0x400000 image
+base is subtracted. The process did not merely hang; it is confirmed gone from `Get-Process`
+immediately after, and every subsequent `blockpoke.ps1` call against that pid failed with `target
+process not running`.
+
+**Not conclusively attributed to `store_sync`** — no store operation was in flight at the moment of
+the crash (the crash happened during an ordinary module-unload triggered by a console `warp`, with
+the store never yet successfully opened this attempt), and the dense `game-over suppressed` spam
+immediately preceding it is itself an already-documented, pre-existing per-frame-spam category
+unrelated to this channel. Flagged here rather than silently worked around, per this doc's own
+tagging discipline — the next round with time budget for it should try reproducing a crash at this
+exact spot (`travel: moving to module ... / epoch: world unloading`) with `store_sync=0` to rule
+the channel in or out. The rig was restarted clean after this and the recipe re-run below.
+
+### The `tar_m02aa` ambient-modal trap fired again, on both instances, needing the documented
+### fast retry pattern to clear
+
+Both a "conversation is active" and a "another modal screen is up" refusal were hit in sequence on
+each side (the ordinary arrival-trigger shape this doc has recorded several times already);
+`skipline` + `selectreply 0` (+ `partyselect ok` where the modal was the party-select flavour),
+retried promptly rather than persistently, cleared both sides within 1-2 pairs on this (second,
+fresh) attempt — matching the doc's own "prefer being FAST over persistent" finding exactly. Both
+`openstore Larrim_Store` calls succeeded (`store 'Larrim_Store': opened` on both host and client).
+
+### `sell` mirrors host-to-client cleanly — CONFIRMED, consistent with the prior round's own fix
+
+`sell Larrim_Store g_w_ionblstr01` on the host: host's own log showed `store: local add of 1x
+'g_w_ionblstr01' detected in store 0x74, publishing` within the same tick. The client's log showed
+the mirror land two seconds later: `store: submitting add of 1x 'g_w_ionblstr01' in store 0x74
+through the store channel` / `inserted 'g_w_ionblstr01' x1 into store 0x74`. This confirms the
+"brand-new-key wire mirror" fix from the prior rig round still holds live.
+
+### The client buy-back gap did NOT reproduce as fixed — host's copy never learned the item was
+### bought back, contradicting the most recent no-rig round's own `_engineBelief`/`_wireTarget` fix
+
+`grantgold 500` on the client, then `buy Larrim_Store g_w_ionblstr01` — succeeded. Watched both
+sides' agent logs for **35+ seconds** afterward: **zero** `store: local remove ... detected,
+publishing` line ever appeared on the client (the side that just bought), and correspondingly
+**zero** apply ever landed on the host. Ground truth, not just log absence: a SECOND
+`buy Larrim_Store g_w_ionblstr01` on the client (after granting more gold) also succeeded —
+confirming the client's own store still held stock the pump never told anyone about — and, most
+directly, `setgold 5000` + `buy Larrim_Store g_w_ionblstr01` on the HOST **also succeeded**,
+meaning the host's own copy of the store still believed the item was present, when the recipe's
+own expectation was an outright refusal ("no stock matching that resref", per this doc's own
+established refusal text). This is a direct, live contradiction of the "Fix (2026-08-29, no-rig
+round)" section above, which closed this exact gap at the loopback-test level
+(`ClientBuyBackOfAMirroredKeyIsDetectedAndPublished`) but was explicitly flagged there as
+"loopback-verified only, not live-verified" — this round is that live verification, and it did not
+hold. Not re-root-caused this round (no time budget for source instrumentation against the live
+native cheat-channel round trip specifically, which that fix's own write-up already named as the
+one thing loopback testing could not cover) — flagged as the concrete blocker for whoever picks
+this back up next, with the exact live recipe above to reproduce it.
+
+### Not reached this round
+
+"Host re-buy is refused as absent" was inverted into direct disconfirming evidence above rather
+than a separate clean pass/fail (the buy succeeding IS the finding). "Gold once per side" was
+exercised incidentally (`grantgold`/`setgold` on both sides, both landed correctly on their own
+terms) but not independently verified as a clean two-way gold sync in this round's own time budget
+— an unexplained gold-reading discrepancy was also noticed incidentally (the host's own `buy`
+refusal briefly quoted `gold 80` immediately after a `grantgold` had just reported `999999999 ->
+1000000499`; not investigated, possibly a stale read in the refusal message's own gold display
+rather than the ledger itself, since the immediately following `setgold 5000` read and wrote
+correctly) — flagged, not chased, given the two more serious findings above. Reconnect resync was
+not reached at all this round.
+
+### Verdict
+
+`store_sync` **stays OFF**, not flipped ON — this round's own recipe found two real problems: a
+confirmed client-side crash (cause not pinned to this channel specifically) and a live
+reproduction of the client buy-back gap the most recent fix round believed it had closed. No
+crash after the rig restart, across the remainder of this round's own testing (host and client
+both confirmed alive and responding throughout the ambient-modal clearing, the sell mirror, and
+both buy-back attempts).
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
+-Install -WarnAsError` (both game directories) were run fresh at the top of this session and were
+clean. No source change this round — live re-verification only.
