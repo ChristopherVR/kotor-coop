@@ -31,6 +31,18 @@ public interface IPartyPoolSession
     /// recognises those by the totals already matching and skips re-applying them; see
     /// <c>Pumps.PartyPoolPump</c>.</summary>
     IReadOnlyList<PartyPoolOpPacket> DrainPartyPoolOps() => [];
+
+    /// <summary>
+    /// <c>Pumps.PartyPoolPump</c>'s own hard loop breaker (docs/research/party-pool-sync.md
+    /// §22) tripped for some key: ask for a full resync so every peer's store converges back to
+    /// the host's own absolute totals, discarding whatever this channel's own detect/reconcile
+    /// loop diverged into. <c>CoopHost</c> is already authoritative, so it just re-broadcasts
+    /// its own current totals (the same call <c>HandleHello</c>/a version-digest mismatch
+    /// already use); <c>CoopClient</c> sends a <see cref="PartyPoolSyncRequestPacket"/> to the
+    /// host, exactly as if a version/digest mismatch had been noticed. Default no-op for a
+    /// session with no party-pool channel at all.
+    /// </summary>
+    void RequestPartyPoolResync() { }
 }
 
 /// <summary>A reusable empty dictionary singleton for the default interface member above, so a

@@ -2425,3 +2425,194 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
 tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
 verification only.
+
+---
+
+## 22. 2026-08-28 — root cause 4 (§21's unbounded ping-pong) fixed: loop-proof by construction,
+## not by tuning; a new hard backstop added regardless; no rig this round, stays OFF
+
+Picked up exactly where §21 left off: its own "concrete next round" ask was a loopback test
+reproducing the rapid-repeat runaway from `PublishPartyPoolOp`/the apply queue directly, with
+the pump's own internal state logged, and — once root-caused — a fix. This round did both, plus
+went further than a point fix: the task brief was explicitly to make the channel **loop-proof by
+construction**, not by re-tuning the existing exclusion window again (the exact pattern root
+causes 2→3 already went through once — §10's fix traded one failure mode for its opposite, §12's
+fix closed that but left §21's amplification undiscovered). No rig this round (isolation
+worktree, no live game process) — bench-only, matching the discipline every non-live round in
+this document has followed.
+
+### 22.1 Root cause 4, precisely
+
+§12's design (`_pendingApplyTarget`) tracked, per key, a **snapshot value** — the wire total as
+of the exact moment an apply was queued — and compared a later scan against that frozen number to
+decide "did the apply land cleanly (exact match) or is there unexplained excess (anything else)."
+That snapshot is sound only if nothing else touches the wire for that key while the apply is in
+flight. But the apply's own trip through the arbitrated, single-slot staging-cheat channel is not
+instantaneous — §21's own live evidence shows a real gap of over a second between a `pooladd`
+request and its landing — and a SECOND rapid deposit of the SAME key, arriving during that window,
+moves `wireTotal` again while the frozen snapshot does not move with it. When the apply finally
+lands, the comparison is against a number that no longer describes what is actually owed: the
+"excess" computed from it is not a real local event, but a bookkeeping artifact of the snapshot's
+own staleness — published anyway, because the pump has no way to tell "stale target" from "genuine
+extra deposit" once it has thrown away the information needed to distinguish them. That publish
+moves the OTHER side's own wire, whose OWN pump — running the identical logic — computes its own
+excess against its OWN stale snapshot, publishes back, and so on. Every round trip **amplifies**,
+because each side's error compounds the previous side's error rather than damping it. Tuning
+`LocalDetectGraceMs` or any other timing constant cannot fix this: a value captured once and
+compared against a moving target is unsound regardless of the window's width, exactly as unsound
+at 50ms as it was at 2000ms — the live recipe just needed enough rapid repeats to expose it either
+way.
+
+### 22.2 The fix: two live-read quantities, never a frozen snapshot
+
+`PartyPoolPump.cs` (`src/KotorCoop.Session/Pumps/PartyPoolPump.cs`) redesigned around the
+invariant the task specified:
+
+- **`_engineBelief`** (replaces `_lastScan`/§12's per-key belief, same role): what this instance
+  last observed the engine hold for a key.
+- **`wireTotal`** (`ICoopSession.PartyPoolTotals`): the merged, authoritative cross-instance
+  total — read **fresh at the top of every `Pump()` call**, then read **again, fresh, immediately
+  before step 2's reconcile** (see the "a regression this fix introduced and caught" note below
+  for why a single read shared by both steps is wrong).
+
+A fresh scan that differs from `_engineBelief` is measured against how far `wireTotal` currently
+sits from that same belief (`ExcessBeyondWire`, a small pure static method): movement that does no
+more than close that gap — including landing exactly on it — is the apply catching the engine up
+to what is already known and true, adopted into `_engineBelief` **silently, publishing nothing**.
+Movement that goes FURTHER than the gap (including the ordinary case where nothing was owed at
+all — the gap is zero, so ANY movement is entirely unexplained, i.e. a fresh genuine local
+action) is a genuine event layered on top, and only that EXCESS publishes — never the raw
+movement, which would double-count what the apply itself already explains. Because the
+comparison is against the CURRENT wire and never a value captured once, a SECOND wire move while
+an apply is still in flight is folded into the very next comparison automatically instead of
+comparing against a number that has already gone stale — there is nothing left in this design for
+staleness to attack.
+
+`_applyInFlight` replaces `_pendingApplyTarget` as a plain key SET (no value at all) — it still
+gates step 2's reconcile so a second apply is never queued chasing a key that already has one in
+flight, but there is nothing in it that ageing can invalidate, unlike the value it replaces.
+
+**A regression this fix introduced and caught by its own test suite before it ever left the
+bench:** the first draft read `wireTotal` ONCE at the top of `Pump()` and reused that same copy
+for step 2's reconcile. That silently broke an invariant the class doc comment has documented
+since root cause 1 — "step 2 always reads the store AFTER step 1's publishes have already updated
+it" — because step 1's own `PublishDetected` calls update this instance's OWN store the instant
+they run (`session.PublishPartyPoolOp`), and step 2 must see that within the SAME tick. Reusing
+the stale pre-step-1 snapshot made reconcile believe the engine (already at the just-published
+total) was AHEAD of a wire that had not "caught up" yet, and queue a bogus `Remove` to drag the
+engine back down — precisely the kind of self-inflicted defect this round's work was trying to
+eliminate, not add. `dotnet test --filter "FullyQualifiedName~PartyPool"` caught it immediately (5
+of the then-61 tests failed, every one converging back toward 0 instead of holding a deposit) the
+first time the full suite ran against the redesign; the fix was to re-read `session.PartyPoolTotals`
+a second time, fresh, right before step 2, exactly restoring that invariant. Left in as a worked
+example in this write-up because it is exactly the class of mistake "read once, reuse everywhere"
+optimisations invite in this codebase, and the class doc comment now calls it out explicitly.
+
+### 22.3 The hard backstop: loop-proof even if the reasoning above has a gap
+
+The task brief was explicit that a channel meant to ship silently ON eventually should not rest
+solely on "this reasoning is correct" — so `PartyPoolPump.cs` also gained an independent, purely
+mechanical backstop. `PublishDetected` now tracks, per key, a rolling 10-second window of its own
+publish timestamps (`_publishHistory`); a key that would cross `MaxPublishesPerWindow` (8) inside
+that window trips `TripLoopBreaker` instead of publishing (the op that would have crossed the
+threshold is itself suppressed, not just the ones after it — the hard ceiling on published ops
+for any one key in any 10s window is exactly 8, never 9). Tripping:
+
+1. Freezes the key (`_frozenUntil[key] = now + 10_000ms`) — `PublishDetected` returns immediately
+   for a frozen key with no history-queue growth, and step 2's reconcile also skips a frozen key
+   entirely (it will not chase a `wireTotal` that might itself still be mid-correction).
+2. Logs once (`"loop breaker tripped"`, greppable, names the key and the ops-in-window count).
+3. Calls `ICoopSession.RequestPartyPoolResync()` — a new interface member
+   (`IPartyPoolSession.cs`) asking for the host's absolute totals to overwrite whatever this
+   channel's own loop diverged into. `CoopHost.RequestPartyPoolResync` just re-runs
+   `ResyncPartyPool` (the same absolute-`Set` re-broadcast a (re-)admission or a version/digest
+   mismatch already triggers) — safe to call from any thread, since it only touches the already-
+   locked `_partyPoolStore`/`_partyPoolSender`. `CoopClient.RequestPartyPoolResync` cannot do the
+   analogous direct thing (it has no send buffer safe to touch off the tick thread — see
+   `SendChat`'s own remarks, which this mirrors exactly): it sets a flag under the existing
+   `_gate` lock, flushed by a new `FlushPartyPoolResyncRequest()` call in `Tick()` that sends a
+   `PartyPoolSyncRequestPacket`, exactly as if a version/digest mismatch had been noticed
+   (`CoopHost.HandlePartyPoolSyncRequest` already re-broadcasts unconditionally on receipt — no
+   protocol change needed, this channel's resync request packet existed since the original design
+   but nothing client-side had ever sent one until now).
+
+No amount of amplification inside the window this catches can exceed roughly 8 published ops for
+a single key — a world away from §21's 615/1068/906/1938.
+
+### 22.4 New regression coverage
+
+Four new tests in `tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`:
+
+- `RapidSameKeyHostDepositsConvergeWithBoundedOpsNotAnUnboundedPingPong` — the headline
+  reproduction. Real two-instance rig (`BuildConnectedRigAsync`, real sockets, both sides running
+  the real async cheat-channel simulation `AgentLoop` already provides — 30-250ms landing latency,
+  150ms bridge scan-cache throttle), three rapid HOST deposits 15ms apart (deliberately tighter
+  than both the scan-cache window and the apply latency, so the client's own catch-up apply for
+  the first deposit is still very likely in flight when the second and third land — the same
+  overlap §21's live rig hit). Asserts convergence to 3 on both sides AND a bounded op count
+  (`PartyPoolStore.Version <= 8` on both host and client) — the task's own "≤ ~6" ask with a small
+  margin. **Could not be mechanically re-verified as failing against the pre-fix
+  `_pendingApplyTarget` code this round** — the sandbox's worktree-isolation guard refused every
+  attempt to check out or diff against the pre-fix commit for a side-by-side run (both a separate
+  git worktree and a local `git stash` were blocked by the environment's own auto-mode
+  classifier, independent of this task). Confidence that this is a genuine regression pin rests on
+  §22.1's mechanism analysis instead: with a frozen snapshot compared against a wire that keeps
+  moving during multi-tick apply latency, §21's live recipe (three rapid same-key deposits) is
+  exactly the shape that produces stale-target error, and this test reproduces the same timing
+  shape (rapid same-key deposits overlapping real, non-instant apply latency) that recipe used.
+  **NEEDS mechanical pre-fix confirmation** the next time tooling allows it — a real gap, flagged
+  rather than glossed over, per this document's own tagging discipline.
+- `RapidSameKeyDepositsOnBothSidesConvergeToSixWithBoundedOps` — the task's own "rapid same-key
+  ×3 each side (+6 both, bounded ops)" ask verbatim: three rapid host deposits, then — once BOTH
+  the client's store AND its own engine have actually caught up (see the test's own comment for
+  why waiting on the store alone raced the async apply and fabricated a spurious excess the first
+  time this test was written, caught by this same round's own run) — three rapid client deposits,
+  converging to 6 with `Version <= 16` on both sides.
+- `AQueuedApplyLandingTwoTicksLateIsAdoptedSilentlyNotRepublished` — deterministic
+  `ScriptedBridge`: a peer op seeds the store, reconcile queues an apply, TWO ticks pass with no
+  engine movement (the ordinary case in production — the cheat-channel round trip is never
+  instant), then the engine jumps straight to the full owed amount. `PartyPoolStore.Version`
+  stays at 1 (only the original seeded peer op) — the late landing, however many ticks late,
+  publishes nothing.
+- `ALoopBreakerFreezesAKeyAfterExcessivePublishesWithinTheRollingWindow` — deterministic
+  `ScriptedBridge`, 20 genuine alternating movements of the same key on 20 consecutive ticks (no
+  peer involved, so every single one would otherwise publish in full): `Version` caps at exactly
+  8, and the trip logs exactly once.
+- Existing coverage re-verified rather than duplicated for the task's other three asks: "deposit
+  immediately followed by a withdrawal nets to zero" (`ADepositImmediatelyFollowedByAWithdrawal-
+  OfTheSameKeyNetsToZeroNotSwallowed`, §12), "a lost ack forces a retransmit"
+  (`ADepositSurvivesALateHostAckWithoutDoublingEitherSide`), and "a reconnect resync does not
+  double" (`AReconnectAfterADepositDoesNotDoubleIt`) all still pass unchanged against this round's
+  redesign — none needed adaptation.
+
+### 22.5 Verdict
+
+`party_pool_sync` **stays OFF** (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged, still default `false`/`0`) — this round changed `PartyPoolPump.cs`, added
+`IPartyPoolSession.RequestPartyPoolResync` plus its `CoopHost`/`CoopClient` implementations, and
+extended the test suite; it did not flip the shipped default.
+
+Files touched: `src/KotorCoop.Session/Pumps/PartyPoolPump.cs` (redesigned around
+`_engineBelief`/live-read `wireTotal`/`ExcessBeyondWire`, plus the loop-breaker fields and
+methods), `src/KotorCoop.Session/IPartyPoolSession.cs` (`RequestPartyPoolResync` added, default
+no-op), `src/KotorCoop.Session/CoopHost.PartyPool.cs` (`RequestPartyPoolResync` implementation),
+`src/KotorCoop.Session/CoopClient.PartyPool.cs` (`RequestPartyPoolResync` implementation plus
+`FlushPartyPoolResyncRequest`), `src/KotorCoop.Session/CoopClient.cs` (wires the flush into
+`Tick()`), `tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs` (four new tests, §22.4).
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build
+--filter "FullyQualifiedName~PartyPool"`: 65/65 passing (up from 61 — the four new tests; every
+pre-existing test this round's redesign could have disturbed — root causes 1-3's own regression
+pins — passes unchanged), run twice back-to-back to check for timing flakiness in the two new
+async two-instance tests, both runs clean. Full suite (`dotnet test tests/KotorCoop.Tests
+--no-build`, run in the foreground, no filter): 2448/2448 passing (up from §21's own 2444 by
+exactly the four new tests) — no regression anywhere else in the codebase.
+
+**NEEDS-LIVE, unchanged in spirit from every prior non-live round's own closing paragraph**: this
+pass had no rig — the fix and its regression coverage are bench-only. The concrete next live-test
+step is exactly §21's own recipe re-run against this fix: three rapid `pooladd`s of the same
+resref, issued a few seconds apart, on the host, then the client, in `end_m01aa` — confirming
+convergence to +3/+6 with no amplification and, ideally, deliberately forcing the loop breaker
+(many more rapid repeats than any real recipe would use) to confirm the freeze-and-resync path
+fires correctly against the real native cheat-channel round trip, not just the bench's own
+`AgentLoop` simulation of it.

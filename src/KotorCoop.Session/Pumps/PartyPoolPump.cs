@@ -6,108 +6,121 @@ namespace KotorCoop.Session.Pumps;
 /// <summary>
 /// The shared party item-pool channel (<c>CSWPartyTable+0x118</c>). Two jobs each tick:
 ///
-/// 1. <b>Detect.</b> Compare this instance's own fresh engine scan against the LAST scan, key by
-///    key, to find a genuine local player action (someone dragged an item into or out of the
-///    shared stash by hand, or a queued apply for a peer's change landing) and publish whatever
-///    is genuinely new — see the per-key loop in <see cref="Pump"/> for exactly how a key with a
-///    queued apply in flight is handled differently from an ordinary one.
-/// 2. <b>Reconcile.</b> Diff the fresh scan against <see cref="ICoopSession.PartyPoolTotals"/>
-///    (the merged cross-instance belief) to find where THIS engine is behind what the session
-///    now knows — a peer's add/remove not yet applied here — and queue an apply for it.
-///
-/// The two never fight because step 1 always runs first (against the OLD baseline, before step
-/// 2's queued applies exist) and step 2 always reads the store AFTER step 1's publishes have
-/// already updated it, so a key step 1 just published never shows a residual diff in step 2.
-///
-/// <b>Echo suppression, two layers.</b> Wire-level: <c>CoopHost</c>/<c>CoopClient</c> already
-/// stop a peer's own change from re-applying to its own STORE (see
-/// <c>CoopClient.HandlePartyPoolOp</c>'s origin check). Engine-level, here: once this pump
-/// queues an apply for a key, it remembers the engine total that apply should PRODUCE
-/// (<c>_pendingApplyTarget</c>) so step 1 can recognise the apply landing cleanly (no publish)
-/// versus something ELSE also moving that key (publish only the excess) — see root cause 3
-/// below for why this is no longer a blanket exclusion.
-///
-/// ⚠ ROOT CAUSE 2, THE DEPOSITING-SIDE DUPLICATE (2026-08-28, docs/research/party-pool-sync.md
-/// §9-§10, superseded below by root cause 3). The guard above only ever protected step 2's OWN
-/// queued applies — a key step 1 itself just detected and published had NO equivalent
-/// protection at all. Root cause 2's original fix gave a step-1 detection its own time-boxed
-/// exclusion entry too (<c>LocalDetectGraceMs</c>, 2 seconds), released either once a fresh scan
-/// reconfirmed the value or the window elapsed.
-///
-/// ⚠ ROOT CAUSE 3, THE UNDER-COUNT/LOCKOUT BUG (2026-08-28, docs/research/party-pool-sync.md
-/// §11-§12). Root cause 2's blanket exclusion traded a duplicate for the opposite defect: ANY
-/// key currently excluded (self-detected and still inside its grace window, OR a queued apply
-/// still awaiting its exact target) was invisible to step 1 in its ENTIRETY — a SECOND genuine
-/// local change to the SAME key inside that window was silently lost, not just delayed, because
-/// <c>_lastScan</c> is updated unconditionally every tick regardless of exclusion, so by the
-/// time the key was released there was no residual diff left to find. A queued apply's own
-/// entry was worse: it never expired at all, so if the local player ALSO changed the same key
-/// while the apply was in flight, the entry could never match its original target again and the
-/// key stayed locked out of both steps indefinitely.
-///
-/// <b>The fix: count-aware, not key-blanket.</b> A pending entry (<c>_pendingApplyTarget</c>,
-/// now populated ONLY by step 2's queued applies — a step-1 detection no longer registers one
-/// at all, see below) means "this key owes the engine a specific TARGET value, not yet
-/// confirmed." Every tick, for every key whose fresh scan value differs at all from the last
-/// scan: if the key has no pending entry, the WHOLE difference is a genuine local change,
-/// published immediately — no exclusion window, so a second (or third, or Nth) rapid change to
-/// the same key is never invisible while an earlier one is "settling," because there IS no
-/// settling period for a self-detected change (it is already true in the engine the instant it
-/// is observed). If the key DOES have a pending entry: a fresh value that has not moved AT ALL
-/// since the last scan means the apply simply has not landed yet — keep waiting, exactly as
-/// before. A fresh value that HAS moved is compared against the pending TARGET: an exact match
-/// is the apply landing cleanly (an echo — nothing new to report, matching the wire-received
-/// op's own contribution the store already accounts for). Anything else is "a later read that
-/// differs by exactly the expected delta is an echo; any FURTHER difference beyond the
-/// expectation is a genuine new local change" — publish exactly the EXCESS beyond the target
-/// (not the raw movement, which would double-count the apply's own already-accounted-for
-/// contribution), then treat the pending entry as resolved either way: if the apply turns out
-/// not to have actually landed, the very next reconcile pass (step 2, using the fresh engine
-/// value against the now-updated store) re-queues whatever gap remains, so nothing is lost by
-/// clearing the expectation here.
-///
-/// This trades away root cause 2's own glitch-immunity for a self-detected change (a transient
-/// one-tick scan disagreement that fully self-heals is no longer silently absorbed — see
-/// <c>PartyPoolLoopbackTests.AStepOneDetectedLocalChangeSurvivesATransientScanGlitchWithoutChurning</c>'s
-/// updated expectations) in exchange for never losing or permanently locking out a genuine rapid
-/// change — consistent with this channel's own multiset design (§2.1: "a store's stock
-/// genuinely goes up and down repeatedly... a one-way ratchet is wrong here too"), which values
-/// correctness over avoiding a rare extra pair of wire ops. Root cause 1 (a landed queued apply
-/// re-detected as a fresh local action) stays fixed by construction: the pending-entry branch
-/// above always computes zero excess when a queued apply lands exactly on target, so nothing
-/// republishes it.
+/// 1. <b>Detect.</b> Compare this instance's own fresh engine scan against
+///    <see cref="_engineBelief"/> (what this instance last believed the engine held), key by
+///    key, to find a genuine local player action versus a queued apply landing — see the
+///    per-key loop in <see cref="Pump"/> and root cause 4 below for exactly how the two are
+///    told apart.
+/// 2. <b>Reconcile.</b> Diff the fresh belief against <see cref="ICoopSession.PartyPoolTotals"/>
+///    (<c>wireTotal</c> — the merged cross-instance belief) to find where THIS engine is behind
+///    what the session now knows, and queue an apply that converges toward whatever the wire
+///    currently says — recomputed fresh every tick, never a value captured once and trusted
+///    forever.
 ///
 /// See docs/research/party-pool-sync.md for the full design and the engine-call chain the
 /// queued applies eventually run through.
+///
+/// ⚠ ROOT CAUSE 4, THE UNBOUNDED PING-PONG (2026-08-28, docs/research/party-pool-sync.md §21-
+/// §22). Live evidence: three rapid same-key <c>pooladd</c>s inflated into an alternating
+/// host&lt;-&gt;client sequence of 1, 2, 4, 12, 40, 180, 615, 1068, 906 units, then a Remove of
+/// 1938, before settling back to zero — no crash, but a severe correctness catastrophe. The
+/// prior design (root cause 3, §12) tracked one FROZEN SNAPSHOT per key
+/// (<c>_pendingApplyTarget[key] = desired.GetValueOrDefault(key)</c>, captured once at the
+/// moment an apply was queued) and treated any later scan that did not land EXACTLY on that
+/// snapshot as needing correction. But the queued apply's own trip through the arbitrated,
+/// single-slot staging-cheat channel is not instantaneous — it can take several ticks, during
+/// which <c>wireTotal</c> for that SAME key can move again (another rapid deposit, a peer's own
+/// op arriving) while the snapshot sits frozen at its original value. When the apply finally
+/// lands, the comparison is against a number that no longer describes what is actually owed,
+/// so the "excess" computed against it is not a real local event at all — it is stale-target
+/// error, published as if it were, which moves the OTHER side's own wire, which repeats the
+/// same mistake back, amplifying every round trip. Tuning the snapshot's own grace window
+/// cannot fix this: any fixed value captured once and compared against a moving target is
+/// unsound by construction, however wide the window.
+///
+/// <b>The fix: loop-proof by construction, not by tuning.</b> Two pieces of state per key,
+/// both re-read fresh every tick instead of frozen at queue time:
+///
+/// - <see cref="_engineBelief"/> — what this instance last observed the engine hold (replaces
+///   <c>_lastScan</c>/root cause 3's per-key belief, same role).
+/// - <c>wireTotal</c> — <see cref="ICoopSession.PartyPoolTotals"/>, read fresh at the top of
+///   every <see cref="Pump"/> call, never cached across ticks.
+///
+/// A fresh scan that differs from <see cref="_engineBelief"/> is measured against how far
+/// <c>wireTotal</c> currently sits from that same belief (<see cref="ExcessBeyondWire"/>):
+/// movement that does no more than close that gap — including landing exactly on it — is the
+/// apply catching the engine up to what is already known and true; it is adopted into
+/// <see cref="_engineBelief"/> silently, publishing nothing, because there is nothing new to
+/// report. Movement that goes FURTHER than the gap (or the wrong direction entirely, including
+/// the ordinary case where nothing was owed at all — the gap is zero, so ANY movement is
+/// entirely unexplained) is a genuine local event layered on top, and only that EXCESS is
+/// published — never the raw movement, which would double-count whatever the apply itself
+/// already explains. Because the comparison is against the CURRENT wire, not a value captured
+/// once, a SECOND wire move while the first apply is still in flight is folded into the very
+/// next comparison automatically — there is no stale snapshot left to drift away from reality.
+///
+/// <see cref="_applyInFlight"/> (a plain key set, not a value to go stale) still exists — it
+/// gates step 2's reconcile so a second apply is never queued for a key already chasing one,
+/// exactly as <c>_pendingApplyTarget</c>'s keys did — but it carries no snapshot, so there is
+/// nothing in it that ageing can invalidate.
+///
+/// <b>The hard backstop.</b> The reasoning above closes the mechanism §21 found, but this
+/// channel ships silently ON by default eventually, so a defence that only works "if the
+/// reasoning above is complete" is not enough on its own. <see cref="PublishDetected"/> counts
+/// how many ops it has actually published for each key inside a rolling
+/// <see cref="PublishRateWindowMs"/> window; a key that crosses <see cref="MaxPublishesPerWindow"/>
+/// trips the breaker (<see cref="TripLoopBreaker"/>): publishing for that key freezes for
+/// <see cref="FreezeDurationMs"/>, a diagnostic logs once, and
+/// <see cref="ICoopSession.RequestPartyPoolResync"/> asks the host to re-broadcast every key as
+/// an absolute <see cref="PartyPoolOpKind.Set"/> — the same resync a version/digest mismatch or
+/// a reconnect already uses — discarding whatever this channel's own loop diverged into for
+/// that key in favour of the host's own authoritative total. Reconcile also skips a frozen key
+/// entirely (it will not chase a <c>wireTotal</c> that might itself be mid-correction) until the
+/// freeze lifts. No amount of amplification inside the window this catches can exceed roughly
+/// <see cref="MaxPublishesPerWindow"/> published ops for a single key — a world away from
+/// §21's 615/1068/906/1938.
 /// </summary>
 internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Action<string> log)
 {
-    /// <summary>One apply this instance owes its own engine, queued for the arbitrated
-    /// staging-cheat channel to submit one at a time — the same shape and the same reason as
-    /// <c>LootPump</c>'s pending-give queue: only one cheat request is ever in flight, so an
-    /// automatic apply must be drained by whatever already arbitrates that channel rather than
-    /// firing here directly.</summary>
     /// <summary>Bounded for the same reason <c>LootPump</c>'s queue is: a stuck drain or a
     /// malformed peer must not grow this without limit.</summary>
     private const int MaxPendingApplies = 256;
 
     private readonly Queue<CoopAgent.PendingPartyPoolApply> _pendingApplies = new();
 
-    /// <summary>This instance's own last-scanned engine totals — the step 1 baseline, and the
-    /// value every ordinary (non-pending) key's movement is measured against each tick.</summary>
-    private Dictionary<PartyPoolStackKey, int> _lastScan = [];
+    /// <summary>This instance's own last-scanned engine totals — the step 1 baseline every
+    /// key's movement is measured against each tick. Updated to the FULL fresh scan at the end
+    /// of step 1, every tick, regardless of what step 1 did with any individual key — see root
+    /// cause 4's class remarks above.</summary>
+    private Dictionary<PartyPoolStackKey, int> _engineBelief = [];
 
-    /// <summary>Keys with a STEP-2 apply already queued (or in flight through the cheat
-    /// channel), mapped to the engine total that apply ALONE is expected to produce once it
-    /// lands. Populated only by step 2's reconcile below — a step-1 self-detection no longer
-    /// registers an entry here at all (see the class remarks' root cause 3 section): it already
-    /// IS true in the engine the instant it is observed, so there is nothing left to "wait for
-    /// landing" the way a queued apply's own delayed cheat-channel round trip needs. A key with
-    /// an entry here is excluded from step 2's reconcile (no second apply queued for the same
-    /// key while one is already in flight) but NOT excluded from step 1's detection — see
-    /// <see cref="Pump"/>'s own per-key loop for how a pending entry is compared against a fresh
-    /// scan value (exact match = landed cleanly; anything else = publish the excess).</summary>
-    private readonly Dictionary<PartyPoolStackKey, int> _pendingApplyTarget = [];
+    /// <summary>Keys with a step-2 apply queued (or already dequeued and in flight through the
+    /// arbitrated cheat channel) whose landing this instance is still waiting to observe.
+    /// Excludes a key from step 2's reconcile (never queue a second apply for a key already
+    /// chasing one) — unlike root cause 3's <c>_pendingApplyTarget</c>, this carries no VALUE to
+    /// go stale; every comparison against it re-reads <c>wireTotal</c> fresh, see the class
+    /// remarks.</summary>
+    private readonly HashSet<PartyPoolStackKey> _applyInFlight = [];
+
+    // ---- the hard loop breaker (root cause 4's own backstop, §22) -------------------------
+
+    private const int MaxPublishesPerWindow = 8;
+    private const long PublishRateWindowMs = 10_000;
+    private const long FreezeDurationMs = 10_000;
+
+    /// <summary>Timestamps (<see cref="SessionClock.NowMs"/>) of this key's own recent
+    /// publishes, oldest first — pruned to <see cref="PublishRateWindowMs"/> on every publish.
+    /// Bounded the same way <see cref="_warnedSuspiciousStackSize"/> is: at most
+    /// <c>ProtocolConstants.MaxPartyPoolStacks</c> distinct keys ever pass through this pump in
+    /// a session.</summary>
+    private readonly Dictionary<PartyPoolStackKey, Queue<long>> _publishHistory = [];
+
+    /// <summary>A key present here with a still-future timestamp is frozen: step 1 still tracks
+    /// its belief normally but never calls <see cref="PublishDetected"/> for it, and step 2
+    /// never queues a new apply for it either, until the timestamp passes. Self-pruning — see
+    /// <see cref="IsFrozen"/> — so an entry never outlives its own freeze by more than one
+    /// query.</summary>
+    private readonly Dictionary<PartyPoolStackKey, long> _frozenUntil = [];
 
     /// <summary>
     /// A stack total above this is presumed to be an ambient-script bug rather than a
@@ -152,21 +165,33 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         // first-scan-per-module rule: the pool's pre-existing contents are not "new" events.
         if (!_baselined)
         {
-            _lastScan = new Dictionary<PartyPoolStackKey, int>(engine);
+            _engineBelief = new Dictionary<PartyPoolStackKey, int>(engine);
             _baselined = true;
             return;
         }
 
-        // ---- step 1: detect movement since the last scan, key by key ----------------------
+        long now = SessionClock.NowMs;
+
+        // Read fresh for step 1 — see the class remarks' root cause 4 section for why this must
+        // never be a value captured once and trusted across MULTIPLE TICKS the way the old
+        // per-key target was. WITHIN this one tick, step 2 below re-reads it AGAIN after step 1
+        // has run, rather than reusing this copy — step 1's own publishes update the store
+        // instantly (session.PublishPartyPoolOp), and step 2 must see that, exactly like the
+        // pre-existing "step 2 always reads the store AFTER step 1's publishes" invariant this
+        // class has documented since root cause 1.
+        IReadOnlyDictionary<PartyPoolStackKey, int> wireTotal = session.PartyPoolTotals;
+
+        // ---- step 1: detect movement since the last belief, key by key --------------------
         //
-        // Every key either _lastScan or the fresh scan knows about, once. A key present in only
-        // one of the two just went to/from zero (matching PartyPoolDiffRule's own two passes).
-        HashSet<PartyPoolStackKey> keys = new(_lastScan.Keys);
+        // Every key either _engineBelief or the fresh scan knows about, once. A key present in
+        // only one of the two just went to/from zero (matching PartyPoolDiffRule's own two
+        // passes).
+        HashSet<PartyPoolStackKey> keys = new(_engineBelief.Keys);
         keys.UnionWith(engine.Keys);
 
         foreach (PartyPoolStackKey key in keys)
         {
-            int prior = _lastScan.GetValueOrDefault(key);
+            int belief = _engineBelief.GetValueOrDefault(key);
             int actual = engine.GetValueOrDefault(key);
 
             if (actual > SuspiciousStackSizeThreshold && _warnedSuspiciousStackSize.Add(key))
@@ -177,51 +202,63 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                     + "not a coop-mod artifact — carried through unchanged, logged once.");
             }
 
-            if (actual == prior)
+            if (actual == belief)
             {
-                // Nothing moved since the last scan. If a queued apply is outstanding for this
-                // key, it simply has not landed yet — keep waiting.
+                // Nothing moved since the last belief. If an apply is in flight for this key,
+                // it simply has not landed yet — keep waiting.
                 continue;
             }
 
-            if (_pendingApplyTarget.TryGetValue(key, out int target))
-            {
-                // A step-2 apply is in flight for this key. `target` is the value that apply
-                // ALONE should produce. An exact match means it landed cleanly — nothing new to
-                // report (the store already accounts for its own contribution). Anything else
-                // means the apply's own effect (however much of it has landed) is entangled with
-                // something ELSE moving the same key — most commonly a genuine local action on
-                // the same key while the apply was still in flight. Publish only the EXCESS
-                // beyond what the apply alone explains, and treat the apply as settled either
-                // way: if it turns out not to have actually landed, the next reconcile pass
-                // below re-queues whatever gap remains from the fresh engine/desired comparison,
-                // so nothing is lost by clearing the expectation here.
-                _pendingApplyTarget.Remove(key);
+            // How much of this movement is NOT explained by the engine catching up to what the
+            // wire already knows — see ExcessBeyondWire's own doc for the exact rule. Zero
+            // means "this is (all or part of) an apply landing," published nothing; nonzero
+            // means a genuine local event, published exactly that much.
+            int excess = ExcessBeyondWire(belief, actual, wireTotal.GetValueOrDefault(key));
 
-                int excess = actual - target;
-                if (excess != 0)
-                {
-                    PublishDetected(key, excess);
-                }
-            }
-            else
+            if (excess != 0)
             {
-                // No apply pending for this key — an ordinary genuine local change. The full
-                // movement since the last scan is published immediately: unlike the old
-                // "exclude this key for up to 2s" guard, a second (or third...) rapid change to
-                // the SAME key is never invisible while an earlier one is still "settling" —
-                // there is no settling period for a self-detected change, since it is already
-                // true in the engine the instant it is observed.
-                PublishDetected(key, actual - prior);
+                PublishDetected(key, excess, now);
+            }
+
+            if (_applyInFlight.Contains(key) && actual == wireTotal.GetValueOrDefault(key))
+            {
+                // The apply this instance was chasing for this key has fully landed — nothing
+                // left to converge toward, so reconcile below is free to notice a NEW gap (a
+                // further deposit that arrived while this one was in flight) and queue for it.
+                _applyInFlight.Remove(key);
             }
         }
 
-        _lastScan = new Dictionary<PartyPoolStackKey, int>(engine);
+        _engineBelief = new Dictionary<PartyPoolStackKey, int>(engine);
 
-        // ---- step 2: reconcile toward the (now-updated) merged truth ----------------------
-        IReadOnlyDictionary<PartyPoolStackKey, int> desired = session.PartyPoolTotals;
-        Dictionary<PartyPoolStackKey, int> desiredForReconcile = Without(desired, _pendingApplyTarget.Keys);
-        Dictionary<PartyPoolStackKey, int> engineForReconcile = Without(engine, _pendingApplyTarget.Keys);
+        // ---- step 2: reconcile toward the (now-current) wire truth -------------------------
+        //
+        // Re-read AFTER step 1 — never reuse the copy above. Step 1's own PublishDetected calls
+        // (session.PublishPartyPoolOp) update this instance's own store the instant they run,
+        // and this reconcile pass must see that update in the SAME tick; using the stale
+        // pre-step-1 snapshot here would make reconcile believe the engine (already at the new,
+        // just-published total) is AHEAD of a wire that has not "caught up" yet, and queue a
+        // bogus Remove to drag the engine back down to match it — a real regression this fix
+        // introduced and caught via the full PartyPoolLoopbackTests run before this comment was
+        // written.
+        //
+        // Excludes a key with an apply already in flight (never queue a second one chasing the
+        // same key) and a key currently frozen by the loop breaker (never chase a wire total
+        // that might itself still be mid-correction from the resync this same breaker just
+        // asked for).
+        IReadOnlyDictionary<PartyPoolStackKey, int> wireForReconcile = session.PartyPoolTotals;
+
+        HashSet<PartyPoolStackKey> excluded = new(_applyInFlight);
+        foreach ((PartyPoolStackKey key, long until) in _frozenUntil)
+        {
+            if (now < until)
+            {
+                excluded.Add(key);
+            }
+        }
+
+        Dictionary<PartyPoolStackKey, int> desiredForReconcile = Without(wireForReconcile, excluded);
+        Dictionary<PartyPoolStackKey, int> engineForReconcile = Without(_engineBelief, excluded);
 
         // Diff(expected: engine, actual: desired) — an Add delta means desired > engine (this
         // instance owes the engine that many more units), a Remove delta means desired < engine.
@@ -236,7 +273,7 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
 
             _pendingApplies.Enqueue(
                 new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
-            _pendingApplyTarget[delta.Key] = desired.GetValueOrDefault(delta.Key);
+            _applyInFlight.Add(delta.Key);
 
             // This instance now owes its own engine an apply — the very next scan needs to be
             // fresh so the apply's landing (and anything else that moves in the meantime) is
@@ -247,12 +284,61 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         }
     }
 
-    /// <summary>Publishes a signed, already-resolved local delta for one key — a positive
-    /// <paramref name="delta"/> is an Add, negative is a Remove. Shared by both branches of the
-    /// per-key loop in <see cref="Pump"/>: an ordinary genuine local change (the full movement)
-    /// and a pending key's excess beyond its target (only the unexplained remainder).</summary>
-    private void PublishDetected(PartyPoolStackKey key, int delta)
+    /// <summary>
+    /// How much of the movement from <paramref name="belief"/> to <paramref name="actual"/> is
+    /// NOT explained by the engine catching up toward <paramref name="wire"/> — the one
+    /// computation root cause 4's whole fix rests on (see the class remarks above).
+    ///
+    /// Nothing was owed (<paramref name="wire"/> already equalled <paramref name="belief"/>):
+    /// every unit of movement is new by construction, since there was nothing to converge
+    /// toward — returns the full delta. Something WAS owed and the movement goes the right way
+    /// but does not pass it (including landing exactly on it): fully explained by convergence —
+    /// returns zero. Movement the wrong way entirely, or past the wire once it is reached: only
+    /// the part beyond what convergence explains is new — returns that signed remainder.
+    /// </summary>
+    private static int ExcessBeyondWire(int belief, int actual, int wire)
     {
+        int delta = actual - belief;
+        int gap = wire - belief;
+
+        if (gap == 0 || Math.Sign(delta) != Math.Sign(gap))
+        {
+            return delta;
+        }
+
+        return Math.Abs(delta) > Math.Abs(gap) ? delta - gap : 0;
+    }
+
+    /// <summary>Publishes a signed, already-resolved local delta for one key — a positive
+    /// <paramref name="delta"/> is an Add, negative is a Remove — unless the loop breaker has
+    /// this key frozen (see the class remarks). Tracks this key's own publish rate and trips
+    /// the breaker itself the moment a publish would cross <see cref="MaxPublishesPerWindow"/>
+    /// inside <see cref="PublishRateWindowMs"/> — that OP is suppressed too, not just the ones
+    /// after it, so the count this method ever lets through a single key in any 10s window is
+    /// bounded at exactly <see cref="MaxPublishesPerWindow"/>.</summary>
+    private void PublishDetected(PartyPoolStackKey key, int delta, long now)
+    {
+        if (IsFrozen(key, now))
+        {
+            return;
+        }
+
+        Queue<long> history = _publishHistory.TryGetValue(key, out Queue<long>? existing)
+            ? existing
+            : _publishHistory[key] = new Queue<long>();
+
+        history.Enqueue(now);
+        while (history.Count > 0 && now - history.Peek() > PublishRateWindowMs)
+        {
+            history.Dequeue();
+        }
+
+        if (history.Count > MaxPublishesPerWindow)
+        {
+            TripLoopBreaker(key, now, history.Count);
+            return;
+        }
+
         PartyPoolOpKind kind = delta > 0 ? PartyPoolOpKind.Add : PartyPoolOpKind.Remove;
         uint count = (uint)Math.Abs(delta);
 
@@ -265,6 +351,46 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         // the same or another key behind the rest of that window. See
         // docs/research/party-pool-sync.md §14.
         bridge.InvalidatePartyPoolScanCache();
+    }
+
+    /// <summary>True (and self-pruning) while <paramref name="key"/> is still inside a freeze
+    /// this pump imposed on itself via <see cref="TripLoopBreaker"/>.</summary>
+    private bool IsFrozen(PartyPoolStackKey key, long now)
+    {
+        if (!_frozenUntil.TryGetValue(key, out long until))
+        {
+            return false;
+        }
+
+        if (now < until)
+        {
+            return true;
+        }
+
+        _frozenUntil.Remove(key);
+        return false;
+    }
+
+    /// <summary>
+    /// The hard backstop, independent of whether root cause 4's own reasoning above turns out
+    /// to have a gap: this key has published more than <see cref="MaxPublishesPerWindow"/> ops
+    /// of its own within <see cref="PublishRateWindowMs"/>, which no legitimate rapid-deposit
+    /// recipe this channel is meant to support should ever do. Freezes publishing for this key
+    /// for <see cref="FreezeDurationMs"/> (reconcile also skips it for the same span — see
+    /// <see cref="Pump"/>'s step 2), logs once, and asks the session for a full resync so the
+    /// host's own absolute totals overwrite whatever this loop diverged into, on every peer,
+    /// once the freeze lifts and reconcile is willing to chase the wire again.
+    /// </summary>
+    private void TripLoopBreaker(PartyPoolStackKey key, long now, int opsInWindow)
+    {
+        _frozenUntil[key] = now + FreezeDurationMs;
+
+        log($"party pool: '{key.Resref}' published {opsInWindow} ops within "
+            + $"{PublishRateWindowMs / 1000}s — loop breaker tripped, freezing this key and "
+            + "requesting a resync from the host's absolute totals "
+            + "(docs/research/party-pool-sync.md §22)");
+
+        session.RequestPartyPoolResync();
     }
 
     /// <summary>Called by whatever already arbitrates the single-slot staging-cheat channel (the

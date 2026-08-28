@@ -140,4 +140,15 @@ public sealed partial class CoopHost
             _partyPoolSender.Acknowledge(ack.PeerId, ack.OpSequence);
         }
     }
+
+    /// <summary>
+    /// <see cref="IPartyPoolSession.RequestPartyPoolResync"/> — the host is already
+    /// authoritative, so this just re-runs the same absolute re-broadcast a (re-)admission or a
+    /// client's own <see cref="PartyPoolSyncRequestPacket"/> triggers. Safe to call from ANY
+    /// thread (the pump's own, in particular): <see cref="ResyncPartyPool"/> only touches
+    /// <see cref="_partyPoolStore"/> and <see cref="_partyPoolSender"/>, both internally locked
+    /// — unlike <see cref="CoopClient.RequestPartyPoolResync"/>, there is no raw send buffer
+    /// here that only the tick thread may touch.
+    /// </summary>
+    public void RequestPartyPoolResync() => ResyncPartyPool(SessionClock.NowMs);
 }

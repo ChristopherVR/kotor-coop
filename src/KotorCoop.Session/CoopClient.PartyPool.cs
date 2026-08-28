@@ -73,4 +73,51 @@ public sealed partial class CoopClient
             _partyPoolSender.Acknowledge(ack.PeerId, ack.OpSequence);
         }
     }
+
+    /// <summary>Set by <c>Pumps.PartyPoolPump</c>'s own hard loop breaker
+    /// (docs/research/party-pool-sync.md §22), called from the AGENT thread — like
+    /// <see cref="SendChat"/>, this must not touch <see cref="_sendBuffer"/> directly (only the
+    /// tick thread owns it), so the request is queued under <see cref="_gate"/> and flushed by
+    /// <see cref="FlushPartyPoolResyncRequest"/> from <see cref="Tick"/> instead.</summary>
+    private bool _partyPoolResyncRequested;
+
+    /// <summary><see cref="IPartyPoolSession.RequestPartyPoolResync"/> — see
+    /// <see cref="_partyPoolResyncRequested"/>'s own remarks for why this only sets a flag.
+    /// </summary>
+    public void RequestPartyPoolResync()
+    {
+        lock (_gate)
+        {
+            _partyPoolResyncRequested = true;
+        }
+    }
+
+    /// <summary>Sends the queued <see cref="PartyPoolSyncRequestPacket"/>, exactly as if a
+    /// version/digest mismatch had been noticed — the host's own
+    /// <see cref="CoopHost.HandlePartyPoolSyncRequest"/> re-broadcasts every key as an absolute
+    /// <see cref="PartyPoolOpKind.Set"/> in reply, regardless of what this request's own
+    /// version/digest say (this is a deliberate "something is wrong, please resync" ask, not a
+    /// version tripwire proving disagreement first).</summary>
+    private void FlushPartyPoolResyncRequest()
+    {
+        bool requested;
+        lock (_gate)
+        {
+            requested = _partyPoolResyncRequested;
+            _partyPoolResyncRequested = false;
+        }
+
+        if (!requested)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(
+            _sendBuffer,
+            new PartyPoolSyncRequestPacket(_localPeerId, _partyPoolStore.Version, _partyPoolStore.Digest));
+        if (length > 0)
+        {
+            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
 }

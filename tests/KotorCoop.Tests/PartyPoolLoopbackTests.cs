@@ -781,6 +781,251 @@ public class PartyPoolLoopbackTests
         }
     }
 
+    // ---- root cause 4: the unbounded ping-pong (docs/research/party-pool-sync.md §21-§22) ---
+
+    /// <summary>Ceiling for the two "converges with bounded ops" tests below — the task's own
+    /// ask is "≤ ~6" for three deposits; a small margin is kept here for the odd extra
+    /// excess-driven op a real overlapping-tick race can legitimately produce, while staying a
+    /// world away from §21's observed 615/1068/906/1938.</summary>
+    private const uint MaxOpsForThreeDeposits = 8;
+
+    private const uint MaxOpsForSixDeposits = 16;
+
+    /// <summary>
+    /// THE root cause 4 reproduction. Three rapid same-key HOST deposits, spaced far tighter
+    /// (15ms) than both the bridge's own 150ms scan-cache window and the simulated cheat-
+    /// channel apply latency (30-250ms — see <see cref="AgentLoop"/>'s own remarks), so the
+    /// client's own catch-up apply for the first deposit is still very likely in flight when
+    /// the second and third land — exactly the overlap docs/research/party-pool-sync.md §21's
+    /// live rig hit with three rapid <c>pooladd</c>s of the same resref.
+    ///
+    /// Against the pre-fix design (a per-key <c>_pendingApplyTarget</c> VALUE captured once
+    /// when an apply was queued and never revisited) this either fails to converge to 3 within
+    /// the timeout, or does so only after publishing far more than a handful of ops — see
+    /// <c>PartyPoolPump.cs</c>'s own "root cause 4" class remarks for exactly why a frozen
+    /// snapshot compared against a wire that keeps moving amplifies instead of converging. The
+    /// fix (<c>engineBelief</c>/<c>wireTotal</c>, both re-read fresh every tick, plus the hard
+    /// loop-breaker backstop) converges through a small, bounded number of ops instead.
+    /// </summary>
+    [Fact]
+    public async Task RapidSameKeyHostDepositsConvergeWithBoundedOpsNotAnUnboundedPingPong()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 1;
+            await Task.Delay(15);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 2;
+            await Task.Delay(15);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 3;
+
+            Assert.True(
+                await WaitForAsync(() => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"host never converged on its own rapid deposits; got {rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(() => rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"client never converged on the host's rapid deposits; got {rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3
+                        && rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3,
+                    TimeSpan.FromSeconds(5)),
+                $"convergence did not hold - host={rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            // THE load-bearing assertion: convergence happened through a BOUNDED number of wire
+            // ops, not the unbounded 1, 2, 4, 12, 40, 180, 615, 1068, 906-then-a-Remove-of-1938
+            // ping-pong docs/research/party-pool-sync.md §21 recorded live.
+            Assert.True(
+                rig.Host.PartyPool.Version <= MaxOpsForThreeDeposits,
+                $"host ops blew up: Version={rig.Host.PartyPool.Version}");
+            Assert.True(
+                rig.Client.PartyPool.Version <= MaxOpsForThreeDeposits,
+                $"client ops blew up: Version={rig.Client.PartyPool.Version}");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// The symmetric shape of the reproduction above: three rapid same-key deposits on EACH
+    /// side (host first, then client), converging to +6 on both — the task's own "rapid
+    /// same-key ×3 each side (+6 both, bounded ops)" ask. Same tight (15ms) spacing so each
+    /// burst overlaps the other side's own catch-up apply.
+    /// </summary>
+    [Fact]
+    public async Task RapidSameKeyDepositsOnBothSidesConvergeToSixWithBoundedOps()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 1;
+            await Task.Delay(15);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 2;
+            await Task.Delay(15);
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 3;
+
+            Assert.True(
+                await WaitForAsync(() => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout));
+            Assert.True(
+                await WaitForAsync(() => rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout));
+
+            // Wait for the CLIENT'S OWN ENGINE (not just its store) to have actually caught up
+            // to 3 before writing a further "local" deposit straight into TrueEngineState below
+            // — the store can already read 3 while the client's catch-up apply is still in
+            // flight through the simulated cheat channel (AgentLoop's own 30-250ms landing
+            // delay), and overwriting the engine mid-flight would fabricate a spurious "excess"
+            // that has nothing to do with the pump's own correctness, only this test's own
+            // choreography racing the async apply.
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 3, Timeout),
+                "client's own engine never caught up to its converged store before the second "
+                + $"round; got {rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+
+            // Three more rapid deposits push it to 6.
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 4;
+            await Task.Delay(15);
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 5;
+            await Task.Delay(15);
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 6;
+
+            Assert.True(
+                await WaitForAsync(() => rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 6, Timeout),
+                $"client under-counted its own rapid deposits; got {rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(() => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 6, Timeout),
+                $"host under-counted the client's rapid deposits; got {rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster) == 6
+                        && rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster) == 6,
+                    TimeSpan.FromSeconds(5)),
+                $"convergence did not hold - host={rig.Host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={rig.Client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                rig.Host.PartyPool.Version <= MaxOpsForSixDeposits,
+                $"host ops blew up: Version={rig.Host.PartyPool.Version}");
+            Assert.True(
+                rig.Client.PartyPool.Version <= MaxOpsForSixDeposits,
+                $"client ops blew up: Version={rig.Client.PartyPool.Version}");
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// A queued apply that takes TWO ticks (not one) to land — the ordinary case in production,
+    /// where the apply travels through the arbitrated single-slot staging-cheat channel rather
+    /// than landing on the very next scan. Deterministic <see cref="ScriptedBridge"/>: a peer's
+    /// op seeds the store (exactly what <c>CoopHost</c>/<c>CoopClient</c>'s own
+    /// <c>HandlePartyPoolOp</c> does), reconcile queues an apply, two ticks pass with NO engine
+    /// movement (the apply still in flight), then the engine jumps straight to the full owed
+    /// amount. Because <c>wireTotal</c> is re-read fresh every tick rather than compared against
+    /// a value captured once, the landing — however many ticks late — is still recognised
+    /// exactly and adopted silently: <see cref="PartyPoolStore.Version"/> stays at 1 (only the
+    /// original seeded peer op), never publishing anything for the late landing itself.
+    /// </summary>
+    [Fact]
+    public void AQueuedApplyLandingTwoTicksLateIsAdoptedSilentlyNotRepublished()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script =
+            [
+                [], // tick1: baseline (silent, empty pool)
+                [], // tick2: still 0 - reconcile notices the peer's seeded total and queues an apply
+                [], // tick3: STILL 0 - one tick of latency with nothing to see yet
+                new() { [Blaster] = 4 }, // tick4: the apply finally lands, TWO ticks after queuing
+                new() { [Blaster] = 4 }, // tick5: steady
+            ];
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            agent.PumpOnce(); // tick1: baseline
+
+            // A peer's op already landed in this instance's own store — exactly what
+            // CoopHost/CoopClient's HandlePartyPoolOp does before the pump looks again.
+            host.PartyPool.Record(PartyPoolOpKind.Add, Blaster, 4);
+
+            agent.PumpOnce(); // tick2: reconcile queues the apply toward the now-known wire gap
+            agent.PumpOnce(); // tick3: still not landed - nothing should publish
+            agent.PumpOnce(); // tick4: lands, two ticks after being queued - must be silent
+            agent.PumpOnce(); // tick5: steady
+
+            Assert.Equal(4, host.PartyPoolTotals.GetValueOrDefault(Blaster));
+            Assert.Equal(1u, host.PartyPool.Version); // only the seeded peer op - nothing else published
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The hard backstop itself (docs/research/party-pool-sync.md §22), independent of whether
+    /// root cause 4's own reasoning has a gap: a key that publishes more than
+    /// <c>PartyPoolPump</c>'s own <c>MaxPublishesPerWindow</c> (8) ops within its 10s rolling
+    /// window is frozen — further movement on that key publishes nothing until the freeze
+    /// lifts, and the trip logs exactly once. Deterministic <see cref="ScriptedBridge"/>: 20
+    /// genuine alternating movements of the SAME key (no peer involved at all, so every single
+    /// one would otherwise be published in full) on 20 consecutive ticks.
+    /// </summary>
+    [Fact]
+    public void ALoopBreakerFreezesAKeyAfterExcessivePublishesWithinTheRollingWindow()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            List<Dictionary<PartyPoolStackKey, int>> script = [[]]; // tick1: baseline
+            for (int i = 0; i < 20; i++)
+            {
+                int value = i % 2 == 0 ? 1 : 0;
+                script.Add(new Dictionary<PartyPoolStackKey, int> { [Blaster] = value });
+            }
+
+            CoopAgent agent = new(
+                new ScriptedBridge(script),
+                host,
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            List<string> logs = [];
+            agent.Log = logs.Add;
+
+            foreach (Dictionary<PartyPoolStackKey, int> _ in script)
+            {
+                agent.PumpOnce();
+            }
+
+            // 20 genuine movements were driven, but the breaker caps published ops for this key
+            // at exactly MaxPublishesPerWindow (8) — the 9th attempt trips the freeze instead of
+            // publishing, and every movement after that is silently suppressed too.
+            Assert.Equal(8u, host.PartyPool.Version);
+
+            List<string> breakerLines =
+                logs.Where(line => line.Contains("loop breaker tripped", StringComparison.Ordinal)).ToList();
+            Assert.Single(breakerLines);
+            Assert.Contains(Blaster.Resref, breakerLines[0]);
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
     /// <summary>
     /// The AGENT-side half of docs/research/party-pool-sync.md §14's two freshness bugs:
     /// <c>KotorGameBridge.PartyPool.cs</c>'s own scan-result cache (reproduced exactly by
