@@ -1021,3 +1021,46 @@ confidence either way). `ItemTemplateSpawnHook`'s mid-function splice (the task'
 suspect) was read closely this round and its register/flag/stack-slot handling all check out
 against the disassembly cited in its own class remarks — no bug found there by static review, but
 it was not exercised live this round.
+
+## 2026-08-28/29 — the `0x40D386` crash reproduces AGAIN, post-fix, via a recipe that never touches party-select at all
+
+Task: `docs/research/transition-crashes.md`'s own attribution round (module-transition crashes
+under shipped defaults). Not looking for this crash specifically — it turned up organically while
+soaking plain `warp tar_m02aa` / `warp end_m01aa` / `warp tar_m10aa` / `warp tar_m04aa` cycles, no
+galaxy map, no STUNT_00, no `partyselect ok` call anywhere in the recipe.
+
+**Reproduced, symbolicated, and matches the earlier reading exactly.** `FIRST-CHANCE access
+violation (0xC0000005) at 0x40D386, eip 0x40D386, esp 0x1AF9B8; image-range stack values:
+0x745898 0x745898 0x6FD8BD` — identical `eip`, `esp`, and stack trace to both of this doc's own
+"11.686s and 11.681s" STUNT_00 readings above. Independently confirmed via `tools/crashlog.ps1`
+against the real Windows Application log (`offset=0x0000d386`). **This walks back the "Host-`
+loadgame`... not reproduced this round" section's implied confidence, and directly contradicts
+`docs/TROUBLESHOOTING.md`'s player-facing claim that this crash "was... fixed 2026-08-28...
+confirmed clean across three independent live re-verifications."** The write-storm fix
+(`PartySelectSuppressionRule`/`PartySelectSuppressionController`, above) is still correct and
+still worth keeping — the 70,000+ suppress/sweep pairs it eliminated were real — but it evidently
+was not `0x40D386`'s actual cause, or was not its only cause. `TROUBLESHOOTING.md` has been
+corrected alongside this entry.
+
+**New RE this round, not attempted in either prior pass**: `0x0040D386` is `+0xA6` into
+`CExoKeyTable::DestroyTable` (`0x0040D2E0`-`0x0040D490`, per `tools/kotor1_0_3.db`), not any GUI
+panel code. The faulting instruction (`cmp word ptr [ecx+4], bx`) reads through `ecx`, which was
+just re-derived from `CExoKeyTable`'s own entry-array base (`[esi+0x10]`) after an intervening
+call (`0x407230`) that runs between two reads of the identical array index — the same "read,
+call something that can invalidate it, re-read without re-validating" shape this doc's own
+`CGuiInGame+0x78` bug had, but in the KEY/BIF resource-table subsystem instead of a GUI panel.
+Full disassembly and the case for why `tar_m02aa`'s ambient dialogue is a strong (not proven
+sole) trigger is in `docs/research/transition-crashes.md`. `0x407230` itself was not disassembled
+this round — that is the next step before a real fix can be shipped.
+
+**Attribution: confirmed independent of every coop.ini feature flag.** The full soak this round
+included a pass with `party_select_host_only=0`, `solo_segment_spectate=0`,
+`transition_announce_scripted=0`, `container_lock_arbitration=0`, `companion_gear_sync=0`,
+`script_item_sync=0`, `map_reveal_sync=0`, `pazaak_detect=0`, `store_sync=0`, and
+`party_pool_sync=0` all simultaneously OFF, and the crash (same signature, unconfirmed exact
+address) still fired. `party_select_host_only` in particular — the flag this doc's own fix
+touches most directly — is ruled out as a precondition.
+
+No code change this round; see `docs/research/transition-crashes.md` for the full five-round
+soak, the tooling gaps found (no crash-dump admin rights, no debugger available, WER's own
+apparent dedup of repeat crashes), and the ranked follow-up list.
