@@ -58,6 +58,58 @@ public sealed partial class CoopCommandDispatcher(
     private static readonly TimeSpan CheatAnswerTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// ⚠ ROOT CAUSE 7 (2026-08-28, docs/research/party-pool-sync.md §26): a still-unanswered
+    /// cheat's request bytes used to be silently overwritten by whichever call reached
+    /// <see cref="SendCheat"/> next — the shared block has exactly ONE request slot, and the
+    /// plugin's <c>CheatController.OnFrame</c> polls it once per frame, executing whatever is
+    /// THERE at that moment. Every console-verb dispatch-table entry calls
+    /// <see cref="SendCheat"/> directly with no in-flight check (only the three
+    /// <c>DrainAutomatic*</c> callers ever checked <see cref="_pendingCheatSerial"/> first), so a
+    /// human's own <c>pooladd</c> — or any other staging verb — issued while
+    /// <c>DrainAutomaticPartyPool</c>'s own dequeued reconcile apply was still awaiting the
+    /// plugin's answer clobbered it outright: the apply's kind/text/amount fields in the shared
+    /// block were overwritten before the plugin ever read them, so the engine-side delta that
+    /// apply represented never ran, yet nothing about the overwrite failed loudly — the LATER
+    /// request's own answer arrives looking completely normal. <c>PartyPoolPump</c> had already
+    /// marked that key <c>_applyInFlight</c> the moment it queued the apply (before dequeue), and
+    /// that flag is only ever cleared by observing the engine actually move for the key (root
+    /// cause 6) — which a clobbered apply never produces — so the key stalls PERMANENTLY: step 2
+    /// excludes it from reconcile forever, with no error, no retry, and no loop-breaker trip
+    /// (nothing is being published for a frozen key). This is the exact live shape §25's rig
+    /// round found: three rapid host <c>pooladd</c>s, the wire silent for 5+ minutes with only 2
+    /// of 3 units confirmed landed.
+    ///
+    /// <b>The fix.</b> <see cref="SendCheat"/> and the automatic apply drains
+    /// (<c>DrainAutomaticLoot</c>/<c>DrainAutomaticPartyPool</c>/<c>DrainAutomaticStore</c>) are
+    /// now the SAME serialized issuer for every cheat kind: a request that arrives while
+    /// <see cref="_pendingCheatSerial"/> is still nonzero is queued in <see cref="_queuedCheats"/>
+    /// rather than overwriting the shared block, and <see cref="ReflectCheatAnswer"/> fires the
+    /// next queued request the instant the current one resolves (a matched answer OR a timeout) —
+    /// never both console-verb and automatic-apply traffic touching the block at once, and never
+    /// a request silently discarded because it lost a race for the single slot. Replies are still
+    /// matched by serial (<c>applied != _pendingCheatSerial</c>, unchanged and already sound —
+    /// this never misattributed an answer, it just let the SLOT itself get stolen out from under
+    /// a still-waiting request). See <see cref="Pumps.PartyPoolPump"/>'s own root-cause-7 remarks
+    /// for the second half of the fix: an apply whose request never even reaches the plugin (a
+    /// dropped connection, a refusal with no free retry path, or — belt and suspenders — any
+    /// other way a landing could still go missing) now self-heals via a timeout instead of
+    /// staying stuck in <c>_applyInFlight</c> forever.
+    /// </summary>
+    private readonly Queue<QueuedCheat> _queuedCheats = new();
+
+    /// <summary>Bounded the same way every other unattended-growth queue in this codebase is
+    /// (<c>PartyPoolPump.MaxPendingApplies</c>, <c>LootPump</c>'s own queue): a human mashing
+    /// staging verbs faster than the plugin can ever answer them must not grow this without
+    /// limit. Vastly more generous than any real recipe needs — the automatic drains are already
+    /// throttled to at most one dequeue per idle tick each, so this only ever protects against a
+    /// pathological console-spam case.</summary>
+    private const int MaxQueuedCheats = 64;
+
+    /// <summary>One request still waiting for its turn at the single shared slot, plus the
+    /// follow-up it was filed with — see root cause 7's remarks above.</summary>
+    private readonly record struct QueuedCheat(CheatRequest Request, Action? OnApplied, Action? OnRefused);
+
+    /// <summary>
     /// What to do once the pending cheat has been answered, and what to do instead if it was
     /// refused. Exactly one command needs it — <c>moviewarp</c>, whose two halves (stage the
     /// cinematic, then travel) MUST NOT be filed in the same tick, because the plugin's frame
@@ -296,19 +348,52 @@ public sealed partial class CoopCommandDispatcher(
     /// Files a staging cheat with the plugin and remembers its serial so the answer can be
     /// reported. Refuses out loud when there is no plugin: "nothing happened" is the one
     /// outcome a staging command must never produce silently.
+    ///
+    /// The single shared slot can only ever hold one unanswered request — see root cause 7's
+    /// remarks on <see cref="_queuedCheats"/> above. Every caller (a console verb, a follow-up
+    /// like <c>moviewarp</c>'s travel half, or an automatic apply drain) goes through here, so
+    /// this is the one place that decides "fire now" versus "queue behind whatever is still
+    /// waiting on an answer" — never "overwrite it".
     /// </summary>
     private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null)
     {
-        // Whatever the previous cheat was going to do next, it is not going to do it now:
-        // only one request is in flight, so filing a new one abandons the old one's answer.
-        _afterCheat.Clear();
-
         if (!bridge.SupportsCheats)
         {
             Reply("staging cheats need the in-game plugin (no shared block found)");
             onRefused?.Invoke();
             return;
         }
+
+        if (_pendingCheatSerial != 0)
+        {
+            if (_queuedCheats.Count >= MaxQueuedCheats)
+            {
+                Reply("too many staging cheats already queued behind the game thread - dropping the oldest");
+                QueuedCheat dropped = _queuedCheats.Dequeue();
+                dropped.OnRefused?.Invoke();
+            }
+
+            _queuedCheats.Enqueue(new QueuedCheat(request, onApplied, onRefused));
+            return;
+        }
+
+        FireCheat(request, onApplied, onRefused);
+    }
+
+    /// <summary>
+    /// The one place that actually writes a request into the shared block — only ever called
+    /// when the slot is confirmed free (<see cref="SendCheat"/> when idle, or
+    /// <see cref="ReflectCheatAnswer"/> handing the slot to the next queued request the instant
+    /// the current one resolves).
+    /// </summary>
+    private void FireCheat(CheatRequest request, Action? onApplied, Action? onRefused)
+    {
+        // Whatever the previous cheat was going to do next, it is not going to do it now — but
+        // by construction (see SendCheat/ReflectCheatAnswer) that follow-up was already taken
+        // and cleared when its own answer (or timeout) resolved the slot this is now filling, so
+        // this is normally a no-op; kept for safety since an armed-and-not-yet-taken follow-up
+        // must never leak into an unrelated request's answer.
+        _afterCheat.Clear();
 
         if (bridge.TryRequestCheat(request, out uint serial))
         {
@@ -320,6 +405,17 @@ public sealed partial class CoopCommandDispatcher(
         {
             Reply("could not reach the plugin to run that");
             onRefused?.Invoke();
+        }
+    }
+
+    /// <summary>Hands the single shared slot to the next request that lost the race for it,
+    /// if any — called the instant the current one resolves, from both branches of
+    /// <see cref="ReflectCheatAnswer"/> (a matched answer and a timeout alike).</summary>
+    private void FireNextQueuedCheat()
+    {
+        if (_queuedCheats.TryDequeue(out QueuedCheat next))
+        {
+            FireCheat(next.Request, next.OnApplied, next.OnRefused);
         }
     }
 
@@ -343,6 +439,11 @@ public sealed partial class CoopCommandDispatcher(
                 _pendingCheatSerial = 0;
                 Reply("the game never answered that - is a world loaded? (cheats run on the game's frame)");
                 _afterCheat.Take(applied: false)?.Invoke();
+
+                // The slot is free again - hand it to whatever lost the race for it, rather
+                // than leaving a queued request waiting for a serial that will now never
+                // resolve on its own (root cause 7, docs/research/party-pool-sync.md §26).
+                FireNextQueuedCheat();
             }
 
             return;
@@ -366,6 +467,10 @@ public sealed partial class CoopCommandDispatcher(
         // The follow-up runs AFTER the plugin's own sentence is on screen, so a reader sees
         // what the game said before what we did about it.
         _afterCheat.Take(applied: status is CheatStatus.Applied or CheatStatus.Forwarded)?.Invoke();
+
+        // Same reasoning as the timeout branch above: the slot just freed up, so give it to
+        // the next request that was queued behind this one, if any.
+        FireNextQueuedCheat();
     }
 
     /// <summary>

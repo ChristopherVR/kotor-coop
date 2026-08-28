@@ -42,6 +42,11 @@ public class PartyPoolLoopbackTests
     private static readonly PartyPoolStackKey Blaster =
         new("g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
 
+    /// <summary>§25's own exact resref (docs/research/party-pool-sync.md) — used by the root
+    /// cause 7 tests below to keep the live recipe recognisable.</summary>
+    private static readonly PartyPoolStackKey MedEquipment =
+        new("g_i_medeqpmnt01", 0, 0, 0, ItemIdentity.FlagKnown);
+
     private const string Module = "end_m01aa";
 
     /// <summary>
@@ -351,11 +356,23 @@ public class PartyPoolLoopbackTests
     /// cheat round trip INTO the same loop iteration as <c>PumpOnce</c>, so <c>PartyPoolPump</c>'s
     /// step 1/step 2 and the cheat-drain always ran in the same strict order every tick, on one
     /// thread — a race between them was structurally impossible to observe. Here, the single-slot
-    /// arbitrated cheat channel (<c>_pendingCheatSerial</c>'s real gate — a human's own console
-    /// verb OR the automatic drain, never both in flight at once, a human's own request always
-    /// preempting per <c>SendCheat</c>'s unconditional <c>_afterCheat.Clear()</c>) lives on this
-    /// SEPARATE thread, racing freely against <see cref="AgentLoop"/>'s own
-    /// <c>Agent.PumpOnce()</c> loop — exactly production's shape.
+    /// arbitrated cheat channel lives on this SEPARATE thread, racing freely against
+    /// <see cref="AgentLoop"/>'s own <c>Agent.PumpOnce()</c> loop — exactly production's shape.
+    ///
+    /// ⚠ ROOT CAUSE 7 (2026-08-28, docs/research/party-pool-sync.md §26): this class used to
+    /// model a human's own console verb as preempting/overwriting whatever the automatic drain
+    /// was doing while it was still mid-flight (<c>_humanRequest</c> was a single overwritable
+    /// field, only ever consulted when the simulated slot was already idle — which does not even
+    /// correctly model THAT old behaviour, since a second rapid <see cref="SubmitHumanPoolAdd"/>
+    /// call before the first was consumed silently overwrote it too). That mirrored
+    /// <c>CoopCommandDispatcher.SendCheat</c>'s OWN pre-fix bug (every console-verb dispatch-table
+    /// entry called <c>SendCheat</c> with no in-flight check at all) rather than testing against
+    /// it. Fixed alongside the production code: the console-verb path and the reconcile-apply
+    /// path now share ONE real FIFO (<see cref="_issueQueue"/>) for the single simulated slot —
+    /// a human request is never dropped, never overwrites an apply that is still mid-flight, and
+    /// (matching <c>CoopCommandDispatcher.RunAsync</c>'s own tick order — <c>DrainInputs</c>
+    /// runs before <c>DrainAutomaticPartyPool</c>) a human request queued ahead of an automatic
+    /// dequeue is served first once the slot frees up.
     /// </summary>
     private sealed class DispatcherLoop : IDisposable
     {
@@ -368,7 +385,14 @@ public class PartyPoolLoopbackTests
 
         private long _cheatLandsAtMs = -1;
         private CoopAgent.PendingPartyPoolApply _inFlight;
-        private CoopAgent.PendingPartyPoolApply? _humanRequest;
+
+        /// <summary>The single shared slot's own FIFO — a human's typed request enqueued here by
+        /// <see cref="SubmitHumanPoolAdd"/> is served before an automatic reconcile-apply dequeue
+        /// is even attempted, exactly like <c>CoopCommandDispatcher.RunAsync</c>'s own
+        /// <c>DrainInputs</c>-then-<c>DrainAutomaticPartyPool</c> tick order — but NEVER while
+        /// something else already occupies the slot (<c>_cheatLandsAtMs &gt;= 0</c>), matching
+        /// the real <c>SendCheat</c>'s post-root-cause-7 queueing instead of clobbering.</summary>
+        private readonly Queue<CoopAgent.PendingPartyPoolApply> _issueQueue = new();
 
         public DispatcherLoop(CoopAgent agent, FakeBridge bridge)
         {
@@ -381,15 +405,14 @@ public class PartyPoolLoopbackTests
         /// <see cref="CoopCommandDispatcher.SendCheat"/> DIRECTLY, never through
         /// <c>PartyPoolPump</c>'s own <c>_pendingApplies</c> queue (see
         /// <c>CoopCommandDispatcher.cs</c>'s <c>CoopCommandKind.PoolAdd</c> verb-table entry).
-        /// Preempts whatever the automatic drain was doing, same as <c>SendCheat</c>'s own
-        /// unconditional <c>_afterCheat.Clear()</c> — this test never exercises that overlap
-        /// (nothing else is mid-command when it fires), but the single shared slot is modelled
-        /// faithfully regardless.</summary>
+        /// Queued behind whatever already occupies the single shared slot — see root cause 7's
+        /// remarks above — never overwriting it, and never itself lost to a second rapid call:
+        /// this is a real FIFO now, not an overwritable field.</summary>
         public void SubmitHumanPoolAdd(PartyPoolStackKey key, int count)
         {
             lock (_gate)
             {
-                _humanRequest = new CoopAgent.PendingPartyPoolApply(PartyPoolOpKind.Add, key, (ushort)count);
+                _issueQueue.Enqueue(new CoopAgent.PendingPartyPoolApply(PartyPoolOpKind.Add, key, (ushort)count));
             }
         }
 
@@ -418,8 +441,9 @@ public class PartyPoolLoopbackTests
                         CoopAgent.PendingPartyPoolApply? human;
                         lock (_gate)
                         {
-                            human = _humanRequest;
-                            _humanRequest = null;
+                            human = _issueQueue.TryDequeue(out CoopAgent.PendingPartyPoolApply queued)
+                                ? queued
+                                : null;
                         }
 
                         if (human is { } h)
@@ -1027,6 +1051,79 @@ public class PartyPoolLoopbackTests
     }
 
     /// <summary>
+    /// Root cause 7's own self-heal (docs/research/party-pool-sync.md §26): an apply that
+    /// <c>PartyPoolPump</c> queued and marked <c>_applyInFlight</c> whose request never actually
+    /// reaches the engine — root cause 7's exact live shape, where a console verb silently
+    /// clobbered the reconcile apply's still-unanswered request at the single shared cheat-channel
+    /// slot before <c>CoopCommandDispatcher</c> was fixed this round — must not stall the key
+    /// PERMANENTLY the way it did pre-fix (§25: only 2 of 3 units ever confirmed landed, the wire
+    /// silent for 5+ minutes with no self-correction). This <see cref="ScriptedBridge"/> never
+    /// moves the engine for <see cref="Blaster"/> at all, simulating exactly that lost request —
+    /// no amount of pumping should ever land it — and asserts the key is freed to reconcile again
+    /// once <c>PartyPoolPump</c>'s own 15s <c>ApplyInFlightTimeoutMs</c> elapses, proving the fix
+    /// self-heals rather than requiring a human to notice and retype the command. Genuinely waits
+    /// out real wall-clock time (<c>SessionClock</c> is a real <c>Stopwatch</c>, not fakeable) —
+    /// the one test in this suite that has to, for exactly that reason.
+    /// </summary>
+    [Fact]
+    public void AnInFlightApplyThatNeverLandsWithinTheTimeoutIsFreedForReconcileToRetryIt()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            // The engine (this bridge's single, forever-repeating [] entry - see ScriptedBridge's
+            // own doc comment) never moves for Blaster, no matter how many ticks pass.
+            ScriptedBridge bridge = new([[]]);
+
+            List<string> logs = [];
+            CoopAgent agent = new(
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+            agent.Log = logs.Add;
+
+            agent.PumpOnce(); // baseline (empty pool, silent)
+
+            host.PartyPool.Record(PartyPoolOpKind.Add, Blaster, 4); // a peer's op lands on the wire
+
+            agent.PumpOnce(); // reconcile notices the gap and queues an apply
+
+            Assert.True(
+                agent.TryDequeuePendingPartyPoolApply(out CoopAgent.PendingPartyPoolApply first),
+                "the reconcile apply was never queued");
+            Assert.Equal(Blaster, first.Key);
+            Assert.Equal(4, first.Count);
+
+            // Dequeued (as DrainAutomaticPartyPool would) but its cheat request is simulated as
+            // lost from here on - the engine never moves for this key. A second apply must not
+            // be queued for a key already in flight.
+            Assert.False(
+                agent.TryDequeuePendingPartyPoolApply(out _),
+                "a second apply must not be queued for a key already in flight");
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(15_500);
+            while (DateTime.UtcNow < deadline)
+            {
+                agent.PumpOnce();
+                Thread.Sleep(500);
+            }
+
+            Assert.Contains(
+                logs, line => line.Contains("presumed lost, retrying", StringComparison.Ordinal));
+
+            // Freed - a fresh apply toward the CURRENT wire is queued again, proving the key did
+            // not stall forever the way it did before root cause 7's fix.
+            Assert.True(
+                agent.TryDequeuePendingPartyPoolApply(out CoopAgent.PendingPartyPoolApply retried),
+                "the stuck key was never freed for reconcile to retry it");
+            Assert.Equal(Blaster, retried.Key);
+            Assert.Equal(4, retried.Count);
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
     /// The AGENT-side half of docs/research/party-pool-sync.md §14's two freshness bugs:
     /// <c>KotorGameBridge.PartyPool.cs</c>'s own scan-result cache (reproduced exactly by
     /// <see cref="ThrottledFakeBridge"/>) can serve a snapshot up to <c>scanIntervalTicks</c>
@@ -1528,6 +1625,186 @@ public class PartyPoolLoopbackTests
                 + $"client engine={clientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
                 + $"host store={host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
                 + $"client store={client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+            host.Dispose();
+            client.Dispose();
+        }
+    }
+
+    // ---- root cause 7: the console-verb path and the reconcile-apply path silently clobbered
+    // each other at the single shared cheat-channel slot (docs/research/party-pool-sync.md §26,
+    // the live recipe that found only 2 of 3 host pooladds ever confirmed landed) --------------
+
+    /// <summary>
+    /// §25's own exact live recipe (docs/research/party-pool-sync.md), but genuinely rapid this
+    /// time: unlike <see cref="RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides"/>
+    /// above (which waits for each deposit to land on the host's OWN engine before typing the
+    /// next — the "~1-2s apart" pacing <c>blockpoke.ps1</c>'s own reply-wait imposed live), this
+    /// fires all three <see cref="DispatcherLoop.SubmitHumanPoolAdd"/> calls back to back with NO
+    /// wait between them, guaranteeing the second and third arrive while the FIRST is still
+    /// mid-flight through the simulated single-slot cheat channel (30-250ms landing latency) —
+    /// the exact shape a real unattended `blockpoke.ps1` burst (or a human mashing Enter) can
+    /// produce, and the one root cause 7 exploited: before the fix, <c>SendCheat</c> had no
+    /// in-flight check at all, so the second and third calls would have overwritten the first
+    /// request's still-unanswered bytes in the shared block outright. Asserts EXACT convergence
+    /// to 3 on every one of the four numbers this channel maintains, not merely "eventually
+    /// something happened" — §25's own live failure was silent (no crash, no loop-breaker trip,
+    /// just a permanently short count), so a bounded-but-wrong result would pass a weaker check.
+    /// </summary>
+    [Fact]
+    public async Task ThreeRapidHostPoolAddsFiredWithNoWaitBetweenThemStillConvergeToExactlyThree()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(
+            host, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using AgentLoop clientAgent = new(
+            client, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using DispatcherLoop hostDispatcher = new(hostAgent.Agent, hostAgent.Bridge);
+        using DispatcherLoop clientDispatcher = new(clientAgent.Agent, clientAgent.Bridge);
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "host/client never connected");
+
+            await Task.Delay(1200);
+
+            // No wait between calls — this is the collision itself, not merely fast pacing.
+            hostDispatcher.SubmitHumanPoolAdd(MedEquipment, 1);
+            hostDispatcher.SubmitHumanPoolAdd(MedEquipment, 1);
+            hostDispatcher.SubmitHumanPoolAdd(MedEquipment, 1);
+
+            Assert.True(
+                await WaitForAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 3, Timeout),
+                "the host's own engine never reached 3 - a queued request was lost at the single "
+                + $"shared slot; got {hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}");
+            Assert.True(
+                await WaitForAsync(() => host.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 3, Timeout),
+                $"host store never converged; got {host.PartyPoolTotals.GetValueOrDefault(MedEquipment)}");
+            Assert.True(
+                await WaitForAsync(() => client.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 3, Timeout),
+                $"client never converged; got {client.PartyPoolTotals.GetValueOrDefault(MedEquipment)}");
+            Assert.True(
+                await WaitForAsync(
+                    () => clientAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 3, Timeout),
+                "client's own engine never caught up; got "
+                + $"{clientAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 3
+                        && clientAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 3
+                        && host.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 3
+                        && client.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 3,
+                    TimeSpan.FromSeconds(12)),
+                "rapid, unwaited host pooladds settled on the wrong number - "
+                + $"host engine={hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}, "
+                + $"client engine={clientAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}, "
+                + $"host store={host.PartyPoolTotals.GetValueOrDefault(MedEquipment)}, "
+                + $"client store={client.PartyPoolTotals.GetValueOrDefault(MedEquipment)}");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+            host.Dispose();
+            client.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The other direction of root cause 7's collision, exercised directly: a console verb's
+    /// own cheat occupying the single shared slot at the exact moment a RECONCILE apply becomes
+    /// dequeueable. The CLIENT deposits (a direct engine write, landing on the wire immediately,
+    /// same shape as <see cref="ClientDepositConvergesToExactlyOneCopyOnBothSides"/>) — the HOST
+    /// then owes its own engine a reconcile apply for <see cref="Blaster"/>. In the SAME instant,
+    /// the host's own "operator" types <c>pooladd</c> for a completely unrelated key
+    /// (<see cref="MedEquipment"/>) through <see cref="DispatcherLoop.SubmitHumanPoolAdd"/> —
+    /// win or lose the race for the slot, NEITHER request may be dropped, and both keys must
+    /// converge correctly and independently on every instance.
+    /// </summary>
+    [Fact]
+    public async Task AConsoleVerbFiredAtTheExactMomentAReconcileApplyBecomesDequeueableLosesNeither()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(
+            host, bridgeScanIntervalMs: 150, heavyPumpIntervalMs: 0, autoDrain: false);
+        using AgentLoop clientAgent = new(client, bridgeScanIntervalMs: 150);
+        using DispatcherLoop hostDispatcher = new(hostAgent.Agent, hostAgent.Bridge);
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "host/client never connected");
+
+            await Task.Delay(300);
+
+            // The client's own deposit — the host's PartyPoolPump will queue a reconcile apply
+            // for Blaster the moment this reaches the wire and its own reconcile step runs.
+            clientAgent.Bridge.TrueEngineState[Blaster] = 4;
+
+            // Fired immediately, without waiting for the reconcile apply above to even be
+            // queued — the two requests race for the host's single simulated slot for real,
+            // rather than being sequenced by the test.
+            hostDispatcher.SubmitHumanPoolAdd(MedEquipment, 2);
+
+            Assert.True(
+                await WaitForAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 4, Timeout),
+                "the reconcile apply for the client's deposit was lost at the single shared slot; "
+                + $"got {hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 2, Timeout),
+                "the console verb's own request was lost at the single shared slot; got "
+                + $"{hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}");
+
+            Assert.True(
+                await WaitForAsync(
+                    () => host.PartyPoolTotals.GetValueOrDefault(Blaster) == 4
+                        && client.PartyPoolTotals.GetValueOrDefault(Blaster) == 4
+                        && host.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 2
+                        && client.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 2,
+                    Timeout),
+                "the two keys did not both converge on both sides - "
+                + $"host Blaster={host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client Blaster={client.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"host MedEquipment={host.PartyPoolTotals.GetValueOrDefault(MedEquipment)}, "
+                + $"client MedEquipment={client.PartyPoolTotals.GetValueOrDefault(MedEquipment)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 4
+                        && hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment) == 2
+                        && host.PartyPoolTotals.GetValueOrDefault(Blaster) == 4
+                        && host.PartyPoolTotals.GetValueOrDefault(MedEquipment) == 2,
+                    TimeSpan.FromSeconds(8)),
+                "one of the two colliding requests drifted after first converging - "
+                + $"host engine Blaster={hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+                + $"MedEquipment={hostAgent.Bridge.TrueEngineState.GetValueOrDefault(MedEquipment)}");
         }
         finally
         {

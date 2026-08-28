@@ -3006,3 +3006,198 @@ continuing to layer more state on top of an already-diverged pool.
 Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
 build.ps1 -Install -WarnAsError` (both game directories) clean at the top of this session, before
 any rig work. No source change this round — live re-verification only.
+
+---
+
+## 26. 2026-08-28 — root cause 7 found and fixed: the single-slot staging-cheat channel let a
+## console verb silently clobber a still-unanswered reconcile apply, permanently stalling the
+## key. No rig this round; five new regression tests, three mechanically confirmed against a
+## temporary revert; `party_pool_sync` stays OFF
+
+Task: pick up exactly where §25 left off — the recipe's own first clause (three rapid host
+`pooladd`s converging to exactly 3 on both sides) failed live: the host's own engine undercounted
+its three confirmed inserts (1 instead of 3), the client fell short of what the host did publish
+(2 instead of 3), and the channel went silent for 5+ minutes with no self-correction, no crash, no
+loop-breaker trip. Isolation worktree, no rig this round — bench-only, matching every prior no-rig
+round's own discipline. HEAD already included §25 (`54e7994`, "pool third deposit never lands") at
+the start of this pass; `git merge main` reported already up to date, no merge needed.
+
+### 26.1 Root cause 7, precisely
+
+`CoopCommandDispatcher.cs`'s single shared cheat-request slot
+(`_pluginBlock`'s `BlockCheatKind`/`BlockCheatTarget`/`BlockCheatText`/… fields, one copy each,
+no queue) is arbitrated on the READ side by `ReflectCheatAnswer` matching `block.CheatApplied`
+against `_pendingCheatSerial`, and was supposed to be arbitrated on the WRITE side the same way —
+but only the three automatic drains (`DrainAutomaticLoot`/`DrainAutomaticPartyPool`/
+`DrainAutomaticStore`) ever actually checked `if (_pendingCheatSerial != 0) return;` before calling
+`SendCheat`. Every OTHER caller — every console-verb entry in `DispatchTable`, `pooladd` and
+`poolremove` themselves included — called `SendCheat` directly, with no in-flight check at all.
+`SendCheat` itself had no gate either: it called `bridge.TryRequestCheat`, which
+(`KotorGameBridge.Cheats.cs`) unconditionally overwrites the block's kind/target/text/amount
+fields and bumps the serial, REGARDLESS of whether the previous serial's answer had ever been
+read. The plugin's own `CheatController.OnFrame` (`src/KotorCoop.Plugin/CheatController.cs`) polls
+`block.CheatSerial` once per game frame and executes whatever is THERE at that moment — it has no
+memory of an earlier serial it never got to see.
+
+So: `DrainAutomaticPartyPool` dequeues a reconcile apply (say, add 1x `g_i_medeqpmnt01`) only when
+`_pendingCheatSerial == 0` (correctly gated), fires `SendCheat`, and the dispatcher now has an
+outstanding, unanswered serial. Nothing stops a SECOND `pooladd` typed a moment later — still well
+within the 30ms-to-low-hundreds-of-ms the plugin's own frame hook needs to notice the FIRST
+request — from calling `SendCheat` again: it overwrites the block's fields and serial before the
+plugin ever read the first one, and sets `_pendingCheatSerial` to the SECOND request's serial. The
+FIRST request — the reconcile apply — is gone. Not refused, not answered, not logged: simply never
+seen by the plugin, because the plugin only ever looks at whatever is currently written. Its own
+engine-side delta never runs.
+
+`PartyPoolPump.cs`'s `_applyInFlight` (root cause 6, §24) marks a key in-flight the moment step 2
+QUEUES an apply — before it is even dequeued — and, before this round, cleared it ONLY by
+observing the engine actually move for that key. A clobbered apply produces no such movement, so
+`_applyInFlight[key]` stayed set FOREVER: step 2 excludes an in-flight key from reconcile
+unconditionally, so a permanently stuck key is never retried, with no error and no loop-breaker
+trip (nothing is being published for a frozen key — the loop breaker only ever watches PUBLISHES,
+and a stalled receiving-side key publishes nothing by definition). This is exactly §25's live
+shape: the host's THIRD `pooladd` (the second published op, `add of 1x`) landed on the client as a
+`local add ... detected, publishing` line instead of an apply-landing line — the tell that
+SOMETHING else, not the queued apply, moved the client's own engine for that key, and after that
+single line both sides went silent on the key for the rest of the session. The host's own
+undercount (1 unit in its own pool for 3 confirmed `added x1` engine calls) is consistent with the
+same mechanism running host-side too: whichever of the host's own later `pooladd`s collided with
+an automatic drain in flight at that moment (loot, store, or another party-pool apply — ANY cheat
+kind shares this one slot) had its OWN request silently replaced.
+
+### 26.2 The fix: `CoopCommandDispatcher.SendCheat`/`ReflectCheatAnswer` become a genuine
+### serialized issuer; `PartyPoolPump` gets a timeout-based self-heal as a backstop
+
+**(a) Never drop.** `SendCheat` (`src/KotorCoop.Agent/CoopCommandDispatcher.cs`) now checks
+`_pendingCheatSerial != 0` itself: a request arriving while the slot is busy is enqueued into a
+new `_queuedCheats` FIFO (`QueuedCheat` — the request plus its follow-up callbacks) instead of
+overwriting the block. Bounded (`MaxQueuedCheats` = 64, generously past anything a real recipe
+needs) the same way every other unattended-growth queue in this codebase is, dropping the OLDEST
+queued entry (with a loud reply) only in the pathological case of a human mashing staging verbs
+faster than the plugin could ever answer them.
+
+**(b) Match replies by serial; never misattribute.** Unchanged and re-confirmed sound —
+`ReflectCheatAnswer`'s `applied != _pendingCheatSerial` check already refused to attribute a
+mismatched answer to the wrong request; the bug was never misattribution, it was the SLOT itself
+being stolen out from under a still-waiting request before its own answer could ever arrive. Kept
+exactly as-is.
+
+**(c) Retry a lost apply after a timeout.** `SendCheat`'s own fix closes the exact mechanism that
+caused §25's stall, but `PartyPoolPump.cs` does not get to assume its own upstream channel is
+flawless forever — the same "a defence that only works if the reasoning above is complete is not
+enough on its own" principle §22's hard backstop was built on. `_applyInFlight` changed from a
+bare `HashSet<PartyPoolStackKey>` to a `Dictionary<PartyPoolStackKey, long>` mapping each in-flight
+key to the tick it was queued; a fresh check at the top of step 2, every tick, expires any entry
+older than the new `ApplyInFlightTimeoutMs` (15s — generous past the dispatcher's own 3s
+`CheatAnswerTimeout` plus whatever a legitimate queue of other cheats ahead of it could plausibly
+add) BEFORE the exclusion set is built, logging once and freeing the key for reconcile to re-queue
+it against the CURRENT wire — never a frozen value, the same discipline root cause 4 established.
+This is deliberately independent of WHY the apply never landed (a §26.1-shaped clobber, a genuine
+plugin refusal with nothing to retry it, or any other way a landing could go missing) — a pure
+mechanical backstop, matching the loop breaker's own "correct by construction, not merely by
+tuning" spirit.
+
+**Unifying the two issuers.** `FireCheat` is now the ONE place that actually writes to the shared
+block — called by `SendCheat` when the slot is free, and by the new `FireNextQueuedCheat` (called
+from BOTH branches of `ReflectCheatAnswer` — a matched answer and a timeout alike) the instant the
+slot frees up. Every caller — a console verb, `moviewarp`'s deferred travel half, and all three
+automatic drains — goes through this same path, so "the console verb path and the reconcile path
+use the same serialized issuer" is now true by construction rather than by convention (the
+automatic drains' own `_pendingCheatSerial != 0` pre-checks are left in place as harmless defence
+in depth — they now just mean those three callers usually skip straight to the front of an empty
+queue rather than ever needing to wait behind one).
+
+### 26.3 New regression coverage
+
+`tests/KotorCoop.Tests/CoopCheatDispatchTests.cs`:
+
+- `ASecondCheatTypedWhileTheFirstIsStillUnansweredIsQueuedNotFiredOverIt` — the direct pin for
+  §26.2(a)/the unified issuer: types `god on`, confirms it alone reaches the fake plugin bridge,
+  types `topup 25` before answering the first, confirms the bridge STILL shows only one request,
+  then answers the first and confirms `topup` fires only once the slot frees. **Mechanically
+  confirmed failing pre-fix**: temporarily reverting `SendCheat` to call `FireCheat` unconditionally
+  (skipping the busy-slot check) makes this test fail with both requests reaching the bridge
+  instantly (`Assert.Single() Failure: The collection contained 2 items`); restored and reconfirmed
+  passing.
+- `SelfCheatsReachThePluginWithTheirArguments`, `SlayByIdCarriesTheIdAndSlayByTagCarriesTheText`,
+  `UsingADoorByTagSendsTheTagAndByIdSendsTheId` — three PRE-EXISTING tests that fired several
+  distinct cheats back to back with no answer in between, which only ever worked because the old
+  `SendCheat` fired immediately regardless of any pending request (i.e., they exercised the exact
+  clobbering this round removes, without meaning to). Adapted to the new serialized-issuer
+  discipline via a new `TypeAndAnswer` helper that answers each cheat and lets
+  `dispatcher.RunAsync` drain the slot before typing the next line — the same "type, read the
+  answer, type the next" shape a human console user actually has.
+
+`tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`:
+
+- `DispatcherLoop` (the harness modelling `CoopCommandDispatcher.RunAsync`'s own single-slot
+  arbitration) is corrected to match: `SubmitHumanPoolAdd` used to write a single overwritable
+  field, read only once the simulated slot was already idle — which did not even correctly model
+  the OLD production bug (a second rapid call before the first was consumed silently overwrote it
+  too, never mind reproducing genuine collision with an in-flight automatic apply). Replaced with
+  a real FIFO (`_issueQueue`) shared between the console-verb path and the reconcile-apply path,
+  matching production's post-fix behaviour and its own `DrainInputs`-before-`DrainAutomaticPartyPool`
+  tick order.
+- `ThreeRapidHostPoolAddsFiredWithNoWaitBetweenThemStillConvergeToExactlyThree` — §25's own recipe,
+  genuinely rapid this time (no wait between the three `SubmitHumanPoolAdd` calls, unlike the
+  pre-existing `RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides`,
+  which waits for each to land before typing the next and so never actually collides). Asserts
+  EXACT convergence to 3 on all four numbers the channel maintains. **Mechanically confirmed
+  failing against the pre-fix harness model**: reverting `SubmitHumanPoolAdd` to overwrite a single
+  field instead of enqueueing makes this test fail (`the host's own engine never reached 3 ... got
+  1` — two of the three requests lost at the harness's own single overwritable slot, the same
+  shape §25's live rig hit); restored and reconfirmed passing.
+- `AConsoleVerbFiredAtTheExactMomentAReconcileApplyBecomesDequeueableLosesNeither` — the other
+  direction named in this session's own brief: a client deposit queues a reconcile apply on the
+  host at the same instant the host's own "operator" types `pooladd` for an unrelated key: neither
+  request may be dropped, and both keys must converge independently. Passes against the fix (this
+  one does not fail against the reverted harness, since it only issues a single human request —
+  its value is proving the fixed behaviour holds under real contention, not pinning the harness's
+  own overwrite bug specifically).
+- `AnInFlightApplyThatNeverLandsWithinTheTimeoutIsFreedForReconcileToRetryIt` — a deterministic
+  `ScriptedBridge` pin for §26.2(c): an apply is queued and dequeued, but the engine (a
+  forever-repeating empty scan) never moves for the key, simulating a request lost outside
+  `PartyPoolPump`'s own view entirely. Confirms the key is freed and a fresh apply toward the
+  current wire is queued again once `ApplyInFlightTimeoutMs` elapses — genuinely waits out real
+  wall-clock time (`SessionClock` is a real `Stopwatch`, not fakeable), the one test in the suite
+  that has to. **Mechanically confirmed failing pre-fix**: temporarily setting
+  `ApplyInFlightTimeoutMs` to a value the test's own wait could never reach makes the key stall
+  forever, exactly as it did pre-fix (`Assert.Contains() Failure ... Collection: []`); restored and
+  reconfirmed passing.
+
+### 26.4 Files changed
+
+`src/KotorCoop.Agent/CoopCommandDispatcher.cs`: `_queuedCheats`/`MaxQueuedCheats`/`QueuedCheat`
+added; `SendCheat` now queues instead of overwriting when the slot is busy; the actual block write
+moved into a new `FireCheat`; `ReflectCheatAnswer` calls a new `FireNextQueuedCheat` from both its
+matched-answer and timeout branches. `src/KotorCoop.Session/Pumps/PartyPoolPump.cs`:
+`_applyInFlight` changed from `HashSet<PartyPoolStackKey>` to `Dictionary<PartyPoolStackKey, long>`
+(queued-at timestamp); `ApplyInFlightTimeoutMs` (15s) added; step 2 expires stale entries before
+building its exclusion set. `tests/KotorCoop.Tests/CoopCheatDispatchTests.cs`: one new test, three
+adapted to the serialized-issuer discipline. `tests/KotorCoop.Tests/PartyPoolLoopbackTests.cs`:
+`DispatcherLoop` corrected to a real FIFO; `MedEquipment` key constant added (§25's own resref);
+three new tests.
+
+### 26.5 Verdict
+
+`party_pool_sync` **stays OFF** (`AgentSettings.PartyPoolSyncEnabled`/`profiles/coop.ini.example`
+unchanged, still default `false`/`0`) — this pass fixed a real, mechanically-confirmed defect (the
+single-slot collision, §26.1) plus added an independent timeout backstop, but per this project's
+own engine-write rules, a bench-only pass earns the fix landing, not the flag flipping.
+
+Build: `dotnet build KotorCoop.slnx -warnaserror` clean. `dotnet test tests/KotorCoop.Tests
+--no-build --filter "FullyQualifiedName~PartyPool|FullyQualifiedName~Cheat"`: 150/150 passing (up
+from the prior session's 149 — actually 68 PartyPool + 83 Cheat pre-existing, +3 PartyPool +1 Cheat
+this round, minus the filter's own overlap accounting). Full suite (`dotnet test
+tests/KotorCoop.Tests --no-build`, run in the foreground, no filter): 2489/2489 passing — no
+regression anywhere else in the codebase.
+
+**NEEDS-LIVE**: this pass had no rig — the fix and its regression coverage are bench-only (three of
+the five new tests mechanically confirmed failing pre-fix via a temporary local revert, not merely
+asserted to be regression pins). The concrete next live step is exactly §25's own recipe re-run
+against this fix: three rapid `pooladd`s of the same resref on the host, then the client, in
+`end_m01aa`, confirming EXACTLY +3/+6 on both sides with the wire never going silent — and,
+separately, a live recipe that deliberately interleaves a console verb (any staging cheat, not
+necessarily party-pool) with an in-flight reconcile apply, to confirm the real
+`CheatController.OnFrame`/shared-block round trip serializes the two exactly as the bench model
+now does.

@@ -85,31 +85,135 @@ public class CoopCheatDispatchTests
     private static void Type(CoopCommandDispatcher dispatcher, string line) =>
         dispatcher.Dispatch(ConsoleCommand.Parse(line));
 
+    private static async Task<bool> WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(15).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Types one line and drives the single-slot channel's own round trip to completion before
+    /// returning — root cause 7 (2026-08-28, docs/research/party-pool-sync.md §26) made
+    /// <c>SendCheat</c> a genuinely SERIALIZED issuer: a request typed while a previous one is
+    /// still unanswered is now QUEUED rather than overwriting it (never dropped, never
+    /// misattributed), so a test that wants to see MULTIPLE distinct requests land at the
+    /// plugin one after another — as several in this file do — has to answer each one and let
+    /// <c>ReflectCheatAnswer</c> free the slot before the next line can fire, exactly like a
+    /// human typing one command, reading its answer, then typing the next. Requires
+    /// <c>dispatcher.RunAsync</c> already running: that is the only thing that ever drains
+    /// <see cref="_pendingCheatSerial"/>/the queued-cheat FIFO.
+    /// </summary>
+    private static async Task<CheatRequest> TypeAndAnswer(
+        CoopCommandDispatcher dispatcher, CheatBridge bridge, string line)
+    {
+        int before = bridge.Requests.Count;
+        Type(dispatcher, line);
+
+        Assert.True(
+            await WaitForAsync(() => bridge.Requests.Count > before, TimeSpan.FromSeconds(5)),
+            $"'{line}' never reached the plugin - the single shared slot never freed up");
+
+        CheatRequest request = bridge.Requests[^1];
+        bridge.AnsweredSerial = (uint)bridge.Requests.Count;
+
+        // Let the dispatcher's own tick loop notice the matching answer and free the slot
+        // (and, if anything was queued behind it, fire that next) before the caller types
+        // another line.
+        await Task.Delay(300).ConfigureAwait(false);
+
+        return request;
+    }
+
     [Fact]
-    public void SelfCheatsReachThePluginWithTheirArguments()
+    public async Task SelfCheatsReachThePluginWithTheirArguments()
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
         using (manager)
         {
-            Type(dispatcher, "god on");
-            Type(dispatcher, "topup 25");
-            Type(dispatcher, "standup");
-            Type(dispatcher, "tp 3 -4 5");
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            CheatRequest god = await TypeAndAnswer(dispatcher, bridge, "god on");
+            CheatRequest topup = await TypeAndAnswer(dispatcher, bridge, "topup 25");
+            CheatRequest standup = await TypeAndAnswer(dispatcher, bridge, "standup");
+            CheatRequest tp = await TypeAndAnswer(dispatcher, bridge, "tp 3 -4 5");
 
             Assert.Equal(4, bridge.Requests.Count);
 
-            Assert.Equal(CheatKinds.God, bridge.Requests[0].Kind);
-            Assert.Equal(1, bridge.Requests[0].Amount);
+            Assert.Equal(CheatKinds.God, god.Kind);
+            Assert.Equal(1, god.Amount);
 
+            Assert.Equal(CheatKinds.TopUp, topup.Kind);
+            Assert.Equal(25, topup.Amount);
+
+            Assert.Equal(CheatKinds.StandUp, standup.Kind);
+
+            Assert.Equal(CheatKinds.Teleport, tp.Kind);
+            Assert.Equal(3f, tp.X);
+            Assert.Equal(-4f, tp.Y);
+            Assert.Equal(5f, tp.Z);
+
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
+    /// <summary>
+    /// ROOT CAUSE 7's own direct regression pin (2026-08-28, docs/research/party-pool-sync.md
+    /// §26): a second staging cheat typed while the first is still unanswered used to overwrite
+    /// the first request's own bytes in the shared block outright — <c>SendCheat</c> had no
+    /// in-flight check at all, so <c>bridge.Requests</c> would have shown BOTH the god request
+    /// AND the topup request the instant the second line was typed, with nothing ever having
+    /// answered the first. This is exactly the mechanism that permanently stalled a party-pool
+    /// key in §25's live rig round: a reconcile apply's own cheat request, still awaiting the
+    /// plugin's answer, silently replaced by a console verb's request before the plugin ever saw
+    /// it. Fixed: a request typed while the slot is busy is QUEUED, not fired — <c>topup</c>
+    /// must not reach the bridge at all until <c>god</c>'s own answer lands.
+    /// </summary>
+    [Fact]
+    public async Task ASecondCheatTypedWhileTheFirstIsStillUnansweredIsQueuedNotFiredOverIt()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            Type(dispatcher, "god on");
+
+            Assert.True(
+                await WaitForAsync(() => bridge.Requests.Count == 1, TimeSpan.FromSeconds(5)),
+                "'god on' never reached the plugin");
+
+            // Typed while "god on" is still unanswered (bridge.AnsweredSerial is still 0) - must
+            // not touch the bridge at all yet.
+            Type(dispatcher, "topup 25");
+
+            await Task.Delay(500);
+            CheatRequest onlyRequest = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.God, onlyRequest.Kind);
+
+            // Answer the first - the slot frees up and the queued "topup" is fired.
+            bridge.AnsweredSerial = 1;
+
+            Assert.True(
+                await WaitForAsync(() => bridge.Requests.Count == 2, TimeSpan.FromSeconds(5)),
+                "the queued 'topup' never fired once the slot freed up");
             Assert.Equal(CheatKinds.TopUp, bridge.Requests[1].Kind);
             Assert.Equal(25, bridge.Requests[1].Amount);
 
-            Assert.Equal(CheatKinds.StandUp, bridge.Requests[2].Kind);
-
-            Assert.Equal(CheatKinds.Teleport, bridge.Requests[3].Kind);
-            Assert.Equal(3f, bridge.Requests[3].X);
-            Assert.Equal(-4f, bridge.Requests[3].Y);
-            Assert.Equal(5f, bridge.Requests[3].Z);
+            await cts.CancelAsync();
+            await loop;
         }
     }
 
@@ -294,18 +398,24 @@ public class CoopCheatDispatchTests
     }
 
     [Fact]
-    public void SlayByIdCarriesTheIdAndSlayByTagCarriesTheText()
+    public async Task SlayByIdCarriesTheIdAndSlayByTagCarriesTheText()
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
         using (manager)
         {
-            Type(dispatcher, "slay 0x2A");
-            Assert.Equal(0x2Au, bridge.Requests[0].Target);
-            Assert.Equal(string.Empty, bridge.Requests[0].Text);
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
 
-            Type(dispatcher, "slay sith_soldier01");
-            Assert.Equal(0u, bridge.Requests[1].Target);
-            Assert.Equal("sith_soldier01", bridge.Requests[1].Text);
+            CheatRequest byId = await TypeAndAnswer(dispatcher, bridge, "slay 0x2A");
+            Assert.Equal(0x2Au, byId.Target);
+            Assert.Equal(string.Empty, byId.Text);
+
+            CheatRequest byTag = await TypeAndAnswer(dispatcher, bridge, "slay sith_soldier01");
+            Assert.Equal(0u, byTag.Target);
+            Assert.Equal("sith_soldier01", byTag.Text);
+
+            await cts.CancelAsync();
+            await loop;
         }
     }
 
@@ -410,24 +520,30 @@ public class CoopCheatDispatchTests
     /// window under test never opens.
     /// </summary>
     [Fact]
-    public void UsingADoorByTagSendsTheTagAndByIdSendsTheId()
+    public async Task UsingADoorByTagSendsTheTagAndByIdSendsTheId()
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
         using (manager)
         {
-            Type(dispatcher, "usedoor end_door10");
-            Assert.Equal(CheatKinds.UseDoor, bridge.Requests[0].Kind);
-            Assert.Equal("end_door10", bridge.Requests[0].Text);
-            Assert.Equal(0u, bridge.Requests[0].Target);
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
 
-            Type(dispatcher, "usedoor 0x1F");
-            Assert.Equal(0x1Fu, bridge.Requests[1].Target);
-            Assert.Equal(string.Empty, bridge.Requests[1].Text);
+            CheatRequest byTag = await TypeAndAnswer(dispatcher, bridge, "usedoor end_door10");
+            Assert.Equal(CheatKinds.UseDoor, byTag.Kind);
+            Assert.Equal("end_door10", byTag.Text);
+            Assert.Equal(0u, byTag.Target);
+
+            CheatRequest byId = await TypeAndAnswer(dispatcher, bridge, "usedoor 0x1F");
+            Assert.Equal(0x1Fu, byId.Target);
+            Assert.Equal(string.Empty, byId.Text);
 
             // Bare: neither, and the plugin sweeps for the nearest transition door.
-            Type(dispatcher, "usedoor");
-            Assert.Equal(0u, bridge.Requests[2].Target);
-            Assert.Equal(string.Empty, bridge.Requests[2].Text);
+            CheatRequest bare = await TypeAndAnswer(dispatcher, bridge, "usedoor");
+            Assert.Equal(0u, bare.Target);
+            Assert.Equal(string.Empty, bare.Text);
+
+            await cts.CancelAsync();
+            await loop;
         }
     }
 

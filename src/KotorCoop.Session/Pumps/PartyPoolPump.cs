@@ -79,6 +79,36 @@ namespace KotorCoop.Session.Pumps;
 /// freeze lifts. No amount of amplification inside the window this catches can exceed roughly
 /// <see cref="MaxPublishesPerWindow"/> published ops for a single key — a world away from
 /// §21's 615/1068/906/1938.
+///
+/// ⚠ ROOT CAUSE 7 (2026-08-28, docs/research/party-pool-sync.md §26). <see cref="_applyInFlight"/>
+/// is set the moment step 2 QUEUES an apply and, before this round, was cleared ONLY by step 1
+/// observing the engine actually move for that key (root cause 6). That is sound only if the
+/// queued apply is guaranteed to eventually reach the plugin. It was not: the arbitrated,
+/// single-slot staging-cheat channel it travels through
+/// (<c>CoopCommandDispatcher.SendCheat</c>/<c>ReflectCheatAnswer</c>) used to let a LATER
+/// request — in particular, a human's own console verb, which never checked whether an
+/// automatic apply was still awaiting its answer — silently overwrite an unanswered apply's
+/// request bytes in the shared block before the plugin ever read them. The engine-side delta
+/// that apply represented then never ran, the engine never moved for that key, and
+/// <c>_applyInFlight</c> stayed set FOREVER: step 2 excludes an in-flight key from reconcile
+/// unconditionally, so a permanently-stuck key is never retried, with no error and no
+/// loop-breaker trip (nothing is being published for a frozen key). Live-reproduced in §25:
+/// three rapid host <c>pooladd</c>s, only 2 of 3 units ever confirmed landed, the wire silent
+/// for 5+ minutes with no self-correction.
+///
+/// <c>CoopCommandDispatcher</c> is fixed this round to never let that overwrite happen (a
+/// request arriving while the slot is busy is now queued, not clobbering — see its own root
+/// cause 7 remarks) — but this class does not get to assume its own upstream channel is
+/// flawless forever, the same "a defence that only works if the reasoning above is complete is
+/// not enough on its own" principle §22's hard backstop was built on. <see cref="_applyInFlight"/>
+/// therefore changed from a bare key set to a key-&gt;queued-at-timestamp map: an entry older
+/// than <see cref="ApplyInFlightTimeoutMs"/> is presumed lost (refused, dropped, or simply never
+/// answered) and is expired BEFORE step 2 builds its exclusion set, so a fresh reconcile against
+/// the CURRENT wire — never a frozen value, same discipline as root cause 4 — re-queues it if
+/// the wire still disagrees. <see cref="ApplyInFlightTimeoutMs"/> (15s) is generous on purpose:
+/// well past the dispatcher's own 3s <c>CheatAnswerTimeout</c> plus whatever a legitimate queue
+/// of other cheats ahead of it could plausibly add, so this only ever fires for a genuinely
+/// lost apply, never a merely slow one.
 /// </summary>
 internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Action<string> log)
 {
@@ -117,12 +147,19 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
     private Dictionary<PartyPoolStackKey, int> _engineBelief = [];
 
     /// <summary>Keys with a step-2 apply queued (or already dequeued and in flight through the
-    /// arbitrated cheat channel) whose landing this instance is still waiting to observe.
-    /// Excludes a key from step 2's reconcile (never queue a second apply for a key already
-    /// chasing one) — unlike root cause 3's <c>_pendingApplyTarget</c>, this carries no VALUE to
-    /// go stale; every comparison against it re-reads <c>wireTotal</c> fresh, see the class
-    /// remarks.</summary>
-    private readonly HashSet<PartyPoolStackKey> _applyInFlight = [];
+    /// arbitrated cheat channel) whose landing this instance is still waiting to observe, mapped
+    /// to <see cref="SessionClock.NowMs"/> at the moment the apply was queued. Excludes a key
+    /// from step 2's reconcile (never queue a second apply for a key already chasing one) —
+    /// unlike root cause 3's <c>_pendingApplyTarget</c>, the VALUE here is never compared against
+    /// anything (every reconcile re-reads <c>wireTotal</c> fresh, see the class remarks); it
+    /// exists only so root cause 7's timeout (<see cref="ApplyInFlightTimeoutMs"/>) can tell a
+    /// key that has been waiting too long from one that just started.</summary>
+    private readonly Dictionary<PartyPoolStackKey, long> _applyInFlight = [];
+
+    /// <summary>Root cause 7 (§26): how long a key may sit in <see cref="_applyInFlight"/> before
+    /// its apply is presumed lost and the key is freed for reconcile to re-queue it against the
+    /// current wire. See the class remarks for why 15s.</summary>
+    private const long ApplyInFlightTimeoutMs = 15_000;
 
     // ---- the hard loop breaker (root cause 4's own backstop, §22) -------------------------
 
@@ -263,7 +300,7 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
             // reaching this line at all already means "a distinct entry currently in flight for
             // this key just moved" — clear it unconditionally and let step 2, re-reading the
             // store fresh below, notice and queue for whatever gap (if any) remains right now.
-            if (_applyInFlight.Contains(key))
+            if (_applyInFlight.ContainsKey(key))
             {
                 _applyInFlight.Remove(key);
             }
@@ -288,7 +325,32 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         // asked for).
         IReadOnlyDictionary<PartyPoolStackKey, int> wireForReconcile = session.PartyPoolTotals;
 
-        HashSet<PartyPoolStackKey> excluded = new(_applyInFlight);
+        // ROOT CAUSE 7 (§26): expire an in-flight apply that has been waiting long enough that
+        // its request is presumed lost (dropped by an upstream single-slot collision, refused
+        // with nothing to retry it, or otherwise never landed) — BEFORE building the exclusion
+        // set below, so a genuinely stuck key is freed to reconcile again against the CURRENT
+        // wire this same tick, rather than waiting one more tick to notice.
+        List<PartyPoolStackKey>? expired = null;
+        foreach ((PartyPoolStackKey key, long queuedAt) in _applyInFlight)
+        {
+            if (now - queuedAt > ApplyInFlightTimeoutMs)
+            {
+                (expired ??= []).Add(key);
+            }
+        }
+
+        if (expired is not null)
+        {
+            foreach (PartyPoolStackKey key in expired)
+            {
+                _applyInFlight.Remove(key);
+                log($"party pool: apply for '{key.Resref}' never landed within "
+                    + $"{ApplyInFlightTimeoutMs / 1000}s — presumed lost, retrying "
+                    + "(docs/research/party-pool-sync.md §26)");
+            }
+        }
+
+        HashSet<PartyPoolStackKey> excluded = new(_applyInFlight.Keys);
         foreach ((PartyPoolStackKey key, long until) in _frozenUntil)
         {
             if (now < until)
@@ -321,7 +383,7 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                     new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
             }
 
-            _applyInFlight.Add(delta.Key);
+            _applyInFlight[delta.Key] = now;
 
             // This instance now owes its own engine an apply — the very next scan needs to be
             // fresh so the apply's landing (and anything else that moves in the meantime) is
