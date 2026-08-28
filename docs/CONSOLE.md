@@ -25,7 +25,7 @@ format, and the live-verification checklist — this page is the short reference
 | `who` / `peers` | — | any player | list connected peers |
 | `where` | — | any player | print your own coordinates |
 | `servers` / `browse` / `list` | — | any player | list discovered servers |
-| `warp` | `<module> [waypoint]` | any player | **the one shadowed retail verb** — travels through the session so the peer follows, instead of the engine's own unsynced warp |
+| `warp` | `<module> [waypoint]` | any player | **the one shadowed retail verb** — travels through the session so the peer follows, instead of the engine's own unsynced warp. **Not safe to chain rapidly for testing**: a pre-existing, unfixed `swkotor.exe` engine defect (stale-pointer bugs in `CExoKeyTable::DestroyTable`/`CSWCObject::GetServerObject`, unrelated to any coop code — see [transition-crashes.md](research/transition-crashes.md)) is far more likely to fire when a transition happens near-instantly, as `warp` does, than through a real door's several seconds of walk+fade; a 12-transition real-door-only soak found zero crashes on the same build where a `warp`-driven soak reliably crashes by transition 2-3 |
 | `netsim` / `net` | `off\|status\|loss <pct>\|latency <ms> [jitter]\|blackout <secs> [in\|out\|both]` | any player | fault-injection: simulate loss/latency/an outage |
 | `clear` / `cls` | — | any player | clear the console |
 | `help` / `?` / `commands` | — | any player | list commands |
