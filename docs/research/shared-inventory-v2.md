@@ -1380,3 +1380,31 @@ partly or fully blocked by it.
 
 **Files touched this round**: none — bench/rig-only verification pass, no source changes. This
 document only.
+
+---
+
+## 11. 2026-08-29, correction to §10.4's "9th failure" — it is the long-documented item-pickup /
+## client-hit flaky pair, not new; a likely mechanism, ground-item sync confirmed unregressed
+
+§10.4 called `an item picked up here vanishes on the peer` "a 9th, newly-reproducible failure not
+in the prior documented set", reproduced identically on both of its two fresh sessions. That
+framing missed `docs/live-verification.md`'s own history: this exact check is already named there,
+more than once (its 2026-08-28 "item 5" entry and the `store_sync`-round entry immediately before
+it), as one half of a **long-running documented flaky pair** with `a client hit costs the enemy
+real hit points` — the two trade PASS/FAIL against each other from run to run, predating this
+document entirely. §10.4's own round did not cross-reference that history before calling it new.
+
+This is not this document's channel (party pool / store), so the full investigation — six manual
+live reproductions confirming the ground-item removal/wire/destroy path is unregressed, a
+`WorldStatePumpItemsTests.cs` bench pin against the resref-cache/suppression-ledger suspects this
+task named, and the `Odyssey.SnapTo`-mediated mechanism a live reproduction pinned for the flaky
+pair itself — is written up in full in `docs/live-verification.md`'s own 2026-08-29 "ground-item
+pickup sync" entry, not repeated here. The one-line version: **`party_pool_sync`/`store_sync`
+mode 2's own items 1/2 verdicts in §10.1/§10.2 are unaffected** (those are real, independently
+root-caused defects in the mode-2 pumps themselves, nothing to do with this correction), and item
+4's baseline PASS stands with its ninth-failure footnote removed — it was the eighth, already
+known.
+
+**Files touched this round**: this document only (correction), plus
+`tests/KotorCoop.Tests/WorldStatePumpItemsTests.cs` and `docs/live-verification.md` (see that
+entry). No production code changed.
