@@ -1843,3 +1843,79 @@ this — it remains a known, orthogonal module hazard, not a `store_sync` defect
 
 **No crash from `store_sync` itself across the whole round** (the one client crash was the
 pre-existing duros/warp-while-down trap above, unrelated to store code). `store_sync` stays OFF.
+
+## Live pass (2026-08-29): the exact re-test this document's own prior section called for
+## (`scriptgive` a resref, then `sell` it) finally run — `sell` REPORTS success but does not
+## actually move the item: verified negative, not merely "still unconfirmed"; `store_sync` stays
+## OFF
+
+Task: this round's own queue item 2 — `warp tar_m02aa`; `scriptgive g_w_blstrpstl001` on the
+host; `openstore Larrim_Store` both; `sell Larrim_Store g_w_blstrpstl001`; confirm the item
+appears in the client's copy of the store, then buy it back on the client. Run with
+`party_pool_sync=0` this round (deliberately — see `docs/research/party-pool-sync.md`'s own new
+§17: `party_pool_sync=1` was found to crash the host reliably this same session, and the party
+pool has no bearing on this test's own resref, which was staged with `scriptgive` specifically to
+avoid it).
+
+### The `sell` call itself: no error, no crash — but the item never actually moved
+
+`scriptgive g_w_blstrpstl001` gave item `0x9F` directly (`gave 'g_w_blstrpstl001' (0x9F) to the
+local player, untracked`). `openstore Larrim_Store` opened cleanly (after one retry — the item
+notification popup from `scriptgive` itself counted as "another modal screen" the first attempt,
+dismissed with a click on its own OK button, unrelated to store code). `sell Larrim_Store
+g_w_blstrpstl001` answered `sell 'g_w_blstrpstl001' x1 to store Larrim_Store` — status **1**
+(applied), no refusal, no crash, host process confirmed alive and responding immediately after.
+
+**But the item never moved.** A follow-up `items 60` sweep (`docs/CONSOLE.md`'s read-only
+diagnostic, full agent-log dump) two minutes later shows item `0x9F` still listed as **`yours`**
+— i.e. still in the local player's own inventory, exactly where `scriptgive` put it — not `held
+by 0x74` (`0x74` is `Larrim_Store` itself, confirmed the same way the 2026-08-28 live pass
+confirmed it). Two OTHER items sharing the same resref (`0x81 held by 0x74`, the store's own
+pre-existing stock; `0x9A held by 0x98`, an unrelated NPC) are visible in the same sweep,
+confirming the sweep itself is working and not simply missing `0x9F`'s true location. `grantgold
+0` (a no-op gold read) shows 40 gold — this save's baseline; no purchase price was ever credited,
+consistent with no transaction having actually occurred.
+
+**`store_sync`'s own pump never detected a change either, for the same reason there was nothing
+to detect.** `StorePump.cs`'s own Detect step (`Pumps/StorePump.cs`) diffs a fresh scan of the
+open store against its last scan every tick the store stays open; the store remained open for
+over two minutes after the `sell` call (confirmed via repeated `hosting on...` heartbeat lines in
+`agent1.log`) with zero `store: local add/remove of...detected` lines appearing — the exact
+symptom `StoreDiffRule.Diff` would produce if the store's own repository genuinely never changed,
+which the `items` sweep above independently confirms it did not.
+
+### This narrows, rather than contradicts, the 2026-08-28 pass's own finding
+
+The prior pass's own "still not positively confirmed" verdict left two live hypotheses open: a
+`sell`-specific defect, or the SAME party-pool `item_count` visibility gap `sell`'s own
+`GetItemRepositoryFn(player, 1)` resolves to. This round used `scriptgive` specifically to rule
+out the second (an item spawned by `scriptgive` never touches the party-pool repository at all —
+`docs/CONFIG.md`'s own description: "gives an item straight into your own inventory with NO
+suppression-ledger entry"), and still found `sell` doing nothing. **This is now a `sell`-specific
+defect, not (or not only) an artifact of the party-pool insert-visibility bug.** The engine call
+itself (`CSWGuiStore::SellItem`, per `docs/CONSOLE.md`'s own description "the REAL Sell-button
+handler") either silently no-ops for a `scriptgive`d item specifically (untracked, no
+suppression-ledger entry — perhaps the sell path expects some bookkeeping state a normal pickup
+sets that `scriptgive` deliberately skips), or the underlying engine call itself does not perform
+the transfer the way `buy`'s own confirmed-working mirror (2026-08-28 pass, `BuyItem`) does. Not
+disassembled this round for lack of time; the next round's concrete target is a fresh full
+disassembly of `CSWGuiStore::SellItem` itself (not merely its call site), the same "read the
+function, not just its documented call convention" discipline that closed the earlier `sell`
+wrong-repository bug and the party-pool `InsertItem`/`AddItem` question.
+
+### Verdict
+
+`store_sync` stays OFF. `buy` remains CONFIRMED working (2026-08-28 pass, unaffected by this
+round's finding). `sell` is now **verified NOT working** — a step up in certainty from "still not
+positively confirmed," not a regression from this round's own testing (nothing about `sell`'s
+code changed this session; this is the first time a clean, unambiguous test case — a
+non-party-pool-routed resref, watched with an independent `items` sweep rather than trusting the
+cheat's own "applied" reply — was actually run against it). No crash, no host instability from
+this round's own `store_sync` testing (the earlier crashes this session were exclusively
+`party_pool_sync`'s `AddItem` defect, run in a separate rig session with `store_sync` disabled —
+see `party-pool-sync.md`'s own §17).
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError` both clean this round (see `party-pool-sync.md`'s §17.6 — the same build
+covers both files). No source change to store code this round; `dotnet test tests/KotorCoop.Tests
+--no-build`: 2410/2410 passed.

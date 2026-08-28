@@ -4618,3 +4618,27 @@ flag), nothing crosses the wire.
 - `docs/CONFIG.md`, `profiles/coop.ini.example` — documented the new flag, matching the existing
   unconfirmed-candidate rows' own format.
 - `docs/research/party-reconciliation.md` — this entry.
+
+## Round 99 (2026-08-29, rig round) — `party_follow_phase7_release` A/B NOT RUN this round: the
+## rig time budget was consumed by two more severe findings elsewhere (a reliable host crash in
+## `party_pool_sync`'s `AddItem` fix, and a confirmed-negative `sell` result for `store_sync`) —
+## Round 98's own recipe is unchanged and still the one to run next
+
+Task: this round's own queue item 3 — the Round 98 A/B live-test recipe (§ above), three reps
+each leg. **Not reached.** The two-instance rig was used this round for queue items 1 and 2
+first (`party_pool_sync`/`store_sync` re-tests, both directed ahead of this item in the task's own
+ordering), and both surfaced defects severe enough to need full root-causing and write-up in their
+own right — see `docs/research/party-pool-sync.md`'s new §17 (a reliably reproducing host crash,
+3/3, in the AddItem-based fix that document's own §16 shipped) and
+`docs/research/store-sync.md`'s new "Live pass (2026-08-29)" section (`sell` confirmed NOT to
+move the item despite reporting success) — leaving no remaining rig time this round for item 3's
+own multi-rep A/B staging.
+
+`party_follow_phase7_release` stays at its shipped default (OFF), unchanged. Round 98's own
+live-verification recipe (§ "Honest status and live-verification recipe for whoever has the rig
+next", above) is still exactly the one to run: stage a release via `companion_local_combat` with
+the flag first at 0 (control: expect the companion to stay frozen at whatever phase the record
+held when mirroring ended) then at 1 (treatment: expect `phase7release: 0x{id} reset phase {X} ->
+-1 on unmirror` at release, then genuine `FindPath`-driven movement), three reps each leg. Nothing
+about this round's own findings elsewhere touches follow-AI code at all — Round 98's own static RE
+is unaffected and needs no revisiting, only the live pass it was always waiting on.

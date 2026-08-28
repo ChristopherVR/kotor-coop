@@ -38,6 +38,16 @@ public class Keys {
         System.Threading.Thread.Sleep(holdMs);
         Send(scan, true);
     }
+    // Left-shift (scan 0x2A) held around the tap, for characters that need it (e.g. the
+    // underscore that is Shift+minus on a US layout) — resref console commands need this
+    // since KOTOR resrefs are conventionally snake_case (g_i_..., g_w_...).
+    public static void TapShifted(ushort scan, int holdMs) {
+        Send(0x2A, false);
+        System.Threading.Thread.Sleep(150);
+        Tap(scan, holdMs);
+        System.Threading.Thread.Sleep(150);
+        Send(0x2A, true);
+    }
     static void Send(ushort scan, bool up) {
         INPUT[] i = new INPUT[1];
         i[0].type = 1;
@@ -71,6 +81,7 @@ public class Keys {
 
 $scanCodes = @{
     'esc' = 0x01; '1' = 0x02; '2' = 0x03; '3' = 0x04; '4' = 0x05; '5' = 0x06
+    '6' = 0x07; '7' = 0x08; '8' = 0x09; '9' = 0x0A; '0' = 0x0B; 'minus' = 0x0C
     'q' = 0x10; 'w' = 0x11; 'e' = 0x12; 'r' = 0x13; 't' = 0x14; 'y' = 0x15
     'u' = 0x16; 'i' = 0x17; 'o' = 0x18; 'p' = 0x19
     'a' = 0x1E; 's' = 0x1F; 'd' = 0x20; 'f' = 0x21; 'g' = 0x22; 'h' = 0x23
@@ -81,6 +92,10 @@ $scanCodes = @{
     'up' = 0xE048; 'down' = 0xE050; 'left' = 0xE04B; 'right' = 0xE04D
     'grave' = 0x29; 'backspace' = 0x0E
 }
+# Shift+scan characters — dispatched through Keys.TapShifted instead of Keys.Tap. Currently
+# just the underscore (Shift+minus, US layout), needed for every KOTOR resref console
+# argument (g_i_..., g_w_..., k_...).
+$shiftedScanCodes = @{ 'underscore' = 0x0C; '_' = 0x0C }
 
 $proc = if ($ProcId -ne 0) { Get-Process -Id $ProcId -ErrorAction SilentlyContinue }
         else { Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Select-Object -First 1 }
@@ -91,8 +106,14 @@ Start-Sleep -Milliseconds 500
 
 foreach ($k in $Keys) {
     $key = $k.ToLower()
-    if (-not $scanCodes.ContainsKey($key)) { Write-Error "unknown key '$k'"; exit 1 }
-    [Keys]::Tap([uint16]$scanCodes[$key], $HoldMs)
-    "sent '$key' (scan 0x{0:X2})" -f $scanCodes[$key]
+    if ($shiftedScanCodes.ContainsKey($key)) {
+        [Keys]::TapShifted([uint16]$shiftedScanCodes[$key], $HoldMs)
+        "sent shifted '$key' (scan 0x{0:X2})" -f $shiftedScanCodes[$key]
+    } elseif ($scanCodes.ContainsKey($key)) {
+        [Keys]::Tap([uint16]$scanCodes[$key], $HoldMs)
+        "sent '$key' (scan 0x{0:X2})" -f $scanCodes[$key]
+    } else {
+        Write-Error "unknown key '$k'"; exit 1
+    }
     Start-Sleep -Milliseconds $GapMs
 }

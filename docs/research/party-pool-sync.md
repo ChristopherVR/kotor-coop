@@ -1648,3 +1648,144 @@ a second deposit of an already-present one — confirming the mechanism directly
 inferring it from `item_count` alone. If any of these still fail, the failure mode has moved past
 everything §7-§16 have collectively covered and is worth a fresh "two lookups, one frame" pass
 on whatever the new failure is, rather than re-litigating `InsertItem`/`AddItem` again.
+
+## 17. 2026-08-29, live pass — §16's own concrete next-test-step run; a NEW, more severe defect
+## found: `AddItem` reliably CRASHES the host, 3/3 reproductions across two different resrefs and
+## two separate rig sessions, at the exact same instruction — worse than the `InsertItem` no-op it
+## replaced; stays OFF; a second, independent, real regression fixed along the way
+## (`pooladd`/`poolremove` were never reachable from the real in-game console at all)
+
+Task: this round's own queue item 1 — run §16's own closing "concrete next live-test step" first
+(`pooladd` then `poolremove` of the same resref; `pooladd` x3 rapid host, x3 client) on the
+two-instance rig, `party_pool_sync=1` both sides.
+
+### 17.1 A prerequisite bug found before the live test could even start: `pooladd`/`poolremove`
+### were never reachable from a real in-game keystroke — only from `blockpoke.ps1`'s own
+### direct shared-block write
+
+Typing `pooladd g_i_medeqpmnt01` at the live console (`tools/sendkey.ps1`, extended this round
+with the digit/underscore scan codes resrefs need — see §17.5) produced a correctly-rendered
+input line, a real submit (the console's own `[0x007A3A40]` open flag cleared on Enter,
+confirmed via a raw `ReadProcessMemory` probe), and **zero** plugin-log output — not even the
+"add failed" line `CheatController.PartyPoolAdd` unconditionally logs on refusal. Root cause,
+found by reading `FuncInterpHook.cs`: its own `Verbs` allowlist (the ONLY gate deciding whether a
+submitted console line reaches `CoopCommandDispatcher` at all, or falls through to the retail
+engine's own `FuncInterp`, which has never heard of `pooladd`) never had `pooladd`/`poolremove`
+added to it — the commit that added both verbs to `ConsoleCommand.cs`
+(`fcdab50`, 2026-08-27) touched twelve files and never touched `FuncInterpHook.cs`. Every prior
+round's own successful live use of `pooladd` (§9-§16) went through `blockpoke.ps1 -ProcId <pid>
+console '...'`, which writes directly to the SAME shared-block field `FuncInterpHook`'s detour
+would have written — bypassing the allowlist check entirely — so nobody had actually typed
+`pooladd` at the real console until this round tried it. **Fixed**: `"pooladd", "poolremove"`
+added to `FuncInterpHook.Verbs` (`src/KotorCoop.Plugin/FuncInterpHook.cs`), confirmed not to
+shadow a retail verb the same way every prior addition to that list was checked. Live-confirmed
+working immediately after rebuild/redeploy (§17.2's own repro used a real keystroke submit, not
+blockpoke, and reached `CheatController.PartyPoolAdd` correctly).
+
+**Not fixed this round** (found, not chased further, for lack of time budget once §17.2's crash
+took priority): the same allowlist is also missing `grantxp`, `equip`, `grantgold`, `followkick`,
+`partyselect`, `faction`, `destroyobject`/`destroy`, and `movenear` — none of these are marked
+blockpoke-only in `docs/CONSOLE.md` the way `scriptgive`/`loottake`/`quittomenu`/etc. are, so each
+is very likely unreachable from a real player's own keystroke today, the same way `pooladd` was.
+Worth a dedicated pass to add the whole set at once and re-verify each live.
+
+### 17.2 The real finding: `CItemRepository::AddItem`, called by `AddItemToPartyPool` exactly as
+### §16 shipped it, crashes the host — 3/3 reproductions, two different resrefs, two separate rig
+### sessions, including once via ordinary gameplay (not the manual `pooladd` cheat at all)
+
+With the console fix in place, `pooladd g_i_medeqpmnt01` on the host (`party_pool_sync=1` both,
+fresh two-instance session, `docs/research/enemy-presence-sync.md`-style clean `demo.ps1`
+restart) produced the EXPECTED diagnostic line first —
+
+```
+party pool: add diag - repo 0x18649458, item_count 1->1, 0x133 IS in the post-add array walk,
+itemLocal unchanged (fresh entry)
+party pool: added 'g_i_medeqpmnt01' (0x133) x1, charges 0/0, upgrades 0x0
+cheat: added 'g_i_medeqpmnt01' x1 to the party pool (status 1)
+```
+
+— immediately followed, within ~150ms, by:
+
+```
+FIRST-CHANCE access violation (0xC0000005) at 0x56E549, eip 0x56E549, esp 0x1AFC40
+```
+
+and the host process was confirmed gone (`Get-Process` returns nothing) a moment later. **This
+reproduced 3/3 times**: a fresh rig restart with `pooladd g_w_thermldet01` (a different resref,
+ruling out anything specific to the first key) crashed identically at the SAME address; a third
+crash happened WITHOUT any manual `pooladd` at all — mid-`warp tar_m02aa`, something in the
+transition/dialogue sequence auto-deposited two items into the pool (`g_w_blstrpstl001` then
+`g_a_clothes01`, both logging a normal "added" line) and the host crashed immediately after the
+second one, confirming this defect is reachable through party_pool_sync's own automatic apply
+channel (`CheatController.PartyPoolAdd` is shared by both the manual `pooladd` verb and the
+peer-apply path — see that file's own doc comment), not merely the manual staging cheat.
+`tools/crashlog.ps1`, cross-checked against wall-clock timestamps, confirms all three as genuine
+Windows Application-log crash events (`code=0xc0000005 offset=0x0016e549`, the module-relative
+form of the same absolute address), not a plugin-log artifact.
+
+**Root cause, static RE this round** (`tools/disasm.py`, `tools/q.py`): 0x56E549 is inside
+`CSWSMessage::WriteRepositoryUpdate` (0x0056E360), called via `CSWSMessage::WriteOBJECTIDServer`
+(0x00578570) — **the retail engine's own dead multiplayer network-message serialization code**,
+never exercised in a real single-player session, reached from `AddItem`'s own merge-search loop
+at `0x0055D598-0x0055D5B6` (`CSWSItem::MergeItem` returning 1 branches into the "notify" block
+§16.4 already found and disassembled, `0x0055D5B6-0x0055D610`). The crashing instruction itself,
+`mov dl, byte ptr [edi + 0x18]`, reads a bad/uninitialized pointer in `edi` — consistent with a
+function that expects to be called only when a real networking session object exists, which
+retail single-player KOTOR never constructs. **This directly contradicts §16.4's own reading**
+that this notify block "only runs on a MERGE SUCCESS" being a narrow, rare case: this round's own
+diagnostic reported `itemLocal unchanged (fresh entry)` — i.e. the code's OWN classification says
+NO merge happened — on every one of the three crashes, meaning either `MergeItem` returns 1 for a
+broader set of cases than "genuinely stacked into an existing item" (worth precisely nailing down
+next round), or the notify block is reachable by some path this round's tracing missed. Either
+way, the practical result is unambiguous and was not narrowed further this round given the
+severity: **calling `AddItem` against the party pool's repository crashes the host essentially
+every time an item lands in it**, not merely on some narrow edge case.
+
+### 17.3 Severity: this is WORSE than the defect it replaced
+
+§7-§16 spent nine rounds chasing a defect whose worst symptom was a silent no-op — annoying, but
+safe to keep testing against. §16's own fix trades that for a **reliable host crash**, which is
+categorically worse: it makes `pooladd`/`poolremove` themselves unsafe to use as this project's
+own live-test primitives (the exact tools this document's own prior rounds relied on), and — per
+§17.2's third repro — makes `party_pool_sync=1` unsafe to leave on during ordinary play if
+anything at all gets deposited into the pool through the normal sync channel. **`AddItem` must
+not ship as-is.**
+
+### 17.4 Verdict and recommendation
+
+`party_pool_sync` stays OFF (`profiles/coop.ini.example`/`AgentSettings.PartyPoolSyncEnabled`
+unchanged) — now for a stronger reason than any prior round: not "unconfirmed," but a confirmed,
+reproducible crash. **Do not re-attempt §16's `AddItem` switch without first either (a) finding
+and calling whatever precondition genuinely initializes the network-message state
+`WriteRepositoryUpdate` expects (unlikely to be a real single-player-safe option), or (b)
+suppressing the notify block entirely** — e.g. a small inline patch/detour on
+`CItemRepository::AddItem` itself that skips the `0x0055D5B6-0x0055D610` block unconditionally
+(the party pool has no in-game UI panel for this notify to matter to; §16.4's own tracing already
+established the ONLY thing that block does when it doesn't crash is a getter+notify pair this
+project already treats as safe-when-unobserved elsewhere), or (c) reverting to `InsertItem` and
+instead manually incrementing `item_count`/appending to `items_list` by hand from C#, bypassing
+`AddItem`'s notify path altogether by not calling it at all. Whichever path the next round takes,
+it MUST re-run this round's own 3/3 crash repro as its own regression pin before calling anything
+fixed.
+
+### 17.5 Tooling fixed along the way
+
+`tools/sendkey.ps1` gained scan codes for `0`/`6`/`7`/`8`/`9` and a `TapShifted` primitive for
+`underscore` (Shift+minus) — resref console arguments need both and neither existed before this
+round. Confirmed working live (typed, not blockpoke'd, `pooladd g_i_medeqpmnt01` rendered
+correctly character-for-character on screen). **Not a substitute for `blockpoke.ps1 console`**:
+raw keystroke injection against this game remains flaky under synthetic `SendInput` in ways
+`blockpoke.ps1`'s own header comment already documents ("injected keystrokes never reach this
+game") — the native `~` toggle in particular did not reliably open on repeat presses this round,
+while `blockpoke.ps1 console` was 100% reliable throughout. Use the keystroke path only when the
+real end-to-end input path itself is what is under test (as it was for §17.1's own finding, which
+blockpoke's bypass would have masked); prefer `blockpoke.ps1 console` for everything else.
+
+### 17.6 Build/test evidence
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors. `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError`: clean NativeAOT win-x86 build, both game directories freshly installed
+and strings-confirmed (`pooladd`/`poolremove` present in both deployed `dinput8.dll`s via a
+UTF-16LE `strings` scan). `dotnet test tests/KotorCoop.Tests --no-build`: 2410/2410 passed — the
+`FuncInterpHook.cs` fix touches no C# logic under test (it is a native-only allowlist), so no new
+tests were added for it; nothing regressed.
