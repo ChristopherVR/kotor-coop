@@ -1375,3 +1375,65 @@ plain example template before this pass ended. An incidental finding — recover
 client instance stuck behind the ambient `duros` party-selection trap needed a full process
 restart (`partyselect ok` and even a savegame reload did not clear it) — is recorded in
 `store-sync.md`'s own new section alongside the rest of this round's evidence.
+
+## Rig pass (2026-08-28, later): `solo_segment_spectate` — the script-agnostic `RemovePartyMemberHook`
+## live plan run end to end, every lever confirmed, flipped ON by default; `party_follow_phase2_kick`
+## A/B attempted but the target precondition never reproduced
+
+Task: two items from this session's own queue — run `star-forge-finale.md` §11's live plan for
+the `RemovePartyMember`-hook solo-segment trigger and flip the default if clean; run
+`party-reconciliation.md` round 95's own A/B recipe for `party_follow_phase2_kick`.
+
+**Item 1 — `solo_segment_spectate`: PASS, flipped ON.** Fresh build/install on both game
+directories (strings-confirmed `RemovePartyMemberBySlot` present in both deployed `dinput8.dll`s).
+The splice install line (`solo segment: RemovePartyMember calls at 0x541C1E`) appeared on both
+plugin logs at startup — live-confirming §11.1's `HookSite` derivation for the first time. A
+single `removeparty 0` produced exactly one debug line and no crash. A tight 3-call burst
+(~330ms total, sent from one PowerShell process to avoid the per-invocation spawn overhead that
+made three separate `blockpoke.ps1` calls land ~1s apart and miss the debounce window) began a
+segment on the second call, in both a catalogued module (`sta_m45ac`) and, after a plugin
+restart with `solo_segment_any_module=1`, an uncatalogued one (`END_M01AA`) — and, with the key
+back at its default `0`, the identical burst in an uncatalogued module correctly produced no
+`began`. The owner's roster genuinely emptied (`partystate.ps1`: `companions 0` on both sides),
+the client's own phantom stopped being tracked on the owner's instance at all
+(`phantoms 0  remotes 0`), the spectator's plugin logged `solo segment: spectating 0x... — input
+parked, camera follows`, and its agent surfaced a toast (`* Lanik is fighting alone -
+spectating`). A real roster refill (`recruit 0`) ended the segment cleanly
+(`solo segment: ended (roster refilled or the module changed)`), confirming §11.2's own
+race-guard fix does not block a genuine end. No crash across the whole round. Full detail in
+`star-forge-finale.md`'s new §12. **`solo_segment_spectate` is now ON by default** — the one
+remaining gap (stopping a real physical WASD press) is unprovable with this project's own input
+primitives (injected keystrokes never reach this game), unchanged from every prior round.
+
+**Item 2 — `party_follow_phase2_kick`: INCONCLUSIVE, stays OFF.** Round 88's own exact recipe
+(`tp 20 22 -1.3`, bare-point `walk 10 15`, `END_M01AA`) run six times with
+`party_follow_finelog=1` on. Five completed attempts all reproduced the SAME shape — a
+transient pass through `phase=2` followed by a freeze in `phase=7`, position bit-identical
+across dozens of samples, `attempts=0`, but the companion only ~1-1.4 units from its leader
+(never the >3-units-away condition the fix's own `Phase2StallRule.ShouldKick` requires
+alongside `phase==2`). The candidate's own target precondition — frozen in phase 2 specifically,
+genuinely far behind — never arose under the CURRENT shipped defaults with this recipe, so no
+control-vs-treatment comparison was possible; `party_follow_phase2_kick` was never toggled to
+`1` this round because there was nothing to test it against. A sixth attempt (an instant `tp`
+separation instead of a gradual `walk`) produced a different anomaly — `party follow finelog`
+output stopped entirely for 5+ minutes with no crash, both processes responsive, no combat per
+the agent's own status line, but console round-trips slowing from sub-second to ~5.5s — flagged
+as a fresh, unexplained lead rather than chased further this round. Full detail, including two
+concrete next-step leads, in `party-reconciliation.md`'s new Round 96. No crash across the whole
+round; no code or default changed for this item.
+
+**Item 3 — `verify.ps1` baseline / full suite / native build, post-flip: PASS.** After the
+`solo_segment_spectate` default flip and its supporting `CoopConfig.cs` fallback fix above, both
+native builds were rebuilt (`dotnet build KotorCoop.slnx -warnaserror` and
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError` on both game directories, strings-confirmed) and
+`dotnet test tests/KotorCoop.Tests --no-build` run: **2382/2382 passed**, 0 failed, 0 skipped —
+up from the pre-round 2364 baseline by the item-1 code changes' own test-suite headcount (no
+regressions). A fresh two-instance session (`coop.ini` reset to the now-updated
+`profiles/coop.ini.example` on both installs, which now ships `solo_segment_spectate=1`) then
+ran `tools/verify.ps1`: **41 passed, 8 failed** — squarely the documented 40-42/7-9 baseline,
+all eight failures matching the long-standing known set (`phantom damageable, not a sink`, `the
+peer really loses those hit points`, `a client hit costs the enemy real hit points`, `a downed
+player is reported to the agent`, `the co-op revive stands the player back up`, `every engine
+call signature matches the binary` (187/189), `a container opened on the client is held and
+shown open on the host`, and the `no per-frame spam` flaky substitution). No new failures from
+this round's changes. No crash on either instance across the whole session.

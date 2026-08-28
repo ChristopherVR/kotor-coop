@@ -99,7 +99,8 @@ public readonly record struct PlayerState(
     /// the owner's enemy mirror. This instance, while its OWN copy of the flag is set, hides
     /// every remote peer from what it writes locally — <c>SoloSegmentRule.ShouldHideAllPeers</c>
     /// — so the duel script never sees a second body. coop.ini <c>solo_segment_spectate</c>
-    /// (agent-side key, default OFF, NEEDS-LIVE).
+    /// (agent-side key, default ON — live-verified 2026-08-28,
+    /// docs/research/star-forge-finale.md §12).
     ///
     /// TODO(version): this is a new wire bit on an existing dword (no packet shape changed),
     /// so nothing here requires a <c>ProtocolConstants.Version</c> bump by itself — flag it at

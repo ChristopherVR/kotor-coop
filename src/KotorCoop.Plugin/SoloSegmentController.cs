@@ -23,12 +23,15 @@ namespace KotorCoop.Plugin;
 /// <c>CoopAgent.PumpOnce</c>'s own peer-visibility filter — this controller does not touch
 /// remote peers at all.
 ///
-/// Kill switch: <c>solo_segment_spectate=0</c> in coop.ini (default OFF — NEEDS-LIVE; nothing
-/// here has been exercised against a real Star Forge save yet).
+/// Kill switch: <c>solo_segment_spectate=0</c> in coop.ini (default ON — live-verified
+/// 2026-08-28 via the script-agnostic <see cref="RemovePartyMemberHook"/> burst trigger: the
+/// splice installs, a burst begins a segment in both a catalogued module and, with
+/// <c>solo_segment_any_module=1</c>, an uncatalogued one too, the owner-side roster genuinely
+/// empties, and a real refill ends it — see docs/research/star-forge-finale.md §12).
 /// </summary>
 internal sealed unsafe class SoloSegmentController(SharedBlockView block)
 {
-    private readonly bool _enabled = PluginConfig.ReadBool("solo_segment_spectate", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("solo_segment_spectate", true);
 
     private readonly SoloSegmentCatalogue _catalogue =
         new(SoloSegmentCatalogue.ParseExtraModules(PluginConfig.Read("solo_segment_modules")));

@@ -4171,3 +4171,85 @@ live. No `SharedBlock`/protocol version change — everything this round touches
 - `docs/CONFIG.md`, `profiles/coop.ini.example` — documented the new flag, matching the existing
   two unconfirmed-candidate rows' own format.
 - `docs/research/party-reconciliation.md` — this entry.
+
+## Round 96 (2026-08-28, rig round) — `party_follow_phase2_kick`'s live A/B attempted; the exact
+## target precondition (phase=2, `attempts=0`, position frozen, leader >3 units away) did not
+## reproduce in six attempts of round 88's own recipe under the CURRENT shipped defaults; a
+## different, consistently-reproducible near-target freeze dominated instead — genuinely
+## inconclusive, stays OFF
+
+Task: round 95's own live-verification recipe (§"Live-verification recipe for whoever has the
+rig next") — control (`party_follow_phase2_kick=0`) vs. treatment (`=1`), three reps each, on
+`END_M01AA` with round 88's exact `tp 20 22 -1.3` / `walk 10 15` staging.
+
+### Method and what actually happened
+
+`party_follow_finelog=1` set on both `coop.ini`s (append, since the key is absent from the
+template and read once at plugin construction — confirmed via grep that the key does not exist
+in `profiles/coop.ini.example` at all, unlike `party_follow_phase2_kick`); `party_follow_phase2_kick`
+left at its shipped default (`0`) for the control leg. `tools/demo.ps1` up, loads `END_M01AA`
+directly. `tp 20 22 -1.3` then a bare-point `walk 10 15` (`tools/blockpoke.ps1`, not
+`console 'walk ...'`, per round 94's own note) on the host, repeated six times across this round
+(re-`tp`-ing back to the start point between most attempts), each followed by a foreground poll
+of the plugin log's `party follow finelog:` lines watching for `phase=2 attempts=0` with the
+companion's position frozen 5+ seconds while more than 3 units from the leader.
+
+### What was observed instead: a different stall, five times out of five completed attempts
+
+Every completed attempt (1-5) reproduced the SAME shape: the companion transiently visits
+`phase=2` for a handful of samples, then advances to `phase=7` and freezes there — position
+bit-identical across dozens of consecutive finelog samples, `attempts=0`, but
+`distSqToTarget` a small, non-zero, never-converging residual (0.02-0.18 across the five
+attempts) with the companion typically only ~1-1.4 units from `leaderPos` — i.e. essentially
+"arrived, but never quite snaps exactly onto the target," not "genuinely stuck far behind." This
+never satisfies `Phase2StallRule.ShouldKick`'s own two gates simultaneously
+(`phase == 2` AND `leaderDistanceSquared > 3² `) — by the time any freeze held long enough to
+matter, phase had already moved to 7. One attempt (a `tp`-only, no-`walk` variant, testing
+whether an INSTANT large separation behaves differently from a gradual `walk`) instead produced
+a much stranger result: `party follow finelog` output stopped entirely for 5+ minutes with no
+crash, `Get-Process` showing both `swkotor.exe` responsive, the agent's own status line reading
+`state exploring (not in combat, not paused)` throughout (ruling out `IsBusyHead`'s own
+combat/casting gate as the cause), but console round-trips slowing from sub-second to ~5.5s —
+unexplained, not chased further this round, and flagged below as a fresh lead rather than folded
+into this round's own conclusion.
+
+### Why this matters for the fix candidate
+
+`party_follow_phase2_kick` targets a SPECIFIC symptom — frozen in phase 2, `attempts` pinned at
+0, genuinely far from the leader — that round 88's own disassembly (Finding 2, §2138 above) traced
+to `TestDirectLine` never returning favourably while `PriorPoint == Snapshot`. The
+already-shipped, default-ON `TryAdvanceStalledMovingToPath` (the fix Finding 2 itself produced)
+requires `attempts > 0` and commits phase 3 directly when triggered — which, combined with
+whatever `party_follow_advance_destnode`/`party_follow_force_walking` (also default ON) do,
+appears to be moving today's stalls into phase 7 before a phase-2/attempts-0 freeze has a chance
+to persist long enough to be observed, at least under this rig's own session state and this
+exact recipe. This is consistent with, not contradictory to, round 95's own 4th-repro finding
+the SAME phase-2 shape live the day before this round — live reproduction of this class of
+follow-AI stall has been flaky across nearly every round in this document, and this round's own
+six attempts add one more data point rather than settling the question either way.
+
+### Verdict: the A/B could not be run this round; `party_follow_phase2_kick` stays OFF, unconfirmed
+
+Because the fix's own precondition never arose, no control-vs-treatment comparison was possible
+— not "the fix did nothing," but "the fix was never exercised." No regression either: `phase2_kick`
+stayed at its default OFF for every attempt this round (the treatment leg was never reached), so
+this round changed no code and flips no switch. No crash on either instance across all six
+attempts and the full round.
+
+### Concrete next step for whoever picks this up
+
+Two candidate leads, neither chased this round: (a) the phase=7 near-target freeze
+(`distSqToTarget` never reaching exactly 0, `attempts=0`, indefinite) is itself a new,
+consistently-reproducible symptom this document has not previously characterized in this much
+detail — worth its own disassembly pass on whichever phase-7 handler owns the final
+target-snapping step; (b) the ~5-minute total `party follow finelog` silence combined with
+console round-trips slowing to ~5.5s (attempt 6) is unexplained and worth watching for again — if
+it recurs, checking whether `player` (the resolved leader handle `PartyFollowController` reads
+every pass) is transiently returning 0, since that alone would explain both symptoms at once
+(the log gate and the drive gate share the same `player != 0` condition).
+
+### Test suite and build
+
+No code changed this round (config-only staging, all reverted with the rest of the rig teardown
+except the intentional `solo_segment_spectate`/`solo_segment_any_module` flips this session's
+other queue item made — see this doc's own git history for the exact diff). No new tests.

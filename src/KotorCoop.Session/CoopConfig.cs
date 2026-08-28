@@ -31,8 +31,8 @@ namespace KotorCoop.Session;
 ///                               ; live-pass section)
 ///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
 ///                               ; docs/research/party-pool-sync.md
-///   solo_segment_spectate = 0  ; the OWNER's fight, the other player spectates during a
-///                               ; story-forced solo segment (NEEDS-LIVE, default off) -
+///   solo_segment_spectate = 1  ; the OWNER's fight, the other player spectates during a
+///                               ; story-forced solo segment (default ON, live-verified) -
 ///                               ; docs/research/star-forge-finale.md
 ///   stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302   ; HOST only: public
 ///                               ; address discovery (roadmap item 24). This is the default
@@ -424,10 +424,12 @@ public sealed record CoopConfig
     /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
     /// writes locally the instant its plugin reports it owns an active segment, and the other
     /// player's plugin parks their input/camera on the fight instead of letting them wander
-    /// into a 1-on-1 duel the base game designed for one player. OFF by default, NEEDS-LIVE —
-    /// nothing here has been exercised against a real Star Forge save yet. coop.ini
-    /// <c>solo_segment_spectate = 1</c> turns it on. Shares the SAME key with the plugin's own
-    /// independent read (<c>SoloSegmentController</c>/<c>SoloSegmentSpectateController</c>,
+    /// into a 1-on-1 duel the base game designed for one player. ON by default — live-verified
+    /// 2026-08-28 (docs/research/star-forge-finale.md §12): the burst trigger begins a segment,
+    /// the owner's roster genuinely empties, the peer's phantom hides, the spectator's input
+    /// parks and camera follows, a real refill ends it. coop.ini <c>solo_segment_spectate = 0</c>
+    /// turns it off. Shares the SAME key with the plugin's own independent read
+    /// (<c>SoloSegmentController</c>/<c>SoloSegmentSpectateController</c>,
     /// <c>PluginConfig.ReadBool</c>), the same "one coop.ini key, two files" pattern
     /// <c>minigame_hide_peer</c>/<c>pazaak_detect</c> already use.
     /// </summary>
@@ -594,7 +596,8 @@ public sealed record CoopConfig
             CompanionGearSync = !kv.ContainsKey("companion_gear_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
-            SoloSegmentSpectateEnabled = IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
+            SoloSegmentSpectateEnabled = !kv.ContainsKey("solo_segment_spectate")
+                || IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
             StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
         };
     }

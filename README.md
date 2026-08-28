@@ -39,7 +39,7 @@ attaches from outside with `OpenProcess`.
 | Shared party item pool (`party_pool_sync`) | Stays off — a 2026-08-28 live-rig pass found a native-side defect: a freshly-inserted pool item is not reliably found by the very next local read, independent of the C# sync logic | [party-pool-sync.md](docs/research/party-pool-sync.md) |
 | Merchant store stock (`store_sync`) | Stays off — a 2026-08-28 live-rig pass confirmed wipe-prevention/buy/deplete/infinite-stock/blackout-resync clean, but found `sell` broken and `buy` can underflow the party's gold | [store-sync.md](docs/research/store-sync.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
-| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Built, off — a 2026-08-28 live pass opened the real door but never reached the detection precondition (the roster wipe fires from the Bastila dialogue, not the door), so the spectate machinery is still unexercised | [star-forge-finale.md](docs/research/star-forge-finale.md) |
+| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
 
 "Live-verified" means watched working on two real GOG instances; "Off by default" means built
@@ -227,10 +227,13 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   off by default** (`party_pool_sync` — status table above): a 2026-08-28 live-rig pass found the
   latest issue sits below the C# sync logic entirely — a freshly-inserted pool item is not
   reliably found by the engine's own very next local read.
-- **The Star Forge's Bastila and Malak duels spectate, but off by default and unproven live**
-  (`solo_segment_spectate`): parks the other player's input/camera on the fight instead of a
-  second combatant wandering in. The detection precondition itself has not yet been reached
-  live (see the status table above), so the input lock hasn't been watched stop a real press.
+- **The Star Forge's Bastila and Malak duels spectate, ON by default and live-verified, with
+  one narrow gap** (`solo_segment_spectate`): parks the other player's input/camera on the
+  fight instead of a second combatant wandering in. Every lever fired live 2026-08-28 (see the
+  status table above), except that the input lock has only been confirmed to engage its own
+  mechanism (the log line, the flags it sets) — never confirmed to actually stop a real
+  PHYSICAL WASD press, since injected keystrokes never reach this game and cannot substitute
+  for one.
 - **The shared merchant store channel (`store_sync`) is built but stays off** — a 2026-08-28
   live-rig pass confirmed the wipe-prevention/buy/deplete/infinite-stock/reconnect half clean,
   but found `sell` never finds an item confirmed to exist and `buy` has no affordability guard
