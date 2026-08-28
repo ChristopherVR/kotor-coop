@@ -1199,3 +1199,184 @@ considered for a default flip.
 **Files touched**: `src/KotorCoop.Session/Pumps/PartyPoolPumpV2.cs`,
 `src/KotorCoop.Session/Pumps/StorePumpV2.cs`,
 `tests/KotorCoop.Tests/SharedInventoryV2LoopbackTests.cs`, this document.
+
+---
+
+## 10. 2026-08-29, third rig round (against §9's fixes) — item 1: the exponential-doubling
+## runaway class reproduces AGAIN, a spurious client-side "local add of 6x" landing on the
+## host and a 4-minute non-self-healing divergence; item 2: a NEW, severe, unbounded
+## re-insertion loop found on the client's store reconcile (every known key re-applied every
+## ~10s, 432 total inserts for 18 keys over ~13 minutes, host clean at 0); item 3 not
+## reached; item 4: full baseline PASS, plus a 9th, newly-reproducible `verify.ps1` failure
+
+Task: re-run the queue's items 1/2 against `main` merged forward through §9's own fixes
+(the belief/`_expectedFromReconcile` ledger replacing `_reconcileInFlight`, the store GUI-gate
+split). Two-instance rig (`tools/demo.ps1`), both game directories freshly
+`build.ps1 -Install -WarnAsError`'d (both deployed `dinput8.dll` 2,060,288 bytes / identical
+timestamp `08/29/2026 06:43:18`; both `KotorCoop.Session.dll` confirmed by byte-scan to contain
+`PartyPoolPumpV2`). `coop.ini` reset to `profiles/coop.ini.example` on both, then
+`party_pool_sync=2`/`store_sync=2` plus `dialogue_item_sync=0`/`script_item_sync=0` isolated
+from the start (per §6.1/§8's own lesson).
+
+### 10.1 Item 1 — `party_pool_sync=2`: DISQUALIFIED again — the exponential-doubling class
+### from §6 reproduces, not §8's narrower re-detection leak
+
+`END_M01AA`, no warp. Ambient noise on both instances settled cleanly (each side independently
+deposited `g_i_medeqpmnt01`×2, `g_i_adrnaline003`×1, `g_w_blstrrfl001`×1, `g_a_clothes01`×1,
+`g_w_blstrpstl001`×1 — matching §2.4's predicted shape exactly, no ramp), confirmed stable for
+90s before testing; host and client agreed at net +2 for `g_i_medeqpmnt01` going in. Three
+rapid HOST `pooladd g_i_medeqpmnt01`s, each confirmed individually (serials 2/3/4, each
+answering `added 'g_i_medeqpmnt01' x1 to the party pool`).
+
+**Read directly from the host's own agent log**: the three legitimate `+1`s landed
+(06:48:15, :20, :23), but sandwiched between the first and second was an entirely unprompted
+`party pool v2: submitting add of 6x 'g_i_medeqpmnt01' through the party-pool channel` /
+`added 'g_i_medeqpmnt01' x6 to the party pool` at 06:48:19 — six units nobody asked for. Host
+net: 2 (ambient) + 1 + 6 + 1 + 1 = **11**, against an expected 2 + 3 = 5.
+
+**The client's own log names the source precisely.** At 06:48:17 the client legitimately
+reconciled `+3` toward the host's growing snapshot (`submitting add of 3x .../ added x3`) —
+correct so far. In the SAME second it also attempted `submitting remove of 4x .../ the engine
+refused it: 'g_i_medeqpmnt01' remove failed: no matching stack found` — a spurious REMOVE
+request the engine itself caught and refused (harmless, but proof the client's own
+detect/reconcile bookkeeping was already computing a nonsense target). One second later
+(06:48:18): `party pool: local add of 6x 'g_i_medeqpmnt01' detected, requesting (serial 6)` —
+a fabricated "local" deposit nobody made, published to the host and applied there (the exact
+`+6` seen on the host's own log one second later). At 06:48:35 the client issued a partial
+self-correction (`submitting remove of 3x .../ removed x3`), landing the client's own engine
+back near 2, but the HOST had already applied the bogus `+6` and never received any correction
+for it — the host and client's own engines were left permanently split.
+
+**No further movement for 4+ minutes idle** (last activity 06:48:35, confirmed quiet through
+06:52:36, four separate 20s polls) — the divergence is stable, not self-healing, matching
+§6.2/§6.3's own verdict shape exactly ("stable, just stable on the wrong number"). No crash;
+both instances stayed `Responding=True` throughout. This is the SAME exponential-doubling
+runaway class §6 first found and §7/§9 each believed they had closed — §9's own
+belief/`_expectedFromReconcile` redesign closed §8.1's narrower re-detection leak (confirmed
+by its own passing loopback test), but this round shows a wider defect in the same
+neighbourhood survives: a fabricated multi-unit "local add" appearing on the client with no
+corresponding real engine movement to explain it. Root cause not pinned this round (out of
+budget); the shape — a spurious detection landing exactly between two real, individually-
+confirmed pooladds — is a strong clue that `_belief`/`rawMovement` computation is itself
+racing against this session's own rapid successive `pooladd` calls in a way none of §9's own
+loopback tests (which use a simulated, tick-based cheat channel, not this rig's real
+single-slot arbitrated channel under real back-to-back console commands) reproduce.
+`party_pool_sync` **stays OFF.**
+
+### 10.2 Item 2 — `store_sync=2`: DISQUALIFIED — a NEW, severe, unbounded client-side
+### re-insertion loop, independent of the client's own `openstore` block
+
+Rig restarted clean: `party_pool_sync=0` (unsafe to run alongside item 1's still-open defect,
+per §6.3's own precedent), `store_sync=2`, `dialogue_item_sync=0`/`script_item_sync=0` kept
+isolated. ONE relocating `warp tar_m02aa` (this session's only warp, host only). Both landed
+cleanly (`module tar_m02aa` on both agent gaits), no crash. The host's ambient `duros`
+conversation trap and a brief incidental combat both cleared within two `skipline`/
+`selectreply 0` rounds; `openstore Larrim_Store` then succeeded cleanly on the host.
+
+**The client's own `openstore` never succeeded, for the ~13-minute session.** Every attempt
+(9 retries across skipline/selectreply cycles, window activation via `movewin.ps1 -Restore`,
+`topup`/`standup` on both players to rule out a downed-party modal) refused identically:
+`openstore: 'Larrim_Store' refused - another modal screen is up (galaxy map / party select /
+...)` (`CGuiInGame`+0x30 != 0, read directly from `Odyssey.Store.cs`'s `OpenStore`). Ruled out
+directly: the party-select screen was swept away at 06:55:10, over two minutes before the
+first `openstore` attempt (`party-select: client copy swept away`); no conversation was active
+(`dialogue: skipline about to poke - no conversation here` on every attempt); both players sat
+at `hp 12/12`, not down (`topup` answered `12 -> 12`, `standup` answered `you are already up`).
+This is the same qualitative `tar_m02aa`-on-the-client hazard §8.2 already documented (a
+persistent, unexplained GUI-busy flag blocking `openstore` specifically on the CLIENT side of
+this module), reproduced a third time under different specific micro-conditions (no `tp`, no
+active fight at the moment of refusal) — still not root-caused, still recorded rather than
+chased further this round.
+
+**A separate, NEW, and far more serious defect was found regardless of the `openstore` block:
+the client's own store reconcile — which §9 item 2 deliberately made run "blind" (no GUI
+needed) — re-applies the ENTIRE known store snapshot to its own engine roughly every 10
+seconds, forever, with no sign of ever stopping.** Grepping the client's plugin log for a
+single representative key (`g_i_belt006`) found **22 separate `store: inserted 'g_i_belt006'
+... into store 0x74` lines**, one approximately every 10.1-10.9 seconds, from 06:57:13 to
+07:00:51 (the observation window). Every one of the store's 18 distinct known resrefs shows
+the IDENTICAL pattern — **24 insert events each, 432 total client-side insert events**,
+confirmed by `grep -oE "store: inserted '[a-z_0-9]+'" | sort | uniq -c`. **The host's own
+plugin log shows ZERO `store: inserted` lines for the entire session** — the host only ever
+scans and publishes an idempotent snapshot, exactly per §2.1's design; this is unambiguously a
+CLIENT-side reconcile defect, not a host re-publish or a wire-level duplication. This
+contradicts §2.5's own "amplification is structurally impossible" argument in the same way
+§6.2 did for the party pool: the client's reconcile step is never recognising "I already
+applied this key's full amount" and keeps re-detecting the identical snapshot as an unexplained
+gap, cycle after cycle, unboundedly — the store-channel sibling of item 1's own defect. No
+crash; both instances stayed `Responding=True` throughout the entire 432-insert cascade.
+`store_sync` **stays OFF.**
+
+Not reached this round for lack of a working client store GUI and out of an abundance of
+caution once the re-insertion loop was found: the host-sell-with-client-GUI-closed check, the
+client buy-back check, and blackout+reconnect.
+
+### 10.3 Item 3 — flip defaults: NOT REACHED. Both items 1 and 2 are freshly disqualified,
+### by defects distinct from every prior round's own root cause (§9's fixes did not hold under
+### this round's real single-slot-arbitrated-channel/real-GUI conditions, which no loopback
+### test in this family currently reproduces). `profiles/coop.ini.example`, `CoopConfig`/
+### `AgentSettings` defaults, `CONFIG.md`, and the README/roadmap/research-README rows are all
+### unchanged — `party_pool_sync`/`store_sync` stay at their code default of 0 everywhere.
+
+### 10.4 Item 4 — baseline: **PASS, with one new, reproducible `verify.ps1` finding flagged
+### for follow-up.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors, against the
+  freshly-fast-forward-merged `main` (`1002474`).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both
+  game directories freshly installed; both deployed `dinput8.dll` byte-identical (2,060,288
+  bytes, same timestamp); both `KotorCoop.Session.dll` confirmed by byte-scan to contain
+  `PartyPoolPumpV2`. A second standalone `build.ps1 -WarnAsError` re-run later in the session
+  (no source changes) was also clean.
+- `dotnet test tests/KotorCoop.Tests --no-build` (rig down): **2,512/2,513 passed** on the
+  first run, one failure
+  (`StorePendingApplyQueueConcurrencyTests.ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`,
+  expected 0 got 136) — re-run alone immediately after, **passed cleanly (1/1)**, matching this
+  repository's own documented environment-flaky-under-full-suite-parallel-load pattern (no
+  source changes were made this session, so this is not attributable to anything in this
+  round's own work).
+- `tools/verify.ps1`, run TWICE against two INDEPENDENT freshly-restarted two-instance
+  sessions (`coop.ini` reset to plain `profiles/coop.ini.example` on both sides each time):
+  **both scored 40 passed, 9 failed, with the IDENTICAL 9 failures both times** — the 8
+  previously-documented baseline failures (`phantom damageable, not a sink`; `the peer really
+  loses those hit points`; `a client hit costs the enemy real hit points`; `a downed player is
+  reported to the agent`; `the co-op revive stands the player back up`; `every engine call
+  signature matches the binary` at 197/199; `a container opened on the client is held and shown
+  open on the host`; `no per-frame spam`) **plus a 9th, newly-reproducible failure not in the
+  prior documented set: `an item picked up here vanishes on the peer`**
+  (`pickups issued 0 -> 1, client slot 0 state 1, host slot still state 1` on one run;
+  `pickups issued 1 -> 2, client slot 1 state 1, host slot still state 1` on the other) — the
+  client's own pickup is registered but the host's copy of the item slot never follows,
+  reproduced identically across two separate fresh-rig sessions, so not a one-off flake. Total
+  count (40/9) is still inside the documented 40-42/7-9 baseline range, but the SPECIFIC ninth
+  failure is new and worth a dedicated look before the next round treats it as
+  "known/expected." **A methodology note, not a product finding**: a THIRD `verify.ps1` run
+  fired back-to-back against the SAME session without a rig restart scored worse (38/11, with
+  different specific checks flipping pass/fail, e.g. `a container opened on the client is held
+  and shown open on the host` passed on the un-restarted run but failed on both fresh runs) —
+  `verify.ps1`'s own checks are not fully idempotent across repeated runs against one
+  accumulating session; always restart the rig between runs when comparing against the
+  documented baseline, not just between differently-configured rounds.
+
+**Verdict**: `party_pool_sync`/`store_sync` **stay OFF (mode 0)**, unchanged from every prior
+round. Both items are freshly disqualified by defects distinct in specific shape from every
+earlier round's own root cause, in code that has already been through two dedicated bench-only
+correctness passes (§7, §9) between live rounds — strong evidence that this family's own
+loopback test suite, however thorough (286 tests across the two files), is not yet
+reproducing the exact interleavings a real rig produces: real back-to-back console commands
+arbitrated through the real single-slot cheat channel (item 1), and a real client GUI genuinely
+never opening across a whole session (item 2). No crash in either round. **Concrete next steps,
+ranked**: (a) build a rig-only diagnostic that logs `_belief`/`rawMovement`/
+`_expectedFromReconcile` state on every tick around a real rapid `pooladd` burst, since §10.1's
+spurious "local add of 6x" has no loopback repro yet to instrument instead; (b) instrument
+`Pumps/StorePumpV2.cs`'s client-side reconcile to log why a key it already applied is
+re-detected as still needing application on the very next cycle — the store re-insertion loop
+in §10.2 is the single clearest, most reproducible repro this family has produced yet (24 clean
+repetitions per key, 10-second period, 100% of keys) and should be the next round's first
+target; (c) the client's persistent `tar_m02aa` `openstore` block (three rounds now, three
+different specific micro-conditions, never once succeeding) may deserve its own dedicated
+investigation independent of `store_sync` — every store-channel live round to date has been
+partly or fully blocked by it.
+
+**Files touched this round**: none — bench/rig-only verification pass, no source changes. This
+document only.
