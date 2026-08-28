@@ -322,6 +322,19 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.RemoveParty, Amount: slot);
     }
 
+    // followkick <slot>  - DEV-ONLY LIVE-TEST PRIMITIVE, see CoopCommandKind.FollowKick.
+    private static CoopCommand ParseFollowKick(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "followkick needs one party-roster slot (0-8), e.g. followkick 0");
+        }
+
+        return new CoopCommand(CoopCommandKind.FollowKick, Amount: slot);
+    }
+
     private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
 
     /// <summary>
@@ -384,6 +397,8 @@ public static partial class ConsoleCommand
         "  removeparty <slot>  dev-only: call the REAL RemovePartyMember(nNPC) on roster slot",
         "                      (0-8) - exercises the solo-segment detector's script-agnostic",
         "                      hook without reaching the Bastila dialogue; local only",
+        "  followkick <slot>   dev-only: dump roster slot (0-8)'s follow-record fields, then",
+        "                      force record+4=10 (TeleportForward) unconditionally; local only",
         "  skipline            finish your OWNED conversation's current line/VO right now,",
         "                      in-process (no OS input); no-op if nothing is playing",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",

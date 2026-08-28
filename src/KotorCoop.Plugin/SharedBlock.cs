@@ -897,4 +897,22 @@ internal partial struct SharedBlock
     /// ⚠ 44, because 1-43 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindSetGold = 44;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-08-28/29, docs/research/party-reconciliation.md Round
+    /// 96's own "concrete next step" (b)): dumps the named companion's follow-record fields
+    /// (phase, attempts, target point, current path node) to the plugin log, then forces
+    /// <c>record+4 = 10</c> (<c>TeleportForward</c>) through
+    /// <c>Odyssey.TryForceTeleportForward</c> UNCONDITIONALLY — regardless of the companion's
+    /// current phase, unlike the automatic <c>party_follow_phase2_kick</c> pass (which only
+    /// fires from phase 2). Built to answer Round 96's own open question live: does poking
+    /// <c>TeleportForward</c> also resume the phase-7 near-target freeze that round found, not
+    /// just the phase-2 stall the shipped fix targets.
+    ///
+    /// <see cref="OffsetCheatAmount"/> is the party-roster slot (0-8, same range
+    /// <c>recruit</c>/<c>leader</c> already use). Local only — never crosses the network.
+    ///
+    /// ⚠ 45, because 1-44 are taken. Take the next FREE number.
+    /// </summary>
+    public const uint CheatKindFollowKick = 45;
 }

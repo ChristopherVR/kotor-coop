@@ -4253,3 +4253,92 @@ every pass) is transiently returning 0, since that alone would explain both symp
 No code changed this round (config-only staging, all reverted with the rest of the rig teardown
 except the intentional `solo_segment_spectate`/`solo_segment_any_module` flips this session's
 other queue item made — see this doc's own git history for the exact diff). No new tests.
+
+## Round 97 (2026-08-28/29, rig round) — Round 96's phase-7 near-target freeze reproduced cleanly
+## on the first attempt; a NEW `followkick` dev verb answers the open question directly: forcing
+## `record+4=10` (TeleportForward) from phase 7 does NOT resume movement — it parks the companion
+## in a second, different frozen state (phase 10, permanently) instead
+
+Task: this round's own queue item 3 — reproduce Round 96's phase-7 near-target freeze with
+`party_follow_phase2_kick=0` (shipped default), dump the follow record fields every second for
+30s, and test whether poking `record+4=10` (TeleportForward) resumes it, adding a `followkick
+<slot>` dev verb since none existed that could fire unconditionally (the shipped
+`party_follow_phase2_kick` mechanism only fires from phase 2, gated by
+`Phase2StallRule.ShouldKick`).
+
+### 97.1 The verb added
+
+`followkick <slot>` (`SharedBlock.CheatKindFollowKick`/`CheatKinds.FollowKick = 45`,
+`Odyssey.TryForceTeleportForward` in `src/KotorCoop.Plugin/Odyssey.DoorTransitions.PathNodes.cs`):
+dumps the named roster slot's follow-record fields (phase, attempts, target, current path node,
+dest node, write cursor, `CreMoveState`) to the plugin log, then writes `record+4 = 10`
+UNCONDITIONALLY — no phase check, no `ShouldKick` gate — through the identical single-field poke
+`TryKickStalledMovingToPathToTeleportForward` already uses for the phase-2 case. Dev-only, local
+only, reachable at the real `~` console. See `docs/CONSOLE.md`'s new row.
+
+### 97.2 Reproduction: first attempt matched Round 96's shape exactly
+
+`warp END_M01AA`, `tp 20 22 -1.3`, `walk 10 15` (round 88/96's own exact recipe) reproduced the
+freeze on the FIRST attempt this round (Round 96 needed several tries). 30+ seconds of
+`party follow finelog` (t=121.13 through t=165.90, well past the 30s ask) held bit-identically:
+
+```
+phase=7 attempts=0 pathNode=19 destNode=19 writeCursor=20 moveState=3
+pos=(10.51,16.78) leaderPos=(10.78,15.70) target=(10.78,15.70)
+targetVsSnapshotDist=1.105 pathWaitDestAccept=False distSqToTarget=0.0000 distSqToPrior=0.0000
+```
+
+Matches Round 96's own description precisely: phase pinned at 7, `attempts=0` (never the phase-2
+kick's own precondition), position frozen, `distSqToTarget=0` (the companion's OWN computed
+distance to its recorded destination point reads zero) while `targetVsSnapshotDist` — the real
+gap between the leader's actual position and the companion's last-known snapshot — sits at a
+stubborn non-zero 1.105 units, and `pathWaitDestAccept=False` throughout: `PathWaitDest`'s own
+forward-search from `CurrentPathNode` (19) toward `DestNode` (19 — already EQUAL, not searching
+for anything) never accepts, consistent with Round 96's own reading that phase 7's exit condition
+is not being met even though the two node indices already agree.
+
+### 97.3 `followkick 0`: fired cleanly, and answers the open question — NO, it does not resume
+### this stall
+
+```
+followkick: 0x127 BEFORE - phase=7 attempts=0 target=(10.78,15.70,-1.10) pathNode=19 destNode=19
+            writeCursor=20 creMoveState=3
+party follow followkick: 0x127 forced phase 7 -> 10 (TeleportForward), unconditional dev poke
+followkick: 0x127 AFTER - phase 7 -> 10 (forced)
+```
+
+Watched for 34+ seconds afterward (t=132.28 through t=165.90 in the same finelog stream): phase
+never left 10. Position (`pos=(10.51,16.78)`), target, and every other field stayed EXACTLY the
+values they held at the moment of the poke — not "still converging," genuinely unchanged, the
+same permanently-frozen shape as the phase-7 stall itself, just relabeled phase 10 instead of
+phase 7. `TeleportForward`'s own disassembly (Round 96, `docs/research/party-reconciliation.md`'s
+earlier §"VERIFIED: TeleportForward") describes it walking `CurrentPathNode` forward through the
+recorded trail and re-entering phase 2 with a fresh `TargetPoint`/`Snapshot` — none of that
+happened here. Two readings, not distinguished this round: (a) `TeleportForward`'s own handler
+has a precondition this call state does not satisfy (its own `TestSafeLocationPoint`-shaped
+obstacle check, per Round 96's own closing lead, may be refusing silently and leaving phase
+parked at 10 rather than falling back to 2 or 7), or (b) the SAME underlying condition that froze
+phase 7 in the first place (whatever holds `pathWaitDestAccept` false with `CurrentPathNode ==
+DestNode`) also blocks whatever `TeleportForward` needs to make progress, since `CurrentPathNode`/
+`DestNode`/`writeCursor` are completely unchanged by the poke and stay unchanged afterward too.
+
+### 97.4 Verdict
+
+Round 96's own open question is now answered directly, live: forcing `record+4=10` from the
+phase-7 near-target freeze does NOT resume the companion — it trades one permanent stall for
+another. This rules OUT "just fire the existing phase-2 kick mechanism at a wider set of phases"
+as a fix for this specific symptom; whatever eventually fixes the phase-7 freeze needs to address
+`PathWaitDest`'s own accept condition directly (why it refuses when `CurrentPathNode == DestNode`
+already), not borrow the phase-2 recovery's own lever. `party_follow_phase2_kick` stays at its
+shipped default (OFF) — unaffected either way, since this round never toggled it (the recipe
+calls for it OFF specifically, to isolate the phase-7 shape from the phase-2 fix's own behavior).
+No crash, no regression; `followkick` is a new, additive, dev-only diagnostic.
+
+### 97.5 Concrete next step
+
+Disassemble `TeleportForward` (0x00512DE0)'s own body against THIS live state
+(`CurrentPathNode=19`, `DestNode=19`, both already equal) to find why it neither advances nor
+falls back — Round 96's own closing lead ("does `TeleportForward`'s own `TestSafeLocationPoint`
+failure path re-enter phase 2, or something else") is now the direct, load-bearing question,
+confirmed reachable live via `followkick` rather than needing the phase-2 stall's own natural
+precondition to occur first.

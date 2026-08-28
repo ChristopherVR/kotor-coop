@@ -578,6 +578,19 @@ public enum CoopCommandKind
     /// <see cref="CoopCommand.Amount"/> carries the target value. Local only.
     /// </summary>
     SetGold,
+
+    /// <summary>
+    /// <c>followkick &lt;slot&gt;</c> — DEV-ONLY LIVE-TEST PRIMITIVE
+    /// (docs/research/party-reconciliation.md Round 96). Dumps NPC roster slot
+    /// <see cref="CoopCommand.Amount"/> (0-8)'s follow-record fields (phase, attempts, target,
+    /// current path node) to the plugin log, then forces <c>record+4 = 10</c>
+    /// (<c>TeleportForward</c>) UNCONDITIONALLY through
+    /// <c>Odyssey.TryForceTeleportForward</c> — regardless of the companion's current phase,
+    /// unlike the automatic <c>party_follow_phase2_kick</c> pass (phase 2 only). Built to test
+    /// live whether the same recovery poke that targets a phase-2 stall also resumes the
+    /// different phase-7 near-target freeze Round 96 found. Local only.
+    /// </summary>
+    FollowKick,
 }
 
 /// <summary>
@@ -781,6 +794,7 @@ public static partial class ConsoleCommand
         new(["startdialog"], ParseStartDialog),
         new(["removeparty"], ParseRemoveParty),
         new(["setgold"], ParseSetGold),
+        new(["followkick"], ParseFollowKick),
         new(["cheats"], ParseCheats),
     ];
 

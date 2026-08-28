@@ -273,8 +273,34 @@ internal static unsafe partial class Odyssey
 
         // Unlink from the player's own backpack, link into the pool. Deliberately NOT
         // calling SetPossessor — see this method's own remarks.
+        //
+        // DIAGNOSTIC (docs/research/party-pool-sync.md §13.3's own "two lookups, one frame"
+        // ask): dump the repo pointer and its item_count field immediately before and after
+        // the insert, on the SAME call, so a live round can tell "the insert never landed in
+        // this repo" from "it landed but a later read resolves a different repo" without
+        // needing two separate console round-trips (which is exactly what let §13's evidence
+        // stay ambiguous). Cheap — one extra int read each side — and safe to leave in.
+        int countBefore = *(int*)(repo + RepositoryItemCount);
         RepositoryRemoveItemFn(playerRepo, item);
         RepositoryInsertItemFn(repo, item, -1);
+        int countAfter = *(int*)(repo + RepositoryItemCount);
+        nint idsAfter = *(nint*)(repo + RepositoryItemArray);
+        bool foundAfter = false;
+        if (idsAfter != 0 && countAfter is > 0 and <= 4096)
+        {
+            for (int i = 0; i < countAfter; i++)
+            {
+                if (*(uint*)(idsAfter + (nint)(i * 4)) == itemId)
+                {
+                    foundAfter = true;
+                    break;
+                }
+            }
+        }
+
+        PluginHost.Log(
+            $"party pool: insert diag — repo 0x{repo:X}, item_count {countBefore}->{countAfter}, "
+            + $"0x{itemId:X} {(foundAfter ? "IS" : "is NOT")} in the post-insert array walk");
 
         return true;
     }
