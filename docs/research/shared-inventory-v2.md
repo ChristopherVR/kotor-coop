@@ -424,3 +424,110 @@ every pre-existing mode-1 and unrelated suite — passes with zero failures. `do
 KotorCoop.slnx -warnaserror` is clean (0 warnings, 0 errors). `party_pool_sync=2`/`store_sync=2`
 stay OFF by default, exactly as designed — this pass only strengthens the bench-side confidence
 NEEDS-LIVE already required; nothing here has run against a real game.
+
+---
+
+## 6. 2026-08-29, rig round — Live pass: `party_pool_sync=2` DISQUALIFIED by the exact same
+## exponential-doubling runaway class as mode 1's §21/§27, reproduced twice, including with
+## `dialogue_item_sync`/`script_item_sync` isolated; `store_sync=2` not reached this round
+
+Task: the queue's item 1 — the exact §27 recipe (`docs/research/party-pool-sync.md` §27.1) re-run
+against mode 2. Two-instance rig (`tools/demo.ps1`), both game directories freshly
+`build.ps1 -Install -WarnAsError`'d (both deployed `dinput8.dll` 2,060,288 bytes / identical
+timestamp; both deployed `KotorCoop.Session.dll` confirmed by byte-scan to contain
+`PartyPoolPumpV2`/`StorePumpV2`/`PartyPoolSnapshotPacketV2`). `coop.ini` reset to
+`profiles/coop.ini.example` on both, then `party_pool_sync=2`/`store_sync=2` set on both (the
+queue's own instruction). Both instances loaded into `END_M01AA` (the default starting save, no
+warp — confirmed via `who`: `Malak END_M01AA`).
+
+### 6.1 First attempt: contaminated by `dialogue_item_sync`/`script_item_sync` (both ON by
+### default) — a different channel, but a real amplification nonetheless
+
+Three `pooladd g_i_medeqpmnt01` on the HOST, each confirmed individually
+(`added 'g_i_medeqpmnt01' x1 to the party pool`). Within seconds, both agent logs showed an
+unbroken cascade of `materialise: gave loot 'g_i_medeqpmnt01' ... for the local player (dialogue
+grant)` lines — the `giveloot`/dialogue-grant channel (`CheatController.Items.cs`,
+`DialoguePump`/`LootPump`), NOT `party_pool_sync` — with stack sizes 6, 120, 321, 201, 243, 216,
+18, 369, 576, 9, 288, 1251, 90, 171... interleaved with `party pool: added`/`removed` lines of
+similar magnitude. The cascade stopped on its own after ~2 minutes; both sides converged to the
+SAME total (`items 99`: 82 of 82 on both) — unlike mode 1's own divergent failure, but still a
+two-orders-of-magnitude overshoot. Root-caused to `dialogue_item_sync=1`/`script_item_sync=1`
+(both ON by default in `profiles/coop.ini.example`) — `party-pool-sync.md` §11/§19 already
+documents this exact cross-channel contamination trap and the established practice of isolating
+both flags to `0` before a clean party-pool read; the queue instructions for this round did not
+call for that isolation, so the first attempt inherited it. Recorded here so the next round does
+not waste time rediscovering it, and because it is itself informative: mode 2 did not prevent
+this contamination from reaching a ~180x overshoot either, even though the two sides agreed with
+each other at the end.
+
+### 6.2 Second attempt, `dialogue_item_sync=0`/`script_item_sync=0` isolated: mode 2's OWN
+### client-side pump reproduces a genuine exponential-doubling runaway, unrelated to any other
+### channel
+
+Demo stopped and restarted clean: `coop.ini` reset again, `party_pool_sync=2`/`store_sync=2=2`
+kept, `dialogue_item_sync=0`/`script_item_sync=0` added on both, logs cleared, fresh save load
+(confirmed `who` → `Malak END_M01AA` again). The same three `pooladd g_i_medeqpmnt01` on the HOST,
+each confirmed individually.
+
+**What happened, read directly from the HOST's own agent log
+(`%TEMP%\kotorcoop-demo\agent1.log`), tagged unambiguously `party pool v2:` (the mode-2 pump, not
+mode 1, not the dialogue-grant channel)**: within ~10 seconds, `party pool v2: submitting
+add/remove of Nx '<resref>' through the party-pool channel` lines began an unmistakable
+power-of-two doubling ramp — **and it hit items nobody ever touched**: `g_w_blstrpstl001` and
+`g_a_clothes01` (both presumably `end_m01aa`'s own opening-tutorial gear, never named in this
+round's `pooladd`) rode the identical doubling sequence alongside the targeted
+`g_i_medeqpmnt01`:
+
+```
+01:51:43  add 1x g_w_blstrpstl001 / add 1x g_a_clothes01
+01:51:58  add 2x g_a_clothes01 / add 2x g_w_blstrpstl001      01:51:54/59  add 2x/8x g_i_medeqpmnt01
+01:52:02  remove 4x g_a_clothes01 / remove 4x g_w_blstrpstl001            01:52:03  remove 40x g_i_medeqpmnt01
+01:52:06  add 6x g_w_blstrpstl001 / add 6x g_a_clothes01                  01:52:07  add 112x g_i_medeqpmnt01
+01:52:10  remove 10x / remove 10x                                        01:52:12  remove 315x
+01:52:15  add 18x / add 18x
+01:52:19  remove 34x / remove 34x
+01:52:24  add 66x / add 66x
+01:52:28  remove 130x / remove 130x
+```
+
+The cascade paused for ~2 minutes (last line 01:52:28, nothing until 01:54:24), giving the false
+impression of settling — then resumed a SECOND doubling ramp unprompted (1, 2, 4, 8, 16, 32... on
+`g_w_blstrrfl001`, `g_i_adrnaline003`, `g_i_medeqpmnt01`, `g_w_blstrpstl001`, `g_a_clothes01`
+simultaneously) between 01:54:24 and 01:54:56, at which point observation stopped (not confirmed
+whether it would have resumed a third time). **Final state** (`items 99`): host 66 items total,
+client 72 — a real 6-item cross-instance divergence, the same qualitative failure §27 found for
+mode 1 (host and client disagreeing with EACH OTHER, not just both wrong by the same amount).
+
+**This is mode 2's own client-side pump (`Pumps/PartyPoolPumpV2.cs`), not a cross-channel
+artifact**: the log tag `party pool v2:` is written only by the mode-2 code path
+(`CoopAgent.cs`'s `EffectivePartyPoolSyncMode == 2` branch calling `_partyPoolPumpV2.Pump`), and
+`dialogue_item_sync`/`script_item_sync` were confirmed OFF in both `coop.ini`s before this run.
+This directly contradicts §1.2/§2.5's own "amplification is structurally impossible" argument —
+the mechanism reasoned about there (both sides publish, and what one publishes influences what the
+other compares against) was believed closed by construction because only the client publishes and
+only the host applies. Live evidence says something in the client's own detect/reconcile loop (the
+§5 "Bug 1-4" fixes did not, apparently, close everything) still re-derives a doubling delta each
+cycle against `end_m01aa`'s own ambient noise, even without the op-log's two-way publish. Root
+cause not pinned this round (out of budget for a three-item queue); the doubling-by-exactly-2x
+shape on EVERY cycle, across UNRELATED keys simultaneously, is a strong, specific clue for whoever
+picks this up next — it smells like a single shared multiplier or a target computed from a
+quantity that itself already includes the previous cycle's delta, not per-key independent noise.
+
+### 6.3 Verdict
+
+`party_pool_sync` **stays OFF, not flipped to 2.** Disqualified on the same bar mode 1 failed at
+§21/§25/§27: the recipe's own first clause (three rapid host deposits converging to exactly +3)
+fails, twice, under two different conditions (contaminated and isolated), with the isolated
+condition proving the defect lives in mode 2's own code, not a channel this document blamed for
+mode 1's own §27 finding. No crash; both instances stayed responsive throughout
+(`Get-Process ... Responding=True`). **Store mode 2 (queue item 2) was NOT reached with
+`party_pool_sync` still enabled** — the single-slot arbitrated cheat channel mode 1's root cause 7
+already documented as vulnerable to being clobbered by an unrelated concurrent verb made it unsafe
+to run the store recipe's own console commands (`openstore`/`scriptgive`/`buy`/`sell`) while
+mode 2's party-pool pump could still be mid-cascade; the rig was stopped and restarted with
+`party_pool_sync=0`/`store_sync=2` to get a clean read for the store channel instead (see the
+session's own separate live-verification entry for that result). **Concrete next step**: root-cause
+the doubling shape in `Pumps/PartyPoolPumpV2.cs` before any further live attempt — in particular
+whether `OutstandingNet`/`ReconcileTarget` (§2.2/2.3, the exact functions the §5 "Bug 2" fix
+touched) can itself be seeded from a value that already reflects a still-in-flight reconcile,
+producing a target that is always ~2x the true delta.
