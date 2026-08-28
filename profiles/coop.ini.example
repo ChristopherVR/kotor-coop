@@ -255,6 +255,17 @@ party_follow_extend_final_node=0
 # Stays OFF by default pending a live A/B.
 party_follow_phase2_kick=0
 
+# A DIFFERENT companion follow-AI shape from the four candidates above: a MIRRORED companion's
+# follow-FSM record is frozen and unread for the whole time this instance mirrors it (DriveOne's
+# own per-pass ClaimCreature call keeps the engine's own AI-master gate from ever re-entering the
+# FSM at all), so the phase/target/prior fields it resumes with the moment mirroring stops can be
+# stale by however far the companion was teleported during the whole mirrored session - not the
+# few-centimetre staleness the candidates above target. This resets that record to the engine's
+# own watchdog sentinel (the same value TryResetStuckFollowPhase already turns into a clean
+# restart) right as mirroring ends, instead of letting the follow-AI resume against a stale
+# leftover. NOT YET LIVE-TESTED. Stays OFF by default pending a live A/B.
+party_follow_phase7_release=0
+
 # The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
 # SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different
 # structure from CSWPartyTable above - can hold a stale, higher member count after a roster

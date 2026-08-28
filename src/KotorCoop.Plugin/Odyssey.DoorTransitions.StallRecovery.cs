@@ -419,4 +419,96 @@ internal static unsafe partial class Odyssey
     /// MAIN THREAD ONLY.
     /// </summary>
 
+    /// <summary>
+    /// ROUND 98 (party-reconciliation.md): the mirror-side counterpart to
+    /// <see cref="TryResetStuckFollowPhase"/> — fired ONCE, at the moment THIS instance STOPS
+    /// mirroring a companion (<c>PartyPresenceController.ReleaseSession</c>, the session's falling
+    /// edge), not every frame the way every other function in this file runs.
+    ///
+    /// See <see cref="FollowPhaseReleaseRule"/>'s own remarks for the full disassembly-grounded
+    /// chain this is built on: a mirrored companion's follow record is a frozen leftover for the
+    /// entire mirrored session (<c>PartyPresenceController.DriveOne</c>'s own
+    /// <see cref="ClaimCreature(nint)"/> call empties the queue and forces <c>CreMoveState=1</c>
+    /// every pass, which keeps the AI master's own per-tick gate from ever entering
+    /// <c>WalkUpdateLocation_QuickWalk</c> for this creature at all — so nothing advances or reads
+    /// <c>record+4</c> while mirroring holds). Left alone, the moment mirroring stops and
+    /// <see cref="PartyFollowController"/> starts driving this same record again, it resumes
+    /// against whatever <c>Target</c>/<c>Prior</c>/<c>Snapshot</c>/phase the record held the
+    /// INSTANT mirroring began — potentially many units from wherever
+    /// <see cref="PartyPresenceController"/> has since teleported the body via its own per-frame
+    /// <c>SetPositionFn</c> writes, since nothing about mirroring ever touches this record. That is
+    /// the same degenerate shape rounds 88-97 spent ten rounds characterizing for a companion that
+    /// was NEVER mirrored at all (frozen <c>Target == Prior == RecordedDestPoint</c>,
+    /// <c>PathWaitDest</c>'s own strict-inequality accept test at 0x00512BF2 permanently false),
+    /// except worse: an in-session freeze there is stale by centimeters; a record frozen through a
+    /// whole mirrored session can be stale by however far the companion has since been teleported.
+    ///
+    /// Rather than reconstruct a fully-correct reset of every stale field by hand
+    /// (<c>CurrentPathNode</c>/<c>DestNode</c>/<c>WriteCursor</c> all index a shared, engine-owned
+    /// circular trail buffer this codebase has never had reason to rebuild from scratch), this
+    /// writes ONLY <see cref="FollowPhaseReleaseRule.EngineWatchdogResetPhase"/> (-1) — the exact
+    /// sentinel the engine's own 50-attempt watchdog already writes on an unrelated stall
+    /// (0x0051C964) — and zeroes <c>attempts</c> (<c>record+0x44</c>) alongside it, matching that
+    /// same engine write exactly. The very next time anything dispatches this record (the following
+    /// <see cref="PartyFollowController"/> frame), the ALREADY-shipped, default-ON
+    /// <see cref="TryResetStuckFollowPhase"/> recognizes phase==-1 and forces phase=0
+    /// (<c>FindPath</c>) with a real, from-scratch pathfind — reusing machinery rounds 71-97 have
+    /// already live-verified extensively, rather than inventing a new recovery path for the mirror
+    /// boundary specifically.
+    ///
+    /// Gated by <see cref="FollowPhaseReleaseRule.ShouldRelease"/> — a no-op when the record
+    /// already reads the reset sentinel, so a companion already idle (or one this instance never
+    /// actually got to mirror before the session ended) is never logged or written pointlessly.
+    ///
+    /// NOT YET LIVE-TESTED. Kill switch (to enable): <c>party_follow_phase7_release=1</c> (default
+    /// OFF). See docs/research/party-reconciliation.md round 98 for the live-verification recipe.
+    ///
+    /// Returns false when the index does not resolve (no companion at that server object id, or no
+    /// client world yet — expected at session end if the body was already despawned).
+    /// <paramref name="wrote"/> reports whether the reset actually fired.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryReleaseFollowPhaseOnUnmirror(uint companionServerObjectId, out bool wrote)
+    {
+        wrote = false;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        uint clientObjectId = ServerToClientObjectIdFn(client, companionServerObjectId);
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int index = GetPartyIndexFn(party, clientObjectId);
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        nint record = party + 0x24 + (index * 0x88);
+        int phase = *(int*)(record + 4);
+        if (!FollowPhaseReleaseRule.ShouldRelease(phase))
+        {
+            return true; // already at the engine's own reset sentinel — nothing to do
+        }
+
+        *(int*)(record + 4) = FollowPhaseReleaseRule.EngineWatchdogResetPhase;
+        *(int*)(record + 0x44) = 0;
+        wrote = true;
+
+        PluginHost.Log(
+            $"party follow phase7release: 0x{companionServerObjectId:X} reset phase "
+            + $"{phase} -> {FollowPhaseReleaseRule.EngineWatchdogResetPhase} on unmirror "
+            + "(frozen follow record handed back to PartyFollowController)");
+
+        return true;
+    }
 }

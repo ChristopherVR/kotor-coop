@@ -88,6 +88,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Phase2StallRule.cs" Link="Plugin\Phase2StallRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\FollowPhaseReleaseRule.cs" Link="Plugin\FollowPhaseReleaseRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\TransitionAnnounceKind.cs" Link="Plugin\TransitionAnnounceKind.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerLockArbiter.cs" Link="Plugin\ContainerLockArbiter.cs" />

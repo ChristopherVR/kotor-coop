@@ -4342,3 +4342,279 @@ falls back — Round 96's own closing lead ("does `TeleportForward`'s own `TestS
 failure path re-enter phase 2, or something else") is now the direct, load-bearing question,
 confirmed reachable live via `followkick` rather than needing the phase-2 stall's own natural
 precondition to occur first.
+
+## Round 98 (2026-08-28, static pass, no rig access) — phase 7 named and its exit disassembled in
+## full (`PathWaitDest`, 0x00512B40); why a MIRRORED companion on a CLIENT never reaches it AT
+## ALL, VERIFIED by tracing the existing ClaimCreature/ClearAllActionsFn disassembly through the
+## AI master's own outer dispatch gate; a new fix candidate, `party_follow_phase7_release`, resets
+## the frozen record at the mirror -> unmirrored boundary. NOT YET LIVE-TESTED.
+
+Task: name phase 7 and find its exit, then settle which of two hypotheses explains why a mirrored
+companion on a client never satisfies it — our own per-tick position writes defeating the engine's
+arrival check, or the follow-AI simply never running for a mirrored body at all. This round had no
+rig access, so everything below is `tools/disasm.py` disassembly against the real GOG binary,
+cross-referenced against this document's own rounds 88-97, `docs/research/realtime-creature-
+movement.md`, and `docs/re/engine-movement.md` (both already-VERIFIED disassembly), plus direct
+source-reading of `PartyFollowController.cs`/`PartyPresenceController.cs`/`Odyssey.Core.cs`.
+
+### VERIFIED: phase 7 is `PathWaitDest` (0x00512B40), per round 95's own DB-anchored dispatch
+### table — disassembled in full this round (`tools/disasm.py 0x512B40 220`), superseding every
+### prior round's partial reads
+
+```
+0x00512B4D  edx = *(record+0x24)      ; CurrentPathNode
+0x00512B50  ebx = *(record+0x34)      ; DestNode
+0x00512B54  edi = *(followData+0xFA4) ; WriteCursor
+0x00512B5A  cmp edx, edi              ; CurrentPathNode == WriteCursor?
+0x00512B5E  je 0x512b70               ; nothing recorded past here -> REJECT (below)
+            eax = edx                 ; forward search, starting at CurrentPathNode
+0x00512B60  loop:
+              cmp eax, ebx            ; eax == DestNode?  (tested BEFORE incrementing)
+              je 0x512b7e             ; found -> accept/reject setup
+              inc eax
+              cmp eax, 0x64 (100); jl skip; xor eax,eax  ; wrap at the 100-slot circular buffer
+              cmp eax, edi            ; back to WriteCursor without a match?
+              jne loop
+0x00512B70  REJECT: eax = [0x745dc0]; ret            ; record+4 LEFT UNTOUCHED — phase stays 7
+0x00512B7E  cmp ebx, edx              ; DestNode == CurrentPathNode?
+0x00512B80  jne 0x512c09              ; NO  -> unconditional ACCEPT, phase=3, no geometry test
+            ; YES (the exact degenerate shape every round since 84 has stalled on):
+0x00512B86  RecordedDestPoint = GetPathData(CurrentPathNode)   ; CSWPartyFollowDataArray, 0x634cc0
+0x00512B98..BF2  distSqToTarget = |RecordedDestPoint - TargetPoint(record+0x28)|^2
+                 distSqToPrior  = |RecordedDestPoint - PriorPoint(record+0x18)|^2
+0x00512BF2  fcompp ST0=distSqToTarget, ST1=distSqToPrior; fnstsw; test ah,5
+0x00512C03  jp 0x512b70               ; unordered OR distSqToTarget >= distSqToPrior -> REJECT
+0x00512C09  ACCEPT: record+4 = 3 (Following_Path); return 1 ("redispatch now")
+```
+
+**What phase 7 waits for, precisely**: neither a raw distance-to-target threshold, an animation/
+`ActionMoveToPoint` completion callback, nor a timer — a forward SEARCH through the recorded
+100-slot trail buffer for an index equal to `DestNode`, gated to a real accept only when the
+recorded point at that index is STRICTLY closer to `TargetPoint` than to `PriorPoint`. Two
+structurally different reject paths both return to the SAME `0x512B70` tail, which does nothing
+but return a "not ready" status — no watchdog escalation of its own, no async re-check queued
+(unlike `Moving_To_Path`'s own dead-end branch, round 95's own citation), no field write besides
+what the caller's own outer `attempts` counter does. **The exit condition**: `record+4` advances to
+3 (`Following_Path`) at exactly ONE instruction, `0x00512C09`, reached only by (a) `DestNode !=
+CurrentPathNode` (an unconditional accept — never the shape this document's stalls exhibit, since
+`WaitingForPath`, the only writer of `DestNode`, always sets it equal to `CurrentPathNode` — round
+84's own finding, unchanged), or (b) `DestNode == CurrentPathNode` AND the recorded point is
+strictly closer to `Target` than to `Prior`.
+
+This also completes round 97's own still-open item precisely, using data that round already
+collected: its live sample read `distSqToTarget=0.0000 distSqToPrior=0.0000` simultaneously — i.e.
+`RecordedDestPoint == TargetPoint == PriorPoint`, a genuine zero-length segment. `0 < 0` is false
+regardless of which side is "fresh" — this is sharper than round 89/90's "stale geometry" theory
+(already live-refuted for the standard host-side repro, this document's own 2026-08-24 "round 90
+... REFUTED" entry above: `target` was already bit-identical to the leader's live position on the
+FIRST frame of the stall, and it still never advanced past 7). The real defect is structural, not
+freshness-dependent: whenever `Prior` and `Target` coincide with the recorded node, the STRICT `<`
+comparison can never pass, no matter how fresh either one is — round 84's own "a zero-length
+segment has no direction to measure past against," now pinned to the exact instruction (`0x512BF2`
+`fcompp` / `0x512C03` `jp`) that encodes it.
+
+### VERIFIED: a mirrored companion on a CLIENT never reaches ANY of the above — the engine's own
+### outer per-tick dispatch never even calls into this FSM while mirroring holds
+
+This is the load-bearing new finding this round, and it resolves the task's two hypotheses in
+favour of neither exactly — closer to the second, but with the precise mechanism now nailed down
+rather than left as "isn't running":
+
+1. `PartyPresenceController.DriveOne` (`PartyPresenceController.cs:480`) calls
+   `Odyssey.ClaimCreature(creature)` — `clearActions: true` by default — on every mirrored
+   companion, every single pass, with the class's own doc comment stating plainly why: "the local
+   AI (and any leftover follow action) must never contest the writes, so re-claim every pass."
+2. `ClaimCreature(creature, clearActions: true)` (`Odyssey.Core.cs:400`) calls `ClearAllActionsFn`
+   (0x004CCD80). `docs/research/realtime-creature-movement.md` §6.1 and its own field table (§2.2)
+   already carry a VERIFIED disassembly of this exact function: it empties the action queue AND
+   **sets `CreMoveState` (creature+0xA8C) = 1 (idle)** on every call — cited independently in three
+   places in that document (lines ~157, ~170, ~431-432: `ClearAllActionsFn(cre, 1); // empties
+   queue, resets path info, sets +0xA8C = 1`).
+3. `docs/re/engine-movement.md` (§"2.1 The one contended writer," VERIFIED) already disassembled
+   the AI master's own per-server-tick pre-pass (`CServerAIMaster::UpdateState`, 0x004B0B70, ~317
+   Hz — the engine's OWN loop, nothing this plugin drives) that decides whether to even call
+   `WalkUpdateLocation_QuickWalk` (0x0051D9C0) for a given creature at all:
+   ```c
+   if (head==1 || head==0x3D) goto quickwalk;      // MoveToPoint or PartyFollowLeader queued
+   if (CreMoveState==4 || ==5 || ==6) goto quickwalk;
+   continue;                                        // otherwise: skipped entirely, this tick
+   ```
+4. A companion `ClaimCreature` has just cleared has an EMPTY queue (`head` is neither 1 nor 0x3D)
+   and `CreMoveState==1` (none of 4/5/6) — **neither condition holds**, every single pass, for as
+   long as mirroring continues. `WalkUpdateLocation_QuickWalk` is therefore never called for this
+   creature by the engine's own native loop, which means `WalkUpdateLocation_QuickWalk_FollowLeader`
+   (0x0051C360) — the ENTIRE phase-dispatch FSM this document's rounds 71-97 disassembled, including
+   `PathWaitDest` above — never runs either. `record+4` (and `Target`/`Prior`/`Snapshot`/
+   `CurrentPathNode`/`DestNode` alongside it) is not merely un-advanced; it is never READ by
+   anything for the whole time this instance mirrors that companion.
+5. `PartyFollowController` — the ONLY code in this plugin that ever calls
+   `WalkUpdateLocation_QuickWalk_FollowLeader` directly (`TryDriveFollowLeaderStep`) or writes
+   `record+4` at all — already knows this independently and backs off completely
+   (`PartyFollowController.cs:264-267`: `if (block.PartyPresenceCount != 0) return;`, with its own
+   class comment: "A client mirroring a peer's party already puppeteers those bodies directly ...
+   handing one of those a real follow order at the same time would contest the puppeteering").
+6. Grepped directly (not inferred): no code anywhere in `PartyPresenceController.cs`,
+   `Odyssey.Core.cs`'s `ClaimCreature`, or `Odyssey.Phantom.cs`'s `DriveEnemy` (the function
+   `DriveOne` calls to place the body) ever constructs a `party + 0x24 + index*0x88` address or
+   touches offset `0x44`/`0x28`/`0x18`/`0x5C`/`0x24`/`0x34` on anything — `DriveOne`'s entire write
+   surface is the `creature` pointer (`CSWSCreature`), never the `party`/follow-record structure
+   `PathWaitDest` and its siblings read. This document's own task framing ("whether our writes ever
+   touch the record") is answered: **they never do, directly or indirectly.**
+
+**Resolving the task's two hypotheses**: the first (DriveOne's per-tick teleports defeating the
+engine's own arrival check — a stale snapshot, or a move action never marked complete) is
+DISASSEMBLY-REFUTED as stated: there is no "defeat" happening, because the arrival-check code
+(`PathWaitDest`, or any phase-dispatch handler) is never ENTERED in the first place while mirroring
+holds — nothing to defeat. The second (the follow-AI isn't running for a mirrored body, and the
+phase-7 value is a leftover) is correct in outcome and now precise in mechanism: it is not that
+this plugin merely "chooses" not to drive it (`PartyFollowController`'s own guard is real, but it
+is a symptom of the deeper cause, not the cause itself) — the ENGINE's own native per-tick
+dispatcher is structurally gated shut for any creature `ClaimCreature` has just cleared, every
+single pass, so `record+4` freezes at WHATEVER value it held the instant mirroring began (which
+this document's own live data (rounds 88-97) shows is quite plausibly 7, `PathWaitDest`, if the
+companion happened to be near-caught-up to its leader in the moment before mirroring took over —
+but could equally be anything else; nothing about the freeze mechanism itself is phase-specific).
+
+### The real risk this creates, and why it is WORSE than the host-only stalls rounds 88-97
+### characterized
+
+A mirrored companion's frozen record is not, by itself, a live gameplay bug — `PartyPresenceController`
+drives position/facing/animation/health directly every pass, never through this FSM, so a frozen
+`phase` field mirrors nothing anyone can see. The risk surfaces at the BOUNDARY: the moment this
+instance stops mirroring a companion (a disconnect, or dropping back to solo play —
+`PartyPresenceController.ReleaseSession`, called from `PluginHost.PumpSessionLifecycle`'s own "the
+one place a session is undone" falling edge), `PartyFollowController`'s own guard opens
+(`block.PartyPresenceCount` is now 0) and it starts driving this exact record again, on the very
+next frame, against whatever `Target`/`Prior`/`Snapshot`/`CurrentPathNode`/`DestNode` it was frozen
+at. Unlike the host-only degenerate case (`Target`/`Prior` stale by, at most, the ~10cm throttle
+`TryDriveFollowTarget` allows between writes), a companion frozen mid-mirror can have been
+teleported anywhere on the map since — `PartyPresenceController.DriveOne` writes position directly
+through `SetPositionFn`, with no distance limit and no interaction with the follow record at all.
+The resumed FSM has no way to know its own inputs are potentially arbitrarily stale, and every
+mechanism this document has shipped to recover a stuck companion (`TryAdvanceStalledPathDestination`,
+`TryAdvanceStalledMovingToPath`, `TryKickStalledMovingToPathToTeleportForward`, etc.) assumes a
+record that drifted gradually, in small steps, not one that snapped back into relevance instantly
+after being frozen arbitrarily far from reality.
+
+### Fix candidate: `party_follow_phase7_release` (default OFF)
+
+Chosen over the task's other two suggested shapes for a concrete reason: "stop driving the
+companion's position while the engine is in phases 2/3/7" is not applicable here — the engine is
+never IN any phase while mirroring holds, per the finding above, so there is nothing to stop
+fighting. "Mark the move action complete when our driven position is within the arrival radius"
+would mean reconstructing and safely invoking the engine's own move-completion machinery from
+outside its normal call chain — exactly the kind of unverified-ABI guess `docs/CONTRIBUTING.md`'s
+engine-write rules warn against, for a mechanism (`PathWaitDest`'s own accept path, round 89's own
+citation) already known to do nothing else useful besides the one field write below already
+does. That leaves the third: **reset phase with a fresh start** — but triggered at the
+mirror-boundary transition, not "once near-target" (a companion whose FSM was never running has no
+meaningful notion of "near-target" to key off of).
+
+`Odyssey.TryReleaseFollowPhaseOnUnmirror` (new, `Odyssey.DoorTransitions.StallRecovery.cs`) writes
+`record+4 = -1` and zeroes `record+0x44` (`attempts`) — the EXACT sentinel and field pair the
+engine's own 50-attempt watchdog already writes on an unrelated stall (0x0051C964, `mov dword ptr
+[esi+4], 0xffffffff` / `mov dword ptr [esi+0x44], 0`), and the exact value the already-shipped,
+default-ON `TryResetStuckFollowPhase` (round 74/84) already recognizes and turns into a clean
+phase-0 (`FindPath`) restart on its very next call. Round 84's own live data already proves this
+sentinel reliably kicks off a genuinely working walk cycle when the engine itself writes it
+("`attempts` started counting up cleanly ... phase progressed 5 -> 3 for the first time in eleven
+rounds") — this reuses that already-verified recovery path rather than inventing a new one for the
+mirror boundary specifically. The dispatch table's own inline phase=-1 handler (0x0051C800,
+disassembled this round) re-snapshots `Snapshot` (`record+0x5C`) from the creature's OWN live
+position before advancing to phase 5 — so the very first thing the restarted FSM does is anchor
+itself to wherever `PartyPresenceController` actually left the body, not the stale pair a frozen
+record would otherwise resume against.
+
+Gated by a new pure rule, `FollowPhaseReleaseRule.ShouldRelease(phase)` (mirroring
+`Phase2StallRule`/`FinalNodeGeometryRule`'s own established pattern) — false only when the record
+already reads -1 (nothing to reset; avoids a pointless write/log for a companion already idle or
+one this instance never actually got to mirror before the session ended).
+
+Wired into `PartyPresenceController.ReleaseSession()` (`PartyPresenceController.cs`), the ONE place
+`docs/CONTRIBUTING.md`'s own convention already designates for "anything a controller does to the
+world on connect belongs in its `ReleaseSession`" — run BEFORE `Invalidate()` clears `_trackedId`,
+over every slot this controller still has a resolved companion id for (`_trackedId[i] != 0`),
+matching `ReleaseAllHeld`'s own "iterate the controller's own cache, not the shared block" pattern
+(the block may already be torn down by the time `ReleaseSession` runs).
+
+Kill switch: `party_follow_phase7_release=0` (default OFF, per this project's own bar — a default
+flips ON only after a direct, decisive, zero-regression live A/B, which this round could not run).
+
+### Honest status and live-verification recipe for whoever has the rig next
+
+**NOT LIVE-TESTED.** This round had no rig access. Everything above is disassembly-grounded
+(VERIFIED against the real GOG binary this session, and against `docs/research/realtime-creature-
+movement.md`/`docs/re/engine-movement.md`'s own already-VERIFIED citations) except the specific
+claim that a real session's frozen phase value happens to land on 7 — plausible given rounds 88-97's
+own live data, but not directly observed for a MIRRORED companion specifically (INFERRED).
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on both GOG installs. Set `party_follow_phase7_release=1`
+   and `party_follow_finelog=1` on whichever instance will be the CLIENT for this pass.
+2. `tools/demo.ps1`, connect both instances, `dialogue_recruit_sync` a companion if the save does
+   not already have one. On the CLIENT, confirm mirroring is active (`party drive: mirroring N of
+   the host's companions` in the log).
+3. On the HOST, walk/teleport the leader a significant distance across the module (or through a
+   door transition) so the mirrored companion's position snaps repeatedly and far — this is what
+   should leave its follow record stale relative to reality, per this round's own theory.
+4. Disconnect the CLIENT (or otherwise end the session so `PumpSessionLifecycle`'s falling edge
+   fires) and watch the CLIENT's plugin log:
+   - **Treatment** (`party_follow_phase7_release=1`): expect `party follow phase7release: 0x{id}
+     reset phase {X} -> -1 on unmirror` at the moment of release, then (on
+     `PartyFollowController`'s very next frame) `TryResetStuckFollowPhase`'s own existing behaviour
+     forcing phase 0, then genuine `FindPath`-driven progress — `party follow finelog` (if left on)
+     showing `phase` cycling 0 -> ... -> 3 and real position change toward the (now solo) leader,
+     not a frozen record or a bogus long-range snap.
+   - **Control** (`=0`, the current shipped default): expect no `phase7release` line, and
+     `PartyFollowController` immediately resuming against whatever phase/target/prior the record was
+     frozen at — worth confirming this actually reproduces a visible problem (a stuck companion, a
+     nonsensical teleport-length "walk," or silent no-op) before treating the treatment leg's result
+     as meaningful.
+5. Confirm no regression either way: session teardown still completes cleanly (`ReleaseAllHeld`'s
+   own faction-restore log line still fires, `Get-Process swkotor,KotorCoop.Agent` clean after
+   `demo.ps1 -Stop`), and — specifically for this fix — that a slot whose companion already
+   despawned before disconnect (index does not resolve) produces no error, matching the `Returns
+   false when the index does not resolve` contract every sibling function in this file already
+   honours.
+6. If the treatment leg shows no observable difference, the next disassembly target is whatever
+   `FindPath` (0x51AC10, phase 0) itself does with a `CurrentPathNode`/`DestNode`/`WriteCursor` that
+   may still be pointing at indices from a completely different, already-overwritten section of the
+   100-slot circular trail buffer — this round's fix resets `phase`/`Snapshot`/`attempts` but
+   deliberately does NOT touch those three fields, on the reasoning that `FindPath`/`WaitingForPath`
+   already compute them fresh in the normal course of the FSM restart; if that reasoning is wrong,
+   they would need resetting too (a natural, small follow-up, not investigated this round for lack
+   of rig access to confirm it is actually necessary).
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean, x86 confirmed, 0 warnings 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build`: **2408/2410 passed** full-suite (2 failures were the
+known-flaky `CoopCommandDispatcherTests` pair `docs/CONTRIBUTING.md` already documents — real UDP
+ports, flake under concurrent runs; both green, 8/8, re-run alone). 14 new tests in
+`FollowPhaseReleaseRuleTests.cs`, all green in isolation (38 ms).
+`Odyssey.TryReleaseFollowPhaseOnUnmirror` and its `PartyPresenceController` wiring are new unsafe
+engine-pointer code, same as every prior round's fix candidates, and are NOT exercised by the (x86
+NativeAOT, unreferenced-by-tests) plugin test project — they can only be verified live.
+`FollowPhaseReleaseRule` is dependency-free (no `SharedBlockView`/`Odyssey`/unsafe pointers) and
+compiles directly into the test project via the established compile-include trick
+(`tests/KotorCoop.Tests/KotorCoop.Tests.csproj`). No `SharedBlock`/protocol version change —
+everything this round touches is plugin-internal (a new phase-field poke, gated by its own config
+flag), nothing crosses the wire.
+
+### Files
+
+- `src/KotorCoop.Plugin/FollowPhaseReleaseRule.cs` (new) — pure release-decision logic, and the
+  disassembly-grounded doc comments for why `-1` is the right sentinel and why the mirror-side
+  freeze mechanism is real (`ClaimCreature`/`ClearAllActionsFn`/the AI master's own outer gate).
+- `src/KotorCoop.Plugin/Odyssey.DoorTransitions.StallRecovery.cs` —
+  `TryReleaseFollowPhaseOnUnmirror` (new), with the full citation trail to
+  `realtime-creature-movement.md`/`docs/re/engine-movement.md`'s own existing VERIFIED disassembly.
+- `src/KotorCoop.Plugin/PartyPresenceController.cs` — new kill switch `party_follow_phase7_release`
+  (default OFF), `ReleaseFollowPhaseForTracked` (new), and the call site in `ReleaseSession()`.
+- `tests/KotorCoop.Tests/FollowPhaseReleaseRuleTests.cs` (new) — unit tests for
+  `FollowPhaseReleaseRule`.
+- `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
+  `FollowPhaseReleaseRule.cs`.
+- `docs/CONFIG.md`, `profiles/coop.ini.example` — documented the new flag, matching the existing
+  unconfirmed-candidate rows' own format.
+- `docs/research/party-reconciliation.md` — this entry.
