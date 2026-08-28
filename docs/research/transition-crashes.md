@@ -321,3 +321,130 @@ documents alongside this one.
    companion's follow-FSM was mid-walk (`store-sync.md`, flagged for `party-reconciliation.md`).
    Neither recipe was deliberately re-run this round — this round's soak found `0x0040D386`
    organically before either could be specifically targeted.
+
+## DLL-level bisect of always-on plugin pieces (2026-08-29)
+
+A follow-up round, prompted by the observation that Round 3 above only ever turned off
+`coop.ini` FEATURE flags — the ones a controller reads with `PluginConfig.ReadBool` to decide
+whether to act — never the small number of plugin pieces that INSTALL unconditionally
+regardless of any flag (a detour/splice or a per-frame reader with no gate at all). Two of
+those, both added since the 2026-08-27 refactor point this project's memory calls out, had no
+kill key before this round:
+
+- `RemovePartyMemberHook` (`src/KotorCoop.Plugin/RemovePartyMemberHook.cs`,
+  `docs/research/star-forge-finale.md` §11) — a mid-function detour on every `RemovePartyMember`
+  VM call, installed unconditionally in `PluginHost.Startup.cs` ("like BarkHook/PhantomHitHook").
+- `EffectiveBehaviourFlag` (`src/KotorCoop.Plugin/EffectiveBehaviourFlag.cs`) — the reader all
+  five host-adoptable controllers (`effect_sync`, `trigger_relay`, `liveness_sync`,
+  `map_reveal_sync`, `dialogue_recruit_sync`) use every frame to consult
+  `SharedBlock.OffsetBehaviourOverrideMask`/`Values`, added 2026-08-27 alongside the
+  behaviour-flag negotiation feature (`b8e551f`), with no way to turn the READ itself off short
+  of turning off all five features individually (which does not stop the shared-block read,
+  only what happens with the result).
+
+The task brief's other candidates — `item_template_spawn_sync` (gates
+`ItemTemplateSpawnHook.Install` directly, `PluginHost.Startup.cs`), `status_indicator`
+(`ConnectionIndicatorController`), `minigame_wait_notice` (`MinigameNoticeController`), and
+`party_select_host_only` (`PartySelectSuppressionController`) — already had kill keys; grepping
+confirmed `docs/CONFIG.md` already documents all four. "`connection_indicator`" is not a
+separate key from `status_indicator` — `ConnectionIndicatorController`'s own field is literally
+named `_enabled = PluginConfig.ReadBool("status_indicator", true)`.
+
+**Two new diagnostic-only kill keys added** (default ON, not meant to ship OFF):
+`removeparty_hook` (`PluginHost.Startup.cs`) and `behaviour_override_reader`
+(`EffectiveBehaviourFlag.cs` — off skips the block read entirely and returns the local
+`coop.ini` value with no log line). Documented in `docs/CONFIG.md` with footnote 13. Both
+live-confirmed to take effect: the plugin log shows
+`RemovePartyMember hook NOT installed: disabled by coop.ini removeparty_hook=0` when set, and
+no `item-template spawns:` install line appears in a session with `item_template_spawn_sync=0`.
+
+### Soak with all six diagnostic keys off: crashes anyway, identical signature
+
+`item_template_spawn_sync=0`, `removeparty_hook=0`, `status_indicator=0`,
+`minigame_wait_notice=0`, `party_select_host_only=0`, `behaviour_override_reader=0` on both
+instances, everything else at its shipped default (so this round adds to, rather than repeats,
+Round 3's coverage — between the two rounds, every coop.ini-gated plugin behaviour this
+codebase currently exposes a switch for has now been tested OFF). Fresh rig, the same
+12-transition soak recipe.
+
+**Crashed on transition 2** — the client died during the dwell after `warp end_m01aa`, last
+plugin-log line `epoch: world unloading; clearing phantom, item, combat and door state`, no
+`FIRST-CHANCE` line captured (the probe did not get another poll cycle) — identical in every
+particular to Rounds 1, 3, 4 and 5 above. **None of the six newly-gateable always-on pieces is
+the cause either.**
+
+### Attempted deeper bisect to `c9d08bb`: blocked by a real, separate hazard
+
+Per the task brief, `git checkout c9d08bb -- src/KotorCoop.Plugin` was tried next (plus
+deleting the 38 files added to the plugin after that commit, since a plain `checkout <rev> --
+<path>` does not delete files the target commit never had — the naive version of this recipe
+silently leaves a hybrid tree that fails to compile). With that done the pre-wave plugin built
+clean and installed onto both game directories.
+
+It could not be soak-tested, for a genuine reason worth recording rather than working around:
+`KotorCoop.Agent`'s plugin-block scanner (`KotorGameBridge.Attach.cs TryFindPlugin`,
+`KotorGameBridge.PluginSignature`) matches a **literal, non-wildcarded 16-byte pattern that
+embeds the exact block version** (`"...3B 00 00 00..."` = 59, decimal, at the signature's byte
+8-11). `c9d08bb`'s plugin writes `_block->Version = 54` (`PluginHost.cs`). The CURRENT
+(HEAD) agent — install.ps1/build.ps1 always deploys the CURRENT agent, and reverting only
+`src/KotorCoop.Plugin` leaves the agent at HEAD — would therefore find **zero** candidates for
+the block at all, fall through to "external mode" instead of "PLUGIN mode", and never form a
+co-op session — so neither the `warp` cheat's peer-follow contract nor `blockpoke.ps1 console`
+(which itself skips exactly those 4 bytes when matching, so it alone would have kept working)
+would exercise anything resembling the live two-instance scenario this bug needs. This is the
+exact hazard `docs/CONTRIBUTING.md`'s "Adding a feature end-to-end" step 5 already warns about
+("a mismatch is a silent 'plugin not found'") — this round is a second, independent
+confirmation of it, this time from testing an OLD plugin against a NEW agent rather than a
+half-bumped version pair. Properly exercising a historical plugin build over the live rig would
+require reverting `src/KotorCoop.Memory`/`Session`/`Agent`/`Protocol` to the same commit too
+(the same added-then-deleted-files problem, four times over, for a payoff this round judged not
+worth it — see "Why the deeper bisect was not carried further" below) — not attempted this
+round. `src/KotorCoop.Plugin` was restored to HEAD (`git checkout HEAD -- src/KotorCoop.Plugin`,
+verified clean with `git status`) and both game directories reinstalled and strings-checked
+against the correct build before any further testing.
+
+### Final confirmatory soak, shipped defaults, HEAD build with both new keys present (ON)
+
+Rebuilt, reinstalled, `coop.ini` reset to a fresh copy of `profiles/coop.ini.example` (every
+flag, including the two new diagnostic keys, at its shipped/code default — all ON). Fresh rig,
+same recipe. **Crashed again on transition 2**, identical signature, identical last log line.
+Confirms the two new kill keys' default-ON code paths introduce no regression of their own —
+the outcome with them present and ON is indistinguishable from every prior round.
+
+### Why the deeper bisect was not carried further, and why the "no plugin at all" fallback could not be run
+
+Two independent rounds this session, covering every coop.ini-gated plugin behaviour this
+codebase can currently switch off — the ten features Round 3 tested plus the six diagnostic
+keys this round added — all show the identical crash signature. Combined with Round 2's one
+symbolicated occurrence (squarely inside `swkotor.exe`'s own `CExoKeyTable::DestroyTable`, zero
+references from `src/*.cs` — `grep -rn "0x40D386\|CExoKeyTable\|DestroyTable" src/` still finds
+nothing), a 60-commit bisection between `c9d08bb` and HEAD (`git log --oneline
+c9d08bb..HEAD -- src/KotorCoop.Plugin` lists 60) was judged low-payoff for the cost of solving
+the cross-version attach problem above at every step, and was not carried out this round.
+
+The task brief's own fallback for "no plugin variant avoids the crash" — soak WITHOUT the
+plugin loaded at all, by renaming `dinput8.dll` — was examined and found not executable with
+this rig's existing tooling: the soak recipe's `warp <module>` is a co-op console verb the
+plugin's `FuncInterpHook` intercepts (there is no such verb in stock KOTOR), and the CLIENT
+following the HOST's warp is the plugin/session's own "peer follows" contract — both need the
+plugin loaded and a live session. Without it, the only way to drive a module transition at all
+would be an actual door crossing walked by input, and `docs/live-verification.md` already
+establishes that injected keystrokes never reach this game. Proving the pure-engine-bug case
+this way remains open, and would need either a human at the keyboard for one shipped-vanilla
+(no `dinput8.dll`) session, or a scripted door-walk built on `teleport.ps1`-style memory writes
+plus the game's own `usedoor`-equivalent action queue rather than the console.
+
+### Updated attribution
+
+Unchanged from Round 3's headline, now on broader evidence: the crash reproduces regardless of
+every plugin-side feature this codebase can currently gate — sixteen keys tested OFF across the
+two rounds (`party_select_host_only`, `solo_segment_spectate`, `transition_announce_scripted`,
+`container_lock_arbitration`, `companion_gear_sync`, `script_item_sync`, `map_reveal_sync`,
+`pazaak_detect`, `store_sync`, `party_pool_sync`, `item_template_spawn_sync`, `removeparty_hook`,
+`status_indicator`, `minigame_wait_notice`, `behaviour_override_reader`, and — separately, at
+shipped ON — reconfirmed once more this round) — plus every one of them ON (two more full
+shipped-defaults soaks this round, both crashing on transition 2, exactly matching Rounds 1/4/5).
+No code fix was made this round: there is still no confirmed culprit inside `src/*.cs` to fix,
+only the two new diagnostic kill keys (which do not change behaviour by default) and the
+process-hazard write-up above. The `CExoKeyTable::DestroyTable` retail-engine hypothesis from
+Round 2 remains the best-supported explanation and is unchanged by this round's work.
