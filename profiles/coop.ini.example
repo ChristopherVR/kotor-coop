@@ -732,6 +732,17 @@ frame_stats=0
 # defaults OFF until it has. 1 turns it on.
 party_pool_sync=0
 
+# Rig-only diagnostics for BOTH mode-2 shared-inventory pumps (party_pool_sync=2 and
+# store_sync=2 - one key, because the two share every bookkeeping mechanism and a failure in one
+# is diagnosed with the other's lines beside it). Prints, per key, on every tick that key has any
+# non-trivial state: the fresh scan value, this pump's own belief, the host's snapshot value, the
+# raw movement since last tick, what its own queued reconciles still expect, what it has
+# published to the host and not seen echoed, what it published THIS tick, and the reconcile
+# target/delta it computed. Three live rig rounds each had to infer a root cause from log
+# timestamps alone (docs/research/shared-inventory-v2.md 6/8/10) - this is so the next one does
+# not. Several lines a second on a busy pool; leave OFF outside a rig.
+party_pool_trace=0
+
 # Solo-segment spectate (docs/research/star-forge-finale.md): the product decision for a
 # story-forced solo segment - the Star Forge's Bastila-chamber duel (sta_m45ac, the door
 # k45_door_bast1's nine RemovePartyMember calls) and Malak's chamber (sta_m45ad, a continuation
