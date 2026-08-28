@@ -5285,3 +5285,45 @@ covered by the pure and loopback tests above and needs no live confirmation the 
 write would — but the next rig round should still confirm it end to end regardless: connect,
 confirm `party drive: mirroring 1 of the host's companions`, `disconnect`, `reconnect`, and confirm
 the SAME log line reappears without a full instance restart, closing round 102's own open item.
+
+---
+
+## Round 104 (2026-08-28, rig round) — round 103's `PartyPresenceWriteCache.Reset()` fix CONFIRMED
+## live: three reconnect reps, all re-mirror within ~2s, no full instance restart needed
+
+Task: this session's queue item 1 — round 102's own recipe, re-run against round 103's fix.
+Two-instance rig (`tools/demo.ps1`), `END_M01AA`, plain `profiles/coop.ini.example` defaults on
+both sides (`party_pool_sync=0`, `store_sync=0` — this item does not need either flag). Commands
+issued through `tools/blockpoke.ps1 -ProcId <client pid> console '<verb>'` (the same agent<-plugin
+channel the in-game `~` console writes — see that script's own header comment), never keystroke
+injection, per this codebase's own documented live-testing convention.
+
+Baseline (fresh connect, before any disconnect): client's `kotorcoop-plugin.log` showed the
+ordinary `party drive: mirroring 1 of the host's companions` line at `17:40:50.358`, immediately
+after `agent reports 1 remote peer(s)` — matching every prior round's own baseline shape.
+
+**Rep 1**: `console 'disconnect'` (reply: session-saved character, module 'END...') then
+`console 'reconnect'` (reply: `co-op: connecting...`). `kotorcoop-session.log`: "a co-op session is
+driving this instance" at `17:46:55.971`. `kotorcoop-plugin.log`: `party drive: mirroring 1 of the
+host's companions` at `17:46:57.735` — **1.76s after reconnect, well within the ~5s window. PASS.**
+
+**Rep 2**: same recipe. Session log: driving resumed at `17:47:29.422`. Plugin log: mirroring line
+at `17:47:30.181` — **0.76s. PASS.**
+
+**Rep 3**: same recipe. Session log: driving resumed at `17:47:48.781`. Plugin log: mirroring line
+at `17:47:50.601` — **1.82s. PASS.**
+
+All three reps re-established companion mirroring well inside the ~5s target, on the SAME game
+instance and the SAME `KotorGameBridge`/agent process across every reconnect — exactly the
+scenario round 102 found broken and round 103 fixed by resetting `PartyPresenceWriteCache` inside
+`ClearCoopState()`. No full instance restart was used or needed at any point. This closes round
+103's own "NEEDS-LIVE" close-out note.
+
+No crash on either side across all three reps (`swkotor` and `KotorCoop.Agent` both confirmed
+alive and responding throughout, via `Get-Process` between reps). `dotnet build
+KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError` (both game
+directories) were run fresh at the top of this session and were clean; no source change this round
+— live re-verification only.
+
+**Verdict**: round 103's reconnect-re-mirror fix is now live-confirmed, 3/3 reps clean. No further
+action needed on this specific item; the reconnect path is healthy going forward.

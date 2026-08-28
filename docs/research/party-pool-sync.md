@@ -2616,3 +2616,133 @@ convergence to +3/+6 with no amplification and, ideally, deliberately forcing th
 (many more rapid repeats than any real recipe would use) to confirm the freeze-and-resync path
 fires correctly against the real native cheat-channel round trip, not just the bench's own
 `AgentLoop` simulation of it.
+
+---
+
+## 23. 2026-08-28, rig round — §22's loop breaker CONFIRMED: root cause 4's severe unbounded
+## ping-pong did NOT reproduce, no trip ever needed. But a smaller, real, live-reproduced defect
+## found on top of it: rapid deposits and a blackout+reconnect both leave a modest but genuine
+## over-count, and the blackout+reconnect case left the two instances DIVERGED, not merely
+## over-counted together. `party_pool_sync` stays OFF, NOT flipped ON
+
+Task: this session's queue item 2 — §22's loop-breaker/`_engineBelief`/`_wireTarget` redesign,
+re-run against §21's own severe-runaway recipe plus the deposit/remove/blackout checks. Two-
+instance rig (`tools/demo.ps1`), `END_M01AA` (this save's default module — the same module §21
+itself used, chosen there specifically "to avoid tar_m02aa's own documented ambient-modal
+ownership"), `party_pool_sync=1` on both `coop.ini`s (the agent process reads `coop.ini` once at
+composition time, not per reconnect — `party_pool_sync` was set BEFORE `demo.ps1` was (re)launched,
+not hot-toggled mid-session; see the "coop.ini is read once per agent process, not per reconnect"
+correction this round had to make to its own first attempt, below). Commands issued through
+`tools/blockpoke.ps1 -ProcId <pid> console '<verb>'`, never keystroke injection.
+
+### The headline result: root cause 4 (the unbounded ping-pong) is genuinely fixed
+
+Three rapid `pooladd g_i_medeqpmnt01` on the host (issued back-to-back through `blockpoke.ps1`,
+each individually confirmed applied), then three rapid `pooladd g_i_medeqpmnt01` on the client,
+then a single `g_w_thermldet01` deposit+immediate-remove, then a `g_w_thermldet01` deposit split
+across a client-side `netsim blackout 8` — **not once across the entire session did any key's
+published-op count within a 10s window approach, let alone cross, `MaxPublishesPerWindow` (8)**:
+every burst this round produced 2-4 publish events per key, never the 600-2000-range escalation
+§21 recorded for the identical recipe against the pre-fix code. `grep -i "loop breaker"` across
+both sides' full agent logs (`$env:TEMP\kotorcoop-demo\agent1.log`/`agent2.log`) for the entire
+session: **zero matches, either side.** This is the exact confirmation §22's own closing paragraph
+asked the next rig round for, and it holds: the `_engineBelief`/live-read-`wireTotal`/
+`ExcessBeyondWire` redesign genuinely stops the exponential compounding root cause 4 described,
+not merely raises the threshold before it happens.
+
+### A smaller, real, live-reproduced defect found on top of the fix: rapid deposits over-count by
+### a small, bounded amount — and a blackout+reconnect resync left the two sides genuinely diverged
+
+**Host-origin rapid test** (three `pooladd g_i_medeqpmnt01`, one per `blockpoke.ps1` call, ~1-2s
+apart — the natural pacing `blockpoke.ps1`'s own reply-wait imposes): host's own three cheat-
+channel applies were each individually correct (`added 'g_i_medeqpmnt01' x1` × 3, matching the
+three real requests exactly — no over-application on the ORIGINATING side's own engine). Host's
+own publish total was also exact: `local add of 2x ... detected, publishing` then `local add of 1x
+... detected, publishing` — 2+1 = 3, matching the three real deposits with zero excess published
+from the host side. But the RECEIVING side (client) then independently detected an extra,
+unexplained +1 beyond what it had just applied (`added 'g_i_medeqpmnt01' x2 to the party pool`
+immediately followed by `party pool: local add of 1x '...' detected, publishing` — a delta the
+client's own engine showed that its own bookkeeping did not expect) and republished it back to the
+host, which the host's own automatic-apply drain then applied for real
+(`party pool: submitting add of 1x ... through the party-pool channel` / `added
+'g_i_medeqpmnt01' x1 to the party pool` on the HOST, ~3 minutes later in wall-clock terms once the
+churn settled). Draining the host afterward with repeated `poolremove g_i_medeqpmnt01` found **4**
+real units for 3 real deposits.
+
+**Client-origin rapid test** (same recipe, reversed): the excess appeared on the ORIGINATING side
+this time — client's own three cheat-channel applies were individually correct (`added x1` × 3),
+but the client's own publish sequence was `local add of 2x ... detected, publishing` (after only
+ONE real apply had landed), then `local add of 1x` × 2 more — 2+1+1 = 4 published for 3 real
+deposits, the excess appearing in the FIRST publish event itself, before the second and third
+manual deposits had even happened. This is the mirror image of the host-origin case: this round
+saw the unexplained +1 land on the depositing side once and the receiving side once, in two
+separate trials — consistent with §9's own "asymmetric, not deterministic... a race, not
+deterministic" characterization of a milder, already-documented gap (§21's own "single-deposit...
+unexplained 2x delta... plausibly ambient scripting... not fully root-caused" finding), not with
+root cause 4's mechanism (which produces unbounded escalating growth, not a flat, bounded +1).
+
+**Deposit-then-immediate-remove**: `pooladd g_w_thermldet01` then `poolremove g_w_thermldet01`
+back to back on the host. Transient churn on both sides during the exchange (an extra `local add
+of 2x` detected for the single real add, an extra automatic apply landing on each side via the
+materialised-loot/giveloot channel), but **both sides converged to 0** once settled (confirmed by
+`poolremove` refusing with `party pool is empty` on both host and client) — net-zero was reached,
+matching §21's own "the bug here is an OVER-COUNT that still converges, not a divergence"
+characterization for THIS specific check.
+
+**Blackout + reconnect resync: the new, more serious finding.** Host deposited 2, then (during an
+8s `netsim blackout` on the CLIENT) deposited 3 more (5 real units total), then the blackout was
+allowed to clear and both sides given 10s to resync. Draining both sides afterward with repeated
+`poolremove g_w_thermldet01`: **host held 9, client held 7** — not only inflated well past the 5
+real units deposited (matching the rapid-deposit tests' own over-count pattern), but the two
+sides landed on GENUINELY DIFFERENT totals from each other, 9 vs 7. This is qualitatively worse
+than every other finding this round and every finding in §21: those all converged to the SAME
+(wrong) number on both sides eventually; this is the first time this round saw the two instances
+disagree with each other after settling, which is a real cross-instance divergence a resync is
+specifically supposed to prevent (`ResyncPartyPool`'s own design, §2.5, re-offers the host's
+absolute totals as a `Set` specifically so this cannot happen). Not root-caused this round — no
+time budget for source instrumentation — but flagged as the most concrete, most severe live
+finding of this session's queue item 2, worth the next round's first attention.
+
+### Distinguishing this round's finding from root cause 4
+
+Every inflation observed this round was **small (single digits) and did not escalate run over
+run** — nothing like §21's 1,2,4,12,40,180,615,1068,906,1938 exponential sequence, and the loop
+breaker's own `MaxPublishesPerWindow` ceiling of 8 was never approached, let alone tripped. This
+reads as §21's own already-documented, not-yet-root-caused "unexplained delta... plausibly ambient
+scripting... or a timing-window miss" gap recurring (small, bounded, self-terminating), NOT as a
+recurrence of root cause 4 (unbounded, escalating, self-amplifying) — root cause 4 itself appears
+genuinely fixed by §22's redesign. The blackout+reconnect divergence is a new variant of the same
+family (a bounded over-count) but is the first live instance of it leaving the two sides
+disagreeing with each other rather than merely disagreeing with the truth together.
+
+### A process note for the next round: `party_pool_sync` cannot be hot-toggled mid-session
+
+This round's first attempt to flip `party_pool_sync=1` mid-session (editing `coop.ini` then
+issuing `console 'reconnect'`/`console 'host'` on the already-running agents) silently had NO
+effect — `CoopConfig` is read exactly once, in `AgentComposition`'s composition root
+(`TryLoadCoopConfig`, called when the AGENT PROCESS itself starts), not per `connect`/`host`/
+`reconnect` command (`DispatchConfiguredConnect`'s own `loadConfig?.Invoke()` only fires for a
+BARE connect with nothing to reconnect to, and `Reconnect()` itself reuses `_lastSettings` from the
+original connect, never re-reading `coop.ini` at all). The fix this round used: `demo.ps1 -Stop`,
+confirm `coop.ini`'s flag survived the stop (it does — `-Stop` only rewrites `auto_start_agent`),
+then a fresh `demo.ps1` launch. Worth a `docs/CONTRIBUTING.md` or `tools/README.md` callout for
+whoever hits this next; not fixed here since it is tooling/process, not a channel defect.
+
+### Verdict
+
+`party_pool_sync` **stays OFF**, **NOT flipped ON** — this round's own recipe was not clean.
+Root cause 4 (the disqualifying severe finding from §21) is confirmed fixed: no unbounded
+amplification, no loop-breaker trip, in any of six separate rig sessions' worth of rapid-deposit
+and blackout recipes this round ran. But a smaller, real, live-reproduced defect remains open: a
+bounded (roughly +1 to +4) over-count on rapid same-key deposits in either direction, and — new
+this round — a genuine cross-instance divergence (9 vs 7) surviving a blackout+reconnect resync.
+Neither was root-caused to a specific line this round; both are flagged for the next pass with
+concrete repro recipes above.
+
+No crash on either side across the whole session (`Get-Process swkotor,KotorCoop.Agent` confirmed
+both alive and responding after every burst, drain, and the blackout/reconnect sequence).
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1
+-Install -WarnAsError` (both game directories, strings-confirmed `RequestPartyPoolResync` present
+in both deployed `KotorCoop.Session.dll`s) were run fresh at the top of this session and were
+clean. No source change this round — live re-verification only.

@@ -1744,3 +1744,74 @@ their shipped OFF default.
 already on `main` as of `966fe0f`. The four write-ups above (`docs/research/store-sync.md`,
 `docs/research/party-pool-sync.md`, `docs/research/party-reconciliation.md`, this entry) are the
 session's only output — see git history for the exact commits.
+
+## Rig pass (2026-08-28): reconnect re-mirror fix (round 103) confirmed live (item 1); party-pool
+## loop breaker (root cause 4) confirmed fixed but a smaller over-count/divergence found (item 2);
+## store_sync's client buy-back gap still reproduces live plus a genuine client crash (item 3);
+## baseline clean (item 4)
+
+Task: this session's four-item queue, starting from a worktree merged forward onto `main` at
+`9914148` ("party-pool pump publishes only excess beyond the live wire total" — root cause 4's own
+fix). Full detail in each feature's own research doc; this entry is the session-level summary.
+
+### Item 1 — reconnect re-mirror: see `docs/research/party-reconciliation.md`'s new "Round 104".
+### Summary: round 103's `PartyPresenceWriteCache.Reset()` fix, live-confirmed. Three
+`disconnect`/`reconnect` reps on the client, defaults on both sides: every rep re-established
+`party drive: mirroring 1 of the host's companions` within ~2s of reconnect (1.76s, 0.76s, 1.82s),
+no full instance restart needed. **PASS, 3/3.**
+
+### Item 2 — `party_pool_sync`: see `docs/research/party-pool-sync.md`'s new §23. Summary: the
+severe, unbounded host<->client ping-pong (root cause 4, disqualifying in the prior round) is
+CONFIRMED FIXED — six rig sessions of rapid-deposit and blackout recipes, zero loop-breaker trips,
+every burst stayed at 2-4 published ops per key. But a smaller, real, live-reproduced defect
+remains: rapid same-key deposits over-count by a small bounded amount (roughly +1 to +4) in either
+direction, and a blackout+reconnect resync left the two instances genuinely DIVERGED from each
+other (host held 9, client held 7, for 5 real deposits) rather than merely over-counted together.
+`party_pool_sync` stays OFF, **NOT flipped ON** — this round's recipe was not clean.
+
+### Item 3 — `store_sync`: see `docs/research/store-sync.md`'s new "Live pass (2026-08-28, rig
+### round)" section. Summary: the sell-side mirror (host to client) still works cleanly. But the
+client buy-back gap the most recent no-rig round believed it had closed did NOT hold live: 35+
+seconds with zero detection/publish on the client side after a buy-back, and the host's own re-buy
+of the "sold" item succeeded when the recipe expected a refusal ("absent"). A genuine client-side
+crash (access violation, confirmed via the Windows Application event log,
+`Fault offset: 0x0023d4b3`) was also hit mid-session during a module transition — not conclusively
+tied to `store_sync` (no store operation was in flight at the moment), but observed under it and
+worth the next round's attention. `store_sync` stays OFF, **NOT flipped ON**.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors (run fresh at the top of
+  this session, after merging `main` forward to `9914148`).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed and strings-confirmed (`RequestPartyPoolResync` present in both
+  deployed `KotorCoop.Session.dll`s, `FollowKick` present in both deployed `dinput8.dll`s).
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2469/2470 passed** — the one failure,
+  `DisconnectRecoveryTests.HeavyPacketLossStillConverges`, is the documented known-flaky suite CI
+  itself excludes; re-run alone immediately after, it passed cleanly, confirming flake rather than
+  regression.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides (every sync flag at its shipped default): **41 passed,
+  8 failed** — squarely the documented 40-42/7-9 baseline. Seven of the eight failures match the
+  long-documented known set exactly (`phantom damageable, not a sink`; `the peer really loses those
+  hit points`; `a client hit costs the enemy real hit points`; `every engine call signature matches
+  the binary` (197/199); `a container opened on the client is held and shown open on the host`; `an
+  item picked up here vanishes on the peer`; `no per-frame spam` — the two documented flaky
+  substitutions both landing as FAIL together this run, as before). The eighth, `no swkotor crash
+  in the event log`, is a false positive from THIS SAME session's own item-3 crash finding (see
+  above) still sitting in the Windows Application event log at the time this baseline ran — that
+  crash predates this baseline session's own instance start by roughly 12 minutes, confirmed by
+  wall-clock timestamp; no crash happened during the baseline run itself, and both processes stayed
+  alive and responding throughout. No new failures, no regression from this session's own work (all
+  four items were live-verification-only passes — no source changed this session, only the four
+  research write-ups and this entry).
+
+No crash from item 1, item 2, or the baseline pass itself — every crash this session traces to item
+3's own finding, in its own isolated rig session. Both game directories' `coop.ini` were reset back
+to the plain example template before this session ended; `store_sync`, `party_pool_sync`, and
+`party_follow_phase7_release` all stay at their shipped OFF default.
+
+**No source changed this session** — every item was a live-verification pass against the code
+already on `main` as of `9914148`. The three write-ups above (`docs/research/party-reconciliation.md`,
+`docs/research/party-pool-sync.md`, `docs/research/store-sync.md`) plus this entry are the
+session's only output — see git history for the exact commits.
