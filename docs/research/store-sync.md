@@ -2246,3 +2246,144 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCo
 build.ps1 -WarnAsError` both clean this round (both game directories freshly installed and
 strings-confirmed). `dotnet test tests/KotorCoop.Tests --no-build`: 2413/2413 passed. No source
 change this round — this is a live re-verification pass only.
+
+## Root-cause + fix (2026-08-28, no rig this round): the wire-mirror gap the prior pass left
+## open — `StorePump`'s own echo-suppression bookkeeping silently skipped a BRAND NEW key, so
+## the receiving peer misread its own just-landed apply as a fresh local sell and re-published it
+
+Task: the prior pass's own closing item — the automatic `store_sync` wire mirror was never
+observed to fire for a real `sell`, "not root-caused this round (no time budget)... the next
+round's concrete target is instrumenting/reading `StorePump`'s own detect step directly." No live
+rig this round (isolation worktree, per `docs/CONTRIBUTING.md`'s parallel-session discipline) —
+everything below is a real host/client/socket loopback reproduction
+(`tests/KotorCoop.Tests/StoreLoopbackTests.cs`) against the actual `KotorCoop.Session` code, not
+static reasoning about it.
+
+### The reproduction: two new loopback tests, one of which fails against the pre-fix tree
+
+`SellOnHostAddingABrandNewKeyMirrorsToClient` (a sell of a resref the store never stocked before —
+the exact shape every prior live pass's own `sell` test happened to exercise, since Larrim's shop
+had no pre-existing entry for the resrefs sold) and
+`SellOnHostMergingIntoAnExistingStackMirrorsToClient` (a sell of a resref the store already
+stocks, a plain quantity increase). Both drive the real `StorePump`/`CoopHost`/`CoopClient`/
+`StoreStore` code through a `FakeStoreBridge` that models exactly what `TryScanOpenStore`'s own
+contract promises — no real engine, so none of the Infinite-stock/`item_count`/possessor quirks
+`docs/research/party-pool-sync.md`'s own investigation found for a DIFFERENT repository — so a
+failure here is a defect in the SESSION/PROTOCOL layer itself, not an artifact of engine RE. The
+merge case passed unmodified against the pre-fix tree; the brand-new-key case failed, reliably:
+
+```
+[host]   store: local add of 1x 'k_computer_spike' detected in store 0x74, publishing
+[client] store: local add of 1x 'k_computer_spike' detected in store 0x74, publishing
+```
+
+**The client independently "detects" and re-publishes the SAME sell the host just told it
+about.** The assertion this fails is not merely "the client never converged" (it does, briefly —
+the first `WaitForAsync` for a post-sell total of 1 passes) but "the sell over- or
+under-corrected after first converging" — the client's own spurious re-publish reaches the host
+as a second, distinct op (a fresh `OpSequence` under the client's own peer id, not a duplicate the
+host's own dedup catches), and the host's `StorePump` step 2 applies it as a SECOND genuine
+increment, driving the store to 2 units where only 1 was ever sold.
+
+### Root cause, found by instrumenting `StorePump.Pump` directly (`Agent.Log`, threaded to a
+### per-side capture in the loopback test)
+
+`Pumps/StorePump.cs`'s step 2 (apply), the `Add`/`Remove` branch, used to update this pump's own
+`_knownEngineTotals`/`_pendingApplyTarget` echo-suppression bookkeeping ONLY for a key it already
+had SOME belief about:
+
+```csharp
+if (_knownEngineTotals.TryGetValue(op.Key, out int before))
+{
+    int after = op.Kind == StoreOpKind.Add ? before + op.CountDelta : Math.Max(0, before - op.CountDelta);
+    SetEngineBelief(op.Key, after);
+}
+```
+
+reasoning (the comment this pass replaced): "a store never locally scanned cannot be mis-detected
+by step 1 anyway... so there is nothing to guard for a key with no prior entry here." **That
+reasoning is true for a STORE, but wrong for a KEY.** The client in the reproduction above HAD
+already opened and baselined store `0x74` (it holds a belief for `Blaster`) — what it had never
+seen was THIS particular key (`Spike`), because the store never stocked it until the host's sell
+just now. `TryGetValue(Spike, ...)` fails (no entry, not "entry with value 0" — the key is simply
+absent from the dictionary), so the `if` never runs, and neither `_knownEngineTotals[Spike]` nor
+`_pendingApplyTarget[Spike]` is ever set. The moment the queued apply lands in the (fake, and in
+production the real) engine, the very next tick's step 1 diffs `_knownEngineTotals` (still missing
+`Spike`) against a fresh scan (now showing `Spike: 1`) and reads the difference as a **brand new
+local sell** — publishing an op that is, byte-for-byte, indistinguishable from a second, genuine
+sell of the same item, because nothing ever told step 1 this key's just-applied change was its own
+pump's doing rather than a human's.
+
+This is exactly the "new key with no baseline" framing the task brief for this round named as a
+live hypothesis, but the actual mechanism is the RECEIVER's echo-suppression gap, not (as the
+brief's other phrasing suggested) the sender-side diff rule or the `StoreStore.Record`
+baseline-seeding logic — both of those were independently unit/loopback-tested already
+(`StoreTests.cs`'s `ANewKeyProducesAnAddForItsFullQuantity`/`AStockIncreaseProducesAnAddForOnlyTheDelta`,
+`StoreLoopbackTests.cs`'s pre-existing `BuyOnHostDecrementsClientsCopy`) and are correct as
+written. The gap was specifically in step 2's OWN bookkeeping after applying a remote op — a
+receive-side defect that only a real two-instance loopback (drain queue -> pending apply -> engine
+landing -> next scan) can surface, which is exactly why the extensive pure-`StoreDiffRule`/
+`StoreStore` unit coverage this document's own prior passes built never caught it.
+
+### The fix
+
+`src/KotorCoop.Session/Pumps/StorePump.cs`, step 2's `Add`/`Remove` branch: removed the
+`TryGetValue` gate — `_knownEngineTotals.GetValueOrDefault(op.Key)` (0 for a genuinely new key,
+matching the real absence) now always feeds `SetEngineBelief`, unconditionally arming
+`_pendingApplyTarget` for the key the apply is about to touch. This matches the class's own
+already-documented design intent for Add/Remove ("correct regardless of whether this pump has
+ever scanned the affected store") — the removed gate was an implementation gap against that
+stated intent, not a deliberate narrower rule. Safe for a store this instance never opens at all
+(the entry sits unread, since step 1 never runs against a store that is never open) and safe for
+one it opens for the FIRST time later (the baseline branch's own `ReplaceStore` call discards this
+optimistic value in favour of the fresh scan regardless, per design rule (a) — unchanged by this
+fix).
+
+### Files, tests
+
+`src/KotorCoop.Session/Pumps/StorePump.cs` — the fix described above, with the mechanism recorded
+in a code comment at the fixed call site (this project's own "keep every hazard comment"
+convention). `tests/KotorCoop.Tests/StoreLoopbackTests.cs` — two new tests,
+`SellOnHostAddingABrandNewKeyMirrorsToClient` (fails against the pre-fix tree, confirmed) and
+`SellOnHostMergingIntoAnExistingStackMirrorsToClient` (already passed unmodified — the merge case
+was never affected, since the key already had a prior belief entry); `AgentLoop` gained an
+optional `name` and a `Logs` capture (`Agent.Log` wired to a `ConcurrentQueue<string>` per side)
+so a loopback failure's assertion message can show exactly which side published what, the
+diagnostic that found this bug.
+
+### An independent confound worth flagging for the next LIVE round specifically
+
+Every prior live `sell` test in this document used `g_w_blstrpstl001` as the test resref against
+`Larrim_Store` — and this SAME document's own 2026-08-28 "BROKEN" pass already established that
+`g_w_blstrpstl001` is Larrim's INFINITE-stock entry (23 consecutive `buy` calls against it never
+moved the store's displayed stock, §1.5's own engine guarantee). Selling that SAME resref back
+merges into the infinite entry and is silently consumed without growing the store's own stock
+(`CSWSStore::AcquireItem`'s infinite-merge branch, §"CSWSStore::AcquireItem 0x005C7610, full
+disasm" above: "returns success WITHOUT incrementing"). If that is what a live rig's own repeat of
+the 2026-08-28 `sell` test actually hit, there would be NOTHING for the engine-level scan to ever
+detect — a correct absence of an op, not a defect, and unrelated to the bug found and fixed above.
+**The next live round should sell a resref confirmed NOT already stocked by the target store**
+(the `items`/`census` sweep, cross-checked against the store's own on-screen list) to avoid
+re-running into this confound a second time and misattributing a clean engine no-op to a wire
+defect.
+
+### VERIFIED / INFERRED / NEEDS-LIVE
+
+| Item | Status |
+| --- | --- |
+| The wire-mirror gap reproduces in a real host/client/socket loopback (not merely a pure-logic unit test) | VERIFIED (`SellOnHostAddingABrandNewKeyMirrorsToClient`, fails pre-fix, `dotnet test`) |
+| Root cause: `StorePump` step 2's echo-suppression bookkeeping skips a brand-new key, causing the receiver to misdetect its own just-landed apply as a fresh local sell and re-publish it | VERIFIED (log instrumentation of both sides, above) |
+| The fix (unconditional `SetEngineBelief` in the Add/Remove branch) | Implemented; **VERIFIED at the loopback layer** (both new tests pass, full suite 2415/2415 green); **NEEDS-LIVE** for the real two-instance rig re-run of this document's own existing `sell` recipe |
+| A merge-into-an-existing-stack sell (the OTHER half of the task brief) | Was never broken — already covered correctly by the pre-existing echo-suppression path, confirmed by the second new test passing unmodified against the pre-fix tree |
+| Whether the prior live pass's own "mirror never fired" observation was ALSO confounded by selling an already-infinite-stocked resref | Not determined this pass (no rig) — flagged as a real, independent risk for whoever runs the next live round, not ruled in or out |
+
+`store_sync` stays default OFF (`profiles/coop.ini.example` unchanged, `store_sync=0`) — this fix
+is loopback-verified, not live-verified; the next rig round should re-run this document's own
+`sell` recipe (§ "Live re-test plan" earlier in this document), this time against a resref
+confirmed NOT already in the target store's stock, before this channel is considered for its
+first real flip-on attempt.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings, 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~Store"`: 172/172
+passed. Full suite, `dotnet test tests/KotorCoop.Tests --no-build`: **2415/2415 passed** (2413
+pre-existing + 2 new loopback tests), foreground, no regressions.

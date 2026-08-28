@@ -128,11 +128,14 @@ public class StoreLoopbackTests
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _task;
 
-        public AgentLoop(ICoopSession session)
+        public System.Collections.Concurrent.ConcurrentQueue<string> Logs { get; } = new();
+
+        public AgentLoop(ICoopSession session, string name = "")
         {
             Bridge = new FakeStoreBridge();
             Agent = new CoopAgent(
                 Bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            Agent.Log = msg => Logs.Enqueue($"[{name}] {msg}");
 
             _task = Task.Run(() => RunAsync(_cts.Token));
         }
@@ -246,8 +249,8 @@ public class StoreLoopbackTests
         Task hostTask = host.RunAsync(cts.Token);
         Task clientTask = client.RunAsync(cts.Token);
 
-        AgentLoop hostAgent = new(host);
-        AgentLoop clientAgent = new(client);
+        AgentLoop hostAgent = new(host, "host");
+        AgentLoop clientAgent = new(client, "client");
 
         Assert.True(
             await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
@@ -497,6 +500,106 @@ public class StoreLoopbackTests
     /// <see cref="IStoreBridge.TryScanOpenStore"/>'s own contract guarantees a real bridge would
     /// report: no change, ever, for such an entry. No op should ever be published for it.
     /// </summary>
+    /// <summary>
+    /// The mirror image of <see cref="BuyOnHostDecrementsClientsCopy"/>: a SELL — a local ADD
+    /// that introduces a key the store never had before. This is the scenario
+    /// docs/research/store-sync.md's own live passes repeatedly reported as "no wire-mirror op
+    /// published" for a real `sell` — this test drives the exact same detect path
+    /// (<see cref="Pumps.StorePump"/> step 1, <see cref="StoreDiffRule"/>) through the FAKE
+    /// bridge, which has none of a real engine's Infinite-stock/`item_count` quirks, to settle
+    /// whether the SESSION/PROTOCOL layer itself has a defect independent of those engine-level
+    /// gotchas.
+    /// </summary>
+    [Fact]
+    public async Task SellOnHostAddingABrandNewKeyMirrorsToClient()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            // The store already stocks Blaster (so there is something for the store to be
+            // "open" against) but has NEVER held Spike — the key this sell introduces.
+            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            // Let both sides establish their silent baseline first - design rule (a).
+            await Task.Delay(300);
+
+            // The host SELLS one unit of an item the store never stocked before - a brand new
+            // key appears in the store's true engine state with count 1.
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 1;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 1, Timeout),
+                "client's own copy of the store never gained the sold item; got "
+                + $"{rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}. "
+                + $"host.Store.Version={rig.Host.Store.Version}, host Spike={rig.Host.Store.Get(Spike)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 1
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 1
+                        && rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40,
+                    TimeSpan.FromSeconds(5)),
+                "the sell over- or under-corrected after first converging, or touched the OTHER "
+                + "stack in the same store\n"
+                + string.Join('\n', rig.HostAgent.Logs) + "\n---client---\n"
+                + string.Join('\n', rig.ClientAgent.Logs));
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    /// <summary>
+    /// The other half of the sell scenario: selling INTO an existing stack (the store already
+    /// stocks this exact resref+identity) merges as a plain quantity increase rather than a
+    /// brand-new key - must publish exactly the delta, not the full post-sell total.
+    /// </summary>
+    [Fact]
+    public async Task SellOnHostMergingIntoAnExistingStackMirrorsToClient()
+    {
+        (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 3;
+            rig.ClientAgent.Bridge.TrueEngineState[Spike] = 3;
+
+            rig.HostAgent.Bridge.OpenStoreId = StoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+
+            await Task.Delay(300);
+
+            // The host sells one more unit of a resref the store already stocks - a merge, not
+            // a new key.
+            rig.HostAgent.Bridge.TrueEngineState[Spike] = 4;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 4, Timeout),
+                "client's own copy of the store never picked up the merged sell; got "
+                + $"{rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 4
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 4,
+                    TimeSpan.FromSeconds(5)),
+                "the merged sell over- or under-corrected after first converging");
+
+            // The host's own wire-side bookkeeping must show the TRUE absolute total (4), not
+            // merely the delta (1) - StoreStore.Record's baseline-seeding behaviour.
+            Assert.Equal(4, rig.Host.Store.Get(Spike));
+
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
     [Fact]
     public async Task InfiniteStockBuyProducesNoOp()
     {

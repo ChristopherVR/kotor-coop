@@ -215,18 +215,31 @@ internal sealed class StorePump(IGameBridge bridge, ICoopSession session, Action
                 // affected store: a relative delta needs no baseline knowledge at all.
                 _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(op.Kind, op.Key, op.CountDelta));
 
-                // Only update this pump's own engine-belief bookkeeping (and therefore only
-                // arm the echo-suppression guard) for a key it already has SOME belief about —
-                // see the class doc's own remarks: a store never locally scanned cannot be
-                // mis-detected by step 1 anyway (step 1 only ever looks at the currently open
-                // store), so there is nothing to guard for a key with no prior entry here.
-                if (_knownEngineTotals.TryGetValue(op.Key, out int before))
-                {
-                    int after = op.Kind == StoreOpKind.Add
-                        ? before + op.CountDelta
-                        : Math.Max(0, before - op.CountDelta);
-                    SetEngineBelief(op.Key, after);
-                }
+                // BUG (found 2026-08-29 by StoreLoopbackTests.SellOnHostAddingABrandNewKeyMirrorsToClient,
+                // matching the live "sell's own wire mirror never published" symptom
+                // docs/research/store-sync.md's own 2026-08-28 pass reported): this USED TO update
+                // engine-belief bookkeeping (and therefore arm the echo-suppression guard,
+                // _pendingApplyTarget) only for a key this pump ALREADY had SOME belief about
+                // (TryGetValue gate below, removed this pass). The old comment's reasoning — "a
+                // store never locally scanned cannot be mis-detected by step 1 anyway" — is true
+                // for a store, but wrong for a KEY: a peer's sell of an item THIS store has never
+                // stocked before is exactly the case where the key is brand new to
+                // _knownEngineTotals even though the STORE itself is already open/baselined here.
+                // Skipping the guard for that key left it unarmed, so the very next real scan
+                // (once the queued apply landed in the engine) read the key's freshly-nonzero
+                // total as a FRESH LOCAL CHANGE — step 1 published its own Add for the exact same
+                // units a peer just sold, double-counting a single sell as two. Tracking belief
+                // unconditionally matches this class's own documented design for Add/Remove
+                // ("correct regardless of whether this pump has ever scanned the affected store")
+                // — for a store this instance never opens, the entry sits harmlessly unread since
+                // step 1 never runs against it; for one it opens LATER for the first time, the
+                // baseline branch's own ReplaceStore call (§ above) discards this optimistic value
+                // in favour of the fresh scan anyway, per design rule (a).
+                int before = _knownEngineTotals.GetValueOrDefault(op.Key);
+                int after = op.Kind == StoreOpKind.Add
+                    ? before + op.CountDelta
+                    : Math.Max(0, before - op.CountDelta);
+                SetEngineBelief(op.Key, after);
             }
         }
     }
