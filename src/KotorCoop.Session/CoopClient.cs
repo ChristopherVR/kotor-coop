@@ -175,6 +175,10 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.StoreOp] = HandleStoreOp,
             [PacketType.StoreAck] = HandleStoreAck,
             [PacketType.CreatureLiveness] = HandleCreatureLiveness,
+            [PacketType.PartyPoolSnapshotV2] = HandlePartyPoolSnapshotV2,
+            [PacketType.PartyPoolIntentAckV2] = HandlePartyPoolIntentAckV2,
+            [PacketType.StoreSnapshotV2] = HandleStoreSnapshotV2,
+            [PacketType.StoreIntentAckV2] = HandleStoreIntentAckV2,
             [PacketType.Pong] = HandlePong,
             [PacketType.None] = HandleNone,
         };
@@ -380,6 +384,9 @@ public sealed partial class CoopClient : ICoopSession
                 _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, storeLength));
             }
         }
+
+        RetransmitPartyPoolIntentsV2(now);
+        RetransmitStoreIntentsV2(now);
 
         // Report our in-world digest so the host can judge the world-time match (globals,
         // save, module GIT). Mostly stable — only the module fields move, on a module

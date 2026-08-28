@@ -43,6 +43,46 @@ public interface IPartyPoolSession
     /// session with no party-pool channel at all.
     /// </summary>
     void RequestPartyPoolResync() { }
+
+    // ---- v2: host-authoritative absolute snapshot + client intents (party_pool_sync=2) ------
+    // See docs/research/shared-inventory-v2.md. Mode 1's members above are untouched; these are
+    // purely additive (docs/CONTRIBUTING.md's "never remove or rename an existing member").
+
+    /// <summary>Host only: publishes this publish cycle's ABSOLUTE totals — see
+    /// docs/research/shared-inventory-v2.md §2.4. A client's own call is a no-op (a client never
+    /// asserts state).</summary>
+    void PublishPartyPoolSnapshotV2(IReadOnlyDictionary<PartyPoolStackKey, int> totals) { }
+
+    /// <summary>The latest FULLY-gathered publish cycle's absolute totals; false until the first
+    /// complete cycle has arrived — mirrors <see cref="IPartySession.TryGetPartyRoster"/>'s own
+    /// "unheard-of vs. empty" distinction (an empty pool and a not-yet-heard-from host must never
+    /// be confused). Always false on the host — it IS the truth, nothing to mirror.</summary>
+    bool TryGetPartyPoolSnapshotV2(out IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+    {
+        totals = EmptyPartyPoolTotals.Instance;
+        return false;
+    }
+
+    /// <summary>Client only: publishes one bounded REQUEST ("I deposited/withdrew this many"),
+    /// returning the serial minted for it — reliable, retransmitted until acked or timed out
+    /// (docs/research/shared-inventory-v2.md §2.5) — or 0 if refused outright (too many already
+    /// in flight). A host's own call is a no-op: the host never sends intents, only applies
+    /// accepted ones (see <see cref="DrainPartyPoolIntentsV2"/>).</summary>
+    uint PublishPartyPoolIntentV2(PartyPoolOpKind kind, PartyPoolStackKey key, ushort count) => 0;
+
+    /// <summary>Host only: every intent this instance's wire layer has accepted (deduped by
+    /// (peer, serial)) since the last drain, oldest first — <c>Pumps.PartyPoolPumpV2</c> applies
+    /// each one to the local engine through the identical staging-cheat primitive v1 already
+    /// uses. The ack (or refusal) itself is sent synchronously by whatever accepted or refused
+    /// the intent, not exposed as a separate call here.</summary>
+    IReadOnlyList<PartyPoolIntentPacketV2> DrainPartyPoolIntentsV2() => [];
+
+    /// <summary>Client only: every intent serial this client has seen acked OR refused since the
+    /// last drain, oldest first — both clear the same way
+    /// (docs/research/shared-inventory-v2.md §2.5), so this carries only the serial, not the
+    /// verdict. <c>Pumps.PartyPoolPumpV2</c> removes each from its own "still outstanding"
+    /// reconcile-target adjustment.</summary>
+    IReadOnlyList<uint> DrainAckedPartyPoolIntentsV2() => [];
 }
 
 /// <summary>A reusable empty dictionary singleton for the default interface member above, so a

@@ -67,6 +67,13 @@ public sealed class CoopAgent
     private readonly PartyPoolPump _partyPoolPump;
     private readonly StorePump _storePump;
 
+    /// <summary>v2 (party_pool_sync=2/store_sync=2, docs/research/shared-inventory-v2.md) — new,
+    /// separate pump instances alongside the v1 pair above, never both active for the same
+    /// channel at once (see <see cref="PumpOnce"/>'s own mode dispatch): v1's
+    /// <see cref="_partyPoolPump"/>/<see cref="_storePump"/> are untouched by this redesign.</summary>
+    private readonly PartyPoolPumpV2 _partyPoolPumpV2;
+    private readonly StorePumpV2 _storePumpV2;
+
     /// <summary>
     /// The suppression ledger shared by every pump that can put a new row into the local PC's
     /// inventory through a channel OTHER than a script — ground-item pickup
@@ -98,6 +105,8 @@ public sealed class CoopAgent
         _partyPump = new PartyPump(bridge, session, settings, _log);
         _partyPoolPump = new PartyPoolPump(bridge, session, _log);
         _storePump = new StorePump(bridge, session, _log);
+        _partyPoolPumpV2 = new PartyPoolPumpV2(bridge, session, _log);
+        _storePumpV2 = new StorePumpV2(bridge, session, _log);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.
@@ -672,19 +681,29 @@ public sealed class CoopAgent
         // PumpContainerLoot itself moved to the fast per-tick path above, ahead of the
         // script-item-grant sample — see that call site's own doc for why.
 
-        // Off by default (coop.ini party_pool_sync) — a researched-but-not-yet-live-verified
-        // offset chain and engine calls, per the project's engine-write rules. See
-        // docs/research/party-pool-sync.md.
-        if (_settings.PartyPoolSyncEnabled)
+        // Off by default (coop.ini party_pool_sync). Mode 1 is the original op-log
+        // (docs/research/party-pool-sync.md); mode 2 is the host-authoritative redesign
+        // (docs/research/shared-inventory-v2.md) — mutually exclusive by construction, so the
+        // two never run against the same engine at once.
+        switch (_settings.EffectivePartyPoolSyncMode)
         {
-            _partyPoolPump.Pump(caps);
+            case 1:
+                _partyPoolPump.Pump(caps);
+                break;
+            case 2:
+                _partyPoolPumpV2.Pump(caps);
+                break;
         }
 
-        // Off by default (coop.ini store_sync) — same "researched but not yet live-verified"
-        // gating as PartyPoolSyncEnabled above. See docs/research/store-sync.md.
-        if (_settings.StoreSyncEnabled)
+        // Off by default (coop.ini store_sync) — same mode gating as party_pool_sync above.
+        switch (_settings.EffectiveStoreSyncMode)
         {
-            _storePump.Pump(local.Module, caps);
+            case 1:
+                _storePump.Pump(local.Module, caps);
+                break;
+            case 2:
+                _storePumpV2.Pump(caps);
+                break;
         }
     }
 
@@ -810,6 +829,22 @@ public sealed class CoopAgent
     public bool TryDequeuePendingStoreApply(out PendingStoreApply next)
     {
         return _storePump.TryDequeuePendingApply(out next);
+    }
+
+    /// <summary>v2 (docs/research/shared-inventory-v2.md): the same single-slot arbitrated drain
+    /// as <see cref="TryDequeuePendingPartyPoolApply"/>, reusing the identical
+    /// <see cref="PendingPartyPoolApply"/> record type — a v2 apply is structurally the same
+    /// (Kind, Key, Count) request into the same staging-cheat primitive, so no new public type
+    /// was needed anywhere in this assembly's surface.</summary>
+    public bool TryDequeuePendingPartyPoolApplyV2(out PendingPartyPoolApply next)
+    {
+        return _partyPoolPumpV2.TryDequeuePendingApply(out next);
+    }
+
+    /// <summary>v2 mirror of <see cref="TryDequeuePendingStoreApply"/>.</summary>
+    public bool TryDequeuePendingStoreApplyV2(out PendingStoreApply next)
+    {
+        return _storePumpV2.TryDequeuePendingApply(out next);
     }
 
     /// <summary>

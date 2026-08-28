@@ -36,8 +36,8 @@ attaches from outside with `OpenProcess`.
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
 | Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | Stays off — a 2026-08-28 rig round found a SEVERE runaway: three rapid deposits of the same resref amplified to 500+ units on each side (and a 15-unit cross-instance divergence), likely from colliding with ambient in-module item-spawn scripts; no crash, but disqualifying | [party-pool-sync.md](docs/research/party-pool-sync.md) |
-| Merchant store stock (`store_sync`) | Stays off — `buy`, `sell`, the sell-mirror, wipe-prevention and the infinite-stock no-op are all live-confirmed clean; the client buy-back check remains inconclusive (a `tar_m02aa` ambient trap the test rig can't reliably clear) and a 2026-08-28 rig round found blackout+reconnect resync can double-apply a sell, misrouting the duplicate into the buyer's own inventory | [store-sync.md](docs/research/store-sync.md) |
+| Shared party item pool (`party_pool_sync`) | Mode 1 (the op-log) stays off — a 2026-08-28 rig round found a SEVERE runaway: three rapid deposits of the same resref amplified to 500+ units on each side (and a 15-unit cross-instance divergence), likely from colliding with ambient in-module item-spawn scripts; no crash, but disqualifying. Mode 2 (host-authoritative absolute snapshot + client intents) replaces the op-log outright — bench-proven immune to that amplification class by construction, NEEDS-LIVE | [party-pool-sync.md](docs/research/party-pool-sync.md), [shared-inventory-v2.md](docs/research/shared-inventory-v2.md) |
+| Merchant store stock (`store_sync`) | Mode 1 (the op-log) stays off — `buy`, `sell`, the sell-mirror, wipe-prevention and the infinite-stock no-op are all live-confirmed clean; the client buy-back check remains inconclusive (a `tar_m02aa` ambient trap the test rig can't reliably clear) and a 2026-08-28 rig round found blackout+reconnect resync can double-apply a sell, misrouting the duplicate into the buyer's own inventory. Mode 2 (host-authoritative absolute snapshot + client intents) replaces the op-log outright — every publish cycle already IS the full resync, so the double-apply class cannot recur by construction, NEEDS-LIVE | [store-sync.md](docs/research/store-sync.md), [shared-inventory-v2.md](docs/research/shared-inventory-v2.md) |
 | Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
 | Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
 | Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
@@ -229,10 +229,14 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Each player really fights one enemy at a time.** `local_combat` hands a client exactly one
   hostile to its own engine at a time; every other engaged enemy stays mirrored (damage still lands), and the damage wire names only the last attacker. See [combat-participation.md](docs/research/combat-participation.md).
 - **The party's shared item pool syncs, but stays off by default** (`party_pool_sync` — status
-  table above): a 2026-08-28 rig round found a severe runaway — three rapid deposits of the same
-  resref amplified into 500+ phantom units on each side, with the two instances disagreeing with
-  each other on top, before settling on their own with no crash. See
-  [party-pool-sync.md](docs/research/party-pool-sync.md).
+  table above): mode 1's bidirectional op-log hit a severe runaway in a 2026-08-28 rig round —
+  three rapid deposits of the same resref amplified into 500+ phantom units on each side, with
+  the two instances disagreeing with each other on top, before settling on their own with no
+  crash. Mode 2 replaces that design outright with a host-authoritative absolute snapshot plus
+  client intents — bench-proven immune to that amplification class by construction, since only
+  the host ever publishes state and a client only ever converges toward it — but is NEEDS-LIVE,
+  never yet run against a real game. See [party-pool-sync.md](docs/research/party-pool-sync.md)
+  and [shared-inventory-v2.md](docs/research/shared-inventory-v2.md).
 - **The Star Forge's Bastila and Malak duels spectate, ON by default and live-verified, with one
   narrow gap** (`solo_segment_spectate`): parks the other player's input/camera on the fight
   instead of a second combatant wandering in. Every lever fired live 2026-08-28 except that the

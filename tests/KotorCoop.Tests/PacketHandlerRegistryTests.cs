@@ -29,6 +29,10 @@ public class PacketHandlerRegistryTests
         PacketType.DialogueGrant, PacketType.DialogueGrantAck, PacketType.Ping, PacketType.Bye,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck, PacketType.PartyPoolSyncRequest,
         PacketType.StoreOp, PacketType.StoreAck, PacketType.StoreSyncRequest,
+        // v2 (host-authoritative absolute snapshot + client intents, docs/research/
+        // shared-inventory-v2.md): the host only ever RECEIVES an intent (never a snapshot or
+        // an ack — it originates both of those itself).
+        PacketType.PartyPoolIntentV2, PacketType.StoreIntentV2,
         PacketType.None,
     ];
 
@@ -46,7 +50,13 @@ public class PacketHandlerRegistryTests
         PacketType.ItemSnapshot, PacketType.ContainerLoot, PacketType.MaterialisedLoot,
         PacketType.CreatureLiveness, PacketType.Pong,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck,
-        PacketType.StoreOp, PacketType.StoreAck, PacketType.None,
+        PacketType.StoreOp, PacketType.StoreAck,
+        // v2 (host-authoritative absolute snapshot + client intents, docs/research/
+        // shared-inventory-v2.md): a client only ever RECEIVES a snapshot or an ack (never an
+        // intent — it originates those itself, and the host never relays one onward).
+        PacketType.PartyPoolSnapshotV2, PacketType.PartyPoolIntentAckV2,
+        PacketType.StoreSnapshotV2, PacketType.StoreIntentAckV2,
+        PacketType.None,
     ];
 
     private static IReadOnlyDictionary<PacketType, object> ReadHandlers(object session)
