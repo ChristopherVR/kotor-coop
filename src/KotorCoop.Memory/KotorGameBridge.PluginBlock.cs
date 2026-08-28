@@ -633,15 +633,25 @@ public sealed partial class KotorGameBridge
     private const int BlockContainerLockResponseSerial = 0x40D8;
     private const int BlockContainerLockResponseGranted = 0x40DC;
 
-    // Item-template-spawn ring (shared block version 58, region 0x4100..0x4604, TotalSize
-    // grown to 0x4700). Mirrors SharedBlock.OffsetItemTemplateSpawn*. See
-    // docs/research/item-identity.md §13 and KotorGameBridge.ItemTemplateSpawns.cs.
+    // Item-template-spawn ring (shared block version 59, region 0x4100..0x4700, TotalSize
+    // grown to 0x4800). Mirrors SharedBlock.OffsetItemTemplateSpawn*. See
+    // docs/research/item-identity.md §13, docs/research/party-pool-sync.md §20 (version 59's
+    // own cheat-flag addition) and KotorGameBridge.ItemTemplateSpawns.cs.
     private const int BlockItemTemplateSpawnRing = 0x4100;
     private const int BlockItemTemplateSpawnRingCapacity = 64;
-    private const int BlockItemTemplateSpawnEntryStride = 0x14;
+    private const int BlockItemTemplateSpawnEntryStride = 0x18;
     private const int BlockItemTemplateSpawnIdOffset = 0x00;
     private const int BlockItemTemplateSpawnResrefOffset = 0x04;
     private const int BlockItemTemplateSpawnResrefLength = 16;
+
+    /// <summary>Version 59. Dword flags; bit 0 (<see cref="BlockItemTemplateSpawnIsCheatBit"/>)
+    /// means this entry's own creation ran through this instance's own code (a cheat, an
+    /// automatic wire-apply), not a vanilla script. Mirrors
+    /// <see cref="KotorCoop.Plugin.SharedBlock.ItemTemplateSpawnIsCheatOffset"/>.</summary>
+    private const int BlockItemTemplateSpawnIsCheatOffset = 0x14;
+
+    private const uint BlockItemTemplateSpawnIsCheatBit = 1u << 0;
+
     private const int BlockItemTemplateSpawnCursor =
         BlockItemTemplateSpawnRing + (BlockItemTemplateSpawnRingCapacity * BlockItemTemplateSpawnEntryStride);
 

@@ -372,4 +372,121 @@ public class PartyPoolTests
         Assert.True(PartyPoolStackMatcher.Matches(null, "g_i_progspike01", tagMatches: true));
         Assert.False(PartyPoolStackMatcher.Matches(null, "g_i_progspike01", tagMatches: false));
     }
+
+    // ---- identity matcher (RemovePartyPoolStack's charge clamp + wildcard rule, docs/research/
+    // party-pool-sync.md §20) -----------------------------------------------------------------
+
+    /// <summary>The ordinary case: every field named, every field must match exactly.</summary>
+    [Fact]
+    public void AnExactIdentityMatchSucceeds()
+    {
+        Assert.True(PartyPoolIdentityMatcher.Matches(
+            itemCharges: 50, itemMaxCharges: 50, itemUpgrades: 0, itemWireFlags: 1,
+            requestedCharges: 50, requestedMaxCharges: 50, requestedUpgrades: 0, requestedWireFlags: 1));
+    }
+
+    [Theory]
+    [InlineData(49u, 50u, 0u, 1u)]
+    [InlineData(50u, 49u, 0u, 1u)]
+    [InlineData(50u, 50u, 1u, 1u)]
+    [InlineData(50u, 50u, 0u, 0u)]
+    public void ASingleMismatchedFieldRefusesTheWholeMatch(
+        uint requestedCharges, uint requestedMaxCharges, uint requestedUpgrades, uint requestedWireFlags)
+    {
+        Assert.False(PartyPoolIdentityMatcher.Matches(
+            itemCharges: 50, itemMaxCharges: 50, itemUpgrades: 0, itemWireFlags: 1,
+            requestedCharges, requestedMaxCharges, requestedUpgrades, requestedWireFlags));
+    }
+
+    /// <summary>
+    /// The exact fix for docs/research/party-pool-sync.md §19.2's own live "identity-key
+    /// mismatch": a bare <c>poolremove &lt;resref&gt;</c> has no charges/upgrades/flags to give,
+    /// so every one of those fields arrives as the wildcard — and must match ANY live value,
+    /// including a nonzero one an ambient script's own deposit actually carries.
+    /// </summary>
+    [Fact]
+    public void EveryFieldWildcardedMatchesAnyLiveValue()
+    {
+        Assert.True(PartyPoolIdentityMatcher.Matches(
+            itemCharges: 50, itemMaxCharges: 50, itemUpgrades: 7, itemWireFlags: 1,
+            requestedCharges: PartyPoolIdentityMatcher.Wildcard,
+            requestedMaxCharges: PartyPoolIdentityMatcher.Wildcard,
+            requestedUpgrades: PartyPoolIdentityMatcher.Wildcard,
+            requestedWireFlags: PartyPoolIdentityMatcher.Wildcard));
+    }
+
+    /// <summary>A wildcard on SOME fields still enforces the ones actually named — partial
+    /// specificity is not "match anything."</summary>
+    [Fact]
+    public void AMixOfWildcardAndConcreteFieldsOnlyEnforcesTheConcreteOnes()
+    {
+        Assert.True(PartyPoolIdentityMatcher.Matches(
+            itemCharges: 50, itemMaxCharges: 50, itemUpgrades: 7, itemWireFlags: 1,
+            requestedCharges: 50, requestedMaxCharges: PartyPoolIdentityMatcher.Wildcard,
+            requestedUpgrades: PartyPoolIdentityMatcher.Wildcard, requestedWireFlags: 1));
+
+        Assert.False(PartyPoolIdentityMatcher.Matches(
+            itemCharges: 50, itemMaxCharges: 50, itemUpgrades: 7, itemWireFlags: 1,
+            requestedCharges: 49, requestedMaxCharges: PartyPoolIdentityMatcher.Wildcard,
+            requestedUpgrades: PartyPoolIdentityMatcher.Wildcard, requestedWireFlags: 1));
+    }
+
+    /// <summary>
+    /// docs/research/item-identity.md §1.1's own measured example: an item whose template never
+    /// fully loaded reads "charges 50/1768092" — MaxCharges above the 0..255 GFF-byte range is
+    /// uninitialised memory, never a real value, and falls back to Charges (the engine's own
+    /// documented default when a .uti declares no MaxCharges field at all).
+    /// </summary>
+    [Fact]
+    public void SafeChargeFieldsClampsAnOutOfRangeMaxChargesDownToCharges()
+    {
+        (uint charges, uint maxCharges) = PartyPoolIdentityMatcher.SafeChargeFields(50, 1768092);
+
+        Assert.Equal(50u, charges);
+        Assert.Equal(50u, maxCharges);
+    }
+
+    /// <summary>An out-of-range CHARGES value (not just MaxCharges) falls back to 0 — there is
+    /// no other field left to default to.</summary>
+    [Fact]
+    public void SafeChargeFieldsClampsAnOutOfRangeChargesToZero()
+    {
+        (uint charges, uint maxCharges) = PartyPoolIdentityMatcher.SafeChargeFields(999999, 40);
+
+        Assert.Equal(0u, charges);
+        Assert.Equal(40u, maxCharges);
+    }
+
+    /// <summary>Both fields already in range pass through unchanged — the clamp never touches a
+    /// genuinely valid pair.</summary>
+    [Fact]
+    public void SafeChargeFieldsLeavesInRangeValuesAlone()
+    {
+        (uint charges, uint maxCharges) = PartyPoolIdentityMatcher.SafeChargeFields(10, 50);
+
+        Assert.Equal(10u, charges);
+        Assert.Equal(50u, maxCharges);
+    }
+
+    /// <summary>
+    /// The whole point of clamping the SAME way on both ends: a remove request built from a
+    /// scan's own (already-clamped) key must reproduce a match against the SAME live item, even
+    /// though a bare re-read of that item's raw MaxCharges would still show the garbage value —
+    /// the asymmetry docs/research/party-pool-sync.md §20 identifies as the root cause of
+    /// §19.2's own "matcher can't reproduce on remove" gap.
+    /// </summary>
+    [Fact]
+    public void AKeyDerivedFromAClampedScanMatchesTheSameLiveItemsRawGarbageMaxCharges()
+    {
+        // What a scan would have reported for this item (KotorCoop.Memory.ItemIdentityLayout.
+        // Decode's own clamp, mirrored here by SafeChargeFields).
+        (uint scannedCharges, uint scannedMaxCharges) = PartyPoolIdentityMatcher.SafeChargeFields(50, 1768092);
+
+        // The SAME live item, re-read later for the remove — MaxCharges still reads raw garbage.
+        (uint itemCharges, uint itemMaxCharges) = PartyPoolIdentityMatcher.SafeChargeFields(50, 1768092);
+
+        Assert.True(PartyPoolIdentityMatcher.Matches(
+            itemCharges, itemMaxCharges, itemUpgrades: 0, itemWireFlags: 1,
+            scannedCharges, scannedMaxCharges, requestedUpgrades: 0, requestedWireFlags: 1));
+    }
 }

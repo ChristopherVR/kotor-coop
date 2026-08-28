@@ -35,9 +35,112 @@ public sealed partial class KotorGameBridge
 
     private bool _partyPoolEverScanned;
 
+    /// <summary>
+    /// How recent a <see cref="TryGetItemCreationObservation"/> fact has to be, relative to the
+    /// scan that first notices this item, for that item to be treated as ambient-script noise
+    /// rather than sync-relevant party-pool content — see
+    /// <see cref="IsAmbientPartyPoolNoise"/>'s own remarks and docs/research/party-pool-sync.md
+    /// §20. KOTOR's own <c>k_*</c> heartbeat/plot scripts can deposit into this exact
+    /// repository via <c>CreateItemOnObject(..., GetFirstPC())</c>, and BOTH instances run the
+    /// same scripts — a naive publish of that deposit as a local player action would double it
+    /// once the peer's own independently-created copy is added to the merged total. A stack a
+    /// human genuinely drags into the pool via the GUI, or deposits through <c>pooladd</c>, was
+    /// never freshly CREATED at that moment (it already existed in a backpack, possibly for a
+    /// long time) — or, for <c>pooladd</c>'s own fresh spawn, IS marked cheat — so this window
+    /// only ever catches the pattern this section exists for: created and pooled in the same
+    /// breath, by something other than our own code.
+    /// </summary>
+    private const long PartyPoolAmbientSuppressionWindowMs = 1000;
+
+    /// <summary>
+    /// Per-item id, whether <see cref="IsAmbientPartyPoolNoise"/> decided this item is ambient
+    /// noise — decided ONCE, the first time an item id is ever seen by a party-pool scan, and
+    /// never re-evaluated afterward. This is deliberate, not a missed refinement: re-checking
+    /// the time window on every later scan would mean an item excluded on tick 1 (correctly
+    /// suppressed, freshly created) starts being COUNTED once <see cref="PartyPoolAmbientSuppressionWindowMs"/>
+    /// elapses — reproducing, on a delay, the exact double-count bug this section exists to
+    /// prevent, since a delayed "sudden appearance" reads as a genuine new local change to
+    /// <c>Pumps.PartyPoolPump</c>'s own step-1 diff exactly the way the original unsuppressed
+    /// deposit did. A decision, once made, is therefore permanent for the item's lifetime —
+    /// consistent with this channel's own design (docs/research/party-pool-sync.md §2.1): an
+    /// ambient item that is never counted is, from the sync layer's perspective, simply not
+    /// part of the multiset at all, on either side, forever — which is correct, since both
+    /// instances independently hold their own equivalent copy without any wire op ever being
+    /// needed.
+    ///
+    /// Cleared on module change (engine object ids are only meaningful within the module that
+    /// minted them — the same reasoning <see cref="ClearItemCreationObservationCache"/>'s own
+    /// remarks give) and defensively capped past the repository's own hard count limit (4096) so
+    /// a very long session cannot grow this without bound even across many modules whose
+    /// per-module clear somehow did not fire.
+    /// </summary>
+    private readonly HashSet<uint> _partyPoolSuppressionDecided = [];
+
+    private readonly HashSet<uint> _partyPoolAmbientSuppressed = [];
+
+    private const int PartyPoolSuppressionCacheCapacity = 4096;
+
+    /// <summary>
+    /// True when <paramref name="itemId"/> should be excluded from a party-pool scan's
+    /// aggregate — see <see cref="_partyPoolSuppressionDecided"/>'s own remarks for why this is
+    /// a one-time, permanent decision per id rather than a live re-check.
+    ///
+    /// <paramref name="nowMs"/> is threaded through explicitly (rather than this method reading
+    /// <see cref="Environment.TickCount64"/> itself) so <c>PartyPoolAmbientSuppressionTests</c>
+    /// (KotorCoop.Tests, granted access via <c>InternalsVisibleTo</c>) can pin the window's exact
+    /// boundary deterministically — the same reasoning
+    /// <c>Pumps.PartyPoolLoopbackTests</c>' own <c>ThrottledFakeBridge</c> gives for a
+    /// test-controlled clock over a real timer. <see cref="TryScanPartyPoolTotals"/> is the only
+    /// real caller and always passes the true wall clock.
+    /// </summary>
+    internal bool IsAmbientPartyPoolNoise(uint itemId, long nowMs)
+    {
+        if (_partyPoolSuppressionDecided.Contains(itemId))
+        {
+            return _partyPoolAmbientSuppressed.Contains(itemId);
+        }
+
+        if (_partyPoolSuppressionDecided.Count >= PartyPoolSuppressionCacheCapacity)
+        {
+            // Past the failure, not a limit expected to bite in ordinary play (the repository
+            // itself is capped at 4096 live items) — a full reset costs nothing but re-deciding
+            // a handful of ids, never a wrong answer, since the decision rule itself is
+            // unchanged.
+            _partyPoolSuppressionDecided.Clear();
+            _partyPoolAmbientSuppressed.Clear();
+        }
+
+        _partyPoolSuppressionDecided.Add(itemId);
+
+        bool suppress = TryGetItemCreationObservation(itemId, out bool isCheat, out long observedAtMs)
+            && !isCheat
+            && nowMs - observedAtMs < PartyPoolAmbientSuppressionWindowMs;
+
+        if (suppress)
+        {
+            _partyPoolAmbientSuppressed.Add(itemId);
+        }
+
+        return suppress;
+    }
+
+    /// <summary>Drops every party-pool suppression decision. Called on module change, alongside
+    /// <see cref="ClearItemCreationObservationCache"/> — see this cache's own remarks on why a
+    /// stale decision would be actively wrong (a reused id in a new module) rather than merely
+    /// uninformative.</summary>
+    private void ClearPartyPoolSuppressionCache()
+    {
+        _partyPoolSuppressionDecided.Clear();
+        _partyPoolAmbientSuppressed.Clear();
+    }
+
     /// <summary>Read-only; no plugin needed. The apply half (creating/destroying items) goes
     /// through the staging-cheat channel (<see cref="ICheatBridge"/>), which does need one, but
-    /// reading the pool's current contents is a pure external memory read.</summary>
+    /// reading the pool's current contents is a pure external memory read. The plugin-fed
+    /// ambient-noise suppression above is a best-effort ENHANCEMENT on top of that read, not a
+    /// requirement: with no plugin attached, <see cref="TryGetItemCreationObservation"/> never
+    /// has an answer, <see cref="IsAmbientPartyPoolNoise"/> always returns false, and every
+    /// item counts exactly as it did before this section existed.</summary>
     public bool SupportsPartyPool => true;
 
     public bool TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> totals)
@@ -100,6 +203,14 @@ public sealed partial class KotorGameBridge
 
             if (!TryReadItemIdentity(itemId, out ItemIdentity identity) || !identity.IsKnown
                 || identity.StackSize == 0)
+            {
+                continue;
+            }
+
+            // Ambient-script noise (an item created and pooled by a vanilla k_* script, not by
+            // player action) is permanently excluded from the sync-relevant aggregate — see
+            // IsAmbientPartyPoolNoise's own remarks and docs/research/party-pool-sync.md §20.
+            if (IsAmbientPartyPoolNoise(itemId, now))
             {
                 continue;
             }

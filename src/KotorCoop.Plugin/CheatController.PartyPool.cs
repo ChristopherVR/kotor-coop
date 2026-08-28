@@ -69,6 +69,17 @@ internal sealed unsafe partial class CheatController
     /// shared party pool, through <see cref="Odyssey.RemovePartyPoolStack"/>. Reads no live
     /// item's identity beforehand (unlike <c>SetItem</c>) — the caller is asking to remove
     /// exactly the stack it already named, not a delta from a read.
+    ///
+    /// Unlike <see cref="PartyPoolAdd"/>, an unspecified field is passed through as
+    /// <see cref="SharedBlock.CheatFieldUnchanged"/> RATHER than coerced to 0 — a REMOVE has no
+    /// engine field to leave alone (there is nothing being written), so the sentinel instead
+    /// reaches <see cref="Odyssey.RemovePartyPoolStack"/> as a WILDCARD: "match any value for
+    /// this field" (see <c>Odyssey.RemovePartyPoolStack</c>'s own remarks). A wire-
+    /// driven apply (<c>CoopCommandDispatcher.DrainAutomaticPartyPool</c>) always supplies
+    /// concrete fields from a scanned key, so this only changes the behaviour of a human's own
+    /// bare <c>poolremove &lt;resref&gt;</c>, which previously demanded an exact match against
+    /// literal zeros — refusing an ambient-script deposit whose real Charges/Upgrades/Flags
+    /// are not zero (docs/research/party-pool-sync.md §19.2/§20).
     /// </summary>
     private void PartyPoolRemove()
     {
@@ -98,13 +109,11 @@ internal sealed unsafe partial class CheatController
         uint upgrades = block.CheatItemUpgrades;
         uint wireFlags = block.CheatItemFlags;
 
+        // Passed through RAW, not coerced to 0: SharedBlock.CheatFieldUnchanged reaches
+        // RemovePartyPoolStack as a per-field WILDCARD (see this method's own remarks) rather
+        // than a demand for an exact-zero match nothing but a freshly-constructed item ever has.
         bool applied = Odyssey.RemovePartyPoolStack(
-            text, length, count,
-            charges == SharedBlock.CheatFieldUnchanged ? 0 : charges,
-            maxCharges == SharedBlock.CheatFieldUnchanged ? 0 : maxCharges,
-            upgrades == SharedBlock.CheatFieldUnchanged ? 0 : upgrades,
-            wireFlags == SharedBlock.CheatFieldUnchanged ? 0 : wireFlags,
-            out int removed);
+            text, length, count, charges, maxCharges, upgrades, wireFlags, out int removed);
 
         if (!applied)
         {

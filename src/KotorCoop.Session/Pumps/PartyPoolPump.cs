@@ -109,6 +109,30 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
     /// scan value (exact match = landed cleanly; anything else = publish the excess).</summary>
     private readonly Dictionary<PartyPoolStackKey, int> _pendingApplyTarget = [];
 
+    /// <summary>
+    /// A stack total above this is presumed to be an ambient-script bug rather than a
+    /// deliberate deposit — docs/research/party-pool-sync.md §19's own live pass observed
+    /// exactly this from the module's own duros-registration script (stack 65535, 6783, and a
+    /// remove of 38937 against the SAME repository this channel scans), all classic KOTOR
+    /// retail script sentinel/overflow values, not a coop-mod artifact. Not a real KOTOR
+    /// gameplay stack: nothing in the base game's own UI or scripting stacks past a few dozen
+    /// of anything. This never changes what gets published or applied — the count is already
+    /// safe to carry (<c>KotorCoop.Memory.ItemIdentityLayout.Decode</c> clamps any raw read to
+    /// <c>[1, ushort.MaxValue]</c> before it ever reaches this dictionary, so a genuinely
+    /// unbounded/garbage value cannot poison a peer) — it only decides whether this pump logs a
+    /// one-time diagnostic so a session watching the log can tell "the ambient module is doing
+    /// this again" from "party_pool_sync grew a real bug", rather than needing a live-attach
+    /// probe to find out after the fact.
+    /// </summary>
+    private const int SuspiciousStackSizeThreshold = 99;
+
+    /// <summary>Keys already warned about via <see cref="SuspiciousStackSizeThreshold"/> —
+    /// logged once per key, not once per tick, matching every other "say it once, not every
+    /// frame" diagnostic in this codebase. Never pruned: bounded by
+    /// <c>ProtocolConstants.MaxPartyPoolStacks</c> (256) the same way the store/loot channels'
+    /// own key spaces are, so this cannot grow without limit over a session.</summary>
+    private readonly HashSet<PartyPoolStackKey> _warnedSuspiciousStackSize = [];
+
     private bool _baselined;
 
     public void Pump(SessionCapabilities caps)
@@ -144,6 +168,14 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         {
             int prior = _lastScan.GetValueOrDefault(key);
             int actual = engine.GetValueOrDefault(key);
+
+            if (actual > SuspiciousStackSizeThreshold && _warnedSuspiciousStackSize.Add(key))
+            {
+                log($"party pool: suspiciously large stack — {actual}x '{key.Resref}' "
+                    + $"(charges {key.Charges}/{key.MaxCharges}, upgrades 0x{key.Upgrades:X}). "
+                    + "Likely an ambient script bug (docs/research/party-pool-sync.md §19/§20), "
+                    + "not a coop-mod artifact — carried through unchanged, logged once.");
+            }
 
             if (actual == prior)
             {

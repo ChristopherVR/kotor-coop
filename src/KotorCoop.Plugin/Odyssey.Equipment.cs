@@ -100,7 +100,22 @@ internal static unsafe partial class Odyssey
         }
 
         var create = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedCreateItemOnObject;
-        if (create(implementer, _routineCreateItemOnObject, 3) != 0)
+
+        // See GiveItemToInventory's identical bracket for why: this is the only point that can
+        // tell ItemTemplateSpawnHook "this creation is ours" (docs/research/party-pool-sync.md
+        // §20).
+        ItemTemplateSpawnHook.NextSpawnIsCheat = true;
+        int createResult;
+        try
+        {
+            createResult = create(implementer, _routineCreateItemOnObject, 3);
+        }
+        finally
+        {
+            ItemTemplateSpawnHook.NextSpawnIsCheat = false;
+        }
+
+        if (createResult != 0)
         {
             failure = 6;
             return false;
@@ -217,7 +232,26 @@ internal static unsafe partial class Odyssey
         }
 
         var create = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedCreateItemOnObject;
-        if (create(implementer, _routineCreateItemOnObject, 3) != 0)
+
+        // ItemTemplateSpawnHook's own detour fires SYNCHRONOUSLY, inside this one call, whenever
+        // it actually creates an item — this is the ONLY point that can tell the hook "this
+        // creation is OURS" (a cheat/apply/sync call), since the hook site itself cannot
+        // distinguish a script's own CreateItemOnObject from this exact call (see
+        // ItemTemplateSpawnHook.NextSpawnIsCheat's own doc comment, docs/research/
+        // party-pool-sync.md §20). Bracketed tightly around the call alone, restored in a
+        // finally so a refusal on the line below never leaves it stuck true.
+        ItemTemplateSpawnHook.NextSpawnIsCheat = true;
+        int createResult;
+        try
+        {
+            createResult = create(implementer, _routineCreateItemOnObject, 3);
+        }
+        finally
+        {
+            ItemTemplateSpawnHook.NextSpawnIsCheat = false;
+        }
+
+        if (createResult != 0)
         {
             failure = 6;
             return ObjectInvalid;
