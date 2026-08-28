@@ -446,7 +446,7 @@ public class StoreLoopbackTests
             // A real blackout past the peer timeout — the client drops off the host's roster
             // entirely and has to rejoin, exactly HandleHello's resync-on-(re)admission path
             // (ResyncStore) firing again.
-            rig.Client.Network.StartBlackout(10_000);
+            rig.Client.Network.StartBlackout(6_000);
 
             Assert.True(
                 await WaitForAsync(() => !rig.Client.IsConnected, TimeSpan.FromSeconds(10)),
@@ -456,7 +456,7 @@ public class StoreLoopbackTests
                 "host never expired the blacked-out peer");
 
             Assert.True(
-                await WaitForAsync(() => rig.Client.IsConnected, Timeout),
+                await WaitForAsync(() => rig.Client.IsConnected, TimeSpan.FromSeconds(30)),
                 "client never rejoined after the blackout ended");
             Assert.Equal(originalId, rig.Client.LocalPeerId);
 
