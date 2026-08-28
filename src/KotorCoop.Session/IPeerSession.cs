@@ -9,6 +9,21 @@ public interface IPeerSession
 
     bool IsConnected { get; }
 
+    /// <summary>
+    /// True on a CLIENT once it has declared its host lost — sustained silence past
+    /// <see cref="SessionSettings.HostLossTimeoutMs"/>, or an explicit
+    /// <see cref="HostByePacket"/> — and cleared again the moment a fresh <see
+    /// cref="WelcomePacket"/> readmits it. Defaults false so a host (never "lost" to itself)
+    /// and every existing test fake need no change. <c>CoopAgent.PumpOnce</c> is the only
+    /// consumer: on the rising edge it runs the plugin-side release pass
+    /// (<c>KotorGameBridge.ClearCoopState</c>) and stops touching the game for the rest of the
+    /// outage — no remote-peer writes, no control-lock re-assert — while the session's own
+    /// <c>RunAsync</c> loop keeps re-Helloing in the background regardless. See
+    /// <see cref="HostLossRule"/> and docs/research/disconnect-reconnect.md's "host loss"
+    /// section.
+    /// </summary>
+    bool HostLost => false;
+
     string LocalName { get; }
 
     /// <summary>Publishes the local avatar. Sent on the next tick.</summary>

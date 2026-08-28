@@ -34,6 +34,39 @@ public sealed partial class CoopHost
         }
     }
 
+    /// <summary>
+    /// One best-effort datagram to every peer still on the roster — see
+    /// <see cref="PacketType.HostBye"/>'s own doc comment. Called once, after the tick loop has
+    /// already stopped (<see cref="RunAsync"/>), so there is no concurrent <see cref="Tick"/>
+    /// contending for <see cref="_sendBuffer"/> and nothing to gain from retrying: a client
+    /// that misses this still notices the silence within <see cref="SessionSettings.PeerTimeoutMs"/>
+    /// regardless.
+    /// </summary>
+    private void BroadcastHostBye()
+    {
+        List<PeerConnection> recipients;
+        lock (_gate)
+        {
+            recipients = [.. _peers.Values];
+        }
+
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        int length = PacketCodec.Write(_sendBuffer, new HostByePacket(_sessionId));
+        if (length == 0)
+        {
+            return;
+        }
+
+        foreach (PeerConnection peer in recipients)
+        {
+            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+        }
+    }
+
     private void HandleHello(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
         if (PacketCodec.ReadHello(span) is not { } hello)

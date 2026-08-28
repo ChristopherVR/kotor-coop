@@ -59,6 +59,8 @@ actually runs with.
 | `chat_overlay_lines` | `5` | lines shown at once | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_fade_ms` | `9000` | ms a line stays before it fades (0 = forever) | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `connect_timeout_ms` | `0` (keeps the built-in 15000) | ms a connect attempt waits before giving up | [connect-flow.md](research/connect-flow.md) |
+| `host_loss_release` | ON | a CLIENT that loses its host releases every plugin-side lock (control lock, party-select suppression, follow mirroring, dialogue spectate, minigame lock, ...) and plays solo instead of staying locked out until a manual disconnect; the client still auto-reconnects in the background either way | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
+| `host_loss_timeout_ms` | `0` (keeps the built-in 5000, same as the silence-based reconnect trigger) | ms the host may stay silent before `host_loss_release` fires | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | `status_toasts` | ON | the persistent connection indicator | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `script_item_sync` | OFF³ | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |

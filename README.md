@@ -200,6 +200,12 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than a separate
   copy.
+- **Losing the host doesn't lock you out.** A client whose host crashes, quits, or drops off the
+  network releases every co-op lock within `host_loss_timeout_ms` (default ~5s — near-instant on
+  a clean host shutdown) and keeps playing solo — companions, doors and dialogue all keep
+  working — while re-Helloing automatically in the background; the host coming back re-mirrors
+  everything with no player action needed (`host_loss_release`, on by default). Proven at the
+  session/agent layer (unit and loopback); see [disconnect-reconnect.md §11](docs/research/disconnect-reconnect.md).
 - **Companion experience and equipment sync are both live-verified and on by default**
   (`companion_xp_sync`, `companion_gear_sync` — see the status table); **dialogue recruitment
   sync is live-confirmed for two companions** (`dialogue_recruit_sync`, on by default), though a

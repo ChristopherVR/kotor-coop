@@ -284,6 +284,11 @@ public sealed partial class CoopHost : ICoopSession
         {
         }
 
+        // A clean shutdown (not a crash — nothing runs the tick loop's own catch above on a
+        // crash) tells every currently-connected client right away, rather than leaving them to
+        // notice only after PeerTimeoutMs of silence. See PacketType.HostBye's own doc comment.
+        BroadcastHostBye();
+
         await receiveLoop.ConfigureAwait(false);
     }
 
