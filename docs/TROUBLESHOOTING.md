@@ -152,20 +152,36 @@ The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`age
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
 its own `File.AppendAllText`, and rotates the same once-at-launch way as the other two.
 
-## A partner's game crashes roughly 12 seconds after a scripted module transition
+## A partner's game crashes during or shortly after a module transition (`0xC0000005`)
 
-This was a real, 100%-reproducible bug on builds up to 2026-08-27: `PartySelectSuppressionController`
-re-detected and re-tore-down the same stale party-selection panel address hundreds of times a
-second for the life of a session, a write storm through a dangling pointer that could corrupt
-whatever heap block a module load later reallocated at that address — a module load being
-exactly the moment a crash like this fires. Root-caused and fixed 2026-08-28 (touch a given
-panel address at most once per module instead of every frame forever); confirmed clean across
-three independent live re-verifications, including the exact STUNT_00 escape-pod crash this bug
-also caused. **If you hit this on an older build, the fix is to upgrade** — reinstall from a
-current release or rebuild from `main` (`build.ps1 -Install`); there is no `coop.ini` workaround,
-since the bug was in the plugin's own panel-suppression code, not a config default. See
-[session-save.md](research/session-save.md) and
-[galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md)'s 2026-08-28 entries.
+There are at least two distinct, unrelated causes behind crashes shaped like this — do not
+assume it is either one without checking `kotorcoop-plugin.log`/`tools/crashlog.ps1` first.
+
+**A fixed cause: the `CGuiInGame+0x78` write storm.** On builds up to 2026-08-27,
+`PartySelectSuppressionController` re-detected and re-tore-down the same stale party-selection
+panel address hundreds of times a second for the life of a session — a write storm through a
+dangling pointer that could corrupt whatever heap block a module load later reallocated at that
+address. Root-caused and fixed 2026-08-28 (touch a given panel address at most once per module
+instead of every frame forever); the write-storm ITSELF is confirmed fixed (one suppress/sweep
+pair per session instead of 70,000+). **If you hit a crash on a build from before 2026-08-27, the
+fix is to upgrade** — reinstall from a current release or rebuild from `main` (`build.ps1
+-Install`).
+
+**An open, NOT-yet-fixed cause: a pre-existing engine bug, `0x0040D386`, unrelated to any
+`coop.ini` feature.** This is the same crash address the write-storm fix was hoped to have closed
+(the STUNT_00 escape-pod path it was first seen on) — but a 2026-08-28/29 live round reproduced
+it again, post-fix, via an ordinary two-instance `warp` cycle that never opens the galaxy map or
+touches party-select at all, and confirmed it is not gated by ANY optional `coop.ini` flag (a
+pass with every feature simultaneously OFF still crashed). It is inside `swkotor.exe`'s own
+`CExoKeyTable::DestroyTable` — a resource-table subsystem, nothing this project's own code calls
+or references — most often (not exclusively) following a transition through `tar_m02aa`. **There
+is no known workaround or `coop.ini` setting that avoids it**; it is not specific to co-op play
+(the recipe that reproduces it is a bare console `warp`, something a solo player's own game could
+in principle also hit). See
+[transition-crashes.md](research/transition-crashes.md) for the full attribution round and
+[galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md)'s 2026-08-28/29 entries
+for the RE and the correction to the earlier "fixed" claim; see
+[session-save.md](research/session-save.md) for the write-storm's own fix.
 
 ## The game crashed and the plugin log doesn't explain why
 
