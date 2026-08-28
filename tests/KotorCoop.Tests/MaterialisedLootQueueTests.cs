@@ -305,4 +305,117 @@ public class MaterialisedLootQueueTests
 
         Assert.Equal(0, session.ResetDedupCallCount);
     }
+
+    // ---- concurrency audit (2026-08-28, docs/research/lag-audit.md): LootPump._pendingLoot
+    // carries the identical unguarded-Queue<T> shape party-pool-sync.md §24's root cause 5
+    // found and fixed in PartyPoolPump, and flagged this class as sharing. Now fixed the same
+    // way (LootPump.cs's own _pendingGate); this pins the fix. ------------------------------
+
+    /// <summary>
+    /// Races <see cref="CoopAgent.PumpOnce"/> (the producer, exactly <c>CoopAgent.RunAsync</c>'s
+    /// own tick loop shape) against <see cref="CoopAgent.TryDequeuePendingLoot"/> spun on a
+    /// genuinely separate OS thread (matching <c>CoopCommandDispatcher.RunAsync</c>'s own
+    /// independent scheduling), with no poll delay on the consumer to maximise exposure to the
+    /// dangerous internal-array-resize window. Every one of 8,000 distinct-keyed items queued by
+    /// the producer must be dequeued exactly once — nothing lost, nothing duplicated.
+    /// </summary>
+    [Fact]
+    public void ThePendingLootQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries()
+    {
+        (CoopAgent agent, StubSession session) = Build();
+
+        List<string> logs = [];
+        agent.Log = logs.Add;
+
+        agent.PumpOnce(); // baseline, nothing queued yet
+
+        System.Collections.Concurrent.ConcurrentQueue<CoopAgent.PendingMaterialisedLootGive> observed = new();
+        using CancellationTokenSource stop = new();
+
+        Thread consumer = new(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                if (agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive next))
+                {
+                    observed.Enqueue(next);
+                }
+            }
+        })
+        { IsBackground = true };
+        consumer.Start();
+
+        const int Iterations = 8_000;
+
+        try
+        {
+            for (int i = 0; i < Iterations; i++)
+            {
+                // One packet, one item, per producer tick - exactly PumpMaterialisedLoot's own
+                // per-packet enqueue shape, just driven fast enough to race the consumer. Unlike
+                // PartyPoolPump's own version of this test (whose producer tick does far more
+                // unrelated work per call, giving the consumer time to keep pace), this pump's
+                // PumpOnce is cheap enough that the producer genuinely can outrun the consumer
+                // and legitimately trip the 256-entry cap a few times over 8,000 iterations -
+                // that is MaxPendingLoot doing its job, not a correctness bug, so this test
+                // accounts for legitimate drops explicitly (below) rather than asserting none.
+                session.Incoming.Add(Packet((uint)i, Item($"item{i:D6}")));
+                agent.PumpOnce();
+            }
+
+            // Production (and every drop decision, which happens synchronously in Pump on THIS
+            // thread) is complete at this point - the only thing still moving is the consumer
+            // thread draining whatever survived.
+            int droppedSoFar = logs.Count(l => l.Contains("dropping materialised loot", StringComparison.Ordinal));
+            int expectedObserved = Iterations - droppedSoFar;
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (observed.Count < expectedObserved && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(15);
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            consumer.Join(TimeSpan.FromSeconds(5));
+        }
+
+        // Drain any stragglers left after the consumer thread stopped.
+        while (agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive leftover))
+        {
+            observed.Enqueue(leftover);
+        }
+
+        List<CoopAgent.PendingMaterialisedLootGive> all = [.. observed];
+
+        // Nothing duplicated - a torn Queue<T> read under a genuine race can hand back the SAME
+        // entry twice (see LootPump.cs's own _pendingGate remarks).
+        HashSet<string> observedResrefs = new(StringComparer.Ordinal);
+        foreach (CoopAgent.PendingMaterialisedLootGive entry in all)
+        {
+            Assert.True(observedResrefs.Add(entry.Item.Resref), $"'{entry.Item.Resref}' was dequeued more than once");
+        }
+
+        // Every legitimately-dropped item was reported exactly once too - a torn read on the
+        // COUNT CHECK side of the lock could otherwise double-drop (or silently under-drop) an
+        // item without either enqueueing OR logging it.
+        HashSet<string> droppedResrefs = new(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match m in logs
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, "^dropping materialised loot '([^']+)'"))
+            .Where(m => m.Success))
+        {
+            Assert.True(droppedResrefs.Add(m.Groups[1].Value), $"'{m.Groups[1].Value}' was reported dropped more than once");
+        }
+
+        // Never both delivered and dropped.
+        Assert.Empty(observedResrefs.Intersect(droppedResrefs));
+
+        // Nothing vanished silently - every produced item is accounted for exactly once, either
+        // delivered or dropped.
+        HashSet<string> expected = new(Enumerable.Range(0, Iterations).Select(i => $"item{i:D6}"), StringComparer.Ordinal);
+        Assert.True(
+            expected.SetEquals(observedResrefs.Union(droppedResrefs)),
+            $"expected {Iterations} items accounted for; observed {observedResrefs.Count}, dropped {droppedResrefs.Count}");
+    }
 }

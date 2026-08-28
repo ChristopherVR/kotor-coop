@@ -835,3 +835,142 @@ exists to mark.
 
 `dotnet build KotorCoop.slnx -warnaserror`: clean. `dotnet test tests/KotorCoop.Tests --no-build`:
 full suite, see this task's own report for the pass/fail tally.
+
+## 2026-08-28 — cross-thread pending-apply queue audit: `LootPump`/`StorePump` had the identical
+## unguarded `Queue<T>` root cause 5 (docs/research/party-pool-sync.md §24) fixed in
+## `PartyPoolPump`; both now fixed, and — unlike root cause 5's own test — the new regression
+## tests reliably reproduce the pre-fix corruption
+
+Task: party-pool-sync.md §24 fixed root cause 5 (`PartyPoolPump._pendingApplies`, a plain
+`Queue<T>` written by `CoopAgent.RunAsync`'s tick loop and drained by
+`CoopCommandDispatcher.RunAsync`'s independently-scheduled loop, with no lock) and flagged
+`LootPump._pendingLoot` as carrying the identical shape, out of scope for that pass. This pass
+audits every producer/consumer queue crossing that same agent-tick-loop/dispatcher-loop boundary,
+fixes whatever else carries the same defect, and adds a concurrency stress test per queue.
+
+### Audit method and scope
+
+`grep -rn "TryDequeuePending" src/KotorCoop.Session src/KotorCoop.Agent` finds the full set of
+consumer entry points `CoopCommandDispatcher` calls into `CoopAgent`: `TryDequeuePendingLoot`
+(`CoopCommandDispatcher.Items.cs`), `TryDequeuePendingPartyPoolApply`
+(`CoopCommandDispatcher.PartyPool.cs`), `TryDequeuePendingStoreApply`
+(`CoopCommandDispatcher.Store.cs`) — each a thin forward from `CoopAgent` into one pump
+(`_lootPump`/`_partyPoolPump`/`_storePump`). A broader `grep -rn "Queue<"` / `"Dequeue"` across
+all of `src/` turns up every other `Queue<T>` in the codebase (`RelayQueue<T>`'s inbox/outbox,
+`CoopHost`/`CoopClient`'s per-channel inbox/outbox queues for barks/chat/dialogue-grants/movies/
+materialised-loot/store-op-drain, and several `(Origin, Sequence)` op-history queues in
+`ContainerLootStore`/`EventFlagStore`/`GroundItemStore`/`PartyPoolStore`/`StoreStore`/
+`DialogueGrantSender`) — none of these cross the agent-tick-loop/dispatcher-loop boundary this
+task is about: they are either already `Lock`-guarded at their own read/write sites (the
+`_storeOpDrainQueue`/`_chatOutbox`/etc. queues written from the socket-receive path and drained
+from the session's own `RunAsync`, all inside `CoopHost`/`CoopClient`, all already gated by a
+`Lock` field — confirmed by reading each file) or are touched exclusively from a single thread
+(a pump's own per-tick bookkeeping, e.g. `PartyPoolPump._publishHistory`'s per-key `Queue<long>`,
+written and read only from `Pump()` itself, never from `TryDequeuePendingApply`). "Cheat replies"
+(the task brief's third named category) resolve to `CoopCommandDispatcher`'s own
+`_pendingCheatSerial`/`_afterCheat` fields (`CoopCommandDispatcher.cs`) — not a queue at all, and
+not cross-thread: both are written and read exclusively from methods the dispatcher's own
+`RunAsync` loop calls (`SendCheat`, and whatever polls the shared-block answer), never touched
+from `CoopAgent`'s tick loop. Confirmed out of scope by reading the file, not merely by absence
+from the `TryDequeuePending*` grep.
+
+That leaves exactly three queues sharing the party-pool root-cause-5 shape — a plain `Queue<T>`
+written by a pump's own `Pump()`/producer method (called from `CoopAgent.RunAsync`'s tick loop)
+and drained by a `TryDequeuePending*` method (called from `CoopCommandDispatcher.RunAsync`'s
+independently-scheduled loop, confirmed via `AgentComposition.cs` starting both as separate tasks
+with no shared synchronization context — same confirmation §24 already did):
+
+| Queue | Producer | Consumer | State before this pass |
+|---|---|---|---|
+| `PartyPoolPump._pendingApplies` | `Pump()` step 2 | `TryDequeuePendingApply` | Already fixed, §24 (root cause 5) |
+| `LootPump._pendingLoot` | `PumpMaterialisedLoot` | `TryDequeuePendingLoot` | Unguarded — flagged by §24, not fixed |
+| `StorePump._pendingApplies` | `Pump()` step 2 | `TryDequeuePendingApply` | Unguarded — not previously flagged; found this pass |
+
+### Fix: `Lock`, not `ConcurrentQueue<T>`
+
+Kept the `Lock` discipline `PartyPoolPump` already established rather than switching either queue
+to `ConcurrentQueue<T>`: both producers perform a compound "check the bound, then enqueue"
+operation (`if (_pendingX.Count >= MaxPendingX) { log/drop; } else { _pendingX.Enqueue(...); }`)
+that has to be atomic — `ConcurrentQueue<T>.Count` racing its own `Enqueue` from another thread
+can no more be trusted as an accurate bound check than the two independent `Interlocked` ops a
+naive `ConcurrentQueue` conversion would still need to fake the same atomicity. A `Lock` around
+both the check and the enqueue is simpler and exactly matches the sole other instance of this
+pattern in the codebase, so a future reader of any of the three pumps sees the identical idiom.
+
+`LootPump.cs`: `_pendingGate` (`Lock`) added, guarding both enqueue sites in
+`PumpMaterialisedLoot` (materialised-loot gives and dialogue-grant gives both feed the same
+queue — see the class's own remarks) and `TryDequeuePendingLoot`.
+
+`StorePump.cs`: `_pendingGate` (`Lock`) added, guarding both enqueue sites in `Pump()`'s step 2
+(the `StoreOpKind.Set` branch and the `Add`/`Remove` branch each have their own
+count-check-and-enqueue) and `TryDequeuePendingApply`.
+
+### Regression tests — and a stronger result than root cause 5's own test got
+
+Both `MaterialisedLootQueueTests.ThePendingLootQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`
+and `StorePendingApplyQueueConcurrencyTests.ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`
+mirror `PartyPoolLoopbackTests`'s own stress shape (§24.1): one thread races 8,000
+distinct-keyed `CoopAgent.PumpOnce()` producer calls against a separate, genuinely independent OS
+`Thread` spinning the matching `TryDequeuePending*` consumer with no poll delay, to maximise
+exposure to the dangerous internal-array-resize window.
+
+The Loot queue's own test cannot assume zero drops the way the party-pool test does — that test's
+producer tick does far more unrelated work per call (`HeavyPumpIntervalMs = 0` pulls in the whole
+world-state pass), giving its consumer thread time to keep up with an effectively-unbounded
+`MaxPendingApplies`. `LootPump.PumpMaterialisedLoot`'s own tick is comparatively cheap, so the
+producer genuinely can outrun the consumer and legitimately trip the 256-entry cap a handful of
+times over 8,000 iterations — `MaxPendingLoot` doing its job, not a bug. The test accounts for
+this explicitly instead of asserting no drops: every produced item must be either delivered
+exactly once or logged dropped exactly once, never both, never neither (verified by intersecting
+the observed-resref set against a set parsed from the `"dropping materialised loot '...'"` log
+lines). The Store queue's test uses `HeavyPumpIntervalMs = 0` like the party-pool test and did not
+need the same accounting — it asserts zero drops directly, matching `PartyPoolLoopbackTests`'s own
+assumption, and that assumption held.
+
+Both tests were then run against a temporarily-reverted fix (`lock (_pendingGate)` mechanically
+replaced with `if (true)` in both files, leaving every other line — including the count-check —
+byte-identical, so the ONLY behavioural change is the missing lock) to check whether they are
+mechanically-confirmed regression pins, the way §24.3 honestly recorded its own inability to force
+root cause 5's `PartyPoolPump` test to fail pre-fix. **Both failed reliably, 3 out of 3 runs each,
+against the unguarded code** — the Loot test caught a duplicate dequeue (a torn read handing back
+the same, sometimes even a stale/default `default(PendingMaterialisedLootGive)`, entry twice — one
+run's failure was literally `''` dequeued twice, the empty-string resref of a zeroed-out struct);
+the Store test caught outright loss (7,996–7,998 observed out of 8,000 produced, several runs).
+Reverted back afterward (confirmed via the file's `if (true)` count returning to zero and `lock
+(_pendingGate)`'s count returning to three in each file) and the full targeted filter plus the
+complete suite re-run clean against the real fix — see below. Unlike root cause 5's own test, both
+of these ARE mechanically-confirmed failing-before/passing-after regression pins, not merely a
+real hazard fixed on principle.
+
+### Files changed
+
+`src/KotorCoop.Session/Pumps/LootPump.cs`: `_pendingGate` (`Lock`) added; both
+`_pendingLoot.Enqueue` sites and `TryDequeuePendingLoot` now guarded.
+
+`src/KotorCoop.Session/Pumps/StorePump.cs`: `_pendingGate` (`Lock`) added; both
+`_pendingApplies.Enqueue` sites (the `Set` branch and the `Add`/`Remove` branch) and
+`TryDequeuePendingApply` now guarded.
+
+`tests/KotorCoop.Tests/MaterialisedLootQueueTests.cs`: added
+`ThePendingLootQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`.
+
+`tests/KotorCoop.Tests/StorePendingApplyQueueConcurrencyTests.cs` (new file): a minimal
+`ICoopSession`/`IGameBridge` stub pair (no real host/client/sockets needed — `StorePump` only
+needs `DrainStoreOps()` under this pump's own control to exercise the race) plus
+`ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries`.
+
+No plugin-side source touched this pass — `PartyPoolPump`'s own fix (§24) already covers the one
+plugin-adjacent instance of this shape, and `party_pool_sync`/`store_sync` are both still off by
+default, so this pass has no live-verification obligation of its own beyond the bench-level
+mechanical confirmation above.
+
+### Build and test results
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean (0 warnings, 0 errors).
+
+`dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~Loot|FullyQualifiedName~Store|FullyQualifiedName~PartyPool"`:
+318/318 passed (317 pre-existing + the 1 new Loot test; the new Store test file's single test is
+also `~Store`-matched, so 318 total includes both new tests).
+
+`dotnet test tests/KotorCoop.Tests --no-build` (full suite): **2,475/2,475 passed**, 0 failed, 0
+skipped.
