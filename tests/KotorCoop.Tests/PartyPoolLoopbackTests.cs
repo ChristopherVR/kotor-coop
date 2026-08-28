@@ -1326,6 +1326,319 @@ public class PartyPoolLoopbackTests
         }
     }
 
+    // ---- root cause 5: the unguarded _pendingApplies queue (docs/research/party-pool-sync.md
+    // §24) — the residual "smaller" over-count and resync-divergence defects §21/§23 left open
+    // after root cause 4's fix ------------------------------------------------------------------
+
+    /// <summary>
+    /// docs/research/party-pool-sync.md §24, root cause 5: <c>PartyPoolPump.cs</c>'s own
+    /// <c>_pendingApplies</c> is written by <c>CoopAgent.RunAsync</c>'s tick loop and drained by
+    /// <c>CoopCommandDispatcher.RunAsync</c>'s genuinely INDEPENDENT, separately-scheduled loop —
+    /// a plain <see cref="Queue{T}"/>, which is not thread-safe for ANY concurrent access,
+    /// including this exact single-producer/single-consumer shape. This hammers exactly that: one
+    /// thread races <see cref="CoopAgent.PumpOnce"/> (many distinct-key enqueues, one per call) —
+    /// mirroring what a peer's own op landing in the store does every tick — against a SEPARATE
+    /// thread spinning <see cref="CoopAgent.TryDequeuePendingPartyPoolApply"/> continuously, the
+    /// same shape <c>DrainAutomaticPartyPool</c> uses in production minus its 150ms poll delay
+    /// (to maximise how many enqueue/dequeue pairs land inside the dangerous window — most
+    /// dangerously, an internal array resize in flight). Every key used is unique and used
+    /// exactly once, so a correct queue must hand back every single one, each exactly once, in
+    /// any order — a torn read under the pre-fix race can silently lose an entry OR hand back a
+    /// duplicate, either of which this test catches directly.
+    /// </summary>
+    [Fact]
+    public void ThePendingApplyQueueSurvivesConcurrentEnqueueAndDequeueWithoutLosingOrDuplicatingEntries()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        try
+        {
+            FakeBridge bridge = new(scanIntervalMs: 0);
+            CoopAgent agent = new(
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+
+            List<string> logs = [];
+            agent.Log = logs.Add;
+
+            agent.PumpOnce(); // baseline scan (silent, empty pool)
+
+            System.Collections.Concurrent.ConcurrentQueue<CoopAgent.PendingPartyPoolApply> observed = new();
+            using CancellationTokenSource stop = new();
+
+            // The consumer: exactly DrainAutomaticPartyPool's own shape (dequeue, then free the
+            // key's slot in the store's own cap so this synthetic load can run far past
+            // ProtocolConstants.MaxPartyPoolStacks without ever legitimately refusing a new key —
+            // PartyPoolStore.Record is internally locked, so this is safe from this thread), but
+            // on a tight spin instead of a 150ms poll, on a genuinely separate OS thread, matching
+            // CoopCommandDispatcher.RunAsync's own independent scheduling.
+            Thread consumer = new(() =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    if (agent.TryDequeuePendingPartyPoolApply(out CoopAgent.PendingPartyPoolApply next))
+                    {
+                        observed.Enqueue(next);
+                        host.PartyPool.Record(PartyPoolOpKind.Remove, next.Key, next.Count);
+                    }
+                }
+            })
+            { IsBackground = true };
+            consumer.Start();
+
+            const int Iterations = 8_000;
+
+            try
+            {
+                for (int i = 0; i < Iterations; i++)
+                {
+                    PartyPoolStackKey key = new($"g_i_stress{i:D6}", 0, 0, 0, ItemIdentity.FlagKnown);
+
+                    // Simulates a peer op landing in the store — exactly what
+                    // CoopHost/CoopClient's own HandlePartyPoolOp does, immediately before the
+                    // pump's own reconcile step notices the gap and enqueues an apply for it.
+                    host.PartyPool.Record(PartyPoolOpKind.Add, key, 1);
+                    agent.PumpOnce();
+                }
+
+                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+                while (observed.Count < Iterations && DateTime.UtcNow < deadline)
+                {
+                    Thread.Sleep(15);
+                }
+            }
+            finally
+            {
+                stop.Cancel();
+                consumer.Join(TimeSpan.FromSeconds(5));
+            }
+
+            // Drain any stragglers left in the queue after the consumer thread stopped.
+            while (agent.TryDequeuePendingPartyPoolApply(out CoopAgent.PendingPartyPoolApply leftover))
+            {
+                observed.Enqueue(leftover);
+            }
+
+            List<CoopAgent.PendingPartyPoolApply> all = [.. observed];
+
+            int dropped = logs.Count(line => line.Contains("dropping apply", StringComparison.Ordinal));
+            Assert.Equal(0, dropped); // the consumer frees a slot the instant it dequeues one —
+                                       // the cap should never legitimately bite in this shape.
+
+            // Nothing lost.
+            Assert.Equal(Iterations, all.Count);
+
+            // Nothing duplicated — a torn Queue<T> read under a genuine race can hand back the
+            // SAME entry twice (see PartyPoolPump.cs's own _pendingGate remarks, root cause 5,
+            // §24 — this is what the unfixed queue does under exactly this load).
+            HashSet<string> seen = new(Iterations, StringComparer.Ordinal);
+            foreach (CoopAgent.PendingPartyPoolApply entry in all)
+            {
+                Assert.True(seen.Add(entry.Key.Resref), $"'{entry.Key.Resref}' was dequeued more than once");
+            }
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// docs/research/party-pool-sync.md §23/§24: the exact live recipe that showed a small,
+    /// bounded over-count on the RECEIVING side after rapid same-key HOST deposits through the
+    /// real cheat channel — a SEPARATE, smaller residual defect from root cause 4's unbounded
+    /// ping-pong, which §22 already fixed. Both host and client run their own independent
+    /// <see cref="DispatcherLoop"/> (mirroring
+    /// <see cref="HostOriginatedPoolAddThroughTheRealCheatChannelDoesNotDoubleApply"/>'s own
+    /// real-channel shape, extended from one deposit to three) so BOTH sides' own apply-queue is
+    /// genuinely raced by a separate thread, not just the host's — the CLIENT's own automatic
+    /// apply drain (receiving the host's three ops) is exactly what exercises root cause 5's
+    /// queue race on the receiving side.
+    /// </summary>
+    [Fact]
+    public async Task RapidHostOriginatedPoolAddsThroughTheRealCheatChannelConvergeToExactlyThreeOnBothSides()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(
+            host, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using AgentLoop clientAgent = new(
+            client, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using DispatcherLoop hostDispatcher = new(hostAgent.Agent, hostAgent.Bridge);
+        using DispatcherLoop clientDispatcher = new(clientAgent.Agent, clientAgent.Bridge);
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "host/client never connected");
+
+            await Task.Delay(1200);
+
+            // Three rapid host pooladds, each waited out (matching blockpoke.ps1's own
+            // reply-wait pacing — §23's own "~1-2s apart" note) before the next, so this mirrors
+            // the LIVE recipe exactly rather than the single-shot test above.
+            for (int i = 1; i <= 3; i++)
+            {
+                hostDispatcher.SubmitHumanPoolAdd(Blaster, 1);
+
+                Assert.True(
+                    await WaitForAsync(
+                        () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == i, Timeout),
+                    $"deposit #{i} never landed on the host's own engine; got "
+                    + $"{hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+            }
+
+            Assert.True(
+                await WaitForAsync(() => host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"host store never converged; got {host.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(() => client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3, Timeout),
+                $"client never converged on the host's deposits; got {client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            // The CLIENT's own simulated engine must ALSO reach 3 — its reconcile-apply, queued
+            // the moment the store above converged, still has to travel through the (30-250ms,
+            // uncorrelated with the store update) simulated cheat round trip on its own separate
+            // DispatcherLoop thread. Waited for explicitly, BEFORE the StaysAsync check below —
+            // that check requires the condition to already hold at the moment it starts sampling,
+            // not merely to become true eventually.
+            Assert.True(
+                await WaitForAsync(
+                    () => clientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 3, Timeout),
+                "client's own engine never caught up to its converged store; got "
+                + $"{clientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+
+            // The load-bearing assertion: EXACTLY 3, held over time, on every one of the four
+            // numbers this channel maintains — not merely "bounded" (root cause 4's own test
+            // already covers that) but genuinely correct.
+            Assert.True(
+                await StaysAsync(
+                    () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 3
+                        && clientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 3
+                        && host.PartyPoolTotals.GetValueOrDefault(Blaster) == 3
+                        && client.PartyPoolTotals.GetValueOrDefault(Blaster) == 3,
+                    TimeSpan.FromSeconds(12)),
+                "rapid host-originated deposits over-counted - "
+                + $"host engine={hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+                + $"client engine={clientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+                + $"host store={host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client store={client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+            host.Dispose();
+            client.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// docs/research/party-pool-sync.md §23/§24: the blackout+reconnect resync divergence found
+    /// live — host held 9, client held 7, for 5 real deposits. Reproduces the recipe through the
+    /// real cheat channel on both sides (<see cref="DispatcherLoop"/>, exactly like the test
+    /// above) rather than direct engine writes, since the residual defect (root cause 5, the
+    /// unguarded <c>_pendingApplies</c> queue) only manifests through that path — a direct
+    /// <c>FakeBridge.TrueEngineState</c> write never touches the queue at all.
+    /// </summary>
+    [Fact]
+    public async Task ABlackoutDuringRapidHostDepositsConvergesBothSidesToTheSameCorrectTotalAfterResync()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(
+            host, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using AgentLoop clientAgent = new(
+            client, bridgeScanIntervalMs: 1000, heavyPumpIntervalMs: 1000, autoDrain: false);
+        using DispatcherLoop hostDispatcher = new(hostAgent.Agent, hostAgent.Bridge);
+        using DispatcherLoop clientDispatcher = new(clientAgent.Agent, clientAgent.Bridge);
+
+        try
+        {
+            Assert.True(
+                await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "host/client never connected");
+
+            await Task.Delay(1200);
+
+            uint originalId = client.LocalPeerId;
+
+            // Host deposits 2, then blacks the CLIENT out (past PeerTimeoutMs, 5000ms, so the
+            // host genuinely expires the peer and a real reconnect happens once it clears) and
+            // deposits 3 more while it cannot hear anything — exactly §23's own recipe (5 real
+            // units total).
+            for (int i = 1; i <= 2; i++)
+            {
+                hostDispatcher.SubmitHumanPoolAdd(Blaster, 1);
+                Assert.True(
+                    await WaitForAsync(
+                        () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == i, Timeout));
+            }
+
+            client.Network.StartBlackout(8000);
+
+            for (int i = 3; i <= 5; i++)
+            {
+                hostDispatcher.SubmitHumanPoolAdd(Blaster, 1);
+                Assert.True(
+                    await WaitForAsync(
+                        () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == i, Timeout));
+            }
+
+            Assert.True(
+                await WaitForAsync(() => !client.IsConnected, TimeSpan.FromSeconds(10)),
+                "client never noticed the blackout");
+            Assert.True(
+                await WaitForAsync(() => host.GetRemotePeers().Count == 0, TimeSpan.FromSeconds(10)),
+                "host never expired the blacked-out peer");
+
+            Assert.True(
+                await WaitForAsync(() => client.IsConnected, Timeout),
+                "client never rejoined after the blackout ended");
+            Assert.Equal(originalId, client.LocalPeerId);
+
+            // The load-bearing assertion: both sides converge to the SAME, CORRECT total (5) —
+            // not merely the same WRONG total (§21's own "a bug that still converges" shape), and
+            // not two DIFFERENT totals (§23's own new, more severe divergence finding).
+            Assert.True(
+                await WaitForAsync(
+                    () => host.PartyPoolTotals.GetValueOrDefault(Blaster) == 5
+                        && client.PartyPoolTotals.GetValueOrDefault(Blaster) == 5,
+                    TimeSpan.FromSeconds(20)),
+                "resync did not converge to the true total - "
+                + $"host={host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+
+            Assert.True(
+                await StaysAsync(
+                    () => host.PartyPoolTotals.GetValueOrDefault(Blaster) == 5
+                        && client.PartyPoolTotals.GetValueOrDefault(Blaster) == 5,
+                    TimeSpan.FromSeconds(10)),
+                "the blackout/resync diverged or drifted after converging - "
+                + $"host={host.PartyPoolTotals.GetValueOrDefault(Blaster)}, "
+                + $"client={client.PartyPoolTotals.GetValueOrDefault(Blaster)}");
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+            host.Dispose();
+            client.Dispose();
+        }
+    }
+
     /// <summary>
     /// The mechanism root cause 2's fix (<c>PartyPoolPump.cs</c>'s <c>_localDetectExpiry</c>)
     /// closes, isolated and made fully deterministic — no timing luck required, unlike
