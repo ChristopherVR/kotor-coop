@@ -9,8 +9,14 @@ No game file is modified. Everything lives beside `swkotor.exe` and can be remov
 
 **New this release:** companion equipment now syncs live (re-equip a party member and your
 partner's copy updates within a few seconds), the Star Forge's Bastila/Malak duels let the other
-player spectate the fight instead of freezing, and Pazaak hands are correctly detected so your
-partner sees you as "in a minigame" instead of standing idle. All three are on by default.
+player spectate the fight instead of freezing, Pazaak hands are correctly detected so your
+partner sees you as "in a minigame" instead of standing idle, a `disconnect`→`reconnect` now
+reliably restores a mirrored companion (a prior caching bug could leave it stuck off), and
+internet play works without a relay for most home routers (automatic public-address discovery
+plus UPnP port mapping — see "Play over the internet" below). All are on by default. **Not yet
+shared between players**: the party's stash pool and a merchant's buy/sell stock still run
+per-instance — every wire-sync design tried for either has been disqualified in live testing, so
+both stay off by decision rather than by caution; see "Something is wrong" below.
 
 ## Install — pick one
 
@@ -169,6 +175,10 @@ player's helper. Clients talk only to the host.
 
 ## Something is wrong
 
+- **The party's shared stash and a merchant's stock aren't shared between us:** expected, not a
+  bug — `party_pool_sync`/`store_sync` both ship off by decision; buying/selling/depositing all
+  work fine on your own side, only the cross-instance mirror is off. See `docs/CONFIG.md` and
+  `docs/research/shared-inventory-v2.md` in the full repo for why.
 - **No Co-op button:** `menu_button = 1` in `coop.ini`. Upgrading over an install from before
   2026-08-27 keeps that file's OLD default (`0`) because `coop.ini` is never overwritten —
   `install.ps1` now warns about this after every install and `install.ps1 -GameDir '...'
