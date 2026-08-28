@@ -1502,3 +1502,87 @@ player is reported to the agent`, `the co-op revive stands the player back up`, 
 call signature matches the binary` (187/189), `a container opened on the client is held and
 shown open on the host`, and the `no per-frame spam` flaky substitution). No new failures from
 this round's changes. No crash on either instance across the whole session.
+
+## Rig pass (2026-08-28/29): `store_sync`/`party_pool_sync` re-test queue, follow-AI Round 96's
+## phase-7 lead, and baseline — party-pool insert defect PINNED with hard live evidence, follow-AI
+## phase-7 question ANSWERED (negatively) via a new `followkick` verb; both sync flags stay OFF
+
+Task: this session's five-item queue — repair the shared rig save's gold (item 0), re-test
+`store_sync` (item 1), re-test `party_pool_sync` (item 2), chase the follow-AI phase-7 lead with
+a new `followkick` dev verb (item 3), and a baseline `verify.ps1`/full-test/native-build pass
+(item 4).
+
+### Item 0 — gold repair: the shared rig save was NOT found poisoned this round
+
+`grantgold 0` (a no-op read) on both instances at session start answered `gold 0 -> 0` — not the
+previously-documented ~999,999,999 clamp. The prior pass's own poisoned reading was apparently
+never persisted to the save file itself (this project has no `savegame` console primitive; every
+runtime gold write, including this pass's own `setgold`, only affects the live process and is
+lost on the next `demo.ps1` load unless a real in-game save happens, which nothing here
+automates). `setgold 5000` was applied and confirmed converging both sides
+(`setgold: gold 0 -> 5000` on the host, `setgold: gold 5000 -> 5000` on the client ~1s later —
+`progression_sync` already had it) as a functional confirmation of the verb, but this value is
+NOT expected to persist past the next rig restart for the reason above. No further action taken;
+noted here rather than fabricated as "fixed."
+
+### Item 1 — `store_sync`: see `docs/research/store-sync.md`'s own new "Live pass (2026-08-28/29)"
+### section for full detail. Summary: wipe-prevention CLEAN, `buy` (afford/refuse/deplete) all
+### CONFIRMED including a new finding that the wire mirror needs neither side's store GUI open,
+### `sell` still NOT positively confirmed — traced to test-methodology (picking store-owned
+### resrefs by mistake) plus the SAME native party-pool defect item 2 pinned this round, not a
+### `sell`-specific regression as far as this round can tell. Stays OFF.
+
+### Item 2 — `party_pool_sync`: see `docs/research/party-pool-sync.md`'s own new §15 for full
+### detail. Summary: the "two lookups, one frame" diagnostic this round added to
+### `Odyssey.AddItemToPartyPool` (repo pointer + `item_count` before/after every insert) pinned
+### the native defect precisely and reproducibly — the repo pointer is rock-stable across dozens
+### of calls (§13.3's hypothesis 2 RULED OUT), while `item_count` never changes across a genuine,
+### engine-confirmed insert (hypothesis 1 CONFIRMED with direct before/after evidence, 6/6 times
+### this round, on both host and client). `CItemRepository::InsertItem`'s own append path
+### (index -1) either has an increment condition this call site does not meet, or `+0x10` is not
+### the field it actually increments. Stays OFF; the next round's target is now a direct
+### disassembly of `InsertItem` itself (0x0055D2C0), not further C#-side detection logic.
+
+### Item 3 — follow-AI phase-7 lead: see `docs/research/party-reconciliation.md`'s own new
+### "Round 97" for full detail. Summary: Round 96's phase-7 near-target freeze reproduced on the
+### FIRST attempt this round (`phase=7 attempts=0`, position frozen, `targetVsSnapshotDist=1.105`,
+### `pathWaitDestAccept=False`, `CurrentPathNode==DestNode` yet never accepting). A new dev verb,
+### `followkick <slot>` (`docs/CONSOLE.md`'s new row), dumps the follow record and then forces
+### `record+4=10` (TeleportForward) UNCONDITIONALLY, regardless of phase — unlike the shipped
+### `party_follow_phase2_kick` (phase 2 only, stayed at its default OFF for this whole round).
+### Fired once against the reproduced stall: the companion did NOT resume — phase moved to 10 and
+### stayed there, bit-identical, for 34+ seconds afterward. This directly answers Round 96's own
+### open question: the phase-2 recovery lever does NOT generalise to the phase-7 freeze: it just
+### trades one permanent stall for a different one. Documented only, per the task's own
+### instruction — no default changed.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors.
+- `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed and strings-confirmed (`FollowKick` present in both deployed
+  `dinput8.dll`s).
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2396/2396 passed**, 0 failed, 0 skipped.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` (both sync flags at their shipped OFF default): **41 passed, 8
+  failed** — squarely the documented 40-42/7-9 baseline, all eight failures matching the
+  long-standing known set exactly (`phantom damageable, not a sink`; `the peer really loses those
+  hit points`; `a client hit costs the enemy real hit points`; `a downed player is reported to
+  the agent`; `the co-op revive stands the player back up`; `every engine call signature matches
+  the binary` (191/193 this run — same category, count varies run to run); `a container opened
+  on the client is held and shown open on the host`; and the `no per-frame spam` flaky
+  substitution). No new failures, no regression from this round's changes.
+
+No crash from any of this round's own code on either instance across the whole session — the one
+client crash mid-round was the pre-existing, documented `tar_m02aa` ambient `duros`/warp-while-
+downed trap (see `store-sync.md`'s own incidental-finding note), recovered by a full process
+restart, matching this project's own established pattern for that hazard. Both `store_sync` and
+`party_pool_sync` stay OFF (`profiles/coop.ini.example` unchanged); both game directories'
+`coop.ini` were reset back to the plain example template before this pass ended.
+
+**Code committed this round** (before the rig pass, so the rig ran the code it tests):
+`followkick` dev verb (`SharedBlock.CheatKindFollowKick`/`CheatKinds.FollowKick = 45`,
+`Odyssey.TryForceTeleportForward`, full wiring through `ConsoleCommand`/`CoopCommandDispatcher`/
+`CheatController`) and the party-pool insert diagnostic
+(`Odyssey.AddItemToPartyPool`'s new repo-pointer/`item_count` before/after log line) — see git
+history for the exact commit.

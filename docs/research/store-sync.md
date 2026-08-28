@@ -1771,3 +1771,75 @@ line for `SetGold`).
    units WERE affordable.
 7. `store_sync` stays OFF regardless of this pass's outcome — unaffected by this fix (it touches
    `SellToStore`/`BuyFromStore`, not the wire sync channel's own diff/apply logic or Bug 4).
+
+## Live pass (2026-08-28/29): this section's own live re-test plan run — wipe-prevention,
+## affordability guard and the buy mirror all CONFIRMED clean; `sell` still cannot be positively
+## confirmed, but the blocker turned out to be test methodology plus the party-pool native defect,
+## not (as far as this round can tell) a defect in `sell` itself — stays OFF
+
+Task: run this document's own "Live re-test plan" above on the two-instance rig
+(`store_sync=1` both), after this session's own gold repair (see `docs/live-verification.md`).
+
+**Wipe-prevention: CLEAN.** `warp tar_m02aa`, `openstore Larrim_Store` repeatedly on the host
+across the whole round (party-select trap recovery forced several re-opens — see the incidental
+finding below) produced zero `store: removed`/`store: added` lines outside a real `buy`/`sell`
+call. Bug 4 stays fixed.
+
+**`buy` (affordable): CONFIRMED, and the wire mirror needs NEITHER side's GUI open.** With gold
+at 0, `buy Larrim_Store g_w_rptnblstr01` correctly refused: `cannot afford: price 550, gold 0`.
+After `setgold 5000`, the same buy succeeded (`buy 'g_w_rptnblstr01' x1 from store Larrim_Store`)
+and — without the CLIENT ever having its own `openstore` open at all — the client's plugin log
+showed the mirror land through the wire on its own: `store: removed 'g_w_rptnblstr01' x1 (asked
+for 1) from store 0x74`. This confirms `StorePump.cs`'s own documented design precisely (its
+header comment: Apply "needs NO knowledge of the store's true pristine baseline… regardless of
+whether this instance has ever locally scanned the affected store") — Detect (publishing a local
+buy/sell) needs the GUI open on the instance that DID the buying/selling, but Apply (receiving
+the mirror) does not need the GUI open on the OTHER instance at all. Worth folding into this
+doc's own live-test recipe: a client-side `openstore` is not actually required to verify the
+mirror, only to verify Detect independently on that side.
+
+**`buy` (deplete-to-zero): CONFIRMED indirectly.** `g_w_rptnblstr01`'s stock was 1; after the one
+successful buy, a further `buy Larrim_Store g_w_rptnblstr01 100` refused with
+`no stock matching that resref in [store]` rather than any underflow/negative-stock symptom.
+
+**`sell`: STILL NOT POSITIVELY CONFIRMED, but for a reason this round can now name precisely.**
+Every resref this round tried to sell failed with `no matching item in inventory`
+(`g_a_class4001`, `k_computer_spike`, `g_i_trapkit001`, `g_i_medeqpmnt01`, all read off the
+host's own `items` sweep as "held by 0x74"). **Resolved, mid-round: `0x74` is `Larrim_Store`
+itself** (confirmed once `buy`'s own log line named `store 0x74` explicitly) — every one of those
+resrefs was the STORE's own stock sitting in ITS repository, not anything the player ever owned.
+`items`'s own sweep walks every item body in the module regardless of possessor, so "held by
+0x74" reads exactly like a player-held item unless the reader cross-checks which id is the
+store. Picking a genuinely player-owned resref from that same sweep instead, this round hit a
+SECOND, independent blocker: the only way this round could stage a definitely-player-owned test
+item was `pooladd`, and `pooladd g_w_blstrpstl001` followed immediately by `sell Larrim_Store
+g_w_blstrpstl001` (even after a fresh `openstore` re-open, ruling out a stale sell-list panel)
+still failed the same way. The new diagnostic added this session
+(`docs/research/party-pool-sync.md`'s own new evidence) shows why: `RepositoryInsertItemFn`'s
+append path does not update the party pool's own `item_count` field live, so a freshly-`pooladd`ed
+item is invisible to ANY subsequent walk of that repository — including, very plausibly, `sell`'s
+own `GetItemRepositoryFn(player, 1)` walk, which resolves to the exact same repository. This
+round could not locate a resref that was BOTH genuinely player-owned (not store stock) AND
+present in the pool before this session started (this save's pool held only 2 items total, and
+this round never determined their resrefs before they were reconciled away by `party_pool_sync`'s
+own connect-time convergence — see `docs/live-verification.md`'s narrative for that sequence). So
+`sell`'s own fix remains **NEEDS-LIVE**, unfalsified but also unconfirmed — the next round should
+either use a save with several already-owned, non-store-stock items and identify them by resref
+BEFORE calling `pooladd`/`openstore` on anything, or wait for `party_pool_sync`'s own native
+insert-visibility defect to be fixed first so a freshly-added item is a valid, clean test case.
+
+**Incidental finding: the `tar_m02aa` ambient `duros` swoop-registration trap fired reliably
+this round on EVERY fresh module entry** (not merely "sometimes," as prior rounds' phrasing
+implied) — roughly 90 seconds after arrival regardless of how quickly the player was moved away
+from the warp-in point, ruling out a proximity-based trigger. `selectreply 1` (not `0`) declines
+the registration outright and ends the conversation in one step where available; the party-select
+screen it opens is not reliably dismissed by `partyselect ok` alone — clearing it took several
+rounds of `selectreply`/`partyselect ok` retries with no way to shortcut them, and once WORKED
+first try. A client instance that gets stuck warping while at/near 0 hp behind this trap can crash
+outright (`death: game-over suppressed; the session decides` spamming immediately before the
+crash) — matches the documented min-1-hp warp artifact; the fix is a full process restart, same
+as this document's own prior "stuck behind the ambient duros trap" note. No new code follows from
+this — it remains a known, orthogonal module hazard, not a `store_sync` defect.
+
+**No crash from `store_sync` itself across the whole round** (the one client crash was the
+pre-existing duros/warp-while-down trap above, unrelated to store code). `store_sync` stays OFF.

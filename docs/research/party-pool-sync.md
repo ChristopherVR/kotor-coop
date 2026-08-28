@@ -1310,3 +1310,97 @@ BOTH: §13's "two lookups, one frame" `ResolvePartyPoolRepo`/count-field dump ar
 answered, the `pooladd`×3-rapid / `pooladd`-then-`poolremove` re-test — since a native
 repository-visibility gap, if that is what §13.3 turns out to be, would still fail the live
 re-test regardless of how correct this round's two C#/plugin-side fixes are.
+
+## 15. 2026-08-28/29, live pass — §13.3's own "two lookups, one frame" diagnostic run; hypothesis 1
+## CONFIRMED with direct evidence (`item_count` never updates on insert), hypothesis 2 RULED OUT
+## (the repo pointer is stable); stays OFF, root cause now precisely located
+
+Task: this round's own queue item 2, plus §13.3's/§14.4's own explicit closing ask — dump
+`ResolvePartyPoolRepo()`'s pointer and the repo's own `item_count` field immediately before and
+after one `pooladd` call, in the same frame, before re-running the `pooladd`×3-rapid /
+`pooladd`-then-`poolremove` live tests.
+
+### 15.1 The diagnostic added
+
+`Odyssey.AddItemToPartyPool` (`src/KotorCoop.Plugin/Odyssey.PartyPool.cs`) now logs, on every
+call: the resolved repo pointer, `item_count` immediately before and after
+`RepositoryInsertItemFn`, and whether the just-inserted item id is found by walking the
+repo's own array up to the post-insert `item_count` — the exact "two lookups, one frame"
+discipline that closed the enemy-presence-sync hunt, reused here for the identical shape of
+problem (`docs/research/enemy-presence-sync.md`).
+
+### 15.2 Result: `item_count` does not change across a genuine insert, reproduced 6/6 times, on
+### BOTH host and client, across two separate live sessions this round
+
+Host, three back-to-back `pooladd g_i_progspike01` calls, ~2-18s apart:
+
+```
+party pool: insert diag - repo 0x186A7788, item_count 1->1, 0xBE is NOT in the post-insert array walk
+party pool: insert diag - repo 0x186A7788, item_count 1->1, 0xC0 is NOT in the post-insert array walk
+party pool: insert diag - repo 0x186A7788, item_count 1->1, 0xC1 is NOT in the post-insert array walk
+```
+
+A fourth call (`g_i_drdshld001`) immediately followed by `poolremove` of the SAME resref
+reproduced §13.2's exact symptom, now with the mechanism attached in the same breath:
+
+```
+party pool: insert diag - repo 0x186A7788, item_count 1->1, 0xC2 is NOT in the post-insert array walk
+party pool: added 'g_i_drdshld001' (0xC2) x1, ...
+party pool: remove 'g_i_drdshld001' x1 failed - no matching stack found in the pool
+```
+
+**The repo pointer itself never changed across ANY call this round** (`0x186A7788` on the host,
+every single time, across dozens of calls over ~20 minutes of wall time) — this is direct,
+positive evidence AGAINST §13.3's hypothesis 2 (`ResolvePartyPoolRepo()` resolving a different
+pointer call to call). `item_count`, read fresh both immediately before and immediately after the
+SAME `RepositoryInsertItemFn` call that is the only write between the two reads, is IDENTICAL
+every time — not "sometimes stale," genuinely unchanged, on a call the engine's own item body
+(tag, id, spawn-ring capture) proves actually ran (§13.2's own independent-reader evidence still
+holds: a live `item <id>` read agrees the object is real). This is now the strongest evidence yet
+for hypothesis 1: `CItemRepository::InsertItem`'s (0x0055D2C0) append path (index `-1`, this
+codebase's only calling convention) does not update `item_count` (`repo+0x10`) — either the
+disassembly's own understanding of the append path is incomplete (an increment that requires some
+precondition this call site does not meet), or `item_count` at `+0x10` is not the field the
+append path actually increments (a capacity vs. count desync, i.e. the true backing array DID
+grow but the field this codebase — and by extension `RemovePartyPoolStack`'s own search loop,
+which reads the identical field — reads to bound its walk does not reflect it).
+
+**One asymmetry worth flagging, not yet explained.** The identical test run on the CLIENT this
+round showed a different secondary symptom: `item_count` was likewise stable (`6->6` all three
+calls) but the post-insert array walk reported the SAME item id (`0xBF`) as present all three
+times, for three textually-identical `pooladd g_i_progspike01` calls that each separately logged
+"added... (0xBF)". Either the object id genuinely was not incrementing across calls (a possible
+second, independent defect in id allocation/recycling this round did not chase), or the id WAS
+advancing normally and the walk's "IS in the array" verdict was a coincidental match against a
+pre-existing, unrelated array slot rather than proof the fresh insert linked correctly — the
+diagnostic as written cannot distinguish the two. Flagged for whoever picks this up: log the
+returned `itemId` value on every call (not just inside the "added" line, which already does) and
+cross-reference it against the walk hit to settle which explanation is right.
+
+### 15.3 Sell/store-sync connection
+
+`docs/research/store-sync.md`'s own live pass this round hit what is very plausibly the SAME
+defect from the other side: `sell Larrim_Store <resref>` on a `pooladd`-freshly-inserted item
+failed with "no matching item in inventory" even immediately after a fresh `openstore` (ruling
+out a stale GUI sell-list). `SellToStore`'s own fix resolves the identical repository
+(`GetItemRepositoryFn(player, 1)` -> the same `CSWPartyTable::GetPartyItems` this file's
+`ResolvePartyPoolRepo()` also calls) — if its own search is ALSO bounded by `item_count`, a
+freshly-inserted item would be invisible to it for the exact same reason `poolremove` cannot find
+one. This is not proven (this round did not disassemble `CSWGuiStore::SellItem`'s own inventory
+scan to confirm it reads the same count field), but it means `sell`'s own live-test blocker this
+round may not be a `sell`-specific defect at all — see that document's own new section for the
+full detail.
+
+### 15.4 Verdict
+
+`party_pool_sync` stays OFF — unchanged this round. §13's own open question is now answered as
+far as live evidence can take it without a disassembly pass on `CItemRepository::InsertItem`
+itself: the repo pointer is stable (hypothesis 2 ruled out), and `item_count` provably does not
+reflect a genuine, engine-confirmed insert (hypothesis 1 confirmed with direct before/after
+evidence, not inference). The next round's concrete target is now narrow and specific:
+disassemble `CItemRepository::InsertItem` 0x0055D2C0 itself (not just its call site) to find
+either the real increment condition the `-1` append path is missing, or the TRUE count/capacity
+field this codebase should be reading instead of `+0x10` — the same "read the function, not just
+its documented call convention" fix that closed the `sell`/`GetItemRepository` defect earlier
+this session. No source changes this round beyond the diagnostic logging itself (already
+committed alongside `followkick`, see `docs/live-verification.md`).
