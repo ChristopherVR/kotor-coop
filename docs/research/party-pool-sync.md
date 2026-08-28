@@ -3201,3 +3201,81 @@ separately, a live recipe that deliberately interleaves a console verb (any stag
 necessarily party-pool) with an in-flight reconcile apply, to confirm the real
 `CheatController.OnFrame`/shared-block round trip serializes the two exactly as the bench model
 now does.
+
+## 27. 2026-08-28, rig round — §26's own concrete next live step run: three rapid host `pooladd`s
+## did NOT converge to +3 — a SEVERE runaway amplified them past 500 units on each side, with a
+## 15-unit final divergence between host and client. `party_pool_sync` stays OFF, disqualified
+## again
+
+Task: this session's queue item 1 — exactly §26's own next live step. Two-instance rig
+(`tools/demo.ps1`), both game directories freshly `build.ps1 -Install -WarnAsError`'d and
+strings-confirmed (both deployed `dinput8.dll`s identical size/timestamp). `coop.ini` reset to a
+byte-for-byte copy of `profiles/coop.ini.example` on both, then `party_pool_sync=1`/`store_sync=0`
+set on both. Both instances loaded into `END_M01AA` (the default starting save/module — no warp
+needed, matching §25's own choice to avoid `tar_m02aa`'s hazards entirely). `remotes 1` confirmed
+both sides via `blockpoke.ps1 state` before starting.
+
+### 27.1 The recipe, and what happened
+
+Three `pooladd g_i_medeqpmnt01` issued on the HOST via `blockpoke.ps1 console`, each waited for its
+own reply before the next was typed (the tool launches a fresh process per invocation, so this is
+"as rapid as the tooling allows" rather than truly simultaneous — each still landed and reported
+success individually: `added 'g_i_medeqpmnt01' x1 to the party pool`, three times, engine-confirmed
+each time). Expected result per the queue: EXACTLY +3 on both sides, ≤ ~6 ops.
+
+**What actually happened, read directly from both agent logs**: within the ~30 seconds after the
+third `pooladd`, an unbroken cascade of `party pool: local add of Nx ... detected, publishing` /
+`added ... to the party pool` / `local remove of Nx ... detected, publishing` lines fired on BOTH
+instances, with N escalating each cycle — 1, 2, 4, 6, 20, 64, 348, 498/597, then interleaved removes
+of 798, 507, 102, 87, 36, 72, matching this document's own §19.1/§20.2 "ambient script noise" shape
+(a `party pool: suspiciously large stack — 448x ... Likely an ambient script bug` diagnostic line
+fired on both sides, exactly as designed) but reaching FAR past what that diagnostic's own
+one-time-warning framing anticipates. The cascade stopped on its own after ~33 seconds (last
+`party pool:` line at 23:18:33 host-side) with no crash and no explicit loop-breaker trip logged —
+it settled into a bad state rather than looping forever, which is a materially different (and
+quieter) failure shape than the true unbounded runaway of the original §21.
+
+**Final state, read via `items 99`**: the host's own copy holds `g_i_medeqpmnt01` totalling **535**
+units across nine item bodies (two of them capped at the engine's own 99-stack ceiling five times
+over — `0x137`-`0x13B` each showing `stack 99`); the client's own copy totals **550** across a
+similar spread. Not merely far past the expected `+3` — the two sides do not even agree with EACH
+OTHER, a 15-unit cross-instance divergence on top of the ~178x-183x overshoot from the target.
+
+### 27.2 Attribution: contaminated by END_M01AA's own ambient item-spawn noise, but the wire
+### channel's response to that noise is itself the disqualifying defect
+
+`end_m01aa` (Endar Spire, the game's opening area) plausibly runs its own heartbeat/plot scripts
+that call `CreateItemOnObject(g_i_medeqpmnt01, GetFirstPC())` — repeated medkit dispenser or
+loot-table content is common Endar Spire set dressing — and §20.2's own `IsAmbientPartyPoolNoise`
+suppression exists for exactly this shape of ambient churn (both instances run the identical script
+content, so each side's own creation must never be published as a genuine local player action). The
+diagnostic line that fired here (`suspiciously large stack — 448x ...`) confirms the suppression
+mechanism IS running and IS aware of the noise — but this round's live evidence is that being aware
+is not the same as staying converged: whatever ambient churn was happening in this save's
+`END_M01AA`, layered on top of three genuine cheat-marked `pooladd`s issued close together, drove
+the channel into a state where each side kept detecting and re-publishing the OTHER side's already-
+published change as if it were new, amplifying rather than damping. This is consistent with, but not
+mechanically proven to be, a resurgence of the exact "local add detected, publishing" echo-loop
+shape §21's original severe runaway described — §26's fix (the serialized single-slot issuer) closes
+a DIFFERENT bug (a dropped/clobbered request), and this round's evidence is that it does not, on its
+own, prevent this one. Root cause not re-pinned this round (out of this session's own time budget
+given three queue items); flagged as the concrete next target, ranked above the `store_sync`
+findings below given the severity (500+ unit overshoot vs. store's smaller misroute).
+
+### 27.3 Verdict
+
+`party_pool_sync` **stays OFF, not flipped ON, disqualified for the second consecutive live round**
+on the same "the very first clause of the recipe fails" bar §25 already established, but this
+round's failure mode is materially worse: §25 undercounted (host 1 of 3, client 2 of 3, silent
+stall); this round overcounted by two orders of magnitude with a cross-instance divergence on top.
+No crash, no loop-breaker trip — the channel settled into a wrong, mismatched state rather than
+looping forever or taking the process down, which is why this is recorded as a severe correctness
+defect rather than a crash/hang. The remaining recipe clauses (×3 client, deposit-then-remove,
+blackout-during-deposits) were not reached; not meaningful to pursue against a channel that already
+fails its own first clause this badly. **Concrete next step**: reproduce on a save/module confirmed
+free of ambient item-spawn scripts (ruling out the `END_M01AA` content as a contributing factor
+rather than merely a contaminating one) and, in parallel, audit whether `IsAmbientPartyPoolNoise`'s
+own suppression window (1000ms, decided once per item id) can itself be fooled by a REAL player
+`pooladd` landing inside that same window as ambient noise for the identical resref — the exact
+collision this round's recipe (`pooladd g_i_medeqpmnt01`, a resref this save's own `END_M01AA`
+content also apparently spawns) would produce if so.

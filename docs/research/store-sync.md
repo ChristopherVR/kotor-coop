@@ -3150,3 +3150,115 @@ previously-undocumented finding worth its own dedicated look in
 Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
 build.ps1 -Install -WarnAsError` (both game directories) clean at the top of this session, before
 any rig work. No source change this round — live re-verification only.
+
+## Live pass (2026-08-28, rig round): wipe-prevention/sell-mirror/infinite-stock no-op re-confirmed
+## clean; the buy-back check reproduces the SAME ambient-trap inconclusiveness as the prior round
+## (this time compounded by a genuine combat encounter at the warp-in point); a NEW finding —
+## blackout+reconnect resync double-applies a pending sell, misrouting the duplicate into the
+## client's own inventory instead of leaving it in the store. `store_sync` stays OFF
+
+Task: this session's queue item 2. Two-instance rig, `store_sync=1`/`party_pool_sync=0` both,
+`coop.ini` freshly reset to `profiles/coop.ini.example` before setting the flags, both game
+directories freshly `build.ps1 -Install -WarnAsError`'d. ONE relocating `warp tar_m02aa` on the
+host (the session's only warp, per `transition-crashes.md`'s own verdict), `Larrim_Store`, the same
+established recipe as the prior round.
+
+### Clean, re-confirmed: no wipe on open, the sell mirror, the infinite-stock no-op
+
+- **No wipe.** Zero `store:` lines on either side between the host's store opening (23:23:33) and
+  the first deliberate `sell`.
+- **Host sell -> client mirror.** `scriptgive g_w_ionblstr01` then `sell Larrim_Store
+  g_w_ionblstr01` on the host: host agent log `store: local add of 1x 'g_w_ionblstr01' detected in
+  store 0x74, publishing` at 23:26:42, client agent log `store: submitting add...`/`inserted
+  'g_w_ionblstr01' x1 into store 0x74` at 23:26:43 — ~1s latency, matching every prior clean
+  reproduction. Notably, this landed on the client WITHOUT the client's own store GUI ever being
+  open — confirms `StorePump`'s mirror is independent of whether the receiving side's `ShowStoreGui`
+  panel is up, only that the instance is connected.
+- **Infinite-stock buy: clean no-op.** `buy Larrim_Store g_w_blstrpstl001` (Larrim's known infinite
+  entry, §1.5) on the host succeeded genuinely (item landed in the buyer's inventory, `setgold`
+  used to fund it after `grantgold`'s own read proved stale — see "Incidental finding" below) with
+  **zero** new `store:` lines on either side across a 10s watch.
+
+### The client buy-back check: INCONCLUSIVE again, same root hazard as the prior round, now with
+### a genuine combat encounter as an additional contributing factor
+
+The fast-retry recipe (`selectreply 0`/`partyselect ok` pairs, retried immediately on arrival)
+worked on the HOST within its very first pair — `openstore Larrim_Store` returned `opened` at
+23:23:33. The CLIENT never cleared: 10+ `selectreply`/`partyselect ok` retries over several minutes,
+including a `tp <x> <y>` (no `z`) move ~46 units away from the warp-in point per this doc's own
+established workaround, all returned `partyselect ok: confirmed` immediately followed by `openstore
+... refused: another modal screen is up`. The client's own plugin log shows why persistence alone
+does not help here: `interaction: auto-joining a peer's conversation with 'duros' (forced` repeats
+every ~4 seconds, continuously, long after the host's own last `dialogue-node-pub` line (23:23:37) —
+the client keeps being re-dragged into the SAME conversation the host is no longer even advancing,
+an asymmetry not previously called out this precisely. **New detail this round**: the warp-in point
+itself is a live combat encounter — the host's log shows `enemy drive: mirroring 11 of the owner's
+14 enemies` and two `combat: killed 0x1C`/`0x19 on the owner's authority` lines moments after arrival,
+plus `combat ground-truth: local PC took 5 damage` on the host itself — consistent with `transition-
+crashes.md` Round 6's own note about "a Sith checkpoint dialogue/combat gate at `tar_m02aa`'s other
+outbound doors." Both players' characters stayed alive throughout (`god` was already ON from a
+prior session's save state; `topup`/`standup` both confirmed full HP, ruling out an actual death as
+the blocker) — the modal-screen refusal is specifically the party-select/conversation cascade, not a
+death-recovery gate. **Genuinely unresolved again**: this is the second consecutive live round this
+exact recipe has been unable to cleanly exercise the client buy-back clause; the concrete next step
+from the prior round (a route through `tar_m02aa` that dodges the trap, or a different store-bearing
+module) was not attempted this round for lack of a confirmed alternative, and remains open.
+
+### NEW finding: blackout + reconnect resync double-applies a pending sell, and the duplicate is
+### misrouted into the client's own inventory rather than staying in the store
+
+`netsim blackout 8` on the client, waited 12s past the window. Reconnect itself was clean (`peers 1`
+-> `peers 0` -> `peers 1`, both sides' own liveness recovering with no anomaly reported) — but the
+client agent log shows a SECOND `store: submitting add of 1x 'g_w_ionblstr01' in store 0x74 through
+the store channel` / `inserted 'g_w_ionblstr01' x1 into store 0x74` at 23:28:06, ~85 seconds after
+the FIRST (clean) mirror of the same sell at 23:26:43 — a duplicate re-application of an op that had
+already landed, triggered by the reconnect. A follow-up `items 99` sweep confirms this is real, not
+a log artifact: the host's own copy of the sold item (object id `0x82`, held by the store `0x74`)
+shows **`stack 2`** (1 from Larrim's own base-game stock plus the 1 sold in) while the client's copy
+of the SAME object id `0x82` shows only `stack 1`, with a SECOND, separate object (`0xBF`) holding
+the missing unit — but tagged **`yours`** (the client PLAYER's own inventory), not the store. Total
+unit count still matches across instances (2 on each side), so this is not a quantity-divergence
+bug in the sense §21/§25/`party-pool-sync.md`'s own defects are — it is a **misrouting** bug: the
+reconnect-triggered re-publish landed the duplicate unit in the wrong container entirely, handing
+the client player a free copy of an item that the store's own shelf does not show, rather than
+merely double-counting the store's stock. Not root-caused this round (found late, no time budget
+left in this session for the three-item queue) — a real, concrete, previously-undocumented defect,
+flagged for the next round's own priority list ahead of a repeat buy-back attempt, since a resync
+bug undermines confidence in ANY of this channel's convergence claims after a real-world blackout.
+
+### Incidental finding: `grantgold`'s own read looked stale immediately after use
+
+`grantgold 500` reported `gold 0 -> 500`, but the very next `buy` attempt still saw `gold 8`
+(refused: `cannot afford: price 110, gold 8`) — a mismatch between what `grantgold`'s own reply
+claimed and what the store's affordability check read moments later. `setgold 5000` (the absolute,
+dev-only setter) then reported `gold 80 -> 5000` and the subsequent buy succeeded — so SOME gold
+field did move between these calls (0, then apparently 80, then 5000), but not in a way this round's
+observations can fully reconcile; not investigated further given the session's time budget, and not
+clearly a `store_sync` defect specifically (both verbs are `grantgold`/`setgold`'s own machinery,
+documented elsewhere) — flagged here only so the next round does not waste time re-discovering that
+`grantgold`'s own reply number cannot be trusted as the store's own read of current gold.
+
+### Verdict
+
+`store_sync` **stays OFF, not flipped ON.** Three of the recipe's clauses are clean and
+re-confirmed (wipe-prevention, sell mirror, infinite-stock no-op); the buy-back clause remains
+INCONCLUSIVE for a second consecutive round due to the same `tar_m02aa` ambient-trap hazard, now
+better characterised (a genuine combat encounter plus a client-side re-triggering asymmetry, not
+merely the conversation/party-select cascade alone); and a NEW, concrete, reproducible defect was
+found in the blackout+reconnect clause — a double-applied sell that misroutes the duplicate into the
+client player's own inventory rather than the store. No crash this round (`Get-Process` confirmed
+both instances `Responding=True` throughout, including through the combat encounter and the stuck
+client). **Concrete next steps, ranked**: (a) root-cause the double-apply-on-reconnect defect — it
+is the more actionable and more clearly `store_sync`-specific of this round's two open items; (b)
+find or build a recipe that reaches a store-bearing module without `tar_m02aa`'s own compounding
+hazards (ambient duros trap + checkpoint combat), to finally close out the buy-back clause on clean
+evidence rather than a third inconclusive attempt.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean at the top of this session. Full
+`dotnet test tests/KotorCoop.Tests --no-build`: 2489/2489 passing (run with the rig down, avoiding
+the documented UDP-port flake). `tools/verify.ps1` baseline (separate, `party_pool_sync=0`/
+`store_sync=0`, shipped defaults): 40 passed, 9 failed — exactly the documented 40-42/7-9 baseline
+(7 core known failures plus both documented flaky substitutions, `a client hit costs the enemy real
+hit points` and `an item picked up here vanishes on the peer`, landing together this run, matching
+this doc's own 2026-08-28 precedent for that exact combination). No regression anywhere.
