@@ -1962,3 +1962,87 @@ neither flag flipped.
 **No source changed this session** — every item was a live-verification pass against the code
 already on `main` as of `66430d3`. The two write-ups above (`docs/research/store-sync.md`,
 `docs/research/party-pool-sync.md`) plus this entry are the session's only output.
+
+## Rig pass (2026-08-29): shared-inventory-v2 (`party_pool_sync=2`/`store_sync=2`) queue — BOTH
+## disqualified by reproducible live defects on the first attempt; defaults stay at 0; baseline clean
+
+Task: re-run `docs/research/party-pool-sync.md` §27's own recipe against the new mode-2
+host-authoritative redesign (`docs/research/shared-inventory-v2.md`), and the established
+`tar_m02aa`/`Larrim_Store` store recipe against mode 2. Started from `main` already containing
+"shared inventory v2" (`eb98743`); fast-forwarded the worktree, no merge conflicts. Full detail in
+`docs/research/shared-inventory-v2.md`'s new §6; this entry is the session-level summary.
+
+### Item 1 — `party_pool_sync=2`: DISQUALIFIED, twice, by an exponential-doubling runaway
+
+Two-instance rig, `END_M01AA` (no warp), three rapid host `pooladd g_i_medeqpmnt01`s per the
+queue's own instructions (`coop.ini.example` defaults + `party_pool_sync=2`/`store_sync=2`).
+**First attempt** was contaminated by `dialogue_item_sync`/`script_item_sync` (both ON by
+default) — a completely different channel (`materialise: gave loot ... (dialogue grant)`)
+produced a ~180x overshoot on its own, though both sides converged to the same final total
+(82/82). **Second attempt**, `dialogue_item_sync=0`/`script_item_sync=0` isolated to rule that
+out: mode 2's OWN client-side pump (log-tagged `party pool v2:`, unambiguous) reproduced a clean
+exponential-doubling ramp — 1, 2, 4, 8, 18, 34, 66, 130... — hitting `g_w_blstrpstl001` and
+`g_a_clothes01`, items the recipe never touched, alongside the targeted `g_i_medeqpmnt01`. Paused
+~2 minutes, then resumed a second doubling ramp unprompted. Final state: host 66 items, client 72
+— a real cross-instance divergence, the same qualitative failure shape as mode 1's own §21/§27
+runaways. This directly contradicts `shared-inventory-v2.md` §1.2/§2.5's "amplification is
+structurally impossible" argument. No crash; both instances stayed `Responding=True`.
+`party_pool_sync` stays OFF.
+
+### Item 2 — `store_sync=2`: DISQUALIFIED by two independent defects (a genuine double-sell, and
+### a full-stock wipe/restore cascade)
+
+Rig restarted clean with `party_pool_sync=0` (unsafe to run alongside item 1's still-unexplained
+runaway — the single-slot cheat channel mode 1's own root cause 7 already documented as
+clobber-prone) and `store_sync=2`, `dialogue_item_sync=0`/`script_item_sync=0` kept isolated. ONE
+relocating `warp tar_m02aa` (this session's only warp). The documented ambient modal trap cleared
+in 4 tries on the host, 1 try on the client — both `openstore Larrim_Store` succeeded, no wipe
+between open and the first action. Host sell → client mirror: clean, ~2s latency, no
+amplification. **Client buy-back never reached the host**: `buy` on the client engine-confirmed
+success, but the host's own agent log showed zero `store v2:` lines for that resref over 2+
+minutes — proven by consequence: the HOST was then able to `buy` the SAME unit a second time
+(`buy 'g_w_ionblstr01' x1 from store Larrim_Store` succeeded twice), the queue's own explicit
+"host re-buy refused" check failing outright — a genuine double-sell, two players each holding a
+copy of what should have been one unit. **New, more severe finding**: minutes later, the host's
+own store pump wiped then restored nearly the ENTIRE pristine stock unprompted — an 18-entry
+`remove` cascade (tagged `store v2:`) followed by a matching `add` cascade ~5-20s later, net
+correct except for the legitimately-sold item — the same "virgin baseline reads as zero" shape
+`store-sync.md`'s very first live pass marked CRITICAL for mode 1, reproducing independently in
+mode 2's own pump. Infinite-stock buy re-confirmed as a clean no-op. Incidental, unrelated
+finding: a `progression_sync` gold-ledger integer-overflow — `setgold`/`buy` in sequence produced
+`purse: peer 2 contributed +4294962076` / `+0 -3294967077` lines and drove the host's own gold
+negative — flagged for its own follow-up, not a `store_sync` defect. Blackout+reconnect not
+attempted (not meaningful once the first two clauses already fail this badly). No crash; both
+instances stayed `Responding=True`. `store_sync` stays OFF.
+
+### Item 3 — flip defaults: NOT REACHED. Both flags disqualified in item 1/2, so
+`profiles/coop.ini.example`, `CoopConfig`/`AgentSettings` defaults, `CONFIG.md`, and the
+README/roadmap/research-README rows are all unchanged.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors, run at the top of this
+  session against the freshly-merged `main`.
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed (`dinput8.dll` 2,060,288 bytes / identical timestamp both sides;
+  both deployed `KotorCoop.Session.dll` confirmed by byte-scan to contain
+  `PartyPoolPumpV2`/`StorePumpV2`/`PartyPoolSnapshotPacketV2`). Re-run once more at the end of the
+  session (no source changes since) — same clean result.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides: **41 passed, 8 failed** — within the documented
+  40-42/7-9 baseline range: all 7 core known failures (`phantom damageable, not a sink`; `the peer
+  really loses those hit points`; `a client hit costs the enemy real hit points`; `a downed player
+  is reported to the agent`; `the co-op revive stands the player back up`; `every engine call
+  signature matches the binary` at 197/199; `a container opened on the client is held and shown
+  open on the host`) plus one of the two documented flaky substitutions (`no per-frame spam`) —
+  `an item picked up here vanishes on the peer` passed cleanly this run. No regression, no crash.
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2506/2506 passed**, run with the rig down to
+  avoid the documented UDP-port-binding flake.
+
+Both game directories' `coop.ini` were reset to the plain example template (shipped defaults)
+before this session ended; `party_pool_sync`/`store_sync` both stay at their shipped OFF default —
+no config/README changes needed since neither flag flipped.
+
+**Source changed this session**: `docs/research/shared-inventory-v2.md` only (new §6, the two live
+findings above). No production code changed — every item was a live-verification pass against the
+mode-2 code already on `main`. This entry plus that write-up are the session's only output.
