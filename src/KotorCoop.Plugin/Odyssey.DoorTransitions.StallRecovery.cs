@@ -460,12 +460,67 @@ internal static unsafe partial class Odyssey
     /// already reads the reset sentinel, so a companion already idle (or one this instance never
     /// actually got to mirror before the session ended) is never logged or written pointlessly.
     ///
-    /// NOT YET LIVE-TESTED. Kill switch (to enable): <c>party_follow_phase7_release=1</c> (default
-    /// OFF). See docs/research/party-reconciliation.md round 98 for the live-verification recipe.
+    /// ROUND 101 (party-reconciliation.md): round 100's own live A/B ran this with every
+    /// precondition satisfied (config on, a genuinely non-reset phase captured pre-disconnect,
+    /// <c>_trackedId</c> populated) and got NO <c>phase7release</c> line and no effect — narrowed
+    /// to "one of this function's own early returns refused, silently." ROOT-CAUSED this round,
+    /// by direct disassembly (<c>tools/disasm.py 0x006349C0 40</c>) of
+    /// <c>CSWParty::FindMemberIndexById</c> (<see cref="GetPartyIndexFn"/>, 0x006349C0):
     ///
-    /// Returns false when the index does not resolve (no companion at that server object id, or no
-    /// client world yet — expected at session end if the body was already despawned).
-    /// <paramref name="wrote"/> reports whether the reset actually fired.
+    /// <code>
+    /// 0x006349CD  mov edx, [ecx]        ; edx = party+0x00, CSWParty's own live member count
+    /// 0x006349D1  test edx, edx
+    /// 0x006349D3  jle 0x6349e7          ; count &lt;= 0 -&gt; not found
+    /// 0x006349D5  add ecx, 0x24         ; ecx = first record (party+0x24)
+    /// 0x006349D8  cmp [ecx], esi        ; record's own stored id == the id we are searching for?
+    /// 0x006349DA  je 0x6349ea           ; found -&gt; return the current index
+    /// 0x006349DC  inc eax
+    /// 0x006349DD  add ecx, 0x88         ; next record
+    /// 0x006349E3  cmp eax, edx          ; index == count?
+    /// 0x006349E5  jl 0x6349d8           ; loop while index &lt; count
+    /// 0x006349E7  or eax, 0xffffffff    ; exhausted the count without a match -&gt; -1
+    /// </code>
+    ///
+    /// The search is bounded by <c>party+0x00</c> — the EXACT SAME field
+    /// <c>PartyTogetherClampRule</c>/<c>PartyRosterController.SyncClientPartyTogetherState</c>
+    /// (<c>party_together_fix</c>, default ON, CLIENT-ONLY) deliberately clamps DOWN to
+    /// <c>CSWPartyTable</c>'s companions-only count, EVERY frame, for as long as this client
+    /// mirrors at least one companion (<c>PartyTogetherClampRule</c>'s own remarks: "In the
+    /// ordinary case the array is ordered [PC, companion, companion], so 'the last one' is always
+    /// a companion" — i.e. this is the everyday steady state for a mirroring client, not an edge
+    /// case). That clamp is what lets a client cross a door while a mirrored companion stands
+    /// wherever the host's copy is, but its side effect is that <see cref="GetPartyIndexFn"/>'s own
+    /// loop bound EXCLUDES the trimmed (always-last, always-the-mirrored-companion) record
+    /// entirely — <c>GetIndex</c> returns -1 for exactly the companion this function exists to
+    /// find, not because the record is gone, but because the count that bounds the search says to
+    /// stop one slot short of it. Nothing un-clamps <c>party+0x00</c> on its own: the clamp only
+    /// ever writes DOWN (<see cref="TryClampClientPartyCount"/>'s own contract), and
+    /// <c>SyncClientPartyTogetherState</c> stops re-clamping the moment the host roster is cleared
+    /// (which happens well before <c>ReleaseSession</c> runs — <c>KotorGameBridge
+    /// .SessionScopedBlockLevels</c> clears "companion presence"/"peer party roster" long before
+    /// the LAST entry, "command") — but its LAST write stands. So at the exact moment this
+    /// function runs, the clamp's last (low) value is still sitting in <c>party+0x00</c>, and
+    /// <see cref="GetPartyIndexFn"/> reliably, deterministically fails — this is not a rare race,
+    /// it reproduces every time a client releases a mirrored session with exactly one companion
+    /// (round 100's own recipe).
+    ///
+    /// THE FIX: on a failed lookup, retry ONCE with <c>party+0x00</c> restored to its true,
+    /// un-clamped population (<c>CSWPartyTable</c>'s own companions-only count, from
+    /// <see cref="TryGetPartyTableMemberCount"/> — a DIFFERENT structure the clamp never touches
+    /// — plus one for the PC, matching <see cref="GetClientPartyMemberCount"/>'s own doc comment
+    /// on what CSWParty's count should read). The restored value is deliberately left standing
+    /// rather than reverted: it is the mathematically correct population, costs nothing to leave,
+    /// and <c>SyncClientPartyTogetherState</c> will re-clamp it right back down on its own very
+    /// next pass if a session is still actually mirroring — which, at the point
+    /// <c>ReleaseSession</c> calls this, it is not.
+    ///
+    /// Kill switch (to enable): <c>party_follow_phase7_release=1</c> (default OFF). See
+    /// docs/research/party-reconciliation.md round 98/100/101 for the live-verification recipe.
+    ///
+    /// Every refusal path logs its own distinct reason (round 101) so a live pass can tell "the
+    /// call never happened" from "the call happened and this specific guard refused it, for this
+    /// specific reason" — <paramref name="wrote"/> still separately reports whether the reset
+    /// actually fired for callers that only care about the outcome.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -476,6 +531,8 @@ internal static unsafe partial class Odyssey
         nint client = GetClient();
         if (client == 0)
         {
+            PluginHost.Log($"party follow phase7release: 0x{companionServerObjectId:X} refused "
+                + "- no client (engine not ready / no module loaded)");
             return false;
         }
 
@@ -484,20 +541,49 @@ internal static unsafe partial class Odyssey
         nint party = GetSWPartyFn(client);
         if (party == 0)
         {
+            PluginHost.Log($"party follow phase7release: 0x{companionServerObjectId:X} refused "
+                + "- no CSWParty (client-side party struct unresolved)");
             return false;
         }
 
         int index = GetPartyIndexFn(party, clientObjectId);
         if (index <= 0)
         {
-            return false;
+            // ROUND 101: see this method's own remarks above — party_together_fix's clamp on
+            // party+0x00 is the routine, deterministic cause of a failed lookup here. Retry once
+            // with the count restored to its true (un-clamped) value before concluding the
+            // companion genuinely has no record.
+            if (TryGetPartyTableMemberCount(out int tableCount) && tableCount is >= 0 and <= 16)
+            {
+                int truePopulation = tableCount + 1; // + the PC, matching CSWParty's own layout
+                int* countPtr = (int*)party;
+                if (*countPtr < truePopulation)
+                {
+                    *countPtr = truePopulation;
+                    index = GetPartyIndexFn(party, clientObjectId);
+                }
+            }
+
+            if (index <= 0)
+            {
+                PluginHost.Log($"party follow phase7release: 0x{companionServerObjectId:X} refused "
+                    + $"- no follow record found (GetIndex returned {index}; not a current party "
+                    + "member, even after restoring CSWParty's own member count)");
+                return false;
+            }
         }
 
         nint record = party + 0x24 + (index * 0x88);
         int phase = *(int*)(record + 4);
         if (!FollowPhaseReleaseRule.ShouldRelease(phase))
         {
-            return true; // already at the engine's own reset sentinel — nothing to do
+            // Already at the engine's own reset sentinel — nothing to do. Not an error; logged at
+            // the same detail level as a real refusal so a live pass can tell the two apart from
+            // "silence" without needing round 100's own indirect proof-by-ReleaseAllHeld chain.
+            PluginHost.Log($"party follow phase7release: 0x{companionServerObjectId:X} nothing to "
+                + "do - phase already at the reset sentinel "
+                + $"({FollowPhaseReleaseRule.EngineWatchdogResetPhase})");
+            return true;
         }
 
         *(int*)(record + 4) = FollowPhaseReleaseRule.EngineWatchdogResetPhase;
