@@ -188,6 +188,14 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private int _drivenLogged = -1;
 
+    /// <summary>ROUND 98 (party-reconciliation.md): see <see cref="FollowPhaseReleaseRule"/>'s and
+    /// <see cref="Odyssey.TryReleaseFollowPhaseOnUnmirror"/>'s own remarks — resets a mirrored
+    /// companion's native follow-FSM record to the engine's own reset sentinel the moment THIS
+    /// instance stops mirroring it, instead of leaving <see cref="PartyFollowController"/> to
+    /// resume against a record frozen since whenever mirroring began. NOT YET LIVE-TESTED. Kill
+    /// switch (to enable): <c>party_follow_phase7_release=1</c> (default OFF).</summary>
+    private readonly bool _phase7Release = PluginConfig.ReadBool("party_follow_phase7_release", false);
+
     public void Invalidate()
     {
         for (int i = 0; i < SharedBlock.PartyPresenceCapacity; i++)
@@ -225,7 +233,36 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
         }
 
+        // ROUND 98: must run BEFORE Invalidate() below clears _trackedId — that array is the only
+        // record of which companions this pass actually had a resolved body for. See
+        // FollowPhaseReleaseRule's own remarks for why this needs to happen here specifically.
+        if (_phase7Release)
+        {
+            ReleaseFollowPhaseForTracked();
+        }
+
         Invalidate();
+    }
+
+    /// <summary>ROUND 98 (party-reconciliation.md): hands every companion this instance was
+    /// mirroring back to <see cref="PartyFollowController"/> with a clean follow-FSM record
+    /// instead of a frozen leftover from wherever <c>phase</c> sat when mirroring began — see
+    /// <see cref="Odyssey.TryReleaseFollowPhaseOnUnmirror"/>'s own remarks for the full
+    /// disassembly-grounded reasoning. Iterates <see cref="_trackedId"/> directly rather than the
+    /// shared block (which the agent may have already started tearing down by the time
+    /// <see cref="ReleaseSession"/> runs) — the same "trust this controller's own cache of who it
+    /// was actually driving" discipline <see cref="ReleaseAllHeld"/> already uses.</summary>
+    private void ReleaseFollowPhaseForTracked()
+    {
+        for (int i = 0; i < SharedBlock.PartyPresenceCapacity; i++)
+        {
+            if (_trackedId[i] == 0)
+            {
+                continue;
+            }
+
+            Odyssey.TryReleaseFollowPhaseOnUnmirror(_trackedId[i], out _);
+        }
     }
 
     /// <summary>
