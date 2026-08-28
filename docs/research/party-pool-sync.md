@@ -2915,3 +2915,94 @@ Build: `dotnet build KotorCoop.slnx -warnaserror` clean. `src/KotorCoop.Plugin/b
 regressed). `dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~PartyPool"`:
 68/68 passed (65 pre-existing + 3 new). Full suite: see this pass's own closing build/test note
 below.
+
+## 25. 2026-08-28, rig round — §24's own concrete next live step run: three rapid host `pooladd`s
+## did NOT converge to exactly 3 on both sides, and the wire channel went silent (a real, several-
+## minute stall, not slow ticking) after only 2 of the 3 units were ever published. `party_pool_sync`
+## stays OFF, disqualified again
+
+Task: this session's queue item 2 — §24's own recipe: `pooladd g_i_medeqpmnt01` ×3 rapid host,
+confirm EXACTLY +3 on both pools with ≤ ~6 ops; ×3 client → +6; deposit then immediate remove → 0;
+blackout during rapid deposits → both converge; no loop-breaker trip. Two-instance rig
+(`tools/demo.ps1`), both game directories freshly `build.ps1 -Install -WarnAsError`'d and
+strings-confirmed (`_pendingGate`/the unconditional `_applyInFlight` clear present in both deployed
+`KotorCoop.Session.dll`s per a source read of `PartyPoolPump.cs`). `party_pool_sync=1` both,
+`store_sync=0` both (isolating from that channel's own queue item, run earlier the same session).
+Deliberately run in `END_M01AA` (the Endar Spire starting module, both instances' default spawn
+point) rather than `tar_m02aa` — no warp needed at all, sidestepping that module's own
+well-documented ambient-conversation/crash hazard entirely for this item.
+
+### The recipe stopped at its own first clause: three rapid host deposits did not converge to 3
+
+Connect-time resync first pruned a handful of pre-existing pool items on both sides (including 2
+pre-existing `g_i_medeqpmnt01`, an artifact of the base save's own starting party inventory,
+unrelated to this test) — both sides' logs agree on every pruned key and quantity, a clean start.
+
+`pooladd g_i_medeqpmnt01` issued three times in immediate succession on the host. All three landed
+locally (`added 'g_i_medeqpmnt01' x1 to the party pool` ×3 in the host's own plugin-adjacent agent
+log, confirming three genuine engine-side inserts, not a dropped console command). The host's own
+pump published exactly two ops covering all three units (`local add of 2x ... detected, publishing`
+then `local add of 1x ... detected, publishing`) — itself clean, well within the "≤ ~6 ops" bound.
+The client applied the FIRST op correctly (`submitting add of 2x ... through the party-pool
+channel` → `added 'g_i_medeqpmnt01' x2 to the party pool`, landing 2 real units). The SECOND op
+never visibly landed as an apply on the client — instead, three seconds later, the client's own log
+shows `party pool: local add of 1x 'g_i_medeqpmnt01' detected, publishing` — the DETECT-side
+wording (matching the host's own local-change phrasing), not the apply-side "submitting add ...
+through the party-pool channel" wording every other received op in this same session used. After
+that single line, **both sides' logs went completely silent on this key for the remainder of the
+session** — no further `pool`/`added`/`removed` line on either side across 5+ minutes of continued
+`hosting on .../connected to ...` heartbeat lines confirming the connection itself stayed healthy
+(`liveness anomalies: 0` throughout, both processes alive and `Responding=True` at every check).
+
+### Ground truth, read directly off a live `items` sweep rather than trusted from the log's own
+### narration — a genuine, concrete cross-instance divergence
+
+A full `items` sweep on both instances, several minutes after the last log activity (long past any
+plausible pump-tick delay), found exactly one "yours" (party-pool) entry for this resref on each
+side, at the SAME object id (`0x135`, matching this codebase's own established "identical prior
+spawn history produces identical ids" assumption) — but with **different stack sizes**: the HOST's
+own live engine shows `0x135 g_i_medeqpmnt01 yours stack 1`; the CLIENT's shows `0x135
+g_i_medeqpmnt01 yours stack 2`. Neither side reached the recipe's own target of 3, and the two
+sides plainly disagree with each other, not merely with the target — a genuine, live-verified
+non-convergence, not an artifact of reading the log's own narration at the wrong moment.
+
+The host's own discrepancy is the more surprising one: three real, log-confirmed `added ... x1`
+engine calls landed, yet the host's own live sweep shows only 1 unit in its own pool for this key.
+Either two of those three inserts silently failed to actually grow the stack (this project's own
+`docs/research/party-pool-sync.md` history — §15/§16/§17 above — is full of exactly this class of
+defect: `InsertItem` bailing out on a flag bit, `item_count` never updating live on an append,
+`AddItem` crashing outright), or the sweep itself is reading a stale/wrong count for reasons not
+established this round. Not root-caused further this pass (no time budget left in this session
+after this finding and the `store_sync` queue item run earlier); flagged as the concrete next
+target — **cross-check the host's own local total via a second, independent reader (not just
+`items`) immediately after each of the three console `pooladd` calls, one at a time rather than
+rapid-fire, to isolate whether the loss happens at the engine-insert layer, the pump's own local
+scan, or the `items` diagnostic's own read.**
+
+### No crash, no loop-breaker trip — this is a silent convergence failure, not the severe runaway
+### catastrophe of §21 or the crash-adjacent findings elsewhere this session
+
+Distinct from §21's unbounded ping-pong (thousands of phantom units) and from `store_sync`'s own
+module-transition crashes found earlier the same session: both processes stayed alive, responsive,
+and connected (`liveness anomalies: 0`) for the whole test and well beyond it; no `loop breaker`
+line appeared in either log. This is a quieter, narrower defect — a real deposit that never
+finishes propagating, silently, with no error, no retry, and no self-heal observed within 5+
+minutes — but it is squarely disqualifying against this queue item's own explicit "EXACTLY +3 both
+pools" acceptance bar regardless of its quieter shape.
+
+### Verdict
+
+`party_pool_sync` **stays OFF, not flipped ON.** §24's own fixes (the `_pendingGate` lock, the
+unconditional `_applyInFlight` clear) did not reproduce §21's severe runaway this round — a real
+improvement over that round — but the very first clause of this queue item's own recipe (three
+rapid host deposits converging to exactly 3 on both sides) did not hold live: the host's own local
+total undercounts its own three confirmed inserts, the client's total falls short of what the host
+did publish, and the channel goes silent with no further self-correction observed. The remaining
+clauses (×3 client, deposit-then-remove, blackout-during-rapid-deposits, loop-breaker) were **not
+reached this round** — this item's own first clause failing was disqualifying on its own, per this
+document's established discipline of stopping at the first clean-recipe violation rather than
+continuing to layer more state on top of an already-diverged pool.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean at the top of this session, before
+any rig work. No source change this round — live re-verification only.

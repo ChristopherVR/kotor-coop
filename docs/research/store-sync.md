@@ -3035,3 +3035,118 @@ GetServerObject 0x0063D4B0`, `this+0xF8` deref, no null check, 140 call sites) w
 non-store-specific investigation next time a rig is available — reproduce a module transition with
 `store_sync=0` (isolating it definitively) and watch for the SAME `0x63D4B3` fault offset, per the
 prior rig round's own suggested next step.
+
+## Live pass (2026-08-28, rig round): both fixes re-tested together — wipe-prevention, the sell
+## mirror, the infinite-stock no-op and blackout+reconnect resync all CONFIRMED CLEAN; the client
+## buy-back detection check is INCONCLUSIVE (test-methodology contamination, not a code finding);
+## the module-transition crash reproduced twice more at the same already-triaged address, plus ONE
+## new, different crash address found in an unrelated engine subsystem. `store_sync` stays OFF —
+## NOT flipped ON
+
+Task: this session's queue item 1 — re-run the full §6/buy-back recipe against BOTH of the most
+recent no-rig fixes together for the first time live: `KotorGameBridge.Store.cs`'s ghost-object
+scan replaced by `EngineGlobals.TryResolveServerObject` (ending the stale/ghost repository read),
+and `Pumps/StorePump.cs`'s module-scoping (clearing `_engineBelief`/`_wireTarget`/pending applies
+on a module change). Two-instance rig (`tools/demo.ps1`), both game directories freshly
+`build.ps1 -Install -WarnAsError`'d and strings-confirmed (`TryResolveServerObject` present in
+both deployed `KotorCoop.Memory.dll`s; `store: module changed (` present in both deployed
+`KotorCoop.Session.dll`s, UTF-16LE). `store_sync=1` both, `party_pool_sync=0` both (isolating from
+that channel's own queue item). `warp tar_m02aa`, Larrim's shop, per this doc's own established
+recipe.
+
+### Clean, confirmed this round: wipe-prevention, the sell mirror (twice, two separate fresh
+### sessions), the infinite-stock no-op, and blackout+reconnect resync
+
+- **No wipe on open.** Both stores opened with zero transactions; two separate ~15-20s watches
+  produced zero `store:` lines on either side. Bug 4's fix holds.
+- **Host sell → client mirror.** `scriptgive g_w_ionblstr01` host, `sell Larrim_Store
+  g_w_ionblstr01` → host's agent log `store: local add of 1x 'g_w_ionblstr01' detected in store
+  0x74, publishing`, client's agent log `store: submitting add...`/plugin log `inserted
+  'g_w_ionblstr01' ... into store 0x74` within ~1 second — confirmed TWICE, in two independently
+  fresh two-instance sessions (both game directories reloaded from the same base save between
+  attempts), no ping-pong, no spurious re-detect on either side either time.
+- **Infinite-stock buy: clean no-op, confirmed decisively.** `buy Larrim_Store g_w_blstrpstl001`
+  (Larrim's known infinite entry, §1.5) on the host succeeded genuinely (`buy 'g_w_blstrpstl001'
+  x1 from store Larrim_Store`, an item landed in the buyer's own inventory) with **zero**
+  `store:`-prefixed lines anywhere in either agent log for that resref, across a 10s watch —
+  matching §1.5's own engine guarantee that an Infinite-flagged entry's stock never moves, holding
+  through the fixed read/apply path exactly as designed.
+- **Blackout + reconnect resync: clean.** `netsim blackout 8` on the client, waited past the
+  window: both instances reported `liveness anomalies: 0` afterward (host `hosting on
+  0.0.0.0:27140`, client `connected to 127.0.0.1:27140 as peer 2`), zero new `store:` lines on
+  either side after the reconnect — no doubling, no reset of anything already converged.
+
+### The client buy-back detection check: INCONCLUSIVE this round — a testing artifact, not
+### evidence either way
+
+The queue's own "CLIENT buy it back → the host's copy loses it within a few ticks" check could
+not be cleanly exercised. `tar_m02aa`'s own well-documented ambient `duros`
+conversation/party-select trap (this doc's several prior entries) fired on the client on every
+fresh arrival this round, same as always, and — this time — would not clear with the doc's own
+established fast-retry recipe (`selectreply`/`partyselect ok` pairs, `tp` away before the
+conversation resolves) even after several attempts; the client stayed stuck behind "another modal
+screen is up" for over a minute of retries. The only recovery that worked was `quittomenu` +
+`loadgame 0` **on the client instance alone** — which reloads that ONE instance's own local game
+state fresh from the save, discarding whatever local depletion/insert history its `CSWSStore`
+copy had accumulated, while the CLIENT's own **agent process** (and therefore `StorePump`'s
+`_engineBelief`/`_wireTarget` dictionaries) kept running continuously and did **not** reset to
+match. This is a self-inflicted inconsistency between the pump's belief and the freshly-reloaded
+engine state — not a normal part of this channel's own live-test recipe (a real player recovering
+from a stuck modal would not casually reload mid-session either) — so the buy-back the client
+performed afterward, and the >60s absence of any `store: local remove ... detected` line
+following it, cannot be attributed to the fix either working or not working. **Genuinely
+unresolved, flagged for the next round**: re-run the buy-back check on a save/route through
+`tar_m02aa` that avoids the ambient trap cleanly (or on a different, non-hazardous store-bearing
+module, if one is found), without any `quittomenu`/`loadgame` recovery in between the sell and the
+buy-back.
+
+### The module-transition crash: reproduced twice more at the SAME already-triaged address, plus
+### one NEW, different crash address in an unrelated engine subsystem — neither reachable from
+### store_sync code
+
+Three crashes this round, all during a `warp`-driven module transition, all confirmed via
+`tools/crashlog.ps1` against the Windows Application event log (not merely inferred from a dead
+process):
+
+1. & 2. **Two more live reproductions of the already-triaged `0xc0000005` at fault offset
+   `0x0023d4b3`** (`CSWCObject::GetServerObject 0x0063D4B0`, `this+0xF8` deref with no null check
+   — see this doc's own "Crash triage" section above), both on the client, both while it was stuck
+   behind the ambient modal trap at the moment the transition began. Matches the prior triage's
+   own finding exactly: `grep -rn "0x63D4B0\|GetServerObject" src/` still finds zero references
+   anywhere in this codebase — not reachable from any `store_sync` code path, on this evidence a
+   third and fourth time.
+2. **One NEW, previously undocumented crash address**: `0xc0000005` at fault offset `0x0011c525`
+   (image base `0x400000` → `0x0051C525`), this time triggered by the HOST warping (`warp
+   end_m01aa`) while the CLIENT — still following per the co-op warp's "the peer follows"
+   contract — was the one that actually crashed. Resolved via `tools/q.py sql` against
+   `tools/kotor1_0_3.db`: `0x0051C525` falls inside **`CSWSCreature::
+   WalkUpdateLocation_QuickWalk_FollowLeader 0x0051C360`** — the party-follow quick-walk
+   pathing FSM, an area already documented (and already the subject of its own dedicated
+   research) in `docs/research/party-reconciliation.md` and referenced by
+   `src/KotorCoop.Plugin/FollowPhaseReleaseRule.cs`'s own doc comments, not by anything in this
+   feature. `grep -rn "WalkUpdateLocation\|0x51C" src/*.cs` finds no `store_sync` code path
+   anywhere near it either — this crash sits squarely in the companion-follow subsystem, unrelated
+   to store code by the same "not referenced anywhere in this channel" standard the prior triage
+   applied. Not root-caused this round (out of this task's own scope); flagged here, by exact
+   address and bracketing function, for whoever next works on party-follow/transition robustness
+   (`docs/research/party-reconciliation.md`) rather than silently absorbed into this document's
+   own crash count.
+
+### Verdict
+
+`store_sync` **stays OFF, not flipped ON.** Four of the recipe's clauses are now confirmed clean
+(wipe-prevention, the sell mirror — twice — the infinite-stock no-op, blackout+reconnect resync);
+the buy-back detection clause is inconclusive due to this round's own testing artifact, not
+positively confirmed either way; and the recipe's explicit "a warp mid-session → no crash" bar was
+not met — three crashes occurred during module transitions this round, none of them reachable from
+any `store_sync` code path on direct `grep` evidence, but a crash is a crash against this queue's
+own stated flip-on gate regardless of attribution. **Concrete next steps**: (a) re-run the
+buy-back check cleanly, without a mid-session `quittomenu`/`loadgame`, ideally on a route through
+`tar_m02aa` that reliably dodges or quickly clears the ambient `duros` trap; (b) the new
+`0x0051C525` `WalkUpdateLocation_QuickWalk_FollowLeader` crash is a real, reproducible,
+previously-undocumented finding worth its own dedicated look in
+`docs/research/party-reconciliation.md`, independent of this channel.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean at the top of this session, before
+any rig work. No source change this round — live re-verification only.

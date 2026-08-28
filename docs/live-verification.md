@@ -1815,3 +1815,85 @@ to the plain example template before this session ended; `store_sync`, `party_po
 already on `main` as of `9914148`. The three write-ups above (`docs/research/party-reconciliation.md`,
 `docs/research/party-pool-sync.md`, `docs/research/store-sync.md`) plus this entry are the
 session's only output — see git history for the exact commits.
+
+## Rig pass (2026-08-28): store_sync's ghost-object-scan + module-scoping fixes re-tested together
+## live for the first time (item 1); party_pool_sync's root-cause-5/6 fix re-tested and found the
+## recipe's own first clause still fails live (item 2); baseline clean (item 3)
+
+Task: this session's three-item queue, starting from a worktree whose HEAD already equalled `main`
+at `cbcc0c4` ("Taris end-to-end playthrough smoke") — no merge needed. Full detail in each
+feature's own research doc; this entry is the session-level summary.
+
+### Item 1 — `store_sync`: see `docs/research/store-sync.md`'s new "Live pass (2026-08-28, rig
+### round): both fixes re-tested together" section. Summary: re-ran the full buy-back recipe
+against the ghost-object-scan fix (`EngineGlobals.TryResolveServerObject` replacing the raw
+`PatternScanner` sweep) and `StorePump`'s module-scoping together, live, for the first time. Four
+clauses CONFIRMED CLEAN: wipe-prevention on open, the host-sell-to-client mirror (confirmed twice,
+in two independently fresh sessions, ~1s latency, no ping-pong), the infinite-stock buy no-op, and
+blackout+reconnect resync (0 liveness anomalies, no doubling). The client buy-back detection clause
+is INCONCLUSIVE — `tar_m02aa`'s own well-documented ambient `duros`/party-select modal trap would
+not clear with the doc's established fast-retry recipe this round, and the only recovery that
+worked (`quittomenu` + `loadgame 0` on the client alone) desynced the client's own `StorePump`
+belief from its freshly-reloaded engine state, contaminating that one check. The recipe's own "a
+warp mid-session → no crash" bar was not met: three crashes occurred during module transitions —
+two more live reproductions of the already-triaged, unrelated `0x0023d4b3` (`CSWCObject::
+GetServerObject`) engine bug, plus one NEW, previously undocumented crash at `0x0051C525`
+(`CSWSCreature::WalkUpdateLocation_QuickWalk_FollowLeader`, the party-follow subsystem — flagged
+for `party-reconciliation.md`, not chased further this session). Neither crash address is
+reachable from any `store_sync` code path (`grep` confirms). `store_sync` stays OFF, not flipped
+on.
+
+### Item 2 — `party_pool_sync`: see `docs/research/party-pool-sync.md`'s new §25. Summary: re-ran
+§24's own root-cause-5/6 fix (the `_pendingApplies` lock, the unconditional `_applyInFlight`
+clear) against its own concrete next live step — three rapid host `pooladd`s expected to converge
+to EXACTLY 3 on both sides. Run in `END_M01AA` (the default starting module) specifically to avoid
+`tar_m02aa`'s own hazards entirely — no warp needed. The severe unbounded ping-pong from §21 did
+NOT reproduce (a real improvement), but the recipe's own very first clause still failed: a live
+`items` sweep, several minutes after the wire channel went silent, found the SAME object id
+showing `stack 1` on the host and `stack 2` on the client — neither matching the target of 3, and
+disagreeing with each other. The host's own three log-confirmed local inserts do not match its own
+live-read total, and only 2 of the 3 published units were ever confirmed landing on the client. No
+crash, no loop-breaker trip — a quieter, narrower defect than §21's runaway, but still
+disqualifying against this item's own "EXACTLY +3" bar. Root cause not pinned this round (whether
+the loss is at the engine-insert layer, the pump's own local scan, or the `items` diagnostic's own
+read) — flagged as the concrete next target. `party_pool_sync` stays OFF, not flipped on; the
+remaining recipe clauses (×3 client, deposit-then-remove, blackout-during-deposits) were not
+reached.
+
+### Item 3 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors (run at the top of this
+  session).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed and strings-confirmed (`TryResolveServerObject` present in both
+  deployed `KotorCoop.Memory.dll`s, `store: module changed (` present in both deployed
+  `KotorCoop.Session.dll`s — UTF-16LE, confirming both `store_sync` fixes under test were genuinely
+  deployed before item 1's rig round). Rebuilt and reinstalled a second time at the top of item 3
+  to restore a clean baseline install after item 1/2's own rig work.
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2475/2475 passed** on a clean, isolated run.
+  An earlier run taken concurrently with a native plugin rebuild showed 2 failures
+  (`CoopCommandDispatcherTests.HostingWithARejoinGateOnServesItsWorldOverWorldTransfer` — the
+  documented UDP-port-binding flake, confirmed by re-running that class alone: 8/8 clean; and
+  `StoreLoopbackTests.LoopBreakerFreezesARunawayKeyThenReconvergesOnceItSettles` — a
+  timing-sensitive test perturbed by the concurrent CPU-heavy native build, confirmed flaky by two
+  isolated re-runs: one failure, one pass) — both re-run individually and in the final full-suite
+  pass, both clean; no regression.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` on both sides (every sync flag at its shipped default): **41 passed,
+  8 failed** — squarely the documented 40-42/7-9 baseline, all eight failures matching the
+  long-documented known set exactly (`phantom damageable, not a sink`; `the peer really loses those
+  hit points`; `a client hit costs the enemy real hit points`; `a downed player is reported to the
+  agent`; `the co-op revive stands the player back up`; `every engine call signature matches the
+  binary` (197/199 this run); `a container opened on the client is held and shown open on the
+  host`; and the `no per-frame spam` flaky substitution, this run showing a `sync12c` burst rather
+  than the death-spam variant seen in earlier sessions). No new failures, no regression.
+
+No crash from item 3's own testing (all three crashes this session trace to item 1's own rig
+rounds, in their own isolated sessions). Both game directories' `coop.ini` were reset back to the
+plain example template before this session ended; `store_sync` and `party_pool_sync` both stay at
+their shipped OFF default.
+
+**No source changed this session** — every item was a live-verification pass against the code
+already on `main` as of `cbcc0c4`. The two write-ups above (`docs/research/store-sync.md`,
+`docs/research/party-pool-sync.md`) plus this entry are the session's only output — see git
+history for the exact commits.
