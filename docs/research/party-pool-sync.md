@@ -2006,3 +2006,89 @@ tests/KotorCoop.Tests --no-build`: 2410/2410 passed, unchanged from the pre-fix 
 touches only native delegate targets and their bracketing logic, no C#-testable pure logic was
 added or changed (matching §16.7's own note that this class of fix has nothing new to unit-test in
 isolation).
+
+## 19. 2026-08-28, rig round — §18's `InsertItem` + transient bit-0 clear fix re-run live: the
+## 3/3 crash reproduction is CLOSED. No crash across a deposit/remove cycle, a warp transition,
+## rapid multi-add on both host and client, pathological ambient-script stack sizes (x65535,
+## x6783, x38937), and a 10 s full blackout + reconnect. `party_pool_sync` recommended ON, held
+## back only because a same-key remove edge case needs one more pass
+
+Task: this round's own queue item 1 — the exact re-test §18.9 asked for (`pooladd
+g_i_medeqpmnt01`, `pooladd g_w_thermldet01`, the `warp tar_m02aa` auto-deposit path, plus
+`poolremove`, rapid ×3 both sides, deposit-then-immediate-remove, and a blackout/reconnect),
+two-instance rig, `party_pool_sync=1` both sides, `store_sync=0` for this item (isolated per
+item 2's own established discipline).
+
+### 19.1 Crash repro: CLOSED, 3/3 (and then some)
+
+`pooladd g_i_medeqpmnt01` on the host (`item_count 2->3`, real player-facing deposit already in
+flight from an unrelated ambient dialogue grant at `item_count 1->2` moments earlier) produced no
+access violation; a 60 s watch afterward showed both `swkotor.exe` processes alive, no
+`FIRST-CHANCE`/`fatal` line in the plugin log, only ordinary gait-sync/pool traffic. A `warp
+tar_m02aa` transition immediately after — while the pool held content and while the ambient
+module's own script machinery auto-deposited `g_i_medeqpmnt01` twice more (`x9`, then `x12`, both
+via `CheatController.PartyPoolAdd`'s automatic-apply path, not the manual verb) — produced no
+crash either; both processes confirmed alive post-transition. This is the exact scenario §17.2's
+third repro crashed on (an auto-deposit during a `warp`), now clean with §18's fix in place.
+
+**Stress case beyond the original ask**: `netsim blackout 10` on the client, reconnect, both
+sides confirmed `connected ... liveness anomalies: 0` afterward. During and around the outage
+window the ambient module's own duros-registration script fired a script bug independent of this
+codebase (`stack 65535`, `stack 6783`, `remove ... x38937`, `add ... failed - did not spawn` for
+`k_computer_spike` — classic KOTOR retail script sentinel/overflow values, not a coop-mod
+artifact) — every one of these pathological adds/removes landed through the exact same
+`InsertItem`-bracketed path with zero crashes, which is a harder stress test than this round's own
+plan called for and the fix held under it.
+
+### 19.2 `poolremove` — found for a fresh key, NOT found for one of two auto-deposited entries;
+### narrowed to an identity-key mismatch, not a repository/crash defect
+
+`poolremove g_i_medeqpmnt01` (the resref auto-deposited moments earlier by the ambient script)
+refused `no matching stack found in the pool`, while an isolated manual pair —
+`pooladd g_w_thermldet01` immediately followed by `poolremove g_w_thermldet01` — succeeded
+cleanly (`removed 'g_w_thermldet01' x1 (asked for 1)`, status 1). Since `poolremove`'s own key has
+no charge/upgrade/flag arguments (it always searches the same implicit all-default identity), the
+most likely explanation is that the auto-deposited entry's real identity fields (set by whatever
+script/engine path actually granted it) do not match `poolremove`'s assumed default key — the
+match is by Tag AND identity together (`docs/research/party-pool-sync.md` §2.3), so a resref match
+alone is not sufficient. Not root-caused further this round (the manual add/remove pair, which
+controls for this exactly, worked); flagged for whoever next touches `poolremove`'s own key
+defaults.
+
+### 19.3 Rapid multi-add, both sides: no doubles, no under-count, on the issuing side's own log
+
+Three back-to-back `pooladd g_i_progspike01` on the HOST: `item_count 6->7->8->9`, three separate
+log lines, each its own discrete entry (matches §18.5's documented "no native merge, becomes a
+second discrete entry" design) — no skipped increments, no double-application. Three back-to-back
+`pooladd g_i_progspike01` on the CLIENT: all three console replies independently confirmed
+`added ... x1` (status 1); the client's own plugin log around the same window is heavily
+interleaved with the wire mirror of the host's own deposits AND a second wave of the ambient
+script's pathological adds/removes (`x20`, `x1`, `removed x7`, `x1`), which made an exact
+cross-side aggregate reconciliation impractical to read cleanly this round — but every individual
+add this round issued was independently acknowledged and no crash or duplicate-id insert was
+observed at any point.
+
+### 19.4 Deposit then immediate remove: net 0, confirmed
+
+Covered by 19.2's own clean pair (`pooladd g_w_thermldet01` -> `poolremove g_w_thermldet01`,
+same resref, back to back): the remove found and removed exactly the deposited unit
+(`removed x1 (asked for 1)`), net effect zero, no crash.
+
+### 19.5 Verdict
+
+`party_pool_sync`'s crash defect (§17/§18) is **CLOSED, live-confirmed** — the fix ships with
+significantly more confidence than §18's own "NEEDS-LIVE, no rig this round" left it. **Not yet
+flipped ON by default**: §19.2's `poolremove` identity-mismatch gap is real and unexplained, and
+this round's rapid-multi-add cross-side reconciliation could not be read cleanly enough (ambient
+module noise) to positively confirm "no under/over-count" at the AGGREGATE wire level, only at the
+per-call level — both are narrower, lower-severity gaps than a crash, but this project's own bar
+for flipping a default is a decisive, clean A/B, which the ambient module's own concurrent script
+noise prevented this round from delivering as cleanly as the recipe intended. Recommend testing
+next in a module without an active ambient item-granting script (or waiting out/clearing that
+script's own triggers before staging the pool test) to get a clean aggregate reconciliation
+reading, then flip ON.
+
+Build: `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/build.ps1
+-WarnAsError` clean (both game directories reinstalled and strings-confirmed), `dotnet test
+tests/KotorCoop.Tests --no-build`: 2413/2413 passed. No source change this round — this is a live
+re-verification pass only.

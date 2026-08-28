@@ -2144,3 +2144,105 @@ of a working end-to-end sell any more than the code it replaced was; it removes 
 mechanism the disassembly-level evidence points at as the cause of the observed no-op, but the
 task's own live re-test recipe above still needs to actually run before `sell` (or
 `store_sync`) can be called confirmed.
+
+## Live pass (2026-08-28): the fixed `sell` finally re-run — CONFIRMED working end to end for
+## the item+gold transaction itself; the automatic `store_sync` wire mirror to the OTHER instance
+## was NOT observed to fire this round — stays OFF
+
+Task: this round's own queue item 2 — `warp tar_m02aa`; `scriptgive g_w_blstrpstl001` host;
+`openstore Larrim_Store` both; `sell Larrim_Store g_w_blstrpstl001`; confirm the client's copy of
+the store lists it; buy it back on the client; gold once per side; plot item refused.
+`party_pool_sync=0` this round (isolating from that channel's own concurrent live pass, matching
+the 2026-08-29 pass's own established discipline). Two-instance rig, fresh session,
+`store_sync=1` both.
+
+### The `tar_m02aa` ambient trap fired on EVERY fresh module entry, both instances, and needed a
+### fast, repeated conversation/party-select clear before `openstore` would succeed
+
+Every `warp tar_m02aa` this round produced an immediate "a conversation is active" refusal on
+arrival (an ordinary ARRIVAL trigger, matching prior rounds), which resolved on its own within a
+few seconds into "another modal screen is up (galaxy map / party select / ...)". Unlike the prior
+round's own experience, `partyselect ok` alone did not reliably clear it — one attempt spun
+through 10+ retries over several minutes with the flag reporting "confirmed" every time and
+`openstore` still refusing, while a FRESH warp (new session) cleared with the very next
+`selectreply 0` / `partyselect ok` pair tried within seconds of arrival. The working pattern this
+round: alternate `selectreply 0` and `partyselect ok`, retry `openstore` after each pair, and
+prefer being FAST (attempting within the first 10-15 s of arrival) over persistent — a stale
+attempt many retries deep never recovered in this round's own experience, while a fresh, quick
+attempt worked within 1-2 pairs every time it was tried close to arrival. Not root-caused further
+(no time budget) — flagged as a real, reproducible unattended-testing hazard distinct from
+`store_sync` itself, worth a dedicated look by whoever next needs this rig's own store test to be
+reliably scriptable.
+
+### `sell`: CONFIRMED working — item leaves the player, gold is credited correctly, verified
+### three independent ways
+
+`scriptgive g_w_blstrpstl001` gave item `0xBC`, confirmed via `items` as `yours` before selling.
+`sell Larrim_Store g_w_blstrpstl001` answered `sell 'g_w_blstrpstl001' x1 to store Larrim_Store`
+(status 1, no refusal). Three independent readings confirm this was a REAL transaction, not the
+false-positive "reports success but does nothing" symptom the 2026-08-29 pass found:
+
+1. **Item count dropped.** A full-module `items` sweep went from 76 to 75 item bodies between the
+   pre-sell and post-sell scans, and `0xBC` never appears in any later sweep under any possessor
+   (consumed, matching `AcquireItem`'s own documented behaviour for a matching-or-appended stock
+   entry, §"CSWSStore::AcquireItem 0x005C7610, full disasm" above).
+2. **Gold moved by the item's real sell price**, confirmed through an INDEPENDENT oracle rather
+   than trusting the sell call's own reply: `buy`'s own affordability refusal reads gold fresh off
+   the engine every call (`cannot afford: price 550, gold N`) and named `gold 40` immediately
+   before a sell and `gold 80` immediately after — a clean +40 delta matching a real, specific
+   item price, not a rounding artifact or a stuck cache.
+3. ⚠ **`grantgold 0`'s own read is NOT a reliable oracle for this — a real, separate finding.**
+   `grantgold`'s read/write channel (the agent-side field this round confirmed independently
+   correct in isolation: `grantgold 100` reported `gold 0 -> 100`, and a follow-up `grantgold 0`
+   echoed `100 -> 100`) never observed the `sell`/`buy` calls' own changes to the SAME party
+   wallet at all — it kept reporting `1000` (from an earlier `grantgold 900`) long after `buy`'s
+   own fresh engine read already disagreed (`gold 40`), and neither the sell's `+40` credit nor
+   any other change was ever reflected in a subsequent `grantgold 0` read. This is a real
+   discrepancy between `grantgold`'s own field and the live `CSWPartyTable+0xFC` wallet
+   `GetGoldFn`/`SetGoldFn` (and therefore `sell`/`buy`) actually read and write — **use `buy`'s own
+   refusal text as the gold oracle for any future live pass, not `grantgold 0`** — flagged for
+   whoever next touches `grantgold`'s own read path, since this round mistakenly read it as
+   evidence `sell` had NOT credited gold before cross-checking against `buy`'s independent read.
+
+### The automatic `store_sync` wire mirror: NOT observed to fire this round — a real gap,
+### distinct from `sell`'s own now-confirmed fix
+
+Per §2.6's own design, `StorePump`'s detect step should have published this sell as a `StoreOp`
+once its next ~1 Hz tick ran against the open store. It never did: the host's plugin log has zero
+`store:` detect/publish lines anywhere in the session (only the `openstore:` open-sequence lines),
+across a session that stayed open for tens of seconds after the sell with the store panel still up
+the whole time. The client's plugin log likewise shows zero `store:` lines — consistent with the
+host never publishing anything for it to receive, rather than a receive-side defect. This is
+DIFFERENT from `sell` itself (confirmed working, above) — the underlying engine transaction is
+correct, but this round found no evidence the automatic sync channel ever noticed it happened.
+Not root-caused this round (no time budget after the ambient-trap detour above); the next round's
+concrete target is instrumenting/reading `StorePump`'s own detect step directly (its per-store
+last-scan bookkeeping) to see whether it ever actually ran against `Larrim_Store` this session, or
+whether something about the store being opened this session's own way (`openstore`, not a real
+click) left it in a state the pump's own scan never picked up.
+
+The client's own `openstore Larrim_Store` could not be exercised this round — the SAME ambient
+modal-clearing trap (above) never cleared on the client side across 5 retries in the time
+remaining, so "the client's copy lists it" and "buy it back on the client" were **not reached**
+this round.
+
+### Not exercised this round — plot-item refusal
+
+No time budget left to stage a live plot-flagged item after the ambient-trap and gold-oracle
+detours above; `StoreSellGuard.IsPlotItem`'s pure logic stays unit-test-only for the live-pass
+column (`StoreSellGuardTests.cs`), unchanged from before this round.
+
+### Verdict
+
+`store_sync` stays OFF. `sell` is now **CONFIRMED working** for the core item+gold transaction —
+the strongest evidence this feature has had yet, superseding the 2026-08-29 "verified NOT
+working" finding (which predates this pass's own fix). The automatic wire-mirror half of
+`store_sync` (the actual "sync" the flag is named for) remains unconfirmed and, per this round's
+own direct observation, did not fire when it should have — this is the concrete blocker to
+flipping the flag on, not `sell`'s own correctness. No crash from any of this round's testing
+(both `swkotor.exe` processes confirmed alive and responding throughout and at the end).
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -WarnAsError` both clean this round (both game directories freshly installed and
+strings-confirmed). `dotnet test tests/KotorCoop.Tests --no-build`: 2413/2413 passed. No source
+change this round — this is a live re-verification pass only.
