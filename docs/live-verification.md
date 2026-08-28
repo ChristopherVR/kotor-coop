@@ -2110,3 +2110,111 @@ plain example template at the end of the session.
 
 **Source changed this session**: `docs/research/shared-inventory-v2.md` (new §8) and this entry
 only. No production code changed.
+
+## Rig pass (2026-08-29): ground-item pickup sync — NOT a regression; the "9th failure" from
+## `shared-inventory-v2.md` §10.4 is the SAME long-documented `an item picked up here vanishes
+## on the peer` / `a client hit costs the enemy real hit points` flaky pair this doc already
+## recorded on 2026-08-28 and several times before; likely mechanism pinned this round
+
+Task: `shared-inventory-v2.md` §10.4 flagged `an item picked up here vanishes on the peer` as "a
+9th, newly-reproducible failure not in the prior documented set", reproduced identically on two
+independent fresh sessions, and asked for a dedicated look. That framing turns out to be
+incomplete — this exact check is already named, twice, earlier in THIS file (the 2026-08-28
+"item 5" entry above, and the `store_sync`-round entry before it) as one half of a long-running
+**documented flaky pair**: `an item picked up here vanishes on the peer` and `a client hit costs
+the enemy real hit points` trade PASS/FAIL against each other from run to run, going back well
+before this pass. §10.4's round did not cross-reference that history, which is the only thing
+"new" about it. This round confirms the pattern is not a regression, and pins a likely mechanism
+neither prior round had.
+
+**Ground-item removal/vanish propagation itself is correct**, confirmed by direct code reading
+(`src/KotorCoop.Session/Pumps/WorldStatePump.cs`'s `PumpItems`, `src/KotorCoop.Memory/
+KotorGameBridge.GroundItems.cs`'s `CollectVanishedItems`, `src/KotorCoop.Session/GroundItemStore.cs`,
+`CoopHost.Items.cs`/`CoopClient.Items.cs`) and by six independent manual live reproductions this
+round, using `tools/blockpoke.ps1 console dropitem` plus a direct poke of the plugin block's
+`PickUpRequest` field (offset `0x280`, the identical test hook `verify.ps1` itself drives) against
+a freshly-restarted rig:
+
+- Host drops, client picks up its own copy up: **3 for 3**, full round trip (client detects vanish
+  → wire op to host → host destroys its own body) landing in 2.4-6.4 s every time
+  (`kotorcoop-plugin.log`: `pickup: player ... told to take object ...` → `item slot N: item ...
+  gone` on the client → `item slot N: destroyed ...` on the host).
+- `RecentlySyncedItems` (the script-item suppression ledger) and the `_spawnedItemResrefs` resref
+  cache (`item-identity.md` §12.2/§13, both named as suspects in this task's own brief) are BOTH
+  confirmed, by direct code reading, to never gate `PumpItems`'s removal loop — `RecentlySyncedItems
+  .Record` is called strictly AFTER the vanish is already collected, as a pure side-channel write
+  consumed only by `ScriptItemGrantPump` elsewhere; the resref cache is written the moment a slot
+  is first observed alive and is never read by `CollectVanishedItems`'s own vanish-detection branch
+  (`state == ItemStateVanished`). Neither can suppress or duplicate a removal. Pinned with a new
+  bench test, `tests/KotorCoop.Tests/WorldStatePumpItemsTests.cs` (`AVanishedSlotForwardsExactlyOneRemoval`,
+  `TwoSimultaneousVanishesBothForward`): a fake bridge that goes alive → vanished, with both caches
+  warm, yields exactly one `RemoveItem` call, and stops re-reporting once the store (and, in the
+  real bridge, the slot) has withdrawn the id — matching `KotorGameBridge.GroundItems.cs`'s own doc
+  comment ("announced every pump until the store removes them, harmless because idempotent").
+
+**What `verify.ps1`'s own check actually hits, live.** Replaying its section 15 sequence by hand
+against a fresh session reproduced the failure 1 of 4 times (3 successes replaying the mechanism
+below, 3 successes with no preceding combat at all — 6 for 6 when nothing precedes the pickup).
+The one reproduction is decisive: `kotorcoop-plugin.log`'s own `attack probe` line shows the local
+player's action-queue head sitting at `0xFFFFFFFF` (idle — no stuck action) for the entire window
+between the earlier attack test and the pickup order, yet `ActionPickUpItem` is dispatched
+successfully (`PickUpIssued` increments, `pickup: player ... told to take object ...` logs) and
+then never executes — the player never walks to an item measured only ~2 units away, for 50+
+seconds, permanently (confirmed by re-checking the slot state and the player's own position via
+`console where` well after `verify.ps1`'s 45 s timeout had already elapsed).
+
+The common factor in every verify.ps1 run that hits this: **section 13's own `a client hit costs
+the enemy real hit points` check runs shortly before section 15's item test, and stages its fight
+by calling `TestDriveController.CloseToMeleeRangeIfNeeded` → `Odyssey.SnapTo`** — the same raw
+`ClearAllActionsFn` + `SetPositionFn` teleport `CheatController`'s own `tp` cheat uses (`docs/
+CONSOLE.md`: "teleports your own character (no walkmesh check)") — to snap the CLIENT's own PC
+into melee range of a distant enemy. This round reproduced the mechanism directly: poking the same
+`0x1DA0`/`0x1DA4` test-attack fields (attacker `0x7FFFFFFF`, a live enemy) to force the identical
+SnapTo, then breaking off combat and immediately dropping+picking-up an item exactly as section 15
+does, failed to complete on 1 of 3 attempts — every attempt WITHOUT a preceding SnapTo succeeded.
+This is consistent with, and gives a first mechanism for, every occurrence of this flaky pair this
+file has recorded: `a client hit costs the enemy real hit points` is the SAME check that drives the
+SnapTo, so a run where it fails to register damage (its own long-documented baseline failure) or
+succeeds is plausibly correlated with whether the following item-pickup check's own SnapTo-adjacent
+player state lets a later `ActionPickUpItem` actually execute. **Not fully root-caused** — which
+specific field `SnapTo`'s teleport leaves the local player's pathfinding unable to read is still
+open, and out of this round's budget (would need instrumenting `AIActionPickUpItem`'s own
+precondition checks, or bisecting `SnapTo`'s two engine calls against a pickup order run
+immediately after each alone) — but the reproduction rate (1/3 replicated, 0/6 unreplicated) and
+the exact log signature match (`pickups issued 0 -> 1`, action-queue head idle, item never leaves
+the floor) make a genuine engine-state interaction the better explanation than "no explanation",
+which is where every prior round that hit this pair left it.
+
+**Verdict**: no code fix applied. `WorldStatePump.PumpItems`/`CollectVanishedItems`/
+`GroundItemStore`/`CoopHost.Items.cs`/`CoopClient.Items.cs`/`ItemController` are unregressed and
+now have an explicit bench pin. `verify.ps1`'s `an item picked up here vanishes on the peer` /
+`a client hit costs the enemy real hit points` pair should be treated as this file's long-documented
+flaky pair going forward, NOT as a fresh, dedicated-look-worthy finding each time one lands — this
+entry is the cross-reference future rounds should have found. Reordering `verify.ps1` (running
+combat-staging checks after the item test, or giving the item test its own `tp`-based position
+reset first) would likely reduce the flake rate, but was not attempted this round: the mechanism is
+not yet pinned precisely enough to be confident a reorder fixes it rather than moving the same
+interaction onto a different pair of checks.
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean.
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean both directories, `dinput8.dll`
+  byte-identical (2,060,288 bytes) both sides.
+- `tools/verify.ps1`, TWO independent fresh-restart sessions this round: first **41 passed, 8
+  failed** (item pickup FAILED, matching §10.4's own report exactly — `pickups issued 0 -> 1,
+  client slot 0 state 1, host slot still state 1`); second (this entry's closing run) **43 passed,
+  6 failed** (item pickup PASSED — `pickups issued 0 -> 1, client slot 0 state 2, host slot
+  cleared` — the SAME `a client hit costs the enemy real hit points` FAILED both times, the
+  expected flaky-pair shape). Every other failure both runs matches the long-documented baseline
+  set.
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2,514/2,515 passed** on the full-suite run (one
+  failure, `StoreLoopbackTests.ReconnectResyncLeavesUntransactedStoresAlone`, re-run alone
+  immediately after — passed cleanly, matching this repository's own documented
+  environment-flaky-under-full-suite-parallel-load pattern, unrelated to this round's own new
+  test), plus the new `WorldStatePumpItemsTests.cs` (2/2) passing both standalone and inside the
+  full run.
+
+`coop.ini` on both game directories was already at the shipped `party_pool_sync=0`/`store_sync=0`
+defaults (`profiles/coop.ini.example`) throughout; nothing needed resetting.
+
+**Source changed this round**: `tests/KotorCoop.Tests/WorldStatePumpItemsTests.cs` (new — the
+regression pin described above) and this entry. No production code changed.
