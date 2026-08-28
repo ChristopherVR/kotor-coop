@@ -1586,3 +1586,86 @@ restart, matching this project's own established pattern for that hazard. Both `
 `CheatController`) and the party-pool insert diagnostic
 (`Odyssey.AddItemToPartyPool`'s new repo-pointer/`item_count` before/after log line) — see git
 history for the exact commit.
+
+## Rig pass (2026-08-29): the merged `AddItem` party-pool fix is confirmed to CRASH the host live
+## (3/3), `sell` is confirmed NOT to move the item despite reporting success, item 3
+## (`party_follow_phase7_release` A/B) was not reached, baseline is clean
+
+Task: this session's four-item queue, starting from a worktree merged forward onto the
+`party-pool deposit uses CItemRepository::AddItem` commit — re-test `party_pool_sync` (item 1),
+re-test `store_sync` (item 2), the `party_follow_phase7_release` A/B (item 3), and a
+`verify.ps1`/full-test/native-build baseline (item 4).
+
+### Item 1 — `party_pool_sync`: **FAIL, stays OFF.** See `docs/research/party-pool-sync.md`'s new
+### §17 for full detail. Summary: before the live test could even run, a real, separate
+### regression was found and fixed — `pooladd`/`poolremove` were never added to
+### `FuncInterpHook`'s console-verb allowlist, so a real player's own keystroke submission of
+### either fell through to the retail engine's own `FuncInterp` and silently did nothing; every
+### prior round's "live" use of these verbs went through `blockpoke.ps1 console`, which bypasses
+### that allowlist entirely, masking the gap. Fixed (`"pooladd", "poolremove"` added to
+### `FuncInterpHook.Verbs`), confirmed working via a real typed keystroke. With that fixed, the
+### actual live test found something more severe than anything `party-pool-sync.md`'s prior nine
+### rounds turned up: `AddItemToPartyPool` (the `AddItem`-based fix this session's merge brought
+### in) reliably CRASHES the host — 3/3 reproductions across two different resrefs and two
+### separate rig restarts, including once via ordinary gameplay (a `warp` transition's own
+### auto-deposit into the pool, not the manual `pooladd` cheat at all). Root cause: `AddItem`'s
+### own merge-notify path reaches the retail engine's dead multiplayer network-message
+### serialization code and dereferences a bad pointer. This is WORSE than the silent no-op defect
+### it replaced — `party_pool_sync` stays OFF, and `AddItem` must not ship without either
+### suppressing that notify path or finding a way to avoid it.
+
+### Item 2 — `store_sync`: **`sell` FAIL (confirmed negative), rest CLEAN, stays OFF.** See
+### `docs/research/store-sync.md`'s new "Live pass (2026-08-29)" section. Summary: with
+### `party_pool_sync=0` (to avoid item 1's crash contaminating this test) and a `scriptgive`d
+### resref (specifically to rule out the party-pool insert-visibility defect the prior round's
+### own `sell` test was blocked by), `sell Larrim_Store g_w_blstrpstl001` reported success
+### (`status 1`, no refusal, no crash) but a follow-up `items` sweep two minutes later shows the
+### item STILL listed as `yours` — never actually transferred to the store. `store_sync`'s own
+### pump correspondingly never detected a stock change, for the honest reason there was nothing to
+### detect. This narrows the prior round's "still not positively confirmed" to a verified,
+### `sell`-specific negative result — `buy` remains confirmed working and unaffected.
+### `CSWGuiStore::SellItem` needs a fresh full disassembly next round. `store_sync` stays OFF.
+
+### Item 3 — `party_follow_phase7_release` A/B: **NOT REACHED this round.** See
+### `docs/research/party-reconciliation.md`'s new "Round 99" entry. Items 1 and 2 (ahead of this
+### one in the task's own ordering) each surfaced a defect severe enough to need full
+### root-causing and write-up, consuming the round's rig time budget before item 3's own
+### multi-rep staging could start. The flag stays at its shipped default (OFF); Round 98's own
+### live-test recipe is unchanged and still the one to run next.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings/errors.
+- `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean NativeAOT win-x86 build, both game
+  directories freshly installed and strings-confirmed (`pooladd`/`poolremove` present in both
+  deployed `dinput8.dll`s).
+- `dotnet test tests/KotorCoop.Tests --no-build`: **2410/2410 passed**, 0 failed, 0 skipped —
+  including the sometimes-flaky `CoopCommandDispatcherTests` pair, clean this run.
+- `tools/verify.ps1`, fresh two-instance session with `coop.ini` reset to the plain
+  `profiles/coop.ini.example` (both sync flags at their shipped OFF default): **41 passed, 8
+  failed**. Seven of the eight match the long-documented baseline set exactly (`phantom
+  damageable, not a sink`; `the peer really loses those hit points`; `a client hit costs the
+  enemy real hit points`; `every engine call signature matches the binary` (192/194 this run);
+  `a container opened on the client is held and shown open on the host`; `no per-frame spam`
+  (the flaky substitution); `an item picked up here vanishes on the peer` (the OTHER documented
+  flaky substitution — both landing as FAIL together this run, same as the 2026-08-28 baseline
+  pass's own "40 passed, 9 failed" entry recorded). The eighth, `no swkotor crash in the event
+  log`, is a false positive from this SAME session's own item-1 crash testing still sitting in
+  the Windows Application event log (`tools/crashlog.ps1`'s three entries at 12:34/12:42/12:47
+  all predate this baseline session's own 13:01 start, confirmed by wall-clock timestamp — no
+  crash happened during the baseline run itself, and the host process stayed alive and
+  responding throughout). No new failures, no regression from this round's own code changes.
+
+No crash from `store_sync`, from the `FuncInterpHook` fix, or from the baseline session itself —
+every crash this round traces to `party_pool_sync`'s `AddItem` defect specifically (item 1's own
+finding), run in its own isolated rig sessions with `store_sync`/baseline testing done separately
+to avoid contaminating them. Both `party_pool_sync` and `store_sync` stay OFF
+(`profiles/coop.ini.example` unchanged); both game directories' `coop.ini` were reset back to the
+plain example template before this pass ended.
+
+**Code committed this round**: the `FuncInterpHook.Verbs` fix
+(`src/KotorCoop.Plugin/FuncInterpHook.cs`), `tools/sendkey.ps1`'s digit/underscore scan-code
+additions (needed to type a resref at the live console at all), and this write-up across
+`docs/research/party-pool-sync.md`, `docs/research/store-sync.md`,
+`docs/research/party-reconciliation.md` and `docs/research/README.md` — see git history for the
+exact commit(s).

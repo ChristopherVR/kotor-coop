@@ -117,6 +117,19 @@ internal static unsafe class FuncInterpHook
         // in-game console. Does not shadow a retail verb (retail's own credits verb is
         // `givecredits`).
         "setgold",
+
+        // BUG FIX (2026-08-29, live-verification session): `pooladd`/`poolremove`
+        // (docs/research/party-pool-sync.md, added to ConsoleCommand.cs in fcdab50) were never
+        // added here, so every real in-game keystroke submission of either fell through to
+        // `_original` — the retail engine's own FuncInterp, which has never heard of them —
+        // instead of reaching CoopCommandDispatcher at all. `docs/CONSOLE.md` lists both as
+        // ordinary (non-blockpoke-only) staging cheats, and this round's own live pass (typed
+        // keystrokes via tools/sendkey.ps1, not blockpoke.ps1) reproduced the silent failure
+        // directly: correct text on the input line, a real submit (the console's own open flag
+        // cleared), zero log output — `IsCoopCommand` returning false is the exact, sufficient
+        // explanation. Does not shadow a retail verb (checked against
+        // docs/research/console-cheats.md the same way every prior addition here was).
+        "pooladd", "poolremove",
     ];
 
     /// <summary>
