@@ -4913,3 +4913,102 @@ everything this round touches is plugin-internal, nothing crosses the wire.
 - `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
   `PartyPresenceReleaseOrderRule.cs`.
 - `docs/research/party-reconciliation.md` — this entry.
+
+## Round 102 (2026-08-28, rig round) — the A/B finally run with three reps each leg: CONTROL
+## clean 2/2 (a third rep's own reconnect never re-mirrored the companion, inconclusive rather
+## than a failure); TREATMENT now produces a REAL log line on every rep (3/3), unlike round 100's
+## silence — but all three landed on the new "already at the reset sentinel" branch, not the
+## "reset phase X -> -1" branch the recipe was built to observe. `party_follow_phase7_release`
+## stays OFF; a new, separate finding: `reconnect` does not reliably re-establish companion
+## mirroring, unlike a fresh `connect`
+
+Task: this session's queue item 3 — round 98/101's own A/B recipe, three reps per leg this time.
+Two-instance rig, fresh worktree merged forward onto block v59. `END_M01AA`, a single recruited
+companion already in the save (party slot 0, object id `0x127` every rig restart — the save's own
+companion, consistently).
+
+### CONTROL (`party_follow_phase7_release=0`, `party_follow_finelog=1`, `party_together_fix=1`)
+
+Reps 1-2: `tp 5 5 0` -> `tp 60 60 0` -> `tp 5 5 0` on the host while the client mirrored the
+companion (confirmed via `party drive: mirroring 1 of the host's companions` before each rep),
+then `disconnect` on the client. Both reps: `party drive: released 1 companion(s) back to your own
+game` fired, **no `phase7release` line** — exactly the control leg's own expectation, matching
+round 100's prior result. Rep 3: `reconnect` on the client after rep 2's disconnect never
+re-established companion mirroring (no fresh `party drive: mirroring...` log line even after a
+20s wait, and the client's own follow-AI log showed its LOCAL, now-unmirrored companion 0x127
+independently stalling/reissuing `ActionFollowLeader` — ordinary single-player AI churn, not a
+mirroring symptom) — `disconnect` on this rep released nothing (no `released N companion(s)` line
+at all, since there was nothing held to release). Not counted as a control result either way
+(inconclusive, not a flag-relevant failure) — see the reconnect finding below.
+
+### TREATMENT (`party_follow_phase7_release=1`, `party_follow_finelog=1`, three FULL rig restarts
+### — one per rep, after CONTROL rep 3 established that `reconnect` cannot be trusted to
+### re-mirror the companion between reps)
+
+Each rep: fresh rig, `warp end_m01aa`, confirm `party drive: mirroring 1 of the host's companions`,
+then the same `tp 5 5 0` -> `tp 60 60 0` -> `tp 5 5 0` -> client `disconnect` recipe (rep 3 added a
+4s pause after the final `tp` before disconnecting, to give the companion time to actually start
+chasing before release). **All three reps produced a `phase7release` log line** — a real result
+every time, unlike round 100's total silence under the identical recipe:
+
+```
+party follow phase7release: 0x127 nothing to do - phase already at the reset sentinel (-1)
+```
+
+on reps 1, 2, AND 3, word-for-word identical each time. This is round 101's own NEW refusal-reason
+logging firing on its legitimate non-error branch (`ShouldRelease() == false`,
+`docs/research/party-reconciliation.md`'s Round 101 entry) — a real, working, decisive answer
+distinct from round 100's silence, distinct from a refusal (`no client`/`no CSWParty`/`no follow
+record`), and distinct from the recipe's own hoped-for `reset phase X -> -1` line. `party drive:
+released 1 companion(s) back to your own game` fired on all three reps, confirming
+`_trackedId[i]` was genuinely populated and the release path genuinely ran end to end each time
+(the same indirect proof round 100 used).
+
+**What this means, precisely.** Round 101's fix (the count-restore retry against
+`GetPartyIndexFn`, and per-branch refusal logging) is confirmed EXECUTING correctly on a real rig,
+three times running — a real improvement over round 100's silent no-op, and stronger evidence than
+"NOT LIVE-TESTED." But this round's own three attempts never caught the companion's follow record
+in a genuine STUCK non-reset phase (5 or 7) at the moment of release, unlike round 100's own single
+rep, which captured `phase=5` moments before disconnect. The `party_follow_finelog` capture at
+each rep's own module-entry window (capped, per `PartyFollowController`'s own `FineLogCap`) showed
+`phase=5` shortly after arrival, matching round 100's own baseline — but by the time release
+actually ran (roughly 90+ seconds later, after three `tp` calls each taking ~1s of real wall time
+between separate `blockpoke.ps1` process launches), the phase had already legitimately returned to
+`-1` on its own in every rep tried, including the one rep with an explicit 4s post-tp pause. This
+suggests either the STUCK freeze this recipe was built around needs a longer/different staging
+than three teleports and a short pause to reliably reproduce, or that whatever combination of
+timing/distance last reliably reproduced it (round 97's own repro, "on the FIRST attempt") is
+narrower than this round's recipe captured. **Not a regression and not evidence against the fix**
+— it is an honest "the fix could not be exercised against its target condition this round," a
+different and narrower gap than round 100's "the fix produced nothing observable at all."
+
+### New, separate finding: `reconnect` does not reliably re-establish companion mirroring
+
+Observed identically three separate times this round (control rep 3, and both times between
+treatment reps before switching to full rig restarts): after a client `disconnect` followed by
+`reconnect` on the SAME still-running rig, `party drive: mirroring 1 of the host's companions`
+never re-logged, even after waits up to 20s, while ordinary player-to-player sync (gait, position)
+resumed normally and `status` reported a clean reconnect (`connected ... liveness anomalies: 0`).
+The client's own local, now-unmirrored companion showed ordinary single-player follow-AI churn
+(`party follow: 0x127 was idle/stalled ... reissued ActionFollowLeader`) during this window,
+suggesting the companion was NOT re-picked-up for mirroring at all after the reconnect, not merely
+slow to re-log. Not root-caused this round (out of scope for item 3, no time budget) — flagged as
+a real, reproducible gap for whoever next investigates the reconnect/rejoin path
+(`docs/research/disconnect-reconnect.md`'s own subject area), since it also affects any future
+live A/B recipe that assumes `reconnect` is equivalent to a fresh `connect` for companion-mirroring
+purposes (it is not, at least not without a full instance restart, per this round's own three
+consistent observations).
+
+### Verdict
+
+`party_follow_phase7_release` stays OFF. Round 101's fix is now live-confirmed to EXECUTE (a real
+step forward from round 100's total silence), but the recipe's own target condition — a companion
+genuinely stuck at a non-reset phase at release time — was not reproduced in three attempts this
+round, so the fix's actual corrective behavior (`reset phase X -> -1`) remains NEEDS-LIVE. No
+crash across any of this round's six rig sessions/restarts; both `swkotor.exe` processes stayed
+alive and `Responding=True` after every rep, confirmed individually.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
+tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
+verification only.
