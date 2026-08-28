@@ -17,11 +17,20 @@ namespace KotorCoop.Session.Pumps;
 /// belief is left untouched), then publish the whole merged belief; drain accepted intents and
 /// queue one engine apply per intent, unconditionally (applying never needed the GUI open).
 ///
-/// <b>Client</b>: detection/reconcile only ever runs against whichever ONE store is open THIS
-/// tick — there is no way to notice a local buy/sell in a shop nobody has opened, matching v1's
-/// own limitation exactly. The reconcile-apply itself needs no GUI open either, so a key already
-/// converging toward its target keeps converging on ticks where a DIFFERENT store (or none) is
-/// open; only fresh detection is store-gated.
+/// <b>Client</b> (redesigned §9, 2026-08-29 — see the task's own item 2): the apply primitive
+/// (<c>Odyssey.Store.cs</c>'s <c>InsertItemIntoStore</c>/<c>RemoveStoreStack</c>, which the
+/// <c>StoreInsert</c>/<c>StoreRemove</c> cheats drive) resolves the target store purely by object
+/// id (<c>GetStoreByGameObjectID</c>) — it needs no GUI open at all. Only READING a store's stock
+/// (<c>TryScanOpenStore</c>) needs the GUI open. The two are therefore split here: RECONCILE runs
+/// for every store this client's session knows about (<see cref="ICoopSession.IsStoreKnownV2"/>),
+/// regardless of whether that particular store's GUI is open THIS tick, converging
+/// <see cref="_belief"/> (this pump's own best estimate of the local engine's value for a key —
+/// updated by a real scan whenever the GUI happens to be open on that store, otherwise tracked
+/// purely from queued reconcile deltas) toward the host's snapshot exactly like
+/// <see cref="PartyPoolPumpV2"/> does. DETECTION of a fresh local buy/sell — the belief-delta scan
+/// diff — only ever runs for whichever ONE store is open THIS tick, since that is the only store
+/// this instance can freshly observe at all; there is no way to notice a local change in a shop
+/// nobody has opened, matching v1's own limitation exactly.
 /// </summary>
 internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Action<string> log)
 {
@@ -31,18 +40,23 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
     private readonly Queue<CoopAgent.PendingStoreApply> _pendingApplies = new();
 
+    /// <summary>See <see cref="PartyPoolPumpV2._lastSnapshotValue"/>'s identical remarks — drives
+    /// ONLY <see cref="RetireOutstandingBy"/>, never the detect step.</summary>
     private readonly Dictionary<StoreStackKey, int> _lastSnapshotValue = [];
 
-    private readonly Dictionary<StoreStackKey, int> _reconcileInFlight = [];
+    /// <summary>See <see cref="PartyPoolPumpV2._belief"/>'s identical remarks. For a key whose
+    /// store has never once been open locally, seeded to 0 on first sight rather than a real scan
+    /// value (see <see cref="PumpClient"/>'s own remarks on the reconcile-without-GUI path) — the
+    /// same "unknown baseline treated as the safest available assumption" shape
+    /// docs/research/shared-inventory-v2.md §2.7 already accepts for the host's own apply
+    /// surface, now symmetric on the client's reconcile side too.</summary>
+    private readonly Dictionary<StoreStackKey, int> _belief = [];
 
-    /// <summary>See <see cref="PartyPoolPumpV2._reconcileQueuedAtMs"/>'s identical remarks.</summary>
-    private readonly Dictionary<StoreStackKey, long> _reconcileQueuedAtMs = [];
+    /// <summary>See <see cref="PartyPoolPumpV2._expectedFromReconcile"/>'s identical remarks.</summary>
+    private readonly Dictionary<StoreStackKey, List<ExpectedReconcileMovement>> _expectedFromReconcile = [];
 
-    /// <summary>See <see cref="PartyPoolPumpV2.ReconcileInFlightTimeoutMs"/>'s identical remarks.</summary>
-    private const long ReconcileInFlightTimeoutMs = 10_000;
-
-    /// <summary>See <see cref="PartyPoolPumpV2._lastActual"/>'s identical remarks.</summary>
-    private readonly Dictionary<StoreStackKey, int> _lastActual = [];
+    /// <summary>See <see cref="PartyPoolPumpV2.ExpectedTimeoutMs"/>'s identical remarks.</summary>
+    private const long ExpectedTimeoutMs = 10_000;
 
     private readonly Dictionary<StoreStackKey, List<OutstandingIntent>> _outstanding = [];
 
@@ -71,6 +85,14 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
         public long QueuedAtMs { get; } = queuedAtMs;
         public long AckedAtMs { get; set; } = -1;
+    }
+
+    /// <summary>See <see cref="PartyPoolPumpV2.ExpectedReconcileMovement"/>'s identical remarks.</summary>
+    private sealed class ExpectedReconcileMovement(int delta, long queuedAtMs)
+    {
+        public int Delta { get; set; } = delta;
+
+        public long QueuedAtMs { get; } = queuedAtMs;
     }
 
     public void Pump(SessionCapabilities caps)
@@ -113,174 +135,113 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         }
 
         PruneOutstanding(now);
-        PruneStaleReconcileInFlight(now);
-
-        if (!bridge.TryScanOpenStore(out uint storeObjectId, out IReadOnlyDictionary<StoreStackKey, int> scan))
-        {
-            // No store open this tick — nothing to freshly detect. A reconcile already in
-            // flight for a store that just closed simply keeps waiting until it reopens (or the
-            // target moves again on a later tick where it IS open); applying never needed the
-            // GUI open, only detecting a local change does.
-            return;
-        }
+        PruneExpiredExpected(now);
 
         if (!session.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> snapshot))
         {
             return;
         }
 
-        HashSet<StoreStackKey> keys = new(scan.Keys);
-        foreach (StoreStackKey key in snapshot.Keys)
-        {
-            if (key.StoreObjectId == storeObjectId)
-            {
-                keys.Add(key);
-            }
-        }
+        // Whichever ONE store (if any) is open on this client right now — the only store this
+        // instance can freshly SCAN this tick. A closed GUI is NOT a reason to skip the whole
+        // tick any more (§9, 2026-08-29, item 2): RECONCILE below runs for every KNOWN key
+        // regardless, since applying an accepted intent's own reconcile never needed the GUI —
+        // only detecting a fresh local change against a live scan does.
+        bool storeOpen = bridge.TryScanOpenStore(
+            out uint openStoreObjectId, out IReadOnlyDictionary<StoreStackKey, int> openScan);
 
-        foreach (StoreStackKey key in _lastSnapshotValue.Keys)
+        HashSet<StoreStackKey> keys = new(snapshot.Keys);
+        keys.UnionWith(_belief.Keys);
+        keys.UnionWith(_expectedFromReconcile.Keys);
+        keys.UnionWith(_outstanding.Keys);
+        if (storeOpen)
         {
-            if (key.StoreObjectId == storeObjectId)
-            {
-                keys.Add(key);
-            }
-        }
-
-        foreach (StoreStackKey key in _reconcileInFlight.Keys)
-        {
-            if (key.StoreObjectId == storeObjectId)
-            {
-                keys.Add(key);
-            }
-        }
-
-        foreach (StoreStackKey key in _outstanding.Keys)
-        {
-            if (key.StoreObjectId == storeObjectId)
-            {
-                keys.Add(key);
-            }
+            keys.UnionWith(openScan.Keys);
         }
 
         foreach (StoreStackKey key in keys)
         {
             // §7 (2026-08-29), item 3: a store the host has never scanned is UNKNOWN, not zero —
-            // `snapshot.GetValueOrDefault(key)` returning 0 for every one of that store's keys is
-            // indistinguishable, by itself, from "the host scanned it and it is genuinely empty".
-            // Left ungated, this client's own local scan of a real, never-before-shared store's
-            // pristine stock would read as a giant "local deposit" against a false zero baseline
-            // (a real defect: the client's own real stock, not just a spurious wire report). Skip
-            // the key ENTIRELY — no bookkeeping dictionary writes either — so the moment the
-            // store becomes known this pump's ordinary `firstSight` seeding handles it correctly,
-            // exactly as if this were the very first tick this key had ever existed.
+            // see PartyPoolPumpV2's callers for the identical "unknown vs. zero" reasoning this
+            // mirrors. Skip the key ENTIRELY — no bookkeeping dictionary writes either — so the
+            // moment the store becomes known this pump's ordinary `firstSight` seeding handles it
+            // correctly, exactly as if this were the very first tick this key had ever existed.
             if (!session.IsStoreKnownV2(key.StoreObjectId))
             {
                 continue;
             }
 
             int snapshotValue = snapshot.GetValueOrDefault(key);
-            int actual = scan.GetValueOrDefault(key);
 
-            // See PartyPoolPumpV2's identical remarks: compares the RAW host snapshot value,
-            // never detectTarget.
-            bool firstSight = !_lastSnapshotValue.TryGetValue(key, out int priorSnapshotValue);
-            bool snapshotMoved = !firstSight && priorSnapshotValue != snapshotValue;
-            _lastSnapshotValue[key] = snapshotValue;
-
-            bool actualMoved = _lastActual.TryGetValue(key, out int priorActual) && priorActual != actual;
-            _lastActual[key] = actual;
-
-            // §7 (2026-08-29): see PartyPoolPumpV2's identical remarks — the ONLY place
-            // outstanding is retired from confirmation evidence, proportional to the snapshot's
-            // own confirmed movement, never by comparing against this instance's own `actual`
-            // (unsound the moment more than one outstanding intent is in flight for the same
-            // key — found live via the party-pool version of this exact pump).
-            if (snapshotMoved)
+            bool firstSnapshotSight = !_lastSnapshotValue.TryGetValue(key, out int priorSnapshotValue);
+            if (!firstSnapshotSight && priorSnapshotValue != snapshotValue)
             {
                 RetireOutstandingBy(key, snapshotValue - priorSnapshotValue);
             }
 
-            // detectTarget (snapshot + outstanding) is ONLY ever valid for the DETECTION check
-            // at the bottom of this loop — see ReconcileTarget's own remarks for why a
-            // RECONCILE-APPLY must never target it directly (PartyPoolPumpV2's identical fix).
-            // Computed AFTER the retirement above so a partial retirement this same tick is
-            // already reflected.
-            int detectTarget = snapshotValue + OutstandingNet(key);
+            _lastSnapshotValue[key] = snapshotValue;
 
-            if (_reconcileInFlight.TryGetValue(key, out int inFlightTarget))
+            bool liveThisTick = storeOpen && key.StoreObjectId == openStoreObjectId;
+
+            // §9 (2026-08-29): no special "first sight" branch — see
+            // PartyPoolPumpV2.PumpClient's identical remarks for why a delta-based design must
+            // never silently seed-and-defer a standing surplus (it can never recover it, unlike
+            // the old absolute-target design's one-tick defer). A key never locally observed
+            // defaults to belief 0 — the same "unknown baseline treated as the safest available
+            // assumption" shape §2.7 already accepts for the host's own cold-start apply surface,
+            // now symmetric here so a store this client has never opened can still reconcile UP
+            // to reflect another peer's real action against it (item 2's own "host sells while
+            // the client's GUI is closed" requirement) rather than being silently skipped forever
+            // the way the pre-§9 GUI-gated early return did.
+            int belief = _belief.GetValueOrDefault(key);
+
+            if (liveThisTick)
             {
-                // See PartyPoolPumpV2's identical remarks: an exact match against the frozen
-                // target alone can never fire again once a scan-cache gap lets the observed
-                // value skip past it — clear unconditionally on ANY movement (the queued apply's
-                // own delta lands in one synchronous engine call, so any movement while in
-                // flight IS that apply landing, by construction).
-                if (actual == inFlightTarget || actualMoved)
-                {
-                    _reconcileInFlight.Remove(key);
-                    _reconcileQueuedAtMs.Remove(key);
+                int actual = openScan.GetValueOrDefault(key);
+                int rawMovement = actual - belief;
+                belief = actual;
+                _belief[key] = actual;
 
-                    // §7 (2026-08-29): outstanding retirement is handled entirely by the
-                    // snapshotMoved-driven RetireOutstandingBy call above now — see
-                    // PartyPoolPumpV2's identical remarks for why the old
-                    // actual-vs-snapshotValue-gated ClearOutstanding call here was unsound.
-                }
-                else
+                if (rawMovement != 0)
                 {
-                    int rearmTarget = ReconcileTarget(key, actual, snapshotValue);
-                    if (rearmTarget != inFlightTarget)
+                    int localChange = ConsumeExpected(key, rawMovement);
+                    if (localChange != 0)
                     {
-                        QueueReconcile(key, actual, rearmTarget);
+                        StoreOpKind kind = localChange > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
+                        ushort count = (ushort)Math.Min(Math.Abs(localChange), ushort.MaxValue);
+
+                        uint serial = session.PublishStoreIntentV2(kind, key, count);
+                        if (serial != 0)
+                        {
+                            log($"store: local {kind.ToString().ToLowerInvariant()} of {count}x "
+                                + $"'{key.Resref}' detected in store 0x{key.StoreObjectId:X}, "
+                                + $"requesting (serial {serial})");
+                            AddOutstanding(key, serial, localChange, now);
+                        }
                     }
                 }
-
-                continue;
             }
 
-            if (firstSight)
+            // Reconcile runs EVERY tick, live scan or not — see the class remarks (item 2). Uses
+            // `belief`, never a live-only `actual`, so a store whose GUI is closed this tick can
+            // still be asked to converge based on this pump's own best current estimate.
+            int target = ReconcileTarget(key, belief, snapshotValue);
+            int projected = belief + ExpectedFromReconcileNet(key);
+            int reconcileDelta = target - projected;
+            if (reconcileDelta != 0)
             {
-                if (actual < snapshotValue)
-                {
-                    QueueReconcile(key, actual, ReconcileTarget(key, actual, snapshotValue));
-                }
-
-                continue;
-            }
-
-            if (snapshotMoved)
-            {
-                // See PartyPoolPumpV2.ReconcileTarget's own remarks: reconciling toward
-                // snapshotValue + OutstandingNet(key) double-counts a delta the snapshot has
-                // already absorbed once the client's own engine already explains it.
-                int reconcileTarget = ReconcileTarget(key, actual, snapshotValue);
-                if (actual != reconcileTarget)
-                {
-                    QueueReconcile(key, actual, reconcileTarget);
-                }
-
-                continue;
-            }
-
-            if (actual != detectTarget)
-            {
-                int delta = actual - detectTarget;
-                StoreOpKind kind = delta > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
-                ushort count = (ushort)Math.Min(Math.Abs(delta), ushort.MaxValue);
-
-                uint serial = session.PublishStoreIntentV2(kind, key, count);
-                if (serial != 0)
-                {
-                    log($"store: local {kind.ToString().ToLowerInvariant()} of {count}x "
-                        + $"'{key.Resref}' detected in store 0x{key.StoreObjectId:X}, "
-                        + $"requesting (serial {serial})");
-                    AddOutstanding(key, serial, delta, now);
-                }
+                QueueReconcile(key, reconcileDelta, now);
             }
         }
     }
 
-    private void QueueReconcile(StoreStackKey key, int actual, int target)
+    private void QueueReconcile(StoreStackKey key, int delta, long nowMs)
     {
-        int delta = target - actual;
+        if (delta == 0)
+        {
+            return;
+        }
+
         StoreOpKind kind = delta > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
         ushort count = (ushort)Math.Min(Math.Abs(delta), ushort.MaxValue);
 
@@ -289,35 +250,105 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
             return;
         }
 
-        _reconcileInFlight[key] = target;
-        _reconcileQueuedAtMs[key] = SessionClock.NowMs;
+        (_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries)
+            ? entries
+            : _expectedFromReconcile[key] = []).Add(new ExpectedReconcileMovement(delta, nowMs));
     }
 
-    /// <summary>See <see cref="PartyPoolPumpV2.PruneStaleReconcileInFlight"/>'s identical
-    /// remarks.</summary>
-    private void PruneStaleReconcileInFlight(long nowMs)
+    /// <summary>See <see cref="PartyPoolPumpV2.ConsumeExpected"/>'s identical remarks.</summary>
+    private int ConsumeExpected(StoreStackKey key, int rawMovement)
     {
-        List<StoreStackKey>? expired = null;
-        foreach ((StoreStackKey key, long queuedAtMs) in _reconcileQueuedAtMs)
+        if (!_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries)
+            || entries.Count == 0)
         {
-            if (nowMs - queuedAtMs > ReconcileInFlightTimeoutMs)
+            return rawMovement;
+        }
+
+        int direction = Math.Sign(rawMovement);
+        int remaining = Math.Abs(rawMovement);
+
+        List<ExpectedReconcileMovement>? fullyConsumed = null;
+        foreach (ExpectedReconcileMovement entry in entries)
+        {
+            if (remaining == 0 || Math.Sign(entry.Delta) != direction)
             {
-                (expired ??= []).Add(key);
+                continue;
+            }
+
+            int entryMagnitude = Math.Abs(entry.Delta);
+            int take = Math.Min(entryMagnitude, remaining);
+            remaining -= take;
+
+            if (take == entryMagnitude)
+            {
+                (fullyConsumed ??= []).Add(entry);
+            }
+            else
+            {
+                entry.Delta -= take * direction;
             }
         }
 
-        if (expired is null)
+        if (fullyConsumed is not null)
+        {
+            foreach (ExpectedReconcileMovement entry in fullyConsumed)
+            {
+                entries.Remove(entry);
+            }
+
+            if (entries.Count == 0)
+            {
+                _expectedFromReconcile.Remove(key);
+            }
+        }
+
+        return direction * remaining;
+    }
+
+    private int ExpectedFromReconcileNet(StoreStackKey key)
+    {
+        if (!_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries))
+        {
+            return 0;
+        }
+
+        int net = 0;
+        foreach (ExpectedReconcileMovement entry in entries)
+        {
+            net += entry.Delta;
+        }
+
+        return net;
+    }
+
+    /// <summary>See <see cref="PartyPoolPumpV2.PruneExpiredExpected"/>'s identical remarks.</summary>
+    private void PruneExpiredExpected(long nowMs)
+    {
+        List<StoreStackKey>? emptied = null;
+        foreach ((StoreStackKey key, List<ExpectedReconcileMovement> entries) in _expectedFromReconcile)
+        {
+            int removed = entries.RemoveAll(e => nowMs - e.QueuedAtMs > ExpectedTimeoutMs);
+            if (removed > 0)
+            {
+                log($"store: expected-reconcile entry for '{key.Resref}' in store "
+                    + $"0x{key.StoreObjectId:X} never observed landing within "
+                    + $"{ExpectedTimeoutMs / 1000}s — presumed resolved, re-evaluating fresh");
+            }
+
+            if (entries.Count == 0)
+            {
+                (emptied ??= []).Add(key);
+            }
+        }
+
+        if (emptied is null)
         {
             return;
         }
 
-        foreach (StoreStackKey key in expired)
+        foreach (StoreStackKey key in emptied)
         {
-            _reconcileInFlight.Remove(key);
-            _reconcileQueuedAtMs.Remove(key);
-            log($"store: reconcile for '{key.Resref}' in store 0x{key.StoreObjectId:X} never "
-                + $"observed landing within {ReconcileInFlightTimeoutMs / 1000}s — presumed "
-                + "resolved, re-evaluating fresh");
+            _expectedFromReconcile.Remove(key);
         }
     }
 
@@ -337,9 +368,8 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         }
     }
 
-    /// <summary>See <see cref="PartyPoolPumpV2.ReconcileTarget"/>'s identical remarks — a PURE
-    /// decision, no side effects (§7, 2026-08-29).</summary>
-    private int ReconcileTarget(StoreStackKey key, int actual, int snapshotValue)
+    /// <summary>See <see cref="PartyPoolPumpV2.ReconcileTarget"/>'s identical remarks.</summary>
+    private int ReconcileTarget(StoreStackKey key, int localValue, int snapshotValue)
     {
         int net = OutstandingNet(key);
         if (net == 0)
@@ -347,8 +377,8 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
             return snapshotValue;
         }
 
-        bool explainedByOwnEngine = net > 0 ? actual >= snapshotValue : actual <= snapshotValue;
-        return explainedByOwnEngine ? actual : snapshotValue;
+        bool explainedByOwnEngine = net > 0 ? localValue >= snapshotValue : localValue <= snapshotValue;
+        return explainedByOwnEngine ? localValue : snapshotValue;
     }
 
     /// <summary>See <see cref="PartyPoolPumpV2.RetireOutstandingBy"/>'s identical remarks.</summary>

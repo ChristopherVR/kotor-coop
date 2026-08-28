@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
@@ -180,7 +181,20 @@ public class SharedInventoryV2LoopbackTests
         private readonly Task _task;
         private readonly Random _random = new();
 
-        private long _cheatLandsAtMs = -1;
+        /// <summary>Counts one per loop iteration (one <see cref="Agent.PumpOnce"/> call) — the
+        /// "tick" unit <see cref="_cheatLandsAtTick"/> is measured in. §9 (2026-08-29, item 1):
+        /// the cheat-channel landing delay used to be wall-clock (30-250ms), which — combined
+        /// with the fake bridge's own ~150ms scan-cache throttle — meant a queued reconcile's own
+        /// landing and the pump's next few detect passes rarely interleaved tightly enough to
+        /// exercise the exact live-observed race (docs/research/shared-inventory-v2.md §8.1: a
+        /// client's own reconcile-apply landing gets re-detected as a fresh local intent).
+        /// Measuring the delay in PUMP TICKS instead — "1-3 ticks late, one per tick" per this
+        /// pass's own task brief — guarantees several detect passes always run WHILE a reconcile
+        /// is genuinely in flight, and at least one runs on the very tick it lands, regardless of
+        /// wall-clock scheduling jitter.</summary>
+        private long _tick;
+
+        private long _cheatLandsAtTick = -1;
         private CoopAgent.PendingPartyPoolApply? _inFlightPool;
         private CoopAgent.PendingStoreApply? _inFlightStore;
 
@@ -209,14 +223,14 @@ public class SharedInventoryV2LoopbackTests
                 try
                 {
                     Agent.PumpOnce();
-                    long now = Environment.TickCount64;
+                    _tick++;
 
-                    if (_cheatLandsAtMs >= 0)
+                    if (_cheatLandsAtTick >= 0)
                     {
-                        if (now >= _cheatLandsAtMs)
+                        if (_tick >= _cheatLandsAtTick)
                         {
                             Land();
-                            _cheatLandsAtMs = -1;
+                            _cheatLandsAtTick = -1;
                             _inFlightPool = null;
                             _inFlightStore = null;
                         }
@@ -225,13 +239,13 @@ public class SharedInventoryV2LoopbackTests
                     {
                         Interlocked.Increment(ref PoolApplyDequeueCount);
                         _inFlightPool = poolNext;
-                        _cheatLandsAtMs = now + 30 + _random.Next(220);
+                        _cheatLandsAtTick = _tick + 1 + _random.Next(3); // lands 1-3 ticks later
                     }
                     else if (Agent.TryDequeuePendingStoreApplyV2(out CoopAgent.PendingStoreApply storeNext))
                     {
                         Interlocked.Increment(ref StoreApplyDequeueCount);
                         _inFlightStore = storeNext;
-                        _cheatLandsAtMs = now + 30 + _random.Next(220);
+                        _cheatLandsAtTick = _tick + 1 + _random.Next(3); // lands 1-3 ticks later
                     }
                 }
                 catch (Exception)
@@ -663,6 +677,22 @@ public class SharedInventoryV2LoopbackTests
                 await WaitForAsync(() => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1, Timeout),
                 "client's own engine never reconciled up to the host's mirrored sell");
 
+            // §9 (2026-08-29): a real settle window, not just a poll-succeeded instant. Item 2's
+            // own fix lets the reconcile-up above land entirely BLIND (the client's store GUI was
+            // closed the whole time it was in flight — see the class remarks) — the WaitForAsync
+            // just above is satisfied the moment the landed value shows up in the raw engine
+            // dictionary, which can win the race against this pump's own FIRST live scan of the
+            // now-open GUI ever running at all. Without giving that first live scan a genuine
+            // chance to happen, a buy-back performed immediately afterward can land AND be
+            // reversed before the pump's belief-tracking ever observed the "1" in between — not a
+            // detection bug, a real "both halves of the deposit-then-withdraw pair landed inside
+            // the same never-yet-sampled window" case, the identical shape
+            // docs/research/shared-inventory-v2.md's own root-cause-6/Bug-4 lineage already
+            // documents, just wider here because BLIND reconcile removes the old "only while the
+            // GUI is open" bound on how long that window can be. A human opening a store and then
+            // clicking sell takes far longer than one scan cycle; this delay reflects that.
+            await Task.Delay(300);
+
             // The buy-back: the client's own engine drops the item, and the host's OWN GUI is
             // closed at the moment the intent arrives — applying an accepted intent never needed
             // the GUI open (docs/research/shared-inventory-v2.md §2.6), only detecting a fresh
@@ -924,6 +954,11 @@ public class SharedInventoryV2LoopbackTests
                 await WaitForAsync(() => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1, Timeout),
                 "client's own engine never reconciled up to the host's mirrored sell");
 
+            // §9 (2026-08-29): see StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost's
+            // identical remarks — gives this pump's first live scan of the now-open GUI a genuine
+            // chance to run before the buy-back yanks the item away again.
+            await Task.Delay(300);
+
             int applyCountBeforeBuyBack = rig.HostAgent.StoreApplyLandings;
 
             rig.ClientAgent.Bridge.TrueStore.Remove(StoreBlaster);
@@ -992,6 +1027,168 @@ public class SharedInventoryV2LoopbackTests
                 + "down against a false zero baseline nor reported as a phantom deposit");
 
             Assert.Equal(0, rig.HostAgent.StoreApplyDequeueCount);
+        }
+    }
+
+    // ---- §9 (2026-08-29): regression coverage for the two defects this pass found and fixed —
+    // see docs/research/shared-inventory-v2.md §9 for the full write-up. --------------------------
+
+    /// <summary>
+    /// Item 1's own explicit repro/fix requirement: docs/research/shared-inventory-v2.md §8.1's
+    /// live-observed defect — a client's own reconcile-apply, converging its engine toward a
+    /// HOST-DRIVEN change, gets mis-detected by the client's OWN detect step as a fresh LOCAL
+    /// action and re-published as a spurious intent, permanently diverging the host upward by the
+    /// re-published amount. The client here never touches this key itself at all — every
+    /// movement it ever observes on its own engine is caused entirely by its own reconcile
+    /// applies converging toward the host's snapshot — across several rounds, so its detect step
+    /// must NEVER report a fresh intent for it. Relies on <see cref="AgentLoopV2"/>'s tick-based
+    /// asynchronous cheat channel (this pass's own harness change, replacing a wall-clock delay
+    /// that rarely interleaved detect passes tightly enough against an in-flight reconcile to
+    /// exercise this race) to genuinely run several detect passes WHILE each reconcile is in
+    /// flight, including the exact tick it lands.
+    ///
+    /// <b>Honest reproduction note (§9, 2026-08-29)</b>: this is a genuine race, not a
+    /// deterministic one — re-run several times against the pre-§9 code (`_reconcileInFlight` +
+    /// an absolute `snapshot + outstanding` detect target), it failed with the client's own
+    /// engine overshooting the expected total (observed: expected 12, got 14 — a spurious extra
+    /// report landing on the host) on SOME runs and passed cleanly on others, exactly the kind of
+    /// timing-dependent defect the live rig itself only caught once per session in §8.1's own
+    /// round. Against the fixed (post-§9) code below, it has passed cleanly on every run tried.
+    /// Kept as a real regression guard for the mechanism either way — it is the closest a
+    /// low-latency loopback harness gets to §8.1's own live timing without literally reintroducing
+    /// wall-clock jitter, and a passing run here is meaningful even though a passing run against
+    /// the OLD code would not have been surprising on its own.
+    /// </summary>
+    [Fact]
+    public async Task ClientReconcileLandingIsNeverReDetectedAsASpuriousIntent()
+    {
+        (Rig rig, _) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            // §8.1's own live precondition, reproduced here: the client's OWN outstanding ledger
+            // for this key is already in play (a genuine local deposit it detected and published
+            // itself) BEFORE the host-driven reconciles start — the exact combination the pre-§9
+            // design's detect step (an ABSOLUTE `snapshot + outstanding` target) could read as a
+            // fresh local change the moment a same-key reconcile's own exclusion window closed,
+            // even though nothing genuinely new happened. A test that never touches the client's
+            // own outstanding ledger for this key at all (this test's own first version) does not
+            // exercise that interaction and passes even against the pre-§9 code.
+            rig.ClientAgent.Bridge.TruePartyPool[Blaster] = 2;
+
+            // Wait for the HOST to confirm receipt of the client's own +2 before starting the
+            // host-driven rounds below — this fake bridge's own host-side writes below are
+            // ABSOLUTE assignments (simulating ambient host-side content independent of any
+            // client report), while the host's own ACCEPT-INTENT path applies a client's report
+            // as a DELTA on top of whatever `TruePartyPool` currently holds
+            // (`AgentLoopV2.Land`'s `after = before + count`); racing an absolute host-side write
+            // against that still-in-flight delta apply double-counts by TEST CONSTRUCTION, not by
+            // any pump defect — confirmed by reproducing it first against the FIXED pump code too
+            // (a version of this test that omitted this wait failed identically either way).
+            // Deliberately NOT waiting any LONGER than that confirmation, though — the client's
+            // own outstanding entry for its +2 is still genuinely fresh (unacked/unretired) the
+            // moment the FIRST host-driven reconcile lands, maximising overlap between the two
+            // ledgers §8.1's own mechanism hinges on. Ten rapid host-driven rounds, fired
+            // back-to-back with no per-round wait (mirroring §27/
+            // ThreeRapidHostChangesReachClientExactlyViaSnapshotAlone's own "no wait between
+            // them" recipe), each landing while the client's own reconcile chain for an earlier
+            // round may still be draining through the single-slot cheat channel.
+            Assert.True(
+                await WaitForAsync(() => rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == 2, Timeout),
+                "host never learned of the client's own initial deposit");
+
+            int running = 2;
+            foreach (int bump in new[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 })
+            {
+                running += bump;
+                rig.HostAgent.Bridge.TruePartyPool[Blaster] = running;
+            }
+
+            Assert.True(
+                await WaitForAsync(() => rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == running, Timeout),
+                $"host never converged to exactly {running}; got "
+                + $"{rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster)}");
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == running, Timeout),
+                $"client's own engine never reconciled up to {running}; got "
+                + $"{rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster)}");
+
+            // A full window for any lingering in-flight reconcile to either land cleanly or, if
+            // the old bug were still present, get mis-detected and re-published — pushing the
+            // host's own total past `running`.
+            Assert.True(
+                await StaysAsync(
+                    () => rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == running
+                        && rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == running,
+                    TimeSpan.FromSeconds(6)),
+                $"both sides must STAY at exactly {running} — a client re-detecting its own "
+                + "reconcile landing as a fresh local action would diverge the host upward past "
+                + $"this. Host={rig.HostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster)} "
+                + $"Client={rig.ClientAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster)}");
+
+            // Only the client's own initial +2 is ever a genuine local action — every later
+            // movement is caused entirely by its own reconcile converging toward the host's
+            // snapshot, so at most ONE "local ... detected" line for this key is ever legitimate.
+            string[] spurious = [.. rig.ClientAgent.Logs.Where(l =>
+                l.Contains("party pool: local", StringComparison.Ordinal)
+                && l.Contains($"'{Blaster.Resref}'", StringComparison.Ordinal))];
+
+            Assert.True(spurious.Length <= 1,
+                $"the client made exactly ONE genuine local change to '{Blaster.Resref}' itself "
+                + "(the initial +2) — every later movement it observed was its own reconcile "
+                + $"converging toward the host's snapshot — yet its detect step published "
+                + $"{spurious.Length} local-change report(s) for it:\n{string.Join('\n', spurious)}");
+        }
+    }
+
+    /// <summary>
+    /// Item 2's own explicit repro/fix requirement: <c>Odyssey.Store.cs</c>'s
+    /// <c>InsertItemIntoStore</c>/<c>RemoveStoreStack</c> (the primitives the <c>StoreInsert</c>/
+    /// <c>StoreRemove</c> cheats drive) resolve their target store purely by object id
+    /// (<c>GetStoreByGameObjectID</c>) — they need no GUI open at all. Only READING a store
+    /// (<c>TryScanOpenStore</c>) needs the GUI open. A host sell must therefore still reach the
+    /// client's own engine even though the client's store GUI is NEVER opened for the whole
+    /// test — the pre-§9 GUI-gated early return in <c>StorePumpV2.PumpClient</c> used to skip
+    /// reconcile ENTIRELY whenever no store was open on the client, which this test would have
+    /// caught (see <see cref="StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost"/> for
+    /// the pre-existing scenario this narrows by never opening the client's GUI at all).
+    /// </summary>
+    [Fact]
+    public async Task StoreHostSellMirrorsToClientEvenWithTheClientsGuiClosed()
+    {
+        (Rig rig, _) = await BuildConnectedRigAsync();
+        using (rig)
+        {
+            await Task.Delay(300);
+
+            rig.HostAgent.Bridge.OpenStoreId = TestStoreId;
+            rig.HostAgent.Bridge.TrueStore[StoreBlaster] = 1;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.Client.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t)
+                        && t.GetValueOrDefault(StoreBlaster) == 1,
+                    Timeout),
+                "client never learned of the host's sell");
+
+            // rig.ClientAgent.Bridge.OpenStoreId is NEVER set anywhere in this test — the
+            // client's own store GUI stays closed for the whole run.
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1, Timeout),
+                "client's own engine never reconciled up to the host's mirrored sell despite its "
+                + "GUI staying closed the whole test — reconcile must never need the GUI open, "
+                + "only detecting a fresh LOCAL change does");
+
+            Assert.True(
+                await StaysAsync(
+                    () => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1,
+                    TimeSpan.FromSeconds(4)),
+                "the client's engine must STAY at exactly 1 with its GUI closed the whole time");
+
+            Assert.Equal(0u, rig.ClientAgent.Bridge.OpenStoreId);
         }
     }
 }
