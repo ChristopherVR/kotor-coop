@@ -187,7 +187,12 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         }
 
         // Never above the creature's own maximum; the agent's number is a request.
-        ushort max = Odyssey.GetMaxHitPoints(target);
+        //
+        // GetEffectiveMaxHitPoints, NOT GetMaxHitPoints: this target is always a player
+        // character (a peer's revive request names a downed PLAYER), whose plain stored-field
+        // max reads zero forever — see CheatController.Player.cs's TopUp and MaxHitPointsRule's
+        // own class doc comment for the full story.
+        int max = Odyssey.GetEffectiveMaxHitPoints(target);
         if (max > 0 && hitPoints > max)
         {
             hitPoints = max;

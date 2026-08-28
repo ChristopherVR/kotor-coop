@@ -3129,3 +3129,40 @@ exactly the two lines the prior round's own module-transition workaround never p
 four of the original checklist items (latch, park, toast, clear) are now live-PASS.** No crash,
 no hang. `pazaak_detect` was already ON (from the prior round); no further default change follows
 from this pass — it closes a documented gap in the same already-shipped channel, not a new one.
+
+## Follow-up (2026-08-28): a later Taris playthrough round's "ZERO notice" finding was a false
+## negative, not a regression of §23.3's fix — permanent regression test added
+
+`docs/research/playthrough-taris.md`'s own end-to-end round (same day, run AFTER the "all four
+checklist items live-PASS" pass directly above) hit real Pazaak on the host under the shipped
+`minigame_hide_peer=1` default and reported: "the CLIENT's plugin log recorded zero lines
+referencing pazaak, minigames, or phantom parking of any kind" — read as "the partner gets ZERO
+notice." **That reading does not hold up.** The toast this section's own "Live pass
+(2026-08-28)" just proved fires (`CLIENT [03:28:08] * Lanik is in a minigame - waiting`) is
+posted through `KotorGameBridge.PostChatLine` into the shared block and rendered by
+`ChatOverlayController` straight onto the frame — it is never written to the plugin's own log
+file. It IS written to the AGENT's own log (`Reply`'s `log(text)` call in
+`CoopCommandDispatcher.cs`) — `agent2.log` in that round's own naming, a different file from
+`kotorcoop-plugin.log`. Grepping the plugin log for "minigame" could not have found this line on
+ANY build, working or not; the Taris round's own host-side local detection lines
+(`CPazaakData field 0x1` / `minigame: entered (Pazaak)`) did fire again identically to this
+section's pass, confirming the flag genuinely crossed the network exactly as before — the round
+simply checked the wrong log for the client-side half.
+
+Re-traced the wiring end to end to confirm nothing regressed between this section's live pass and
+the later round: `CoopCommandDispatcher.Announcers.cs`'s `AnnouncePeerChanges` feeds
+`MinigameAnnouncer.Observe` from `session.GetRemotePeers()` — `CoopHost`/`CoopClient`'s raw wire
+buffer sample, with no minigame filtering anywhere in either implementation.
+`CoopAgent.PumpOnce`'s own `HidePeersInMinigame` filter only ever narrows its locally-scoped
+`visible` list (used for `TryWriteRemotePeers` and the position/combat/pause pumps), never
+`GetRemotePeers()` itself — exactly the "the hide filter belongs only to the block write" shape
+this document's own §23.3 designed for. Unchanged since that fix landed.
+
+Added `tests/KotorCoop.Tests/MinigameAnnouncerLoopbackTests.cs` as a permanent regression pin: a
+real host/client/`CoopAgent` rig over real sockets, `HidePeersInMinigame` left at its shipped
+default, asserts BOTH halves of the claim from a single flag edge — the client's
+`MinigameAnnouncer` announces "Revan is in a minigame - waiting" AND, at the same time, the
+client's own bridge write (`TryWriteRemotePeers`) received an empty peer list (the phantom
+parked). Passes against the current, unmodified wiring — no code change was needed for this half
+of that round's task. See `docs/research/playthrough-taris.md`'s own dated follow-up for the full
+write-up, including the separate, real `topup` "0 max hp" fix from the same round.

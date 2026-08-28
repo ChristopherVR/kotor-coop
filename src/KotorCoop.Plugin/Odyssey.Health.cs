@@ -21,7 +21,75 @@ internal static unsafe partial class Odyssey
     /// </summary>
     public static short GetCurrentHitPoints(nint obj) => *(short*)(obj + ObjCurrentHitPoints);
 
+    /// <summary>
+    /// The STORED max hit points field only (CSWSObject+0xE0) — correct for doors, placeables
+    /// and ordinary creatures, but ALWAYS ZERO for a player character (the engine never writes
+    /// it for one; see <see cref="GetEffectiveMaxHitPoints"/>'s own remarks). Left exactly as
+    /// it was: every existing caller of this method already deals only in non-PC creatures
+    /// (mirrored enemies), for which this stored-field read is what the real engine's own
+    /// <c>CSWSObject::GetMaxHitPoints</c> does too.
+    /// </summary>
     public static ushort GetMaxHitPoints(nint obj) => *(ushort*)(obj + ObjMaxHitPoints);
+
+    // CSWSCreatureStats offsets used by GetEffectiveMaxHitPoints's PC branch — the same ones
+    // KotorGameBridge.Attach.cs's TryReadMaxHitPoints already uses out-of-process, VERIFIED
+    // live (a level-1 PC with a rolled 10 and a +2 CON modifier read back 12, matching a
+    // full-health reading exactly). CreStats itself (CSWSCreature+0xA74) is declared once in
+    // Odyssey.Core.cs and already reused by Odyssey.Progression.cs's XP read.
+    private const int StatsIsPc = 0x06C;
+    private const int StatsLevelListData = 0x028;   // CExoArrayList<CSWLevelStats*>: T* data
+    private const int StatsLevelListCount = 0x02C;  // ...then the count, then the capacity
+    private const int StatsConModifier = 0x0EE;     // byte, added once PER LEVEL (0x004ED372)
+    private const int LevelStatsHitPoints = 0x02B;  // byte, the hit points rolled at that level
+
+    /// <summary>
+    /// Max hit points, following the SAME branch the engine's own
+    /// <c>CSWSCreature::GetMaxHitPoints</c> (0x004ED310) follows, unlike the plain stored-field
+    /// read <see cref="GetMaxHitPoints"/> still is. See <see cref="MaxHitPointsRule"/>'s own
+    /// class doc comment for why the stored field is wrong for a player character and what the
+    /// correct branch computes instead.
+    ///
+    /// For anything that is not a PC-flagged creature this is identical to
+    /// <see cref="GetMaxHitPoints"/> — the real engine's branch for them IS the plain field
+    /// read, so there is nothing to change and every existing non-PC caller is unaffected.
+    ///
+    /// Returns 0 when nothing can be read (no stats block, no level list, a level pointer that
+    /// does not resolve, or a count outside <see cref="MaxHitPointsRule.MaxCharacterLevels"/>'s
+    /// defensive bound) — every caller already treats 0 as "unknown, cannot heal past this".
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static int GetEffectiveMaxHitPoints(nint obj)
+    {
+        nint stats = Deref(obj + CreStats);
+        bool isPc = stats != 0 && *(int*)(stats + StatsIsPc) == 1;
+
+        if (!isPc)
+        {
+            return MaxHitPointsRule.ForNonPc(*(ushort*)(obj + ObjMaxHitPoints));
+        }
+
+        nint levels = Deref(stats + StatsLevelListData);
+        int levelCount = *(int*)(stats + StatsLevelListCount);
+        if (levels == 0 || levelCount <= 0 || levelCount > MaxHitPointsRule.MaxCharacterLevels)
+        {
+            return 0;
+        }
+
+        Span<int> rolled = stackalloc int[levelCount];
+        for (int i = 0; i < levelCount; i++)
+        {
+            nint level = Deref(levels + (i * 4));
+            if (level == 0)
+            {
+                return 0;
+            }
+
+            rolled[i] = *(byte*)(level + LevelStatsHitPoints);
+        }
+
+        int conModifier = *(byte*)(stats + StatsConModifier);
+        return MaxHitPointsRule.ForPc(conModifier, rolled);
+    }
 
     /// <summary>
     /// True while damage to this object floors at 1 hit point instead of downing it.
