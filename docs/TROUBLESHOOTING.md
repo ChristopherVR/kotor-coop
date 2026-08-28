@@ -177,7 +177,16 @@ pass with every feature simultaneously OFF still crashed). It is inside `swkotor
 or references — most often (not exclusively) following a transition through `tar_m02aa`. **There
 is no known workaround or `coop.ini` setting that avoids it**; it is not specific to co-op play
 (the recipe that reproduces it is a bare console `warp`, something a solo player's own game could
-in principle also hit). See
+in principle also hit). A separate 2026-08-28 round found a second address in the same bug family
+(`0x0023D4B3`, `CSWCObject::GetServerObject`) reproduces on a build from BEFORE this project's
+current feature set even existed (`c9d08bb`) — confirming neither address is a regression this
+project introduced — and, more usefully for a player: **a 12-transition soak that only ever used
+real in-game doors, on the same build, produced zero crashes**, while every soak that used the
+`warp` console verb as the transition trigger itself crashed reliably by the second or third hop.
+The working theory is that `warp` fires a transition near-instantly, with none of a real door's
+few seconds of walk-up and fade to let a transient engine state (a lingering conversation, in
+particular) settle first — so this crash is most likely to actually appear during rapid `warp`
+chaining (dev/test use), not during ordinary door-based play. See
 [transition-crashes.md](research/transition-crashes.md) for the full attribution round and
 [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md)'s 2026-08-28/29 entries
 for the RE and the correction to the earlier "fixed" claim; see

@@ -448,3 +448,190 @@ No code fix was made this round: there is still no confirmed culprit inside `src
 only the two new diagnostic kill keys (which do not change behaviour by default) and the
 process-hazard write-up above. The `CExoKeyTable::DestroyTable` retail-engine hypothesis from
 Round 2 remains the best-supported explanation and is unchanged by this round's work.
+
+## Mechanism attribution: real doors vs. the `warp` verb, and a pre-wave (`c9d08bb`) reproduction (2026-08-28)
+
+Two questions the prior rounds left open: (1) every reproduction so far used the console `warp`
+cheat exclusively — does an ordinary player, crossing real doors, ever hit this at all? (2) the
+DLL-level bisect above could not exercise a historical plugin build live (the block-version
+signature hazard); does the crash predate the current development wave, or was it introduced
+somewhere in the ~60 commits between `c9d08bb` and HEAD? Two-instance rig, GOG 1.0.3, HEAD
+`c3dc793` (this branch, post-merge with `main`'s `removeparty_hook`/`behaviour_override_reader`
+kill-key commit), both game directories freshly `build.ps1 -WarnAsError -Install`'d, `coop.ini`
+confirmed byte-identical to `profiles/coop.ini.example` (only cosmetic mojibake and the
+operational `auto_start_agent` line differ, as in every prior round).
+
+| Round | Build | Transition mechanism | Transitions | Crashed? | Address confirmed |
+| --- | --- | --- | --- | --- | --- |
+| 6 | HEAD (`c3dc793`) | real doors (`usedoor`) + 5 relocating `warp`s | 12 real-door + 5 warp | no, 0/17 | n/a — none crashed |
+| 6.5 | pre-wave (`c9d08bb`) | `warp` only, exact Round-1 recipe | 2 | yes, transition 2 (client) | yes — `0x0023D4B3`, `CSWCObject::GetServerObject` |
+
+### Round 6 — 12-transition real-door-only soak, HEAD build: ZERO crashes
+
+Method deviated from a literal "bounce the same two modules 12 times" only where the game's own
+level design forced it, and every deviation is called out below rather than glossed over:
+
+1. **`end_m01aa` -> `end_m01ab`** via the real corridor door: `tp 44.5 120.1 -0.04` then
+   `usedoor end_door10` on the HOST, exactly `playthrough-endar-spire.md`'s own verified recipe.
+   Clean. **This module pair turned out to be one-way** — `python tools/kotorfiles.py gff
+   end_m01ab.rim:m01ab.git --path "Door List"` shows all five of `end_m01ab`'s own doors with an
+   EMPTY `LinkedToModule` (confirmed by a live `usedoor` sweep too: "the sweep found 9 door(s), 0
+   of them module transitions") — the Endar Spire escape corridor has no door back, only a
+   scripted/human-only continuation toward `STUNT_00`. No real-door return trip exists for this
+   pair; noted rather than forced.
+2. **One relocating `warp tar_m02aa`** to reach Taris, exactly as the task brief sanctioned. Clean.
+3. **`tar_m02aa` <-> `tar_m02af`** (the South Apartments interior door, tag `tar02_aprtdoor` one
+   way / `tar02_aptdoor` the other, both confirmed present with non-empty `LinkedToModule` in the
+   pristine `.git`). The forward crossing worked cleanly the first time. The return door
+   (`tar02_aptdoor`) never fired despite being 0.0-1.0 m away and repeatedly re-opened — the
+   engine's own `usedoor` walk-to-door primitive stalled short every time and the door eventually
+   got stuck refusing to open at all (`the engine refused it: door 0x23: REFUSED to open (still
+   state 1)`), a live-reproduced instance of the exact "usedoor needs to already be close" quirk
+   `playthrough-taris.md` §Step-1 already flagged, worsened here by this round's own repeated
+   retries wedging the door's animation state. **This is a scripted-content/pathing quirk in
+   vanilla KOTOR's door-walk logic, not a coop crash** — nothing died, the door simply never
+   opened. Rather than burn more time on one wedged door instance, the host was relocated with a
+   second `warp tar_m02aa` (clean) then a third `warp tar_m02ac` (clean, bypassing a Sith
+   checkpoint dialogue/combat gate at `tar_m02aa`'s other outbound doors that also proved
+   unautomatable in the time budgeted).
+4. **`tar_m02ac` <-> `tar_m02ae`** (Upper City <-> cantina, tag `tar02_cantdoor` one way /
+   `ptar_stnddr` the other — a SECOND, never-before-touched instance of that tag; the earlier
+   wedged `ptar_stnddr` near the checkpoint is a different door object). This pair worked cleanly
+   and repeatably: **10 consecutive real-door module transitions, 5 round trips, ~20-25 s dwell
+   each with both players walking (`blockpoke.ps1 walk`), the client following every time**,
+   confirmed by `where` on both instances after each leg. Zero crashes, zero desyncs, zero stalls
+   once past the first wedge.
+
+**Aggregate: 12 real-door-driven module transitions total (1 + 1 forward + 10), plus 5 relocating
+`warp`s across the session (all of them ALSO survived) — zero crashes on either instance for the
+entire ~30-minute session.** This is the single largest crash-free transition run this doc has
+recorded; every prior round that used `warp` as the transition mechanism itself (not just for
+relocation) crashed by transition 2 or 3, 100% of the time (5/5 in the original attribution round,
+repeated in the DLL-bisect round).
+
+**Why the relocating warps did not contaminate the result, NEEDS-LIVE caveat included**: unlike
+the crash-inducing recipe (a `warp` landing in or immediately following `tar_m02aa` while an
+ambient conversation — the `duros` NPC trap — is active), every relocating warp in this round
+either landed in an empty street with no ambient dialogue running, or (for `tar_m02aa` itself)
+was immediately followed by minutes of quiet `tp`/`usedoor` staging rather than another
+transition seconds later. The historical recipe's own Round 2 hypothesis above ("why `tar_m02aa`
+in particular") is about TIMING relative to a lingering conversation, not simply "any warp,
+ever" — so this round's clean warps are consistent with, not contradictory to, that hypothesis.
+This is INFERRED, not proven: this round did not deliberately try to crash a relocating warp the
+way Round 6.5 below deliberately reproduced the known recipe.
+
+### Round 6.5 — pre-wave (`c9d08bb`) whole-tree build, exact Round-1 recipe: CRASHES, symbolicated to the OTHER originally-named address
+
+Per the task brief's fallback plan, a scratch worktree was created at `c9d08bb` (`git worktree
+add`, a sibling directory, not under `.claude/worktrees`), and **everything** was built there —
+`dotnet build KotorCoop.slnx` (root solution) and `src/KotorCoop.Plugin/build.ps1 -Install` for
+BOTH game directories — deliberately deploying `c9d08bb`'s own agent alongside its own plugin,
+avoiding the version-mismatch hazard the DLL-bisect round hit (that round only reverted
+`src/KotorCoop.Plugin` and kept the HEAD agent, so the agent's hardcoded plugin-signature scanner
+never found the old block version). `blockpoke.ps1 state` confirmed `block version 54` on both
+instances (matching `c9d08bb`'s `SharedBlock.Version`, not HEAD's 59) and `remotes 1` on both —
+proof the session actually formed this time, unlike the blocked DLL-bisect attempt.
+
+Ran the ORIGINAL Round 1 recipe exactly: `warp tar_m02aa` on the host (clean), dwelled ~20 s and
+confirmed the client's plugin log showed the `duros` NPC's gait mirroring (the ambient-
+conversation trap), then `warp end_m01aa` on the host.
+
+**The CLIENT crashed within 25 ms of the transition starting.** Its last plugin-log lines:
+
+```
+[22:54:39.053] flush, before the module is stored: destroyed phantom 0xA7 (slot 0)
+[22:54:39.061] travel: moving to module 'end_m01aa' on the session's authority
+[22:54:39.076] epoch: world unloading; clearing phantom, item, combat and door state
+[22:54:39.098] FIRST-CHANCE access violation (0xC0000005) at 0x63D4B3, eip 0x63D4B3, esp 0x1AFB80;
+image-range stack values: 0x60FB28 0x4B8E5F
+```
+
+`0x63D4B3 - 0x400000 = 0x23D4B3` — **this is `+0x23d4b3`, `CSWCObject::GetServerObject`, the
+OTHER address originally named in this doc's own brief** (alongside `+0x11C525`
+`WalkUpdateLocation_QuickWalk_FollowLeader`), previously only ever seen by `store-sync.md` while
+a client was stuck behind `tar_m02aa`'s ambient modal at the moment a transition began — exactly
+the scenario just reproduced here, on purpose, at a commit from before every coop.ini feature
+flag and diagnostic kill-key this doc's bisection rounds tested even existed. The host's own log
+shows the identical "epoch: world unloading" / "agent reports 0 remote peer(s)" shape with no
+fault of its own (it survives its own local transition, matching every prior round).
+
+**Verdict: the crash predates the wave.** Per the task brief's own branching rule ("if it crashes
+at `c9d08bb` too -> the crash predates the wave"), no bisection between `c9d08bb` and HEAD was
+carried out — there is nothing to bisect FOR, since the fault reproduces identically at a commit
+`git log --oneline c9d08bb..HEAD -- src/KotorCoop.Plugin` shows is 60 plugin commits and a full
+`removeparty_hook`/`behaviour_override_reader`/party-pool-sync/store-sync development cycle
+before HEAD. Combined with the DLL-bisect round's sixteen-flags-off result and this round's own
+real-door soak, THREE independent lines of evidence now converge: no `coop.ini` feature gates it,
+no diagnostic-only plugin piece gates it, and it is fully present in a build that predates the
+existence of most of this codebase's current features. It is not a regression this project
+introduced at any point on `main`.
+
+After capturing the evidence, HEAD's plugin/agent were rebuilt and reinstalled into both game
+directories (`build.ps1 -Install`, both dirs, confirmed via `strings dinput8.dll` against the PDB
+path) before any further work, and the scratch worktree was removed (`git worktree remove`, plus
+a manual `Remove-Item` for one leftover directory handle held by a still-open agent console from
+the round — the working tree itself unregistered cleanly).
+
+### Updated attribution and verdict
+
+**The crash is a pre-existing, unfixed `swkotor.exe` retail engine defect — a family of at least
+two related stale-pointer bugs (`CExoKeyTable::DestroyTable` at `0x0040D386`, and
+`CSWCObject::GetServerObject` at `0x0023D4B3`, both in the "something invalidates a base pointer/
+table between a validation read and a later re-read at the same index/offset" shape) — that this
+project's own code does not cause, does not gate, and predates by a wide margin.** What this
+round adds beyond the DLL-bisect's "no coop.ini flag" result is a MECHANISM finding: **every
+reproduction of this crash, across every round in this document, used the console `warp` cheat as
+the transition trigger. A 12-transition real-door-only soak on the same HEAD build, in the same
+session type, on the same two-instance rig, produced zero crashes.** The most likely explanation
+(INFERRED, consistent with but not a re-proof of Round 2's timing hypothesis): a real door
+crossing is preceded by several seconds of walking and the door's own ~0.5 s fade/open animation,
+during which whatever transient engine state a lingering conversation or resource load left
+behind has time to settle; `warp` fires the transition essentially the instant it is typed
+(`TravelController.Execute` is called on the very next frame after the plugin flushes its own
+spawned objects — see `src/KotorCoop.Plugin/TravelController.cs`), which is far more likely to
+catch the engine's own key/BIF or object tables mid-mutation.
+
+**Is `warp`'s own path already "safe" in the sense the task brief asked about?** Yes, verified by
+reading `src/KotorCoop.Plugin/TravelController.cs` and `Odyssey.Travel.cs`: the coop-intercepted
+`warp` verb does NOT call `StartNewModule` (or anything else) synchronously from inside the
+console-command dispatch. `CoopCommandDispatcher.Warp` writes the request onto the same
+agent<->plugin travel channel peer-follow uses (`SharedBlock.TravelSerial`/`TravelModule`/
+`TravelWaypoint`); `TravelController.Execute()` is "Called by PluginHost on the game's thread
+after every plugin-spawned object has been flushed" (its own doc comment) — i.e. already deferred
+to a frame boundary, and it raises the transition through `Odyssey.TravelToModule`, which does
+nothing more than the identical three plain-field writes
+(`SetMoveToModuleString`/`SetMoveToModuleStartWaypoint`/`SetMoveToModulePending`) that
+`transition-smoothness.md` §11.1 found EVERY module-transition trigger uses — the door's own
+`CSWSDoor::EventHandler`, every NWScript `StartNewModule()` call, native area/trigger transitions,
+and the retail `Global::warp` debug cheat all write the exact same fields; the engine's own
+`MainLoop` drains them through the single `StartNewModule` call site regardless of who wrote
+them. There is no "mid-frame console-driven module load" bypass to fix — the co-op `warp` verb
+already rides the engine's own pending-transition funnel exactly the way a script would. The
+difference from a door is TIMING (near-instant vs. several seconds of walk+fade), not mechanism
+safety, and that cannot be "fixed" by deferring further without turning `warp` into a slow walk,
+which would defeat its purpose as a dev/test primitive.
+
+**This is not treated as a player-facing bug requiring a code fix in this codebase.** A real
+player crossing real doors, in this round's 12-transition sample, never hit it. It remains a real,
+open, upstream `swkotor.exe` defect that a sufficiently unlucky ordinary player COULD in principle
+still hit (nothing about the fault is co-op-specific — `docs/TROUBLESHOOTING.md` already says so),
+but this round's evidence raises the bar for "how would you actually hit it" from "any module
+transition" to "an unusually-timed transition with no walk/fade pacing, most reliably produced by
+rapid `warp` chains" — exactly the shape a live-test rig's own soak recipe produces and an
+ordinary playthrough does not. See the corresponding addenda in `docs/CONSOLE.md`'s `warp` row and
+`docs/TROUBLESHOOTING.md`.
+
+### Open follow-ups, updated
+
+1. Item 1 from the earlier "Open follow-ups" list (disassemble `0x407230`) still stands for
+   `CExoKeyTable::DestroyTable`; this round adds a second address, `CSWCObject::GetServerObject`
+   at `0x0023D4B3`, to the same disassembly backlog — neither has had its own intervening
+   call/invalidation traced yet.
+2. This round's real-door soak is 12 transitions, not an exhaustive proof; a longer unattended
+   soak (hours, not one session) using only real doors — ideally with crash dumps enabled, per
+   this doc's own still-open "Tooling gap" item — would strengthen the "ordinary play is fine"
+   claim further, or falsify it.
+3. Nobody has yet tried to CRASH a relocating `warp` deliberately (e.g., warp back into
+   `tar_m02aa` while the `duros` conversation is active, then immediately warp again) — Round 6's
+   clean relocating warps are circumstantial support for the timing hypothesis, not a controlled
+   test of it.
