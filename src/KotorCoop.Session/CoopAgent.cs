@@ -684,7 +684,7 @@ public sealed class CoopAgent
         // gating as PartyPoolSyncEnabled above. See docs/research/store-sync.md.
         if (_settings.StoreSyncEnabled)
         {
-            _storePump.Pump(caps);
+            _storePump.Pump(local.Module, caps);
         }
     }
 

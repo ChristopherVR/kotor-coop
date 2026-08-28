@@ -4,8 +4,8 @@
 // Unlike the party pool (a single, always-reachable pointer chain — KotorGameBridge.PartyPool.cs)
 // no per-area "every store" enumeration was found this pass, so this reads only the store a
 // local player's GUI is currently showing, via CGuiInGame+0x84 (the "store" member, VERIFIED
-// against tools/kotor1_0_3.db) -> CSWGuiStore+0x227C (the open store's object id, VERIFIED fresh
-// disasm of CSWGuiStore::PopulateStore).
+// against tools/kotor1_0_3.db) -> CSWGuiStore+0x2278 (the open store's object id — corrected
+// 2026-08-28 from the original, mistaken +0x227C; see StoreGuiObjectId's own doc comment below).
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -180,55 +180,79 @@ public sealed partial class KotorGameBridge
     /// <summary>
     /// Resolves a store's <c>CItemRepository*</c> from its object id, purely by
     /// <c>ReadProcessMemory</c> — the external agent has no engine call, unlike
-    /// <c>Odyssey.Store.cs</c>'s write-side <c>GetStoreByGameObjectIDFn</c>. Uses the SAME
-    /// item-vtable address sweep <see cref="RebuildItemTagCache"/> already builds for items,
-    /// generalised: the sweep here looks for the <c>CSWSStore</c> vtable instead, matching this
-    /// one object id, then reads <see cref="StoreItemRepo"/> off it directly.
-    ///
-    /// Throttled with the rest of this file's scan — a store vtable sweep is not free either,
-    /// and this is only ever asked for once per <see cref="TryScanOpenStore"/> call.
+    /// <c>Odyssey.Store.cs</c>'s write-side <c>GetStoreByGameObjectIDFn</c>.
     ///
     /// BUG FIX (2026-08-28, live-found): this used to set <c>repo = address + StoreItemRepo</c> —
     /// the ADDRESS of the <c>item_list</c> pointer FIELD, not the <c>CItemRepository*</c> VALUE
     /// that field holds (<c>item_list</c> is documented as a pointer type, docs/research/
     /// store-sync.md §1.1). The exact same mistake was independently made in the plugin's own
     /// <c>Odyssey.Store.cs</c>'s <c>ResolveStoreRepo</c> — see that fix's own comment for the
-    /// full story. Here the effect was total silence rather than a refusal message: every
-    /// subsequent <c>count</c>/<c>ids</c> read in <see cref="TryScanOpenStore"/> landed on
-    /// garbage past the real <c>CSWSStore</c> struct tail, tripped the
-    /// <c>count &lt; 0 or &gt; 4096</c>/<c>ids == 0</c> guards, and made <c>TryScanOpenStore</c>
-    /// behave as if no store were ever open — so <c>StorePump</c>'s step 1 never even entered
-    /// its detect branch, live-confirmed against a real `buy` (no `store: local ... detected`
-    /// log line on either side, ever, across a live two-instance session).
+    /// full story.
+    ///
+    /// ROOT CAUSE (2026-08-29, docs/research/store-sync.md's own "discrepancy" write-up): a
+    /// SECOND, independent defect the bug above was masking. This used to find the store by a
+    /// raw <c>PatternScanner</c> sweep of committed memory for the <c>CSWSStore</c> vtable word,
+    /// trusting the FIRST address whose id field happened to match — exactly the "ghost object"
+    /// hazard this codebase already found and fixed for creatures
+    /// (docs/research/enemy-presence-sync.md, <see cref="LiveObjectGate"/>): <c>operator
+    /// delete</c>/a freed-but-not-yet-reused heap block leaves the vtable word and the object id
+    /// exactly where they were, so a scan cannot tell a live <c>CSWSStore</c> from the intact
+    /// bytes of one that no longer belongs to the current world (a re-entered module, a stale
+    /// allocation left over from an earlier load). A ghost hit reads a PLAUSIBLE, VALID-LOOKING
+    /// <c>item_list</c> pointer — its own last-known-good snapshot — so <see cref="TryScanOpenStore"/>
+    /// never sees an error, never returns false, and just silently reports the SAME stale stock
+    /// forever: a live client buy against the REAL store (resolved by the engine's own
+    /// <c>GetStoreByGameObjectID</c>, which this raw scan never asked) genuinely moves the item,
+    /// but this bridge's own scan of a DIFFERENT, ghost copy of the same object id never reflects
+    /// it — the exact shape of the live-observed symptom ("35+ seconds with zero detection... the
+    /// host's own re-buy of the 'sold' item succeeded", store-sync.md's rig-round write-up),
+    /// indistinguishable from a hung pump because nothing ever fails loudly.
+    ///
+    /// Fixed the SAME way the creature census was: resolve the id through the engine's OWN
+    /// per-app object registry (<see cref="EngineGlobals.TryResolveServerObject"/>, a
+    /// transcription of <c>CGameObjectArray::GetGameObject 0x004D8230</c> — the SAME hash-table
+    /// walk <c>CServerExoAppInternal::GetStoreByGameObjectID 0x004B1AB0</c> itself performs
+    /// internally, docs/research/store-sync.md §1.2's own disasm: <c>mov ecx,[ecx+0x1005c] ...
+    /// call 0x4d8230</c>) rather than a raw byte-pattern guess. This guarantees the read side
+    /// resolves the EXACT SAME live <c>CSWSStore*</c> the write side
+    /// (<c>Odyssey.Store.cs</c>'s <c>GetStoreByGameObjectIDFn</c>) and the retail engine's own
+    /// <c>BuyItem</c>/<c>SellItem</c> handlers do — there is no longer a second "repo instance" a
+    /// mirrored insert could land in that this scan does not also see, and a store this instance
+    /// has never actually resolved (module unloaded, id genuinely gone) fails safe (empty scan,
+    /// no crash) exactly like <c>GetStoreByGameObjectID</c>'s own type-checked accessor. The
+    /// vtable re-check below reproduces that same type-tag discipline (a store id that resolves
+    /// to some OTHER live object type is refused, not mis-read as a repository pointer).
+    ///
+    /// <see cref="EngineGlobals.TryLookupObject"/> (the bucket-walk this ultimately calls) is
+    /// already unit-tested in isolation (<c>LiveObjectGateTests</c>) against a synthetic address
+    /// space — this reuses that already-proven primitive rather than re-implementing a scan, the
+    /// same "one true lookup" discipline every other object-id-keyed read in this bridge already
+    /// follows (<c>KotorGameBridge.Attach.cs</c>'s census gate). NEEDS-LIVE for the full pointer
+    /// chain (<see cref="EngineGlobals.AppManagerPtr"/> onward), the same as every other method in
+    /// this file — nothing about the ARITHMETIC is new.
     /// </summary>
     private bool TryReadStoreRepo(uint storeObjectId, out nint repo)
     {
         repo = 0;
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(StoreVtable));
-        PatternScanner scanner = new(_memory);
-
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, StoreScanLimit))
+        if (!EngineGlobals.TryResolveServerObject(_memory, storeObjectId, out nint address) || address == 0)
         {
-            // CSWSStore's embedded CSWSObject starts at +0x00, itself embedding CGameObject at
-            // ITS OWN +0x00 (tools/kotor1_0_3.db: CSWSStore.object @ 0 -> CSWSObject.game_object
-            // @ 0 -> CGameObject.vtable @ 0 / CGameObject.id @ 4) — so this scan's hit address
-            // IS the vtable pointer, which IS the object base, and the id sits at +0x04 from it.
-            // VERIFIED against the symbol database, not by analogy with the item shape.
-            if (_memory.TryReadUInt32(address + 0x04, out uint id) && id == storeObjectId)
-            {
-                return _memory.TryReadPointer(address + StoreItemRepo, out repo) && repo != 0;
-            }
+            return false;
         }
 
-        return false;
+        // Type-tag discipline, matching CServerExoAppInternal::GetStoreByGameObjectID's own
+        // `cmp al,[type_constant]` check (docs/research/store-sync.md §1.2): the object array
+        // holds every game object, not just stores, so a resolved id must still be confirmed as
+        // a genuine CSWSStore — read directly off the vtable word at the object's own +0x00,
+        // rather than trusted from the byte pattern that used to find it in the first place.
+        if (!_memory.TryReadUInt32(address, out uint vtable) || vtable != StoreVtable)
+        {
+            return false;
+        }
+
+        return _memory.TryReadPointer(address + StoreItemRepo, out repo) && repo != 0;
     }
 
     /// <summary>CSWSStore vtable. tools/kotor1_0_3.db: <c>CSWSStore</c> vtable = <c>0x0074BDB8</c>.</summary>
     private const uint StoreVtable = 0x0074BDB8;
-
-    /// <summary>A loaded module holds very few stores (single digits, typically) — this cap
-    /// exists only so a pathological sweep cannot run away, matching <see cref="ItemScanLimit"/>'s
-    /// own reasoning at a much smaller scale.</summary>
-    private const int StoreScanLimit = 256;
 }

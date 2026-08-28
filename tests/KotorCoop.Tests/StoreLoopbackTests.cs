@@ -30,6 +30,12 @@ public class StoreLoopbackTests
     private const uint OtherStoreId = 0x2000;
     private const string Module = "tar_m02aa";
 
+    /// <summary>A SECOND module, distinct from <see cref="Module"/>, for the module-scoping
+    /// tests below — object ids are assigned per-GIT-load, so the engine is free to reuse the
+    /// SAME numeric id (<see cref="StoreId"/>) for an entirely unrelated store once this module
+    /// loads.</summary>
+    private const string OtherModule = "end_m01aa";
+
     private static readonly StoreStackKey Blaster =
         new(StoreId, "g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
 
@@ -59,6 +65,14 @@ public class StoreLoopbackTests
         /// <summary>0 = no store GUI open on this instance right now.</summary>
         public uint OpenStoreId { get; set; }
 
+        /// <summary>The module <see cref="TryReadLocalState"/> reports. Mutable (unlike a bare
+        /// constant) so a test can drive a module CHANGE — <see cref="StorePump"/> reads this off
+        /// <c>PlayerState.Module</c> every tick and clears its per-module belief when it changes
+        /// (docs/research/store-sync.md's own module-scoping fix); defaults to this file's own
+        /// shared <see cref="Module"/> constant so every EXISTING test (none of which cares about
+        /// module changes) is unaffected.</summary>
+        public string LocalModule { get; set; } = Module;
+
         public string Description => "store-loopback-fake";
 
         public bool IsAttached => true;
@@ -69,7 +83,7 @@ public class StoreLoopbackTests
 
         public bool TryReadLocalState(out PlayerState state)
         {
-            state = new PlayerState(Vector3f.Zero, 0f, Module, 20, 0);
+            state = new PlayerState(Vector3f.Zero, 0f, LocalModule, 20, 0);
             return true;
         }
 
@@ -1001,5 +1015,253 @@ public class StoreLoopbackTests
             await cts.CancelAsync();
             await Task.WhenAll(hostTask, clientTask);
         }
+    }
+
+    /// <summary>
+    /// The module-scoping fix (docs/research/store-sync.md's own "discrepancy" write-up, task 2):
+    /// a store's object id is only meaningful within the module that placed it, and the engine is
+    /// free to reuse the SAME numeric id for an entirely unrelated store once a DIFFERENT module
+    /// loads. Before this fix, <see cref="Pumps.StorePump"/> kept its per-key belief
+    /// (<c>_engineBelief</c>/<c>_wireTarget</c>) keyed purely by id, with no module boundary at
+    /// all — so a fresh module's genuinely pristine stock (never transacted, never desired to be
+    /// anything but what it is) could be misread as a DELTA against a totally unrelated belief
+    /// left over from the module just departed, and published/mirrored as a spurious op linking
+    /// two stores that have nothing to do with each other.
+    /// </summary>
+    [Fact]
+    public async Task AModuleChangeClearsStaleStoreBeliefRatherThanMisreadingTheNewModulesStock()
+    {
+        // Driven MANUALLY (both sides), not the auto-draining Rig/AgentLoop pair every other test
+        // in this file uses — deliberately. The scenario needs the module label and the fresh
+        // "new module" stock value to become visible to a pump in the SAME instant (the first
+        // pump against the new module must never see the module changed but the stock still
+        // reading the old module's post-transaction value, or vice versa); a background task
+        // pumping concurrently on its own 3 ms cadence cannot be trusted not to interleave a
+        // Pump() call between those two field writes, which produced a genuine test-harness race
+        // (an early, spurious re-baseline against the still-old stock value) distinct from the
+        // production defect this test exists to catch. Full manual control removes it.
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        FakeStoreBridge hostBridge = new();
+        CoopAgent hostAgent = new(
+            hostBridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+        FakeStoreBridge clientBridge = new();
+        CoopAgent clientAgent = new(
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+
+        Assert.True(
+            await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+            "host/client never connected");
+
+        static void DrainApply(FakeStoreBridge b, CoopAgent.PendingStoreApply next)
+        {
+            int before = b.TrueEngineState.GetValueOrDefault(next.Key);
+            int after = next.Kind == StoreOpKind.Add
+                ? before + next.Count
+                : Math.Max(0, before - next.Count);
+
+            if (after > 0)
+            {
+                b.TrueEngineState[next.Key] = after;
+            }
+            else
+            {
+                b.TrueEngineState.Remove(next.Key);
+            }
+        }
+
+        async Task PumpBothOnceAsync(int delayMs = 10)
+        {
+            hostAgent.PumpOnce();
+            while (hostAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply next))
+            {
+                DrainApply(hostBridge, next);
+            }
+
+            clientAgent.PumpOnce();
+            while (clientAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply next))
+            {
+                DrainApply(clientBridge, next);
+            }
+
+            await Task.Delay(delayMs);
+        }
+
+        hostBridge.TrueEngineState[Blaster] = 40;
+        clientBridge.TrueEngineState[Blaster] = 40;
+        hostBridge.OpenStoreId = StoreId;
+        clientBridge.OpenStoreId = StoreId;
+
+        for (int i = 0; i < 20; i++)
+        {
+            await PumpBothOnceAsync(15);
+        }
+
+        // A genuine transaction in the FIRST module, converged on both sides — establishes a
+        // real, non-zero belief (39) for (StoreId, Blaster) that a module-unaware pump would
+        // otherwise carry forward.
+        hostBridge.TrueEngineState[Blaster] = 39;
+
+        for (int i = 0; i < 400 && clientBridge.TrueEngineState.GetValueOrDefault(Blaster) != 39; i++)
+        {
+            await PumpBothOnceAsync(5);
+        }
+
+        Assert.Equal(39, clientBridge.TrueEngineState.GetValueOrDefault(Blaster));
+
+        uint versionBeforeTransition = host.Store.Version;
+
+        // The module changes UNDERNEATH the still-open store — deliberately NOT toggling
+        // OpenStoreId through 0 first (a plain close/reopen already resets
+        // _openStoreBaselined on its own, per the pre-existing "no store open" branch; that path
+        // is not what this test is for). This is the case that path does NOT cover: the bridge's
+        // own "is a store open" read staying nonzero straight through the transition (a fast
+        // module load, or a pump tick that simply does not land inside the gap) — the ONLY
+        // signal StorePump has left that anything changed is the module name itself. The NEW
+        // module happens to place an entirely unrelated store at the SAME object id (StoreId),
+        // with its own pristine, never-transacted stock of 40 — NOT 39 — and this becomes true in
+        // the SAME instant the module label does, so no pump can ever observe one without the
+        // other: without the module-clear fix, both sides' engine belief still holds "39" from
+        // the departed module, so this fresh scan (40) would read as a genuine local Add of 1 and
+        // be published/mirrored — a spurious op linking two stores that share nothing but a
+        // reused numeric id.
+        hostBridge.LocalModule = OtherModule;
+        clientBridge.LocalModule = OtherModule;
+        hostBridge.TrueEngineState.Clear();
+        hostBridge.TrueEngineState[Blaster] = 40;
+        clientBridge.TrueEngineState.Clear();
+        clientBridge.TrueEngineState[Blaster] = 40;
+
+        for (int i = 0; i < 30; i++)
+        {
+            await PumpBothOnceAsync(10);
+        }
+
+        Assert.True(
+            hostBridge.TrueEngineState.GetValueOrDefault(Blaster) == 40
+                && clientBridge.TrueEngineState.GetValueOrDefault(Blaster) == 40
+                && host.Store.Version == versionBeforeTransition
+                && client.Store.Version == versionBeforeTransition,
+            "the new module's pristine stock was misread as a delta against the OLD "
+            + "module's belief and published/mirrored - "
+            + $"host={hostBridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+            + $"client={clientBridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+            + $"host.Store.Version {versionBeforeTransition}->{host.Store.Version}, "
+            + $"client.Store.Version {versionBeforeTransition}->{client.Store.Version}");
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
+    /// The other half of the same fix: a REMOTE op still queued (but not yet applied through the
+    /// single-slot cheat channel) for the OLD module's store id must not land against whatever
+    /// object the NEW module now happens to hold that same id — the module change must drop the
+    /// pump's own optimistic apply queue, not merely its belief dictionaries.
+    /// </summary>
+    [Fact]
+    public async Task AModuleChangeDropsAnyApplyStillQueuedForTheOldModule()
+    {
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        using AgentLoop hostAgent = new(host, "host");
+
+        FakeStoreBridge clientBridge = new();
+        CoopAgent clientAgent = new(
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+
+        Assert.True(
+            await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+            "host/client never connected");
+
+        hostAgent.Bridge.TrueEngineState[Blaster] = 40;
+        clientBridge.TrueEngineState[Blaster] = 40;
+        hostAgent.Bridge.OpenStoreId = StoreId;
+        clientBridge.OpenStoreId = StoreId;
+
+        // Baseline the client manually (PumpOnce, not the auto-draining AgentLoop) so the
+        // queued-apply race below can be forced deterministically.
+        for (int i = 0; i < 20; i++)
+        {
+            clientAgent.PumpOnce();
+            await Task.Delay(15);
+        }
+
+        // The host sells a brand-new key. The client's next pump queues the mirrored insert as a
+        // PendingStoreApply WITHOUT draining it — exactly ClientBuyBackOfAMirroredKeyIsDetectedAndPublished's
+        // own race-forcing shape, reused here to leave an apply genuinely in flight.
+        hostAgent.Bridge.TrueEngineState[Spike] = 1;
+
+        bool queued = false;
+        for (int i = 0; i < 400 && !queued; i++)
+        {
+            clientAgent.PumpOnce();
+            if (clientAgent.TryDequeuePendingStoreApply(out CoopAgent.PendingStoreApply _))
+            {
+                // Do not apply it - leave the pump believing one more is still in flight isn't
+                // possible (TryDequeuePendingApply already removed it from the pump's own
+                // queue), so instead re-arm by requeuing nothing: the DEQUEUE ITSELF is what
+                // this test needs to have happened, proving the channel had something to apply.
+                queued = true;
+            }
+
+            if (!queued)
+            {
+                await Task.Delay(5);
+            }
+        }
+
+        Assert.True(queued, "the client never queued an automatic apply for the mirrored sell");
+
+        // The module changes NOW, before the dequeued apply (already handed to the single-slot
+        // cheat channel in a real run) would have landed in the engine. Without the fix, the
+        // client's own _wireTarget[Spike] entry (armed when the apply above was queued) survives
+        // the module change untouched.
+        clientBridge.LocalModule = OtherModule;
+        clientBridge.OpenStoreId = 0;
+        clientAgent.PumpOnce();
+
+        // Re-open "the same" numeric StoreId in the NEW module — a totally unrelated, pristine
+        // store that has never heard of Spike at all. Without the fix, StorePump's per-key visit
+        // loop unions in every key _wireTarget still holds for this store id (docs/research/
+        // store-sync.md's own "the exact buy-back race" comment on that union) — including the
+        // now-orphaned Spike entry — computes excess = actual(0, Spike is absent from this
+        // module's scan) - target(1) = -1, and PUBLISHES A SPURIOUS REMOVE for a key this
+        // module's store never stocked, silently zeroing the HOST's own genuine sale of it.
+        clientBridge.TrueEngineState.Clear();
+        clientBridge.TrueEngineState[Blaster] = 12;
+        clientBridge.OpenStoreId = StoreId;
+
+        for (int i = 0; i < 20; i++)
+        {
+            clientAgent.PumpOnce();
+            await Task.Delay(15);
+        }
+
+        Assert.True(
+            await StaysAsync(
+                () => hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Spike) == 1
+                    && hostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 40,
+                TimeSpan.FromSeconds(2)),
+            "a stale apply/wire-target entry left over from the OLD module reached the host as a "
+            + "spurious op against the NEW module's unrelated store - host state: "
+            + string.Join(", ", hostAgent.Bridge.TrueEngineState.Select(kv => $"{kv.Key.Resref}={kv.Value}")));
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
     }
 }
