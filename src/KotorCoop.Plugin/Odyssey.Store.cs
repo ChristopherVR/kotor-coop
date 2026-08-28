@@ -7,6 +7,8 @@
 // redeclared under new names here: a second `private const int CreatureItemRepo = ...` in this
 // file would be a duplicate-member COMPILE ERROR, not a style choice.
 
+using System.Text;
+
 namespace KotorCoop.Plugin;
 
 internal static unsafe partial class Odyssey
@@ -471,6 +473,13 @@ internal static unsafe partial class Odyssey
     // (rather than silently acting on the wrong store) unless the currently open panel's own
     // store id matches the one asked for. This is the task's own "refuse if the store GUI isn't
     // open" rule, made precise: it is not merely "a store" that must be open, it is THIS one.
+    //
+    // UPDATE (2026-08-29): `SellToStore` no longer calls `GuiSellItemFn` (this trace's own
+    // "SellItem" above) — a live pass found it silently no-ops, root-caused to one of its own
+    // internal re-resolutions failing. The trace above is kept as-is because it is still an
+    // accurate, disassembly-verified description of what the real click handler does, and
+    // `BuyFromStore`/`GuiBuyItemFn` (confirmed working) is UNCHANGED by this. See the
+    // 2026-08-29 section further below for the sell-specific fix.
 
     /// <summary>CGuiInGame::ShowStoreGui already declares <see cref="InGameGuiStoreOffset"/>
     /// and <see cref="StorePanelObjectIdOffset"/>; resolves the currently open store panel, or
@@ -499,7 +508,10 @@ internal static unsafe partial class Odyssey
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006C0BE0;
 
     /// <summary>CSWGuiStore::SellItem(panel, item) 0x006C0D80, ret 4. VERIFIED, fresh disasm
-    /// this pass — see the section header above for the full trace.</summary>
+    /// this pass — see the section header above for the full trace. NOT used by
+    /// <see cref="SellToStore"/> any more (see the 2026-08-29 root-cause section, below the
+    /// next one) — kept declared because it is still the documented, disassembly-verified
+    /// shape of the real click handler, referenced there.</summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> GuiSellItemFn =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006C0D80;
 
@@ -740,12 +752,164 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    // ---- root cause + fix (2026-08-29): `sell` reported success but never moved the item ---
+    //
+    // docs/research/store-sync.md's 2026-08-29 live pass ran the exact clean re-test the prior
+    // (2026-08-28) pass called for — a `scriptgive`d resref (untracked by the party-pool
+    // insert-visibility bug, ruling that out as a cause) staged, `sell` called, then an
+    // independent `items` sweep two minutes later still showed the item `yours`, never `held
+    // by` the store, and `grantgold 0` showed no price ever credited. `sell` itself answered
+    // "applied" (status 1) throughout — a full silent no-op, not a refusal.
+    //
+    // Full VERIFIED disasm of `CSWGuiStore::SellItem` 0x006C0D80 THIS PASS (the task this
+    // section exists to close): the function's FIRST four gates, in order — item (the one
+    // stack argument) non-null, its OWN re-resolved acting player non-null
+    // (`GetPlayerCreatureId 0x4AEA40` -> `GetCreatureByGameObjectID 0x4AE770`), its OWN
+    // re-resolved store non-null (panel `+0x2278` -> `GetStoreByGameObjectID 0x4AE7B0`), and
+    // `GetItemRepositoryFn(that re-resolved player, 1)` non-null — ALL run, and any one of them
+    // failing jumps straight to the function's tail with NO OTHER WORK DONE, before the sell
+    // price is even looked up, let alone gold changed or the item moved. This is decisive
+    // together with the live pass's own "gold never changed" observation: `SetGold` (the
+    // function's step 2, AFTER all four gates) never ran, so the 2026-08-29 sell demonstrably
+    // died at one of these four early, silent bail-outs — not deeper in the function (the
+    // Plot-item refusal inside `AcquireItem`, chased below, happens even later and would still
+    // have let gold change first).
+    //
+    // WHICH of the four gates failed was not pinned down this pass (no live rig available —
+    // see docs/CONTRIBUTING.md's own "No rig" note for this pass) — `GetItemRepositoryFn`'s own
+    // fresh disasm (0x004EF770, re-verified this pass) shows its main branch resolves a fixed,
+    // creature-independent singleton (`CSWPartyTable::GetPartyItems 0x00563340`) whenever the
+    // PASSED creature's own `+0xA88` flag is set, which is true for essentially any live party
+    // member — making a repo-resolve mismatch between `SellItem`'s own internal player and
+    // `SellToStore`'s C#-supplied one unlikely, but not ruled out, and the player/store
+    // resolve calls were not independently instrumented live either.
+    //
+    // THE FIX does not chase which gate it was, because it does not need to: `SellToStore`
+    // already independently resolves and validates its OWN player (the caller's, threaded in),
+    // its OWN store (`ResolveStoreBase`, matched against the open panel's own store id), and
+    // its OWN repo (`GetItemRepositoryFn(player, 1)` — successful, since it is what FOUND the
+    // item being sold in the first place). Rather than hand the item to `SellItem` and hope
+    // its OWN, separately-resolved copies of the same three things agree, `SellToStore` now
+    // drives the same underlying primitives `SellItem` itself calls (its OWN §-cited trace,
+    // above), directly, with its own already-good pointers:
+    //   1. Refuse a Plot-flagged item itself (`StoreSellGuard.IsPlotItem`) — `AcquireItem`
+    //      (0x005C7610) refuses one unconditionally as the SECOND thing it does (VERIFIED,
+    //      fresh disasm this pass: right after its own item-null check — `AcquireItem` takes
+    //      only the item as an argument, so unlike `SellItem` there is no separate player/store
+    //      null check to run first) — reproduced here so a doomed sell is reported with a
+    //      specific reason instead of the store silently declining deeper in.
+    //   2. Price via `GetItemSellValueFn` (0x006C07F0, `SellItem`'s own step 1).
+    //   3. Unlink from the player's repo (or split off 1 unit of a stack via `SplitItemFn`,
+    //      0x0055F280 — `SellItem`'s own finite-stack tail, VERIFIED fresh disasm this pass).
+    //   4. `AcquireItemFn` (0x005C7610, `SellItem`'s own step 3) moves it into the store.
+    //   5. Credit gold (`SetGoldFn`, `SellItem`'s own step 2 — reordered to come AFTER
+    //      `AcquireItem`, matching the order these steps' OWN dependency requires: the price was
+    //      already looked up before the item moved, same as retail) — and write the SAME new
+    //      total into the panel's own cached currency-label int (`StorePanelGoldCacheOffset`,
+    //      `+0x2270`) that `BuyItem` itself reads as ITS OWN arithmetic base rather than a fresh
+    //      `GetGold` call (VERIFIED, both functions' disasm) — otherwise a follow-up buy on the
+    //      same open panel would compute against a stale pre-sell gold figure.
+    //   6. Refresh both on-screen lists once after the whole loop (the same two calls
+    //      `SellItem`'s own tail makes per-unit) so the GUI matches reality without needing
+    //      `SellItem` itself in the loop at all.
+    //
+    // `AcquireItem`'s own return value is NOT checked (deliberately — see its own doc comment:
+    // one of its three exit paths does not set an explicit success flag, so trusting it blind
+    // would be worse than not checking at all). A live-verified positive check (e.g. re-reading
+    // some engine-side "did the item actually move" signal) was considered and deliberately NOT
+    // added this pass: with no rig to validate a candidate check against, shipping an unverified
+    // guess as if it were a verified guard risks being WRONG in a way that is worse than no
+    // check — this codebase's own `buy` (confirmed working) sets the precedent of trusting the
+    // engine call the same way, checking only what can be ruled out ahead of time (the Plot-item
+    // case, above). Whoever next has rig access should watch specifically for a store entry
+    // silently vanishing (an `AcquireItem` refusal past the Plot check that this pass could not
+    // rule out) as part of the live re-test below.
+    //
+    // NEEDS-LIVE: this pass had no rig. The live re-test docs/research/store-sync.md's own
+    // 2026-08-29 section already spelled out — `scriptgive g_w_blstrpstl001`, `openstore
+    // Larrim_Store` on both, `sell Larrim_Store g_w_blstrpstl001`, then an `items` sweep
+    // confirming it is `held by` the store and gone from the player, and a buy-back on the
+    // OTHER instance — still needs to be run by whoever next has rig access. See that doc's own
+    // dated section for the full write-up this comment summarizes.
+
+    /// <summary>CSWSItem + this = the CSWSObject::plot field. VERIFIED, tools/kotor1_0_3.db:
+    /// CSWSItem.server_object embeds a CSWSObject at +0x010, and CSWSObject.plot sits at
+    /// +0x0F8, so 0x010 + 0x0F8 = 0x108. <c>CSWSStore::AcquireItem</c> tests this field and
+    /// refuses — unconditionally, right after its own item-null check — when it is nonzero.
+    /// See <see cref="StoreSellGuard"/> and the section header above.</summary>
+    private const int ItemPlotOffset = 0x108;
+
+    /// <summary>CSWGuiStore + this = the panel's own cached "gold currently on the currency
+    /// label" int (see the "CORRECTION" note above `ShowStoreGuiFn`'s own section). `BuyItem`
+    /// reads this SAME field — not a fresh `GetGold` call — as its own arithmetic base, so a
+    /// sell that updates the player's real gold without also updating this cache would desync
+    /// the NEXT buy on the same open panel. VERIFIED, fresh disasm (both BuyItem and SellItem
+    /// write it).</summary>
+    private const int StorePanelGoldCacheOffset = 0x2270;
+
+    /// <summary>CSWGuiStore::GetItemSellValue(panel, item) 0x006C07F0, ret 4. VERIFIED, fresh
+    /// disasm this pass — <c>SellItem</c>'s own price lookup, the sell-side mirror of
+    /// <see cref="GetItemBuyValueFn"/>.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int> GetItemSellValueFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int>)0x006C07F0;
+
+    /// <summary>CSWSStore::AcquireItem(store, item) 0x005C7610, ret 4. VERIFIED, full fresh
+    /// disasm this pass (the section header above): the store's own "take an item from the
+    /// seller" primitive — refuses (returns 0, no side effect) on a null item, a Plot-flagged
+    /// item (<see cref="ItemPlotOffset"/>), or (deeper in the function) an unresolvable current
+    /// possessor; otherwise unlinks the item from its CURRENT possessor via the item's OWN
+    /// <c>+0x268</c> possessor id (NOT via any repository pointer the caller supplies) and
+    /// links it into the store's stock, merging into a matching finite entry (StackSize++,
+    /// discarding any extra units on the incoming item — this is exactly why a stacked source
+    /// item must be split to exactly 1 unit first, see <see cref="SplitItemFn"/>) or appending
+    /// a fresh entry. Its return value is NOT reliable across every path (the "append a fresh
+    /// entry" tail falls through to whatever <c>AddItemToInventory</c> returned rather than
+    /// setting an explicit success flag) — <see cref="SellToStore"/> deliberately does not
+    /// check it, the same way the retail GUI handler itself never does; see the section header
+    /// above for why a live-verified alternative check was not added this pass.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int> AcquireItemFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int>)0x005C7610;
+
+    /// <summary>Splits exactly 1 unit off a stacked item, returning the NEW split-off item
+    /// (StackSize 1) and decrementing the source item's own StackSize in place — VERIFIED,
+    /// fresh disasm this pass of <c>SellItem</c>'s own finite-stack tail (`push 1; ecx=item;
+    /// call 0x0055F280`), which hands the split-off unit to <see cref="AcquireItemFn"/> the
+    /// same way this file's own <see cref="SellToStore"/> now does. Despite
+    /// tools/kotor1_0_3.db attributing the address to CSWSCreature (<c>SplitItem_2</c>), the
+    /// disassembled calling convention is unambiguous: <c>this</c> is the ITEM being split, not
+    /// a creature — the DB's class attribution is trusted here for the address only.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint> SplitItemFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint>)0x0055F280;
+
+    /// <summary>CSWGuiStore::PopulateStoreItemListBox(panel) 0x006C1840, ret 0 (this-only).
+    /// Refreshes the on-screen STORE list. VERIFIED safe to call directly outside a GUI click:
+    /// it is part of <c>BuyItem</c>'s own tail, and <c>buy</c> is confirmed working through
+    /// that exact call. <see cref="SellToStore"/> calls it once after its whole loop rather
+    /// than once per unit (a cosmetic refresh, not a correctness requirement).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PopulateStoreItemListBoxFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x006C1840;
+
+    /// <summary>CSWGuiStore::PopulateInventoryItemListBox(panel) 0x006C0850, ret 0. Refreshes
+    /// the on-screen PLAYER INVENTORY list — the sell side's counterpart to
+    /// <see cref="PopulateStoreItemListBoxFn"/>, also part of <c>SellItem</c>'s own tail.
+    /// Also the SAME accessor (<c>GetItemRepositoryFn(player, 1)</c>, per the 2026-08-28
+    /// section above) this file's own sell path resolves its repo through, confirming that
+    /// repo is genuinely what a real click's own inventory list would show.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> PopulateInventoryItemListBoxFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x006C0850;
+
     /// <summary>
     /// Sells up to <paramref name="count"/> units of the first item in
     /// <paramref name="player"/>'s own inventory whose tag matches
-    /// <paramref name="resrefAscii"/> to store <paramref name="storeObjectId"/>, through the
-    /// REAL <c>CSWGuiStore::SellItem</c> click handler. Requires the store's own GUI to already
-    /// be open and matching <paramref name="storeObjectId"/>.
+    /// <paramref name="resrefAscii"/> to store <paramref name="storeObjectId"/>. Requires the
+    /// store's own GUI to already be open and matching <paramref name="storeObjectId"/>.
+    ///
+    /// As of the 2026-08-29 fix (see the section header above) this drives the underlying
+    /// engine primitives (<see cref="GetItemSellValueFn"/>, <see cref="AcquireItemFn"/>,
+    /// <see cref="SplitItemFn"/>, gold) directly with THIS method's own already-validated
+    /// player/store/repo, instead of handing the item to the real <c>CSWGuiStore::SellItem</c>
+    /// click handler and trusting its own separately-resolved copies of the same three things
+    /// to agree — which is what silently no-op'd in the 2026-08-29 live pass.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -775,6 +939,12 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        nint store = ResolveStoreBase(storeObjectId);
+        if (store == 0)
+        {
+            return false;
+        }
+
         // BUG FIX (2026-08-28, live-found): this used to read `player + CreatureItemRepo`
         // (`+0xA30`) directly. VERIFIED, fresh disasm this pass (see the section header above,
         // "root cause + fix"): a live, in-party PC's actual inventory is the SHARED PARTY POOL
@@ -799,13 +969,69 @@ internal static unsafe partial class Odyssey
                 break;
             }
 
-            GuiSellItemFn(panel, item);
+            uint plot = *(uint*)(item + ItemPlotOffset);
+            if (StoreSellGuard.IsPlotItem(plot))
+            {
+                string resrefText = Encoding.ASCII.GetString(resrefAscii, resrefLength);
+                LastStoreNote = $"'{resrefText}' is a plot item and cannot be sold";
+                break;
+            }
+
+            int price = GetItemSellValueFn(panel, item);
+            int goldAfter = GetGoldFn(player) + price;
+
+            ItemIdentityFields fields = ReadItemFields(item);
+            uint stackSize = fields.StackSize == 0 ? 1u : fields.StackSize;
+
+            nint toAcquire;
+            if (stackSize > 1)
+            {
+                // Mirrors SellItem's own finite-stack tail: split off exactly 1 unit rather
+                // than handing the whole stack to AcquireItem, which only ever increments a
+                // matching store entry by 1 regardless of the incoming item's own StackSize
+                // (see AcquireItemFn's own doc comment) — handing it the full stack would
+                // silently discard every unit past the first.
+                toAcquire = SplitItemFn(item, 1);
+                if (toAcquire == 0)
+                {
+                    LastStoreNote = "failed to split a stacked item";
+                    break;
+                }
+            }
+            else
+            {
+                RepositoryRemoveItemFn(repo, item);
+                toAcquire = item;
+            }
+
+            // AcquireItem's own return value is not reliably checkable (see AcquireItemFn's own
+            // doc comment) and — like the retail GUI handler itself, and like this codebase's
+            // own already-confirmed-working BuyFromStore, which does not check the native
+            // SellItem call's outcome either — this is trusted to have succeeded once the ONE
+            // refusal this codebase CAN rule out ahead of time (the Plot-item check, above) has
+            // already been cleared. See the section header above for why a live-verified
+            // post-hoc check was deliberately not added this pass (no rig to validate one
+            // against).
+            AcquireItemFn(store, toAcquire);
+
+            SetGoldFn(player, goldAfter);
+            *(int*)(panel + StorePanelGoldCacheOffset) = goldAfter;
             sold++;
+        }
+
+        if (sold > 0)
+        {
+            PopulateStoreItemListBoxFn(panel);
+            PopulateInventoryItemListBoxFn(panel);
         }
 
         if (sold == 0)
         {
-            LastStoreNote = "no matching item in inventory";
+            if (LastStoreNote.Length == 0)
+            {
+                LastStoreNote = "no matching item in inventory";
+            }
+
             return false;
         }
 
