@@ -2046,3 +2046,67 @@ no config/README changes needed since neither flag flipped.
 **Source changed this session**: `docs/research/shared-inventory-v2.md` only (new §6, the two live
 findings above). No production code changed — every item was a live-verification pass against the
 mode-2 code already on `main`. This entry plus that write-up are the session's only output.
+
+## Rig pass (2026-08-29): shared-inventory-v2, second round against §7's fixes — item 1 still
+## disqualified (a NEW, distinct defect: a client's own reconcile-apply landing gets re-detected
+## and re-published as a fresh intent, no exponential doubling this time); item 2 blocked on the
+## client half by a `tar_m02aa` environment hazard, but the host-sell-never-mirrors result stands;
+## defaults stay at 0; baseline clean
+
+Task: re-run items 1/2 against `main` merged forward through §7 (retire-by-confirmed-snapshot-
+movement, cloned-under-lock belief, store-removal debounce, absent-store=unknown). Full detail in
+`docs/research/shared-inventory-v2.md`'s new §8; this entry is the session-level summary.
+
+### Item 1 — `party_pool_sync=2`: DISQUALIFIED, by a different mechanism than the prior round
+
+`END_M01AA`, no warp, `dialogue_item_sync=0`/`script_item_sync=0` isolated from the start. Three
+rapid host `pooladd g_i_medeqpmnt01`s. No exponential doubling this time — §7's fix for that
+specific pathology holds. But after everything settled (confirmed stable across 4+ minutes idle),
+the two engines had permanently diverged: net +3 on the host, 0 on the client, for the same key.
+Root-caused directly from the client's own log: its detect step fired twice for this key, each time
+within 0-2 seconds of that SAME key's own reconcile-apply landing — the client re-detected its OWN
+convergence-toward-the-snapshot as a fresh local player action and re-published it as a genuine
+intent, which the host (correctly, per its own rules) accepted and applied, corrupting the host's
+canonical state. This is the same general class of feedback the design's own §2.5 claims is
+structurally impossible, manifesting through a different door than the prior round's doubling. No
+crash. `party_pool_sync` stays OFF.
+
+### Item 2 — `store_sync=2`: client half blocked by an environment hazard, host-sell-never-mirrors
+### confirmed independently
+
+`party_pool_sync=0` (isolated per the prior round's own precedent), `store_sync=2`,
+`dialogue_item_sync=0`/`script_item_sync=0` kept isolated. ONE relocating `warp tar_m02aa` (host
+only). Both landed cleanly, no crash, zero liveness anomalies. Host's store GUI opened in 1 retry
+and stayed open. The CLIENT's store GUI never opened for the entire ~13-minute session — stuck on
+`"another modal screen is up"` through 8 retries of the documented `skipline`/`selectreply
+0`/`partyselect ok` loop, despite the client's own PC reading `hp 12/12`, not in combat, and
+`standup` confirming it was never itself down. The client's log repeatedly showed `"your party is
+down — a peer can still revive you"` (a companion, not the PC) — a different trigger than
+`store-sync.md`'s known `tp`-fall hazard (`tp` was never used this round); moving the host onto the
+client's own position and waiting 2.5 more minutes did not clear it. Host sell
+(`scriptgive`/`sell g_w_ionblstr01`) succeeded at the engine level (store stock 1 -> 2 on the
+host's own `items 99`); the client's `items 99` for the SAME object id in the SAME store still read
+stack 1 five minutes later — never mirrored. Code inspection shows `StorePumpV2.PumpClient`
+returns before reaching its reconcile logic whenever no store at all is open that tick, narrower
+than the file's own "reconcile needs no GUI" doc comment for a store never opened even once — a
+partial, not fully proven, explanation. Client buy-back and the "host re-buy refused" checks were
+not reached. No crash. `store_sync` stays OFF.
+
+### Item 3 — flip defaults: NOT REACHED, same as the prior round.
+
+### Item 4 — baseline: **PASS.**
+
+- `dotnet build KotorCoop.slnx -warnaserror`: clean, against the fast-forward-merged `main`
+  (`1e7abca`).
+- `src/KotorCoop.Plugin/build.ps1 -Install -WarnAsError`: clean both directories; `dinput8.dll`
+  byte-identical (2,060,288 bytes, same timestamp) both sides; `KotorCoop.Session.dll` confirmed by
+  byte-scan to contain `PartyPoolPumpV2`. Re-run clean at the end with no source changes.
+- `dotnet test tests/KotorCoop.Tests --no-build` (rig down): **2511/2511 passed**, zero failures.
+- `tools/verify.ps1`, fresh session, plain `coop.ini`: **41 passed, 8 failed** — the exact
+  documented baseline set, no regression, no crash.
+
+`party_pool_sync`/`store_sync` stay OFF (mode 0) on both game directories' `coop.ini`, reset to the
+plain example template at the end of the session.
+
+**Source changed this session**: `docs/research/shared-inventory-v2.md` (new §8) and this entry
+only. No production code changed.
