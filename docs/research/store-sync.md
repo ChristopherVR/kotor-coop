@@ -2387,3 +2387,110 @@ Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnin
 `dotnet test tests/KotorCoop.Tests --no-build --filter "FullyQualifiedName~Store"`: 172/172
 passed. Full suite, `dotnet test tests/KotorCoop.Tests --no-build`: **2415/2415 passed** (2413
 pre-existing + 2 new loopback tests), foreground, no regressions.
+
+## Live pass (2026-08-28, rig round) — the brand-new-key wire-mirror fix CONFIRMED live: a host
+## sell now genuinely mirrors to the client's copy and a buy-back is genuinely reachable; but a
+## NEW, real gap found — a client-side buy immediately after receiving a mirrored insert of that
+## SAME key was never detected/published back to the host for 2+ minutes. `store_sync` stays OFF
+
+Task: this round's queue item 1 — `warp tar_m02aa` both, `scriptgive` a finite resref on the host,
+`openstore Larrim_Store` both, `sell` it on the host and confirm the client's copy lists it (wire
+mirror), `buy` it back on the client and confirm it is gone from the host's copy, an infinite-stock
+sell/buy no-op, gold once per side, blackout+reconnect resync. Two-instance rig (GOG host `C:\GOG
+Games\Star Wars KOTOR (GOG)`, client `D:\Games\swkotor-gog-p2`), fresh worktree merged forward onto
+block v59 (`party-pool identity matcher with wildcards`).
+
+### The brand-new-key fix (prior no-rig round): CONFIRMED live
+
+`scriptgive g_w_ionblstr01` (item `0xB6`, a resref this doc's own §"An independent confound" note
+flags as finite and NOT pre-stocked by Larrim), `openstore Larrim_Store` on both (the host needed
+two retries past the documented ambient-modal trap — `skipline`/`selectreply 0` cleared it, exactly
+per this doc's own established recipe), `sell Larrim_Store g_w_ionblstr01` on the host. The host's
+own agent log (`store: local add of 1x 'g_w_ionblstr01' detected in store 0x74, publishing`) and the
+client's (`store: inserted 'g_w_ionblstr01' (0xB7) x1 into store 0x74`) confirm the wire mirror fired
+within one ~1 Hz tick (15:54:12 sell -> 15:54:15/16 mirrored insert) — the fix genuinely closes the
+prior "wire mirror never observed to fire" gap for a brand-new key, live, not just at the loopback
+layer.
+
+### NEW finding: a client-side buy of that SAME just-received key was not detected for 2+ minutes
+
+`buy Larrim_Store g_w_ionblstr01` on the CLIENT (after `setgold 5000` to afford it — see the gold
+hazard note below) succeeded genuinely (`buy: buy 'g_w_ionblstr01' x1 from store Larrim_Store`,
+15:55:08, the real `BuyItem` handler). Per this channel's own design, the client's next ~1 Hz scan
+of the still-open store should have diffed this decrease and published a `Remove` op. It never did:
+no `store: local remove ... detected, publishing` line appears anywhere in the client's agent log in
+the ~2.5 minutes that followed. Direct confirmation the host was never told: `grantgold 5000` then
+`buy Larrim_Store g_w_ionblstr01` on the HOST at 15:57:51 **succeeded** — the host's own copy of the
+store still held the unit the client had already bought away almost three minutes earlier. That
+later host buy's own mirror DID reach the client correctly a second later
+(`store: local remove of 1x 'g_w_ionblstr01' detected in store 0x74, publishing` at 15:57:53,
+`store: removed ... from store 0x74` applied on the client at 15:57:54) — so the wire channel itself
+is not globally broken; specifically the CLIENT's own detection of its OWN buy of a key it had only
+just received via mirror never fired.
+
+A same-round isolation test rules out "the client can never detect/publish at all": `scriptgive
+g_w_rptnblstr01` (a distinct resref, never touched by anything else this session) then `sell
+Larrim_Store g_w_rptnblstr01` **on the client** produced a clean `store: local add of 1x
+'g_w_rptnblstr01' detected in store 0x74, publishing` (15:59:29) that reached the host's own copy
+one tick later (`store: inserted 'g_w_rptnblstr01' (0xBE) x1 into store 0x74`, 15:59:30). Client-side
+detect/publish works in general; it specifically failed for a buy against a key the SAME instance
+had only just finished applying a remote insert for.
+
+**Leading hypothesis (not proven this round, no time budget for a source-level repro):**
+`StorePump.Pump`'s step 1 excludes any key still present in `_pendingApplyTarget` from detection
+(`Without(priorForDetect, _pendingApplyTarget.Keys)` / `Without(openStoreScan, _pendingApplyTarget.Keys)`,
+`src/KotorCoop.Session/Pumps/StorePump.cs`), and only clears a key from that set once
+`_knownEngineTotals[key] == target` is observed on a later tick. If the client's own local buy lands
+in the real engine BEFORE that confirming scan ever sees the mirrored insert's own target value
+land cleanly (i.e. the local player transacts the same key while the pump's own optimistic apply is
+still in flight), the key could plausibly never satisfy that equality check again — permanently
+excluding it from step 1's detection for the rest of the session. This is an INFERRED mechanism from
+reading the code against the live timeline, not confirmed by instrumentation this round; flagged as
+the concrete next thing to check (log `_pendingApplyTarget`'s own contents around the failure, or
+write a loopback test that has the local side transact the same key the pump is still landing an
+apply for) before this channel's next live attempt.
+
+### Incidental finding: `setgold` on one side, while the automatic gold ledger ("purse") is live,
+### produced a wildly wrong (but apparently non-persistent) gold value in the HOST's own log
+
+Using `setgold 5000` on the client (a DEV-ONLY, absolute, local-only repair primitive per
+`docs/CONSOLE.md`) to afford the buy-back above, the host's agent log recorded three successive
+`purse: peer 2 contributed ...` lines whose deltas grew increasingly nonsensical culminating in
+`party gold 999999999 -> -2294967078` — clearly a signed/unsigned delta-computation defect in
+whatever reconciles a peer's own gold change into the shared purse total. The REAL engine value
+appears to have stayed safely clamped throughout: a `buy` refusal read immediately afterward on
+BOTH instances reported a consistent `gold 0`, not a negative or wrapped number, so this looks like
+a display/bookkeeping-only defect in the purse pump's own delta math rather than actual corruption
+of the live `CSWPartyTable` wallet — but it was not root-caused this round (out of scope for this
+queue item, no time budget) and is flagged here for whoever next touches the gold-convergence
+channel. **Practical note for future rig rounds**: use `grantgold <delta>` (the documented
+"live-test primitive for gold convergence") rather than `setgold <absolute>` to top up affordability
+mid-session — `grantgold` produced no such anomaly anywhere in this round's own logs.
+
+### Infinite-stock buy: clean no-op, confirmed
+
+`buy Larrim_Store g_w_blstrpstl001` (the doc's own previously-established infinite-stock resref) on
+the host produced zero `store:` publish or apply lines on either side across an 8s watch — exactly
+the expected "nothing to detect" behaviour for an item whose engine-level stock never changes.
+
+### Blackout + reconnect: clean
+
+`netsim blackout 8` on the client, waited past the window: both instances reported `connected ...
+liveness anomalies: 0` afterward (host: `hosting on 0.0.0.0:27140`; client: `connected to
+127.0.0.1:27140 as peer 2`), both `swkotor.exe` processes confirmed alive and `Responding=True`
+throughout.
+
+### Verdict
+
+`store_sync` **stays OFF**. The brand-new-key wire-mirror fix is now live-confirmed (a real
+improvement over every prior round, which never got a mirror to fire live at all), but this round
+found a new, real, reproducible gap in the opposite direction the task's own recipe explicitly
+asked to exercise ("buy it back on the client... gone from the host's copy") — a client buy against
+a key it only just received via mirror is not detected/published, at least for 2+ minutes, which is
+disqualifying for a channel meant to converge automatically. No crash from any of this round's
+testing; both processes stayed alive and responsive throughout, including through the blackout.
+
+Build/test evidence: `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
+build.ps1 -Install -WarnAsError` (both game directories) clean this round; `dotnet test
+tests/KotorCoop.Tests --no-build`: 2444/2444 passed. No source change this round — live
+verification only.
