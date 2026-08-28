@@ -224,24 +224,41 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// on the same frame as a module change, and a cached creature pointer is the one thing in
     /// this file that is never safe to use unverified.
     /// </summary>
+    /// <summary>
+    /// ROUND 101 (party-reconciliation.md): executes <see cref="PartyPresenceReleaseOrderRule"/>'s
+    /// own fixed step list instead of a hand-written sequence of calls, so the ORDER — the exact
+    /// thing round 100's own investigation needed to confirm before it could trust anything else —
+    /// is pulled out into pure, unit-tested data rather than living only as prose in this
+    /// method's own comments.
+    /// </summary>
     public void ReleaseSession()
     {
-        int restored = ReleaseAllHeld();
-
-        if (restored > 0)
+        foreach (PartyPresenceReleaseStep step in PartyPresenceReleaseOrderRule.Steps(_phase7Release))
         {
-            PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
-        }
+            switch (step)
+            {
+                case PartyPresenceReleaseStep.ReleaseFaction:
+                    int restored = ReleaseAllHeld();
+                    if (restored > 0)
+                    {
+                        PluginHost.Log($"party drive: released {restored} companion(s) back to your own game");
+                    }
 
-        // ROUND 98: must run BEFORE Invalidate() below clears _trackedId — that array is the only
-        // record of which companions this pass actually had a resolved body for. See
-        // FollowPhaseReleaseRule's own remarks for why this needs to happen here specifically.
-        if (_phase7Release)
-        {
-            ReleaseFollowPhaseForTracked();
-        }
+                    break;
 
-        Invalidate();
+                case PartyPresenceReleaseStep.ReleaseFollowPhase:
+                    // Must run BEFORE Invalidate() clears _trackedId — that array is the only
+                    // record of which companions this pass actually had a resolved body for. See
+                    // FollowPhaseReleaseRule's own remarks for why this needs to happen here
+                    // specifically. PartyPresenceReleaseOrderRuleTests asserts this ordering.
+                    ReleaseFollowPhaseForTracked();
+                    break;
+
+                case PartyPresenceReleaseStep.Invalidate:
+                    Invalidate();
+                    break;
+            }
+        }
     }
 
     /// <summary>ROUND 98 (party-reconciliation.md): hands every companion this instance was

@@ -4720,3 +4720,196 @@ Build: no source change this round (live re-verification + read-only source inve
 `dotnet build KotorCoop.slnx -warnaserror` / `src/KotorCoop.Plugin/build.ps1 -WarnAsError` /
 `dotnet test tests/KotorCoop.Tests --no-build` all clean, per this session's own end-of-round
 verification pass (see docs/live-verification.md).
+
+## Round 101 (2026-08-28, static pass, no rig access) — root-caused round 100's silent no-op: a
+## DIFFERENT, already-shipped, default-ON fix (`party_together_fix`) clamps the exact field
+## `CSWParty::FindMemberIndexById` bounds its search by, hiding the mirrored companion from
+## `TryReleaseFollowPhaseOnUnmirror`'s own lookup deterministically, every time, not as a race.
+## Fixed with a bounded retry; every refusal branch now logs a distinct reason; a pure ordering
+## test locks in the `_trackedId`-before-`Invalidate` guarantee. `party_follow_phase7_release`
+## stays OFF pending the next live pass.
+
+Task: root-cause round 100's own "genuine, narrowed negative result" — `TryReleaseFollowPhaseOnUnmirror`
+producing neither a log line nor an effect despite every precondition (config on, a real non-reset
+phase captured pre-disconnect, `_trackedId` populated) looking satisfied. No rig this round;
+everything below is source-reading and direct disassembly (`tools/disasm.py`) against the real GOG
+binary.
+
+### Ordering, read against the actual call sites — no bug found here
+
+`PartyPresenceController.ReleaseSession()` (before this round's own refactor, see below) ran
+`ReleaseAllHeld()`, then (if `party_follow_phase7_release=1`) `ReleaseFollowPhaseForTracked()`,
+then `Invalidate()` — exactly the order round 100's own investigation already confirmed correct:
+`ReleaseAllHeld()` reads `_trackedId` but never clears it (its own doc comment says so, and its
+own gate shares the same array `ReleaseFollowPhaseForTracked()` reads), and `Invalidate()` is the
+only step that clears it (`Forget`, called from `Invalidate`'s own loop), and it ran last. `PumpSessionLifecycle`
+(`PluginHost.SessionLifecycle.cs`) calls `_partyPresence?.ReleaseSession()` after the camera
+controllers and before `_death`/`_partyRoster`/etc — also unchanged from round 100's own read.
+Nothing here was broken; round 100 already established this correctly by direct proof
+(`ReleaseAllHeld`'s own restore count).
+
+### ROOT CAUSE: `CSWParty::FindMemberIndexById`'s search bound is the exact field
+### `party_together_fix` clamps down, and clamps down continuously while a client mirrors a
+### companion — VERIFIED by direct disassembly this round
+
+`GetPartyIndexFn` (`CSWParty::FindMemberIndexById`/`GetIndex`, 0x006349C0) was already
+disassembly-cited in `docs/research/control-return.md` ("computes its argument via
+`CSWParty::FindMemberIndexById`... the SAME bound `PartyTogetherClampRule`'s clamp writes") but
+never traced end-to-end against this function's own failure. Full disassembly this round
+(`tools/disasm.py 0x006349C0 40`, GOG binary):
+
+```
+0x006349CD  mov edx, [ecx]        ; edx = party+0x00 — CSWParty's OWN live member-count field
+0x006349D1  test edx, edx
+0x006349D3  jle 0x6349e7          ; count <= 0 -> not found
+0x006349D5  add ecx, 0x24         ; ecx = first record (party+0x24), stride confirmed 0x88
+0x006349D8  cmp [ecx], esi        ; record's own stored id (offset +0) == the search id?
+0x006349DA  je 0x6349ea           ; found -> return the current index
+0x006349DC  inc eax
+0x006349DD  add ecx, 0x88
+0x006349E3  cmp eax, edx          ; index == count?
+0x006349E5  jl 0x6349d8           ; loop while index < count
+0x006349E7  or eax, 0xffffffff    ; exhausted count without a match -> -1
+```
+
+`party+0x00` is the loop's own upper bound, full stop — and it is the EXACT SAME field
+`PartyRosterController.SyncClientPartyTogetherState`/`Odyssey.TryClampClientPartyCount`
+(`party_together_fix`, default ON, CLIENT-ONLY) writes every frame, clamping it DOWN to
+`CSWPartyTable`'s companions-only count specifically to stop `IsPartyTogether` (a sibling function
+reading the identical field, per `Odyssey.DoorTransitions.PartyCount.cs`'s own citation of its
+loop bound) from refusing every door while a mirrored companion stands wherever the host's copy
+is. `PartyTogetherClampRule`'s own doc comment says plainly this is not an edge case: "In the
+ordinary case the array is ordered [PC, companion, companion], so 'the last one' is always a
+companion, and trimming it is exactly the harmless door-transition fix it was written for" — i.e.
+for any client mirroring exactly one companion (round 100's own rig setup), the clamp fires and
+holds continuously, every single frame, for the entire mirrored session. The trimmed member is, by
+construction, always the LAST one in the array — which for a one-companion session is the
+companion itself.
+
+So: `TryReleaseFollowPhaseOnUnmirror`'s `GetPartyIndexFn(party, clientObjectId)` call was never
+racing anything and never hitting a rare condition — it was searching a count-bounded array whose
+count had been deliberately, routinely trimmed to exclude the exact record being searched for, for
+as long as `party_together_fix` had been doing its job (i.e. the entire mirrored session). Nothing
+un-clamps `party+0x00` on release: the clamp only ever writes DOWN
+(`TryClampClientPartyCount`'s own contract, `before <= maxCount` refuses), and
+`SyncClientPartyTogetherState` simply STOPS re-clamping once the host roster is cleared (which
+happens well before `ReleaseSession` runs — `KotorGameBridge.SessionScopedBlockLevels` clears
+"companion presence"/"peer party roster" many entries before the list's own deliberately-LAST
+entry, "command") — but its last WRITE stands. `GetPartyIndexFn` returns -1 for the companion at
+the exact moment `TryReleaseFollowPhaseOnUnmirror` runs, deterministically, matching round 100's
+"genuine, narrowed negative result" precisely (not "NOT LIVE-TESTED" — actually observed to fail,
+every time, for a structural reason now pinned down).
+
+Ruled out as the (sole) explanation: a race in `KotorGameBridge.SessionScopedBlockLevels`'s own
+write order (`companion presence`/`peer party roster` clear well before `command`, the list's
+deliberately-last entry) — real, and worth a future round's attention (`PartyFollowController`'s
+own outer gate is `block.Command`, so it cannot itself observe that narrow a window, but
+`PartyRosterController.SyncClientPartyTogetherState`, gated only on `_enabled` and
+`TryGetHostPartyRoster`, could in principle keep re-clamping for a few extra frames after
+`PartyPresenceCount` has already fallen) — but not needed to explain round 100's result: the clamp
+is the STEADY STATE throughout mirroring, not something that only appears in a narrow teardown
+window, so this round's fix does not depend on that race existing or not.
+
+### Fix: retry once with the count restored to its true, un-clamped population
+
+`Odyssey.TryReleaseFollowPhaseOnUnmirror` (`Odyssey.DoorTransitions.StallRecovery.cs`): on a
+failed `GetPartyIndexFn` lookup, reads `CSWPartyTable`'s own companions-only count via the
+ALREADY-shipped `TryGetPartyTableMemberCount` (a DIFFERENT structure the clamp never touches —
+`CServerExoAppInternal+0x1B770`, not `CSWParty`), adds one for the PC (matching
+`GetClientPartyMemberCount`'s own doc comment on what CSWParty's count should read), and — only if
+the live count reads lower than that true value — writes it directly to `party+0x00` before
+retrying the lookup once. The restored value is deliberately left standing rather than reverted:
+it is the mathematically correct population, costs nothing to leave, and
+`SyncClientPartyTogetherState` will re-clamp it right back down on its own very next pass if a
+session is still actually mirroring — which, at the point `ReleaseSession` calls this, it never
+is (the host roster is already clear by then, so that controller has already stopped touching this
+field for this session).
+
+Kept narrow and local to this one function rather than patched at the `party_together_fix`/
+`PartyTogetherClampRule` layer: that clamp is a live, verified, default-ON door-transition fix
+serving its own purpose correctly, and generalizing this round's un-clamp-on-demand pattern to
+every consumer of `GetPartyIndexFn` (`TryGetPhaseAndPathNode`, `TryGetFollowDiagnostics`,
+`TryResetStuckFollowPhase`, and the rest of the `Odyssey.DoorTransitions.*` family) is a real,
+plausible follow-up — round 98's own finding that `PartyFollowController`'s per-companion loop
+never runs while mirroring (gated on `block.PartyPresenceCount != 0`) means those call sites have
+so far only ever been exercised on a HOST (where `party_together_fix` never runs, being
+CLIENT-ONLY) or on a client that is NOT currently mirroring anything — but a client that mirrors
+one companion while ALSO genuinely following another of its own is a real, untested combination
+this round did not have time to chase. Flagged, not fixed, this round.
+
+### Distinct refusal logging (this round's other direct ask)
+
+Every early return inside `TryReleaseFollowPhaseOnUnmirror` now logs its own reason before
+returning — `no client`, `no CSWParty`, `no follow record found... even after restoring CSWParty's
+own member count` (the retry described above runs before this one fires, so seeing it live now
+means the retry itself failed, a genuinely different and worse signal than round 100's blind
+silence), and `nothing to do - phase already at the reset sentinel` (the legitimate, non-error
+`ShouldRelease() == false` path, which previously returned silently with no way to tell it apart
+from an actual bug). The next live pass can read exactly which branch fired instead of needing
+round 100's own indirect `_trackedId`-via-`ReleaseAllHeld` proof chain.
+
+### Ordering pulled into pure, tested data
+
+`PartyPresenceReleaseOrderRule` (new) — `PartyPresenceController.ReleaseSession()` now executes
+its fixed `Steps(bool phase7ReleaseEnabled)` list instead of a hand-written sequence of calls, so
+the "`ReleaseFollowPhase`/`ReleaseFaction` before `Invalidate`" guarantee round 100 needed to
+confirm by indirect proof is now asserted directly by
+`PartyPresenceReleaseOrderRuleTests` (7 tests: both steps that read `_trackedId` run before the
+one step that clears it, for both kill-switch states; `ReleaseFollowPhase` is entirely absent when
+the flag is off; `Invalidate` always runs last; `ReleaseFaction` always runs first). This is a
+behavior-preserving refactor — `ReleaseSession`'s own observable order is unchanged — that makes a
+future accidental reorder a build-time/test-time failure instead of another silent no-op.
+
+### Honest status and live-verification recipe for whoever has the rig next
+
+**NOT YET LIVE-TESTED** (no rig this round, same caveat as round 98). The root cause is
+disassembly-grounded and, unlike round 98's own original theory, DIRECTLY explains round 100's
+own live data (a real, non-reset phase captured pre-disconnect, `_trackedId` provably populated,
+yet zero log line) rather than merely being consistent with it — but the fix itself has not been
+run against the real engine.
+
+1. `src/KotorCoop.Plugin/build.ps1 -Install` on the CLIENT install. `party_follow_phase7_release=1`,
+   `party_follow_finelog=1`, `party_together_fix=1` (the shipped default — leaving it OFF would
+   remove the very condition this round's fix targets and prove nothing about it).
+2. Repeat round 100's own recipe exactly: connect both instances, recruit/confirm one mirrored
+   companion, teleport the host leader a large distance twice, `disconnect` the client.
+3. **Expect this round's fix to change the outcome**: `party follow phase7release: 0x{id} reset
+   phase {X} -> -1 on unmirror` should now appear in the client's log at release — if it still does
+   not, the new refusal-reason logging pinpoints exactly which guard fired (no client / no CSWParty
+   / no follow record even after the retry / already at the sentinel), which is itself strictly
+   more information than round 100 had to work with even in a continued-negative outcome.
+4. Three reps, per the recipe round 98 originally asked for (rounds 99-100 each managed only one).
+5. If the log line appears but `PartyFollowController` still does not resume a genuine walk cycle
+   afterward, that is a DIFFERENT, later-stage question (round 98's own "Concrete next step" item 6
+   — `CurrentPathNode`/`DestNode`/`WriteCursor` possibly needing their own reset) and not evidence
+   against this round's fix.
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0 warnings 0 errors.
+`src/KotorCoop.Plugin/build.ps1 -WarnAsError`: clean, x86 confirmed, 0 warnings 0 errors.
+`dotnet test tests/KotorCoop.Tests --no-build`: **2420/2420 passed**, full suite, no failures (the
+two known-flaky `CoopCommandDispatcherTests` cases round 98 documented did not flake this run). 7
+new tests in `PartyPresenceReleaseOrderRuleTests.cs`, all green.
+`Odyssey.TryReleaseFollowPhaseOnUnmirror`'s own fix (the count-restore retry) is new unsafe
+engine-pointer code, same as every prior round's fix candidates, and is NOT exercised by the (x86
+NativeAOT, unreferenced-by-tests) plugin test project — it can only be verified live.
+`PartyPresenceReleaseOrderRule` is dependency-free (no `SharedBlockView`/`Odyssey`/unsafe
+pointers) and compiles directly into the test project via the established compile-include trick
+(`tests/KotorCoop.Tests/KotorCoop.Tests.csproj`). No `SharedBlock`/protocol version change —
+everything this round touches is plugin-internal, nothing crosses the wire.
+
+### Files
+
+- `src/KotorCoop.Plugin/Odyssey.DoorTransitions.StallRecovery.cs` —
+  `TryReleaseFollowPhaseOnUnmirror`: the disassembly-grounded root-cause doc comment, the
+  count-restore retry, and distinct refusal logging on every early-return branch.
+- `src/KotorCoop.Plugin/PartyPresenceReleaseOrderRule.cs` (new) — the pure, tested step-order
+  contract `ReleaseSession` now executes.
+- `src/KotorCoop.Plugin/PartyPresenceController.cs` — `ReleaseSession()` refactored to execute
+  `PartyPresenceReleaseOrderRule.Steps(...)` instead of a hand-written call sequence (behavior
+  unchanged).
+- `tests/KotorCoop.Tests/PartyPresenceReleaseOrderRuleTests.cs` (new) — the ordering tests.
+- `tests/KotorCoop.Tests/KotorCoop.Tests.csproj` — added the compile-include line for
+  `PartyPresenceReleaseOrderRule.cs`.
+- `docs/research/party-reconciliation.md` — this entry.
