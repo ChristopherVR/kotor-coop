@@ -7,13 +7,17 @@ characters, travel, fight, loot, talk and pause together.
 
 No game file is modified. Everything lives beside `swkotor.exe` and can be removed again.
 
-**New this release:** companion equipment now syncs live (re-equip a party member and your
-partner's copy updates within a few seconds), the Star Forge's Bastila/Malak duels let the other
-player spectate the fight instead of freezing, Pazaak hands are correctly detected so your
-partner sees you as "in a minigame" instead of standing idle, a `disconnect`→`reconnect` now
-reliably restores a mirrored companion (a prior caching bug could leave it stuck off), and
-internet play works without a relay for most home routers (automatic public-address discovery
-plus UPnP port mapping — see "Play over the internet" below). All are on by default. **Not yet
+**New this release (2026-08-29):** a companion that stalls partway through a leg while following
+now recovers on its own instead of standing frozen forever (`party_follow_stall_recovery`, on by
+default); losing the host no longer locks you out — every co-op lock releases within a few
+seconds, you keep playing solo, and rejoining is automatic when the host comes back
+(`host_loss_release`, on by default); the swoop race now runs end to end, with every other
+player held safely off the single-seat track and told who is racing instead of being dragged in
+behind them; if you never played this game before you can now join with `join_mode =
+newcharacter` — connect, create a character through the game's own New Game screen as normal,
+and the mod carries you into the host's world with it; a spectator's skip during someone else's
+conversation is swallowed the same way clicks already were; and a peer or companion that used to
+render as a stranger (or as Trask) right after a warp is fixed. All are on by default. **Not yet
 shared between players**: the party's stash pool and a merchant's buy/sell stock still run
 per-instance — every wire-sync design tried for either has been disqualified in live testing, so
 both stay off by decision rather than by caution; see "Something is wrong" below.

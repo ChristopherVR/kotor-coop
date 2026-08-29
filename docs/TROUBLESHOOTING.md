@@ -165,9 +165,18 @@ round 105 folded what they do into method `5` and measured it insufficient on it
 
 ## Swoop racing / a minigame won't start or gets stuck
 
-Confirmed, currently unresolved engine-level block, not a co-op regression — see
-[minigames.md](research/minigames.md)'s "blocked" entry for the exact mechanism and why
-diagnosing it further needs a native debugger this project doesn't have.
+Fixed 2026-08-29 — the "the race never dispatches" report was a wrong test recipe, not an
+engine-level block: the race branch of Gadon's dialogue needs the `Tar_SummonGadon` global (not
+`Tar_SwoopEng`, which an earlier round had set instead) plus three real reply picks, and with
+those the race runs end to end. A KOTOR swoop track is a single-seat area, so the co-op layer
+holds every other peer still with a "&lt;name&gt; is racing - waiting" notice
+(`minigame_lock_peers`, ON by default, `minigame_lock_timeout_s=600`) and refuses to follow-warp
+anyone onto the track (`minigame_modules`); rewards (gold, journal, the `Tar_Swoop*` globals)
+reach everyone through the ordinary globals channel. The one remaining gap is NEEDS-LIVE: the
+keyboard half of the peer lock only confirms its own mechanism engages, never confirmed to stop
+a real PHYSICAL keypress (injected keystrokes never reach this game, same limit as the Star
+Forge spectate lock). The `delay_probe` diagnostic splice used to trace the original dispatch
+chain ships OFF by default. See [minigames.md](research/minigames.md) §24.
 
 ## `kotorcoop-*.log` keeps growing / disk usage from logs
 
