@@ -24,9 +24,18 @@ public readonly record struct PartyPoolStackKey(
 {
     /// <summary>The four non-stack fields of a live item's identity, keyed the same way this
     /// struct is — the bridge-side helper that turns a scanned <see cref="ItemIdentity"/> into
-    /// a wire key.</summary>
+    /// a wire key.
+    ///
+    /// ⚠ The flags byte is NARROWED to <see cref="ItemIdentity.StackIdentityFlagMask"/> on the
+    /// way in, so a key can never encode a distinction the engine's own merge predicate does not
+    /// make (see that constant's remarks for the disassembly, and
+    /// docs/research/shared-inventory-v2.md §13.2/§14 for the live failure that motivated it).
+    /// Normalising HERE, at construction, rather than in a custom equality is deliberate: both
+    /// instances then derive the byte-identical key for the same stack, which keeps
+    /// <c>EntryDigest</c> and every dictionary lookup deterministic across the wire.</summary>
     public static PartyPoolStackKey From(string resref, ItemIdentity identity) =>
-        new(resref, identity.Charges, identity.MaxCharges, identity.Upgrades, identity.Flags);
+        new(resref, identity.Charges, identity.MaxCharges, identity.Upgrades,
+            identity.StackIdentityFlags);
 }
 
 public enum PartyPoolOpKind : byte

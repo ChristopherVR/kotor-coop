@@ -478,6 +478,20 @@ public static class CheatKinds
     /// console verb in its own right. See <c>SharedBlock.CheatKindQuickSave</c>.
     /// </summary>
     public const uint QuickSave = 60;
+
+    /// LIVE-TEST PRIMITIVE (docs/research/shared-inventory-v2.md §14): closes the full-screen
+    /// in-game GUI (equipment / inventory / character / journal / map / options) through the
+    /// engine's own <c>HideSWInGameGui</c>. No arguments; local only.
+    ///
+    /// It is the counterpart to <see cref="OpenStore"/>'s own refusal: that screen sets
+    /// <c>CGuiInGame+0x30</c>, which <c>ShowStoreGui</c> gates on, and nothing else in the
+    /// console can clear it — which is why the client half of four consecutive live store rounds
+    /// never ran. See <c>SharedBlock.CheatKindCloseGui</c>.
+    ///
+    /// ⚠ 53 is taken from a reserved per-stream range, not the running maximum — check
+    /// <c>SharedBlock</c>'s own numbering note before adding another.
+    /// </summary>
+    public const uint CloseGui = 53;
 }
 
 /// <summary>

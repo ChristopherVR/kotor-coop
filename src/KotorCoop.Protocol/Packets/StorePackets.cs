@@ -22,8 +22,12 @@ public readonly record struct StoreStackKey(
     /// <summary>The four non-stack fields of a live item's identity, keyed the same way this
     /// struct is — the bridge-side helper that turns a scanned <see cref="ItemIdentity"/> into a
     /// wire key for a specific store.</summary>
+    /// <remarks>⚠ The flags byte is NARROWED to <see cref="ItemIdentity.StackIdentityFlagMask"/>
+    /// exactly as <see cref="PartyPoolStackKey.From"/> narrows it, and for the identical reason —
+    /// see both of their remarks.</remarks>
     public static StoreStackKey From(uint storeObjectId, string resref, ItemIdentity identity) =>
-        new(storeObjectId, resref, identity.Charges, identity.MaxCharges, identity.Upgrades, identity.Flags);
+        new(storeObjectId, resref, identity.Charges, identity.MaxCharges, identity.Upgrades,
+            identity.StackIdentityFlags);
 }
 
 public enum StoreOpKind : byte

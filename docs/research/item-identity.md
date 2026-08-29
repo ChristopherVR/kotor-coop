@@ -777,3 +777,63 @@ body, so there is no case where the two disagree about the SAME id. The Tag-prox
 path (§8.2, §12.1) is untouched byte-for-byte, and remains what a peer's report of an id THIS
 session never itself created (a body spawned entirely on the OTHER side, forwarded only as a
 Tag over the wire) still falls back to.
+
+---
+
+## 14. What the ENGINE thinks makes two items "the same stack" — the merge predicate, fully
+## disassembled (2026-08-29)
+
+This document has always described the four persisted per-instance fields. It never said which of
+them the engine itself uses when it decides two stacks may combine, and the difference turned out
+to matter: `docs/research/shared-inventory-v2.md` §13.2 lost a live rig round to a shared-inventory
+stack key that encoded a distinction the game does not make, and §14 fixed it from the answer
+below.
+
+`CSWSItem::MergeItem` `0x00553F90` is short, and its first act is a call to the "may these two
+combine?" predicate at **`0x00553CF0`** — VERIFIED, fresh full disassembly. That predicate is a
+flat run of early-outs, every one of which must pass:
+
+| compared | field | verdict |
+| --- | --- | --- |
+| `+0x294` | **Upgrades** mask | part of stack identity |
+| `+0x258` | **Charges** | part of stack identity |
+| `+0x288` | flags dword — **but only bit 5** | only **Stolen** is part of stack identity |
+| `+0x0C` | base-item type (the row `+0x24`'s max-stack comes from) | part of stack identity |
+| `+0x248`, `+0x24C`, `+0x108` | (not chased this pass) | part of stack identity |
+| `+0x264`, `+0x265`, `+0x266` | three bytes (not chased this pass) | part of stack identity |
+| `+0x28` | a `CExoString` compare via `0x005E5310` | part of stack identity |
+| `+0x25C` | **MaxCharges** | **NOT compared** |
+
+The flags comparison is the load-bearing part and it is three instructions
+(`0x00553D60`-`0x00553D6E`):
+
+```
+mov  eax, dword ptr [ebp + 0x288]   ; the other item's flags dword
+xor  eax, dword ptr [ebx + 0x288]   ; XOR against this item's
+test al, 0x20                       ; ONE bit: 0x20 == engine bit 5 == Stolen
+jne  <no merge>
+```
+
+**Engine bit 0 (Identified) and engine bit 6 (NonEquippable) are never read.** The engine merges
+two stacks that differ in either. So:
+
+- `ItemIdentity.FlagStolen` is a real stack discriminator and must stay in any key.
+- `ItemIdentity.FlagIdentified` and `FlagNonEquippable` are **not**, and a key that encodes them
+  claims a distinction the game does not make — which is exactly how one resref ended up living
+  under two `PartyPoolStackKey`s at once in a live pool, with units migrating between them every
+  time the engine merged.
+- Charges and Upgrades genuinely do keep stacks apart, so they stay.
+- MaxCharges does **not** — recorded here as a known, unobserved residual rather than acted on,
+  since `PartyPoolStackKey`/`StoreStackKey` also carry it as the apply payload.
+
+`ItemIdentity.StackIdentityFlagMask` (agent) and `PartyPoolIdentityMatcher.StackIdentityFlags`
+(plugin) are the two expressions of this, duplicated because the NativeAOT win-x86 plugin cannot
+reference the x64 agent's assemblies — the same reason `SafeChargeFields` duplicates
+`ItemIdentityLayout.Decode`'s charge clamp. ⚠ They must move together; changing one alone trades a
+fabricated deposit for a silently-failing withdrawal.
+
+⚠ None of this changes what `SaveItem`/`LoadDataFromGff` PERSIST — Identified is still a real,
+saved per-item fact and is still carried on the wire and applied. It is only not part of stack
+IDENTITY. The shared-inventory apply side reflects that by preserving whatever the blueprint gave
+a freshly-created body rather than forcing the bit either way
+(`Odyssey.IdentityFlagsForCreatedItem`).

@@ -1711,3 +1711,290 @@ host-sell mirror works; the host-side stock wipe did not recur; and the party po
 failure has a named mechanism with a specific fix to try, instead of a fourth round of "the same
 neighbourhood". No crash in either half of the session; both instances `Responding=True`
 throughout.
+
+---
+
+## 14. 2026-08-29, fifth rig round — §13.2's named keying fix is CORRECT and live-verified on
+## both sides; a NEW root cause found and fixed (a partial repository walk published as a
+## complete one — the host published an EMPTY pool while the pool was full); the client store
+## blocker is finally named and measured; and a NEW, reproducible party-pool defect on
+## ambient-baselined keys keeps `party_pool_sync` at **0**. `store_sync` also stays at **0** —
+## its client half remains unexecuted, for the fifth round running.
+
+Two-instance rig (`tools/demo.ps1`), both game directories `build.ps1 -Install -WarnAsError`'d
+and hash-verified after install (all three `dinput8.dll` — publish, host, client — byte-identical
+by SHA-256; `KotorCoop.Memory.dll`/`KotorCoop.Session.dll`/`KotorCoop.Protocol.dll` scanned at
+both byte alignments for this pass's own literals, per §13's lesson). `coop.ini` reset to
+`profiles/coop.ini.example` on both, then `party_pool_sync=2`/`store_sync=2`,
+`dialogue_item_sync=0`/`script_item_sync=0`, `party_pool_trace=1`.
+
+### 14.0 A rig hazard that invalidated the first attempt, and is worth writing down
+
+The first launch produced an immediate, spectacular runaway — 891, 1188, 1089 units of
+`g_i_adrnaline003` churning between the instances. **It was not a sync defect. The two instances
+had loaded DIFFERENT SAVES.** `demo.ps1 -Save 1` resolves to the most recently written non-autosave
+directory *per install* (`PluginMenuLoader.TryResolveSaveDirectory` orders by
+`LastWriteTimeUtc`), and other streams had left `zzz_swoop` newest in the host install and
+`QUICKSAVE` newest in the client's. The host loaded one world, the client another.
+
+Worse, the two installs' own `000002 - Game1` — the demo save both are supposed to share — had
+**drifted apart** (host's dated 2026-08-13, client's 2026-07-30, different contents: 1 medpac in
+the pool versus 2). Every round in this document that measured "client exactly N extra" against
+an assumed shared baseline should be re-read with that in mind.
+
+Fixed for this round by copying the host's `000002 - Game1` over the client's (the client's own
+copy backed up out of `saves/` first, so the enumerator cannot see it) and touching both
+directories so slot 1 resolves to it on both installs. Verified file-by-file: 5 files, all
+SHA-256 identical. **A two-instance inventory test is meaningless until this is checked**, and
+nothing in the rig checks it.
+
+### 14.1 Item 1 — §13.2's one-line hypothesis was right, and both halves are live-verified
+
+§13.2 predicted: mask `ItemIdentity.FlagIdentified` out of the stack key at BOTH ends, and
+warned that doing one end alone "trades a fabricated deposit for a silently-failing withdrawal".
+
+**The authority turned out to be readable rather than arguable.** `CSWSItem::MergeItem`
+0x00553F90's first act is the "may these two stacks combine?" predicate at `0x00553CF0`, and its
+ENTIRE flags comparison is three instructions at `0x00553D60`-`0x00553D6E`:
+
+```
+mov  eax, dword ptr [ebp + 0x288]   ; the other item's flags dword
+xor  eax, dword ptr [ebx + 0x288]   ; XOR with this item's
+test al, 0x20                       ; ...and test ONE bit: 0x20 == bit 5 == Stolen
+jne  <no merge>
+```
+
+Bit 0 (Identified) and bit 6 (NonEquippable) are never read — the engine merges across both. The
+same predicate DOES compare `+0x294` (Upgrades) and `+0x258` (Charges) in full, which settles
+§13.2's "charges/upgrades stay in the key" as fact rather than judgement. It does NOT compare
+`+0x25C` (MaxCharges); that is recorded here as a known residual rather than changed, because
+removing MaxCharges from the key would also remove it from the apply payload.
+
+Shipped, on both sides plus a third place §13.2 did not anticipate:
+
+- **agent**: `ItemIdentity.StackIdentityFlagMask` (`Known|Stolen`) narrows the flags byte inside
+  `PartyPoolStackKey.From` and `StoreStackKey.From`. Narrowing at CONSTRUCTION rather than in a
+  custom equality is deliberate — both instances then derive the byte-identical key, which
+  `EntryDigest` and every dictionary lookup depend on.
+- **plugin**: `PartyPoolIdentityMatcher.StackIdentityFlags` (Stolen alone; `Known` is a wire
+  meta-flag `EngineBitsToWireFlags` cannot produce from a live item) plus `NormalizeWireFlags`,
+  applied to BOTH sides of the comparison inside `Matches`.
+- **plugin write side, and this one is not optional**: `Odyssey.IdentityFlagsForCreatedItem`.
+  `ApplyItemIdentity` SETS or CLEARS all three bits unconditionally from what it is handed. Now
+  that a key cannot carry Identified, handing the key's flags straight through would make every
+  wire-driven apply, and every bare console `pooladd`, actively CLEAR the identified bit on an
+  item whose blueprint set it — manufacturing the unidentified twin all over again. Identified
+  and NonEquippable now come verbatim from the body the engine just built from the blueprint, so
+  a created item matches what the same blueprint gave the save, on both instances, with no
+  convention to agree on.
+
+**Live result, on a non-ambient key (`g_i_medeqpmnt01`), against a byte-identical save:**
+
+| clause | expected | measured |
+| --- | --- | --- |
+| host `pooladd` ×3 | client +3 | pool 1 → 4 on the host; client `actual` 1 → 4 in exactly 3 applies, one per deposit |
+| client `poolremove` ×1 | host −1 | client 4 → 3, `published=-1` once; host applied `remove of 1x`, engine answered `removed x1 (asked for 1)` |
+| both idle 5 min | no drift | 5 min 40 s: **zero** submits, **zero** trace lines, **zero** engine writes on either side |
+| client `pooladd` ×2 concurrent with host activity | +2 | client 3 → 5, `published=1` twice, host applied twice, converged |
+
+`published=0` on every single trace line except the four genuine local changes. **The client
+fabricated nothing, in either direction, at any point.** And §13.2's own unexplained line —
+`remove failed: no matching stack found`, the losing key — **did not occur once**: the withdrawal
+found the merged stack immediately. That is the one-sided-fix hazard §13.2 warned about, closed.
+
+Unit-pinned in `tests/KotorCoop.Tests/StackIdentityKeyingTests.cs` (both masks, both key types,
+the withdrawal matcher, and that Stolen/Known/Charges/Upgrades still split a key) and two
+pump-level cases in `SharedInventoryV2PumpTests` driving the real key derivation: a merge across
+the old two keys publishes zero movement in either direction, and a genuine deposit onto the
+merged key is still published exactly once. **All eight of the new assertions were confirmed to
+FAIL against the pre-fix code** by reverting both masks and re-running.
+
+### 14.2 A NEW root cause, live-caught: a partial repository walk published as a complete one
+
+Mid-round, at 14:38:02, the host's snapshot went to **zero for all five keys at once**, on a
+single tick. The client correctly reconciled its engine down to match — emptying a pool nothing
+had touched — and put all five back a tick later when the snapshot returned. The client's own
+bookkeeping was faultless throughout (`published=0` on every line: it fabricated nothing, it was
+obeying). **The lie was in the scan.**
+
+Both shared-inventory scans walk a `CItemRepository`'s id array and skip — with a bare
+`continue` — every id they cannot turn into a resref + identity, then return the partial
+aggregate as `true`: a complete, authoritative statement of the repository's contents.
+`TryGetItemResref` resolves an unknown id by rebuilding the item-tag cache, and
+`EnsureItemKnown` **refuses to rebuild for `ItemTagRebuildMs` — fifteen seconds — after the last
+rebuild**. So for up to fifteen seconds after any rebuild, every id not already cached resolves
+to nothing. When that is every id in the pool, the aggregate is EMPTY and is published as "the
+shared stash is empty".
+
+`IPartyPoolBridge` already says this in words for the scan's hard-failure paths — *"the caller
+must not treat that as 'the pool is empty'"* — but a skipped ITEM was never covered, and it is
+the far likelier failure. It is also strictly worse than a hard failure, because a hard failure
+returns `false` and both pumps already skip the tick (§12.3); this one returns `true`.
+
+This is very likely a contributor to several earlier rounds' ramps: an all-keys-zero tick followed
+by an all-keys-restore tick is precisely the shape §6.2/§10.1 kept recording, and against the
+pre-§12 pumps it would also have been *published* as a phantom remove per key.
+
+Fixed: new `ItemAggregateScanRule` carries the decision and the reasoning for both scans.
+`IsObservation(walked, unresolved)` is the strict rule — an aggregate that skipped ANYTHING is not
+evidence about the whole, because a partial miss is the same defect with a smaller blast radius
+(three of five keys resolving under-reports the other two, and under-reporting a total in a
+host-authoritative absolute-state design IS a removal order). An EMPTY repository stays a
+perfectly good observation, or a genuine emptying could never replicate. On refusal both scans
+hand back the last GOOD scan and leave it cached — the same "stale but honest" answer their
+existing pointer-read failures already give — and record why in
+`LastPartyPoolScanNote`/`LastStoreScanNote`. Each scan also spends ONE forced item sweep per pass
+trying to close the gap first, bounded to once because the rebuild is a full sweep.
+
+After the fix, the second round ran ~20 minutes with no recurrence.
+
+### 14.3 Item 1 verdict — `party_pool_sync` stays **0**, on a NEW and cleanly reproduced defect
+
+Everything in §14.1 held on a key ambient scripts do not touch. On a key they DO touch, it does
+not.
+
+`END_M01AA`'s own tutorial gear (`g_w_blstrpstl001`, `g_a_clothes01`) is ambient-deposited into
+the pool by `k_*` scripts and is therefore carried by §12.2's `PartyPoolAmbientBaseline` — a
+per-key offset netted out of the raw total. A genuine local deposit onto such a key is read
+wrong:
+
+```
+15:06:17  console: client `pooladd g_w_blstrpstl001`  ->  'added x1 to the party pool'
+15:06:19  trace: 'g_w_blstrpstl001' actual=4 belief=6 snap=6 raw=-2 published=-2 target=4
+15:06:20  HOST: party pool v2: submitting remove of 2x 'g_w_blstrpstl001'
+15:06:20  host engine: party pool: removed 'g_w_blstrpstl001' x2 (asked for 2)
+```
+
+**A deposit of +1 was scanned as −2, published as a remove of 2, and applied to the host's
+canonical engine.** Reproduced twice in the same session (the earlier instance was a +2 step on
+the same two keys, published and applied, taking both sides from 4 to 6).
+
+Two things about it are worth being precise about, in both directions:
+
+- It is **bounded and self-consistent**: both instances converged and went completely silent
+  afterwards each time. This is NOT the exponential-doubling class of §6/§10 — nothing ran away,
+  nothing needed a loop-breaker. §14.1's fixes plus §12's hold.
+- It is still **wrong units on the host's canonical engine, from a legitimate player action**,
+  and the affected keys are exactly the ones a real module hands you. That is disqualifying for a
+  shipped default on its own.
+
+The mechanism is `PartyPoolAmbientBaseline`'s per-key offset interacting with a newly-created
+body of a suppressed key (§12.2 replaced *skipping* a suppressed item with a per-key baseline
+precisely so merges could not fabricate movement; a genuine deposit onto a baselined key is the
+case it does not yet handle). Root-causing it is the next pass's job, and it now has a
+one-command repro: settle `END_M01AA`, then a single `pooladd g_w_blstrpstl001` on either side.
+
+### 14.4 Item 2 — the client store blocker is finally NAMED and MEASURED, and `store_sync` stays 0
+
+For the fifth round running the client's store half did not execute. But the reason is no longer
+a mystery, and this round did not lose the time to it — it spent the time identifying it.
+
+**`CGuiInGame+0x30` is not "some modal screen".** The symbol DB has no member there, so the
+existing refusal text — *"another modal screen is up (galaxy map / party select / ...)"* — was a
+guess, and an unactionable one. A byte scan of the GUI code range for disp8 stores to
+`[reg+0x30]` (`tools/fieldwrites.py` deliberately refuses disp8 offsets: its disp32 scan would
+miss them) finds exactly two writers in the whole class, a matched pair:
+`CSWGuiInGame::ShowSWInGameGui` sets it to 1 at `0x0062CAFB`, `HideSWInGameGui` clears it at
+`0x0062CC0D`. It is the **full-screen in-game GUI** — equipment / inventory / character /
+abilities / journal / map / options. `ShowStoreGui` (`0x0062E339`) and `ShowGalaxyMapGui`
+(`0x0062D069`) gate on it identically.
+
+**Measured live, in END_M01AA, no warp, no conversation, nothing on screen anyone asked for:**
+
+| | `CGuiInGame+0x30` | GUI-manager modal stack |
+| --- | --- | --- |
+| host | 0 | 0 |
+| **client** | **1** | **1** |
+
+That is the four-round blocker, in two numbers. The host's `openstore` succeeds first try because
+both are zero; the client's cannot, ever, because the full-screen GUI is up. Confirmed twice, by
+independent external `ReadProcessMemory` and then in-process by the plugin itself, agreeing
+exactly.
+
+`CSWGuiManager+0x98` is the ENTRY COUNT of `modal_stack` (symbol DB:
+`CSWGuiManager.modal_stack`, a `GuiManagerModalStack` at byte offset 148/`0x94`; this is the count
+beside the array pointer), reached through `CGuiInGame+0x38` (`CGuiInGame.manager`, byte offset
+56). It is the gate `HideSWInGameGui` bails on at `0x0062CBC9`-`0x0062CBD1`. Note the old
+message's two guesses — galaxy map and party select — are **non-null pointers on BOTH instances**;
+they are allocated panels, not "showing" flags, which is exactly why four rounds of reasoning from
+them got nowhere. The modal-stack count is the signal.
+
+New console verb **`closegui`** (no arguments, local only, cheat kind 53) calls the engine's own
+`HideSWInGameGui` — not a new primitive: it is the exact address and argument
+`MenuLoadController`'s load phases already call, live-proven across every join round. It is a
+deliberate no-op when the screen is not up, and it reports the field before and after rather than
+claiming success. Live-confirmed working end to end this round: correct APPLIED "already closed"
+on the host, correct engine-refused answer on the client with the real before/after values,
+argument rejection works, no crash.
+
+**It does not yet unblock the client**, because the engine refuses its own teardown while that
+modal stack is occupied. Popping it (`MenuLoadController` already declares `PopModalPanel`
+0x0040BE00) is the next step, and it wants its own live round: the value here is that the target
+is now one named field with a measured value of 1, instead of a fifth round of guessing. What
+puts a modal panel on the CLIENT's stack — and only the client's — during the rig's own join/load
+flow is the question to answer, and it is answerable from the client's own join path rather than
+from the store channel at all.
+
+Also produced this round, for whoever runs the store recipe next: a full enumeration of every
+module's `StoreList` with its ambient load, so §10.4's own next-step (c) ("pick a calmer store
+module") can stop being a guess. The calmest by a wide margin are `tat_m17ac` (1 store, 5
+creatures, **0 triggers**, 0 encounters), `tat_m17ad` (1 store, 8 creatures, 0 triggers) and
+`tat_m17ag` (2 stores, 3 creatures, 3 triggers) — against `tar_m02aa`'s 14 creatures and 6
+triggers.
+
+### 14.5 A separate, deterministic HOST CRASH on `warp tar_m02aa`, 3/3 — unattributed, needs a bisect
+
+Every attempt to reach the store module this round killed the host, at the same instruction, with
+identical `esp` and identical image-range stack values all three times:
+
+```
+FIRST-CHANCE access violation (0xC0000005) at 0x6B5FEE, eip 0x6B5FEE, esp 0x1AFB80;
+image-range stack values: 0x414E89 0x418DCD 0x6B5B48 0x41773C 0x733618 0x6B76A8 ...
+```
+
+`0x006B5FEE` is `mov edx, dword ptr [eax]` immediately after `call 0x6346C0` returned null, in
+`CSWGuiInGameEquip` code (nearest symbol `CSWGuiInGameEquip::UpdatePortraits` 0x006B5B60; the
+stack carries `0x6B5B48` too). `eip` is inside `swkotor.exe`, not our `dinput8`. It fires during
+the module teardown, a few milliseconds after `transition: closed the client world ahead of the
+map init`.
+
+Attempted isolations, all of which still crashed: with and without the dev-only `equip` verb
+having been used earlier in the session; with `party_roster_sync=1` and with `party_roster_sync=0`
+(the crash sits right after our own `party roster: local party is now 0x001` line, which turned
+out to be coincidence — it crashes identically with that channel off).
+
+**Not attributable to this stream, with an argument but not a proof.** On the third attempt
+`party_pool_sync=0`, no pool console verb was ever issued, no store GUI was ever opened and
+`closegui` was never called — so *none* of this pass's plugin code paths executed before the
+crash (`IdentityFlagsForCreatedItem`, `StackIdentityMatches`, `CloseFullScreenGui`, the
+`openstore` guard: all dormant), and the agent-side scan changes are `ReadProcessMemory` only and
+cannot fault another process. The immediately preceding round also ran the full party-pool recipe
+for 15 minutes, exercising those paths repeatedly, without a crash — only the warp crashed.
+
+Note it may well be **save-specific**: §13.1 warped to `tar_m02aa` successfully four hours
+earlier, on the rig's then-current (different, drifted) saves; this round is the first to run
+`000002 - Game1` on both installs. The honest next step is a bisect: same save, same warp, a
+`dinput8.dll` built from `main`.
+
+### 14.6 Item 3 — flip the defaults: NOT REACHED
+
+`party_pool_sync` is freshly disqualified by §14.3 and `store_sync`'s client half has still never
+been executed, so neither can support a shipped default. `profiles/coop.ini.example`,
+`CoopConfig`/`AgentSettings` defaults, `docs/CONFIG.md`, `README.md`, `docs/roadmap-seamless.md`,
+`tools/package-README.md` and `docs/live-verification.md` are all unchanged — both flags stay at
+their code default of **0** everywhere.
+
+### 14.7 What this round bought
+
+- §13.2's named keying defect is **closed**, on the engine's own evidence rather than a
+  hypothesis, on all three sides it touches, and live-verified in both directions including the
+  withdrawal that had been silently failing.
+- A **new root cause** — a partial repository walk published as a complete one — found, fixed,
+  and very plausibly a contributor to several earlier rounds' ramps.
+- The **client store blocker**, which has cost every store round this project has run, reduced
+  from a four-round mystery to one named field with a measured value and a specific next move.
+- A **rig hazard** (the two installs' demo saves had silently drifted apart, and `-Save 1`
+  resolves per-install) that invalidates cross-instance inventory measurements, documented — and
+  fixed for this rig.
+- One remaining party-pool defect, **cleanly reproduced with a one-command repro**, and one
+  deterministic host crash flagged for a bisect.

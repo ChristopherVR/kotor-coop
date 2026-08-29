@@ -32,6 +32,43 @@ public static class PartyPoolIdentityMatcher
     public const uint Wildcard = SharedBlock.CheatFieldUnchanged;
 
     /// <summary>
+    /// The ONLY identity flag bit that may take part in a stack match:
+    /// <c>SharedBlock.ItemIdentityStolen</c> (bit 2, value <c>0b100</c>). Declared as a literal
+    /// for the same reason <see cref="Wildcard"/> is: this class stays free of any
+    /// <c>SharedBlock</c> dependency.
+    ///
+    /// <c>SharedBlock.ItemIdentityKnown</c> (bit 0) is absent because it is not an engine bit at
+    /// all — it is the wire's "somebody actually read this" meta-flag, and
+    /// <c>Odyssey.PartyPool.cs</c>'s <c>EngineBitsToWireFlags</c> cannot produce it from a live
+    /// item. Including it here would make every wire-driven request (a scan always sets Known)
+    /// fail to match every live item (which never has it).
+    ///
+    /// ⚠ Identified (bit 1) and NonEquippable (bit 3) are deliberately EXCLUDED, and the
+    /// authority is the retail engine, not taste. The "may these two stacks combine?" predicate
+    /// at <c>0x00553CF0</c> — the first call <c>CSWSItem::MergeItem</c> 0x00553F90 makes —
+    /// compares the two items' <c>+0x288</c> flag dwords with exactly
+    /// <c>xor eax, [ebx+0x288]; test al, 0x20</c> at <c>0x00553D66</c>: ONE bit, engine bit 5,
+    /// which is Stolen. Engine bit 0 (Identified) and bit 6 (NonEquippable) are never read, so
+    /// the engine merges across them and a matcher that demands them is asking for a stack the
+    /// game has already dissolved.
+    ///
+    /// This is the plugin-side half of <c>ItemIdentity.StackIdentityFlagMask</c>, which narrows
+    /// the same bits out of a <c>PartyPoolStackKey</c>/<c>StoreStackKey</c> on the agent side.
+    /// The two are duplicated rather than shared for the identical reason
+    /// <see cref="SafeChargeFields"/> duplicates <c>ItemIdentityLayout.Decode</c>'s clamp: the
+    /// NativeAOT win-x86 plugin cannot reference the x64 agent's assemblies. ⚠ Changing one
+    /// without the other trades a fabricated deposit for a silently-failing withdrawal — that
+    /// exact one-sided hazard is what docs/research/shared-inventory-v2.md §13.2 warns about.
+    /// </summary>
+    public const uint StackIdentityFlags = 0b100;
+
+    /// <summary>Reduces a set of wire identity flags to <see cref="StackIdentityFlags"/>,
+    /// passing <see cref="Wildcard"/> through untouched (a wildcard is not a set of bits — it is
+    /// the absence of a demand, and masking it would turn it into one).</summary>
+    public static uint NormalizeWireFlags(uint wireFlags) =>
+        wireFlags == Wildcard ? Wildcard : wireFlags & StackIdentityFlags;
+
+    /// <summary>
     /// Charges/MaxCharges as the ENGINE'S OWN "what a save/load round trip would preserve" rule
     /// sees them (docs/research/item-identity.md §1.1 and its "oddity" note): both fields are
     /// persisted as GFF BYTES, so a raw value above 255 was never a real charge count — it is
@@ -84,7 +121,14 @@ public static class PartyPoolIdentityMatcher
             return false;
         }
 
-        if (requestedWireFlags != Wildcard && itemWireFlags != requestedWireFlags)
+        // Both sides are narrowed to StackIdentityFlags here, not merely expected to arrive
+        // narrowed: this is the one place a wire key and a live item's bits meet, so it is the
+        // one place that can guarantee neither side smuggles an Identified/NonEquippable bit
+        // into the comparison. See StackIdentityFlags' own remarks for the engine evidence.
+        uint itemFlags = NormalizeWireFlags(itemWireFlags);
+        uint wantedFlags = NormalizeWireFlags(requestedWireFlags);
+
+        if (wantedFlags != Wildcard && itemFlags != wantedFlags)
         {
             return false;
         }

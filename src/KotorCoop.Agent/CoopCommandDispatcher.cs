@@ -343,6 +343,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SetGlobal] = SetGlobal,
         [CoopCommandKind.Pazaak] = Pazaak,
         [CoopCommandKind.OpenStore] = c => OpenStore(c.Address ?? string.Empty),
+        [CoopCommandKind.CloseGui] = _ => SendCheat(new CheatRequest(CheatKinds.CloseGui)),
         [CoopCommandKind.PartySelectOk] = _ => SendCheat(new CheatRequest(CheatKinds.PartySelectOk)),
         [CoopCommandKind.Faction] = FactionCommand,
         [CoopCommandKind.PazaakEnd] = _ => SendCheat(new CheatRequest(CheatKinds.PazaakEnd)),

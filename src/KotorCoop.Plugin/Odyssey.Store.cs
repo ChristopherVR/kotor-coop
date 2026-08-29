@@ -128,9 +128,12 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // Identified/NonEquippable come from the blueprint the engine has just loaded, NOT from
+        // the wire key (which can no longer carry them) — see IdentityFlagsForCreatedItem in
+        // Odyssey.PartyPool.cs for why forcing them here would manufacture a split stack key.
         if (!ApplyItemIdentity(
                 itemId, upgrades, (uint)count, charges, maxCharges,
-                flags | SharedBlock.ItemIdentityKnown, out after))
+                IdentityFlagsForCreatedItem(flags, spawned), out after))
         {
             LastStoreNote = $"identity apply failed for 0x{itemId:X}: {LastItemResolveNote}";
             return false;
@@ -306,9 +309,24 @@ internal static unsafe partial class Odyssey
     /// ShowStoreGui's own first precondition check.</summary>
     private const int InGameGuiInitializedOffset = 0x108;
 
-    /// <summary>CGuiInGame + this = nonzero while another modal screen (galaxy map, party
-    /// select, ...) is up. VERIFIED, fresh disasm this pass of ShowStoreGui's own second
-    /// precondition check.</summary>
+    /// <summary>
+    /// CGuiInGame + this = nonzero while the FULL-SCREEN in-game GUI is up — the
+    /// equipment/inventory/character/abilities/journal/map/options screen the menu key raises,
+    /// not "some panel exists". VERIFIED as a precondition read by fresh disasm of ShowStoreGui
+    /// (<c>0x0062E339</c>) and <c>ShowGalaxyMapGui</c> (<c>0x0062D069</c>), which gate on it
+    /// identically.
+    ///
+    /// ⚠ NAMED, not guessed, as of docs/research/shared-inventory-v2.md §14: the symbol DB has no
+    /// member at CGuiInGame+0x30, and a byte scan of the GUI code range for disp8 stores to
+    /// <c>[reg+0x30]</c> (which <c>tools/fieldwrites.py</c> deliberately refuses — the offset fits
+    /// a disp8, so its own disp32 scan would miss it) finds exactly two writers in the whole
+    /// class, a matched pair: <c>CSWGuiInGame::ShowSWInGameGui</c> sets it to 1 at
+    /// <c>0x0062CAFB</c> and <c>CSWGuiInGame::HideSWInGameGui</c> clears it at <c>0x0062CC0D</c>.
+    /// This matters because it makes the refusal ACTIONABLE: it is not an unknown modal, it is
+    /// that one screen, and the same <c>HideSWInGameGui</c> 0x0062CBA0 this plugin already calls
+    /// from <c>MenuLoadController</c> is what takes it back down. Four consecutive live store
+    /// rounds lost the client half to this refusal (§8.2, §10.2, §13.1).
+    /// </summary>
     private const int InGameGuiBusyOffset = 0x30;
 
     /// <summary>CGuiInGame + this = CSWGuiStore* while a store panel is open, 0 otherwise.
@@ -354,6 +372,55 @@ internal static unsafe partial class Odyssey
         (delegate* unmanaged[Thiscall]<nint, uint, uint, void>)0x0062E310;
 
     /// <summary>
+    /// CSWGuiInGame::HideSWInGameGui(int) 0x0062CBA0 — the engine's own teardown for the
+    /// full-screen in-game GUI, and the ONLY thing that clears
+    /// <see cref="InGameGuiBusyOffset"/> (it does so at 0x0062CC0D; its counterpart
+    /// <c>ShowSWInGameGui</c> sets it at 0x0062CAFB, and those two are the whole set of writers
+    /// in the class).
+    ///
+    /// Not a new primitive: <c>MenuLoadController</c>'s main-menu and mid-session load phases
+    /// already call this exact address with this exact argument (<c>0</c>), live-proven across
+    /// every join round this project has run. It is redeclared here because
+    /// <see cref="CloseFullScreenGui"/> needs it beside the offsets that explain WHY, and
+    /// <c>MenuLoadController</c>'s copy is private to that class.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> HideSWInGameGuiFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x0062CBA0;
+
+    /// <summary>CGuiInGame + this = <c>CSWGuiManager*</c> (symbol DB: <c>CGuiInGame.manager</c>,
+    /// byte offset 56). The same object <c>CClientExoApp::GetSWGuiManager</c> 0x005EDA40
+    /// returns, which is how <see cref="HideSWInGameGuiFn"/> reaches it.</summary>
+    private const int InGameGuiManagerOffset = 0x38;
+
+    /// <summary>
+    /// CSWGuiManager + this = the ENTRY COUNT of <c>modal_stack</c> (symbol DB:
+    /// <c>CSWGuiManager.modal_stack</c>, a <c>GuiManagerModalStack</c> at byte offset 148 /
+    /// <c>0x94</c>; this is its second dword, the count beside the array pointer).
+    ///
+    /// This is the gate <c>HideSWInGameGui</c> bails on at <c>0x0062CBC9</c>-<c>0x0062CBD1</c>
+    /// (<c>mov eax,[edi+0x98]; test eax,eax; jne bail</c>, <c>edi</c> = the GUI manager), so it
+    /// is the one number that says whether the full-screen GUI can be taken down at all.
+    ///
+    /// MEASURED LIVE, 2026-08-29 (docs/research/shared-inventory-v2.md §14), and it is the
+    /// four-round store blocker in one line: on the HOST <c>CGuiInGame+0x30</c> = 0 and this
+    /// count = 0, so <c>openstore</c> succeeds first try; on the CLIENT, in END_M01AA, with no
+    /// warp and no conversation, <c>CGuiInGame+0x30</c> = 1 and this count = <b>1</b> — a modal
+    /// panel really is pushed, and the engine's own teardown therefore refuses. The old refusal
+    /// text guessed "galaxy map / party select"; both of those pointers are non-null on BOTH
+    /// instances (they are allocated panels, not a "showing" flag), which is why four rounds of
+    /// guessing from them got nowhere. The modal-stack count is the signal.
+    /// </summary>
+    private const int GuiManagerModalStackCountOffset = 0x98;
+
+    /// <summary>The number of panels on the GUI manager's modal stack, or -1 when the manager
+    /// could not be resolved. See <see cref="GuiManagerModalStackCountOffset"/>.</summary>
+    private static int ReadModalStackCount(nint gui)
+    {
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        return manager == 0 ? -1 : *(int*)(manager + GuiManagerModalStackCountOffset);
+    }
+
+    /// <summary>
     /// Opens the store GUI for the local player against <paramref name="store"/> (a base
     /// CSWSStore* — see <see cref="ResolveStoreBase"/> or <see cref="CreatureFinder.FindStoreByTag"/>)
     /// — the C++ entry point <c>ExecuteCommandOpenStore</c>'s own VM handler ultimately reaches
@@ -387,9 +454,17 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        if (*(int*)(gui + InGameGuiBusyOffset) != 0)
+        // A guard that fails safe still has to say what it saw. Naming the screen and printing
+        // the raw field turns "another modal screen is up" — the message four live store rounds
+        // could do nothing with — into a refusal a player or a rig can act on: close the
+        // equipment/map/journal screen and try again. See InGameGuiBusyOffset's own remarks for
+        // the two engine writers that settle what the field is.
+        int fullScreenGui = *(int*)(gui + InGameGuiBusyOffset);
+        if (fullScreenGui != 0)
         {
-            reason = "another modal screen is up (galaxy map / party select / ...)";
+            reason = "the full-screen in-game GUI is up (equipment / inventory / character / "
+                + $"map / journal / options) — close it first, e.g. `closegui` (CGuiInGame+0x30 = "
+                + $"{fullScreenGui}, GUI-manager modal stack = {ReadModalStackCount(gui)})";
             return false;
         }
 
@@ -419,6 +494,64 @@ internal static unsafe partial class Odyssey
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Takes the full-screen in-game GUI back down through the engine's own
+    /// <c>HideSWInGameGui</c> — the `closegui` live-test primitive, and the counterpart to the
+    /// refusal <see cref="OpenStore"/> raises on <see cref="InGameGuiBusyOffset"/>.
+    ///
+    /// This exists because that refusal has cost FOUR consecutive live store rounds
+    /// (docs/research/shared-inventory-v2.md §8.2, §10.2, §13.1): the client's own
+    /// <c>openstore</c> refused six times in a row with no conversation active and nothing
+    /// visibly modal, and the documented <c>skipline</c>/<c>selectreply 0</c>/<c>partyselect
+    /// ok</c> retry loop cannot clear it, because none of those three touches
+    /// <c>CGuiInGame+0x30</c>. The field's two writers (see
+    /// <see cref="InGameGuiBusyOffset"/>) say the only thing that clears it is this call.
+    ///
+    /// Deliberately a NO-OP when the screen is not up: <c>HideSWInGameGui</c> tears down
+    /// whatever panel index <c>CGuiInGame+0x2C</c> currently names, which is not something to
+    /// run speculatively. Reports what it saw either way, before and after, rather than
+    /// claiming success — the engine has its own early bail-outs (an uninitialised HUD, a
+    /// modal message box at the GUI manager's <c>+0x98</c>) that this cannot see past.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool CloseFullScreenGui(out string detail)
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            detail = "no in-game GUI resolved (not in a loaded module)";
+            return false;
+        }
+
+        if (*(int*)(gui + InGameGuiInitializedOffset) == 0)
+        {
+            detail = "the HUD is not initialised yet (still loading)";
+            return false;
+        }
+
+        int modalsBefore = ReadModalStackCount(gui);
+
+        int before = *(int*)(gui + InGameGuiBusyOffset);
+        if (before == 0)
+        {
+            detail = "the full-screen in-game GUI is already closed (CGuiInGame+0x30 = 0, "
+                + $"GUI-manager modal stack = {modalsBefore})";
+            return true;
+        }
+
+        HideSWInGameGuiFn(gui, 0);
+
+        int after = *(int*)(gui + InGameGuiBusyOffset);
+        detail = $"HideSWInGameGui called — CGuiInGame+0x30 {before} -> {after}, "
+            + $"GUI-manager modal stack {modalsBefore} -> {ReadModalStackCount(gui)}"
+            + (after == 0
+                ? string.Empty
+                : " (the engine refused its own teardown — it bails at 0x0062CBD1 while the "
+                    + "GUI manager's modal stack is not empty; that stack has to be popped first)");
+        return after == 0;
     }
 
     // ---- buy/sell: drive the real GUI button handlers directly (2026-08-28 addendum) -------

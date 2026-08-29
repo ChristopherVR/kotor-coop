@@ -135,23 +135,42 @@ public sealed partial class KotorGameBridge
         }
 
         Dictionary<StoreStackKey, int> scan = [];
+        int unresolved = 0;
+        bool forcedRebuild = false;
 
         for (int i = 0; i < count; i++)
         {
             if (!_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId)
                 || itemId is 0 or >= 0x7F000000)
             {
+                unresolved++;
                 continue;
             }
 
+            // Counted, forced once, and refused below if anything is still missing — the exact
+            // reasoning KotorGameBridge.PartyPool.cs's own loop carries, and for the same reason:
+            // this aggregate is published as a store's complete stock, and a stock under-reported
+            // by an unreadable id is a sell order to every other instance. See
+            // ItemAggregateScanRule.
             if (!TryGetItemResref(itemId, out string resref) || resref.Length == 0)
             {
-                continue;
+                if (!forcedRebuild)
+                {
+                    forcedRebuild = true;
+                    TryGetItemResref(itemId, out resref, force: true);
+                }
+
+                if (resref.Length == 0)
+                {
+                    unresolved++;
+                    continue;
+                }
             }
 
             if (!TryReadItemIdentity(itemId, out ItemIdentity identity) || !identity.IsKnown
                 || identity.StackSize == 0)
             {
+                unresolved++;
                 continue;
             }
 
@@ -169,6 +188,19 @@ public sealed partial class KotorGameBridge
             scan[key] = scan.GetValueOrDefault(key) + identity.StackSize;
         }
 
+        // An "infinite" entry is EXCLUDED, not unresolved — that exclusion is a decision made
+        // about an entry this pass read perfectly well, so it does not make the aggregate
+        // partial. Only ids that could not be turned into a resref+identity at all do.
+        if (!ItemAggregateScanRule.IsObservation(count, unresolved))
+        {
+            LastStoreScanNote = ItemAggregateScanRule.Explain($"store 0x{id:X}", count, unresolved);
+            storeObjectId = _storeLastScanId;
+            totals = _storeLastScan;
+            return _storeEverScanned && _storeLastScanId != 0;
+        }
+
+        LastStoreScanNote = string.Empty;
+
         _storeLastScanId = id;
         _storeLastScan = scan;
         _storeEverScanned = true;
@@ -176,6 +208,10 @@ public sealed partial class KotorGameBridge
         totals = scan;
         return true;
     }
+
+    /// <summary>Why the last store scan refused to publish what it built, or empty when it
+    /// published normally — the counterpart to <c>LastPartyPoolScanNote</c>.</summary>
+    public string LastStoreScanNote { get; private set; } = string.Empty;
 
     /// <summary>
     /// Resolves a store's <c>CItemRepository*</c> from its object id, purely by

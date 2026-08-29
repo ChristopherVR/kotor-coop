@@ -434,6 +434,13 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.OpenStore, Address: rest[0]);
     }
 
+    // closegui  - LIVE-TEST PRIMITIVE, see CoopCommandKind.CloseGui. No arguments: there is one
+    // full-screen in-game GUI and it is either up or it is not.
+    private static CoopCommand ParseCloseGui(string[] rest) =>
+        rest.Length == 0
+            ? new CoopCommand(CoopCommandKind.CloseGui)
+            : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: closegui  (takes no arguments)");
+
     // buy <store-tag|id> <resref> [count]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Buy.
     private static CoopCommand ParseBuy(string[] rest) => ParseStoreTrade(rest, CoopCommandKind.Buy, "buy");
 

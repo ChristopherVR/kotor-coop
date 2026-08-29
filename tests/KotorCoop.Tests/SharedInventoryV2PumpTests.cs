@@ -804,4 +804,115 @@ public class SharedInventoryV2PumpTests
         Assert.Contains("belief=0", line, StringComparison.Ordinal);
         Assert.Contains("published=3", line, StringComparison.Ordinal);
     }
+
+    // ---- defect E: one resref under two stack keys (§13.2) --------------------------------
+
+    /// <summary>Aggregates a pool the way <c>KotorGameBridge.PartyPool.cs</c> does — key each
+    /// live item by <see cref="PartyPoolStackKey.From"/> and sum the stack sizes. Going through
+    /// the real key derivation is the point: if the flags narrowing ever regresses, these item
+    /// lists stop collapsing to one key and the test sees it.</summary>
+    private static Dictionary<PartyPoolStackKey, int> Aggregate(
+        params (string Resref, byte Flags, int Count)[] items)
+    {
+        Dictionary<PartyPoolStackKey, int> totals = [];
+        foreach ((string resref, byte flags, int count) in items)
+        {
+            PartyPoolStackKey key = PartyPoolStackKey.From(
+                resref, new ItemIdentity((ushort)count, 0, 0, 0, flags));
+            totals[key] = totals.GetValueOrDefault(key) + count;
+        }
+
+        return totals;
+    }
+
+    /// <summary>
+    /// docs/research/shared-inventory-v2.md §13.2, reproduced at the altitude it actually lives
+    /// at. The pool holds two medpac bodies the engine considers ONE stack: the save's own, which
+    /// are identified (`/f3`), and units a cheat/apply created, which are not (`/f1`). The engine
+    /// then merges them — an ordinary thing for it to do, since its own merge predicate at
+    /// 0x00553CF0 never looks at the identified bit — and every unit ends up on a single body.
+    ///
+    /// NOTHING LEFT OR ENTERED THE POOL. Five units before, five after. The pump must therefore
+    /// publish nothing at all. Against the pre-fix keying this tick was a fabricated
+    /// <c>Remove</c> of the losing key plus a fabricated <c>Add</c> of the winning one — both
+    /// published, both applied by the host, which is how §13.2's three real deposits became
+    /// "client 12, host 10".
+    /// </summary>
+    [Fact]
+    public void AStackMergingAcrossTheIdentifiedBitPublishesNoMovementAtAll()
+    {
+        const string Resref = "g_i_medeqpmnt01";
+        const byte Identified = ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified;
+        const byte Plain = ItemIdentity.FlagKnown;
+
+        ScriptedBridge bridge = new();
+        StubClientSession session = new();
+
+        bridge.Pool = Aggregate((Resref, Identified, 2), (Resref, Plain, 3));
+        session.PoolSnapshot = Aggregate((Resref, Identified, 2), (Resref, Plain, 3));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps);
+        pump.Pump(Caps);
+
+        Assert.Empty(session.PoolIntents);
+
+        // The merge lands: all five units now sit on the identified body, none on the other.
+        bridge.Pool = Aggregate((Resref, Identified, 5));
+
+        pump.Pump(Caps);
+        pump.Pump(Caps);
+
+        Assert.Empty(session.PoolIntents);
+        Assert.Equal(0, DispatchPoolAppliesWithoutLanding(pump));
+
+        // ...and the mirror image, which is the same defect seen from the other end: a merge can
+        // destroy EITHER body, so the reverse migration must be equally invisible.
+        bridge.Pool = Aggregate((Resref, Plain, 5));
+
+        pump.Pump(Caps);
+        pump.Pump(Caps);
+
+        Assert.Empty(session.PoolIntents);
+        Assert.Equal(0, DispatchPoolAppliesWithoutLanding(pump));
+    }
+
+    /// <summary>The narrowing must not have made the pump BLIND: a genuine deposit onto the very
+    /// key a merge migrates within is still detected and published exactly once, and the merge
+    /// that follows it adds nothing.</summary>
+    [Fact]
+    public void AGenuineDepositOnTheMergedKeyIsStillPublishedExactlyOnce()
+    {
+        const string Resref = "g_i_medeqpmnt01";
+        const byte Identified = ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified;
+        const byte Plain = ItemIdentity.FlagKnown;
+
+        ScriptedBridge bridge = new();
+        StubClientSession session = new();
+
+        bridge.Pool = Aggregate((Resref, Identified, 2));
+        session.PoolSnapshot = Aggregate((Resref, Identified, 2));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps);
+        Assert.Empty(session.PoolIntents);
+
+        // A real local deposit of 3, which arrives (as a cheat-created body always did) without
+        // the identified bit — and merges into the save's stack a tick later.
+        bridge.Pool = Aggregate((Resref, Identified, 2), (Resref, Plain, 3));
+        pump.Pump(Caps);
+
+        (PartyPoolOpKind kind, PartyPoolStackKey key, ushort count) =
+            Assert.Single(session.PoolIntents);
+        Assert.Equal(PartyPoolOpKind.Add, kind);
+        Assert.Equal(Resref, key.Resref);
+        Assert.Equal(ItemIdentity.FlagKnown, key.Flags);
+        Assert.Equal(3, count);
+
+        bridge.Pool = Aggregate((Resref, Identified, 5));
+        pump.Pump(Caps);
+        pump.Pump(Caps);
+
+        Assert.Single(session.PoolIntents);
+    }
 }
