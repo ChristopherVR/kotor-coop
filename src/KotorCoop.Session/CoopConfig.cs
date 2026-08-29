@@ -20,6 +20,12 @@ namespace KotorCoop.Session;
 ///                       ; ProtocolConstants.DefaultPort (27015) — see docs/CONFIG.md footnote 8
 ///   password = swordfish
 ///   name = Malak
+///   join_mode = save         ; or newcharacter - go through the game's own New Game /
+///                             ; character-creation screens and carry THAT character into the
+///                             ; host's world. Default `save` (today's behaviour).
+///   auto_adopt_world = 1     ; a joiner whose world does not match the host's adopts the
+///                             ; host's world automatically instead of playing degraded
+///                             ; (default on) - docs/research/world-adoption.md
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
@@ -46,6 +52,30 @@ namespace KotorCoop.Session;
 public sealed record CoopConfig
 {
     public bool Host { get; init; }
+
+    /// <summary>
+    /// How a JOINER gets a character into the host's world — coop.ini <c>join_mode</c>,
+    /// default <see cref="JoinMode.Save"/> (this install already has a save; its PC is what
+    /// gets carried). <see cref="JoinMode.NewCharacter"/> is the first-time joiner: no save,
+    /// no character, so they go through the retail New Game / character-creation screens and
+    /// the character chargen writes to <c>TEMP:pifo</c> is carried into the host's world
+    /// instead of into the Endar Spire's own story start. Ignored when hosting. See
+    /// <see cref="JoinModeRule"/> and docs/research/world-adoption.md.
+    /// </summary>
+    public JoinMode JoinMode { get; init; } = JoinMode.Save;
+
+    /// <summary>
+    /// Whether a joiner whose world does not fingerprint the same as the host's adopts the
+    /// host's world automatically — coop.ini <c>auto_adopt_world</c>, ON by default.
+    ///
+    /// OFF restores the pre-adoption behaviour exactly: the join is still admitted, but
+    /// <c>ContentCompatibility.ApplyWorldMismatch</c> turns every object-id-keyed channel
+    /// (enemies, doors, placeables, container loot, encounters) off and the two players share
+    /// little more than chat and presence. ON is the default because that degraded session is
+    /// almost never what anyone wanted, and adoption never touches the joiner's own saves —
+    /// only the autosave slot.
+    /// </summary>
+    public bool AutoAdoptWorld { get; init; } = true;
 
     public string HostAddress { get; init; } = "127.0.0.1";
 
@@ -156,6 +186,26 @@ public sealed record CoopConfig
     /// unset keeps <see cref="ProtocolConstants.DefaultConnectTimeoutMs"/>.
     /// </summary>
     public int ConnectTimeoutMs { get; init; }
+
+    /// <summary>
+    /// Whether a CLIENT that loses its host runs the full plugin-side lock release (control
+    /// lock, party-select suppression, follow mirroring, dialogue spectate, minigame lock, ...)
+    /// instead of leaving every lock held until a manual disconnect — coop.ini
+    /// <c>host_loss_release</c>. ON by default — see <see cref="SessionSettings.HostLossReleaseEnabled"/>
+    /// for the full reasoning and docs/research/disconnect-reconnect.md's "host loss" section.
+    /// Ignored by a host.
+    /// </summary>
+    public bool HostLossRelease { get; init; } = true;
+
+    /// <summary>
+    /// How long a CLIENT'S host may stay silent before the <see cref="HostLossRelease"/> pass
+    /// fires — coop.ini <c>host_loss_timeout_ms</c>. 0 or unset keeps
+    /// <see cref="ProtocolConstants.PeerTimeoutMs"/> (5000), the same instant the existing
+    /// silence-based reconnect logic already gives up and starts re-Helloing. See
+    /// <see cref="SessionSettings.HostLossTimeoutMs"/>.
+    /// </summary>
+    public int HostLossTimeoutMs { get; init; }
+
     /// Show the persistent connection indicator ("co-op: connected, 2 players" /
     /// "co-op: reconnecting..." / "co-op: disconnected"), reposted only when it changes. On
     /// by default. Before this the ~ console's <c>status</c> verb was the only way to see any
@@ -531,6 +581,12 @@ public sealed record CoopConfig
         return new CoopConfig
         {
             Host = host,
+
+            // Tolerant on purpose (JoinModeRule.Parse): a misspelled value must degrade to
+            // today's behaviour, never to a character creation the player did not ask for.
+            JoinMode = JoinModeRule.Parse(kv.GetValueOrDefault("join_mode")),
+            AutoAdoptWorld = !kv.ContainsKey("auto_adopt_world")
+                || IsTruthy(kv.GetValueOrDefault("auto_adopt_world")),
             HostAddress = kv.GetValueOrDefault("host", "127.0.0.1"),
             HasHostAddress = kv.TryGetValue("host", out string? hostValue) && hostValue.Length > 0,
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,
@@ -562,6 +618,11 @@ public sealed record CoopConfig
                 : 9000,
             ConnectTimeoutMs = int.TryParse(kv.GetValueOrDefault("connect_timeout_ms"), out int ct)
                 ? Math.Max(ct, 0)
+                : 0,
+            HostLossRelease = !kv.ContainsKey("host_loss_release")
+                || IsTruthy(kv.GetValueOrDefault("host_loss_release")),
+            HostLossTimeoutMs = int.TryParse(kv.GetValueOrDefault("host_loss_timeout_ms"), out int hlt)
+                ? Math.Max(hlt, 0)
                 : 0,
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")

@@ -61,6 +61,7 @@
     <Compile Include="..\KotorCoop.Protocol\DialogueFollowMachine.cs" Link="Shared\DialogueFollowMachine.cs" />
     <Compile Include="..\KotorCoop.Protocol\DialogueNodeFollower.cs" Link="Shared\DialogueNodeFollower.cs" />
     <Compile Include="..\KotorCoop.Protocol\DialogueAutoJoinRule.cs" Link="Shared\DialogueAutoJoinRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\DialogueSkipAuthorityRule.cs" Link="Shared\DialogueSkipAuthorityRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ContainerAnimationEdges.cs" Link="Shared\ContainerAnimationEdges.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentCatalogue.cs" Link="Shared\SoloSegmentCatalogue.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentMachine.cs" Link="Shared\SoloSegmentMachine.cs" />

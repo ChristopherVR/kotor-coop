@@ -2218,3 +2218,58 @@ defaults (`profiles/coop.ini.example`) throughout; nothing needed resetting.
 
 **Source changed this round**: `tests/KotorCoop.Tests/WorldStatePumpItemsTests.cs` (new — the
 regression pin described above) and this entry. No production code changed.
+
+---
+
+## The new-character join (`join_mode = newcharacter`) — live pass 2026-08-29
+
+Full write-ups: [research/world-adoption.md](research/world-adoption.md)'s 2026-08-29 section
+(the mechanism, the two rig corrections, and the blocking finding) and
+[research/dialogue-skip-desync.md](research/dialogue-skip-desync.md)'s addendum (spectator
+skip). This is the short index.
+
+### Bring it up
+
+```powershell
+pwsh tools\demo.ps1 -Stop
+pwsh src\KotorCoop.Plugin\build.ps1 -Install
+pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2'
+pwsh tools\demo.ps1 -ClientNewCharacter     # client stays at the MAIN MENU with no save
+
+# drive the game's own character creation - NO mouse input
+$c = (@(Get-Process swkotor | Sort-Object StartTime))[1].Id
+pwsh tools\blockpoke.ps1 -ProcId $c chargen newgame
+pwsh tools\blockpoke.ps1 -ProcId $c chargen quick 2
+pwsh tools\blockpoke.ps1 -ProcId $c chargen accept
+pwsh tools\blockpoke.ps1 -ProcId $c chargen          # read the state back
+```
+
+⚠ `blockpoke chargen` pokes the plugin's request region DIRECTLY rather than going through
+`blockpoke console`. Measured this round: **the agent's console reply channel does not answer
+at the main menu** — `blockpoke console 'status'`, a long-standing verb, is equally silent
+there and answers normally in-world. Every chargen verb is menu-only, so the console route is
+unusable for exactly this feature. That is a pre-existing gap, not a regression.
+
+### Verified
+
+| | |
+|---|---|
+| `agent run --join`, `join_mode = newcharacter`, at the menu | runs (it used to exit 2) |
+| arm handshake agent → block → plugin | `newchar: armed (request 1)` |
+| `CharGenSaveHook` / `DialogueSkipHook` byte checks + installs | both, no crash |
+| `newgame` | class-selection screen up and rendering (screenshot) |
+| `chargen quick <0-5>` | class picked, optimised template applied |
+| `chargen accept` | `BeginPlayGame` runs, the new game starts |
+| the save hook's timing | fires immediately after `BeginPlayGame` |
+
+### NOT verified, and why
+
+* **The character capture.** `SaveCharGenCreature` has not flushed `Temp\pifo.ifo` when it
+  returns — 0 bytes at the hook, still 0 after a 400 ms spin, and `Temp\` empty by world-up.
+  Blocking; the recommended fix is in world-adoption.md.
+* **A spectator's skip being swallowed.** `skipline` pokes `CSWSObject+0x1F4` directly and
+  never enters `HandleInputEvent`, so it does not exercise the hook. Add a `skipkey` primitive
+  that calls `CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)`; `DialogueSkipHook.SwallowedCount`
+  is then the oracle.
+* **Post-adopt door convergence in the game.** Covered by loopback tests (one of which was
+  confirmed to FAIL against the pre-fix single-datagram snapshot); not re-run on the rig.

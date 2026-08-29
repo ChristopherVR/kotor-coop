@@ -22,6 +22,20 @@ password =
 ; Name shown to the other players. Optional: blank = a generated "playerNNN".
 name =
 
+; For mode = join: how you get a character into the host's world. Ignored when hosting.
+;   save          the default - you already have a save, and its character is what you bring.
+;   newcharacter  you have never played this game. Choose NEW GAME at the main menu and make
+;                 a character as usual; when you finish you are taken into the host's world
+;                 with it instead of into the Endar Spire. Afterwards, save once and you can
+;                 switch back to `save`.
+; See docs/research/world-adoption.md.
+join_mode = save
+
+; When your world does not match the host's, fetch and adopt the host's world instead of
+; playing a degraded session (enemies, doors, containers and party all off). Your own saves
+; are never touched - only the autosave slot is written. 0 restores the old behaviour.
+auto_adopt_world = 1
+
 ; Name shown for this session in the server browser. Falls back to the `name` above when
 ; unset (commented out).
 # server_name =
@@ -35,6 +49,17 @@ menu_button = 1
 ; How long (ms) a connect attempt waits for any reply before giving up. 0 or unset keeps the
 ; built-in 15000.
 # connect_timeout_ms = 0
+
+; When a CLIENT loses its host (silence, or the host shutting down cleanly), release every
+; plugin-side lock (control lock, party-select suppression, follow mirroring, dialogue
+; spectate, minigame lock, ...) so play continues solo instead of staying locked out until a
+; manual disconnect. On by default; the client still auto-reconnects in the background either
+; way. Set 0 to restore the old behaviour of leaving every lock held until manual disconnect.
+host_loss_release = 1
+
+; How long (ms) the host may stay silent before the release above fires. 0 or unset keeps the
+; built-in 5000 — the same instant the client already gives up and starts re-Helloing.
+# host_loss_timeout_ms = 0
 
 ; State send rate in Hz, clamped 5-120. 0 or unset keeps the agent's own built-in rate (30 Hz,
 ; ProtocolConstants.DefaultTickRate).
@@ -265,6 +290,54 @@ party_follow_phase2_kick=0
 # restart) right as mirroring ends, instead of letting the follow-AI resume against a stale
 # leftover. NOT YET LIVE-TESTED. Stays OFF by default pending a live A/B.
 party_follow_phase7_release=0
+
+# The RUNTIME companion follow-AI stall detector (docs/research/party-reconciliation.md round
+# 105) - the one candidate in this section that is ON by default, and the only one that watches
+# the follow record WHILE the game runs rather than at a single lifecycle edge.
+#
+# It targets the wedge rounds 96/97 reproduced five times out of five on the client
+# (warp end_m01aa -> tp 20 22 -1.3 -> walk 10 15): the companion parks in phase 7
+# (PathWaitDest) with pathNode == destNode and its recorded trail node sitting at exactly the
+# same point as BOTH the follow target and the cached prior position, so the engine's own
+# accept test - a STRICT "is the node closer to Target than to Prior" - compares 0 against 0
+# and can never pass, however long you wait. Every earlier candidate above misses it: they gate
+# on phase 2, on attempts>0, on a >=2 node gap, or on the leader being more than 3 units away,
+# and this stall is phase 7, attempts 0, gap 1, ~1.1 units.
+#
+# Fires at most once every 3 seconds per companion, at most 5 times per module without an
+# observed recovery, and never while a movie/conversation/roster freeze/module change owns the
+# companion. Set to 0 to turn the whole detector off.
+party_follow_stall_recovery=1
+
+# Which recovery the detector applies. All six were run live against the same reproduced wedge,
+# one at a time, through the dev-only `followstall <slot> [method]` console verb; only 3 actually
+# ended with the companion back beside its leader, so 3 is the shipped default. The others are
+# kept, numbered and documented because each one taught something real - see round 105 in
+# docs/research/party-reconciliation.md for the full A/B.
+#   1  phasereset    engine watchdog sentinel (-1) into the phase field + pathNode/destNode
+#                    re-pointed at the write cursor, so TryResetStuckFollowPhase makes it a clean
+#                    phase-0 FindPath next frame.  LIVE: restarted and re-wedged identically
+#                    within 8s, zero position change
+#   2  followleader  reissue ActionFollowLeader through the VM, bypassing the head-type/busy/
+#                    3-unit gates.  LIVE: dispatched cleanly, changed nothing at all
+#   3  positionparty the engine's own CSWPartyTable::PositionParty - the exact call a module
+#                    transition makes; resets all follow data and re-snaps every member into
+#                    formation.  LIVE: 16.5 units behind -> 0.88 units, in one call.  DEFAULT.
+#                    It relocates the companion rather than walking it, and also clears solo
+#                    mode and unstealths the party, which is why the detector gates it behind a
+#                    2s wedge, a real separation, a 3s cooldown and a per-module budget
+#   4  priortie      write the companion's own position into the cached prior field so the
+#                    engine's unmodified accept test can pass.  LIVE: real walking (3.44 units
+#                    from a 6.6-unit separation) but it converges onto the exact tie the STRICT
+#                    compare rejects and re-wedges there
+#   5  destnode      make DestNode differ from CurrentPathNode so the handler's forward search
+#                    reaches its unconditional accept branch (the union of the two older OFF
+#                    candidates).  LIVE: advanced the trail index, moved the companion 0.76
+#                    units the WRONG way, into a different frozen state
+#   6  priorpush     put prior a fixed multiple past the trail node, away from the target, so the
+#                    strict inequality holds by construction rather than by luck.  LIVE: 1.6
+#                    units of real progress, then a NEW frozen shape the detector does not watch
+party_follow_stall_recovery_method=3
 
 # The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
 # SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different

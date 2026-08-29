@@ -64,6 +64,9 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.WalkTo] = "walkto 1 2",
         [CoopCommandKind.LoadGame] = "loadgame 0",
         [CoopCommandKind.QuitToMenu] = "quittomenu",
+        [CoopCommandKind.NewGame] = "newgame",
+        [CoopCommandKind.ChargenQuick] = "chargen quick 0",
+        [CoopCommandKind.ChargenAccept] = "chargen accept",
         [CoopCommandKind.ScriptGive] = "scriptgive g_w_blstrpstl001",
         [CoopCommandKind.LootTake] = "loottake",
         [CoopCommandKind.PoolAdd] = "pooladd g_w_blstrpstl001",
@@ -83,6 +86,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.RemoveParty] = "removeparty 0",
         [CoopCommandKind.SetGold] = "setgold 5000",
         [CoopCommandKind.FollowKick] = "followkick 0",
+        [CoopCommandKind.FollowStall] = "followstall 0 1",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

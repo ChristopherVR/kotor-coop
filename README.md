@@ -23,7 +23,7 @@ attaches from outside with `OpenProcess`.
 | Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
 | Session lifecycle — menu, connect, save/load rejoin | Live-verified; the `host_load_readopt` regression and the STUNT_00 escape-pod crash are both CLOSED — same root cause, a dangling-pointer write storm in `PartySelectSuppressionController`, fixed 2026-08-27 and reconfirmed clean across three independent live re-verifications (last 2026-08-28) | [session-save.md](docs/research/session-save.md), [galaxy-map-and-party-select.md](docs/research/galaxy-map-and-party-select.md) |
 | Three-peer sessions (3+ players) | Live-verified — `demo3.ps1`/`verify3.ps1`, 34/34 checks passed, chat/phantoms/hit-tables all agreeing across three instances | [live-verification.md](docs/live-verification.md) |
-| Companion follow-AI | Reframed 2026-08-28: never runs for a mirrored companion by design, not by stall; a release-boundary reset fix (`party_follow_phase7_release`) is confirmed EXECUTING live across two rig rounds but has never yet caught a genuinely stuck phase, stays off | [party-reconciliation.md](docs/research/party-reconciliation.md) |
+| Companion follow-AI | **Stall fixed and on by default, 2026-08-29** (`party_follow_stall_recovery`). Root cause named: the engine's own `PathWaitDest` accept is a STRICT compare against a recorded trail node that has collapsed onto the cached prior position, so it can never pass and the companion freezes — reproduced 4/4, including a leader teleported 16.5 units away that the companion never recovered from. A runtime wedge detector now gathers the party through the engine's own `PositionParty`; five reps, every wedge recovered on the first attempt. Still by design: a MIRRORED companion's follow-AI does not run at all | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
@@ -98,6 +98,27 @@ the agent itself in the background. Everything optional lives in `coop.ini`
 ([docs/CONFIG.md](docs/CONFIG.md)); the zip's own `README.md` covers play, configuration and
 troubleshooting without needing this repo. CLI equivalent:
 `KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
+
+### Joining: which character you bring
+
+Co-op is one world — the host's — with each player in their own body. How your body gets there
+depends on what you already have, and `coop.ini`'s `join_mode` says which:
+
+| your situation | `join_mode` | what happens |
+| --- | --- | --- |
+| you have a save | `save` (the default) | your save's character is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
+| you have never played this game | `newcharacter` | connect, then choose **New Game** at the main menu and create a character exactly as you normally would. When you finish you are taken into the **host's** world with it, instead of into the Endar Spire |
+
+Either way **your own saves are never touched** — only the autosave slot is written — so
+leaving the session and loading your own game again costs nothing. What you give up when the
+worlds differ is the world you were playing: party, inventory, companions, globals and journal
+all come from the host, because in co-op those are shared. You bring your character; the host
+brings the world.
+
+After a `newcharacter` join, save once. From then on you have a save of your own, and
+`join_mode = save` (the default) does the right thing without being told.
+
+See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the mechanism.
 
 ### Sharing `dinput8.dll` with another mod
 
@@ -191,15 +212,26 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Only the host can switch party character**, mirrored to everyone else; control returns to
   your own character automatically on connect (`control_return=0` opts out). A mirrored
   companion's follow-AI never runs at all, by design (the reclaim that keeps local AI from
-  contesting a driven position also blocks the engine's own follow dispatcher) — a release-
-  boundary reset fix (`party_follow_phase7_release`) is confirmed EXECUTING live but has never
-  yet caught a genuinely stuck phase, so it stays off. `disconnect` then `reconnect` now reliably
-  re-mirrors a companion (round 104, 2026-08-28 — a prior caching bug is fixed). A mirrored
+  contesting a driven position also blocks the engine's own follow dispatcher). Where the
+  follow-AI DOES run, its long-standing "companion stands still and never catches up" stall is
+  fixed and on by default (`party_follow_stall_recovery`, 2026-08-29): a runtime detector spots
+  the exact wedged follow record and gathers the party through the engine's own routine, the same
+  one a module transition uses. It relocates the companion rather than walking it back — the
+  engine's own long-distance pathfinding limit underneath is real and still unfixed, so a
+  companion left far behind is gathered, not walked. `disconnect` then `reconnect` reliably
+  re-mirrors a companion (round 104, 2026-08-28). A mirrored
   companion can't fight for a client except through `companion_local_combat` (on by default). See
   [control-return.md](docs/research/control-return.md) and
   [party-reconciliation.md](docs/research/party-reconciliation.md).
 - **One conversation at a time**, by design — the other player spectates rather than a separate
   copy.
+- **Losing the host doesn't lock you out, live-verified.** A client whose host crashes, quits, or
+  drops off the network releases every co-op lock within `host_loss_timeout_ms` (default ~5s —
+  near-instant when the whole host process dies, measured live at 6.1s) and keeps playing solo —
+  companions, doors and dialogue all keep working — while re-Helloing automatically in the
+  background; the host coming back re-mirrors everything with no player action needed
+  (`host_loss_release`, on by default). See
+  [disconnect-reconnect.md §11](docs/research/disconnect-reconnect.md) for the rig pass.
 - **Companion experience and equipment sync are both live-verified and on by default**
   (`companion_xp_sync`, `companion_gear_sync` — see the status table); **dialogue recruitment
   sync is live-confirmed for two companions** (`dialogue_recruit_sync`, on by default), though a

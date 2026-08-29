@@ -20,6 +20,7 @@ param(
     [int]$Save = 1,
     [switch]$Stop,
     [switch]$SkipLaunch,
+    [switch]$ClientNewCharacter,
     # Extra raw args appended to instance 1/2's own `agent run` invocation — e.g.
     # -Agent1ExtraArgs @('--enemy-census-cap','5') to shrink the host's combat-census
     # truncation for a liveness-reconciliation live test (docs/research/creature-liveness.md).
@@ -52,6 +53,27 @@ function Set-AutoStartAgent {
     Set-Content -Path $path -Value $lines -Encoding ASCII
 }
 
+# The same single-key rewrite, for any key. Set-AutoStartAgent stays as it is rather than
+# becoming a call to this: it is referenced from the -Stop path, which must keep working even
+# if this one is edited, and it is the only key the rig writes on EVERY run.
+function Set-CoopIniKey {
+    param([string]$Directory, [string]$Key, [string]$Value)
+
+    $path = Join-Path $Directory 'coop.ini'
+    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
+
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\s*$([regex]::Escape($Key))\s*=") {
+            $lines[$i] = "$Key = $Value"
+            $found = $true
+        }
+    }
+
+    if (-not $found) { $lines += "$Key = $Value" }
+    Set-Content -Path $path -Value $lines -Encoding ASCII
+}
+
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -64,6 +86,11 @@ if ($Stop) {
     Set-AutoStartAgent -Directory $Game1 -Value '1'
     Set-AutoStartAgent -Directory $Game2 -Value '1'
     "restored auto_start_agent = 1 in both installs (the rig turns it off while running)"
+
+    # Same rule for -ClientNewCharacter's key: the rig must not leave the second install
+    # configured to send a real player through character creation on their next join.
+    Set-CoopIniKey -Directory $Game2 -Key 'join_mode' -Value 'save'
+    "restored join_mode = save in the client install"
 
     # The agent windows are launched with -NoExit, so killing the agent leaves an empty
     # console sitting there. Left alone they pile up one pair per run until the desktop is
@@ -119,6 +146,16 @@ Remove-Item (Join-Path $WorkDir 'consoles.txt') -Force -ErrorAction SilentlyCont
 Set-AutoStartAgent -Directory $Game1 -Value '0'
 Set-AutoStartAgent -Directory $Game2 -Value '0'
 
+# -ClientNewCharacter: the first-time-joiner rig. The client is left AT THE MAIN MENU with no
+# save loaded — that is the whole scenario, a player who has never played this game — and its
+# coop.ini asks for the chargen join. The agent then arms the plugin's capture and waits for a
+# character to exist; the run's own steps (or a human) drive New Game and character creation.
+# -Stop puts join_mode back to `save`.
+Set-CoopIniKey -Directory $Game2 -Key 'join_mode' -Value ($ClientNewCharacter ? 'newcharacter' : 'save')
+if ($ClientNewCharacter) {
+    'client install set to join_mode = newcharacter; it will NOT load a save'
+}
+
 if (-not $SkipLaunch) {
     if (Get-Process swkotor -ErrorAction SilentlyContinue) {
         throw 'swkotor is already running; use -Stop first, or -SkipLaunch to attach to what is up'
@@ -147,6 +184,16 @@ if (-not $SkipLaunch) {
     # launch above is what used to fail; 14s is what has been observed to work.
     Start-Sleep -Seconds 14
     $second = @(Get-Process swkotor | Sort-Object StartTime)[1]
+
+    if ($ClientNewCharacter) {
+        # ⚠ THE POINT OF THE SWITCH: instance 2 gets NO save. Loading one here would give it
+        # a character to carry, which is precisely the case join_mode = newcharacter does not
+        # cover. It sits at the main menu until New Game and character creation are driven.
+        'instance 2 left at the main menu (-ClientNewCharacter): no save loaded'
+        & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X 830 -Y 0
+        $global:LASTEXITCODE = 0
+    }
+    else {
 
     "loading save $Save in instance 2 ..."
     & $agent load --pid $second.Id --load-save $Save
@@ -179,6 +226,8 @@ if (-not $SkipLaunch) {
             Read-Host | Out-Null
         }
     }
+
+    } # end of the non--ClientNewCharacter load block
 }
 
 $procs = @(Get-Process swkotor | Sort-Object StartTime)

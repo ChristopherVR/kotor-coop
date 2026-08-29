@@ -34,6 +34,12 @@ public sealed class CoopAgent
     private long _lastHeavyPumpMs;
     private long _lastCombatPumpMs;
 
+    /// <summary>The session's own <see cref="ICoopSession.HostLost"/> as of the last
+    /// <see cref="PumpOnce"/> tick, for the edge-detect in that method — the falling/rising
+    /// edge is what runs the plugin-side release pass and resumes normal driving, never a
+    /// per-tick re-check. See docs/research/disconnect-reconnect.md's "host loss" section.</summary>
+    private bool _lastHostLost;
+
     /// <summary>The module we last saw ourselves in, and when we arrived — so a transition is
     /// never issued while the world we just entered is still filling with objects. The flag
     /// distinguishes "we changed module" from "this is the first module we ever saw", which
@@ -349,6 +355,46 @@ public sealed class CoopAgent
         // Round 78 instrumentation — every tick, ahead of every cadence gate below, so the
         // logged edge is as close to the engine's own true transition as this process can see.
         _dialoguePump.LogHostDialogueEdge();
+
+        // ⚠ HOST LOSS: run the plugin-side release exactly once, on the edge, and then touch
+        // NOTHING else in the game while the host stays gone. Before this, a client whose host
+        // vanished never lowered the plugin's block.Command — TryWriteRemotePeers below writes
+        // it unconditionally every tick it runs — so PluginHost.SessionLifecycle's whole
+        // ReleaseSession list (control lock, party-select suppression, follow mirroring,
+        // dialogue spectate, minigame lock, ...) never saw the falling edge it exists to react
+        // to, and LockControlToPlayer further down kept reverting the player's own companion
+        // selection every tick forever. bridge.ClearCoopState() is the SAME call
+        // SessionManager.TearDownSession already makes on every ordinary disconnect — reusing
+        // it here means the release path stays the one already proven correct there, not a
+        // second copy of the list. The rising edge (host back) needs nothing special: this
+        // method simply resumes below, exactly as if nothing had happened, on the very next
+        // tick GetRemotePeers() etc. reflect the fresh Welcome.
+        bool hostLost = _session.HostLost;
+        if (hostLost != _lastHostLost)
+        {
+            _lastHostLost = hostLost;
+            if (hostLost)
+            {
+                _bridge.ClearCoopState();
+                _bridge.PostChatLine("Host connection lost - playing solo, will rejoin automatically.");
+                Log?.Invoke("host connection lost - released every plugin-side lock, playing solo");
+            }
+            else
+            {
+                _bridge.PostChatLine("Host connection restored - rejoining.");
+                Log?.Invoke("host connection restored - rejoining");
+            }
+        }
+
+        if (hostLost)
+        {
+            // The session's own RunAsync loop (a separate task, started once in this class's
+            // own RunAsync) keeps re-Helloing on its own cadence regardless of whether this
+            // pump runs at all — nothing here needs to drive that. LastLocalState/PublishLocalState
+            // already ran above, so a returning host sees fresh state the instant it is back.
+            LastWriteSucceeded = true;
+            return;
+        }
 
         if (!_bridge.CanWriteRemotes)
         {

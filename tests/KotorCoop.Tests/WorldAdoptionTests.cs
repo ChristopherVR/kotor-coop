@@ -315,6 +315,64 @@ public sealed class WorldAdoptionTests : IDisposable
         Assert.Contains(log, line => line.Contains("could not fetch"));
     }
 
+    /// <summary>
+    /// The <c>join_mode = newcharacter</c> adoption: a joiner with NO SAVE AT ALL, carrying the
+    /// character the game's own chargen just wrote.
+    ///
+    /// Two things are pinned here, and the first is the whole point of the feature. The
+    /// ordinary overload refuses this joiner — there is no <c>SAVEGAME.sav</c> to lift a
+    /// character out of — while the carried overload lands the host's world with the handed-in
+    /// character staged as <c>Temp\pifo.ifo</c> AND as the <c>kcoop_carried.ifo</c> stash the
+    /// plugin restores from after <c>LoadPCAutoSave</c> truncates the former
+    /// (world-adoption.md §7). The second is that the staged world still fingerprints as the
+    /// host's — the provenance of the character changes nothing about the world half.
+    /// </summary>
+    [Fact]
+    public async Task AJoinerWithNoSaveCanAdoptCarryingACharacterHandedIn()
+    {
+        string hostSave = BuildSave("tar_m02aa", nextObjId: 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        Assert.True(SaveDigest.TryComputeSaveIdentity(hostSave, out uint hostIdentity));
+
+        int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), hostIdentity);
+
+        // A first-time joiner: the install exists, the saves directory is empty.
+        string joinerGame = BuildGameDirectory();
+
+        // Exactly what the plugin's capture hands back: a chargen pifo, read as one entry.
+        string chargenSave = BuildSave("end_m01aa", nextObjId: 0x127, "Fresh Recruit", [(2u, "n_trask")]);
+        Assert.True(PlayerIfo.TryExtractPlayer(chargenSave, out GffStruct created, out _));
+        Assert.True(PlayerIfo.TryExtractPlayerFromPifoBytes(
+            PlayerIfo.BuildPifo(created), out GffStruct roundTripped, out _));
+
+        // The ordinary path cannot serve this player at all — that is the bug being fixed.
+        List<string> refusal = [];
+        Assert.Null(await WorldAdoption.TryAdoptAsync(
+            joinerGame, Path.Combine(joinerGame, "saves", "000002 - Game1"), Local(port),
+            SessionPassword.None, hostIdentity, refusal.Add, _cts.Token));
+        Assert.Contains(refusal, line => line.Contains("no SAVEGAME.sav"));
+
+        List<string> log = [];
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptWithCharacterAsync(
+            joinerGame, roundTripped, "the character you just created", Local(port),
+            SessionPassword.None, hostIdentity, log.Add, _cts.Token);
+
+        Assert.NotNull(adopted);
+        Assert.Equal(hostIdentity, adopted!.Value.SaveIdentity);
+        Assert.Equal("the character you just created", adopted.Value.CharacterSource);
+
+        // Both files, because only the stash survives the loader's own FileCopy.
+        string pifo = Path.Combine(joinerGame, "Temp", "pifo.ifo");
+        string stash = Path.Combine(joinerGame, "Temp", PlayerIfo.CarriedCharacterFile);
+        Assert.True(File.Exists(pifo));
+        Assert.True(File.Exists(stash));
+        Assert.Equal(File.ReadAllBytes(pifo), File.ReadAllBytes(stash));
+
+        // And the character in them is the one that was handed in, not a blank stranger.
+        Assert.True(PlayerIfo.TryExtractPlayerFromPifoBytes(
+            File.ReadAllBytes(stash), out GffStruct staged, out _));
+        Assert.Equal(created.Count, staged.Count);
+    }
+
     // ---- helpers ---------------------------------------------------------------
 
     private static CompatibilityVerdict Admitted() =>

@@ -811,3 +811,204 @@ answered: the phantom despawns within the away-toast window (not instantly, but 
 relative to this run's own achieved pump rate), both toasts fire, a resumed read clears
 the flag and respawns the phantom, and neither a `loadgame` reload nor a `warp` module
 transition spuriously trips it.
+
+## 11. Host loss: releasing plugin-side locks when the CLIENT loses its host (2026-08-29)
+
+### The bug this closes
+
+§3's recovery sequence above already covers the wire and world-state side of an outage
+correctly — the client re-Hellos, the host retires and reclaims the identity, everything
+reliable converges. What it does **not** cover is what happens to the *game itself* on the
+client's machine while the outage lasts, and that turned out to be broken in a way severe
+enough to make solo play impossible for the whole outage:
+
+- **The client's own control lock never let go.** `CoopAgent.PumpOnce` called
+  `KotorGameBridge.LockControlToPlayer` every tick whenever `SyncParty` and party capability
+  were on, with no check on connection state at all. The moment the host vanished this became
+  a tight loop reverting the player's own companion selection back to their PC every single
+  tick, forever — a companion was permanently unclickable, not just briefly.
+- **The plugin's whole `ReleaseSession` list never ran.** `PluginHost.SessionLifecycle`'s
+  release (control-swap suppression, party-select suppression, follow mirroring/`ClaimCreature`
+  give-back so companions resume their own AI, solo-segment spectate, dialogue spectate,
+  minigame lock, ...) is keyed on `SharedBlock.Command`'s *falling* edge. But
+  `KotorGameBridge.TryWriteRemotePeers` writes `Command = CommandSpawnAndDrive` unconditionally
+  every tick it runs, and it kept running — with an empty peer list — throughout the whole
+  outage, because nothing ever told it to stop. The falling edge the plugin was waiting for
+  never happened, so nothing released: `ClearCoopState` (the one place that lowers `Command`,
+  alongside every other session-scoped block level) only ever ran on a *full* `SessionManager`
+  teardown, never on the client's own silent "still trying to reconnect" state.
+- **A crashed host gave the client no warning at all.** The only signal was silence past
+  `PeerTimeoutMs` (5000 ms) — correct for a crash, but a factor of the same 5 s of needlessly
+  locked play even for a *clean* host shutdown, which could have told the client immediately.
+
+Net effect: from the moment the host disappeared until the player manually disconnected (never
+automatically), every lock the plugin holds on the host's behalf stayed held, on a game the
+host was no longer part of.
+
+### The fix
+
+Two new, independent pieces, both client-side (a host is never "lost" to itself,
+`ICoopSession.HostLost` defaults to `false` and `CoopHost` never overrides it):
+
+1. **`CoopClient.HostLost`** (`IPeerSession.HostLost`) — a new signal, distinct from
+   `IsConnected`/`Reconnecting`. It latches on whichever of two triggers fires first:
+   sustained silence past `SessionSettings.HostLossTimeoutMs` (`HostLossRule.ShouldDeclare`,
+   the pure decision — see `HostLossRuleTests`), or an explicit `PacketType.HostBye` the host
+   now broadcasts to every connected peer the instant its own tick loop stops cleanly (never on
+   a crash — there is nothing left to send it with). `HostLossTimeoutMs` defaults to the exact
+   same value as `PeerTimeoutMs` (5000), so out of the box `HostLost` latches in the *same tick*
+   the existing reconnect logic already gives up and starts re-Helloing — no new delay is
+   introduced, a release that used to never happen at all now does. `HostByePacket` closes the
+   "crashed host" vs "host shut down cleanly" gap: the clean case is now near-instant instead
+   of waiting the full 5 s (see `HostLossTests.AnExplicitHostByeDeclaresHostLossFarFasterThanTheSilenceTimeout`).
+   Cleared the instant a fresh `Welcome` readmits the client — the same tick the ordinary
+   rejoin/re-mirror path (§3's table) starts running again.
+
+2. **`CoopAgent.PumpOnce` reacts to the edge, once.** On the rising edge it calls
+   `KotorGameBridge.ClearCoopState()` — the *same* call `SessionManager.TearDownSession` already
+   makes on every ordinary disconnect, reused rather than duplicated, so the release path stays
+   the one already proven correct there — and posts a HUD/chat notice
+   ("Host connection lost - playing solo, will rejoin automatically.") through
+   `IMenuBridge.PostChatLine`. Then, for as long as `HostLost` stays true, the pump returns
+   immediately after publishing the local player's own state (so a rejoin has fresh data) —
+   no remote-peer writes, no `LockControlToPlayer`, no world-state channel pumped against a
+   host that is not there. The session's own `RunAsync` loop (a separate task) keeps
+   re-Helloing in the background throughout, completely independent of whether this pump runs
+   at all. The falling edge needs no special handling: `PumpOnce` simply resumes its normal
+   body on the next tick, exactly as if nothing had happened, and posts the "restored" chat
+   line.
+
+Both are gated by `coop.ini` `host_loss_release` (ON by default) — OFF restores the exact
+pre-existing behaviour (every lock held until a manual disconnect; the client still
+auto-reconnects regardless, since reconnecting itself was never the broken part).
+`host_loss_timeout_ms` is a second, independent knob for players who want the release to wait
+longer than the reconnect attempt itself.
+
+### The host's side of the same question (task 2): already correct
+
+Confirmed rather than fixed: `CoopHost.Tick`'s timeout sweep and `CoopHost.HandleBye` already
+both call `ReleaseDialogueIfOwnedBy` and `InteractionLockStore.Forget` for a departing peer —
+the same two calls, in the same order, for both the "silently vanished" and "said Bye cleanly"
+paths (see `CoopHost.Connection.cs`). Party/companion state needs no equivalent release: the
+host never grants a client an object-level lock on a companion (companions are always
+host-owned), and the container-lock arbitration channel (`RequestSerial`/`LockResponsePacket`)
+is answered synchronously in-process on the same call that requests it, so there is no pending
+per-peer arbitration state that could be left dangling by a vanished client. What was missing
+was **integration-level test coverage proving dialogue and the interaction lock release
+*together*, for the same vanished client, on both paths** — added as
+`HostLossTests.AClientThatVanishesMidDialogueAndMidLockReleasesBothOnTheHost` (timeout) and
+`HostLossTests.AClientThatSaysByeMidDialogueAndMidLockReleasesBothOnTheHostImmediately` (Bye).
+
+### Tests
+
+- `HostLossRuleTests` — the pure timing decision, no socket, no session.
+- `CoopAgentHostLossTests` — the pump's reaction to the edge in isolation: `ClearCoopState`
+  runs exactly once per transition, the HUD/chat notices post, `LockControlToPlayer` stops
+  being called for the whole outage and resumes on the very next tick after rejoin, remote
+  peers are never written while lost, and the local player keeps being read/published.
+- `HostLossTests` — real sockets, real `CoopHost`/`CoopClient`: silence-triggered `HostLost`
+  with recovery, the `HostBye` fast path (measured well under the silence timeout), the
+  `host_loss_release = 0` opt-out never latching `HostLost`, and both host-side vanish paths
+  (timeout and Bye) releasing a dialogue token and an interaction lock held together.
+
+### Live pass (2026-08-29): PASS
+
+Two-instance rig (`demo.ps1`, END_M01AA, Trask recruited). Two scenarios run separately.
+
+**Spectator reply-list rendering, host-led (baseline, unaffected by this change — confirms it
+"still holds").** `dlgprobe.ps1 -Tag end_trask -PickAfter 10`: host opens a conversation with
+Trask, client joins at t=4. Client's plugin log:
+
+```
+[10:09:53.863] dialogue: engine started the same conversation here; adopting it to follow
+[10:09:53.867] dialogue: followed conversation delivered content 15 ms after opening (15 ms after the request)
+[10:09:53.875] dialogue: followed the owner 19 -> 29
+```
+
+`followed conversation delivered content` is `DialogueSpectateController.ReportContentLatency`,
+fired only once `Odyssey.DialogueHasContent()` is true — which itself checks
+`DialogPanelReplyCount > 0` on THIS instance's own dialogue panel (`Odyssey.Dialogue.Bark.cs`).
+This is the existing probe for "the spectator's panel actually has replies rendered, not blank" —
+it fired 15 ms after the client's engine opened its side of the conversation. Node-sync held
+(client node == host node == "wanted" node) for all 15 paired samples over the 20 s run: the
+spectator's rendered view tracked the owner's the whole time.
+
+**Host loss mid client-owned dialogue, the headline scenario.** Client starts its OWN
+conversation with Trask (`startdialog end_trask`, dialogue is initiator-led — any peer can
+start one, matching the product requirement this whole feature preserves), confirmed via
+`dialogue: engine reached StartDialog`. The HOST's `swkotor.exe` is then killed
+(`Stop-Process`) — which, because `RunCommand.cs`'s own "the agent dies with its game" watchdog
+(`Process.WaitForExitAsync` on the game pid, cancelling the shared `CancellationTokenSource`)
+tears the host's whole agent process down cleanly the instant the game process is gone, this
+exercises the `HostBye` FAST path, not the 5 s silence path — a realistic proxy for "the host's
+whole process/machine died", not merely "the network blipped".
+
+Client's block state, sampled every second after the kill:
+
+```
+t+4.9s  command 1  remotes 1  phantoms 1
+t+6.1s  command 0  remotes 0  phantoms 0    <- the release
+```
+
+Client's own agent log:
+
+```
+[11:02:50] * Lanik left the game
+[11:02:50] * co-op: reconnecting...
+[11:02:51] * host connection lost - released every plugin-side lock, playing solo
+```
+
+Client's plugin log, same instant — the FULL `ReleaseSession` chain, confirmed firing end to
+end for the first time ever on a real disconnect that is not a full manual teardown:
+
+```
+[11:02:51.184] session: released - undoing what it did to this game
+[11:02:51.184] party drive: companion 0x127 back in the player faction
+[11:02:51.185] party drive: released 1 companion(s) back to your own game
+[11:02:51.185] death: suppressions lifted - Tab and the party portraits answer again
+[11:02:51.185] interaction: dropped every peer lock - nobody else is holding anything here
+[11:02:51.185] party roster: your party is yours again - nothing left to reconcile against
+[11:02:51.185] portraits: restored the party widgets (the session ended)
+[11:02:51.185] session released: destroyed phantom 0x12D (slot 0)
+[11:02:51.186] session: nothing it spawned was left standing
+```
+
+"Tab and the party portraits answer again" is `DeathController`'s own release line for the
+EXACT control/game-over suppression bytes this whole feature exists to stop `LockControlToPlayer`
+fighting — companions are selectable again. "released 1 companion(s) back to your own game" is
+Trask handed back to local AI. "dropped every peer lock" is the interaction-lock release (doors,
+containers). All within 6.1 s of the kill, comfortably inside the ~6 s target.
+
+`blockpoke dialogue` on the client immediately after: `local: partner 'end_trask'` still set,
+`remote: active 0` — the client's OWN conversation survived the release completely untouched
+(nothing in the release list touches `DialogueSpectateController`; it self-drives off
+`RemoteDialogueActive`, which affects only spectating a PEER's conversation, never the local
+player's own) — confirming "reply to dialogue" keeps working through the whole outage.
+
+**Rejoin.** The host relaunched (a fresh `swkotor.exe`, `agent launch --instance 3` to coexist
+with the still-running client, then `agent load` + a new `run --host` on the same port) while
+the client kept running the entire time — a genuine reconnect, not a fresh session. Client:
+
+```
+t+2.0s   command 0  remotes 0  phantoms 0
+t+4.5s   command 1  remotes 1  phantoms 1    <- re-mirrored
+```
+
+```
+[11:04:36] * host connection restored - rejoining
+[11:04:36] * connected - connected to 127.0.0.1:27140 as peer 2
+[11:04:36] * Lanik joined the game
+[11:04:36] * co-op: connected, 1 player
+```
+
+Plugin log: `session: a co-op session is driving this instance` -> phantom respawned, joined
+the player faction, equipment re-mirrored, party roster reconciled. Throughout the entire
+outage and rejoin the client's own status line kept reading `state in a conversation` — the
+dialogue never dropped.
+
+**Verdict: PASS on every claim.** Release within 6 s of a real host-process death (not just a
+network blip); the full `ReleaseSession` chain fires end to end (companions, control/portrait
+suppression, interaction locks, spawned bodies); both HUD/chat notices post; the client's own
+dialogue survives untouched; the reconnect loop keeps re-Helloing in the background the whole
+time; and the host coming back re-mirrors everything with no player action. Spectator reply-list
+rendering during a host-led dialogue is confirmed unaffected by this change.

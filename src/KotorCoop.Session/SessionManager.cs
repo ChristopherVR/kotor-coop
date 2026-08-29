@@ -442,6 +442,76 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         return adopted;
     }
 
+    /// <summary>
+    /// The new-character join's adoption — coop.ini <c>join_mode = newcharacter</c>.
+    ///
+    /// Same two pieces as <see cref="RejoinAfterLoadAsync"/> (adopt the host's world, ask the
+    /// plugin to load it carrying our character), with the two differences the first-time
+    /// joiner forces:
+    /// <list type="number">
+    /// <item>The character is HANDED IN rather than lifted out of a save directory, because
+    /// this player has no save — it is what the game's own character creation just wrote (see
+    /// <see cref="WorldAdoption.TryAdoptWithCharacterAsync"/>).</item>
+    /// <item>The load is requested with <c>inSession: true</c>. Retail chargen finishes by
+    /// LOADING A MODULE — the player is standing in the Endar Spire by the time their
+    /// character exists — so the adoption is mid-session by construction, and a main-menu-only
+    /// request would be acked and mooted the instant <c>MenuLoadController</c> saw a server,
+    /// leaving the player in single-player believing they had joined.</item>
+    /// </list>
+    ///
+    /// Like <see cref="RejoinAfterLoadAsync"/>, this does NOT reopen the co-op socket: the
+    /// caller polls the load and calls <see cref="Reconnect"/> once it settles.
+    /// </summary>
+    public async Task<AdoptedWorld?> AdoptWithNewCharacterAsync(
+        IGameBridge bridge,
+        string gameDirectory,
+        GffStruct carriedPlayer,
+        string characterSource,
+        CancellationToken cancellationToken)
+    {
+        bool host;
+        IPEndPoint? endpoint;
+        SessionSettings? settings;
+        lock (_gate)
+        {
+            host = _lastHost;
+            endpoint = _lastEndpoint;
+            settings = _lastSettings;
+        }
+
+        if (host || endpoint is null || settings is null)
+        {
+            Log?.Invoke("new character: nothing to join (not a joined client, or never connected)");
+            return null;
+        }
+
+        Disconnect();
+
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptWithCharacterAsync(
+            gameDirectory,
+            carriedPlayer,
+            characterSource,
+            endpoint,
+            SessionPassword.Hash(settings.Password),
+            expectedSaveIdentity: 0,
+            Log,
+            cancellationToken).ConfigureAwait(false);
+
+        if (adopted is null)
+        {
+            return null;
+        }
+
+        if (!bridge.TryRequestAdoptedWorldLoad(inSession: true, out string diagnostic))
+        {
+            Log?.Invoke($"new character: {diagnostic}");
+            return null;
+        }
+
+        Log?.Invoke($"new character: {diagnostic}");
+        return adopted;
+    }
+
     /// <summary>Reconnects with the parameters of the last <see cref="Connect"/>.</summary>
     public void Reconnect()
     {

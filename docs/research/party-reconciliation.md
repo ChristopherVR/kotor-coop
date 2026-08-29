@@ -5327,3 +5327,230 @@ directories) were run fresh at the top of this session and were clean; no source
 
 **Verdict**: round 103's reconnect-re-mirror fix is now live-confirmed, 3/3 reps clean. No further
 action needed on this specific item; the reconnect path is healthy going forward.
+
+## Round 105 (2026-08-29, rig round) — the follow-AI stall FIXED, on by default. A runtime wedge
+## detector (`party_follow_stall_recovery`, ON) replaces nine rounds of edge-triggered candidates;
+## the root cause is named precisely (`PathWaitDest`'s STRICT accept compared against a recorded
+## trail node that has collapsed onto `PriorPoint`); all SIX candidate recoveries were run live
+## against the same reproduced wedge and exactly one of them actually recovers the companion
+
+Task: fix the companion follow-AI stall for real — reproduce it with `party_follow_finelog`,
+build the runtime stall detector rounds 96-104 kept pointing at but never built, A/B the
+recoveries in isolation, keep whichever one works, and stop calling this "OFF by decision."
+
+### 105.1 The wedge, reproduced 4/4 and root-caused exactly
+
+`tools/demo.ps1`, `END_M01AA`, `party_follow_finelog=1` on both installs. Round 96/97's recipe
+(`tp 20 22 -1.3` then a bare-point `walk 10 15` through `tools/blockpoke.ps1`) reproduced the
+freeze on the FIRST attempt every time it was asked for, four separate times across this round's
+four plugin builds. A representative capture, held bit-identically for 48+ continuous seconds
+(`t=118.37` through `t=166.65`):
+
+```
+phase=7 attempts=0 pathNode=17 destNode=17 writeCursor=18 moveState=3
+pos=(10.60,17.07) leaderPos=(10.78,15.70) target=(10.78,15.70) prior=(10.90,16.07)
+recordedDestPoint=(10.90,16.07) targetVsSnapshotDist=1.377
+pathWaitDestAccept=False distSqToTarget=0.1501 distSqToPrior=0.0000
+```
+
+**The root cause, stated as precisely as the data supports.** `PathWaitDest` (0x00512B40, phase 7)
+falls through to its phase-advancing write only when the recorded trail node is STRICTLY closer to
+`TargetPoint` than to `PriorPoint` — the `fcompp`/`test ah,5`/`jp` idiom at 0x00512BF2 that rounds
+89/90 already transcribed. In every reproduction `recordedDestPoint == prior` **exactly**, so
+`distSqToPrior` reads a hard `0.0000` and a strict `<` can never be true for any non-zero
+`distSqToTarget`. It is not slow convergence; it is a compare that is arithmetically incapable of
+passing. `attempts` (`record+0x44`) stays pinned at `0` throughout, because the outer dispatcher's
+own per-call gate never reopens.
+
+**Why nothing already shipped fires on it** — four independent misses, all confirmed against this
+round's own numbers rather than inferred:
+
+| already-shipped check | its gate | this wedge |
+|---|---|---|
+| `TryAdvanceStalledPathDestination` (default ON) | `gap >= 2` | `gap == 1` (writeCursor 18, pathNode 17) |
+| `Phase2StallRule` / `party_follow_phase2_kick` | `phase == 2` AND leader > 3 units | `phase == 7`, leader 1.37 units |
+| `PartyFollowController`'s own reissue check | `distSq > 9` | `distSq == 1.87` |
+| `party_follow_phase7_release` | evaluated once, at `ReleaseSession` | the phase is legitimately `-1` by then (rounds 102/103) |
+
+### 105.2 The severe form: a separation the companion NEVER recovers from
+
+The near-target freeze above is the mild face of this bug. Teleporting the leader away
+(`tp 25 25 -1.3`, an instant 16.5-unit separation — a "transition/separation" in the plainest
+possible form) produces the SAME wedge with the separation left standing:
+
+```
+phase=7 attempts=0 pathNode=19 destNode=19 writeCursor=20 moveState=3
+pos=(10.60,17.04) leaderPos=(25.00,25.00) target=(25.00,25.00) prior=(10.90,16.04)
+recordedDestPoint=(10.90,16.04) targetVsSnapshotDist=16.457
+pathWaitDestAccept=False distSqToTarget=280.5783 distSqToPrior=0.0000
+```
+
+The companion is **16.5 units behind and will never move again** — `TryDriveFollowTarget` has
+correctly updated `target` to the leader's new position, and it changes nothing, because the
+degenerate `prior == node` tie is what blocks the accept, not a stale target. This is the exact
+user-facing complaint ("stands still after a transition/separation and never resumes following"),
+and it is the case every recovery below was ultimately judged on.
+
+One genuinely useful negative result while characterising it: if the leader WALKS away (rather
+than teleporting), the wedge clears on its own — `TryDriveFollowTarget`'s own >10 cm gate fires,
+refreshes `prior`/`target`, and the companion resumes and follows correctly. So the bug needs a
+**stationary or teleported** leader to persist, which is exactly why so many prior rounds' walking
+repros were flaky.
+
+### 105.3 The runtime detector (`FollowStallRule`, `party_follow_stall_recovery`, ON by default)
+
+`src/KotorCoop.Plugin/FollowStallRule.cs` — a pure, unit-tested rule, pinned against round 97's
+own captured numbers. It fires only when ALL of:
+
+* `phase` is 6 or 7 (the two handlers that share the strict accept test — 0x00512A60 and
+  `PathWaitDest`; `FinalNodeGeometryRule`'s own remarks establish they are structurally identical
+  in every respect this depends on),
+* `attempts == 0` (a cycling FSM is left alone),
+* `pathNode == destNode` (what makes the search resolve on its first comparison and fall into the
+  fragile geometric test at all),
+* `CannotAccept(distSqToTarget, distSqToPrior)` — the engine's own compare, in the negative,
+* the companion's position has held still for 2 s,
+* the leader is genuinely moving OR more than 1 unit away,
+* nothing else owns the companion (conversation, roster freeze, mirrored session, module-change
+  frame — all already hard early-returns in `PartyFollowController` — plus `IsMoviePlaying`).
+
+Anti-spin, because this runs per frame per companion and writes engine fields: one fire per
+companion per 3 s, at most 5 per module without a CONFIRMED recovery (the companion genuinely
+moved ≥0.5 units after the poke, which resets the counter), the give-up logged exactly once, and
+every counter cleared on the module-change branch this controller already had.
+
+### 105.4 The A/B: six recoveries, one game session each shape, through a new `followstall` verb
+
+`followstall <slot> [method]` (`SharedBlock.CheatKindFollowStall`/`CheatKinds.FollowStall = 56`)
+dumps the wedge signature and then applies ONE recovery **unconditionally** — no wedge check, no
+stall timer, no cooldown. It exists because the automatic pass reads its method once at plugin
+construction, so isolating six candidates through it alone would have cost six rig restarts;
+through the verb they are six console round-trips.
+
+Every leg below re-reproduced the wedge first and confirmed it frozen, then fired one method, then
+watched the fine-log for 8-25 s.
+
+| # | method | what it writes | LIVE RESULT |
+|---|---|---|---|
+| 1 | `phasereset` | phase `-1` + attempts 0 + pathNode/destNode → writeCursor (round 98's own untried step 6) | **NEGATIVE.** `phase 7 -> -1, pathNode 37 -> 38`; 8 s later back at `phase=7 pathNode=37 destNode=37`, position bit-identical. The FSM restarts and re-wedges on the same geometry — the wedge is geometric, not index bookkeeping |
+| 2 | `followleader` | unconditional `ActionFollowLeader` via the VM | **NEGATIVE.** `dispatched (index 1)`, and nothing whatsoever changed — record and position identical 9 s later |
+| 3 | `positionparty` | `CSWPartyTable::PositionParty` 0x00565B00 | **POSITIVE, decisive.** From the 16.5-unit separation: `(10.60,17.04)` → `(22.11,22.70)`, **0.88 units from the leader, in one call.** No crash |
+| 4 | `priortie` | `prior` ← the companion's own position | **PARTIAL.** Real walking — 3.44 units from a 6.6-unit separation — then it parks exactly where `|node-me| == |node-target|` and re-wedges, because the STRICT compare rejects the tie |
+| 5 | `destnode` | make `DestNode != CurrentPathNode` (`gap>=2`: → writeCursor-1; `gap==1`: append a node at the leader and advance the cursor) | **NEGATIVE.** Fired correctly (`destNode 19 -> 20`, `pathNode` advanced 19→20, phase 7→6) and moved the companion 0.76 units — **away** from the leader (1.164 → 1.655) — into another frozen shape |
+| 6 | `priorpush` | `prior` ← `node + 2*(node - target)`, so the strict inequality holds by construction | **PARTIAL.** 1.6 units of real progress from the 16.5-unit separation, then a NEW frozen shape (`phase=3`, `pathNode=20 destNode=17`) this detector does not even watch |
+
+**The honest reading.** 4, 5 and 6 all confirm the geometric diagnosis is correct — poking exactly
+the fields the engine's own test reads DOES restart genuine walking, repeatedly and reproducibly.
+But the walk then stalls again downstream on the separate long-distance pathfinding limit round 88
+documented and this round reconfirmed twice. Chasing that is a different investigation.
+`PositionParty` sidesteps it entirely by being the engine's OWN answer to "the party is scattered,
+gather it" — the exact call `MovePlayerToArea` makes at every module transition, walkmesh snap,
+formation and follow-data reset included. Its costs are real and documented: it relocates the
+companion rather than walking it, clears `pt_solomode`, unstealths the party, and can snap the PC
+itself to a safe location. That is precisely why the detector gates it behind a wedge signature, a
+2-second freeze, a real separation, a 3-second cooldown and a per-module budget rather than
+letting it run freely.
+
+`FollowStallRule.DefaultMethod = MethodPositionParty` — and a unit test pins that, so a future
+round that changes it has to bring its own live A/B.
+
+### 105.5 Acceptance: the repro 5×, a real door, two reconnects, and the verify battery
+
+**Repro × 5, detector ON, no method override (exercising the shipped code default).** Every wedge
+the detector saw recovered on its FIRST attempt, immediately:
+
+```
+REP 1  wedged 2.0s phase=7 pathNode=18 destNode=18 writeCursor=19 distSqToPrior=0.0000 leaderDistSq=1.87
+       recovered 0x127 via positionparty - moved 0.51u after 1 attempt(s)
+REP 2  wedged 2.0s phase=6 pathNode=2  destNode=2  writeCursor=5  distSqToPrior=0.0000 leaderDistSq=73.68
+       recovered 0x127 via positionparty - moved 9.69u after 1 attempt(s)
+REP 2  wedged 2.0s phase=6 pathNode=23 destNode=23 writeCursor=24 distSqToPrior=0.0000 leaderDistSq=3.50
+       recovered 0x127 via positionparty - moved 1.18u after 1 attempt(s)
+REP 3  wedged 2.0s phase=6 pathNode=2  destNode=2  writeCursor=5  distSqToPrior=0.0000 leaderDistSq=63.50
+       recovered 0x127 via positionparty - moved 9.12u after 1 attempt(s)
+REP 4  no wedge at all — the companion followed cleanly
+REP 5  no wedge at all — the companion followed cleanly
+```
+
+Note reps 2 and 3: `leaderDistSq` 73.68 and 63.50, i.e. the companion was **8.6 and 8.0 units
+behind** — the severe form, recovered in one call each. Never more than `1/5` of the anti-spin
+budget used, no latch-off, no repeat firing.
+
+**Real door path.** `tp 47.4 118.5 -0.04` then `usedoor end_door10`: `door: 0x4A at 1.6m links to
+module 'end_m01ab' at waypoint 'from_01a'; open state 2` → `area transition pending: flushing
+spawned objects before the module is stored` → host in `end_m01ab` at `(49.9, 120.3)`. **Zero**
+stall lines across the transition, no access violation, both instances alive. (`END_M01AA`'s
+script leaves Trask behind at that door, so `end_m01ab` has no companion to follow — that is
+vanilla behaviour, not a regression; `tools/partystate.ps1` reads `companions 0` there.)
+`PartyFollowTransitionRule`'s one-frame epoch skip is untouched by this round and its module-change
+branch now also clears the detector's own per-module counters, which is the only line added to it.
+
+**Reconnect × 2** (`disconnect` then `reconnect` on the client, round 104's own recipe): mirroring
+re-established both times (`party drive: mirroring 1 of the host's companions`), no crash. This
+also produced an unplanned but valuable confirmation of round 101's finding, now caught in the act
+on the OTHER side of the boundary:
+
+```
+party follow stall: 0x127 follow record was hidden by party_together_fix's own clamp on party+0x00
+  - restored CSWParty's member count once, index 1 now resolves
+```
+
+Exactly **once** across both reconnect cycles (the per-slot, per-module latch holding), in the
+window between disconnect and re-mirror. Every other function in this family
+(`TryAdvanceStalledPathDestination`, `TryDriveFollowLeaderStep`, `TryGetFollowDiagnostics`, …) does
+the plain `GetPartyIndexFn` lookup and silently returns on `index <= 0` — so on a client that has
+just stopped mirroring they can ALL be no-ops for the very companion they exist to fix. The new
+`TryResolveFollowRecord` applies round 101's bounded count restore, latched to at most one engine
+write per companion per module.
+
+**`tools/verify.ps1`: 41 passed, 8 failed** — squarely inside the documented ~40-42/7-9 baseline,
+same failure set as before (the phantom hp-sink pair, the ground-item/container environment-flaky
+ones, the two signature disagreements, the per-frame `sync12c` spam counter). `no crash on either
+side PASS`; `the host still controls its companions PASS ... host clamped this run: False`. And
+across the entire battery — warps, doors, combat, conversations, a transition — the detector logged
+**zero** stall lines on either instance: no false positives.
+
+### 105.6 What is still open
+
+* The long-distance pathfinding limit round 88 first documented is reconfirmed and still unfixed:
+  methods 4/5/6 each restart genuine walking and each stall again a few units later. The default
+  recovery routes around it rather than fixing it. If someone wants the companion to WALK back
+  rather than be gathered, that limit is the next thing to disassemble — start from the phase-3
+  shape method 6 leaves behind (`pathNode=20 destNode=17 writeCursor=20`, position frozen).
+* The phase-5 shape (`attempts` cycling through the engine's own 50-attempt watchdog,
+  `pathNode=destNode=writeCursor=0`, `prior==target==node`, position frozen) is what
+  `PositionParty` leaves behind and what a fresh module load starts in. It is harmless where it was
+  observed — the companion is already in formation, under the detector's own 1-unit gate — but it
+  is a distinct, still-uncharacterised frozen shape and is deliberately NOT covered by this rule.
+* Methods 1, 2, 4, 5 and 6 are kept, numbered, documented and reachable through
+  `party_follow_stall_recovery_method` / `followstall`, per this project's convention of keeping
+  ruled-out avenues named rather than deleting them.
+
+### Test suite and build
+
+`dotnet build KotorCoop.slnx -warnaserror`: clean, 0/0. `src/KotorCoop.Plugin/build.ps1
+-Install -WarnAsError` against both game directories: clean, x86 confirmed, and the deployed
+`dinput8.dll`s string-checked for this round's own new log text before every rig leg.
+`dotnet test tests/KotorCoop.Tests`: full suite green (2547/2547 on the pre-A/B build, including
+the normally-flaky `CoopCommandDispatcherTests`), with the new `FollowStallRuleTests` pinning the
+rule against round 97's captured numbers and against the shipped default method.
+
+### Files
+
+- `src/KotorCoop.Plugin/FollowStallRule.cs` (new) — the pure detector, the six method ids, the
+  live A/B result for each in `DefaultMethod`'s own remarks.
+- `src/KotorCoop.Plugin/Odyssey.DoorTransitions.StallDetect.cs` (new) — `TryGetFollowStallState`
+  (pure reads, no engine calls, safe every frame), `TryRecoverFollowStall` (the six recoveries),
+  and `TryResolveFollowRecord` (round 101's count restore, latched).
+- `src/KotorCoop.Plugin/PartyFollowController.cs` — `DriveStallRecovery`, the leader-motion and
+  suppression inputs, the per-slot anti-spin state, and its reset on the existing module-change
+  branch.
+- `src/KotorCoop.Plugin/CheatController.cs`, `CheatController.Party.cs`, `SharedBlock.cs`,
+  `src/KotorCoop.Memory/IGameBridge.cs`, `src/KotorCoop.Session/ConsoleCommand*.cs`,
+  `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the `followstall` dev verb (cheat kind 56).
+- `tests/KotorCoop.Tests/FollowStallRuleTests.cs` (new), `ConsoleCommandVerbTableCoverageTests.cs`,
+  `KotorCoop.Tests.csproj`.
+- `docs/CONFIG.md`, `docs/CONSOLE.md`, `docs/TROUBLESHOOTING.md`, `profiles/coop.ini.example`,
+  `README.md`, `docs/roadmap-seamless.md` — the two new keys, the new verb, and the status lines
+  that no longer say "off by decision" for this stall.
+- `docs/research/party-reconciliation.md` — this entry.

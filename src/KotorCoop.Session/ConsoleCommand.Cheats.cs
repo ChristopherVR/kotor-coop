@@ -281,6 +281,47 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
     }
 
+    // newgame  - opens the game's own character-creation screens. See CoopCommandKind.NewGame.
+    private static CoopCommand ParseNewGame(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "newgame takes no arguments")
+            : new CoopCommand(CoopCommandKind.NewGame);
+
+    // chargen quick [class 0-5] | chargen accept  - see CoopCommandKind.ChargenQuick/ChargenAccept.
+    private static CoopCommand ParseChargen(string[] rest)
+    {
+        const string usage = "chargen quick [class 0-5] | chargen accept";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (rest[0].Equals("accept", StringComparison.OrdinalIgnoreCase))
+        {
+            return rest.Length > 1
+                ? new CoopCommand(CoopCommandKind.Invalid, Error: "chargen accept takes no arguments")
+                : new CoopCommand(CoopCommandKind.ChargenAccept);
+        }
+
+        if (!rest[0].Equals("quick", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        int classIndex = 0;
+        if (rest.Length > 1 && (!int.TryParse(rest[1], out classIndex) || classIndex is < 0 or > 5))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "chargen quick takes a class index 0-5 (the six portraits, left to right)");
+        }
+
+        return rest.Length > 2
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: usage)
+            : new CoopCommand(CoopCommandKind.ChargenQuick, Amount: classIndex);
+    }
+
     // startdialog <npc-tag|id> [dlg-resref]  - LIVE-TEST PRIMITIVE, see
     // CoopCommandKind.StartDialog.
     private static CoopCommand ParseStartDialog(string[] rest)
@@ -333,6 +374,29 @@ public static partial class ConsoleCommand
         }
 
         return new CoopCommand(CoopCommandKind.FollowKick, Amount: slot);
+    }
+
+    // followstall <slot> [method]  - DEV-ONLY LIVE-TEST PRIMITIVE, see
+    // CoopCommandKind.FollowStall (including why Amount carries method*100+slot).
+    private static CoopCommand ParseFollowStall(string[] rest)
+    {
+        const string usage =
+            "followstall needs a party-roster slot (0-8) and an optional recovery method "
+            + "(1 phasereset, 2 followleader, 3 positionparty, 4 priortie, 5 destnode, "
+            + "6 priorpush), e.g. followstall 0 6";
+
+        if (rest.Length is not (1 or 2) || !int.TryParse(rest[0], out int slot) || slot < 0 || slot > 8)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        int method = 0;
+        if (rest.Length == 2 && (!int.TryParse(rest[1], out method) || method < 1 || method > 6))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        return new CoopCommand(CoopCommandKind.FollowStall, Amount: (method * 100) + slot);
     }
 
     private static CoopCommand ParseCheats(string[] rest) => new(CoopCommandKind.Cheats);
@@ -399,6 +463,11 @@ public static partial class ConsoleCommand
         "                      hook without reaching the Bastila dialogue; local only",
         "  followkick <slot>   dev-only: dump roster slot (0-8)'s follow-record fields, then",
         "                      force record+4=10 (TeleportForward) unconditionally; local only",
+        "  followstall <slot> [method]  dev-only: dump roster slot (0-8)'s follow-record wedge",
+        "                      signature, then apply one follow-stall recovery unconditionally",
+        "                      (1 phasereset, 2 followleader, 3 positionparty, 4 priortie,",
+        "                      5 destnode, 6 priorpush;",
+        "                      omitted = coop.ini's party_follow_stall_recovery_method); local only",
         "  skipline            finish your OWNED conversation's current line/VO right now,",
         "                      in-process (no OS input); no-op if nothing is playing",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",

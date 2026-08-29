@@ -349,12 +349,81 @@ public class CoopCommandDispatcherTests
         }
     }
 
+    /// <summary>
+    /// The same listener, reached through the gate a first-time joiner actually depends on.
+    ///
+    /// ⚠ THIS IS THE ONE THAT MATTERS FOR <c>join_mode = newcharacter</c>. A joiner with no
+    /// save has no world of their own and cannot obtain one any other way — if the host is not
+    /// serving, there is nothing for them to adopt and the whole flow dead-ends at "could not
+    /// fetch the host's world". <c>auto_adopt_world</c> is ON by default precisely so that a
+    /// host who has configured nothing still serves.
+    /// </summary>
+    [Fact]
+    public async Task HostingWithOnlyAutoAdoptOnStillServesItsWorld()
+    {
+        string gameDirectory = Path.Combine(
+            Path.GetTempPath(), "kotorcoop-worldserve-adopt-" + Guid.NewGuid().ToString("N"));
+        string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(saveDirectory);
+        byte[] saveBytes = "the host's world, as a first-time joiner would receive it"u8.ToArray();
+        File.WriteAllBytes(Path.Combine(saveDirectory, "SAVEGAME.sav"), saveBytes);
+
+        int port = FreePort();
+
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        CoopConfig config = new()
+        {
+            ClientLoadRejoin = false,
+            HostLoadReadopt = false,
+            AutoAdoptWorld = true,
+        };
+
+        CoopCommandDispatcher dispatcher = new(
+            manager, bridge, ProtocolConstants.DefaultPort,
+            p => new SessionSettings { PlayerName = "Host", Port = port, TickRate = 30, Password = p },
+            () => config,
+            gameDirectory: gameDirectory);
+
+        try
+        {
+            dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Host));
+            Assert.IsType<CoopHost>(manager.Current);
+
+            using CancellationTokenSource dispatchCts = new();
+            Task dispatchTask = dispatcher.RunAsync(dispatchCts.Token);
+
+            using CancellationTokenSource fetchCts = new(TimeSpan.FromSeconds(10));
+            IReadOnlyList<WorldFile> received = (await FetchWithRetryAsync(
+                new IPEndPoint(IPAddress.Loopback, port), SessionPassword.None, fetchCts.Token)).Files;
+
+            WorldFile saveFile = Assert.Single(received);
+            Assert.Equal(saveBytes, saveFile.Data);
+
+            await dispatchCts.CancelAsync();
+            await dispatchTask;
+        }
+        finally
+        {
+            manager.Disconnect();
+
+            try
+            {
+                Directory.Delete(gameDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     [Fact]
     public async Task HostingWithBothRejoinGatesOffServesNothing()
     {
-        // Both gates default ON since their 2026-08-24 live verification (see CoopConfig's own
-        // doc comments); this is the regression check that a host with BOTH explicitly turned
-        // off does not open a new listener at all.
+        // All THREE gates default ON (client_load_rejoin/host_load_readopt since their
+        // 2026-08-24 live verification, auto_adopt_world since join_mode landed — see
+        // CoopConfig's own doc comments); this is the regression check that a host with every
+        // one explicitly turned off does not open a new listener at all.
         string gameDirectory = Path.Combine(
             Path.GetTempPath(), "kotorcoop-worldserve-off-" + Guid.NewGuid().ToString("N"));
         string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
@@ -365,7 +434,12 @@ public class CoopCommandDispatcherTests
 
         MenuBridge bridge = new();
         using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
-        CoopConfig config = new() { ClientLoadRejoin = false, HostLoadReadopt = false };
+        CoopConfig config = new()
+        {
+            ClientLoadRejoin = false,
+            HostLoadReadopt = false,
+            AutoAdoptWorld = false,
+        };
         CoopCommandDispatcher dispatcher = new(
             manager, bridge, ProtocolConstants.DefaultPort,
             p => new SessionSettings { PlayerName = "Host", Port = port, TickRate = 30, Password = p },

@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -178,6 +178,47 @@ switch ($Command) {
         "  console: cmd serial {0}  reply serial {1}" -f (U32 0x9F4), (U32 0xA58)
         "  last command: '{0}'" -f (Ascii 0x9F8 96)
         "  reply:        '{0}'" -f (Ascii 0xA5C 96)
+    }
+    'chargen' {
+        # The character-creation drive verbs, poked straight into the plugin's own request
+        # region (SharedBlock 0x4790..0x47A0) rather than through the agent's ~console channel.
+        #
+        # Why direct: every one of these is only meaningful AT THE MAIN MENU, and the agent's
+        # console reply channel does not answer there on this rig - verified with `status`, a
+        # long-standing verb, which is equally silent at the menu. The plugin services this
+        # region from MenuFrame, which does run there. Same "kind before serial" ordering the
+        # agent uses.
+        #
+        #   blockpoke -ProcId N chargen newgame
+        #   blockpoke -ProcId N chargen quick 2      (class index 0-5)
+        #   blockpoke -ProcId N chargen accept
+        #   blockpoke -ProcId N chargen              (read the state back)
+        $kinds = @{ 'newgame' = 1; 'quick' = 2; 'accept' = 3 }
+
+        if ($Arg1.Length -gt 0) {
+            if (-not $kinds.ContainsKey($Arg1)) {
+                "  chargen: unknown verb '{0}' (newgame|quick|accept)" -f $Arg1
+            }
+            else {
+                WU32 0x4794 ([uint32]($kinds[$Arg1] -bor ($Arg2 -shl 16)))
+                $serial = (U32 0x4790) + 1
+                WU32 0x4790 $serial
+
+                $deadline = (Get-Date).AddSeconds(10)
+                while ((Get-Date) -lt $deadline -and (U32 0x4798) -ne $serial) { Start-Sleep -Milliseconds 100 }
+
+                if ((U32 0x4798) -ne $serial) {
+                    "  chargen: sent '{0}' (serial {1}) - the plugin did not answer within 10s" -f $Arg1, $serial
+                } else {
+                    $status = U32 0x479C
+                    if ($status -eq 0) { "  chargen: '{0}' done" -f $Arg1 }
+                    else { "  chargen: '{0}' refused (failure {1}; the reason is in kotorcoop-plugin.log)" -f $Arg1, $status }
+                }
+            }
+        }
+
+        "  chargen drive: request {0}  applied {1}  status {2}" -f (U32 0x4790), (U32 0x4798), (U32 0x479C)
+        "  newchar capture: request {0}  applied {1}  state {2} (0 idle/1 armed/2 captured/3 failed)  bytes {3}" -f (U32 0x4780), (U32 0x4784), (U32 0x4788), (U32 0x478C)
     }
     'item' {
         # The raw item-identity half of the cheat channel (SharedBlock version 41,

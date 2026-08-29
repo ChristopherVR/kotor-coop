@@ -93,6 +93,11 @@ public sealed partial class CoopClient
             _sessionPeerId = welcome.AssignedPeerId;
             _reconnecting = false;
 
+            // The host is back (or this is the first join, where it was already false). Either
+            // way CoopAgent.PumpOnce reads this falling edge and resumes driving the game
+            // normally — see HostLost's own doc comment for the full round trip.
+            _hostLost = false;
+
             // The link is back. Everything still unacked backed off while it was down; make
             // it all due now so the world catches up in one tick instead of over the next few
             // seconds. Nothing is re-created here — the ops kept their sequence numbers, and
@@ -345,6 +350,35 @@ public sealed partial class CoopClient
         _channel.NoteVersionMismatch();
         _rejectReason = $"protocol mismatch: host is v{hostVersion}, you are v{ProtocolConstants.Version}";
         return true;
+    }
+
+    /// <summary>
+    /// The host announced a clean shutdown (<see cref="PacketType.HostBye"/>) — declare host
+    /// loss immediately, subject to the same <see cref="SessionSettings.HostLossReleaseEnabled"/>
+    /// gate the silence-based trigger uses, and drop back to the handshake right away rather
+    /// than waiting out <see cref="SessionSettings.PeerTimeoutMs"/> of silence first. The
+    /// reconnect itself is NOT gated on the toggle — a clean host restart is worth rejoining
+    /// promptly either way, the toggle only decides whether locks release early.
+    /// </summary>
+    private void HandleHostBye(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadHostBye(span) is null)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        if (!IsConnected)
+        {
+            return;
+        }
+
+        if (_settings.HostLossReleaseEnabled)
+        {
+            _hostLost = true;
+        }
+
+        ForgetSession();
     }
 
     private void HandlePong(IPEndPoint from, ReadOnlySpan<byte> span, long now)
