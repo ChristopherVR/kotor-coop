@@ -17,7 +17,7 @@ namespace KotorCoop.Session;
 /// the scheduler (<see cref="PumpOnce"/>), the module/peer bookkeeping the typed events below
 /// are raised from, and the handful of public properties/methods other components poll or call.
 /// </summary>
-public sealed class CoopAgent
+public sealed partial class CoopAgent
 {
     private readonly IGameBridge _bridge;
     private readonly ICoopSession _session;
@@ -435,6 +435,13 @@ public sealed class CoopAgent
         // writes, which is what already deactivates a slot for a peer elsewhere. See
         // PlayerState.FlagInMinigame, MinigameRule.ShouldHidePeer and docs/research/minigames.md.
         MinigameRule minigameRule = new(HidePeersEnabled: _settings.HidePeersInMinigame, SpectateEnabled: false);
+
+        // ⚠ BEFORE the hide filter below, and against the UNFILTERED `peers` list on purpose.
+        // "One player races, everybody else waits" needs to see the racer, and the very next
+        // statement is what removes them from `visible` — a lock computed from the filtered
+        // list could never begin. See MinigameLockRule and docs/research/minigames.md §24.
+        PumpMinigameLock(local, peers);
+
         visible = _settings.HidePeersInMinigame
             ? [.. visible.Where(p => !minigameRule.ShouldHidePeer(p.State.IsInMinigame))]
             : visible;

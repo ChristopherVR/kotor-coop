@@ -324,6 +324,21 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // A default-OFF diagnostic, not a feature: four read-only splices on the delayed-
+        // script-situation path (DelayCommand -> AddEventDeltaTime -> the AI master's drain),
+        // for docs/research/minigames.md §24's root-cause question. See DelayEventProbeHook.
+        if (PluginConfig.ReadBool("delay_probe", false))
+        {
+            if (DelayEventProbeHook.Install(out string delayProbeDiagnostic))
+            {
+                Log($"minigame: {delayProbeDiagnostic}");
+            }
+            else
+            {
+                Log($"minigame: delayed-event probe NOT installed: {delayProbeDiagnostic}");
+            }
+        }
+
         // The engine reverts any pause that lacks a valid "PausedBy" record within one
         // tick, which in a loopback session is every pause there is — space bar, HUD
         // button and mirror alike. See PauseSanityPatch.

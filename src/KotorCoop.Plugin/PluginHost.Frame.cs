@@ -219,6 +219,11 @@ internal static unsafe partial class PluginHost
             RecordFrameTime();
         }
 
+        // Before the epoch gate: the delayed-event probe (coop.ini delay_probe, default OFF)
+        // records on the game's thread inside four engine splices and must be turned into log
+        // lines from somewhere file I/O is safe. Inert — and free — unless the probe installed.
+        DelayEventProbeHook.Drain();
+
         // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
         // where the gate returns early (no server) — the Enter chat prompt and the chat
         // overlay. (The Co-op button, browsers and menu-load run on MainLoopHook — the swap
@@ -508,6 +513,12 @@ internal static unsafe partial class PluginHost
         // the two never fight for SetCameraFollow on the same frame: a peer publishing a
         // solo-segment owner flag gets this instance parked on their fight instead.
         _soloSegmentSpectate?.OnFrame();
+
+        // After the solo-segment spectator, deliberately: both park the local player's input
+        // and both defer to a live conversation, so whichever asserted last would win a frame
+        // they overlapped on. A story-forced duel is the rarer and more fragile of the two, so
+        // it goes first and this one only ever adds to what it already did.
+        _minigameLock?.OnFrame();
 
         _controller?.OnFrame();
 

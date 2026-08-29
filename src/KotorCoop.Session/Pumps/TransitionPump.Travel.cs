@@ -8,6 +8,11 @@ namespace KotorCoop.Session.Pumps;
 // docs/research/transition-smoothness.md.
 internal sealed partial class TransitionPump
 {
+    /// <summary>The minigame-track module this pump last refused to follow into, so the
+    /// refusal logs once per race rather than at the follow cadence for the whole of it.
+    /// Cleared the moment a follow decision reaches a normal destination again.</summary>
+    private string _lastRefusedMinigameModule = string.Empty;
+
     /// <summary>
     /// Keeps a client in the host's module. When the host crosses into another area, the
     /// client warps after it through the game's own transition path; a client whose own
@@ -180,6 +185,33 @@ internal sealed partial class TransitionPump
             return;
         }
 
+        // ⚠ AND NEVER ONTO A MINIGAME TRACK, for the same reason a stunt module is refused
+        // one line above and then some: a swoop/turret area is SINGLE-SEAT, and the
+        // 2026-08-29 live round watched this exact follow (into tar_m03mg) be the last thing
+        // the following instance did before it died. Two gates, either sufficient — the peer
+        // publishing FlagInMinigame (works for a track module this build has never heard of)
+        // and the destination naming a known one (works one poll EARLIER, before the flag has
+        // been read). See MinigameModuleRule and docs/research/minigames.md §24. Deliberately
+        // a plain `return`, not a "spent" clear: the peer comes back off the track by
+        // themselves and the ordinary reunion path then applies unchanged.
+        if (MinigameModuleRule.ShouldRefuseFollow(
+                settings.LockPeersDuringMinigame,
+                host!.State.IsInMinigame,
+                target,
+                settings.ExtraMinigameModules))
+        {
+            if (!string.Equals(target, _lastRefusedMinigameModule, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRefusedMinigameModule = target;
+                log($"not following to '{target}': a peer is in a single-seat minigame there "
+                    + "— waiting for them instead");
+            }
+
+            return;
+        }
+
+        _lastRefusedMinigameModule = string.Empty;
+
         // "areaXX" is the bridge's fallback when the module NAME could not be read (a
         // transition in flight on the host's side). It is an object id, not a module, and
         // asking the engine to load it would fail at best. Wait for the real name.
@@ -301,6 +333,24 @@ internal sealed partial class TransitionPump
         if (announce.Module.StartsWith("stunt", StringComparison.OrdinalIgnoreCase)
             || ModuleNameGuard.IsFallbackModuleName(announce.Module))
         {
+            _pendingAnnounce = null;
+            return false;
+        }
+
+        // ⚠ AND NEVER ONTO A MINIGAME TRACK. A swoop/turret area is single-seat: following the
+        // racer in gets this player a camera bolted to a bike they cannot drive, and the
+        // 2026-08-29 live round watched the follow-warp into tar_m03mg be the last thing the
+        // following instance did before it died. Same shape as the stunt gate above, same
+        // "spent, not kept" treatment — the announce named somewhere we are never going.
+        // See MinigameModuleRule and docs/research/minigames.md §24.
+        if (MinigameModuleRule.ShouldRefuseFollow(
+                settings.LockPeersDuringMinigame,
+                ownerInMinigame: false,
+                announce.Module,
+                settings.ExtraMinigameModules))
+        {
+            log($"not following the announced transition to '{announce.Module}': "
+                + "that is a single-seat minigame track");
             _pendingAnnounce = null;
             return false;
         }

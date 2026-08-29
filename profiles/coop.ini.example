@@ -142,6 +142,36 @@ pazaak_detect = 1
 ; the block never carries the flag for an excluded slot, so the notice will not show. See
 ; docs/research/minigames.md's dated section for the full explanation.
 minigame_wait_notice = 1
+
+; One player races, everybody else waits. A KOTOR swoop track (tar_m03mg) or turret deck
+; (m12ab) is a SINGLE-SEAT area: the engine swaps the racer's whole world for it, and there
+; is no second bike. With this on (default) the other players are held still with an
+; on-screen "<name> is racing - waiting", and - the part that actually matters - the
+; follow-the-leader warp refuses to drag them onto the track. Measured live 2026-08-29:
+; that follow-warp into tar_m03mg was the last thing the following instance did before it
+; died. The race's own rewards (gold, journal, the Tar_Swoop* / TAR_SWOOP_MIN/MSEC /
+; Tar_SwoopStatus / Tar_SwoopRaceCounter globals) still reach everyone through the ordinary
+; globals/journal/purse channels, which are not gated on this. 0 restores the old
+; free-for-all. See docs/research/minigames.md §24.
+;
+; A lock needs BOTH the peer's minigame flag AND a known track module, and that second half is
+; what keeps Pazaak out: pazaak_detect sets the same flag for a card hand on purpose, and
+; freezing everybody through a long optional side activity in a normal module would be wrong.
+minigame_lock_peers = 1
+
+; Safety valve for the above: seconds a lock may stand before releasing itself regardless
+; of what the racer's flag still says. A peer whose agent died mid-race leaves its last
+; published state behind forever, and "frozen for the rest of the session" must not be a
+; state this can reach. 600 = ten minutes, comfortably longer than any race in the game;
+; 0 disables the timeout.
+minigame_lock_timeout_s = 600
+
+; Extra module names to treat as single-seat minigame tracks, comma-separated, on top of
+; the four a stock install ships (tar_m03mg, manm26mg, tat_m17mg, m12ab - found by reading
+; every modules/*.rim area file for a MiniGame struct, not guessed). Only needed for a mod
+; that adds its own track. Empty by default.
+# minigame_modules =
+
 ; --- persistent connection indicator ------------------------------------------------
 ; Before this the only way to see connection state in-game was typing `status` at the ~
 ; console. This posts a short line ("co-op: connected, 2 players" / "reconnecting..." /

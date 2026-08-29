@@ -3166,3 +3166,330 @@ client's own bridge write (`TryWriteRemotePeers`) received an empty peer list (t
 parked). Passes against the current, unmodified wiring — no code change was needed for this half
 of that round's task. See `docs/research/playthrough-taris.md`'s own dated follow-up for the full
 write-up, including the separate, real `topup` "0 max hp" fix from the same round.
+
+## 24. §14-§22's eight-round `DelayCommand` mystery, ROOT-CAUSED (2026-08-29): nothing was ever
+swallowed — the test recipe never reached the race branch of Gadon's dialogue, and the swoop race
+starts fine with the plugin loaded
+
+Everything from §14 to §22 chased one claim: that `k_ptar_racecs0`'s
+`DelayCommand(7.0, AssignCommand(GetFirstPC(), <subroutine@764>))` "never dispatches while our
+plugin is loaded". Eight rounds of increasingly careful work established that the subroutine's
+effects never happen (no escort spawn, no PC teleport, no party removal) from four independent
+angles, and correctly ruled out a bad blueprint, a bad waypoint, a census cap, a resref typo and
+`CreateObject` itself.
+
+**The claim's own premise was wrong.** `k_ptar_racecs0` never ran. There was no `DelayCommand` to
+dispatch.
+
+### 24.1 The instrument: `DelayEventProbeHook` (coop.ini `delay_probe`, default OFF)
+
+Rather than reason about it further, this round built the read-only probe the question needed. It
+splices five points, each verified byte-for-byte before patching and each re-executing the exact
+instructions it relocated (`src/KotorCoop.Plugin/DelayEventProbeHook.cs`, modelled on
+`RemovePartyMemberHook`):
+
+| splice | address | what it answers |
+|---|---|---|
+| `CSWVirtualMachineCommands::ExecuteCommandDelayCommand` entry | `0x0052FE30` | was `DelayCommand` called at all, and with what gate values |
+| `CServerAIMaster::AddEventDeltaTime` entry | `0x004B08D0` | did the event actually get enqueued |
+| `CServerAIMaster::UpdateState`, past the resolve branch | `0x004B0DA6` | did an event come due, and what object type is it for |
+| `CServerAIMaster::UpdateState`, the discard block | `0x004B0E20` | was an event silently thrown away |
+| `CSWSDialog::RunScript`, immediately before the VM call | `0x0059EDC1` | did a dialogue node's own action script run, and as WHOM |
+
+The gates, from fresh disassembly of the GOG v1.0.3 binary (all constants read out of the
+executable's own data, not assumed):
+
+```
+ExecuteCommandDelayCommand 0x0052FE30
+  0x0052FE7D  jne 0x52FEF6     ; implementer+0x04 ("has caller object") != 1 -> free the
+                               ;   situation, return 0. SILENT no-op.
+  0x0052FEA3  jne 0x52FEF6     ; the caller object id does not resolve -> SILENT no-op.
+  0x0052FEE7  call 0x4B08D0    ; otherwise: AddEventDeltaTime(0, ms, id, id, type=1, situation)
+
+CServerAIMaster::UpdateState 0x004B0B70   (the drain, per server tick)
+  0x004B0D40  call CWorldTimer::CompareWorldTimes  ; > 0 -> not due yet, stop draining
+  0x004B0D99  call 0x004D8230                      ; hash lookup: al = 0 FOUND, al = 1 MISS
+  0x004B0DA4  jne 0x4B0E20                         ; the event's object is gone -> DISCARD
+  0x004B0DAA  mov al,[obj+8]                       ; the object TYPE byte
+              > 4 -> vtable+0x78, == 4 -> vtable+0x28, == 3 -> vtable+0x20,
+              anything else -> 0x4B0E20 DISCARD
+```
+
+`byte[0x74666C] = 0` (the lookup's "found" return — `0x004D8230` returns 0 on a hit and 1 on a
+miss, and writes the object pointer through its out parameter), `byte[0x746633] = 4` (AREA),
+`byte[0x746632] = 3` (MODULE), `dword[0x746644] = 0x7F000000` (OBJECT_INVALID),
+`dword[0x7441B8] = 1` (the event type `DelayCommand` enqueues), `float[0x73D6FC] = 1000.0`
+(seconds -> ms). `AssignCommand` (`0x0052E720`) has the same object-resolution gate at
+`0x0052E787` and, unlike `DelayCommand`, does NOT require a caller object.
+
+### 24.2 What the probe saw, on the rig, running §22's own recipe verbatim
+
+`tools/demo.ps1` (both instances), the same crafted `Tar_SwoopEng` save, `travel tar_m11aa`,
+`tp 65.0 76.0 0.12`, `talk GadonThek112`. The dialogue ran the same six-node chain §15-§22 all
+report (`-1 -> 17 -> 18 -> 19 -> 20 -> 21 -> 2`, terminal node 09:45:36.759).
+
+* **Zero `DelayCommand hasCaller=` lines anywhere in that window.** `ExecuteCommandDelayCommand`
+  was not called once between the conversation opening and the terminal node.
+* **Exactly one dialogue node action script ran for the whole conversation**, at 09:51:53.276 on
+  the repeat pass with the `CSWSDialog::RunScript` splice armed:
+  `delayprobe: dialogue node script 'k_act_talktrue' runs as self=0x4`.
+* The machinery itself was demonstrably alive the whole time: 1219 `enqueue` records, 1076 `due`
+  records and **0 `DISCARD`** records across the session, and every `DelayCommand` call the probe
+  did catch elsewhere logged `hasCaller=1` with a resolvable self.
+
+`k_act_talktrue` is `EntryList[22].Script` in `tar11_gadon112.dlg`, and it is the ONLY node in the
+whole file carrying that script. So the conversation ran entry 22's branch, not entry 17's.
+
+### 24.3 Why: the wrong global. It is `Tar_SummonGadon`, not `Tar_SwoopEng`
+
+`tar11_gadon112.dlg`'s `StartingList` has four candidates, evaluated in order — the first whose
+`Active` script returns true wins:
+
+| order | entry | Active |
+|---|---|---|
+| 0 | 81 | `k_ptar_zaerracex` |
+| 1 | 22 | `k_con_talkedto` |
+| 2 | 2 | `k_ptar_gadmis01` |
+| 3 | 0 | (none) |
+
+`k_ptar_zaerracex.ncs` is 113 bytes and contains exactly one string constant:
+**`Tar_SummonGadon`** — a BOOLEAN global (catalogue index 353), compared against 1. It has nothing
+to do with `Tar_SwoopEng`. With `Tar_SwoopEng` set and `Tar_SummonGadon` clear, entry 81 fails,
+`k_con_talkedto` succeeds, and the conversation starts at entry 22 — a branch from which
+`EntryList[17]` (`k_ptar_racecs0`) and `ReplyList[21]` (`k_ptar_bekrace`) are **not reachable at
+all**, confirmed by walking the whole reply graph out of entry 22.
+
+Note also that §14's "Reply[18] / Entry[17]" numbering is right but §21.6's "`bekrace` is a
+node-21 script" is not: `k_ptar_bekrace` is `ReplyList[21]`, not `EntryList[21]`. Two different
+lists, one index.
+
+### 24.4 The race, run end to end, with the plugin loaded
+
+`setglobal Tar_SummonGadon true`, then `talk GadonThek112`, then three reply picks — the race
+branch needs real choices and an auto-advancing forced conversation never makes them, which is
+the second half of why every prior round stalled:
+
+```
+E81 -> R98 -> E6 -> [pick R9] -> E9 (k_ptar_takeaccel) -> R10 -> E10 -> R11 -> E11
+    -> [pick any of R14/R13/R12] -> E12 -> R15 -> E13 -> R16 -> E14
+    -> [pick R18 "Okay, I'm ready for the race."] -> E16 -> R19
+    -> E17 (k_ptar_racecs0) -> R20 -> E18 (k_ptar_racecs1) -> R21 (k_ptar_bekrace)
+```
+
+Observed live, in the plugin's own log, on the very first attempt:
+
+```
+10:01:41.220  delayprobe: dialogue node script 'k_ptar_racecs0' runs as self=0x2
+10:01:49.231  delayprobe: dialogue node script 'k_ptar_racecs1' runs as self=0x2
+10:01:49.232  delayprobe: DelayCommand hasCaller=1 self=0x2      <- racecs0's own delayed chain
+10:02:08.240  delayprobe: dialogue node script 'k_ptar_bekrace' runs as self=0x2
+10:02:08.241  delayprobe: DelayCommand hasCaller=1 self=0x2      <- bekrace's StartNewModule
+10:02:09.991  dialogue-node-pub: #1 node -1 -> 4 serial 21       <- a NEW module's conversation
+```
+
+and `where` then reported `module tar_m03af`. **The whole chain §14-§22 could never get to run
+fires correctly with this plugin loaded, first try, no plugin change required.** The published
+node index is confirmed to be the `EntryList` index (`node 16 -> 17` with `k_ptar_racecs0`
+running on that exact edge, and `node 6 -> 9` with `k_ptar_takeaccel` on that one).
+
+### 24.5 What actually changes for the shipped mod
+
+`minigame_hide_peer` stays default-on. What changes is that the swoop race is no longer an
+unexplained blocker: it is reachable, and the reason nobody had seen one was a test recipe, not
+the mod. The remaining co-op problem is a different (and real) one, below.
+
+### 24.6 The race area, and the real co-op problem the round found
+
+The race itself is **`tar_m03mg`**, not `tar_m03af` — `tar_m03af` is the Bek garage the race is
+entered from. Reading every `modules/*.rim` area file in a stock GOG v1.0.3 install for a
+`MiniGame` struct gives exactly four modules that have one:
+
+| module | `MiniGame/Type` |
+|---|---|
+| `tar_m03mg` | 1 (swoop — the Taris race) |
+| `manm26mg` | 1 (swoop — Manaan) |
+| `tat_m17mg` | 1 (swoop — Tatooine) |
+| `M12ab` | 2 (turret — the Leviathan) |
+
+Live, `travel tar_m03mg` produced `minigame: entered` on the host immediately — the
+`CSWCModule::GetMiniGame` chain §1/§2 documented works exactly as designed for a real swoop
+track. **Correction to §3:** the kind read at `CSWMiniGame+0x80` came back `Unknown`, not `Swoop`,
+even though `m03mg.are`'s own `MiniGame/Type` is 1. The gating does not depend on the kind (it is
+a local label only), so this is recorded rather than fixed; the offset is named `type` in the
+symbol database and matches the field ORDER in the area's own struct, so the likely explanation is
+that the client-side `CSWMiniGame` has not been filled in at the entry edge the log samples.
+NEEDS-LIVE.
+
+**And the actual bug.** The client instance followed the host into the race module — the ordinary
+follow-the-leader warp — and died there:
+
+```
+CLIENT 10:02:02.675  transition: closed the client world ahead of the map init
+CLIENT 10:02:02.675  world: unannounced teardown - treating as a load, not a transition
+CLIENT 10:02:02.676  epoch: world unloading; clearing phantom, item, combat and door state
+       (no further log lines; the process was gone)
+```
+
+A minigame area is single-seat: `m03mg.are`'s `MiniGame` struct carries one `Player` sub-struct,
+29 `Enemies` and 22 `Obstacles`. There is no second bike. Following the racer in is not a
+degraded experience, it is an invalid one.
+
+### 24.7 What was built: "one player races, everybody else waits"
+
+* `KotorCoop.Protocol.MinigameLockRule` (pure, unit-tested) decides, from the peer roster, whether
+  this instance is held and by whom. Ownership is first-come and sticky (ties break on the lowest
+  peer id, which is stable across ticks where roster order is not), and there are four release
+  paths, each with its own test: the owner's flag clears, the owner leaves the roster (a
+  disconnect mid-race), `minigame_lock_timeout_s` expires, or this player turns out to be in a
+  minigame too. A lock that fails to release is the worst thing this feature can do.
+  **A lock needs the flag AND a track module**, and the second half is not belt-and-braces — it
+  is what keeps Pazaak out. §23's `pazaak_detect` (ON by default) deliberately sets the SAME
+  `PlayerState.FlagInMinigame` bit for a running card hand, because for phantom-parking purposes a
+  player at a Pazaak table is exactly as absent as one on a bike. For LOCKING purposes they are
+  nothing alike: a Pazaak hand is a long, optional side activity in an ordinary module, and
+  freezing everybody else through one would be a plain regression this feature would otherwise
+  have shipped. One wire bit cannot separate them; the peer's published MODULE can, and already
+  crosses the network.
+* `KotorCoop.Protocol.MinigameModuleRule` refuses the follow-warp, on either of two independent
+  signals: the peer publishing `FlagInMinigame`, or the destination naming a known track module
+  (the four above, plus anything in `coop.ini minigame_modules`). The module-name gate catches the
+  warp one poll EARLIER than the flag can.
+* `SharedBlock` region **0x4704..0x4720** (`OffsetMinigameLockActive` + `OffsetMinigameLockName`,
+  no `TotalSize` growth) carries the decision AGENT -> PLUGIN. That direction is forced, not
+  stylistic: `minigame_hide_peer` (default ON) removes a racing peer from the block's remote slots
+  in the very tick their flag turns true, so a plugin-side reader of those slots could never see
+  the owner — the identical trap §23.3 recorded for the HUD notice.
+* `MinigameLockController` (plugin) refuses to trust the lock level past a dead agent — it is a
+  LEVEL written by a separate process, and if that process dies mid-race the agent-side timeout
+  cannot help because it runs in the process that just died, so the plugin adds its own
+  `AgentLiveness` + active-session condition on top. It holds the waiting player with the same two levers
+  `SoloSegmentSpectateController` already stacks (`creature+0xE8` commandable = 0, plus
+  `HoldCreatureStill` reasserted every 30 frames) and draws "&lt;name&gt; is racing - waiting" on
+  HUD row 9. The keyboard half of that lock stays NEEDS-LIVE for the same reason it does there —
+  injected keystrokes never reach this game — but the part that mattered (the follow-warp) is
+  agent-side and testable.
+* `CoopAgent.PumpMinigameLock` runs BEFORE the hide filter, against the unfiltered roster.
+  `MinigameLockLoopbackTests` pins that ordering with two real agents over real sockets.
+
+### 24.8 Rewards: the existing channels already carry them; no new packet type needed
+
+The race's own outputs are set by scripts in `tar_m03af`/`tar_m03mg` (`k_ptar_postswoop`,
+`k_ptar_swoop1win`, `k_ptar_racewon`, `heartbeat`, ...) and every one of them is a plain global:
+
+| global | type | catalogue index |
+|---|---|---|
+| `Tar_SwoopRace` | boolean | 521 |
+| `Tar_SwoopNew` | boolean | 117 |
+| `Tar_SwoopStatus` | number | 130 |
+| `Tar_SwoopRaceCounter` | number | 19 |
+| `TAR_SWOOP_MIN` / `TAR_SWOOP_MSEC` | number | 39 / 339 |
+| `TAR_SWOOP_MIN_BEAT` / `TAR_SWOOP_MSEC_BEAT` | number | 318 / 62 |
+
+**The `sbyte` globals channel carries all of them, bit-exactly, and the reserved
+`PacketType 66 GlobalIntBatch` is not needed.** The engine's own `GLOBALVARS.res` stores a number
+global as ONE BYTE per catalogue entry (`ValNumber`), and `GlobalVariableTable.TryWriteNumber`
+writes `(byte)value` — so an `sbyte` on the wire is a lossless re-interpretation of the same byte,
+not a narrowing. A lap time of 999 ms cannot be represented by the ENGINE either; it is already
+stored mod 256 before this mod ever sees it. None of these names is in `NotWorldTruth` or matches
+the `k_vis_` exclusion, so they replicate through `WorldStatePump.PumpWorldState` untouched, and
+`PumpWorldState`/`PumpJournal` are not gated on minigame state (checked: `CoopAgent.PumpOnce`
+applies `MinigameRule` only to the peer-visibility filter, the presence census and forwarded
+damage). Prize gold rides the existing shared purse: a script-granted increase is picked up by
+`PartyPump.ObserveLocalGold` -> the earned/spent ledger -> the host's merge, exactly like any
+other gold.
+
+### 24.9 Recipe, for the next round
+
+```powershell
+pwsh tools\demo.ps1
+pwsh tools\blockpoke.ps1 -ProcId <host> travel tar_m11aa
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'tp 65.0 76.0 0.12'
+pwsh tools\blockpoke.ps1 -ProcId <host> console 'setglobal Tar_SummonGadon true'
+pwsh tools\blockpoke.ps1 -ProcId <host> talk GadonThek112
+#   at entry  6: console 'selectreply 0'
+#   at entry 11: console 'selectreply 1'
+#   at entry 14: console 'selectreply 1'      <- "Okay, I'm ready for the race."
+# -> tar_m03af, then the garage's own dialogue; or `travel tar_m03mg` straight to the track.
+```
+
+`Tar_SwoopEng` is NOT needed for this path and setting it changes nothing about which starting
+entry wins. Watch `dialogue-node-pub` for the entry index and, with `delay_probe = 1`,
+`delayprobe: dialogue node script '<resref>'` for what each node actually ran.
+
+### 24.10 Live pass (2026-08-29, second rig round): the whole lock/reward layer verified end to end
+
+Two instances, `tools/demo.ps1`, shipped defaults (`minigame_lock_peers` absent from both game
+directories' `coop.ini`, so the ON-by-default idiom is what ran). Host warped straight to
+`tar_m03mg` — the race area itself — which is the same engine state a real race reaches, without
+spending the round re-driving §24.4's dialogue.
+
+**The host entered a real swoop minigame, and the KIND is confirmed:**
+
+```
+HOST 11:54:02.065  minigame: entered (Unknown) — peers will park this player's phantom
+HOST 11:54:02.166  minigame: kind settled to Swoop
+```
+
+That second line is new this round and settles §24.6's open question: `CSWMiniGame+0x80` really is
+the type field and really does read 1 for `tar_m03mg` — it is simply **not filled in yet at the
+instant the pointer first goes non-null**, arriving ~100 ms later. §3's INFERRED offset is
+confirmed; only the sampling moment was wrong. Nothing gates on the kind either way.
+
+**The peer was locked, told why, and NOT dragged onto the track:**
+
+```
+CLIENT agent  11:54:03  * minigame lock: Lanik started a minigame — holding control until it ends
+CLIENT agent  11:54:03  * not following the announced transition to 'tar_m03mg': that is a single-seat minigame track
+CLIENT agent  11:54:03  * not following to 'tar_m03mg': a peer is in a single-seat minigame there — waiting for them instead
+CLIENT agent  11:54:03  * Lanik is in a minigame - waiting
+CLIENT plugin 11:54:03.742  minigame lock: a peer is racing — this player is held until it ends
+```
+
+Both follow gates fired (the announced fast path AND the slow path), and `where` on the client
+confirmed it stayed put: `module END_M01AA` while the host read `module tar_m03mg`. Compare
+§24.6's own first round, where the same warp took the client's process with it.
+
+**The rewards crossed while the racer was inside the minigame, in a different module.** Set on the
+host with `setglobal`, then read back on the client (a `setglobal` that reports `X -> X` is a read
+that found the value already there):
+
+| global | set on host | read back on client |
+|---|---|---|
+| `Tar_SwoopStatus` (number) | `0 -> 3` | `3 -> 3` |
+| `Tar_SwoopRaceCounter` (number) | `0 -> 2` | `2 -> 2` |
+| `Tar_SwoopRace` (boolean) | `0 -> 1` | `1 -> 1` |
+| `TAR_SWOOP_MSEC` (number) | byte 200 | byte 200 |
+
+`TAR_SWOOP_MSEC` is the interesting one and it proves §24.8's bit-exactness claim directly: asking
+for 200 makes the `setglobal` verb report *"the engine refused it: still reads -56 after requesting
+200"* — because 200 IS -56 in the signed byte the engine stores and this project's tooling reads.
+The client reports the identical `-56`. The byte crossed the wire unchanged; nothing was clamped,
+saturated or lost, and no `GlobalIntBatch` packet type is needed. (The verb's own "refused"
+wording is a signed/unsigned mismatch in its verification read, not a failed write — worth knowing
+before the next round chases it.)
+
+**The lock released cleanly when the race ended:**
+
+```
+HOST   11:56:11.028  minigame: exited — back in the shared world
+CLIENT 11:56:12  * minigame lock: Lanik finished — control is yours again
+CLIENT 11:56:12.875  minigame lock: the minigame ended — control is yours again
+```
+
+~1.8 s end to end, which is the module-load settle plus one heavy-pump interval — not a stall.
+Neither instance crashed across two relocating warps.
+
+**Also this round, and worth recording as a rig hazard rather than a finding**: the round's FIRST
+attempt showed every agent-side line firing while the client's PLUGIN log stayed silent. Cause: a
+concurrently-running agent had installed its own `dinput8.dll` over `D:\Games\swkotor-gog-p2`
+between this round's install and its launch, so the client was running someone else's plugin with
+this session's agent. The tell is cheap and worth reusing — the client's log had no
+`delayed-event probe armed` line while the host's did, and the two installed DLLs differed in
+SIZE (2,063,360 vs 2,072,064). Check both installed DLLs match before trusting a negative
+plugin-side result.
+
+`tools/verify.ps1` after the pass: **40 passed, 9 failed** — inside the documented ~40-42/7-9
+baseline, and every failure in the long-known set (the flaky item-pickup / client-hit pair, the
+downed/revive pair that needs a human, the 2-of-197 signature mismatch, the container walk-up, and
+the per-frame-spam check reading a stale log window). `dotnet test tests/KotorCoop.Tests`:
+**2560/2560**.
