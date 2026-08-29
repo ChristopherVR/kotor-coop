@@ -99,6 +99,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerLockArbiter.cs" Link="Plugin\ContainerLockArbiter.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPoolStackMatcher.cs" Link="Plugin\PartyPoolStackMatcher.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPoolIdentityMatcher.cs" Link="Plugin\PartyPoolIdentityMatcher.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyPoolDepositRule.cs" Link="Plugin\PartyPoolDepositRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StoreAffordabilityRule.cs" Link="Plugin\StoreAffordabilityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StoreSellGuard.cs" Link="Plugin\StoreSellGuard.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MaxHitPointsRule.cs" Link="Plugin\MaxHitPointsRule.cs" />

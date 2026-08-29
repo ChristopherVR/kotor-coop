@@ -115,11 +115,77 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // ⚠ Where a spawn actually LANDS, corrected in docs/research/shared-inventory-v2.md §15.
+        // CreateItemOnObject routes through CSWSCreature::AcquireItem, which files the item into
+        // CSWSCreature::GetItemRepository(creature, 1) — the SHARED PARTY POOL for a live party
+        // member, not the +0xA30 backpack this code used to unlink from. Reading +0xA30 made the
+        // unlink below a guaranteed no-op, so every store insert left the item linked in the
+        // party pool as well as the store: one body, two repositories, counted by both channels'
+        // scans. The section header further down this file flagged exactly this hazard for this
+        // caller; this is it being taken.
+        nint player = GetGameObjectFn(GetServer(), playerObjectId);
+        nint sourceRepo = ResolveCreatureItemRepo(player);
+        if (sourceRepo == 0)
+        {
+            LastStoreNote = "could not resolve the spawning player's own repository";
+            return false;
+        }
+
+        // AcquireItem also asks for a MERGE (wantMerge=1), so a spawn of something the player
+        // already carries hands back that PRE-EXISTING stack rather than a new body — moving
+        // which into a shop would drag the player's own standing units in with it. Snapshot
+        // first so that is detectable, then undo and retry with merges refused.
+        (uint Id, uint Stack)[]? before = SnapshotRepositoryStacks(sourceRepo);
+
         itemId = GiveItemToInventory(playerObjectId, resrefAscii, resrefLength, count, out int failure);
         if (itemId is 0 or ObjectInvalid)
         {
             LastStoreNote = $"did not spawn (failure {failure})";
             return false;
+        }
+
+        if (TryFindSnapshotStack(before, itemId, out uint stackBefore))
+        {
+            nint mergedInto = ResolveItemBase(itemId);
+            if (mergedInto != 0)
+            {
+                *(uint*)(mergedInto + ItemStackSize) = stackBefore;
+            }
+
+            nint[] flipped = new nint[64];
+            int flippedCount = BlockMergesForTag(sourceRepo, resrefAscii, resrefLength, flipped);
+            try
+            {
+                itemId = GiveItemToInventory(playerObjectId, resrefAscii, resrefLength, count, out failure);
+            }
+            finally
+            {
+                RestoreStolenBits(flipped, flippedCount);
+            }
+
+            if (itemId is 0 or ObjectInvalid)
+            {
+                LastStoreNote = $"did not spawn on the merge-free retry (failure {failure})";
+                return false;
+            }
+
+            if (TryFindSnapshotStack(before, itemId, out uint stillMerged))
+            {
+                nint again = ResolveItemBase(itemId);
+                if (again != 0)
+                {
+                    *(uint*)(again + ItemStackSize) = stillMerged;
+                }
+
+                LastStoreNote =
+                    $"the engine merged the spawn into the player's own stack 0x{itemId:X} twice "
+                    + "— refusing rather than moving their units into the shop";
+                return false;
+            }
+
+            PluginHost.Log(
+                $"store: the spawn merged into the player's own stack (restored to {stackBefore}); "
+                + $"retried with merges blocked and got a fresh 0x{itemId:X}");
         }
 
         if (!TryReadItemIdentityFields(itemId, out ItemIdentityFields spawned) || spawned.LooksUnloaded)
@@ -139,22 +205,24 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint player = GetGameObjectFn(GetServer(), playerObjectId);
-        nint playerRepo = player == 0 ? 0 : *(nint*)(player + CreatureItemRepo);
         nint item = ResolveItemBase(itemId);
-
-        if (playerRepo == 0 || item == 0)
+        if (item == 0)
         {
-            LastStoreNote = $"0x{itemId:X} spawned but could not resolve player backpack/item base";
+            LastStoreNote = $"0x{itemId:X} spawned but could not resolve the item base";
             return false;
         }
 
-        // Unlink from the player's own backpack, link into the store. Deliberately NOT calling
+        // Unlink from wherever the engine filed it, link into the store. Deliberately NOT calling
         // SetPossessor — same reasoning AddItemToPartyPool's own remarks give: the item's
         // possessor is left as the spawning player's id rather than fought back to
         // OBJECT_INVALID. NEEDS-LIVE, docs/research/store-sync.md.
-        RepositoryRemoveItemFn(playerRepo, item);
+        int unlinked = RepositoryRemoveItemFn(sourceRepo, item);
         RepositoryInsertItemFn(repo, item, -1);
+
+        PluginHost.Log(
+            $"store: insert diag — 0x{itemId:X} x{count}, unlinked from the player's repository "
+            + $"0x{sourceRepo:X} ({(unlinked != 0 ? "yes" : "NO — it was not there")}), "
+            + $"linked into store repo 0x{repo:X}");
 
         return true;
     }
