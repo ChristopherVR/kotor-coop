@@ -527,6 +527,22 @@ public enum CoopCommandKind
     CloseGui,
 
     /// <summary>
+    /// <c>popmodal [count]</c> - LIVE-TEST PRIMITIVE (docs/research/shared-inventory-v2.md
+    /// section 15). Pops panels off the GUI manager's own modal stack through the engine's own
+    /// <c>CSWGuiManager::PopModalPanel</c>.
+    ///
+    /// The half <see cref="CloseGui"/> was missing, and the one that actually unblocks the
+    /// client's <see cref="OpenStore"/>: the engine refuses <c>HideSWInGameGui</c>'s own
+    /// teardown while that stack is occupied, so <c>closegui</c> alone could only ever REPORT
+    /// the blocker. Section 15 traced what puts a panel there to this project's own menu-load
+    /// path, which constructs a <c>CSWGuiSaveLoad</c> panel and never pops it.
+    ///
+    /// <see cref="CoopCommand.Amount"/> is how many to pop at most (default 1, clamped 1..8).
+    /// An already-empty stack is success, not a refusal. Local only.
+    /// </summary>
+    PopModal,
+
+    /// <summary>
     /// <c>partyselect ok</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
     /// 2026-08-28 addendum). Confirms the native party-selection screen
     /// (<c>CSWGuiPartySelection</c>) with its current on-screen selection, through the panel's
@@ -881,6 +897,7 @@ public static partial class ConsoleCommand
         new(["pazaak"], ParsePazaak),
         new(["openstore"], ParseOpenStore),
         new(["closegui"], ParseCloseGui),
+        new(["popmodal"], ParsePopModal),
         new(["partyselect"], ParsePartySelect),
         new(["faction"], ParseFaction),
         new(["buy"], ParseBuy),

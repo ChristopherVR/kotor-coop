@@ -217,6 +217,31 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/shared-inventory-v2.md §15): pops the GUI manager's
+    /// own modal stack through <see cref="Odyssey.PopModalPanels"/>.
+    ///
+    /// The half <see cref="CloseGui"/> was missing. <c>HideSWInGameGui</c> refuses its own
+    /// teardown while that stack is occupied, so on an instance whose stack carries a panel —
+    /// which §15 traced to this project's OWN menu-load path — `closegui` could report only the
+    /// refusal, never clear it. <see cref="SharedBlock.CheatAmount"/> caps how many to pop
+    /// (default 1, clamped 1..8: a modal stack is a handful deep at worst, and an unbounded loop
+    /// on the main thread is not a debugging tool).
+    ///
+    /// An already-empty stack answers APPLIED, same reasoning <see cref="CloseGui"/> gives.
+    /// </summary>
+    private void PopModal()
+    {
+        int max = Math.Clamp(block.CheatAmount > 0 ? block.CheatAmount : 1, 1, 8);
+
+        bool popped = Odyssey.PopModalPanels(max, out string detail);
+        PluginHost.Log($"popmodal: {detail}");
+
+        Answer(
+            popped ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"popmodal: {detail}");
+    }
+
+    /// <summary>
     /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-28 addendum): buys a resref
     /// from a store through the REAL <see cref="Odyssey.BuyFromStore"/> (the GUI's own Buy
     /// click handler) — gold and item both move through the engine's own path. See

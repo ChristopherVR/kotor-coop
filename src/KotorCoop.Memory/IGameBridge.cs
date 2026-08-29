@@ -492,6 +492,11 @@ public static class CheatKinds
     /// <c>SharedBlock</c>'s own numbering note before adding another.
     /// </summary>
     public const uint CloseGui = 53;
+
+    /// <summary>Pops the GUI manager's own modal stack, which is what actually lets
+    /// <see cref="CloseGui"/> succeed — the engine refuses its own full-screen teardown while
+    /// that stack is occupied. See <c>SharedBlock.CheatKindPopModal</c>.</summary>
+    public const uint PopModal = 54;
 }
 
 /// <summary>

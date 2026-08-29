@@ -622,6 +622,83 @@ internal static unsafe partial class Odyssey
         return after == 0;
     }
 
+    /// <summary>
+    /// <c>CSWGuiManager::PopModalPanel(this)</c> 0x0040BE00 — VERIFIED, full disassembly this
+    /// pass (docs/research/shared-inventory-v2.md §15). <c>__thiscall(this = CSWGuiManager*)</c>,
+    /// <b>no stack arguments</b> (it ends in a bare <c>ret</c>, not <c>ret 4</c>), returning the
+    /// popped panel pointer in <c>eax</c>.
+    ///
+    /// Its very first act is the guard that makes it safe to call speculatively:
+    /// <c>mov eax,[esi+0x98]; test eax,eax; je &lt;ret&gt;</c> — an EMPTY modal stack returns
+    /// immediately having touched nothing. On a non-empty one it removes the top entry from the
+    /// <c>+0x94</c> array (<c>CExoArrayList::Remove</c> 0x006857A0), calls the manager's own
+    /// 0x0040ACC0 (focus/refresh), and re-activates whatever panel is now on top through its
+    /// vtable's <c>+0x44</c>/<c>+0x7C</c> slots. It does <b>not</b> delete the popped panel —
+    /// there is no <c>operator delete</c> anywhere in the function — so this unregisters, it
+    /// does not free.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> PopModalPanelFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x0040BE00;
+
+    /// <summary>
+    /// Pops up to <paramref name="max"/> panels off the GUI manager's modal stack — the
+    /// `popmodal` live-test primitive, and the missing half of
+    /// <see cref="CloseFullScreenGui"/>.
+    ///
+    /// ⚠ Why this exists (docs/research/shared-inventory-v2.md §15). <c>HideSWInGameGui</c>
+    /// refuses its own teardown while <c>CSWGuiManager+0x98</c> is non-zero, so `closegui` alone
+    /// could never clear <c>CGuiInGame+0x30</c> — the field <c>ShowStoreGui</c> gates on, and
+    /// therefore the reason the CLIENT half of every live store round this project has run was
+    /// refused. §14 measured the blocker (both numbers = 1 on the client, 0 on the host) and
+    /// named this call as the next step; this is that step.
+    ///
+    /// It stops the moment the stack reports empty and never loops more than
+    /// <paramref name="max"/> times regardless, so a manager whose count field does not behave
+    /// the way the disassembly says cannot spin the main thread.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool PopModalPanels(int max, out string detail)
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            detail = "no in-game GUI resolved (not in a loaded module)";
+            return false;
+        }
+
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        if (manager == 0)
+        {
+            detail = "no GUI manager resolved (CGuiInGame+0x38 is null)";
+            return false;
+        }
+
+        int before = *(int*)(manager + GuiManagerModalStackCountOffset);
+        if (before <= 0)
+        {
+            detail = $"the GUI manager's modal stack is already empty (count = {before})";
+            return true;
+        }
+
+        int popped = 0;
+        for (int i = 0; i < max; i++)
+        {
+            if (*(int*)(manager + GuiManagerModalStackCountOffset) <= 0)
+            {
+                break;
+            }
+
+            PopModalPanelFn(manager);
+            popped++;
+        }
+
+        int after = *(int*)(manager + GuiManagerModalStackCountOffset);
+        detail = $"popped {popped} modal panel(s) — GUI-manager modal stack {before} -> {after}, "
+            + $"CGuiInGame+0x30 = {*(int*)(gui + InGameGuiBusyOffset)}";
+        return after < before;
+    }
+
     // ---- buy/sell: drive the real GUI button handlers directly (2026-08-28 addendum) -------
     //
     // Task: `buy`/`sell` dev verbs that move gold through the ENGINE'S OWN path, not a bare
