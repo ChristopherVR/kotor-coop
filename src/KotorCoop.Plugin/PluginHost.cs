@@ -289,7 +289,11 @@ internal static unsafe partial class PluginHost
         //      party_pool_sync's ambient-script-noise suppression — see
         //      SharedBlock.ItemTemplateSpawns.cs and docs/research/party-pool-sync.md §20.
         //      NEEDS-LIVE, flag stays OFF.
-        _block->Version = 59;
+        // 60 = 2026-08-29 seamless wave: minigame peer lock (0x4704/0x4708,
+        //      SharedBlock.MinigameLock.cs), new-character join capture handshake (0x4780..
+        //      and 0x47C0, SharedBlock.JoinChargen.cs), cheat kinds 53 closegui, 56 followstall,
+        //      59 skipkey, 60 quicksave. Live-verified — docs/live-verification.md (2026-08-29).
+        _block->Version = 60;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

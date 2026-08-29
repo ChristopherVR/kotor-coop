@@ -236,10 +236,11 @@ public class TransitionMovieTests
         // explicit arbitration region (docs/research/container-sync.md), 58 the
         // item-template-spawn ring (block grown to 0x4700, docs/research/item-identity.md §13),
         // 59 the item-template-spawn ring's own per-entry cheat flag (block grown to 0x4800,
-        // docs/research/party-pool-sync.md §20) — 45 and 46 are reserved by other agents working
-        // this tree concurrently) — see the changelog comments beside `_block->Version` and
-        // `PluginSignature` for the full history.
-        Assert.Equal(59, int.Parse(version.Groups[1].Value));
+        // docs/research/party-pool-sync.md §20), 60 the 2026-08-29 seamless wave (minigame peer
+        // lock, new-character join handshake, cheat kinds 53/56/59/60) — 45 and 46 are reserved
+        // by other agents working this tree concurrently) — see the changelog comments beside
+        // `_block->Version` and `PluginSignature` for the full history.
+        Assert.Equal(60, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

@@ -136,8 +136,14 @@ public static class ProtocolConstants
     /// client intents" redesign of the party pool and store channels
     /// (<c>party_pool_sync=2</c>/<c>store_sync=2</c>, default OFF, NEEDS-LIVE — mode 1, the
     /// existing op-log, is unchanged). See docs/research/shared-inventory-v2.md.
+    ///
+    /// Version 47: <see cref="PacketType.HostBye"/> (70) — the host's clean-shutdown broadcast
+    /// that lets clients release every lock immediately instead of waiting out the silence
+    /// timeout (<c>host_loss_release</c>). Also the flag snapshot became paged (same packet
+    /// types, but a v46 peer would misread a paged snapshot). See
+    /// docs/research/disconnect-reconnect.md §11 and world-adoption.md (2026-08-29).
     /// </summary>
-    public const byte Version = 46;
+    public const byte Version = 47;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
