@@ -3415,3 +3415,81 @@ pwsh tools\blockpoke.ps1 -ProcId <host> talk GadonThek112
 `Tar_SwoopEng` is NOT needed for this path and setting it changes nothing about which starting
 entry wins. Watch `dialogue-node-pub` for the entry index and, with `delay_probe = 1`,
 `delayprobe: dialogue node script '<resref>'` for what each node actually ran.
+
+### 24.10 Live pass (2026-08-29, second rig round): the whole lock/reward layer verified end to end
+
+Two instances, `tools/demo.ps1`, shipped defaults (`minigame_lock_peers` absent from both game
+directories' `coop.ini`, so the ON-by-default idiom is what ran). Host warped straight to
+`tar_m03mg` — the race area itself — which is the same engine state a real race reaches, without
+spending the round re-driving §24.4's dialogue.
+
+**The host entered a real swoop minigame, and the KIND is confirmed:**
+
+```
+HOST 11:54:02.065  minigame: entered (Unknown) — peers will park this player's phantom
+HOST 11:54:02.166  minigame: kind settled to Swoop
+```
+
+That second line is new this round and settles §24.6's open question: `CSWMiniGame+0x80` really is
+the type field and really does read 1 for `tar_m03mg` — it is simply **not filled in yet at the
+instant the pointer first goes non-null**, arriving ~100 ms later. §3's INFERRED offset is
+confirmed; only the sampling moment was wrong. Nothing gates on the kind either way.
+
+**The peer was locked, told why, and NOT dragged onto the track:**
+
+```
+CLIENT agent  11:54:03  * minigame lock: Lanik started a minigame — holding control until it ends
+CLIENT agent  11:54:03  * not following the announced transition to 'tar_m03mg': that is a single-seat minigame track
+CLIENT agent  11:54:03  * not following to 'tar_m03mg': a peer is in a single-seat minigame there — waiting for them instead
+CLIENT agent  11:54:03  * Lanik is in a minigame - waiting
+CLIENT plugin 11:54:03.742  minigame lock: a peer is racing — this player is held until it ends
+```
+
+Both follow gates fired (the announced fast path AND the slow path), and `where` on the client
+confirmed it stayed put: `module END_M01AA` while the host read `module tar_m03mg`. Compare
+§24.6's own first round, where the same warp took the client's process with it.
+
+**The rewards crossed while the racer was inside the minigame, in a different module.** Set on the
+host with `setglobal`, then read back on the client (a `setglobal` that reports `X -> X` is a read
+that found the value already there):
+
+| global | set on host | read back on client |
+|---|---|---|
+| `Tar_SwoopStatus` (number) | `0 -> 3` | `3 -> 3` |
+| `Tar_SwoopRaceCounter` (number) | `0 -> 2` | `2 -> 2` |
+| `Tar_SwoopRace` (boolean) | `0 -> 1` | `1 -> 1` |
+| `TAR_SWOOP_MSEC` (number) | byte 200 | byte 200 |
+
+`TAR_SWOOP_MSEC` is the interesting one and it proves §24.8's bit-exactness claim directly: asking
+for 200 makes the `setglobal` verb report *"the engine refused it: still reads -56 after requesting
+200"* — because 200 IS -56 in the signed byte the engine stores and this project's tooling reads.
+The client reports the identical `-56`. The byte crossed the wire unchanged; nothing was clamped,
+saturated or lost, and no `GlobalIntBatch` packet type is needed. (The verb's own "refused"
+wording is a signed/unsigned mismatch in its verification read, not a failed write — worth knowing
+before the next round chases it.)
+
+**The lock released cleanly when the race ended:**
+
+```
+HOST   11:56:11.028  minigame: exited — back in the shared world
+CLIENT 11:56:12  * minigame lock: Lanik finished — control is yours again
+CLIENT 11:56:12.875  minigame lock: the minigame ended — control is yours again
+```
+
+~1.8 s end to end, which is the module-load settle plus one heavy-pump interval — not a stall.
+Neither instance crashed across two relocating warps.
+
+**Also this round, and worth recording as a rig hazard rather than a finding**: the round's FIRST
+attempt showed every agent-side line firing while the client's PLUGIN log stayed silent. Cause: a
+concurrently-running agent had installed its own `dinput8.dll` over `D:\Games\swkotor-gog-p2`
+between this round's install and its launch, so the client was running someone else's plugin with
+this session's agent. The tell is cheap and worth reusing — the client's log had no
+`delayed-event probe armed` line while the host's did, and the two installed DLLs differed in
+SIZE (2,063,360 vs 2,072,064). Check both installed DLLs match before trusting a negative
+plugin-side result.
+
+`tools/verify.ps1` after the pass: **40 passed, 9 failed** — inside the documented ~40-42/7-9
+baseline, and every failure in the long-known set (the flaky item-pickup / client-hit pair, the
+downed/revive pair that needs a human, the 2-of-197 signature mismatch, the container walk-up, and
+the per-frame-spam check reading a stale log window). `dotnet test tests/KotorCoop.Tests`:
+**2560/2560**.
