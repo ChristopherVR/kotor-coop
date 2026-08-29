@@ -25,9 +25,9 @@ name =
 ; For mode = join: how you get a character into the host's world. Ignored when hosting.
 ;   save          the default - you already have a save, and its character is what you bring.
 ;   newcharacter  you have never played this game. Choose NEW GAME at the main menu and make
-;                 a character as usual; when you finish you are taken into the host's world
-;                 with it instead of into the Endar Spire. Afterwards, save once and you can
-;                 switch back to `save`.
+;                 a character as usual; your game starts normally and a few seconds later the
+;                 mod saves it and pulls you into the host's world with that character. That
+;                 save is yours to keep, so afterwards you can switch back to `save`.
 ; See docs/research/world-adoption.md.
 join_mode = save
 

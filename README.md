@@ -107,7 +107,7 @@ depends on what you already have, and `coop.ini`'s `join_mode` says which:
 | your situation | `join_mode` | what happens |
 | --- | --- | --- |
 | you have a save | `save` (the default) | your save's character is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
-| you have never played this game | `newcharacter` | connect, then choose **New Game** at the main menu and create a character exactly as you normally would. When you finish you are taken into the **host's** world with it, instead of into the Endar Spire |
+| you have never played this game | `newcharacter` | connect, then choose **New Game** at the main menu and create a character exactly as you normally would. Your game starts as usual; a few seconds later the mod saves it and pulls you into the **host's** world with the character you just made |
 
 Either way **your own saves are never touched** — only the autosave slot is written — so
 leaving the session and loading your own game again costs nothing. What you give up when the
@@ -115,8 +115,9 @@ worlds differ is the world you were playing: party, inventory, companions, globa
 all come from the host, because in co-op those are shared. You bring your character; the host
 brings the world.
 
-After a `newcharacter` join, save once. From then on you have a save of your own, and
-`join_mode = save` (the default) does the right thing without being told.
+A `newcharacter` join leaves a save of your own behind — the one the mod made to carry your
+character across — so from the next session on, `join_mode = save` (the default) does the right
+thing without being told.
 
 See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the mechanism.
 

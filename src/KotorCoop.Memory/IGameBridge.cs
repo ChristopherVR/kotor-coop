@@ -458,6 +458,26 @@ public static class CheatKinds
     /// <c>SharedBlock</c>'s own numbering note before adding another.
     /// </summary>
     public const uint FollowStall = 56;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/dialogue-skip-desync.md): presses skip on the dialogue
+    /// panel through the ENGINE'S OWN INPUT DISPATCH
+    /// (<c>CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)</c>), which is the one route that
+    /// actually passes through <c>DialogueSkipHook</c> — the spectator gag. <see cref="SkipLine"/>
+    /// does not: it pokes the owner's object flag directly and refuses on a spectator, which is
+    /// precisely the instance under test. Takes no arguments. See
+    /// <c>SharedBlock.CheatKindSkipKey</c>.
+    /// </summary>
+    public const uint SkipKey = 59;
+
+    /// <summary>
+    /// Saves the game through the engine's own quicksave path
+    /// (<c>CClientExoAppInternal::DoQuickSave</c>). Takes no arguments. Used by
+    /// <c>join_mode = newcharacter</c> to obtain a first-time joiner's freshly created
+    /// character in the only portable form KOTOR has for one — a save — and available as a
+    /// console verb in its own right. See <c>SharedBlock.CheatKindQuickSave</c>.
+    /// </summary>
+    public const uint QuickSave = 60;
 }
 
 /// <summary>

@@ -50,6 +50,52 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-29, docs/research/dialogue-skip-desync.md): presses skip
+    /// on the dialogue panel THROUGH THE ENGINE'S OWN INPUT DISPATCH, which is the only route
+    /// that passes through <see cref="DialogueSkipHook"/> — the gag that stops a SPECTATOR
+    /// advancing somebody else's conversation.
+    ///
+    /// ⚠ WHY <c>skipline</c> COULD NOT TEST THAT HOOK, measured live and recorded here because
+    /// it looks like it should have: <see cref="SkipLine"/> writes the owner's
+    /// <c>CSWSObject+0x1F4</c> directly and never enters <c>CSWGuiDialog::HandleInputEvent</c>,
+    /// so the hook never runs; and on the spectator — the instance the hook is entirely about —
+    /// it refuses before writing anything, because a spectator owns no conversation for
+    /// <c>TryGetActiveDialogue</c> to resolve. Two different reasons, same useless result.
+    ///
+    /// <see cref="DialogueSkipHook.SwallowedCount"/> is the oracle, and it is reported both
+    /// BEFORE and AFTER the call in one answer line: a spectator must see it step by one with
+    /// nothing advancing on either instance, an owner must see it flat with the line advancing
+    /// normally. Reading it after the call is safe and exact — the detour runs synchronously
+    /// inside the call below, on this thread.
+    /// </summary>
+    private void SkipKey()
+    {
+        uint before = DialogueSkipHook.SwallowedCount;
+
+        // Logged before the call for the same reason SkipLine logs its probe: this is the one
+        // line that says what the panel state was when the key went in.
+        PluginHost.Log($"dialogue: skipkey about to dispatch - {Odyssey.DescribeDialogueDrive()}");
+
+        if (!Odyssey.SendDialogueSkipKey(out int nodeBefore))
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "no dialogue panel here to send a skip key to");
+            return;
+        }
+
+        uint after = DialogueSkipHook.SwallowedCount;
+        bool swallowed = after != before;
+
+        PluginHost.Log(
+            $"dialogue: skipkey dispatched at node {nodeBefore}; swallowed {before} -> {after} "
+            + $"({(swallowed ? "SWALLOWED - spectator" : "passed through - owner")})");
+
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"skip key sent at node {nodeBefore}; swallowed {before} -> {after} "
+            + $"({(swallowed ? "swallowed" : "passed through")})");
+    }
+
+    /// <summary>
     /// LIVE-TEST PRIMITIVE: commits reply slot <c>block.CheatAmount</c> on the local player's
     /// OWNED conversation — see <see cref="SharedBlock.CheatKindSelectReply"/> for why this
     /// exists (navigating past a reply screen without real OS input, for the skip live-test).

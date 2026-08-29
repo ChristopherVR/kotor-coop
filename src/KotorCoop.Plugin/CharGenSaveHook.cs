@@ -4,18 +4,29 @@ using System.Runtime.InteropServices;
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Observes the engine writing the character a player just created — the one instant
-/// <c>Temp\pifo.ifo</c> holds a brand-new PC and nothing has cleaned it up yet.
+/// Counts finished character creations: a marker on the engine's own chargen-save call, so the
+/// log can say whether a stalled <c>join_mode = newcharacter</c> join is waiting on a player
+/// who has not finished chargen or on a module that has not come up.
 ///
-/// ⚠ WHY THIS EXISTS AT ALL, WHEN A FILE POLL WAS TRIED FIRST AND IS SIMPLER. Measured live
-/// (2026-08-29, rig instance 2, a real Quick Character through the retail screens): the poll —
-/// 250 ms, on <c>MenuFrame</c> — NEVER SAW THE FILE. Pressing Play runs
-/// <c>CSWGuiClassSelection::BeginPlayGame 0x6DBDF0</c>, which writes the pifo and then walks
-/// straight into the module load; the plugin's own log recorded "the main thread was gone for
-/// 1265 ms" across exactly that span, so no frame callback ran inside it, and by the time one
-/// did the whole <c>Temp\</c> directory was empty. The window is not merely short — for a
-/// frame-driven poll it does not exist. The quarter of a second a hook was said to buy turned
-/// out to be the entire thing.
+/// ⚠ THIS HOOK ONCE HAD A JOB AND LOST IT, AND THE REASON IS WORTH KEEPING. It was written to
+/// catch <c>Temp\pifo.ifo</c> at the one instant chargen was believed to write it — after a
+/// 250 ms <c>MenuFrame</c> poll never saw the file (measured live 2026-08-29: pressing Play
+/// runs <c>CSWGuiClassSelection::BeginPlayGame 0x6DBDF0</c> and the plugin's own log recorded
+/// "the main thread was gone for 1265 ms" across it, so no frame callback ran inside that
+/// span). The hook fired correctly and the file was ZERO BYTES, still zero after a 400 ms spin
+/// on the game thread. Disassembly then said why: <c>SaveCharGenCreature</c> WRITES NO PIFO. It
+/// does not reference the string (the five xrefs of 0x745318 are all in
+/// <c>StorePlayerCharacters</c>, <c>DoPCAutosave</c>, <c>LoadCharacterFromIFO</c> and
+/// <c>LoadPCAutoSave</c>), and its own tail writes <c>TEMP:temp</c> with restype 0x7DF ("bic")
+/// through <c>CResGFF::WriteGFFFile</c> at 0x613434 — a <c>.bic</c> character file, not a
+/// module IFO. docs/research/character-login-chain.md §2's writer (a) is wrong, and
+/// <see cref="NewCharacterCaptureController"/> now takes the character out of a real save
+/// instead.
+///
+/// What is left is a five-byte marker on a call that happens exactly once per character
+/// creation, which is cheap, safe and the only in-process evidence that the player got that
+/// far. It is installed only while a join is armed, so an install that never uses
+/// <c>join_mode = newcharacter</c> still carries no patch.
 ///
 /// THE HOOK SITE is the CALL, not the function: <c>0x006DBE9B</c>, the sole call site of
 /// <c>CSWCCreature::SaveCharGenCreature 0x6123E0</c> in the whole image (`tools/xrefs.py
@@ -31,16 +42,13 @@ namespace KotorCoop.Plugin;
 /// 0x006DBEA0  68 1C D7 73 00        push 0x73D71C            ; resume here; does not read eax
 /// </code>
 ///
-/// The stub calls the original FIRST (so the file exists before we look), then our callback
-/// inside <c>pushad</c>/<c>popad</c> — which also preserves <c>eax</c>, though the resume point
-/// does not read it. <c>ecx</c> is loaded by the instruction before the site and is untouched
-/// by the jump, so the original receives exactly the <c>this</c> it would have.
+/// The stub calls the original FIRST, then our callback inside <c>pushad</c>/<c>popad</c> —
+/// which also preserves <c>eax</c>, though the resume point does not read it. <c>ecx</c> is
+/// loaded by the instruction before the site and is untouched by the jump, so the original
+/// receives exactly the <c>this</c> it would have.
 ///
-/// ⚠ AND IT DOES REAL WORK IN THE CALLBACK — a file copy — which every other hook here refuses
-/// to do (they capture into a ring and let the frame tick act). That is deliberate and is the
-/// whole point: deferring is precisely what failed. This fires AT MOST ONCE per armed join, on
-/// a thread that is about to spend seconds loading a module anyway, and it is wrapped in a
-/// catch that can never unwind into the engine.
+/// The callback now does nothing but increment a counter, which is what every other hook here
+/// does (capture, and let the frame tick act).
 ///
 /// Installed only while a new-character join is armed (<see cref="NewCharacterCaptureController"/>),
 /// so an install that never uses <c>join_mode = newcharacter</c> carries no patch at all.
@@ -85,7 +93,7 @@ internal static unsafe class CharGenSaveHook
             if (site[i] != Site[i])
             {
                 diagnostic = $"call-site mismatch at +{i} (saw {site[i]:X2}, expected {Site[i]:X2}); "
-                    + "the created character cannot be captured";
+                    + "the chargen-finished marker is unavailable";
                 return false;
             }
         }
@@ -135,9 +143,9 @@ internal static unsafe class CharGenSaveHook
     }
 
     /// <summary>
-    /// Runs on the game's own thread, immediately after the engine has written the new
-    /// character to <c>TEMP:pifo</c> and before <c>BeginPlayGame</c> continues into the module
-    /// load that clears <c>Temp\</c>. This is the only moment the file is there to be had.
+    /// Runs on the game's own thread, immediately after the engine's chargen-save call returns
+    /// and before <c>BeginPlayGame</c> continues into the module load. Counts, and nothing
+    /// else.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnSaved()
@@ -145,7 +153,6 @@ internal static unsafe class CharGenSaveHook
         try
         {
             Sequence++;
-            NewCharacterCaptureController.OnCharacterSaved();
         }
         catch
         {

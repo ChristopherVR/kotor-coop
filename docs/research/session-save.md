@@ -1988,3 +1988,50 @@ Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `d
 2339/2339 (this same session; see `galaxy-map-and-party-select.md`'s own 2026-08-28 entry for the
 STUNT_00 crash's own independent third-party confirmation and the new `faction` diagnostic verb
 this session also built).
+
+---
+
+## The message-box precondition trap is GONE (2026-08-29): the bit was never "safe to load"
+
+Every round above that touched `loadgame` had to work around `failure 9` by poking
+`CSWGuiMessageBox+0x64` bit 0 by hand — `msgboxpoke.ps1` twice, then `partyselect ok` twice,
+each time noted as "a real retail precondition, faithfully replicated". It was faithfully
+replicated. It was also unconditionally false.
+
+Measured this round, on BOTH rig instances simultaneously, by walking the pointer chain from
+outside the process (`[[[0x7A39FC]+4]+4]+0x40` → `+0x98`, which is all `GetInGameGui 0x5ED690`
+does — `mov eax,[ecx+4]; mov eax,[eax+0x40]; ret`):
+
+```
+client (mid-conversation):        [msgbox+0x64] = 0x06   bit0 = 0
+host   (20 min into normal play): [msgbox+0x64] = 0x06   bit0 = 0
+```
+
+A host that had been playing normally for twenty minutes with nothing modal on screen reads the
+same value as a client mid-cutscene. So the bit cannot mean "nothing is blocking"; on this
+evidence it marks the pause-menu ROUTE into `CSWGuiSaveLoad::LoadGame` — the GUI sets it on its
+way in — and a programmatic load does not come through that route and never will. Replicating
+it was not a safety net; it was a guaranteed refusal for every caller `FireMidSessionPhase1`
+has.
+
+Nothing downstream reads it: retail's own branch tests it once at `0x6CB11C` and the sequence
+after it (`DestroyServer` / `UnloadModule` / `CreateServer` / `LoadPCAutoSave`) never touches
+the message box. Which is also why the four hand-poked loads above are direct evidence that
+proceeding with the bit clear is safe — a poke that sets a bit nothing reads is exactly
+equivalent to not reading it.
+
+`FireMidSessionPhase1` now LOGS the byte every time
+(`mid-session load precondition [msgbox+0x64] = 0x06 … observed, not obeyed`) and proceeds. A
+NULL sub-object is still `failure 9`: that means `CGuiInGame::Initialize` has not run, i.e.
+there is no in-game GUI to load over at all. Verified live 2026-08-29 through
+`join_mode = newcharacter`'s own mid-session adoption, which is what finally forced the issue —
+see [world-adoption.md](world-adoption.md)'s round-2 live pass.
+
+⚠ **And that same live pass found a second bug in this path, which every earlier `loadgame`
+round would have hit had it carried a file across:** a MID-SESSION load EMPTIES `Temp\`. The
+carried-character stash written there 2 s earlier was gone by the time the plugin looked, and
+`pifo.ifo` was back at 0 bytes — the directory emptied, then `LoadPCAutoSave`'s source-less
+`FileCopy` recreating the one name it targets. The wipe rides on this path's own teardown
+(`DestroyServer` at `0x6CB316` / `CClientExoApp::UnloadModule` at `0x6CB324`), which a
+from-the-menu load never performs, which is why the main-menu adoption never saw it. Anything
+this path must carry across the load now lives in the game directory root instead.

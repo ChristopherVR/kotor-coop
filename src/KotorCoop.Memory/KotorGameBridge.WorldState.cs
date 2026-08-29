@@ -174,12 +174,14 @@ public sealed partial class KotorGameBridge
 
     /// <summary>Polls the capture armed by <see cref="TryArmNewCharacterCapture"/>. False
     /// while nothing has been armed yet or the block cannot be read.</summary>
-    public bool TryGetNewCharacterCapture(out uint state, out uint bytes)
+    public bool TryGetNewCharacterCapture(out uint state, out uint bytes, out string saveDirectory)
     {
         state = 0;
         bytes = 0;
+        saveDirectory = string.Empty;
         return _joinChargenBlock != 0
-            && PluginMenuLoader.TryReadNewCharacterCapture(_memory, _joinChargenBlock, out state, out bytes);
+            && PluginMenuLoader.TryReadNewCharacterCapture(
+                _memory, _joinChargenBlock, out state, out bytes, out saveDirectory);
     }
 
     /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> (or

@@ -309,6 +309,8 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Leader] = c => Leader(c.Amount),
         [CoopCommandKind.Recruit] = c => Recruit(c.Amount, c.Address ?? string.Empty),
         [CoopCommandKind.SkipLine] = _ => SendCheat(new CheatRequest(CheatKinds.SkipLine)),
+        [CoopCommandKind.SkipKey] = _ => SendCheat(new CheatRequest(CheatKinds.SkipKey)),
+        [CoopCommandKind.Save] = _ => SendCheat(new CheatRequest(CheatKinds.QuickSave)),
         [CoopCommandKind.SelectReply] = c => SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: c.Amount)),
         [CoopCommandKind.LoadGame] = c => TriggerMidSessionLoad(c.Amount),
 

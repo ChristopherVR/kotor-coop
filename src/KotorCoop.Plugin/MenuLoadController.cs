@@ -350,8 +350,22 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
         try
         {
             string directory = NativeMethods.GetGameDirectory();
-            string carried = Path.Combine(directory, "Temp", CarriedCharacterFile);
             string pifo = Path.Combine(directory, "Temp", "pifo.ifo");
+
+            // ⚠ THE GAME ROOT FIRST, Temp\ ONLY AS A FALLBACK. The stash used to live beside
+            // the pifo, and on a MID-SESSION adoption that is not a safe place for it:
+            // measured live 2026-08-29, Temp\ was EMPTY by the time this ran (the agent had
+            // written the stash two seconds earlier and pifo.ifo was back at 0 bytes, i.e. the
+            // directory had been emptied and then the loader's source-less FileCopy recreated
+            // the one name it targets). The main-menu adoption never hit it because the wipe
+            // rides on the mid-session teardown - DestroyServer / UnloadModule - that a load
+            // from the menu never performs. The Temp\ fallback stays so a newer plugin still
+            // works with an older agent.
+            string carried = Path.Combine(directory, CarriedCharacterFile);
+            if (!File.Exists(carried))
+            {
+                carried = Path.Combine(directory, "Temp", CarriedCharacterFile);
+            }
 
             if (!File.Exists(carried))
             {
@@ -360,9 +374,11 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
                 return;
             }
 
+            Directory.CreateDirectory(Path.Combine(directory, "Temp"));
             File.Copy(carried, pifo, overwrite: true);
             PluginHost.Log(
-                $"menu: restored the carried character over TEMP:pifo ({new FileInfo(pifo).Length} bytes)");
+                $"menu: restored the carried character over TEMP:pifo ({new FileInfo(pifo).Length} bytes, "
+                + $"from {Path.GetFileName(Path.GetDirectoryName(carried))}\\{CarriedCharacterFile})");
         }
         catch (Exception ex)
         {
@@ -372,9 +388,13 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
     }
 
     /// <summary>
-    /// Where the agent stashes the joining player's character, next to the pifo the loader
-    /// clobbers. A separate name on purpose — the loader's FileCopy targets "pifo" by name,
-    /// so anything we want to survive it must not be called that.
+    /// Where the agent stashes the joining player's character: the GAME DIRECTORY ROOT, under
+    /// a name that is not "pifo".
+    ///
+    /// Both halves matter. The loader's <c>FileCopy</c> targets "pifo" by name and truncates
+    /// it to zero when the staged save has none, so the stash must not be called that; and a
+    /// mid-session adoption empties <c>Temp\</c> on its way through (measured 2026-08-29 — see
+    /// <see cref="RestoreCarriedCharacter"/>), so the stash must not live there.
     /// </summary>
     internal const string CarriedCharacterFile = "kcoop_carried.ifo";
 

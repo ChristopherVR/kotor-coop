@@ -16,14 +16,22 @@ namespace KotorCoop.Agent;
 /// only advice that worked was "go play single-player for five minutes first", which is a
 /// strange thing to tell someone who just wants to join their friend.
 ///
+/// ⚠ AND WHY IT NOW GOES THROUGH A SAVE. The first design of this flow rested on
+/// docs/research/character-login-chain.md §2's claim that retail chargen writes
+/// <c>TEMP:pifo</c> — the exact file adoption carries. Measured live 2026-08-29: it does not.
+/// <c>CSWCCreature::SaveCharGenCreature 0x6123E0</c> never references the string and its own
+/// tail writes <c>Temp	emp.bic</c>. So the character is obtained the only way KOTOR makes one
+/// portable, and the way this codebase has always read one: out of a save.
+///
 /// THE FIVE STEPS, and which of them are new:
 /// <list type="number">
 /// <item>ARM the plugin's capture (new — <c>NewCharacterCaptureController</c>).</item>
-/// <item>The player uses the game's own New Game and character creation. Nothing of ours runs;
-/// the engine writes the finished character to <c>Temp\pifo.ifo</c> exactly as it does for
-/// every single-player game ever started, and the plugin copies it aside.</item>
-/// <item>Read that copy back as a character (<c>PlayerIfo.TryExtractPlayerFromPifoBytes</c> —
-/// existing; the sidecar path already round-trips the identical file shape).</item>
+/// <item>The player uses the game's own New Game and character creation, and lands in the Endar
+/// Spire as any new game does. Nothing of ours runs during it.</item>
+/// <item>The plugin notices the world is up, asks the engine to SAVE (retail's own quicksave),
+/// and names the save it wrote. The character is read out of it with
+/// <c>PlayerIfo.TryExtractPlayer</c> — byte-for-byte the extraction <c>join_mode = save</c>
+/// has always used, against a save this session just watched being written.</item>
 /// <item>Adopt the host's world carrying it (<c>SessionManager.AdoptWithNewCharacterAsync</c>
 /// → the existing <c>WorldTransfer</c>/staging/verification chain, with the character handed in
 /// rather than extracted).</item>
@@ -107,27 +115,47 @@ internal static class NewCharacterJoinFlow
 
         say($"new character: {armed}");
         say("new character: at the main menu choose NEW GAME and create your character as usual. "
-            + "When you finish, you will be taken into the host's world instead of the Endar Spire.");
+            + "You will start the Endar Spire as normal; a moment later you will be pulled into "
+            + "the host's world with the character you just made.");
 
         // 2. Wait for the character. NO DEADLINE, deliberately: the player is choosing a face
         //    and spending skill points, and a timeout here would abandon them silently in the
         //    middle of it. Cancellation (the agent shutting down) is the only way out.
+        //
+        //    What arrives is a SAVE, not a file lifted out of Temp\. See
+        //    KotorCoop.Plugin.NewCharacterCaptureController for why: retail chargen does not
+        //    write TEMP:pifo (measured live, then disassembled - SaveCharGenCreature emits a
+        //    .bic), so the character is obtained the only way KOTOR makes one portable.
         uint bytes = 0;
+        string saveName = string.Empty;
+        uint lastState = uint.MaxValue;
+
         while (true)
         {
             token.ThrowIfCancellationRequested();
 
-            if (bridge.TryGetNewCharacterCapture(out uint state, out uint captured))
+            if (bridge.TryGetNewCharacterCapture(out uint state, out uint captured, out string directory))
             {
+                if (state != lastState)
+                {
+                    lastState = state;
+                    if (state == CaptureStateSaving)
+                    {
+                        say("new character: your game is up - saving it so your character can "
+                            + "travel; this takes a few seconds.");
+                    }
+                }
+
                 if (state == CaptureStateCaptured)
                 {
                     bytes = captured;
+                    saveName = directory;
                     break;
                 }
 
                 if (state == CaptureStateFailed)
                 {
-                    say("new character: the plugin could not capture the created character "
+                    say("new character: the plugin could not obtain the created character "
                         + "(see kotorcoop-plugin.log) - load a save yourself instead.");
                     return;
                 }
@@ -136,23 +164,21 @@ internal static class NewCharacterJoinFlow
             await Task.Delay(CapturePollMs, token).ConfigureAwait(false);
         }
 
-        say($"new character: captured your character ({bytes:N0} bytes); fetching the host's world.");
-
-        // 3. Read it back. The stash is a pifo — byte-for-byte what PlayerIfo.BuildPifo emits —
-        //    so the existing sidecar reader parses it with nothing added.
-        string stash = Path.Combine(gameDirectory, "Temp", PlayerIfo.CarriedCharacterFile);
-        byte[] pifo;
-        try
+        if (saveName.Length == 0)
         {
-            pifo = await File.ReadAllBytesAsync(stash, token).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            say($"new character: could not read the captured character - {ex.Message}");
+            say("new character: the plugin reported a capture but named no save directory.");
             return;
         }
 
-        if (!PlayerIfo.TryExtractPlayerFromPifoBytes(pifo, out GffStruct player, out string parsed))
+        say($"new character: your game was saved into '{saveName}' ({bytes:N0} bytes); "
+            + "fetching the host's world.");
+
+        // 3. Read the character out of that save. EXACTLY the extraction join_mode = save uses -
+        //    <module>.sav -> module.ifo -> Mod_PlayerList - against a save this session just
+        //    watched the engine write. Nothing new parses here.
+        string saveDirectory = Path.Combine(gameDirectory, "saves", saveName);
+
+        if (!PlayerIfo.TryExtractPlayer(saveDirectory, out GffStruct player, out string parsed))
         {
             say($"new character: {parsed}");
             return;
@@ -215,4 +241,10 @@ internal static class NewCharacterJoinFlow
 
     /// <summary>Mirrors <c>SharedBlock.JoinChargenStateFailed</c>.</summary>
     private const uint CaptureStateFailed = 3;
+
+    /// <summary>Mirrors <c>SharedBlock.JoinChargenStateSaving</c> — the world is up and the
+    /// engine has been asked to save. Announced because it is the one step in this flow that
+    /// happens while the player is standing in a game and would otherwise look like nothing
+    /// happening.</summary>
+    private const uint CaptureStateSaving = 4;
 }

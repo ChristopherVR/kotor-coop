@@ -318,6 +318,28 @@ public enum CoopCommandKind
     SkipLine,
 
     /// <summary>
+    /// <c>skipkey</c> — LIVE-TEST PRIMITIVE (docs/research/dialogue-skip-desync.md). Presses
+    /// skip on the dialogue panel THROUGH THE ENGINE'S OWN INPUT DISPATCH
+    /// (<c>CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)</c>), which is the only route that
+    /// passes through <c>DialogueSkipHook</c> — the gag that stops a SPECTATOR advancing
+    /// somebody else's conversation. <see cref="SkipLine"/> cannot test that hook: it pokes the
+    /// owner's object flag directly (never entering the input path) and refuses outright on a
+    /// spectator, which is exactly the instance the hook is about. The answer line carries the
+    /// hook's swallow count before and after, which is the oracle. Takes no arguments.
+    /// </summary>
+    SkipKey,
+
+    /// <summary>
+    /// <c>save</c> — asks the game to save through its own quicksave path
+    /// (<c>CClientExoAppInternal::DoQuickSave</c>). "Applied" means REQUESTED: the engine
+    /// writes the directory a tick or more later and may still refuse. Used by
+    /// <c>join_mode = newcharacter</c> to obtain a first-time joiner's freshly created
+    /// character (see docs/research/world-adoption.md) and useful on its own for producing a
+    /// genuinely fresh save on the rig. Takes no arguments.
+    /// </summary>
+    Save,
+
+    /// <summary>
     /// <c>selectreply &lt;slot&gt;</c> — LIVE-TEST PRIMITIVE (docs/research/dialogue-skip-desync.md).
     /// Commits reply slot <see cref="CoopCommand.Amount"/> on the local player's OWNED
     /// conversation, through <c>Odyssey.SelectDialogueReply</c> — the console's way to navigate
@@ -827,6 +849,8 @@ public static partial class ConsoleCommand
         new(["leader"], ParseLeader),
         new(["recruit"], ParseRecruit),
         new(["skipline"], ParseSkipLine),
+        new(["skipkey"], ParseSkipKey),
+        new(["save"], ParseSave),
         new(["selectreply"], ParseSelectReply),
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),

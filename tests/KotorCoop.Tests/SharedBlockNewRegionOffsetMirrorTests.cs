@@ -45,6 +45,7 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("JoinChargenRequest", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
         ("JoinChargenState", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
         ("JoinChargenBytes", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
+        ("JoinChargenSaveDir", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
 
         ("MinigameLockActive", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
         ("MinigameLockName", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),

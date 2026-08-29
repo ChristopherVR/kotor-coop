@@ -763,3 +763,95 @@ injection, which this same session measured dropping clicks mid-sequence.
 That is the input path, so it goes through the hook, and
 `DialogueSkipHook.SwallowedCount` is then the oracle: it must increment on the spectator and
 stay flat on the owner, with the node index unchanged on both.
+
+---
+
+## `skipkey` (2026-08-29): the primitive that actually reaches the hook
+
+Built exactly as the paragraph above specifies. `Odyssey.SendDialogueSkipKey` resolves the
+dialogue panel with the existing `GetDialoguePanel()` (vtable-matched against
+`CSWGuiDialog 0x7559E0` / `CSWGuiDialogCinematic 0x755800`, the same resolver
+`SelectDialogueReply` uses) and calls `HandleInputEvent` **through the panel's own vtable
+slot**, not the address.
+
+**The slot is 0x3C, and it is the same slot in both classes.** Read out of the two vtables:
+index 15 of each holds `0x006A7230`. `CSWGuiDialogCinematic` declares no override, which is the
+same fact that lets `DialogueSkipHook` cover both panel classes with one splice while the reply
+gag needed two — and calling through the slot rather than the address keeps that true if a
+future build ever changes it.
+
+**The arguments, re-derived rather than assumed** (`0x6A7230`, thiscall, `ret 8`):
+
+```
+0x006A7230  push ebp
+0x006A7231  mov  ebp, [esp+0x0C]      ; <- arg2 (one push deep)
+0x006A7235  test ebp, ebp
+0x006A723A  je   0x6A7333             ; arg2 == 0 -> straight to the return
+0x006A7240  push ebx
+0x006A7241  mov  ebx, [esp+0x10]      ; <- arg1 (three pushes deep)
+0x006A7245  cmp  ebx, 0x3D            ; ... 0x27 / 0x2D compared below
+```
+
+So arg1 is the EVENT CODE (`0x27`) and arg2 is a payload the function refuses outright when
+zero. `1` satisfies that test and is never dereferenced on this branch — only the `0x1F9` event
+reads through it, and `0x27` is not `0x1F9`. The jump table at `0x6A7374` is indexed by
+`event - 0x27` (`lea eax,[ebx-0x27]; cmp eax,0xB; ja 0x6A730D`), which is how `0x27` reaches the
+mode-byte test at `0x6A7266` and, from there, the skip case this document's hook sits on.
+
+**Why the counter is reported before AND after in one line.** `CheatController.SkipKey` reads
+`DialogueSkipHook.SwallowedCount`, dispatches, reads it again, and answers with both. The detour
+runs synchronously inside the call, on the same thread, so the pair is exact; and one console
+reply then distinguishes the two outcomes without a second round trip — `swallowed N -> N+1`
+means the gag fired (spectator), `swallowed N -> N` means it passed through (owner). Console
+verb: `skipkey`, no arguments, blockpoke-only, documented in docs/CONSOLE.md.
+
+⚠ It is deliberately NOT wired into `FuncInterpHook`'s verb list, matching
+`skipline`/`selectreply`: dev-only live-test primitives stay reachable only through
+`tools/blockpoke.ps1`, never by a player typing at the in-game console.
+
+## LIVE-VERIFIED (2026-08-29, rig): the spectator's skip is swallowed, the owner's is not
+
+Two GOG instances, host `35220` on demo save 1, client `27404` — a client that had joined
+through `join_mode = newcharacter` and then rejoined off its own new save. The conversation was
+staged the way `verify.ps1` stages its own: the HOST opened one with `end_trask` through the
+test-drive channel (block `0x1D70` tag + `0x1D90` serial), and the client joined it as a
+spectator by itself.
+
+State when the keys went in — host owns, client follows:
+
+```
+host  : localPartner='end_trask'  remoteActive=0
+client: localPartner=''           remoteActive=1  remotePartner='end_trask'
+```
+
+| who | result |
+|---|---|
+| **CLIENT (spectator)** `skipkey` | `dialogue: skipkey dispatched at node -1; swallowed 0 -> 1 (SWALLOWED - spectator)` |
+| … and what moved | **nothing, on either instance**: host node index 0 → 0, client's followed index 0 → 0, no `dialogue-node-pub` on either side |
+| **HOST (owner)** `skipkey`, same conversation | `skipkey about to dispatch - owner 0x127 node 29/74 … isDialogDelay 1` then `dispatched at node 29; swallowed 0 -> 0 (passed through - owner)` |
+| … repeated on a freshly opened line | `node 19/74 … isDialogDelay 1`, `swallowed 0 -> 0 (passed through - owner)` |
+
+That is the oracle this document asked for, both halves: the gag's counter **increments on the
+spectator and stays flat on the owner**, and the spectator's press advanced nothing anywhere.
+The owner's presses reached the engine's own dispatch with a line genuinely playing
+(`isDialogDelay 1` — the guard `skipline`'s own probe reads).
+
+⚠ **What this pass did NOT capture: the owner's skip stepping the node index.** Both owner
+presses landed on nodes (29/74 and 19/74) where the following `dialogue-node-pub` never moved
+within several seconds. That is consistent with retail's own behaviour rather than with the gag
+— `skipline`'s table entry in console-cheats.md already records skip as "a correctly inert
+no-op on a reply-list screen", and `CSWGuiDialog::HandleInputEvent`'s switch sends the event to
+`SelectReply` instead of the skip case whenever `[panel+0x1DF8]` bit 0 is clear, which is
+exactly a reply screen. Note that this ALSO explains the owner's flat counter honestly: on a
+reply screen the event never reaches `0x6A7278` at all, so the hook could not have swallowed it
+even if it wanted to. The earlier `skipline` live pass is what has the owner-side node stepping
+(3–32 ms after the call); a future round wanting a single run that shows both should stage a
+narration stretch rather than `end_trask`'s opening node.
+
+⚠ **`startdialog` on the CLIENT could not open a conversation with `end_trask` at all** this
+round (three attempts, `ActionStartConversation queued` each time, no `StartDialog` ever
+reached), which is why the roles are host-owner / client-spectator rather than the other way
+round. The assertion is symmetric, so this does not weaken it, but it is worth knowing before
+scripting the mirror-image test: the client's Trask is a solo-mode companion driven by the host
+(`partystate`: client `soloMode 1`, companion `0x127`), and a companion the local engine is not
+driving is not something the local player can start a conversation with.

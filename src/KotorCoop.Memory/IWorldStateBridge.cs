@@ -102,9 +102,9 @@ public interface IWorldStateBridge
     }
 
     /// <summary>
-    /// Arms the plugin's new-character capture: it watches for the character retail chargen
-    /// writes to <c>Temp\pifo.ifo</c> and stashes it where the adoption load cannot truncate
-    /// it. coop.ini <c>join_mode = newcharacter</c>. False (with a reason) for bridges with no
+    /// Arms the plugin's new-character capture: it waits for the new game the player is about
+    /// to start to reach its first module, has the engine SAVE there, and names that save back.
+    /// coop.ini <c>join_mode = newcharacter</c>. False (with a reason) for bridges with no
     /// in-process plugin.
     /// </summary>
     bool TryArmNewCharacterCapture(out string diagnostic)
@@ -115,13 +115,15 @@ public interface IWorldStateBridge
 
     /// <summary>Polls the capture armed by <see cref="TryArmNewCharacterCapture"/>:
     /// <paramref name="state"/> is one of <c>SharedBlock.JoinChargenState*</c> (0 idle, 1
-    /// armed, 2 captured, 3 failed) and <paramref name="bytes"/> is the size of what was
-    /// captured — the honest evidence, since a zero-byte pifo would otherwise report
-    /// "captured" too.</summary>
-    bool TryGetNewCharacterCapture(out uint state, out uint bytes)
+    /// armed, 2 captured, 3 failed, 4 saving), <paramref name="bytes"/> is the size of the
+    /// produced save's <c>SAVEGAME.sav</c> — the honest evidence, since an empty directory
+    /// would otherwise report "captured" too — and <paramref name="saveDirectory"/> names it
+    /// relative to <c>saves\</c>.</summary>
+    bool TryGetNewCharacterCapture(out uint state, out uint bytes, out string saveDirectory)
     {
         state = 0;
         bytes = 0;
+        saveDirectory = string.Empty;
         return false;
     }
 

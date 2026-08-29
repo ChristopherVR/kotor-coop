@@ -949,4 +949,50 @@ internal partial struct SharedBlock
     /// streams. Take the next FREE number in YOUR range.
     /// </summary>
     public const uint CheatKindFollowStall = 56;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-29, docs/research/dialogue-skip-desync.md): presses skip on
+    /// the dialogue panel THROUGH THE ENGINE'S OWN INPUT DISPATCH —
+    /// <c>CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)</c> via the panel's vtable slot 0x3C,
+    /// which both dialogue panel classes share.
+    ///
+    /// ⚠ THIS IS NOT <see cref="CheatKindSkipLine"/> WITH A DIFFERENT NAME. <c>skipline</c>
+    /// pokes <c>CSWSObject+0x1F4</c> on the resolved conversation OWNER and never enters
+    /// <c>HandleInputEvent</c>, so it cannot exercise <c>DialogueSkipHook</c> — the spectator
+    /// gag spliced into that function — and it refuses outright on a spectator, which is the
+    /// only instance the gag is about. Measured live 2026-08-29: <c>skipline</c> left the
+    /// hook's swallow count flat on both instances, proving nothing. This verb enters the input
+    /// path, so <c>DialogueSkipHook.SwallowedCount</c> becomes the honest oracle — it must
+    /// increment on the spectator (with nothing advancing anywhere) and stay flat on the owner.
+    ///
+    /// Local only, never crosses the network. Answer text carries the swallow count before and
+    /// after the call, so one console reply says which of the two happened.
+    ///
+    /// ⚠ 59, from this stream's own reserved range (59-62); 57-58 belong to another concurrent
+    /// stream. Take the next FREE number in YOUR range.
+    /// </summary>
+    public const uint CheatKindSkipKey = 59;
+
+    /// <summary>
+    /// Saves the game through the engine's OWN save path —
+    /// <c>CClientExoAppInternal::DoQuickSave 0x005F4B50</c>, the function retail's quicksave
+    /// binding calls, which builds the "QUICKSAVE" name and hands it to
+    /// <c>CClientExoApp::SendSaveGameRequest</c>. From there it is the ordinary client -&gt;
+    /// server save message, <c>CSWSPlayer::GetIsAllowedToSave</c> gate and all.
+    ///
+    /// WHY THE PLUGIN NEEDS A SAVE VERB AT ALL. <c>join_mode = newcharacter</c>
+    /// (docs/research/world-adoption.md) has to obtain the character a first-time joiner just
+    /// created, and the only portable form of a KOTOR character is the one adoption already
+    /// reads: <c>&lt;module&gt;.sav -&gt; module.ifo -&gt; Mod_PlayerList</c>, inside a save.
+    /// Retail chargen does NOT write one (see that document's 2026-08-29 correction: the
+    /// chargen writer emits <c>Temp	emp.bic</c>, not <c>TEMP:pifo</c>), so the character has
+    /// to be saved once, in-world, before it can be carried anywhere. This is that save.
+    ///
+    /// Also a live-test primitive in its own right: producing a genuinely fresh save on demand
+    /// is something several rig scripts have wanted (docs/research/session-save.md's rounds
+    /// staged saves by copying directories about because there was no way to ask for one).
+    ///
+    /// ⚠ 60, from this stream's own reserved range (59-62).
+    /// </summary>
+    public const uint CheatKindQuickSave = 60;
 }

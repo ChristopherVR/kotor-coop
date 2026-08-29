@@ -2262,17 +2262,75 @@ unusable for exactly this feature. That is a pre-existing gap, not a regression.
 | `chargen accept` | `BeginPlayGame` runs, the new game starts |
 | the save hook's timing | fires immediately after `BeginPlayGame` |
 
-### NOT verified, and why
+### NOT verified, and why (ALL THREE CLOSED by the round below)
 
 * **The character capture.** `SaveCharGenCreature` has not flushed `Temp\pifo.ifo` when it
   returns — 0 bytes at the hook, still 0 after a 400 ms spin, and `Temp\` empty by world-up.
-  Blocking; the recommended fix is in world-adoption.md.
+  Blocking; the recommended fix is in world-adoption.md. ⚠ *Root cause, found next round: there
+  was no flush to wait for — that function writes `Temp	emp.bic`, never a pifo.*
 * **A spectator's skip being swallowed.** `skipline` pokes `CSWSObject+0x1F4` directly and
   never enters `HandleInputEvent`, so it does not exercise the hook. Add a `skipkey` primitive
   that calls `CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)`; `DialogueSkipHook.SwallowedCount`
   is then the oracle.
 * **Post-adopt door convergence in the game.** Covered by loopback tests (one of which was
   confirmed to FAIL against the pre-fix single-datagram snapshot); not re-run on the rig.
+
+---
+
+## The new-character join, END TO END, and the spectator skip gag (live pass 2026-08-29, round 2)
+
+Full write-ups: [research/world-adoption.md](research/world-adoption.md)'s "LIVE PASS
+(2026-08-29, round 2)" section and
+[research/dialogue-skip-desync.md](research/dialogue-skip-desync.md)'s "LIVE-VERIFIED" section.
+This is the short index.
+
+### Bring it up
+
+```powershell
+pwsh tools\demo.ps1 -Stop
+pwsh src\KotorCoop.Pluginuild.ps1 -Install
+pwsh src\KotorCoop.Pluginuild.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2'
+dotnet build src\KotorCoop.Agent\KotorCoop.Agent.csproj -c Debug   # demo.ps1 runs the DEBUG agent
+pwsh tools\demo.ps1 -ClientNewCharacter
+
+$c = (@(Get-Process swkotor | Sort-Object StartTime))[1].Id
+pwsh toolslockpoke.ps1 -ProcId $c chargen newgame
+pwsh toolslockpoke.ps1 -ProcId $c chargen quick 2
+pwsh toolslockpoke.ps1 -ProcId $c chargen accept
+# then wait: the flow saves the new game and pulls the client into the host's world by itself
+```
+
+### Verified
+
+| | |
+|---|---|
+| `join_mode = newcharacter`, chargen to standing in the host's world | **works, unattended**, 2 min 10 s from `chargen accept` |
+| the character that arrives | the player's own — live appearance **171** on the client vs **114** on the host, and the host's phantom of it reads 171 |
+| the save the flow produces | `saves 000 - QUICKSAVE`, 566,770 bytes, **492 ms** after the request, first attempt |
+| object-id convergence | `census: MIRROR 25 id(s): 25 resolve here, 0 do not` |
+| doors / companions / gold / xp / journal | `verify.ps1` **41 pass / 8 fail** — the documented baseline, all failures in the known flaky set |
+| session admitted at full capability | no `W_SAVE` degraded warning after the reconnect |
+| quit, then rejoin with `join_mode = save` off the new save | works in ~1 s, unattended (`SaveMismatch` → adopt → `rejoined 'END_M01AA'`) |
+| `skipkey` on the SPECTATOR | `swallowed 0 -> 1 (SWALLOWED - spectator)`, and **nothing advanced on either instance** |
+| `skipkey` on the OWNER | `node 29/74 … isDialogDelay 1`, `swallowed 0 -> 0 (passed through - owner)` |
+| no crash | event log clean across the whole session |
+
+### Two rig traps fixed, both on the mid-session load path
+
+* **`[msgbox+0x64]` bit 0 is clear in ordinary play** — measured on both instances at once
+  (`0x06` on a healthy host twenty minutes in). `FireMidSessionPhase1` now logs it instead of
+  refusing; that also removes the `loadgame` failure-9 trap four earlier rounds had to poke
+  around by hand.
+* **A mid-session adoption empties `Temp\`** — the carried-character stash written there two
+  seconds earlier was gone by the time the plugin looked, and the login produced a blank
+  character. The stash now lives in the game directory root.
+
+### Still open
+
+* The 4 s settle before the save is ~122 s in practice: `MenuFrame` is the game's own MainLoop
+  and the Endar Spire's opening cinematic holds it. Correct, just slow.
+* The owner-side `skipkey` was never observed stepping the node index — both attempts landed on
+  reply-list nodes where retail's own skip is inert. `skipline`'s earlier pass has that half.
 
 ## Swoop racing: root cause, and "one races, the rest wait" (2026-08-29)
 
