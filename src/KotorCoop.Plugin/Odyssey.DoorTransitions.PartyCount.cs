@@ -217,6 +217,53 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY (a raw field write, same rule as every other engine poke in this file).
     /// </summary>
+    /// <summary>
+    /// How many of CSWParty's member slots, counting from 0 and STOPPING at the first failure,
+    /// currently resolve to a live creature — the ceiling
+    /// <see cref="PartyCountRestoreRule.SafeRestoreCount"/> refuses to let the member count
+    /// exceed. Deliberately resolved through <see cref="GetCreatureByClientIdFn"/>
+    /// (<c>CClientExoApp::GetCreatureByGameObjectID</c> 0x005ED5B0), the exact call
+    /// <c>CSWParty::GetCharacter</c> 0x006346C0 itself makes — so "resolvable" here means the
+    /// same thing it means to the consumer that crashed, not something adjacent to it.
+    ///
+    /// A LEADING run, not a total: the count is an array bound, so a live entry sitting above a
+    /// dead one buys nothing — every index below the bound has to be safe.
+    ///
+    /// Pure reads (one engine call per slot, itself null-safe). MAIN THREAD ONLY, like every
+    /// other member of this file.
+    /// </summary>
+    private static int CountResolvableClientPartyMembers(nint client, nint party)
+    {
+        if (client == 0 || party == 0)
+        {
+            return 0;
+        }
+
+        int resolvable = 0;
+        for (int i = 0; i < SwPartyMemberCapacity; i++)
+        {
+            uint id = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
+            if (id == 0 || (id & ~ControlPartyNpcFlag) == ObjectInvalidClientId)
+            {
+                break;
+            }
+
+            if (GetCreatureByClientIdFn(client, id) == 0)
+            {
+                break;
+            }
+
+            resolvable++;
+        }
+
+        return resolvable;
+    }
+
+    /// <summary>The engine's <c>OBJECT_INVALID</c> / empty-member-slot sentinel — live-confirmed
+    /// in <c>Odyssey.ControlSwitch.cs</c>'s own <c>SwPartyMemberCapacity</c> remarks (member[2]
+    /// reads it on a one-companion party).</summary>
+    private const uint ObjectInvalidClientId = 0x7F000000;
+
     public static bool TryClampClientPartyCount(int maxCount, out int before)
     {
         before = -1;

@@ -40,6 +40,15 @@ internal static unsafe partial class Odyssey
         /// "no record" apart from "a record the default-ON <c>party_together_fix</c> clamp was
         /// hiding."</summary>
         public bool CountWasRestored;
+
+        /// <summary>True when this pass actually WROTE <c>party+0x00</c>, whether or not the
+        /// lookup then succeeded (a write that did not help is reverted immediately, but it still
+        /// happened). This — not <see cref="CountWasRestored"/> — is what
+        /// <c>PartyFollowController</c>'s per-slot latch keys on: an engine field write must be
+        /// at most once per slot per module, and latching only on SUCCESS left a failing restore
+        /// re-arming itself every frame, which is how it came to be written 500x/s across a
+        /// module load. See docs/research/transition-crashes.md's host-warp-crash section.</summary>
+        public bool CountRestoreWritten;
     }
 
     /// <summary>
@@ -60,10 +69,26 @@ internal static unsafe partial class Odyssey
     /// different structure the clamp never touches) plus one for the PC, exactly what
     /// <see cref="GetClientPartyMemberCount"/> documents CSWParty's count should read.
     ///
-    /// The restored value is deliberately left standing (round 101's own reasoning):
-    /// <c>SyncClientPartyTogetherState</c> re-clamps it on its own very next pass if a session is
-    /// still genuinely mirroring, and this whole path only runs when
-    /// <see cref="PartyFollowController"/> has already established that it is not.
+    /// ⚠ 2026-08-29 — round 101's "the restored value is deliberately left standing, because
+    /// <c>SyncClientPartyTogetherState</c> re-clamps it on its own very next pass" was WRONG, and
+    /// deterministically fatal on a host. That re-clamp is CLIENT-ONLY
+    /// (<c>PartyRosterController.SyncClientPartyTogetherState</c> returns early unless the
+    /// host-roster valid bit is set, which is never set on a host), and this method's own gating
+    /// caller reaches here on a host every module load — so on a host a speculative raise was
+    /// left standing with nothing in the process able to take it back. Combined with the
+    /// arithmetic being blind to whether the members it was counting had been populated yet, that
+    /// is the host's deterministic <c>CSWGuiInGameEquip::UpdatePortraits+0x48E</c> crash on any
+    /// relocating warp (docs/research/transition-crashes.md; shared-inventory-v2.md §15.6). Two
+    /// changes close it, both here:
+    ///
+    /// <list type="number">
+    /// <item>the raise is bounded by how many members actually RESOLVE right now
+    /// (<see cref="PartyCountRestoreRule"/> + <see cref="CountResolvableClientPartyMembers"/>),
+    /// never by arithmetic alone — the count is an array bound and may never name an entry a
+    /// consumer would dereference NULL;</item>
+    /// <item>a raise that did not make the lookup succeed is REVERTED on the spot rather than
+    /// left behind, so no speculative value can ever outlive the frame that guessed it.</item>
+    /// </list>
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -73,12 +98,14 @@ internal static unsafe partial class Odyssey
         out nint party,
         out nint record,
         out int index,
-        out bool countWasRestored)
+        out bool countWasRestored,
+        out bool countRestoreWritten)
     {
         party = 0;
         record = 0;
         index = -1;
         countWasRestored = false;
+        countRestoreWritten = false;
 
         nint client = GetClient();
         if (client == 0)
@@ -101,11 +128,26 @@ internal static unsafe partial class Odyssey
             {
                 int truePopulation = tableCount + 1; // + the PC, matching CSWParty's own layout
                 int* countPtr = (int*)party;
-                if (*countPtr < truePopulation)
+                int before = *countPtr;
+                int restoreTo = PartyCountRestoreRule.SafeRestoreCount(
+                    before,
+                    truePopulation,
+                    CountResolvableClientPartyMembers(client, party),
+                    SwPartyMemberCapacity);
+
+                if (restoreTo > 0)
                 {
-                    *countPtr = truePopulation;
+                    *countPtr = restoreTo;
+                    countRestoreWritten = true;
                     index = GetPartyIndexFn(party, clientObjectId);
                     countWasRestored = index > 0;
+
+                    if (!countWasRestored)
+                    {
+                        // It did not buy the lookup anything, so it is a guess — and a standing
+                        // guess about this field is the host's UpdatePortraits crash. Put it back.
+                        *countPtr = before;
+                    }
                 }
             }
 
@@ -143,13 +185,16 @@ internal static unsafe partial class Odyssey
                 out nint party,
                 out nint record,
                 out int index,
-                out bool restored))
+                out bool restored,
+                out bool restoreWritten))
         {
+            state.CountRestoreWritten = restoreWritten;
             return false;
         }
 
         state.Index = index;
         state.CountWasRestored = restored;
+        state.CountRestoreWritten = restoreWritten;
         state.Phase = *(int*)(record + 4);
         state.Attempts = *(int*)(record + 0x44);
         state.PathNode = *(int*)(record + 0x24);
@@ -284,7 +329,8 @@ internal static unsafe partial class Odyssey
                 out nint party,
                 out nint record,
                 out int index,
-                out bool restored))
+                out bool restored,
+                out bool _))
         {
             detail = "no follow record (GetIndex refused"
                 + (allowCountRestore ? ", even after restoring CSWParty's own member count)" : ")");
