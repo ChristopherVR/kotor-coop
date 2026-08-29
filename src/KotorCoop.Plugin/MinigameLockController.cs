@@ -93,11 +93,27 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
 
     public void OnFrame()
     {
-        bool wanted = block.MinigameLockActive != 0;
+        // ⚠ THE FLAG IS ONLY TRUSTED WHILE AN AGENT IS ALIVE TO CLEAR IT.
+        //
+        // This is a LEVEL written by a separate process. If that process dies mid-race the
+        // level stays asserted forever, and the failure mode is the worst one this feature
+        // has: a player frozen for the rest of their session with nothing on screen able to
+        // free them. The agent-side timeout (minigame_lock_timeout_s) cannot help — it runs
+        // in the process that just died. So the plugin applies its own, independent liveness
+        // condition on top, exactly the pair AgentLivenessController already uses to freeze
+        // remote-peer writes: a session actually driving this block, and a heartbeat that has
+        // moved recently.
+        bool agentAlive = block.Command == SharedBlock.CommandSpawnAndDrive
+            && AgentLiveness.Evaluate(block.AgentHeartbeat, Environment.TickCount64)
+                is AgentLivenessState.Live;
+
+        bool wanted = agentAlive && block.MinigameLockActive != 0;
 
         if (!wanted)
         {
-            Release("the minigame ended");
+            Release(block.MinigameLockActive != 0
+                ? "the agent stopped answering"
+                : "the minigame ended");
             return;
         }
 
