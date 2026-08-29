@@ -126,6 +126,46 @@ public sealed partial class KotorGameBridge
         return true;
     }
 
+    /// <summary>
+    /// The object ids of every NPC roster slot that currently has a body in the world, straight
+    /// out of <c>CSWPartyTable+0x0C</c>'s <c>int[9]</c>.
+    ///
+    /// ⚠ THIS IS THE MEMBERSHIP RECORD, and the reason it exists as its own read is
+    /// <see cref="PartyCensusRule"/>: the census used to decide "is this one of ours" from the
+    /// party-FOLLOW pointer, which the engine attaches some time after the body appears, so a
+    /// companion inside a transition window was published as an enemy and materialised on the
+    /// peer as a companion-shaped stand-in. Read that rule's doc comment before changing this.
+    ///
+    /// ALL NINE slots, not just the <c>PartyActiveSlots</c> pair: the active-slot list and the
+    /// count are separate fields the engine updates at its own moments, and a body that exists
+    /// but is not yet counted is precisely the case being defended against. An unoccupied slot
+    /// reads <see cref="PartyCensusRule.ObjectInvalid"/> and is dropped.
+    ///
+    /// Empty means "nothing to exclude" AND "could not ask" — deliberately the same answer,
+    /// because both leave the follow-pointer and is-player tests standing on their own, which is
+    /// the behaviour that shipped before this. It never removes a check, only adds one.
+    /// </summary>
+    public HashSet<uint> ReadPartyRosterIds()
+    {
+        HashSet<uint> ids = [];
+
+        if (!TryGetPartyTable(out nint partyTable))
+        {
+            return ids;
+        }
+
+        for (int slot = 0; slot < PartyNpcSlots; slot++)
+        {
+            if (_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out uint objectId)
+                && PartyCensusRule.IsRosterId(objectId))
+            {
+                ids.Add(objectId);
+            }
+        }
+
+        return ids;
+    }
+
     // ---- shared progression (gold + experience) ---------------------------------
     //
     // See docs/research/progression-sync.md. Gold is a single party-table field (VERIFIED);

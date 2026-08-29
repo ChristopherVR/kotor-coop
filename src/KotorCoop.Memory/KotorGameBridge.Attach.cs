@@ -513,10 +513,17 @@ public sealed partial class KotorGameBridge
 
         // Anything that is neither the player nor a party member is idle enough to drive.
         // Ordering by object id keeps the choice stable between resolves.
+        //
+        // ⚠ Membership through PartyCensusRule, not the follow pointer alone: claiming a
+        // companion as a phantom body is the worst version of the census leak this rule exists
+        // for — the body would be driven to a peer's position AND run follow-AI back toward the
+        // player, every frame, in the same instance.
+        HashSet<uint> partyRoster = ReadPartyRosterIds();
+
         _phantoms =
         [
             .. creatures
-                .Where(c => !c.IsPlayer && !c.IsPartyMember)
+                .Where(c => !PartyCensusRule.IsOwnParty(c.ObjectId, c.IsPlayer, c.IsPartyMember, partyRoster))
                 .OrderBy(c => c.ObjectId)
                 .Take(_maxPhantoms),
         ];

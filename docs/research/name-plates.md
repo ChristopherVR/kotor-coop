@@ -218,3 +218,53 @@ Left for the next round, in order:
 
 ⚠ Do NOT "fix" a player-resolution bug with `&& !c.IsPartyMember`: the PC's own `+0x4C0` reads
 non-null (measured, above), so that filter rejects the player.
+
+---
+
+## The census leak — items 2 and 3 above, settled (2026-08-29, MEASURED LIVE)
+
+Item 2 was right, and it is the mechanism behind the report. The full write-up, with the
+numbers, lives in [enemy-materialisation.md](enemy-materialisation.md) §7 — this section records
+only what it means for THIS document, because the two are one lesson wearing two hats.
+
+**The Trask body is not a peer at all.** It arrives through the ENEMY channel: the host's census
+excluded a creature on `IsPlayer || IsPartyMember`, `IsPartyMember` being the `+0x4C0` follow
+pointer, so a companion whose pointer had not been (re)attached read as a hostile stranger and
+was published. Measured on the rig, `end_m01ab`: Trask, appearance **378**, party-table roster
+slot 0, `+0x4C0 == 0` for **5.5 seconds** — fifteen consecutive samples — and 4.9 s on a second
+run. The peer cannot resolve that id (party bodies are spawned by the party table at load, not
+placed in the GIT: `0x76` on the host against `0x74` on the client for the same companion, both
+measured), so it materialises a stand-in and repaints it to the published row. Appearance 378.
+Standing where the host's Trask stands. The reporter's "Trask icon".
+
+**Every "icon" surface was checked explicitly and cleared, so the next round does not re-check
+them:**
+
+- **Minimap peer arrow** (`MinimapPeerHook`, `Odyssey.Map`) — reuses the engine's OWN embedded
+  player-arrow control and touches only angle, alpha and colour. `CSWGuiImageParams.resref` is
+  never written anywhere in this repo except `NativeBrowserController`. It is structurally
+  incapable of rendering a portrait.
+- **M-screen pin** (`MapMarkerController`) — a bare `CSWSWaypoint` with `HasMapNote = 1`, no
+  blueprint, no MapNote text. The stock blip.
+- **Party bar** — `PortraitController` only HIDES widgets 1 and 2 on a mirroring client (an
+  off-screen `SetExtent`). Nothing in the repo ever writes a portrait id to a creature: the only
+  `+0x30` sites are reads (`PhantomController`'s log line, `ReadPartyPortraits`), and
+  `CSWCCreatureStats+0x11C` is referenced in a comment and read by nothing. A peer has no roster
+  slot to occupy.
+- **`ReadPartyPortraits`** — reads the LOCAL roster's portraits (so, legitimately, `po_ptrask`),
+  but only ever to advertise this host's party on someone else's lobby screen. Never an identity
+  source for a peer.
+- **Name plate** — sourced from `block.GetRemoteName(slot)` (the peer packet) and nothing else;
+  `ApplyName` returns early on an empty name rather than substituting. A stand-in gets no name
+  at all.
+- **One real hazard found and closed**: `PartyRosterBodyReuseRule.ShouldReuse` (behind
+  `dialogue_recruit_sync`, default off) accepted any id it could resolve locally, including a
+  body THIS plugin spawned. Phantoms and stand-ins are allocated from a runtime counter the two
+  instances advance independently, so a peer's roster id can collide with one by arithmetic
+  alone — and that is the one code path in the project that could have seated a remote player's
+  avatar in a party portrait slot. It now refuses them.
+
+Item 3 (stand-ins never dressed on the client twin) is fixed with the same per-body latch this
+document's own section added for phantoms; see enemy-materialisation.md §7.2. Item 1 — a save
+whose PC is not appearance 114 — is still not represented on this rig, but it is no longer the
+blocker it was: the Trask symptom is explained and reproduced as a mechanism without it.
