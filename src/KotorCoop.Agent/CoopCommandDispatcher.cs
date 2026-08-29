@@ -338,8 +338,11 @@ public sealed partial class CoopCommandDispatcher(
 
         [CoopCommandKind.LootTake] = c => LootTake(c.Address ?? string.Empty),
 
-        [CoopCommandKind.PoolAdd] = c => SendCheat(new CheatRequest(
-            CheatKinds.PartyPoolAdd, Text: c.Address ?? string.Empty, Amount: c.Amount)),
+        // Same suppression as the automatic v2 drain (CoopCommandDispatcher.PartyPoolV2.cs):
+        // a party-pool add lands in the PC's own item repository, so without this
+        // ScriptItemGrantPump re-broadcasts a human's own `pooladd` as a script grant. See
+        // CoopAgent.NoteLocalPartyPoolAdd.
+        [CoopCommandKind.PoolAdd] = c => PoolAdd(c.Address ?? string.Empty, c.Amount),
         [CoopCommandKind.PoolRemove] = c => SendCheat(new CheatRequest(
             CheatKinds.PartyPoolRemove, Text: c.Address ?? string.Empty, Amount: c.Amount)),
 

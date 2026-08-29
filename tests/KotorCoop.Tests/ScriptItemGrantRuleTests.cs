@@ -101,6 +101,32 @@ public sealed class ScriptItemGrantRuleTests
         Assert.Empty(result.ToPublish);
     }
 
+    /// <summary>
+    /// A row this instance's own PARTY-POOL channel just created — a peer's accepted intent
+    /// applied here, this instance's own reconcile toward the host's snapshot, or a human's
+    /// `pooladd`. CoopAgent.NoteLocalPartyPoolAdd feeds the same ledger, added 2026-08-29 after a
+    /// live round caught the gap: a party-pool add lands in the PC's OWN item repository
+    /// (shared-inventory-v2.md §15.1's CreateItemOnObject -> AcquireItem ->
+    /// GetItemRepository(creature, 1) chain), so this sweep saw our own pool applies as script
+    /// grants and re-broadcast them, and the peer materialised a second copy through giveloot.
+    /// </summary>
+    [Fact]
+    public void ANewRowExplainedByOurOwnPartyPoolAddIsSuppressed()
+    {
+        List<(string, ItemIdentity)> before = [];
+        List<(string, ItemIdentity)> after = [Row("g_w_blstrpstl001"), Row("g_a_clothes01")];
+        RecentlySyncedItems ledger = new();
+
+        // The exact pair the live round fabricated, fed by CoopAgent.NoteLocalPartyPoolAdd.
+        ledger.Record("g_w_blstrpstl001", 1, nowMs: 0);
+        ledger.Record("g_a_clothes01", 1, nowMs: 0);
+
+        ScriptItemGrantRule.Result result =
+            ScriptItemGrantRule.Evaluate(before, after, rebaselineOnly: false, ledger, nowMs: 0);
+
+        Assert.Empty(result.ToPublish);
+    }
+
     /// <summary>Only ONE suppression is consumed per ledger entry: a second, genuinely new copy
     /// of the same resref that the ledger has no budget left for is still reported.</summary>
     [Fact]

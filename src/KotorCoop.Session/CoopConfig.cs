@@ -529,17 +529,17 @@ public sealed record CoopConfig
     /// </summary>
     public bool CompanionGearSync { get; init; } = true;
     /// <summary>
-    /// Syncs the shared party item pool (<c>CSWPartyTable+0x118</c>) both ways. OFF by default
-    /// (coop.ini <c>party_pool_sync = 1</c> turns it on) — the offset chain and the engine
-    /// calls this uses are researched and verified against the disassembly, but not yet watched
-    /// land on a running game, per the project's own rule that a researched write ships behind
-    /// a flag until it has. See docs/research/party-pool-sync.md.
+    /// Syncs the shared party item pool (<c>CSWPartyTable+0x118</c>) both ways. ON by default
+    /// since 2026-08-29 — see <see cref="PartyPoolSyncMode"/>, which carries the mode this
+    /// actually runs in (2, the host-authoritative redesign) and the live evidence for the flip.
+    /// <c>party_pool_sync = 0</c> turns it off. See docs/research/party-pool-sync.md and
+    /// docs/research/shared-inventory-v2.md.
     /// </summary>
-    public bool PartyPoolSyncEnabled { get; init; }
+    public bool PartyPoolSyncEnabled { get; init; } = true;
 
     /// <summary>
-    /// <c>party_pool_sync</c> parsed as a small integer rather than a bare bool: <c>0</c> off
-    /// (unchanged default), <c>1</c> the v1 op-log above (byte-for-byte unchanged — a bare
+    /// <c>party_pool_sync</c> parsed as a small integer rather than a bare bool: <c>0</c> off,
+    /// <c>1</c> the v1 op-log above (byte-for-byte unchanged — a bare
     /// truthy value like the historical <c>party_pool_sync = 1</c> still parses to <c>1</c>, so
     /// no shipped config silently changes meaning), <c>2</c> the host-authoritative "absolute
     /// snapshot + client intents" redesign (docs/research/shared-inventory-v2.md). Independent
@@ -547,8 +547,19 @@ public sealed record CoopConfig
     /// site and test that only ever needed "is this channel on at all"); see
     /// <see cref="AgentSettings.EffectivePartyPoolSyncMode"/> for how the two are reconciled
     /// when only one of them was set.
+    ///
+    /// <b>2026-08-29 — flipped ON, at mode 2.</b> Live-verified on a two-instance rig, twice:
+    /// three rapid host deposits mirrored one-for-one, a client deposit and a withdrawal each
+    /// applied exactly once, two five-minute idles with zero publishes and zero engine writes on
+    /// either side, and both instances converging on identical item totals. The verification was
+    /// deliberately run with <c>dialogue_item_sync</c>/<c>script_item_sync</c> at their own
+    /// shipped defaults (ON) rather than isolated, which is what caught the last cross-channel
+    /// echo: a party-pool add lands in the PC's own item repository
+    /// (docs/research/shared-inventory-v2.md §15.1), so <c>Pumps.ScriptItemGrantPump</c> read our
+    /// own pool applies as fresh script grants and re-broadcast them, and the peer materialised a
+    /// second copy through giveloot. Closed by <see cref="CoopAgent.NoteLocalPartyPoolAdd"/>.
     /// </summary>
-    public int PartyPoolSyncMode { get; init; }
+    public int PartyPoolSyncMode { get; init; } = 2;
 
     /// <summary>
     /// <c>party_pool_trace</c>: rig-only, per-tick diagnostic logging for BOTH mode-2 shared
@@ -579,16 +590,27 @@ public sealed record CoopConfig
     /// <c>minigame_hide_peer</c>/<c>pazaak_detect</c> already use.
     /// </summary>
     public bool SoloSegmentSpectateEnabled { get; init; }
-    /// Syncs merchant store stock both ways. OFF by default (coop.ini <c>store_sync = 1</c>
-    /// turns it on) — researched and verified against the disassembly, but not yet watched land
-    /// on a running game, per the project's own rule that a researched write ships behind a flag
-    /// until it has. See docs/research/store-sync.md.
+    /// Syncs merchant store stock both ways. ON by default since 2026-08-29 — see
+    /// <see cref="StoreSyncMode"/> for the mode it runs in (2) and the live evidence.
+    /// <c>store_sync = 0</c> turns it off. See docs/research/store-sync.md and
+    /// docs/research/shared-inventory-v2.md.
     /// </summary>
-    public bool StoreSyncEnabled { get; init; }
+    public bool StoreSyncEnabled { get; init; } = true;
 
-    /// <summary><c>store_sync</c> parsed as a small integer — the store channel's mirror of
-    /// <see cref="PartyPoolSyncMode"/>, identical reasoning.</summary>
-    public int StoreSyncMode { get; init; }
+    /// <summary>
+    /// <c>store_sync</c> parsed as a small integer — the store channel's mirror of
+    /// <see cref="PartyPoolSyncMode"/>, identical reasoning.
+    ///
+    /// <b>2026-08-29 — flipped ON, at mode 2</b>, on THREE clean live sessions in a row: each a
+    /// client buy, a client sell-back, a host re-buy that succeeded exactly once, a second host
+    /// re-buy correctly refused ("no stock matching that resref"), and 155 seconds of idle with
+    /// zero engine writes on either side. Every write in all three was accounted for — one per
+    /// real transaction, none spurious. The last wobble (docs/research/shared-inventory-v2.md
+    /// §15.5: the client re-inserting what it had just bought) was root-caused to the host's own
+    /// snapshot regressing under a pre-apply scan and is closed — see
+    /// <c>CoopHost._storeIntentEffectV2</c>.
+    /// </summary>
+    public int StoreSyncMode { get; init; } = 2;
 
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
@@ -768,13 +790,22 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = !kv.ContainsKey("companion_gear_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
-            PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
-            PartyPoolSyncMode = ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")),
+            // ON by default at mode 2 (2026-08-29) — the ON-by-default idiom, widened to the
+            // small-integer parse: an absent key means the shipped default, a present one means
+            // exactly what it says, including 0.
+            PartyPoolSyncEnabled = !kv.ContainsKey("party_pool_sync")
+                || ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")) != 0,
+            PartyPoolSyncMode = !kv.ContainsKey("party_pool_sync")
+                ? 2
+                : ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")),
             PartyPoolTrace = IsTruthy(kv.GetValueOrDefault("party_pool_trace")),
             SoloSegmentSpectateEnabled = !kv.ContainsKey("solo_segment_spectate")
                 || IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
-            StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),
-            StoreSyncMode = ParseSyncMode(kv.GetValueOrDefault("store_sync")),
+            StoreSyncEnabled = !kv.ContainsKey("store_sync")
+                || ParseSyncMode(kv.GetValueOrDefault("store_sync")) != 0,
+            StoreSyncMode = !kv.ContainsKey("store_sync")
+                ? 2
+                : ParseSyncMode(kv.GetValueOrDefault("store_sync")),
         };
     }
 

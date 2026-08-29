@@ -216,10 +216,13 @@ player's helper. Clients talk only to the host.
 
 ## Something is wrong
 
-- **The party's shared stash and a merchant's stock aren't shared between us:** expected, not a
-  bug — `party_pool_sync`/`store_sync` both ship off by decision; buying/selling/depositing all
-  work fine on your own side, only the cross-instance mirror is off. See `docs/CONFIG.md` and
-  `docs/research/shared-inventory-v2.md` in the full repo for why.
+- **The party's shared stash and a merchant's stock aren't shared between us:** both channels
+  ship ON as of 2026-08-29 (`party_pool_sync=2`/`store_sync=2`), so the usual cause is an OLD
+  `coop.ini` — the installer never overwrites that file, so an install from before then keeps its
+  own `=0` lines. Set them to `2`, or run `install.ps1 -GameDir '...' -UpdateDefaults`. Two real
+  limitations remain even when on: a shop's stock is only READ while somebody has that shop's GUI
+  open, and an infinite-stock item's buys never replicate (the engine's own stock never changes
+  for one). See `docs/CONFIG.md` and `docs/research/shared-inventory-v2.md` in the full repo.
 - **No Co-op button:** `menu_button = 1` in `coop.ini`. Upgrading over an install from before
   2026-08-27 keeps that file's OLD default (`0`) because `coop.ini` is never overwritten —
   `install.ps1` now warns about this after every install and `install.ps1 -GameDir '...'

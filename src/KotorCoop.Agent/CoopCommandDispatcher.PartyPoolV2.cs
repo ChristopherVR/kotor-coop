@@ -41,6 +41,15 @@ public sealed partial class CoopCommandDispatcher
             $"party pool v2: submitting {next.Kind.ToString().ToLowerInvariant()} of {next.Count}x "
             + $"'{next.Key.Resref}' through the party-pool channel");
 
+        if (next.Kind == KotorCoop.Protocol.PartyPoolOpKind.Add)
+        {
+            // Our own cheat channel is about to CREATE this item, and a party-pool add lands in
+            // the PC's own item repository — so ScriptItemGrantPump would otherwise sweep it up
+            // and re-broadcast it as a fresh script grant. See CoopAgent.NoteLocalPartyPoolAdd
+            // for the live trace this closes.
+            agent.NoteLocalPartyPoolAdd(next.Key.Resref);
+        }
+
         SendCheat(new CheatRequest(
             kind,
             Text: next.Key.Resref,

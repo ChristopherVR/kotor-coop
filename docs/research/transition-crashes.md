@@ -684,3 +684,103 @@ per key.
 
 **Workaround until it is fixed**: a rig recipe that needs the host to change module should turn
 those five keys off. That is what made the store round in shared-inventory-v2.md §15.5 possible.
+(No longer needed as of the section below — the cause is fixed; the workaround is kept as the
+description of the state this attribution was made from.)
+
+### Attributed and fixed, 2026-08-29 — `party_follow_stall_recovery`'s count RESTORE, not
+### `party_together_fix`'s clamp
+
+The remaining bisect was not needed: the four surviving suspects are separable by reading, and
+only one of them writes anything on a host at all.
+
+| key | writes `CSWParty+0x00`? | runs on the HOST? | gate |
+| --- | --- | --- | --- |
+| `party_together_fix` | yes, **DOWN only** (`TryClampClientPartyCount` returns false unless `before > maxCount`) | **no** | `PartyRosterController.SyncClientPartyTogetherState` returns unless `block.TryGetHostPartyRoster(...)` — a bit only ever written for a client |
+| `hide_party_portraits` | no | **no** | `PortraitController`: `shouldHide = Command == SpawnAndDrive && block.DamageDealtEnabled`, and `DamageDealtEnabled` is written only on the non-authority side |
+| `party_select_host_only` | no | **no** (it does still read `CGuiInGame+0x78` per frame before its own gate) | `PartySelectSuppressionRule.ShouldSuppress(enabled, isClientInLiveSession)` |
+| `party_follow_stall_recovery` | **yes, UP** | **YES** | `PartyFollowController`: `Command == SpawnAndDrive` (both roles write it) and `PartyPresenceCount == 0` (a client-only counter, so always true on a host) |
+
+`PartyFollowController`'s own class comment is explicit that it is the HOST/solo controller —
+"applies ONLY to companions THIS instance's own engine genuinely owns". So the fault is its count
+restore, added by FOLLOW round 101 and copied into the runtime detector by round 105
+(`Odyssey.TryResolveFollowRecord`, `allowCountRestore`):
+
+```csharp
+int truePopulation = tableCount + 1;          // CSWPartyTable's companions-only count, + the PC
+int* countPtr = (int*)party;
+if (*countPtr < truePopulation)
+{
+    *countPtr = truePopulation;               // <- raises CSWParty+0x00
+    index = GetPartyIndexFn(party, clientObjectId);
+    countWasRestored = index > 0;             // ...and the raise is left standing either way
+}
+```
+
+**Why that is the crash.** `CSWParty+0x00` is not a statement about how many companions the save
+has — it is the bound every consumer walks the member ARRAY with, `CSWParty::GetCharacter`
+included. Across a module load the two facts diverge: the party TABLE is save state and survives
+the transition already saying "one companion", while `CSWParty`'s array for the NEW module has not
+been populated yet and member[1] still reads the empty-slot sentinel `0x7F000000`. Writing `2`
+there in that window is exactly "count above 1 with a dead member 1", and
+`CSWGuiInGameEquip::UpdatePortraits` — reached from `CGuiInGame::Initialize` as the incoming
+module builds its GUI — asks for member 1 the moment the count is above 1 and dereferences the
+answer with no null check.
+
+Two further details made it a deterministic HOST crash rather than a transient:
+
+- round 101's own reasoning for leaving the raise standing ("`SyncClientPartyTogetherState`
+  re-clamps it on its own very next pass") **does not hold on a host**: that re-clamp is
+  client-only, so on a host nothing in the process ever takes the value back;
+- the per-slot latch that keeps this engine field write off the per-frame path
+  (`PartyFollowController._stallCountRestored`) was set only when the retry SUCCEEDED. A restore
+  that raised the count and still failed to resolve an index logged nothing and did not latch, so
+  it re-armed every frame — the project's own per-frame-write rule, broken, across exactly the
+  frames a module load spans.
+
+**The fix** (`PartyCountRestoreRule`, `Odyssey.CountResolvableClientPartyMembers`,
+`Odyssey.TryResolveFollowRecord`, `PartyFollowController.DriveStallRecovery`):
+
+1. the raise is bounded by how many members actually RESOLVE right now — the length of the
+   LEADING run of member slots whose stored client id resolves through
+   `CClientExoApp::GetCreatureByGameObjectID` 0x005ED5B0, the same call `GetCharacter` itself
+   makes. A leading run, not a total: the count is an array bound, so every index below it has to
+   be safe. This is what makes the restore epoch-aware without a timer — during a half-built
+   module it simply reads 1 and no raise happens, and the frame the engine finishes populating
+   the array it reads 2 and round 101's actual purpose still works.
+   (`PartyFollowTransitionRule`'s one-frame epoch skip stays where it is; it covers the frame the
+   epoch first changes, this covers every frame after it until the array is genuinely ready.)
+2. a raise that did not make the lookup succeed is **reverted on the spot**. No speculative value
+   about this field may outlive the frame that guessed it.
+3. the latch keys on "a write happened" (`FollowStallState.CountRestoreWritten`), not on "the
+   write helped", and is set before the early return — one engine field write per slot per module.
+
+Unit-pinned in `tests/KotorCoop.Tests/PartyCountRestoreRuleTests.cs`: refused at 1 resolvable
+member, allowed at 2, the resolvable run is a hard ceiling rather than a hint, never lowers the
+count (that stays `party_together_fix`'s decision alone), and a count it does not recognise as a
+count is not written.
+
+**Can a REAL transition that leaves a companion behind hit the same fault?** The obvious candidate
+is `END_M01AA`'s own script dropping Trask at that door. No, and for two independent reasons:
+
+1. A companion being left behind means the party TABLE loses them, so `TryGetPartyTableMemberCount`
+   returns 0 and `truePopulation` is 1. `SafeRestoreCount` will not raise a count to 1 that is
+   already 1, and `CSWGuiInGameEquip::UpdatePortraits` only asks for member 1 when the count is
+   ABOVE 1 (`cmp [edi],1 / jle skip`). There is nothing to ask for.
+2. Even in the harder shape — the table still claiming a companion the new module has not
+   materialised — the resolvable-run ceiling refuses the raise until that member genuinely
+   resolves. That is the same guard, and it does not care WHY the member is missing (mid-load,
+   dropped by a script, or destroyed).
+
+The fault needed the count to exceed the resolvable members, and that is now unreachable from this
+path regardless of what the party table says.
+
+**Live status (2026-08-29):** five relocating warps across four sessions with all five party keys
+at their shipped ON defaults — `tar_m02aa` x2 and `tat_m17ac` x3, one of them on a `coop.ini`
+copied verbatim from `profiles/coop.ini.example` — all survived, with **zero** occurrences of
+`6B5FEE` in the host's plugin log, against a signature that was 6/6 deterministic before. A
+`tools/verify.ps1` run in the same configuration reported
+`the host still controls its companions PASS  table 1 companion(s), CSWParty 2 (PC+companions)`,
+i.e. the legitimate case (count 2, both members resolvable) still works. The real-door clause
+(`end_door10 -> end_m01ab`) is still **unexercised**: `usedoor`'s walk stalled short of the door
+on both attempts and never started a transition, a staging-verb/pathing limitation unrelated to
+this fix.

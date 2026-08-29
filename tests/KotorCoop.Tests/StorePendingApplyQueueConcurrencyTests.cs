@@ -163,7 +163,7 @@ public class StorePendingApplyQueueConcurrencyTests
         MinimalStoreBridge bridge = new();
         StubSession session = new();
         CoopAgent agent = new(
-            bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
 
         List<string> logs = [];
         agent.Log = logs.Add;

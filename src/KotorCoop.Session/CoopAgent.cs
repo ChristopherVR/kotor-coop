@@ -1046,6 +1046,49 @@ public sealed partial class CoopAgent
     }
 
     /// <summary>
+    /// Records that THIS instance's own party-pool channel is about to add
+    /// <paramref name="resref"/> to the shared party pool — a peer's accepted intent being
+    /// applied on the host, this instance's own reconcile toward the host's snapshot, or a
+    /// human's <c>pooladd</c>. Feeds the SAME <see cref="RecentlySyncedItems"/> ledger
+    /// <see cref="NoteLocalItemGiven"/> does, for the same reason and with the same one-row
+    /// budget.
+    ///
+    /// ⚠ 2026-08-29, live-caught. This looks like it should not be necessary — the party pool is
+    /// not the PC's inventory — but it is, and the chain is documented elsewhere in this
+    /// repository: <c>CreateItemOnObject(resref, aPartyMember, n)</c> routes through
+    /// <c>CSWSCreature::AcquireItem</c> into the repository <c>GetItemRepository(creature, 1)</c>
+    /// returns, and for a live party member that IS the shared party pool
+    /// (docs/research/shared-inventory-v2.md §15.1). So a pool add lands squarely inside what
+    /// <c>bridge.ReadPossessedItems(localPlayer)</c> sweeps, and
+    /// <see cref="Pumps.ScriptItemGrantPump"/> — which exists precisely to catch an item a SCRIPT
+    /// put in the PC's inventory — read our own pool applies as script grants and re-broadcast
+    /// them. Live, at connect, on shipped defaults plus <c>party_pool_sync=2</c>:
+    ///
+    /// <code>
+    /// client 19:00:16  party pool: local add of 1x 'g_w_blstrpstl001' ... requesting (serial 1)
+    /// host   19:00:17  party pool v2: submitting add of 1x 'g_w_blstrpstl001' ... added to the party pool
+    /// host   19:00:18  script item grant: 2 new item(s) in the local PC's inventory outside dialogue:
+    ///                  g_w_blstrpstl001, g_a_clothes01
+    /// client 19:00:18  materialised loot: submitting 'g_w_blstrpstl001' ... gave to 0x7FFFFFFF
+    /// </code>
+    ///
+    /// — one deposit turned into a second copy on the other instance, through a completely
+    /// different channel. <see cref="Pumps.ScriptItemGrantPump"/>'s own class doc already names
+    /// this exact class of item ("a peer's own grant applied via giveloot ... must never be
+    /// re-broadcast as if a script had just created it"); the party-pool channel was simply never
+    /// wired into the ledger that says so.
+    /// </summary>
+    public void NoteLocalPartyPoolAdd(string resref)
+    {
+        if (string.IsNullOrEmpty(resref))
+        {
+            return;
+        }
+
+        _recentlySyncedItems.Record(resref, 1, Environment.TickCount64);
+    }
+
+    /// <summary>
     /// Clears the avatar fields the negotiated capabilities forbid, so a mod mismatch
     /// cannot reach the game as a bad appearance row or a wrong-item equip. Returns the
     /// list unchanged when everything is permitted, which is the common case.

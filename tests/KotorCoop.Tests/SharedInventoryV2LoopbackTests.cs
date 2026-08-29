@@ -205,10 +205,27 @@ public class SharedInventoryV2LoopbackTests
         private long _tick;
 
         private long _cheatLandsAtTick = -1;
+        private long _cheatLandsAtMs = -1;
         private CoopAgent.PendingPartyPoolApply? _inFlightPool;
         private CoopAgent.PendingStoreApply? _inFlightStore;
 
-        public AgentLoopV2(ICoopSession session, int bridgeScanIntervalMs, int heavyPumpIntervalMs = 0)
+        /// <summary>Fixed WALL-CLOCK milliseconds a dequeued cheat apply takes to land, or 0 for
+        /// the ordinary randomised 1-3 ticks. A test that needs an apply to still be IN FLIGHT
+        /// across a whole host scan + broadcast cycle — docs/research/shared-inventory-v2.md
+        /// §15.5's wobble, where the live single-slot arbitrated channel took seconds — sets this
+        /// explicitly. Deliberately wall-clock, not ticks: a tick is however long one pump
+        /// iteration happens to take on the machine running the suite, which made the same number
+        /// mean 2s on one box and 10s on another.</summary>
+        public int CheatLandDelayMs { get; init; }
+
+
+        /// <param name="trace">Turns on both mode-2 pumps' per-tick diagnostic lines (coop.ini
+        /// <c>party_pool_trace</c>) into <see cref="Logs"/>, so a failing assertion can print the
+        /// same actual/belief/snap/outstanding/target evidence a rig round reads out of the agent
+        /// log. A CONSTRUCTOR parameter, not an init property: the CoopAgent (and with it both
+        /// pumps' trace flag) is built right here, before any object initializer would run.</param>
+        public AgentLoopV2(
+            ICoopSession session, int bridgeScanIntervalMs, int heavyPumpIntervalMs = 0, bool trace = false)
         {
             Bridge = new FakeBridgeV2(bridgeScanIntervalMs);
             Agent = new CoopAgent(
@@ -219,6 +236,7 @@ public class SharedInventoryV2LoopbackTests
                     HeavyPumpIntervalMs = heavyPumpIntervalMs,
                     PartyPoolSyncMode = 2,
                     StoreSyncMode = 2,
+                    PartyPoolTrace = trace,
                 });
 
             Agent.Log = msg => Logs.Enqueue(msg);
@@ -237,10 +255,13 @@ public class SharedInventoryV2LoopbackTests
 
                     if (_cheatLandsAtTick >= 0)
                     {
-                        if (_tick >= _cheatLandsAtTick)
+                        if (_cheatLandsAtMs >= 0
+                            ? Environment.TickCount64 >= _cheatLandsAtMs
+                            : _tick >= _cheatLandsAtTick)
                         {
                             Land();
                             _cheatLandsAtTick = -1;
+                            _cheatLandsAtMs = -1;
                             _inFlightPool = null;
                             _inFlightStore = null;
                         }
@@ -250,12 +271,14 @@ public class SharedInventoryV2LoopbackTests
                         Interlocked.Increment(ref PoolApplyDequeueCount);
                         _inFlightPool = poolNext;
                         _cheatLandsAtTick = _tick + 1 + _random.Next(3); // lands 1-3 ticks later
+                        _cheatLandsAtMs = CheatLandDelayMs > 0 ? Environment.TickCount64 + CheatLandDelayMs : -1;
                     }
                     else if (Agent.TryDequeuePendingStoreApplyV2(out CoopAgent.PendingStoreApply storeNext))
                     {
                         Interlocked.Increment(ref StoreApplyDequeueCount);
                         _inFlightStore = storeNext;
                         _cheatLandsAtTick = _tick + 1 + _random.Next(3); // lands 1-3 ticks later
+                        _cheatLandsAtMs = CheatLandDelayMs > 0 ? Environment.TickCount64 + CheatLandDelayMs : -1;
                     }
                 }
                 catch (Exception)
@@ -404,7 +427,22 @@ public class SharedInventoryV2LoopbackTests
         }
     }
 
-    private static async Task<(Rig Rig, CancellationTokenSource Cts)> BuildConnectedRigAsync()
+    /// <param name="bridgeScanIntervalMs">The fake bridge's own scan-cache window. 150 (the
+    /// default) is the ordinary case. A test that needs the host to genuinely RE-SCAN a store
+    /// while an accepted intent's engine apply is still queued behind the cheat channel — the
+    /// §15.5 wobble's own condition — passes 0, so a scan happens on every tick rather than only
+    /// every 50th.</param>
+    /// <param name="cheatLandDelayMs">See <see cref="AgentLoopV2.CheatLandDelayMs"/> — 0 keeps
+    /// the ordinary randomised 1-3 ticks.</param>
+    /// <param name="hostHeavyPumpIntervalMs">The HOST agent's heavy-pass interval. 0 (every
+    /// tick) is the ordinary case. A test that needs a host snapshot BROADCAST to fall between an
+    /// accepted intent's belief write-through and the host's next store SCAN — the exact race
+    /// docs/research/shared-inventory-v2.md §15.5's wobble hinges on, since the scan is what
+    /// would otherwise overwrite the write-through within a millisecond — widens it past the
+    /// 1000ms broadcast interval so the ordering is certain rather than a coin flip.</param>
+    private static async Task<(Rig Rig, CancellationTokenSource Cts)> BuildConnectedRigAsync(
+        int bridgeScanIntervalMs = 150, int cheatLandDelayMs = 0, bool trace = false,
+        int hostHeavyPumpIntervalMs = 0)
     {
         CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
         CoopClient client = new(
@@ -415,8 +453,11 @@ public class SharedInventoryV2LoopbackTests
         _ = host.RunAsync(cts.Token);
         _ = client.RunAsync(cts.Token);
 
-        AgentLoopV2 hostAgent = new(host, bridgeScanIntervalMs: 150);
-        AgentLoopV2 clientAgent = new(client, bridgeScanIntervalMs: 150);
+        AgentLoopV2 hostAgent = new(host, bridgeScanIntervalMs, hostHeavyPumpIntervalMs, trace)
+        {
+            CheatLandDelayMs = cheatLandDelayMs,
+        };
+        AgentLoopV2 clientAgent = new(client, bridgeScanIntervalMs, trace: trace);
 
         Assert.True(
             await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
@@ -717,6 +758,122 @@ public class SharedInventoryV2LoopbackTests
                     Timeout),
                 $"the client's buy-back never reached the host's own engine; host still shows "
                 + $"{rig.HostAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster)}");
+        }
+    }
+
+
+    /// <summary>
+    /// docs/research/shared-inventory-v2.md §15.5's store wobble, reproduced end to end and
+    /// pinned closed. The one clause of the store recipe that did not come out clean on the rig:
+    /// two seconds after the client published its buy, the client RE-INSERTED the item it had
+    /// just bought, then removed it again three seconds later — two spurious engine writes for
+    /// one transaction, self-healing but real.
+    ///
+    /// The condition the earlier <see cref="StoreHostSellMirrorsToClientAndClientBuyBackReachesTheHost"/>
+    /// deliberately does not create is the host's OWN store GUI still being open while the
+    /// client's intent is in flight. The host accepts the intent and write-throughs its belief
+    /// (so the very next broadcast says "0"), but the engine apply that write-through predicts is
+    /// still queued behind the single-slot cheat channel — so the host's next scan reads the
+    /// PRE-apply stock and republishes "1". That regression is what the client read as the host's
+    /// truth: credit retired, target back to 1, insert.
+    ///
+    /// The fix is a host-side invariant (<c>CoopHost._storeIntentEffectV2</c>): a published
+    /// snapshot is MONOTONE with respect to accepted intents — once the host has said a key moved
+    /// because it accepted an intent, it may not say otherwise until it has genuinely re-observed
+    /// the key at the value it predicted. So this asserts the thing the rig measured: the CLIENT
+    /// lands ZERO engine applies of its own for the whole transaction.
+    /// </summary>
+    [Fact]
+    public async Task AClientBuyWithTheHostsOwnStoreGuiOpenNeverReInsertsWhatItJustBought()
+    {
+        // The live timings, reproduced. The host broadcasts its snapshot every 1000ms
+        // (StoreV2BroadcastIntervalMs); its store scan cache is ~1s on the real bridge, and the
+        // single-slot arbitrated cheat channel took SECONDS to land an apply. So: a scan window
+        // just over one broadcast (1500ms) means the write-through's "0" reaches the client on
+        // the next broadcast BEFORE any scan has run, and the scan after that still reads the
+        // pre-apply "1" and republishes it — the regression. A 2400ms landing delay (800 ticks of
+        // the 3ms loop) keeps the apply in flight across both. With the default 150ms/1-3-tick
+        // settings the apply always lands first and none of this can happen.
+        (Rig rig, _) = await BuildConnectedRigAsync(
+            bridgeScanIntervalMs: 1500, cheatLandDelayMs: 3000, trace: true,
+            hostHeavyPumpIntervalMs: 2000);
+        using (rig)
+        {
+            // Both instances loaded the same module, so both hold the same pristine stock, and
+            // BOTH have the shop open — the §15.5 condition.
+            rig.HostAgent.Bridge.TrueStore[StorePristine] = 3;
+            rig.HostAgent.Bridge.TrueStore[StoreBlaster] = 1;
+            rig.ClientAgent.Bridge.TrueStore[StorePristine] = 3;
+            rig.ClientAgent.Bridge.TrueStore[StoreBlaster] = 1;
+            rig.HostAgent.Bridge.OpenStoreId = TestStoreId;
+            rig.ClientAgent.Bridge.OpenStoreId = TestStoreId;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.Client.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t)
+                        && t.GetValueOrDefault(StoreBlaster) == 1
+                        && t.GetValueOrDefault(StorePristine) == 3,
+                    Timeout),
+                "the client never received the shop's pristine stock");
+
+            // Let both sides settle on that baseline before anybody buys anything.
+            await Task.Delay(600);
+            int clientAppliesBefore = Volatile.Read(ref rig.ClientAgent.StoreApplyLandings);
+
+            // The buy: the client's own engine drops the item. The host's GUI stays OPEN.
+            rig.ClientAgent.Bridge.TrueStore.Remove(StoreBlaster);
+
+            // §15.5's wobble took ~5s from publish to the compensating remove. Sample the wire
+            // from the buy onward, so a REGRESSION in what the host publishes (1 -> 0 -> 1) is
+            // visible in the failure message rather than having to be inferred.
+            List<string> wire = [];
+            DateTime deadline = DateTime.UtcNow + Timeout;
+            DateTime? settleUntil = null;
+            string lastWire = "1";
+            while (DateTime.UtcNow < deadline && (settleUntil is null || DateTime.UtcNow < settleUntil))
+            {
+                if (settleUntil is null
+                    && (!rig.HostAgent.Bridge.TrueStore.ContainsKey(StoreBlaster)
+                        || rig.HostAgent.Bridge.TrueStore[StoreBlaster] == 0))
+                {
+                    // The apply landed on the host. Keep watching for §15.5's own compensating
+                    // remove, which came ~3s after the spurious insert.
+                    settleUntil = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+                }
+
+                rig.Client.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t);
+                string nowWire = $"{t.GetValueOrDefault(StoreBlaster)}";
+                if (nowWire != lastWire)
+                {
+                    wire.Add($"{DateTime.UtcNow:HH:mm:ss.fff} snap={nowWire}");
+                    lastWire = nowWire;
+                }
+
+                await Task.Delay(10);
+            }
+
+            Assert.True(
+                !rig.HostAgent.Bridge.TrueStore.ContainsKey(StoreBlaster)
+                    || rig.HostAgent.Bridge.TrueStore[StoreBlaster] == 0,
+                "the client's buy never reached the host's own engine");
+
+            int clientApplies = Volatile.Read(ref rig.ClientAgent.StoreApplyLandings) - clientAppliesBefore;
+            Assert.True(
+                clientApplies == 0,
+                $"the client applied {clientApplies} engine write(s) of its own for a buy it "
+                + "performed itself — §15.5's re-insert. Client store now: "
+                + string.Join(
+                    ", ",
+                    rig.ClientAgent.Bridge.TrueStore.Select(kv => $"{kv.Key.Resref}={kv.Value}"))
+                + "\nWIRE:\n" + string.Join("\n", wire)
+                + "\nCLIENT:\n"
+                + string.Join("\n", rig.ClientAgent.Logs.Where(l => l.Contains("store")))
+                + "\nHOST:\n"
+                + string.Join("\n", rig.HostAgent.Logs.Where(l => l.Contains("store"))));
+
+            Assert.False(rig.ClientAgent.Bridge.TrueStore.ContainsKey(StoreBlaster));
+            Assert.Equal(3, rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StorePristine));
+            Assert.Equal(3, rig.HostAgent.Bridge.TrueStore.GetValueOrDefault(StorePristine));
         }
     }
 

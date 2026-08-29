@@ -2541,3 +2541,111 @@ the smoke only — never committed, never packaged), a GOG host published its co
 `steam: friends can now join this session (kc1/<public-ip>:27140)`. The receive half
 (`GameRichPresenceJoinRequested_t`, callback 337) and `InviteUserToGame` need a second machine and
 a second Steam account, and remain untested.
+
+## Rig pass (2026-08-29, POOL4): `party_pool_sync` and `store_sync` both FLIPPED ON at mode 2, and the host's warp crash fixed at the root
+
+Five rig cycles, `tools/demo.ps1`, both game dirs `build.ps1 -Install -WarnAsError`'d and
+SHA-256-verified after every install (publish output, host and client `dinput8.dll`
+byte-identical each time; `KotorCoop.Session.dll` and `KotorCoop.Agent.exe` identical across both
+installs). Both installs' `saves\000002 - Game1` verified file-by-file identical before every
+launch.
+
+### Item 1 — `party_pool_sync`: one more real defect found on the SHIPPED combination, fixed, then clean
+
+The point of running the recipe on shipped defaults rather than the isolated ones every prior
+round used (`dialogue_item_sync=0`/`script_item_sync=0`) was to check the combination that would
+actually ship. It was NOT clean, and the mechanism is worth writing down because it involves a
+channel nobody had connected to this one:
+
+```
+client 19:00:16  party pool: local add of 1x 'g_w_blstrpstl001' detected, requesting (serial 1)
+client 19:00:16  party pool: local add of 1x 'g_a_clothes01'   detected, requesting (serial 2)
+host   19:00:17  party pool v2: submitting add of 1x 'g_w_blstrpstl001' -> added to the party pool
+host   19:00:17  party pool v2: submitting add of 1x 'g_a_clothes01'   -> added to the party pool
+host   19:00:18  script item grant: 2 new item(s) in the local PC's inventory outside dialogue:
+                 g_w_blstrpstl001, g_a_clothes01
+client 19:00:18  dialogue grant: received 2 item(s) from peer 1, queueing
+client 19:00:18  materialised loot: ... gave 'g_w_blstrpstl001' to 0x7FFFFFFF
+client 19:00:19  materialised loot: ... gave 'g_a_clothes01'   to 0x7FFFFFFF
+```
+
+A party-pool add lands in the PC's OWN item repository (shared-inventory-v2.md §15.1's
+`CreateItemOnObject` -> `AcquireItem` -> `GetItemRepository(creature, 1)` chain), so
+`ScriptItemGrantPump` — which exists precisely to catch an item a SCRIPT put in the PC's
+inventory — read our own pool applies as script grants and re-broadcast them, and the peer
+materialised a second copy through `giveloot`. `ScriptItemGrantPump`'s own class doc already names
+this exact class of item ("a peer's own grant applied via giveloot ... must never be re-broadcast
+as if a script had just created it"); the party-pool channel was simply never wired into the
+`RecentlySyncedItems` ledger that says so. Closed by `CoopAgent.NoteLocalPartyPoolAdd`, fed from
+both the automatic v2 drain and the human `pooladd` verb.
+
+Rebuilt, reinstalled, hash-verified, relaunched, same recipe:
+
+| clause | measured |
+| --- | --- |
+| the echo | **gone** — zero `script item grant` lines and zero `materialised loot` lines on either side across the whole connect window |
+| three rapid host `pooladd g_i_medeqpmnt01` | client mirrored 2 -> 4 -> 5, one apply per deposit, `published=0` on every client trace line |
+| spurious client publishes after connect | **zero** |
+| cross-instance totals (`items 99`) | host **61 of 61**, client **61 of 61** — identical |
+
+### Item 2 — `store_sync`: three clean sessions in a row
+
+Module `tat_m17ac` (Yuka Laka), `store_sync=2`, `party_pool_sync=0` (§6.3's precedent), a fresh
+connect each time. Every session ran the same recipe: client `popmodal`/`closegui`/`openstore
+k_ptat_yukastore`, client buy, client sell-back, host re-buy, second host re-buy, close both GUIs,
+155 s idle.
+
+| clause | session 1 | session 2 | session 3 |
+| --- | --- | --- | --- |
+| client `openstore` after `popmodal` | ok | ok | ok |
+| client's first live scan vs the host's snapshot | agreed on every key (`live reseed`, `published=0` everywhere) | agreed | agreed |
+| client buy | `published=-1` once; host applied `remove of 1x` once | same | same |
+| **§15.5's re-insert** | **none** | **none** | **none** |
+| client sell | `published=1` once; host applied `insert of 1x` once | same | same |
+| host re-buy | succeeded exactly once | same | same |
+| host re-buy, second time | refused: `no stock matching that resref` | same | same |
+| 155 s idle, engine store writes | host +0, client +0 | +0 / +0 | +0 / +0 |
+
+Session 1's full ledger, as an example — every write accounted for, one per real transaction:
+
+```
+client 19:17:12  store: local remove of 1x 'g_i_drdshld005' ... requesting (serial 1)
+host   19:17:13  store v2: submitting remove of 1x -> removed from store 0x1A
+client 19:18:13  store: local add of 1x ... requesting (serial 2)
+host   19:18:14  store v2: submitting add of 1x -> inserted into store 0x1A
+client 19:19:16  store v2: submitting remove of 1x -> removed from store 0x1A   (mirroring the host's re-buy)
+```
+
+For contrast, the same moment on the pre-fix build (§15.5) inserted `g_i_drdshld005` back into the
+store 2 s after the buy and removed it again 3 s later — two spurious engine writes for one
+transaction.
+
+### Item 3 — the host's warp crash: fixed, and the fix is live
+
+`CSWGuiInGameEquip::UpdatePortraits+0x48E` was 6/6 fatal to the HOST on any relocating warp. The
+cause is `party_follow_stall_recovery`'s own `CSWParty+0x00` member-count restore, not
+`party_together_fix`'s clamp — see docs/research/transition-crashes.md for the full attribution
+and the fix.
+
+**Five relocating warps across four sessions with all five party keys at their shipped ON
+defaults, zero faults:**
+
+| # | destination | config | result |
+| --- | --- | --- | --- |
+| 1 | `tar_m02aa` | shipped defaults + `party_pool_sync=2` | both instances alive, both in `tar_m02aa` |
+| 2 | `tat_m17ac` | shipped defaults + `store_sync=2` | alive |
+| 3 | `tat_m17ac` | shipped defaults + `store_sync=2` | alive |
+| 4 | `tat_m17ac` | shipped defaults + `store_sync=2` | alive |
+| 5 | `tar_m02aa` | `coop.ini` copied verbatim from `profiles/coop.ini.example` | alive; host party table repopulated correctly in the new module (`companions 1`, member object id `0x98`) |
+
+`kotorcoop-plugin.log` on the host: **0 occurrences of `6B5FEE`** across every one of those
+sessions, against a signature that was previously deterministic.
+
+**The real-door clause was NOT exercised.** `usedoor end_door10` reported
+`walking through door 0x4A (3.3m) -> 'end_m01ab'` and then the documented
+`600 frames after the walk the player is 3.1m from 0x4A ... No transition happened - the door is
+still an obstacle, or the path stopped short` on both attempts (from `tp 47.4 116 -0.04` and from
+`tp 50.0 118.0 -0.04`). That is a staging-verb/pathing limitation, not a transition failure — no
+transition was ever started, so nothing about the fix was tested by it. Both instances stayed
+alive and fault-free throughout. The five warps above are the evidence; a real-door confirmation
+is still open.

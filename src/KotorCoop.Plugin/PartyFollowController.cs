@@ -935,15 +935,27 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // 2. Read the record. allowCountRestore is latched per slot per module — see
         // _stallCountRestored's own remarks (an engine field write must never be a per-frame one).
         bool allowRestore = !_stallCountRestored[slot];
-        if (!Odyssey.TryGetFollowStallState(objectId, allowRestore, out Odyssey.FollowStallState state)
-            || !state.Valid)
+        Odyssey.FollowStallState state;
+        bool resolved = Odyssey.TryGetFollowStallState(objectId, allowRestore, out state);
+
+        // ⚠ 2026-08-29: latch on WRITTEN, not on succeeded — and before the early return, so a
+        // restore that did not resolve anything still spends this slot's one allowance for the
+        // module. Latching on success alone left a failing restore re-arming itself every single
+        // frame, which is how an engine field write ended up on the per-frame path across a
+        // module load (the project's own per-frame-write rule) and how the host's
+        // UpdatePortraits crash got its count. See docs/research/transition-crashes.md.
+        if (state.CountRestoreWritten)
+        {
+            _stallCountRestored[slot] = true;
+        }
+
+        if (!resolved || !state.Valid)
         {
             return;
         }
 
         if (state.CountWasRestored)
         {
-            _stallCountRestored[slot] = true;
             PluginHost.Log(
                 $"party follow stall: 0x{objectId:X} follow record was hidden by party_together_fix's "
                 + $"own clamp on party+0x00 — restored CSWParty's member count once, index {state.Index} "
