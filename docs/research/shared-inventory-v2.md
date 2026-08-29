@@ -2287,3 +2287,156 @@ to stop is here with the numbers written down.
 - The host warp crash moved from "unattributed, `tar_m02aa`-specific" to "ours, in one of five
   named config keys, with the faulting engine read symbolicated and a config lever left in the
   tree".
+
+## 16. 2026-08-29, seventh rig round — BOTH FLAGS FLIPPED ON at mode 2. `store_sync`'s §15.5
+## wobble is root-caused (the HOST's own snapshot regressed under a pre-apply scan) and closed,
+## with three clean sessions in a row; `party_pool_sync`'s last defect was found by running the
+## recipe on the SHIPPED combination rather than the isolated one — a cross-channel echo through
+## `script_item_sync` — and closed; and the host's warp crash is attributed and fixed at the root
+
+Five rig cycles. Both game directories `build.ps1 -Install -WarnAsError`'d and SHA-256-verified
+after every install (publish output, host and client `dinput8.dll` byte-identical each time;
+`KotorCoop.Session.dll` and `KotorCoop.Agent.exe` identical across both installs). Both installs'
+`saves\000002 - Game1` verified file-by-file identical before every launch.
+
+### 16.1 Item 1 — the last party-pool defect was in a DIFFERENT channel, and only the shipped
+### combination could show it
+
+Every prior round isolated `dialogue_item_sync=0`/`script_item_sync=0` before reading the pool,
+on §6.1's own precedent. That is the right way to read the pool channel in isolation and the
+wrong way to decide whether it can ship, because the combination that ships has both of those ON.
+Run that way, at connect, on the very first pool applies of the session:
+
+```
+client 19:00:16  party pool: local add of 1x 'g_w_blstrpstl001' detected, requesting (serial 1)
+client 19:00:16  party pool: local add of 1x 'g_a_clothes01'   detected, requesting (serial 2)
+host   19:00:17  party pool v2: submitting add of 1x 'g_w_blstrpstl001' -> added to the party pool
+host   19:00:17  party pool v2: submitting add of 1x 'g_a_clothes01'   -> added to the party pool
+host   19:00:18  script item grant: 2 new item(s) in the local PC's inventory outside dialogue:
+                 g_w_blstrpstl001, g_a_clothes01
+client 19:00:18  dialogue grant: received 2 item(s) from peer 1, queueing
+client 19:00:18  materialised loot: ... gave 'g_w_blstrpstl001' to 0x7FFFFFFF
+client 19:00:19  materialised loot: ... gave 'g_a_clothes01'   to 0x7FFFFFFF
+```
+
+**The party-pool channel's own apply was re-broadcast by a completely different channel as a
+fresh script grant, and the peer materialised a second copy.** The chain is §15.1's, read the
+other way round: `CreateItemOnObject(resref, aPartyMember, n)` routes through
+`CSWSCreature::AcquireItem` into the repository `GetItemRepository(creature, 1)` returns, and for
+a live party member that IS the shared party pool — so a party-pool add lands squarely inside what
+`bridge.ReadPossessedItems(localPlayer)` sweeps, and `ScriptItemGrantPump` exists precisely to
+report anything new that turns up in that sweep.
+
+`ScriptItemGrantPump`'s own class doc already names this class of item, in terms that fit exactly:
+"an item that arrived through a channel that already replicates it (ground pickup, container/corpse
+loot, a peer's own grant applied via giveloot, a human's own giveloot) must never be re-broadcast
+as if a script had just created it, or both players end up with two copies." The suppression
+ledger it consumes (`RecentlySyncedItems`) is fed by `WorldStatePump`, `LootPump` and
+`CoopAgent.NoteLocalItemGiven`. The party-pool channel was never wired into it — an omission, not
+a disagreement.
+
+**Fix**: `CoopAgent.NoteLocalPartyPoolAdd(resref)`, one row of budget, fed from
+`CoopCommandDispatcher.DrainAutomaticPartyPoolV2` (the shipped automatic path — a peer's accepted
+intent applied on the host, or this instance's own reconcile) and from the human `pooladd` verb.
+Unit-pinned by `ScriptItemGrantRuleTests.ANewRowExplainedByOurOwnPartyPoolAddIsSuppressed`, using
+the exact resref pair the live round fabricated.
+
+Rebuilt, reinstalled, hash-verified, relaunched, same recipe, same shipped combination:
+
+| clause | measured |
+| --- | --- |
+| the echo | **gone** — zero `script item grant` and zero `materialised loot` lines on either side across the whole connect window |
+| three rapid host `pooladd g_i_medeqpmnt01` | client mirrored 2 -> 4 -> 5, one apply per deposit, `published=0` on every client trace line |
+| spurious client publishes after connect | **zero** |
+| cross-instance totals (`items 99`) | host **61 of 61**, client **61 of 61** — identical |
+
+### 16.2 Item 2 — §15.5's wobble: the client was right, the HOST's snapshot was wrong
+
+§15.5 described the wobble as "the client's outstanding ledger retires while the host snapshot
+still shows the old count". The retirement was correct. What was wrong is what it retired
+against.
+
+`CoopHost.HandleStoreIntentV2` write-throughs its belief the instant it accepts an intent — §7's
+own fix, so the broadcast reflects the change even with the shop's GUI closed on the host. But the
+engine apply that write-through PREDICTS is queued, not done: it goes through the single-slot
+arbitrated cheat channel and lands a second or two later. While the host's own store GUI is open
+(which §15.5's recipe required), its next scan reads the PRE-apply stock and
+`PublishStoreSnapshotV2` overwrote the prediction with it. The wire therefore said `1`, then `0`
+(write-through), then `1` again (stale scan), then finally `0`. The client spent its credit on the
+`0` — correctly — and then read the restored `1` as the host's truth and reconciled UP.
+
+**A published snapshot must be MONOTONE with respect to accepted intents.** Once the host has told
+everyone a key moved because it accepted a client's intent, it may not say otherwise until it has
+genuinely re-observed the key at the value it predicted, or given up waiting. Until then a scan
+disagreeing with the prediction is not evidence about that key — it is a read of an engine that
+has not run the apply yet. `CoopHost._storeIntentEffectV2` records the predicted value per key and
+defends it, for that key only, bounded by `StoreIntentEffectHoldMs` (10 s) so a genuinely dropped
+apply still heals and the scan wins again. The stale-removal debounce skips a held key for the
+same reason.
+
+Pinned by `SharedInventoryV2LoopbackTests.AClientBuyWithTheHostsOwnStoreGuiOpenNeverReInsertsWhatItJustBought`,
+which reproduces the live conditions rather than approximating them: both GUIs open, a wall-clock
+cheat-landing delay, and a host heavy pass wider than the 1 s broadcast interval so the
+write-through's `0` reliably reaches the client before the host's next scan. Pre-fix it reproduces
+the re-insert **3/3** and prints the wire's own `1 -> 0 -> 1` regression; post-fix **5/5** clean,
+zero client-side engine writes. (Three earlier attempts at that test passed pre-fix and are worth
+recording as a warning: with the default 150 ms scan window and 1-3-tick landing the apply always
+lands before the next scan, and none of this can happen.)
+
+### 16.3 Item 2 — three clean sessions in a row
+
+Module `tat_m17ac`, `store_sync=2`, `party_pool_sync=0` (§6.3's precedent), a fresh connect each
+time. Same recipe every session: client `popmodal`/`closegui`/`openstore k_ptat_yukastore`, client
+buy, client sell-back, host re-buy, second host re-buy, close both GUIs, 155 s idle.
+
+| clause | session 1 | session 2 | session 3 |
+| --- | --- | --- | --- |
+| client `openstore` after `popmodal` | ok | ok | ok |
+| client's first live scan vs the host's snapshot | agreed on every key (`live reseed`, `published=0` everywhere) | agreed | agreed |
+| client buy | `published=-1` once; host applied `remove of 1x` once | same | same |
+| **the §15.5 re-insert** | **none** | **none** | **none** |
+| client sell | `published=1` once; host applied `insert of 1x` once | same | same |
+| host re-buy | succeeded exactly once | same | same |
+| host re-buy, second time | refused: `no stock matching that resref` | same | same |
+| 155 s idle, engine store writes | host +0, client +0 | +0 / +0 | +0 / +0 |
+
+### 16.4 Item 3 — the host's warp crash, attributed and fixed
+
+Not `party_together_fix`. That clamp only ever writes `CSWParty+0x00` DOWN and is client-only.
+The only thing in this codebase that writes it UP is `party_follow_stall_recovery`'s own count
+RESTORE, and that path has no host/client gate at all. Full attribution, mechanism and fix in
+docs/research/transition-crashes.md; the short version is that `CSWParty+0x00` is an array bound
+rather than a statement about the save's party size, and across a module load the party TABLE
+survives saying "one companion" while `CSWParty`'s array for the new module has not been populated
+yet. The restore is now bounded by how many members actually RESOLVE, reverted if it does not
+help, and latched on "a write happened" rather than "the write worked".
+
+Live: **five relocating warps across four sessions with all five party keys at their shipped ON
+defaults, zero faults**, including one on a `coop.ini` copied verbatim from
+`profiles/coop.ini.example`. `0` occurrences of `6B5FEE` in the host's plugin log, against a
+signature that was 6/6 deterministic. The real-door clause (`end_door10 -> end_m01ab`) was NOT
+exercised — `usedoor`'s walk stalled short of the door on both attempts and never started a
+transition, a staging-verb limitation unrelated to the fix.
+
+### 16.5 Result
+
+`party_pool_sync` and `store_sync` are both **ON by default, at mode 2**, in
+`profiles/coop.ini.example`, `CoopConfig`, `AgentSettings`, `AgentComposition`, `docs/CONFIG.md`,
+`README.md`, `docs/TROUBLESHOOTING.md`, `docs/roadmap-seamless.md`, `tools/package-README.md` and
+`docs/live-verification.md`. Mode 1 is untouched and reachable only by writing `= 1` explicitly;
+every mode-1 loopback test now sets its mode explicitly rather than relying on the old
+"`Enabled` alone means v1" default, which the flip changed.
+
+### 16.6 What is still open
+
+- **The connect-time first-sight publish.** On both flip-round connects the client first-sighted
+  `g_w_blstrpstl001` and `g_a_clothes01` with `snap=0` and published `+1` for each, and the host
+  applied both. This is §2.4's own documented "accepted, bounded, at-most-one-time over-count" and
+  it is symmetric (both instances ended on identical totals, 61 of 61), but it is a real fabrication
+  of one unit per affected key per connect and it is what fed §16.1's echo in the first place. The
+  likely mechanism is the two instances classifying the same plot-spawned item differently under
+  `IsAmbientPartyPoolNoise`'s one-shot per-id decision, or the host's first snapshot going out
+  before its own first successful pool scan. The store side solved the equivalent problem with
+  `_baselinedStores` (the first snapshot naming a store IS that store's baseline); the pool has no
+  equivalent. Worth closing next.
+- **A real-door confirmation of §16.4's fix**, since `usedoor` could not produce a transition.

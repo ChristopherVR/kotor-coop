@@ -127,12 +127,14 @@ internal static class AgentComposition
             MovieRelayEnabled = config?.MovieRelayEnabled ?? true,
             SyncCompanionXp = config?.CompanionXpSync ?? true,
             SyncCompanionGear = config?.CompanionGearSync ?? true,
-            PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
-            PartyPoolSyncMode = config?.PartyPoolSyncMode ?? 0,
+            // ON by default at mode 2 (2026-08-29): with no coop.ini at all, the shipped
+            // default is what a fresh install would have got from profiles/coop.ini.example.
+            PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? true,
+            PartyPoolSyncMode = config?.PartyPoolSyncMode ?? 2,
             PartyPoolTrace = config?.PartyPoolTrace ?? false,
             SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
-            StoreSyncEnabled = config?.StoreSyncEnabled ?? false,
-            StoreSyncMode = config?.StoreSyncMode ?? 0,
+            StoreSyncEnabled = config?.StoreSyncEnabled ?? true,
+            StoreSyncMode = config?.StoreSyncMode ?? 2,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.

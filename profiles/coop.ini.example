@@ -830,12 +830,11 @@ frame_stats=0
 # closes the client's world in that window - the exact call the engine's own dump-player handler
 # makes, one frame earlier than the queued message would.
 #
-# 2026-08-29 (docs/research/shared-inventory-v2.md section 15): the HOST crashes deterministically
-# on ANY relocating warp, 5/5, at CSWGuiInGameEquip::UpdatePortraits+0x48E - the CLIENT-side party
-# reporting a member count above 1 while member 1's object no longer resolves, walked by the new
-# module's own GUI construction. The close above is the only thing that empties the client's world
-# early and it fires 60-70 ms before the fault every time. Set to 0 to run the A/B; leave at 1
-# otherwise, or travel-map-init-crash.md's own fault comes back.
+# 2026-08-29: this key was the prime suspect for the HOST's deterministic crash on any relocating
+# warp (CSWGuiInGameEquip::UpdatePortraits+0x48E) and was RULED OUT by a live A/B - the crash was
+# byte-identical with this at 0. The real cause was party_follow_stall_recovery's own CSWParty
+# member-count restore and is fixed (docs/research/transition-crashes.md). The key stays as a
+# bisect lever; leave it at 1 in normal use, or travel-map-init-crash.md's own fault comes back.
 transition_close_client_world=1
 
 # Sync the shared party item pool (CSWPartyTable+0x118, the "party inventory" both players'
@@ -844,10 +843,19 @@ transition_close_client_world=1
 # identified-stolen-nonequippable, NOT engine object id - a party-pool item is spawned
 # independently on each instance and never shares an id the way a GIT-placed door or container
 # does), reliable, with a two-layer anti-echo design (docs/research/party-pool-sync.md).
-# NEEDS-LIVE: the offset chain and every engine call this uses are verified against the symbol
-# database and the disassembly, but none of it has been watched land on a running game yet -
-# defaults OFF until it has. 1 turns it on.
-party_pool_sync=0
+# 0 = off. 1 = the original bidirectional op-log, DISQUALIFIED (a 2026-08-28 rig round found it
+# amplifying a 3-unit deposit past 500 units) and kept only so an existing config that says
+# "party_pool_sync = 1" keeps meaning exactly what it always meant. 2 = the host-authoritative
+# "absolute snapshot + client intents" redesign (docs/research/shared-inventory-v2.md), and the
+# SHIPPED DEFAULT since 2026-08-29: mode 2's own recipe passed clean twice in a row on a live
+# two-instance rig with zero fabricated units - three rapid host deposits mirroring one-for-one,
+# a client deposit and withdrawal each applied exactly once, and two five-minute idles with zero
+# publishes and zero engine writes on either side. Verified with dialogue_item_sync and
+# script_item_sync at their own shipped defaults (both ON), which is what found and closed the
+# last cross-channel echo: a party-pool add lands in the PC's own item repository, so
+# script_item_sync used to re-broadcast our own pool applies as fresh script grants and the peer
+# materialised a second copy (CoopAgent.NoteLocalPartyPoolAdd).
+party_pool_sync=2
 
 # Rig-only diagnostics for BOTH mode-2 shared-inventory pumps (party_pool_sync=2 and
 # store_sync=2 - one key, because the two share every bookkeeping mechanism and a failure in one
@@ -899,7 +907,14 @@ solo_segment_any_module=0
 # share an id for, unlike the party pool. Reads a store's stock only while a local player has
 # that store's GUI open (docs/research/store-sync.md); an infinite-stock item's buys never
 # replicate (the engine's own stock never changes for one). Gold is NOT touched by this channel -
-# the existing gold ledger already reconciles what a buy/sell costs. NEEDS-LIVE: same status as
-# party_pool_sync above - researched and verified against the disassembly, not yet watched land
-# on a running game. 1 turns it on.
-store_sync=0
+# the existing gold ledger already reconciles what a buy/sell costs.
+#
+# 0 = off. 1 = the original bidirectional op-log, DISQUALIFIED (a blackout+reconnect resync
+# double-applied a sell into the buyer's own inventory), kept only for config compatibility.
+# 2 = the same host-authoritative redesign party_pool_sync uses, and the SHIPPED DEFAULT since
+# 2026-08-29: THREE clean live sessions in a row on a two-instance rig, each one a client buy, a
+# client sell-back, a host re-buy that succeeded exactly once, a second host re-buy correctly
+# refused ("no stock matching that resref"), and 155 seconds of idle with zero engine writes on
+# either side. Every write in all three sessions was accounted for - one per real transaction,
+# none spurious.
+store_sync=2

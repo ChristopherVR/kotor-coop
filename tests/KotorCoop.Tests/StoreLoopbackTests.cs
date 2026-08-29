@@ -148,7 +148,7 @@ public class StoreLoopbackTests
         {
             Bridge = new FakeStoreBridge();
             Agent = new CoopAgent(
-                Bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+                Bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
             Agent.Log = msg => Logs.Enqueue($"[{name}] {msg}");
 
             _task = Task.Run(() => RunAsync(_cts.Token));
@@ -647,7 +647,7 @@ public class StoreLoopbackTests
 
         FakeStoreBridge clientBridge = new();
         CoopAgent clientAgent = new(
-            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
         List<string> clientLogs = [];
         clientAgent.Log = msg => clientLogs.Add(msg);
 
@@ -1051,10 +1051,10 @@ public class StoreLoopbackTests
 
         FakeStoreBridge hostBridge = new();
         CoopAgent hostAgent = new(
-            hostBridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            hostBridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
         FakeStoreBridge clientBridge = new();
         CoopAgent clientAgent = new(
-            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
 
         Assert.True(
             await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
@@ -1182,7 +1182,7 @@ public class StoreLoopbackTests
 
         FakeStoreBridge clientBridge = new();
         CoopAgent clientAgent = new(
-            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true });
+            clientBridge, client, new AgentSettings { HeavyPumpIntervalMs = 0, StoreSyncEnabled = true, StoreSyncMode = 1 });
 
         Assert.True(
             await WaitForAsync(() => client.IsConnected && host.GetRemotePeers().Count == 1, Timeout),

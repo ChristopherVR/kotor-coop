@@ -269,6 +269,20 @@ public sealed partial class CoopCommandDispatcher
     }
 
     /// <summary>
+    /// A human's own <c>pooladd</c>. Identical shape to <see cref="GiveLoot"/> above and to the
+    /// automatic v2 drain (<c>CoopCommandDispatcher.PartyPoolV2.cs</c>): our own cheat channel is
+    /// about to CREATE this item, and a party-pool add lands in the PC's own item repository, so
+    /// without the ledger entry <c>Pumps.ScriptItemGrantPump</c> re-broadcasts it as a script
+    /// grant. See <c>CoopAgent.NoteLocalPartyPoolAdd</c> for the live trace.
+    /// </summary>
+    private void PoolAdd(string resref, int count)
+    {
+        manager.Agent?.NoteLocalPartyPoolAdd(resref);
+
+        SendCheat(new CheatRequest(CheatKinds.PartyPoolAdd, Text: resref, Amount: count));
+    }
+
+    /// <summary>
     /// The automatic half of <see cref="GiveLoot"/>: drains one queued give per tick from
     /// the connected <see cref="CoopAgent"/> — materialised loot received over the wire
     /// (docs/research/enemy-materialisation.md §6) OR a peer's dialogue-conversation grant

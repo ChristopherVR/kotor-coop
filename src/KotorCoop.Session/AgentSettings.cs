@@ -280,19 +280,20 @@ public sealed record AgentSettings
     public bool SyncCompanionGear { get; init; } = true;
     /// When true, <see cref="Pumps.PartyPoolPump"/> runs on the heavy pass: syncing the shared
     /// party item pool (<c>CSWPartyTable+0x118</c>) both ways — detecting a local player's own
-    /// deposit/withdrawal and applying a peer's, through the staging-cheat channel. Off by
-    /// default (coop.ini <c>party_pool_sync</c>) — the offset chain is VERIFIED against the
-    /// symbol database and the disassembly, and the engine calls are real, verified primitives,
-    /// but neither has been watched land on a running game yet. See
-    /// docs/research/party-pool-sync.md for the full design and the NEEDS-LIVE items.
+    /// deposit/withdrawal and applying a peer's, through the staging-cheat channel. ON by
+    /// default since 2026-08-29 (coop.ini <c>party_pool_sync</c>), at mode 2 — see
+    /// <see cref="CoopConfig.PartyPoolSyncMode"/> for the live evidence. Note that the mode-1
+    /// pump this sentence describes is NOT what runs by default; <see cref="Pumps.PartyPoolPumpV2"/>
+    /// is. See docs/research/party-pool-sync.md and docs/research/shared-inventory-v2.md.
     /// </summary>
-    public bool PartyPoolSyncEnabled { get; init; }
+    public bool PartyPoolSyncEnabled { get; init; } = true;
 
     /// <summary><c>party_pool_sync</c> as a small integer — see
     /// <see cref="CoopConfig.PartyPoolSyncMode"/>'s identical remarks. Independent of
     /// <see cref="PartyPoolSyncEnabled"/> above; use <see cref="EffectivePartyPoolSyncMode"/> to
-    /// read the two reconciled.</summary>
-    public int PartyPoolSyncMode { get; init; }
+    /// read the two reconciled. Defaults to 2 since 2026-08-29 — see
+    /// <see cref="CoopConfig.PartyPoolSyncMode"/>.</summary>
+    public int PartyPoolSyncMode { get; init; } = 2;
 
     /// <summary>See <see cref="CoopConfig.PartyPoolTrace"/> — rig-only per-tick diagnostics for
     /// both mode-2 shared-inventory pumps.</summary>
@@ -321,15 +322,16 @@ public sealed record AgentSettings
     /// When true, <see cref="Pumps.StorePump"/> runs on the heavy pass: syncing merchant store
     /// stock both ways — detecting a local buy/sell while a store's GUI is open, and applying a
     /// peer's, through the staging-cheat channel, for any store this instance has learned an
-    /// object id for. Off by default (coop.ini <c>store_sync</c>) — the offset chain and the
-    /// engine calls are VERIFIED against the symbol database and the disassembly, but neither
-    /// has been watched land on a running game yet. See docs/research/store-sync.md.
+    /// object id for. ON by default since 2026-08-29 (coop.ini <c>store_sync</c>), at mode 2 —
+    /// see <see cref="CoopConfig.StoreSyncMode"/> for the live evidence. As with the party pool,
+    /// the mode-1 pump this sentence describes is NOT what runs by default;
+    /// <see cref="Pumps.StorePumpV2"/> is. See docs/research/store-sync.md.
     /// </summary>
-    public bool StoreSyncEnabled { get; init; }
+    public bool StoreSyncEnabled { get; init; } = true;
 
     /// <summary><c>store_sync</c> as a small integer — see <see cref="PartyPoolSyncMode"/>'s
-    /// identical remarks, store's own mirror.</summary>
-    public int StoreSyncMode { get; init; }
+    /// identical remarks, store's own mirror. Defaults to 2 since 2026-08-29.</summary>
+    public int StoreSyncMode { get; init; } = 2;
 
     /// <summary>See <see cref="EffectivePartyPoolSyncMode"/>'s identical remarks, store's own
     /// mirror.</summary>

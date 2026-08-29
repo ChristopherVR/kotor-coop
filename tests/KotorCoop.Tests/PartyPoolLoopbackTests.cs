@@ -259,7 +259,7 @@ public class PartyPoolLoopbackTests
             Agent = new CoopAgent(
                 Bridge,
                 session,
-                new AgentSettings { HeavyPumpIntervalMs = heavyPumpIntervalMs, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = heavyPumpIntervalMs, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
             _autoDrain = autoDrain;
 
             _task = Task.Run(() => RunAsync(_cts.Token));
@@ -977,7 +977,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             agent.PumpOnce(); // tick1: baseline
 
@@ -1024,7 +1024,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             List<string> logs = [];
             agent.Log = logs.Add;
@@ -1077,7 +1077,7 @@ public class PartyPoolLoopbackTests
 
             List<string> logs = [];
             CoopAgent agent = new(
-                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
             agent.Log = logs.Add;
 
             agent.PumpOnce(); // baseline (empty pool, silent)
@@ -1154,7 +1154,7 @@ public class PartyPoolLoopbackTests
         {
             ThrottledFakeBridge bridge = new(scanIntervalTicks: 1000);
             CoopAgent agent = new(
-                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             // tick 1 @ clock 0: baseline scan (empty pool) - silent, per the pump's own
             // first-scan-is-silent rule.
@@ -1222,7 +1222,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             foreach (Dictionary<PartyPoolStackKey, int> _ in script)
             {
@@ -1267,7 +1267,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             foreach (Dictionary<PartyPoolStackKey, int> _ in script)
             {
@@ -1319,7 +1319,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             agent.PumpOnce(); // tick1: baseline
 
@@ -1451,7 +1451,7 @@ public class PartyPoolLoopbackTests
         {
             FakeBridge bridge = new(scanIntervalMs: 0);
             CoopAgent agent = new(
-                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                bridge, host, new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             List<string> logs = [];
             agent.Log = logs.Add;
@@ -1970,7 +1970,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             for (int i = 0; i < script.Count; i++)
             {
@@ -2018,7 +2018,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             List<string> logs = [];
             agent.Log = logs.Add;
@@ -2060,7 +2060,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             List<string> logs = [];
             agent.Log = logs.Add;
@@ -2099,7 +2099,7 @@ public class PartyPoolLoopbackTests
             CoopAgent agent = new(
                 new ScriptedBridge(script),
                 host,
-                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true });
+                new AgentSettings { HeavyPumpIntervalMs = 0, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
 
             List<string> logs = [];
             agent.Log = logs.Add;

@@ -243,20 +243,27 @@ for the RE and the correction to the earlier "fixed" claim; see
 
 ## The party's shared item stash and a merchant's stock aren't shared between us
 
-This is expected, not a bug. `party_pool_sync` (the "stash gear in the party" pool,
-`pt_item_repo`) and `store_sync` (a merchant's buy/sell stock) both ship OFF by default, and stay
-that way by DECISION, not merely caution: every wire-sync design tried for either channel has
-been live-disqualified by a real, reproducible defect. Mode 1 (a bidirectional op-log) hit a
-severe amplification runaway on the party pool (three deposits inflated past 500 units) and a
-blackout+reconnect double-apply on the store. Mode 2 (`=2`, a host-authoritative absolute
-snapshot plus client intents, `docs/research/shared-inventory-v2.md`) was built specifically to
-be structurally immune to mode 1's failure class, but three separate 2026-08-29 rig rounds found
-it ALSO disqualified — a distinct doubling/re-insertion/re-detection defect on the party-pool
-side every round, and a severe unbounded client-side re-insertion loop on the store side. Buying,
-selling and depositing/withdrawing all work correctly on your OWN instance either way — it is
-only the cross-instance mirroring that is off. Mode 2 is left in the tree behind
-`party_pool_sync=2`/`store_sync=2` for testers who want to help close the remaining defects, but
-is not recommended for real play. See [CONFIG.md](CONFIG.md), and
+**As of 2026-08-29 both channels ship ON, at mode 2** — if your stash and a merchant's stock are
+not shared, the usual cause is an OLD `coop.ini`: the installer never overwrites that file, so an
+install from before 2026-08-29 keeps its own `party_pool_sync=0`/`store_sync=0` lines. Set them to
+`2`, or re-run `install.ps1 -GameDir '...' -UpdateDefaults`.
+
+Two limitations are real and expected even with the channels on:
+
+* **A shop's stock can only be READ while some player has that shop's GUI open.** That is an
+  engine limitation (`CSWSStore+0x230` is only reachable through the open panel), unchanged from
+  mode 1. Applying a peer's buy/sell never needs the GUI — only noticing your own does.
+* **An infinite-stock item's buys never replicate**, because the engine's own stock never changes
+  for one.
+
+The history, for context: mode 1 (a bidirectional op-log, still reachable by writing `=1`) was
+live-disqualified by a severe amplification runaway on the party pool (three deposits inflated
+past 500 units) and a blackout+reconnect double-apply on the store, and stays disqualified. Mode 2
+(a host-authoritative absolute snapshot plus client intents,
+`docs/research/shared-inventory-v2.md`) replaced it and took six live rig rounds to become clean;
+the last two rounds passed the party pool's own recipe with zero fabricated units and the store's
+recipe three sessions in a row. Buying, selling and depositing/withdrawing have always worked
+correctly on your OWN instance regardless of these flags. See [CONFIG.md](CONFIG.md), and
 [party-pool-sync.md](research/party-pool-sync.md)/[store-sync.md](research/store-sync.md)/
 [shared-inventory-v2.md](research/shared-inventory-v2.md) for the full history.
 
