@@ -29,12 +29,22 @@ namespace KotorCoop.Plugin;
 /// file, so the character a player creates and the character an adoption carries are the same
 /// bytes travelling the same road.
 ///
-/// ⚠ NO ENGINE CALLS, DELIBERATELY. This could have been a detour on <c>0x6123E0</c> — one call
-/// site (0x006DBE9B), a clean capture point. It is a file poll instead, because a poll cannot
-/// crash the game and the only thing a hook would buy is a quarter of a second. The engine
-/// writes the file; we read it. The one thing the plugin does that the agent could not is
-/// choose the DESTINATION — the stash name the loader's own FileCopy does not target — and
-/// that is a <c>File.Copy</c>, not an engine call.
+/// ⚠ A HOOK, AND THE FILE POLL THAT FAILED FIRST. This began as a 250 ms poll on
+/// <c>MenuFrame</c> and nothing else — no engine patch, on the reasoning that a poll cannot
+/// crash the game and a hook would buy only a fraction of a second. Measured live
+/// (2026-08-29, a real Quick Character through the retail screens): THE POLL NEVER SAW THE
+/// FILE. Pressing Play runs <c>CSWGuiClassSelection::BeginPlayGame 0x6DBDF0</c>, which writes
+/// the pifo and walks straight into the module load; this plugin's own log recorded "the main
+/// thread was gone for 1265 ms" across exactly that span, so no frame callback ran inside it,
+/// and by the time one did the whole <c>Temp\</c> directory was empty. The window is not short
+/// for a frame-driven poll — it does not exist. <see cref="CharGenSaveHook"/> is the fix: it
+/// sits on the call itself and copies the file on the game's own thread the instant the engine
+/// finishes writing it.
+///
+/// The poll is KEPT, as a fallback and as the "still waiting" heartbeat. It costs one
+/// <c>FileInfo</c> every 250 ms while armed, it is the only thing that would still work if a
+/// future patch moved the call site out from under the hook's byte check, and its own
+/// conditions (fresh / big enough / stable) are the correctness rules either route must pass.
 ///
 /// Runs from <c>PluginHost.MenuFrame</c>, not <c>OnFrame</c>: the whole point is the main menu
 /// and the chargen screens, where the SwapBuffers hook is dormant (the same reason
@@ -89,7 +99,7 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         }
 
         _nextPollMs = nowMs + NewCharacterCaptureRule.PollIntervalMs;
-        Poll(nowMs);
+        Poll(nowMs, fromHook: false);
     }
 
     private void Arm(uint serial)
@@ -100,18 +110,54 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         _previousBytes = -1;
         _nextPollMs = 0;
         _nextWaitingLogMs = Environment.TickCount64 + 15000;
+        _instance = this;
 
         block.JoinChargenBytes = 0;
         block.JoinChargenState = SharedBlock.JoinChargenStateArmed;
         block.JoinChargenApplied = serial;
 
+        // The engine patch goes in HERE rather than at plugin startup, so an install that never
+        // uses join_mode = newcharacter carries no patch at all. Main thread: MenuFrame is the
+        // game's own MainLoop.
+        string hook = CharGenSaveHook.Install(out string hookDiagnostic)
+            ? hookDiagnostic
+            : $"NO HOOK - {hookDiagnostic} (falling back to the file poll, which has been "
+                + "measured to miss the window)";
+
         // ASCII only: the plugin log is written as bytes, so an em-dash arrives as '?'.
         PluginHost.Log(
             $"newchar: armed (request {serial}) - watching Temp\\{PifoFile} for the character "
-            + "the game's own chargen writes");
+            + $"the game's own chargen writes; {hook}");
     }
 
-    private void Poll(long nowMs)
+    /// <summary>The armed controller, for <see cref="CharGenSaveHook"/>'s static callback to
+    /// reach. There is one plugin instance per process, and this is set at arm time rather than
+    /// at construction so the hook can never act for a join nobody asked for.</summary>
+    private static NewCharacterCaptureController? _instance;
+
+    /// <summary>
+    /// Called by <see cref="CharGenSaveHook"/> from inside the engine's own chargen path, on
+    /// the game thread, in the one window where <c>Temp\pifo.ifo</c> holds the character the
+    /// player just made. Copies it immediately — deferring to the next frame is exactly what
+    /// the live pass proved does not work.
+    /// </summary>
+    public static void OnCharacterSaved() => _instance?.CaptureFromHook();
+
+    private void CaptureFromHook()
+    {
+        if (!_armed)
+        {
+            return;
+        }
+
+        // The engine has JUST returned from writing the file, so the stability check the poll
+        // needs (two agreeing lengths) is moot here — nothing else is writing it, and there is
+        // no later poll to be the second sample. Freshness and size still apply, and are what
+        // reject a leftover or a zero-byte pifo.
+        Poll(Environment.TickCount64, fromHook: true);
+    }
+
+    private void Poll(long nowMs, bool fromHook)
     {
         try
         {
@@ -124,10 +170,31 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
             long bytes = exists ? info.Length : 0;
             long writtenTicks = exists ? info.LastWriteTimeUtc.Ticks : 0;
 
+            if (fromHook)
+            {
+                // Always say what the hook saw, whether or not it can be used. If the engine
+                // ever stops leaving the file where we expect it, THIS line is the evidence
+                // that says so — and it is the one moment nobody else can observe.
+                PluginHost.Log(
+                    $"newchar: chargen saved a character (hook): pifo exists={exists} bytes={bytes}");
+            }
+
+            // The stability rule (two agreeing lengths) exists because the poll can read a file
+            // mid-write. The hook cannot: it runs after the engine's own write call returned,
+            // with nothing else touching the file. Passing the observed length as the previous
+            // one satisfies the rule truthfully rather than bypassing it.
+            long previous = fromHook ? bytes : _previousBytes;
+
             if (!NewCharacterCaptureRule.ShouldCapture(
-                exists, bytes, _previousBytes, writtenTicks, _armedAtTicksUtc))
+                exists, bytes, previous, writtenTicks, _armedAtTicksUtc))
             {
                 _previousBytes = exists ? bytes : -1;
+
+                if (fromHook)
+                {
+                    Fail($"the character the engine saved is not usable (exists={exists} bytes={bytes})");
+                    return;
+                }
 
                 if (nowMs >= _nextWaitingLogMs)
                 {
@@ -157,12 +224,14 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
             block.JoinChargenState = SharedBlock.JoinChargenStateCaptured;
             PluginHost.Log(
                 $"newchar: captured the created character into Temp\\{MenuLoadController.CarriedCharacterFile} "
-                + $"({copied} bytes) - the agent can now adopt the host's world");
+                + $"({copied} bytes, via the {(fromHook ? "hook" : "poll")}) "
+                + "- the agent can now adopt the host's world");
         }
-        catch (IOException ex)
+        catch (IOException ex) when (!fromHook)
         {
             // The engine still has the file open; try again next poll rather than failing the
-            // whole join on one unlucky quarter-second.
+            // whole join on one unlucky quarter-second. Not tolerated from the hook: there is no
+            // next attempt there, so an IOException is a real failure the player must hear about.
             _previousBytes = -1;
             PluginHost.Log($"newchar: poll deferred ({ex.Message})");
         }

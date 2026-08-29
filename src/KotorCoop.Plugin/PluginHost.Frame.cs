@@ -172,6 +172,11 @@ internal static unsafe partial class PluginHost
         // has armed it (coop.ini join_mode = newcharacter).
         _newCharacterCapture?.OnFrame();
 
+        // The chargen-drive verbs, here for the same reason: every one of them is only
+        // meaningful at the main menu and through the character-creation screens, where the
+        // SwapBuffers hook does not fire.
+        _chargenDrive?.OnFrame();
+
         // A locked server's password prompt. Here rather than on the swap hook for the same
         // reason the menu-load replay is: the ask lands while the player is at the main menu,
         // having just pressed Connect in the browser, where the swap hook does not fire. It is

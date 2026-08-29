@@ -26,4 +26,25 @@ internal sealed unsafe partial class SharedBlockView
         get => *U32(SharedBlock.OffsetJoinChargenBytes);
         set => *U32(SharedBlock.OffsetJoinChargenBytes) = value;
     }
+
+    /// <summary>Agent -&gt; plugin. Bumped to run a chargen-drive verb.</summary>
+    public uint ChargenDriveRequest => *U32(SharedBlock.OffsetChargenDriveRequest);
+
+    /// <summary>Agent -&gt; plugin. Low 16 bits: one of <c>SharedBlock.ChargenDrive*</c>. High 16
+    /// bits: the class index, for <c>ChargenDriveQuick</c>.</summary>
+    public uint ChargenDriveKind => *U32(SharedBlock.OffsetChargenDriveKind);
+
+    /// <summary>Plugin -&gt; agent. The serial acted on.</summary>
+    public uint ChargenDriveApplied
+    {
+        get => *U32(SharedBlock.OffsetChargenDriveApplied);
+        set => *U32(SharedBlock.OffsetChargenDriveApplied) = value;
+    }
+
+    /// <summary>Plugin -&gt; agent. 0 done, nonzero a refusal code.</summary>
+    public uint ChargenDriveStatus
+    {
+        get => *U32(SharedBlock.OffsetChargenDriveStatus);
+        set => *U32(SharedBlock.OffsetChargenDriveStatus) = value;
+    }
 }

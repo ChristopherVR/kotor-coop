@@ -298,6 +298,28 @@ public sealed partial class CoopCommandDispatcher
         });
     }
 
+    /// <summary>
+    /// Runs one of the character-creation drive verbs (<c>newgame</c>, <c>chargen quick</c>,
+    /// <c>chargen accept</c>) by asking the plugin to call the engine's own button handler.
+    ///
+    /// Synchronous by design, unlike <see cref="TriggerMidSessionLoad"/>: these are single
+    /// engine calls the plugin makes on its next MainLoop frame, not module loads, so there is
+    /// nothing to poll and nothing that could block this dispatcher's tick.
+    /// </summary>
+    private void DriveChargen(uint kind, int classIndex)
+    {
+        if (_kotor is null)
+        {
+            Reply("chargen: this agent is not attached to a KOTOR process (needs --kotor)");
+            return;
+        }
+
+        // The diagnostic says what happened either way — a refusal is not an error here, it is
+        // an answer ("character creation is not open", "not at the main menu").
+        _kotor.TryDriveChargen(kind, classIndex, out string diagnostic);
+        Reply(diagnostic);
+    }
+
     /// <summary>Reads the CURRENT session save fresh — the world+identity pair a rejoining
     /// client should receive if it connects RIGHT NOW, never a snapshot captured when serving
     /// started. Same resolution <see cref="MaintainSessionSave"/>'s client branch already uses

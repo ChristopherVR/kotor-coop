@@ -42,8 +42,44 @@ internal partial struct SharedBlock
     /// spent a live round chasing.</summary>
     public const int OffsetJoinChargenBytes = 0x478C;
 
-    // 0x4790..0x47A0 reserved for this region (a captured-name string, if the on-screen line
-    // ever wants to say WHO was created).
+    // ---- driving the chargen screens from the console (0x4790..0x47A0) --------------------
+    //
+    // The `newgame` / `chargen quick` / `chargen accept` verbs. These call the engine's OWN
+    // button handlers — the same functions a real click reaches — rather than synthesising
+    // mouse input, which on this rig is intermittently and undiagnosably dead (the trap that
+    // made MenuLoadController exist at all) and which, measured, drops clicks in the middle of
+    // a scripted sequence.
+    //
+    // ⚠ NOT a cheat kind, deliberately. CheatController refuses every request with no player
+    // loaded (CheatController.Execute's own first guard) and runs behind PluginHost.OnFrame's
+    // world-epoch gate, and this whole feature lives at the main menu where neither holds.
+    // Same reason the menu-load request has its own region.
+
+    /// <summary>Agent -&gt; plugin. Bump to run <see cref="OffsetChargenDriveKind"/>. Written
+    /// LAST, after the kind, like every other request region here.</summary>
+    public const int OffsetChargenDriveRequest = 0x4790;
+
+    /// <summary>Agent -&gt; plugin. One of the <c>ChargenDrive*</c> constants below.</summary>
+    public const int OffsetChargenDriveKind = 0x4794;
+
+    /// <summary>Plugin -&gt; agent. Echoes the serial acted on.</summary>
+    public const int OffsetChargenDriveApplied = 0x4798;
+
+    /// <summary>Plugin -&gt; agent. 0 = done, nonzero = a refusal code (see
+    /// <c>CharGenDriveController</c>, which logs the reason in words as well).</summary>
+    public const int OffsetChargenDriveStatus = 0x479C;
+
+    /// <summary>Open the game's own character-creation screens from the main menu — replays
+    /// <c>CSWGuiMainMenu::OnNewGamePicked</c>'s body.</summary>
+    public const uint ChargenDriveNewGame = 1;
+
+    /// <summary>Pick a class and apply the optimised template — the "Quick Character" route.
+    /// The class index rides in the high 16 bits of the kind word.</summary>
+    public const uint ChargenDriveQuick = 2;
+
+    /// <summary>Press Play: <c>CSWGuiMainCharGen::BeginPlayGame</c>, which is what writes the
+    /// character to <c>TEMP:pifo</c>.</summary>
+    public const uint ChargenDriveAccept = 3;
 
     /// <summary>Nothing has been asked for.</summary>
     public const uint JoinChargenStateIdle = 0;

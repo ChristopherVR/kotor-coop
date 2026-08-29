@@ -163,6 +163,15 @@ public sealed partial class KotorGameBridge
         return ok;
     }
 
+    /// <summary>
+    /// Runs a character-creation drive verb through the plugin — <c>newgame</c>,
+    /// <c>chargen quick</c>, <c>chargen accept</c>. See
+    /// <see cref="PluginMenuLoader.TryDriveChargen"/> and
+    /// <c>KotorCoop.Plugin.CharGenDriveController</c>.
+    /// </summary>
+    public bool TryDriveChargen(uint kind, int classIndex, out string diagnostic) =>
+        PluginMenuLoader.TryDriveChargen(_memory, kind, classIndex, out diagnostic);
+
     /// <summary>Polls the capture armed by <see cref="TryArmNewCharacterCapture"/>. False
     /// while nothing has been armed yet or the block cannot be read.</summary>
     public bool TryGetNewCharacterCapture(out uint state, out uint bytes)

@@ -47,6 +47,12 @@ public static class PluginMenuLoader
     private const int BlockJoinChargenState = 0x4788;
     private const int BlockJoinChargenBytes = 0x478C;
 
+    // SharedBlock's chargen-drive verb region (`newgame`, `chargen quick`, `chargen accept`).
+    private const int BlockChargenDriveRequest = 0x4790;
+    private const int BlockChargenDriveKind = 0x4794;
+    private const int BlockChargenDriveApplied = 0x4798;
+    private const int BlockChargenDriveStatus = 0x479C;
+
     /// <summary>
     /// Reads which module a save is standing in, from SAVEGAME.sav's ERF key list: the
     /// entry typed 2055 (.sav) IS the module (e.g. END_M01AA). The engine's LoadModule
@@ -384,4 +390,88 @@ public static class PluginMenuLoader
         return memory.TryReadUInt32(block + BlockJoinChargenState, out state)
             && memory.TryReadUInt32(block + BlockJoinChargenBytes, out bytes);
     }
+
+    /// <summary>
+    /// Runs one of the character-creation drive verbs in the plugin — <c>newgame</c>,
+    /// <c>chargen quick</c>, <c>chargen accept</c>. The plugin calls the engine's OWN button
+    /// handler for that step (see <c>KotorCoop.Plugin.CharGenDriveController</c>); nothing here
+    /// synthesises input.
+    ///
+    /// Waits for the plugin's ack so the caller learns whether the step was refused — these are
+    /// single engine calls made on the next MainLoop frame, not module loads, so the wait is
+    /// bounded and short.
+    /// </summary>
+    /// <param name="kind">One of <c>SharedBlock.ChargenDrive*</c>, mirrored agent-side in
+    /// <see cref="ChargenDriveKinds"/>.</param>
+    /// <param name="classIndex">For <c>quick</c>: which of the six class portraits, 0-5. The
+    /// engine derives the class from the CONTROL'S ADDRESS, so the plugin turns this back into
+    /// the genuine embedded control rather than passing a number on.</param>
+    public static bool TryDriveChargen(
+        ProcessMemory memory, uint kind, int classIndex, out string diagnostic)
+    {
+        if (!TryFindBlock(memory, out nint block, out diagnostic))
+        {
+            return false;
+        }
+
+        // Kind (with the class index in the high half) BEFORE the serial: the plugin acts on
+        // the serial, so everything it will read must already be there.
+        uint packed = (kind & 0xFFFF) | ((uint)classIndex << 16);
+        if (!memory.TryWrite(block + BlockChargenDriveKind, packed)
+            || !memory.TryReadUInt32(block + BlockChargenDriveRequest, out uint serial)
+            || !memory.TryWrite(block + BlockChargenDriveRequest, serial + 1))
+        {
+            diagnostic = "could not write the chargen request";
+            return false;
+        }
+
+        serial++;
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (memory.TryReadUInt32(block + BlockChargenDriveApplied, out uint applied)
+                && applied == serial)
+            {
+                memory.TryReadUInt32(block + BlockChargenDriveStatus, out uint status);
+                diagnostic = status == 0
+                    ? $"chargen: {ChargenDriveKinds.Describe(kind, classIndex)} done"
+                    : $"chargen: {ChargenDriveKinds.Describe(kind, classIndex)} refused "
+                        + $"(failure {status}; the reason is in kotorcoop-plugin.log)";
+                return status == 0;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        diagnostic = "chargen: the plugin did not answer (is the game at the main menu with the "
+            + "plugin loaded?)";
+        return false;
+    }
+}
+
+/// <summary>
+/// The plugin's <c>SharedBlock.ChargenDrive*</c> constants, mirrored on this side of the
+/// x86/x64 boundary the same way <c>CheatKinds</c> mirrors the cheat kinds — the two assemblies
+/// cannot share a type.
+/// </summary>
+public static class ChargenDriveKinds
+{
+    /// <summary>Open the character-creation screens from the main menu.</summary>
+    public const uint NewGame = 1;
+
+    /// <summary>Pick a class and apply the optimised "Quick Character" template.</summary>
+    public const uint Quick = 2;
+
+    /// <summary>Press Play — writes the character to <c>TEMP:pifo</c> and starts the module.
+    /// </summary>
+    public const uint Accept = 3;
+
+    public static string Describe(uint kind, int classIndex) => kind switch
+    {
+        NewGame => "newgame",
+        Quick => $"quick (class {classIndex})",
+        Accept => "accept",
+        _ => $"kind {kind}",
+    };
 }

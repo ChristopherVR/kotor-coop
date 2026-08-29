@@ -78,6 +78,10 @@ internal static unsafe partial class PluginHost
     /// <summary>Watches for the character retail chargen writes, for a joiner who has no save
     /// to carry one out of (coop.ini <c>join_mode = newcharacter</c>).</summary>
     private static NewCharacterCaptureController? _newCharacterCapture;
+
+    /// <summary>The `newgame` / `chargen quick` / `chargen accept` verbs — the engine's own
+    /// character-creation button handlers, called rather than clicked.</summary>
+    private static CharGenDriveController? _chargenDrive;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
     private static PasswordPromptController? _passwordPrompt;
