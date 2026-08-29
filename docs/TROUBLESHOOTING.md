@@ -44,10 +44,86 @@ original name.
 ## Second KOTOR instance won't launch, or refuses to run alongside the first
 
 The retail single-instance guard is a named mutex, not real DRM — but it only yields to
-`agent launch --instance 2` (which renames the mutex in memory) on the **DRM-free GOG
-build**. The Steam build's own DRM wrapper refuses a second instance outright and its packed
-binary means none of this project's engine addresses apply to it. See Requirements in the
-top-level README.
+`agent launch --instance 2` (which renames the mutex in memory) on the **DRM-free GOG build**.
+The Steam copy goes through the Steam client, which allows one copy of an app, and it refuses
+regardless: the rename succeeds (`launched pid NNNNN with mutex name 'kcoop2'`) and the process
+still vanishes a moment later, usually with
+`error: Process was not started by this object` from the launcher that lost it.
+
+**Two instances on one PC with only one DRM-free copy: run the Steam copy FIRST** (it takes the
+plain `swkotor` mutex), then `agent launch --instance 2` on the DRM-free copy. Host and client
+roles come from the agents' `--host`/`--join` arguments, not from launch order. Verified live —
+docs/research/steam-support.md §18.5.
+
+(The old claim that "its packed binary means none of this project's engine addresses apply" was
+wrong and is retracted: the wrapper decrypts `.text` in place before the game starts, so every
+address is the same at runtime.)
+
+## Steam: nothing works / "the exe differs" when playing with a GOG friend
+
+Fixed. The compatibility handshake used to hash the `swkotor.exe` **file**, and the Steam copy
+is the same code under Valve's SteamStub wrapper, which encrypts `.text` on disk — so two
+installs that hook identically hashed differently and the join was refused with
+`RefusalReason.Executable`. It now hashes the **running image**, which the two builds share
+byte for byte. A Steam client and a DRM-free host have been verified in one live session
+(docs/research/steam-support.md §18).
+
+If a cross-store join is still refused on the executable, **both sides need this version or
+newer**. Check each agent's startup line — the two `exe image` values must match, and the
+`exe file` values are expected to differ:
+
+```
+GOG   content digest: exe image C6962619, ... [exe file 8B8EC44D (DrmFree)]
+Steam content digest: exe image C6962619, ... [exe file 220AC31D (SteamStub)]
+```
+
+If a session logs `executable identity unchecked: one side published no live image digest`, one
+peer's plugin did not publish one (an older plugin, or a plugin that failed to read its own
+image — its log says which). The session still runs; the executable check is simply not in
+force, so make sure both sides really are on the same build.
+
+Expect content warnings (`W_OVERRIDE`, `W_APPEARANCE`, `W_TLK`, `W_2DA`, `W_GLOBALS`) whenever
+the two installs are modded differently. Those are not Steam-specific and none of them ends a
+session — they name the channel each mismatch degrades.
+
+## Steam overlay and the frame hook
+
+Not a problem in practice. With the overlay loaded, the plugin logs
+
+```
+frame hook installed: hooked IAT 0x73D00C (real SwapBuffers 0x779857F0)
+```
+
+and the frame counter climbs normally, so the overlay does not own that import slot. If some
+future overlay build ever does, the plugin **refuses rather than corrupting it** and names the
+culprit:
+
+```
+IAT slot 0x73D00C holds 0x... but gdi32!SwapBuffers is 0x...; something else already hooked it. Refusing.
+```
+
+The one-click fix for that is Steam → KOTOR → Properties → General → uncheck "Enable the Steam
+Overlay while in-game".
+
+⚠ **A frame counter of 0 at the main menu is normal on every build** — the swap hook is dormant
+there and the menu runs off the `MainLoop` call site instead. The plugin says so itself
+(`frame hook installed but has not fired for ~2s`). Do not read it as an overlay conflict.
+
+## Steam: friends-list "Join Game" does nothing
+
+`steam_api64.dll` has to be sitting beside `KotorCoop.Agent.exe`; this project cannot ship one
+(see the README's Steam section). With it present the host's agent logs, once:
+
+```
+steam: ready as app 32370 (ISteamFriends via SteamAPI_SteamFriends_v018)
+steam: friends can now join this session (kc1/203.0.113.7:27140)
+```
+
+Without it, exactly one line and then silence — everything else works as before. Other failure
+lines to expect: `steam: SteamAPI_Init returned false` (Steam is not running, or the account
+does not own KOTOR — it must own **app 32370**, whichever store the install came from), and
+`steam: steam_api64.dll exports neither SteamAPI_InitFlat nor SteamAPI_Init` (the file is not a
+Steamworks redistributable).
 
 ## `build.ps1 -Install` deployed into the wrong game directory
 

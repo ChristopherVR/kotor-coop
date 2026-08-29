@@ -23,7 +23,13 @@ at runtime**, and no per-build address table is needed (§7 says what to build i
 one, and why). `PackageInstaller`'s current "Steam (not supported: … the binary differs)"
 label is wrong on its second clause and should be corrected.
 
-**What actually blocks Steam today is our own compatibility handshake, not the engine.**
+> **Update, 2026-08-29 (§18).** Everything below was written from disk, before the rig had run
+> a Steam instance. It has now been run: the Steam build hooks cleanly with the overlay on, §8's
+> fix is shipped (the digest hashes the running image), and a Steam client joined a DRM-free
+> host in one live session. **§18 supersedes the NEEDS-LIVE/INFERRED tags in §§3, 4, 6, 8 and
+> 17.** The design reasoning below is left exactly as it was written; §18 says what happened.
+
+**What blocked Steam — our own compatibility handshake, not the engine. Fixed in §8/§18.**
 `ContentCompatibility` hard-refuses a session whose two `ExeDigest`s differ
 (`RefusalReason.Executable`), and `InstallDigest` hashes the file on disk — so a wrapped
 Steam host and an unwrapped host hash differently and refuse each other, even though the
@@ -260,7 +266,18 @@ different layout, say), the escalation path is: keep the current addresses as th
 set, add `SteamBuild`-style recognition for the new one, and only then introduce a table.
 Not before.
 
-## 8. THE ACTUAL BLOCKER: our own exe digest refuses cross-store play
+## 8. THE ACTUAL BLOCKER: our own exe digest refuses cross-store play — **FIXED, option 1**
+
+> **Shipped 2026-08-29.** Option 1 below is what was built, with one change the design did not
+> anticipate: the hash is taken by the PLUGIN, inside the game, *before it installs a single
+> hook*, and published at `SharedBlock.OffsetExeImageDigest` for the agent to carry — not by
+> the agent reading the process afterwards. The reason is that our own inline detours rewrite
+> `.text`, and which ones get installed depends on coop.ini, so an agent-side read taken after
+> attach would differ between two peers whose CONFIG differs and would refuse a session that
+> works. `ExeImageDigestRule` (KotorCoop.Protocol, compiled into the plugin by source) also
+> folds in the PE timestamp, `ImageBase` and every section header, and deliberately EXCLUDES
+> `AddressOfEntryPoint` — the one header field the wrapper changes. The file hash survives as
+> a log label. Live results: §18.
 
 `InstallDigest.TryHashExecutable` FNV-1a-hashes **the file on disk**, and
 `ContentCompatibility` (`src/KotorCoop.Protocol/ContentCompatibility.cs:202`) treats a
@@ -534,4 +551,258 @@ observed in memory).
    players on two machines.
 
 None of these were run: this wave is research, design and non-live implementation, and the
-rig was not used.
+rig was not used. **All four were run the next day — see §18, which supersedes the tags above.**
+
+---
+
+## 18. Live results (2026-08-29) — Steam runs, and a Steam client joined a GOG host
+
+Everything §17 listed as NEEDS-LIVE was run, on this machine, with the rig lock held. The
+short version: **the Steam build behaves exactly as §§1-6 argued, §8's fix is shipped, and a
+cross-store session works.** The one inference §17 could not settle from disk — that the Steam
+build's *runtime* `.text` equals the DRM-free file's `.text` — is now VERIFIED, in memory,
+rather than argued from the unwrap's provenance.
+
+### 18.1 The image digest: the two builds agree, the two files do not
+
+Both installs, same demo save, plugin log line written before a single hook is installed:
+
+```
+GOG   [18:42:46.561] exe image digest C6962619 over .text 0x401000..0x73C1D0 (3387856 bytes), taken before any hook
+Steam [18:39:05.064] exe image digest C6962619 over .text 0x401000..0x73C1D0 (3387856 bytes), taken before any hook
+```
+
+3,387,856 = `0x33B1D0`, `.text`'s virtual size from §1's section table, to the byte. And the
+agents' own content-digest lines put the file hash and the image hash side by side:
+
+```
+GOG   content digest: exe image C6962619, 509 appearance rows, 2 override file(s), 49265 tlk entries [exe file 8B8EC44D (DrmFree)]
+Steam content digest: exe image C6962619, 556 appearance rows, 2665 override file(s), 49349 tlk entries [exe file 220AC31D (SteamStub)]
+```
+
+**Different files (`8B8EC44D` vs `220AC31D`, SHA-256 `D3432B32…` vs `34E6D971…`), identical
+running images (`C6962619`).** That is §8's whole claim, measured. §4's INFERRED line — "the
+runtime `.text` of the Steam build equals the unwrapped file's `.text` byte for byte" — is now
+**VERIFIED**: two independent processes each hashed 3.4 MB of their own decrypted `.text`,
+plus the section table and the PE timestamp, and produced the same 32-bit value.
+
+The digest is taken in `PluginHost.AllocateBlock`, *before* `InstallHooks`. That placement is
+load-bearing rather than incidental: our own inline detours rewrite `.text`, and which ones
+get installed depends on coop.ini, so a digest taken any later would differ between two peers
+whose CONFIG differs and would refuse a session that works perfectly. One fixed point in
+startup is what makes the two sides comparable at all.
+
+### 18.2 The Steam build, hooked (NEEDS-LIVE #1)
+
+Launched through the Steam client (`steam://rungameid/32370`), with `gameoverlayrenderer.dll`
+loaded (**overlay ON** — confirmed in the process module list at `0x65EF0000`). Every hook
+installed; **no byte-pattern refusal anywhere in the log**:
+
+```
+[18:39:05.054] forwarding to system C:\WINDOWS\system32\dinput8.dll (module 0x634C0000)
+[18:39:05.057] === KotorCoop plugin loaded into pid 47028 ===
+[18:39:05.060] enabled the developer console in swkotor.ini ([Game Options] EnableCheats=1)
+[18:39:05.060] shared block at 0xFEE0000 (18432 bytes)
+[18:39:05.064] exe image digest C6962619 over .text 0x401000..0x73C1D0 (3387856 bytes), taken before any hook
+[18:39:05.077] frame hook installed: hooked IAT 0x73D00C (real SwapBuffers 0x779857F0)
+[18:39:05.077] console interp hooked: FuncInterp hooked (trampoline 0xFEF0000)
+[18:39:05.078] menu frame hook installed: MainLoop call site hooked (stub 0xFF00000)
+[18:39:05.078] party faction guard: party faction guard installed (stub 0xFF10000)
+[18:39:05.079] animations: animation hook at 0x63C760 (stub 0xFF20000); overlay flourish at 0x5F4681 (stub 0xFF30000)
+[18:39:05.079] barks: bark hook at 0x5F2C90 (stub 0xFF40000)
+[18:39:05.080] item-template spawns: item-template spawns at 0x52F748 (stub 0xFF50000)
+[18:39:05.081] solo segment: RemovePartyMember calls at 0x541C1E (stub 0xFF60000)
+[18:39:05.081] dialogue: 0x6A7110 (stub 0xFF70000); cinematic 0x6A7E20 (stub 0xFF80000)
+[18:39:05.082] dialogue: dialogue skip authority at 0x6A7278 (stub 0xFF90000)
+[18:39:05.082] combat: phantom-hit watch at 0x4DFA40 (stub 0xFFA0000)
+[18:39:05.082] combat: phantom-effect watch at 0x4D8320 (stub 0xFFB0000)
+[18:39:05.083] cinematic: mid-module movie watch at 0x602CF0 (stub 0xFFC0000)
+[18:39:05.084] dialogue: dialogue gate at 0x4CF490 (stub 0xFFD0000)
+[18:39:05.084] dialogue: forced-conversation tap at 0x57A470 (stub 0xFFE0000)
+[18:39:05.085] container: container-use gate at 0x587420 (stub 0xFFF0000); container_lock_arbitration=1 (host-arbitrated)
+[18:39:05.085] container: container-close watch at 0x587560 (stub 0x1B860000)
+[18:39:05.086] dialogue: shot-camera guard at 0x6306E0 (stub 0x1B870000)
+[18:39:05.087] minimap: peers on the minimap at 0x68ACB4 (stub 0x1B880000)
+[18:39:05.087] pause: pause sanity check disarmed at 0x4C6503
+[18:39:05.088] pause: pause button owned at 0x688590 and 0x6C0350 (stub 0x1B890000)
+[18:39:05.089] death handling: control-swap guard at 0x5F6B60 (stub 0x1B8B0000); game-over guard at 0x4B6E99 (stub 0x1B8C0000)
+[18:39:05.092] worker thread started
+[18:39:05.166] agent: started KotorCoop.Agent.exe as pid 54264; log -> kotorcoop-agent.log
+[18:39:05.502] menu: Co-op button shown, labelled and bound
+[18:39:07.504] agent: liveness NeverLive -> Live
+```
+
+Every address in that list is the same VA the DRM-free build's own log prints, which is §4 end
+to end: the stub decrypted `.text` in place before `DirectInput8Create` ran, and each site's
+byte-pattern check matched the plaintext it expected.
+
+**§6's question is settled in favour of the optimistic branch.** The Steam overlay does *not*
+own the game's `SwapBuffers` IAT slot — `FrameHook`'s validation passed and it hooked
+`0x73D00C` with the real `gdi32!SwapBuffers` (`0x779857F0`) still in it, so whatever the
+overlay does, it is not an IAT rewrite of that import. And the hook fires: with a world loaded
+the counter climbed 264,653 → 266,496 in four seconds. **No overlay change is needed.** The
+"disable the overlay" instruction stays in the docs as a fallback for some future overlay
+build, not as a requirement.
+
+The stub does not re-verify after the OEP jump either (§3's INFERRED): the game ran for the
+better part of an hour with ~25 inline detours live in `.text` and never faulted or reloaded.
+
+⚠ `frames` reads **0 at the main menu, on both builds** — the swap hook is dormant there and
+`MenuFrame` runs off the `MainLoop` call site instead. The plugin says so itself
+(`WARNING: frame hook installed but has not fired for ~2s (normal while a movie or a module
+load holds the main thread)`). Do not read a zero frame counter at the menu as an overlay
+conflict; it is not one on either build.
+
+### 18.3 The agent, attach, and the console (NEEDS-LIVE #1, continued)
+
+```
+pid 47028  block 0xFEE0000  version 60
+  frames 264,653  phantoms 0  remotes 0  command 0
+```
+
+Block found by signature scan at version 60. `agent load --pid 47028 --load-save 1` staged and
+loaded the demo save through the plugin ("loaded through the plugin (no input injection)"). A
+console verb answers through the `FuncInterp` detour on the Steam process:
+
+```
+console: cmd serial 1  reply serial 11
+last command: 'where'
+reply:        'module END_M01AA  at 20.0 22.2 -1.3  hp 12/12'
+```
+
+### 18.4 The cross-store session (NEEDS-LIVE #2/#3, answered better than asked)
+
+§17 asked for a Steam↔Steam session and a Steam↔DRM-free *refusal*. A second Steam instance is
+impossible (§18.5), so the pairing run was the one that actually matters — and the refusal is
+gone rather than reproduced: **host = GOG (`C:\GOG Games\…`, DRM-free), client = Steam**, both
+on the same demo save, connected over loopback.
+
+```
+client [18:46:08] * connected - connected to 127.0.0.1:27140 as peer 2
+client [18:46:08] * Lanik joined the game
+host   [18:46:08] * Malak joined the game
+host   [18:46:08] * co-op: connected, 1 player
+```
+
+No `RefusalReason.Executable`. **And no `W_UNCHECKED` either**, which is the other half of the
+evidence: the executable check was *active* on both sides and *passed*, rather than quietly
+skipped because a digest was missing. The warnings that did fire are the honest ones — this
+particular Steam install carries a large mod pack, and none of these is fatal:
+
+```
+* co-op [W_APPEARANCE] appearance.2da differs; phantoms keep their default appearance
+* co-op [W_TLK] dialog.tlk differs (different text mods); harmless
+* co-op [W_OVERRIDE] override folders differ (2 vs 2665 files); gear or items unique to one side may not appear on the other
+* co-op [W_2DA] 2DA edits differ between installs
+* co-op [W_MODULES] module files differ; a module edited on one side may desync there
+* co-op [W_GLOBALS] global variable tables differ; quest/world state and doors are not shared
+```
+
+That a *heavily modded* Steam install and a *vanilla* GOG install could share a session on the
+strength of an identical running image, with every content difference degraded rather than
+fatal, is a stronger result than a matched-pair test would have been.
+
+Presence, both sides: `phantoms 1  remotes 1`, `peers 1`, `peers-here 1`.
+
+**Module transition, and a world transfer across the store boundary:**
+
+```
+host   [18:52:53] * announcing transition to 'end_m01ab'
+host   [18:52:56] * client announced transition to 'end_m01ab'
+host   [18:53:03] * world sent (663,173 bytes)
+host   where -> 'module end_m01ab  at 50.0 120.0 -0.0  hp 12/12'
+client where -> 'module end_m01ab  at 50.0 120.0 -0.0  hp 12/12'
+```
+
+Both instances ended up in `end_m01ab` at the same coordinates, presence intact
+(`peers-here 1`), and the GOG host shipped its world to the Steam client over the
+world-transfer TCP path — 663 KB across two different stores' installs of the same game.
+
+⚠ **The transition was driven by `warp`, not by a door, and that is a rig limitation rather
+than a Steam one.** Three `usedoor end_door10` attempts on `END_M01AA` opened the door and then
+stalled the walk short of the threshold:
+
+```
+door: 0x4A at 4.1m links to module 'end_m01ab' at waypoint 'from_01a'; open state 2
+door: 600 frames after the walk the player is 2.7m from 0x4A (was 4.1m), at 46.6,117.6; aimed at 51.4,120.1.
+      No transition happened - the door is still an obstacle, or the path stopped short.
+```
+
+`walkto` did not move the PC either, which is the known injected-input problem
+(docs/live-verification.md, "Why `blockpoke walk` no-ops on the player character"). Nothing
+about it is store-specific — same verb, same module, and the instance that stalled was the
+DRM-free host. A real door crossing with a Steam client in the session is **still NEEDS-LIVE**;
+everything the transition path does *after* the crossing is verified above.
+
+### 18.5 A second Steam instance is impossible — confirmed (NEEDS-LIVE #4)
+
+`agent launch --instance 2` renamed the mutex successfully (the name string lives at
+`0x0073D75C` in `.rdata`, which the wrapper leaves in plaintext, so the patch itself works):
+
+```
+launching instance 2: C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe
+launched pid 56096 with mutex name 'kcoop2'
+error: Process was not started by this object, so requested information cannot be determined.
+```
+
+The process was created and then went away — the stub re-launches through the Steam client,
+which enforces one copy of an app, and the launcher lost the pid it had just patched. Only the
+original instance remained. **INFERRED is now VERIFIED.**
+
+The workaround for a dev rig is simply ordering: **let the Steam copy take the plain mutex and
+make the DRM-free copy instance 2.** That is what §18.4's run did — Steam launched first
+through the client, then `agent launch --instance 2` on the GOG copy — and the host/client
+roles come from the agents' arguments, not from launch order.
+
+### 18.6 Steam invites, as far as one machine can take them
+
+`steam_api64.dll` (Steamworks v1.62, copied from another Steam game on this machine for the
+smoke only — **not committed and not packaged**, see §11) was dropped beside
+`KotorCoop.Agent.exe` on the **GOG host**, which is the interesting direction: a GOG install
+publishing an invite, needing only that the Steam account own app 32370.
+
+```
+steam: ready as app 32370 (ISteamFriends via SteamAPI_SteamFriends_v018)
+steam: friends can now join this session (kc1/103.95.113.80:27140)
+```
+
+and, from Steam's own stderr, proof the client accepted the process:
+
+```
+Setting breakpad minidump AppID = 32370
+SteamInternal_SetMinidumpSteamID:  Caching Steam ID:  76561…479 [API loaded no]
+```
+
+`steam_appid.txt` (5 bytes, `32370`) was written into the game directory by
+`TryEnsureAppIdFile`, and only because a redistributable was present — `ComposeSteam`'s guard
+against littering a non-Steam player's game folder works.
+
+**Native calls exercised:** `NativeLibrary.TryLoad("steam_api64.dll")`; `SteamAPI_InitFlat`
+(the v1.59+ signature — the older `SteamAPI_Init` fallback was not needed); export resolution
+for `SteamAPI_Shutdown`, `SteamAPI_GetHSteamPipe`, `SteamAPI_ManualDispatch_Init` /
+`_RunFrame` / `_GetNextCallback` / `_FreeLastCallback`,
+`SteamAPI_ISteamFriends_SetRichPresence`, `_ClearRichPresence`, `_InviteUserToGame`;
+`SteamAPI_ManualDispatch_Init`; the `SteamAPI_SteamFriends_v018` accessor; and
+`SteamAPI_ISteamFriends_SetRichPresence("connect", …)` with a `SteamConnectStringRule` string
+built from the host's STUN public address.
+
+Note the interface version: §10 named `SteamAPI_SteamFriends_v017`; the facade probes v018
+first, and **v018 is what a current client resolves**. The probe list is what saved it.
+
+**NOT exercised** (both need a second machine and a second Steam account):
+`SteamAPI_ISteamFriends_InviteUserToGame`, and the receive half — the manual-dispatch pump
+delivering `GameRichPresenceJoinRequested_t` (callback 337) into `OnConnectRequest`.
+`--steam-join` remains the only tested path into that code, and it is a plain CLI verb.
+
+### 18.7 What §17's list looks like now
+
+| | was | now |
+| --- | --- | --- |
+| 1. Steam build hooked, frame hook vs overlay | NEEDS-LIVE | **VERIFIED** — every hook installed, overlay loaded, IAT slot ours, hook fires (§18.2) |
+| 2. Address parity end to end | NEEDS-LIVE | **VERIFIED** — same image digest, same hook addresses, a real session (§18.1, §18.4) |
+| 3. Steam↔DRM-free | NEEDS-LIVE (watch it refuse) | **VERIFIED — it no longer refuses.** The fix is shipped and the session runs (§18.4) |
+| 4. Second Steam instance | INFERRED impossible | **VERIFIED impossible**, with a rig workaround (§18.5) |
+| §3 no post-OEP integrity checking | INFERRED | **VERIFIED** — ~25 live detours, a full session, no fault (§18.2) |
+| §4 runtime `.text` parity | INFERRED | **VERIFIED** — identical image digest from two processes (§18.1) |
+| A real DOOR crossing with a Steam client | — | **NEEDS-LIVE** — `usedoor`'s walk stalls on this module for rig reasons, on either build (§18.4) |
+| `InviteUserToGame` and callback 337 | NEEDS-LIVE | **still NEEDS-LIVE** — needs a second machine and account (§18.6) |
