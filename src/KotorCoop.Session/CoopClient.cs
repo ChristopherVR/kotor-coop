@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -138,7 +138,8 @@ public sealed partial class CoopClient : ICoopSession
 
         // Bind an ephemeral port: two clients on one machine must not fight over 27015.
         _channel = new UdpChannel(0);
-        _buffer = new SnapshotBuffer(settings.InterpolationDelayMs);
+        _buffer = new SnapshotBuffer(
+            settings.InterpolationDelayMs, 1000 / settings.TickRate, settings.DejitterEnabled);
         // The identity the host keys our peer slot on. A configured one survives the process,
         // so a relaunch reclaims the slot instead of joining as a stranger; 0 keeps the old
         // per-session behaviour. See PeerIdentity.

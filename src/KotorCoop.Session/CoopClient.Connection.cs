@@ -149,6 +149,14 @@ public sealed partial class CoopClient
             }
 
             _effectiveTickRate = hostTickRate;
+
+            // The buffer quantises inter-arrival gaps to the sender's send period, so it has
+            // to learn the same rate the tick timer just adopted — it was built in the
+            // constructor, before any host had announced one, against this install's own
+            // coop.ini. Getting this wrong does not break playback (the rule's drift bound
+            // re-pegs to raw arrivals), it just stops the regularisation helping. See
+            // SnapshotTimingRule.
+            _buffer.SendPeriodMs = 1000 / hostTickRate;
         }
     }
 

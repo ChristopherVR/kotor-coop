@@ -11,7 +11,10 @@ namespace KotorCoop.Session;
 /// be wrong, snap them back. Paying a constant 100 ms of latency instead means remote
 /// players are always shown at a position they actually occupied.
 /// </summary>
-public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.DefaultInterpolationDelayMs)
+public sealed class SnapshotBuffer(
+    int interpolationDelayMs = ProtocolConstants.DefaultInterpolationDelayMs,
+    int sendPeriodMs = 1000 / ProtocolConstants.DefaultTickRate,
+    bool dejitter = true)
 {
     private const int MaxSamplesPerPeer = 32;
 
@@ -28,12 +31,34 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
     {
         public string Name = string.Empty;
         public long LastUpdateMs;
+
+        /// <summary>What <see cref="SnapshotTimingRule"/> remembers for this peer — the arrival
+        /// and playback timestamps of the last sample actually laid down. Deliberately NOT
+        /// advanced by a suppressed duplicate: the whole point is that the next real sample's
+        /// gap is measured from the last real one, so the two periods a duplicate spanned are
+        /// counted as two.</summary>
+        public SnapshotTimingState Timing = SnapshotTimingState.Fresh;
+
         public readonly List<(long TimeMs, PlayerState State)> Samples = new(MaxSamplesPerPeer);
     }
 
     private readonly Dictionary<uint, PeerTrack> _peers = [];
     private readonly int _delayMs = interpolationDelayMs;
+    private readonly bool _dejitter = dejitter;
     private readonly Lock _gate = new();
+
+    /// <summary>
+    /// The nominal interval between a peer's sends, in milliseconds — what
+    /// <see cref="SnapshotTimingRule.Assign"/> quantises inter-arrival gaps to.
+    ///
+    /// Settable rather than fixed at construction because a CLIENT does not know the rate it
+    /// will actually receive at until the host's <c>Welcome</c> announces one, and the buffer
+    /// is built before the handshake (see <c>CoopClient</c>'s constructor and
+    /// <c>HandleWelcome</c>'s tick-rate adoption). Written from the receive thread and read
+    /// under <see cref="_gate"/> on the same thread as every other buffer mutation, so a plain
+    /// property is enough — a stale read costs one sample filed against the old period.
+    /// </summary>
+    public int SendPeriodMs { get; set; } = sendPeriodMs;
 
     public int PeerCount
     {
@@ -62,6 +87,12 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
             }
 
             track.Name = name;
+
+            // ⚠ ALWAYS, and before any suppression below. This is the liveness stamp
+            // PruneStale judges a peer against; a player standing perfectly still publishes
+            // byte-identical states that ShouldAccept correctly declines to sample, and
+            // letting that path skip this would time them out of the session for holding
+            // still. See SnapshotTimingRule.ShouldAccept's own warning.
             track.LastUpdateMs = receivedAtMs;
 
             // Out-of-order datagrams are normal on UDP; drop anything older than the newest.
@@ -70,15 +101,47 @@ public sealed class SnapshotBuffer(int interpolationDelayMs = ProtocolConstants.
                 return;
             }
 
+            // A state that repeats the newest one exactly is not an observation, it is the
+            // sender's send timer having fired twice between two of its pump ticks (or a peer
+            // standing still). Filing it would assert "demonstrably motionless for a period",
+            // which is what turns the FOLLOWING sample into a double-speed dash. Suppressed
+            // here rather than in Interpolate because the damage is done at record time — and
+            // track.Timing is deliberately left alone so the next real sample's gap spans both
+            // periods. See SnapshotTimingRule.
+            if (_dejitter && track.Samples.Count > 0
+                && !SnapshotTimingRule.ShouldAccept(track.Samples[^1].State, state))
+            {
+                return;
+            }
+
             // The first sample after a link came back is a fresh start, not the far end of a
             // walk: throw the pre-gap history away so the peer appears where they are instead
             // of sliding there from wherever they were standing when the link died.
-            if (track.Samples.Count > 0 && receivedAtMs - track.Samples[^1].TimeMs > ContinuityGapMs)
+            //
+            // ⚠ Judged on ARRIVAL times, not the assigned playback times below: the question is
+            // "how long has this peer been silent", which is a wall-clock fact about the link,
+            // not something the regularised timeline gets a say in.
+            if (track.Samples.Count > 0 && track.Timing.HasPrevious
+                && receivedAtMs - track.Timing.LastArrivalMs > ContinuityGapMs)
             {
                 track.Samples.Clear();
+                track.Timing = SnapshotTimingState.Fresh;
             }
 
-            track.Samples.Add((receivedAtMs, state));
+            long sampleTimeMs = _dejitter
+                ? SnapshotTimingRule.Assign(track.Timing, receivedAtMs, SendPeriodMs)
+                : receivedAtMs;
+
+            // Monotonicity is the buffer's own invariant (Interpolate walks the list assuming
+            // ascending times), and the rule's resync branches hand back a raw arrival that
+            // could in principle land on or before the last assigned stamp.
+            if (track.Samples.Count > 0 && sampleTimeMs <= track.Samples[^1].TimeMs)
+            {
+                sampleTimeMs = track.Samples[^1].TimeMs + 1;
+            }
+
+            track.Timing = track.Timing.Accept(receivedAtMs, sampleTimeMs);
+            track.Samples.Add((sampleTimeMs, state));
 
             if (track.Samples.Count > MaxSamplesPerPeer)
             {

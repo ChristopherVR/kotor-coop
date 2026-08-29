@@ -26,6 +26,21 @@ public sealed record SessionSettings
 
     public int InterpolationDelayMs { get; init; } = ProtocolConstants.DefaultInterpolationDelayMs;
 
+    /// <summary>
+    /// Whether received avatar snapshots are filed on a regularised playback timeline instead
+    /// of raw arrival times — coop.ini <c>dejitter</c>, ON by default. See
+    /// <see cref="KotorCoop.Protocol.SnapshotTimingRule"/> for the mechanism and for why
+    /// arrival stamps manufacture a stall-then-dash pattern out of a perfectly healthy
+    /// localhost link. OFF restores the previous behaviour exactly: every arrival becomes a
+    /// sample, stamped when it landed.
+    ///
+    /// Purely local playback, like <see cref="InterpolationDelayMs"/> itself: nothing about it
+    /// crosses the wire, two peers may legitimately run it differently, and it is deliberately
+    /// NOT part of the <see cref="Behaviour"/> negotiation for the same reason
+    /// <c>interp_ms</c> is not.
+    /// </summary>
+    public bool DejitterEnabled { get; init; } = true;
+
     public int PeerTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
 
     /// <summary>

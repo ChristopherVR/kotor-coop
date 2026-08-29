@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using KotorCoop.Memory;
 using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
@@ -113,6 +113,7 @@ internal static class AgentComposition
             SyncParty = options.SyncParty,
             SyncProgression = options.SyncProgression,
             SyncPause = config?.PauseSync ?? true,
+            PerfTrace = config?.PerfTrace ?? false,
             HidePeersInMinigame = config?.HidePeersInMinigame ?? true,
             LockPeersDuringMinigame = config?.LockPeersDuringMinigame ?? true,
             MinigameLockTimeoutMs = (config?.MinigameLockTimeoutSeconds ?? 600) * 1000,
@@ -216,6 +217,7 @@ internal static class AgentComposition
             Port = effectivePort,
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
+            DejitterEnabled = config?.Dejitter ?? true,
             Digest = digest,
             Behaviour = behaviourDigest,
             RequireIdenticalSave = options.RequireIdenticalSave,

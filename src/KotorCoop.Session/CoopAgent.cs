@@ -1,4 +1,4 @@
-using KotorCoop.Memory;
+﻿using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session.Events;
 using KotorCoop.Session.Pumps;
@@ -33,6 +33,20 @@ public sealed partial class CoopAgent
 
     private long _lastHeavyPumpMs;
     private long _lastCombatPumpMs;
+
+    /// <summary>coop.ini <c>perf_trace</c>'s accumulator, or null when the trace is off — which
+    /// is what keeps every call site below a single null check rather than a flag test plus a
+    /// clock read. See <see cref="PerfTrace"/>.</summary>
+    private readonly PerfTrace? _perfTrace;
+
+    /// <summary>Wall clock for the perf trace's phase timings. One instance reused for every
+    /// phase of every tick (start/stop, never allocated per measurement) because the trace must
+    /// not itself be a per-tick allocation on the path it is measuring.</summary>
+    private readonly System.Diagnostics.Stopwatch _perfClock = new();
+
+    /// <summary>What this tick's real-time half cost, handed from <see cref="PumpOnce"/> to the
+    /// loop in <see cref="RunAsync"/> that owns the total. Meaningless while the trace is off.</summary>
+    private double _perfPositionPathMs;
 
     /// <summary>The session's own <see cref="ICoopSession.HostLost"/> as of the last
     /// <see cref="PumpOnce"/> tick, for the edge-detect in that method — the falling/rising
@@ -103,6 +117,16 @@ public sealed partial class CoopAgent
         _settings = settings;
 
         _log = msg => Log?.Invoke(msg);
+
+        if (settings.PerfTrace)
+        {
+            _perfTrace = new PerfTrace();
+
+            // Counting is process-wide and off until something asks for it — see
+            // MemoryTelemetry. Switched on here rather than in the composition root so the
+            // ONLY way it turns on is an agent that will actually drain and report it.
+            MemoryTelemetry.Enabled = true;
+        }
 
         _barkPump = new BarkPump(bridge, session);
         _transitionPump = new TransitionPump(bridge, session, settings, _log);
@@ -254,6 +278,19 @@ public sealed partial class CoopAgent
 
                 double ms = sw.Elapsed.TotalMilliseconds;
 
+                if (_perfTrace is not null)
+                {
+                    _perfTrace.NoteTick(ms, _perfPositionPathMs);
+                    _perfPositionPathMs = 0;
+
+                    if (_perfTrace.TryDrain(
+                            Environment.TickCount64, PerfTraceFlushIntervalMs, _session.GetStats(),
+                            out PerfTraceSnapshot perf))
+                    {
+                        Log?.Invoke(PerfTrace.Format(perf));
+                    }
+                }
+
                 ticks++;
                 sumMs += ms;
                 if (ms > maxMs) maxMs = ms;
@@ -283,8 +320,18 @@ public sealed partial class CoopAgent
         await sessionTask.ConfigureAwait(false);
     }
 
+    /// <summary>How often <c>perf_trace</c> writes a line. One second: short enough that a
+    /// two-minute walk-around is a hundred-and-twenty-row table rather than a single averaged
+    /// number, long enough that the line itself never becomes the load.</summary>
+    private const int PerfTraceFlushIntervalMs = 1000;
+
     public void PumpOnce()
     {
+        if (_perfTrace is not null)
+        {
+            _perfClock.Restart();
+        }
+
         if (_bridge.TryReadLocalState(out PlayerState local))
         {
             LastReadSucceeded = true;
@@ -479,6 +526,23 @@ public sealed partial class CoopAgent
         visible = MaskAvatarFields(visible, caps);
 
         LastWriteSucceeded = _bridge.TryWriteRemotePeers(visible);
+
+        if (_perfTrace is not null)
+        {
+            // ⚠ Measured to HERE, not to the end of the method. Everything above is the
+            // real-time half — read the local player, publish it, sample the peers, write the
+            // phantoms — and its cadence is what a player watching the other character
+            // actually sees. Everything below is world state whose freshness nobody can see
+            // frame to frame, so folding the two into one number would hide the only part of
+            // the tick that has to stay cheap.
+            _perfPositionPathMs = _perfClock.Elapsed.TotalMilliseconds;
+
+            long perfNowMs = SessionClock.NowMs;
+            foreach (RemotePeer peer in visible)
+            {
+                _perfTrace.NotePhantomWrite(peer.PeerId, peer.State.Position, perfNowMs);
+            }
+        }
 
         // Track how long we have been in this module, for the travel settle window below,
         // and raise ModuleChanged/WorldAdopted for whoever is listening. Only real names
@@ -692,6 +756,7 @@ public sealed partial class CoopAgent
         }
 
         _lastHeavyPumpMs = nowMs;
+        double perfHeavyStartMs = _perfTrace is null ? 0 : _perfClock.Elapsed.TotalMilliseconds;
 
         // Report our in-world content fingerprint (the session rate-limits the wire
         // anyway). The save identity and the current module's GIT digest ride along with
@@ -758,6 +823,11 @@ public sealed partial class CoopAgent
                 _storePumpV2.Pump(caps);
                 break;
         }
+
+        // Last statement in the method on purpose: every heavy sub-pass above is inside the
+        // window, and the only paths that skip it are the early returns ABOVE the heavy gate,
+        // which by definition ran no heavy pass to time.
+        _perfTrace?.NoteHeavyPass(_perfClock.Elapsed.TotalMilliseconds - perfHeavyStartMs);
     }
 
     /// <summary>
