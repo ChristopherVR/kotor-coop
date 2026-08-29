@@ -160,6 +160,10 @@ internal sealed unsafe partial class PhantomController
                     _spawnCooldownFrames = 30;
                 }
 
+                // The PEER is gone, not just its body: forget the identity kept across module
+                // changes, so the next joiner in this slot is never dressed as the last one.
+                _appearanceCache[i] = 0;
+
                 continue;
             }
 
@@ -181,7 +185,7 @@ internal sealed unsafe partial class PhantomController
 
             nint phantom = _phantoms[i];
 
-            ApplyAppearance(phantom, remote.Appearance);
+            ApplyAppearance(i, phantom, remote.Appearance);
             ApplyEquipment(i);
             ApplyName(i, phantom);
 
@@ -609,6 +613,13 @@ internal sealed unsafe partial class PhantomController
     /// <summary>appearance.2da row, u16 inside CSWSCreatureAppearanceInfo at +0xA50.</summary>
     private const int CreAppearanceType = 0xA60;
 
+    /// <summary>CSWSObject + this = portrait_id, the portraits.2da row (u16) — the same field
+    /// <c>KotorGameBridge.ReadPartyPortraits</c> reads (⚠ NOT +0x20, which is dead for a
+    /// creature in the world). Logged, never written: a phantom is not a party member, so
+    /// nothing on this instance's HUD draws its portrait, and the blueprint's own 0 (an empty
+    /// row in portraits.2da) is the correct value for a body that has no portrait.</summary>
+    private const int ObjPortraitId = 0x30;
+
     /// <summary>
     /// Makes the phantom wear the remote player's appearance.2da row. Writing the row field is
     /// not enough on its own: the engine rebuilds a creature's model-type and per-body-part model
@@ -624,20 +635,63 @@ internal sealed unsafe partial class PhantomController
     /// codebase before this round. <see cref="Odyssey.RebuildClientAppearance"/> is the
     /// corresponding client-side call (docs/research/phantom-locomotion.md §11's X2
     /// experiment); called here, once, the same way the server-side rebuild already is.
+    ///
+    /// ⚠ WRONG-LOOK-AFTER-A-WARP (docs/research/name-plates.md, "The peer's LOOK has the same
+    /// two halves as its name"). The old shape of this method decided "already applied" from
+    /// the SERVER field alone, and applied nothing when it matched. That is the wrong question
+    /// on the one path that matters: at SPAWN time the client twin does not exist yet, so the
+    /// server field is written, <see cref="Odyssey.RebuildClientAppearance"/> finds no twin and
+    /// silently does nothing, and the twin the engine builds a frame later is built from the
+    /// BLUEPRINT's row. From then on the server field reads correct forever, so nothing ever
+    /// re-applied it and the peer rendered as the blueprint (or, before the appearance channel
+    /// existed at all, as whatever the fallback template was) for the rest of the module.
+    ///
+    /// It only bites after a RE-spawn — a module change — because that is when the peer's row is
+    /// already known at spawn time; on a first connect the row usually arrives a tick later, so
+    /// the drive loop's own call did the work with a twin present and the bug hid.
+    ///
+    /// So: the row is chosen by <see cref="PeerIdentityRule"/> (peer packet &gt; that peer's
+    /// last published row &gt; leave it alone — never anything read off a local body), and the
+    /// client half is re-asserted until <see cref="_twinDressed"/> latches, per body.
     /// </summary>
-    private static void ApplyAppearance(nint phantom, uint appearance)
+    private void ApplyAppearance(int slot, nint phantom, uint published)
     {
-        if (appearance is 0 or > 0xFFFF)
+        if (PeerIdentityRule.IsUsableAppearance(published))
+        {
+            _appearanceCache[slot] = published;
+        }
+
+        uint chosen = PeerIdentityRule.ChooseAppearance(published, _appearanceCache[slot]);
+
+        ushort* field = (ushort*)(phantom + CreAppearanceType);
+        ushort onBody = *field;
+        if (!PeerIdentityRule.ShouldApply(chosen, onBody, _twinDressed[slot]))
         {
             return;
         }
 
-        ushort* field = (ushort*)(phantom + CreAppearanceType);
-        if (*field != (ushort)appearance)
+        if (onBody != (ushort)chosen)
         {
-            *field = (ushort)appearance;
+            *field = (ushort)chosen;
             Odyssey.RebuildAppearance(phantom);
-            Odyssey.RebuildClientAppearance(phantom);
+        }
+
+        // Cheap while the twin is missing (two reads and a return), fires its engine call
+        // exactly once per body once it exists — the latch is the per-object discipline this
+        // project's own per-frame-write rule asks for, not a cadence.
+        if (!Odyssey.RebuildClientAppearance(phantom))
+        {
+            return;
+        }
+
+        _twinDressed[slot] = true;
+
+        if (_identityLogged < MaxIdentityLines)
+        {
+            _identityLogged++;
+            PluginHost.Log(
+                $"identity: phantom slot {slot} (0x{_phantomIds[slot]:X}) now renders appearance "
+                + $"{chosen} (server row was {onBody}, peer published {published})");
         }
     }
 

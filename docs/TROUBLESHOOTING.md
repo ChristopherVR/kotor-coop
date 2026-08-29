@@ -272,6 +272,33 @@ recent (~200 MB each — a 32-bit game's full dump). Turn it back off with
 dev-only `tools/crashlog.ps1 -EnableDumps` does the identical registry write for a hardcoded
 dev dump folder — the two are equivalent, just aimed at different audiences.
 
+## My partner looks like the wrong character (a stranger, or a companion) after a warp
+
+The body a peer is drawn with has two halves — the server object the mod writes, and the
+CLIENT TWIN the engine actually renders — and only the second one is what you see. Before
+2026-08-29 the mod decided "this phantom already wears the right look" from the server half
+alone, so a phantom re-spawned after a module change (a `warp`, a door, any transition) could
+be left rendering the `k_coop_phantom` blueprint for the rest of the module: the server field
+was correct, the twin did not exist yet at the moment it was written, and nothing re-applied
+it. It did not show at first connect, only after a transition — that ordering is the whole
+tell. Fixed by re-asserting the look on the twin until it lands, per body; see
+[research/name-plates.md](research/name-plates.md).
+
+If it still happens on a current build, the peer is probably PUBLISHING the wrong look rather
+than the mod applying it wrongly — i.e. that player's own agent has latched onto a body that is
+not their character. Check that side's agent log for `player: adopted the engine's own creature
+0x...` and `player 0x...: is-PC flag is ...` lines around the transition, and the receiving
+side's plugin log for the spawn line, which carries all three numbers that can disagree:
+
+```
+spawned phantom in slot 0: id 0x12D at 0x... (x, y, z) appearance 378 (peer published 378, renders 114), portrait 0
+```
+
+`appearance` is the server row, `renders` is the twin's row (what you see), and `peer
+published` is what came over the wire. Those three agreeing is the fix working; `renders`
+lagging is the twin gap above; `peer published` being someone else's row is the peer's own
+agent resolving the wrong player, which is a different bug and worth reporting with that line.
+
 ## Where to look next
 
 `docs/live-verification.md` has the two-instance checklist this project's own "live-verified"

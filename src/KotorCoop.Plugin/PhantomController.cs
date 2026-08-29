@@ -69,6 +69,25 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
     /// does not exist yet then, so the name is re-asserted once the twin appears.</summary>
     private readonly bool[] _twinNamed = new bool[SharedBlock.SlotCapacity];
 
+    /// <summary>The same latch, one field over, for the peer's LOOK: true once the peer's
+    /// appearance row has reached this body's CLIENT TWIN (<c>Odyssey.RebuildClientAppearance</c>
+    /// returning true), which is the half that renders. Per BODY — cleared with the slot — so a
+    /// re-spawned phantom always re-dresses its new twin. See <see cref="PeerIdentityRule"/>.</summary>
+    private readonly bool[] _twinDressed = new bool[SharedBlock.SlotCapacity];
+
+    /// <summary>The last usable appearance row each PEER published, kept across module changes
+    /// (unlike everything else here, which is per body) and dropped only when the peer itself
+    /// leaves the slot. A peer publishes 0 for about a second either side of a transition while
+    /// its own agent re-resolves its player object — exactly the window a phantom is re-spawned
+    /// in — and dressing a fresh body from that zero left it wearing the blueprint.</summary>
+    private readonly uint[] _appearanceCache = new uint[SharedBlock.SlotCapacity];
+
+    /// <summary>Bounded logging for the identity lines: enough to see a session's spawns and
+    /// re-dresses, never one per frame.</summary>
+    private int _identityLogged;
+
+    private const int MaxIdentityLines = 40;
+
     private int _phantomCount;
 
     private bool _spawnDisabled;
@@ -92,6 +111,11 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         _lastAnim[slot] = 0;
         _lastOneShotSerial[slot] = 0;
         _twinNamed[slot] = false;
+
+        // Per BODY, deliberately: the next body this slot gets has a brand-new client twin,
+        // built from the blueprint, that has to be dressed again. _appearanceCache is NOT
+        // cleared here — that is the PEER's identity, and it outlives any one body.
+        _twinDressed[slot] = false;
         _destroyAttempts[slot] = 0;
 
         for (int j = 0; j < SharedBlock.EquipCount; j++)
