@@ -20,16 +20,32 @@ public static class InstallDigest
     /// Builds the digest from a game directory and its executable. Any field whose source
     /// is missing or unreadable is simply left unknown — the whole thing degrades to
     /// <see cref="ContentDigest.Unknown"/> in the worst case, which compares as "unchecked".
+    ///
+    /// <paramref name="liveImageDigest"/> is the plugin's hash of the LOADED executable image
+    /// (<see cref="KotorGameBridge.TryReadExeImageDigest"/>), and it — not the file — is what
+    /// <see cref="ContentDigest.ExeDigest"/> carries. See the field's own note below for why
+    /// the file hash cannot be the answer and cannot be the fallback either.
     /// </summary>
-    public static ContentDigest Compute(string gameDirectory, string executablePath)
+    public static ContentDigest Compute(
+        string gameDirectory, string executablePath, uint? liveImageDigest = null)
     {
         ContentDigest.Field known = ContentDigest.Field.None;
         uint exe = 0, overrideCensus = 0, twoDa = 0, appearance = 0, tlk = 0, journal = 0, modules = 0;
         ushort overrideCount = 0, appearanceRows = 0;
         uint tlkEntryCount = 0;
 
-        if (TryHashExecutable(executablePath, out exe))
+        // ⚠ THE EXE FIELD IS THE RUNNING IMAGE, NOT THE FILE — and there is deliberately no
+        // fallback to the file hash. Steam ships the same link as the DRM-free build wrapped
+        // in SteamStub v3, which encrypts .text on disk and decrypts it in place before the
+        // game's entry point runs: the two FILES hash differently, the two running images are
+        // byte-identical, and ContentCompatibility refuses on RefusalReason.Executable over
+        // nothing (docs/research/steam-support.md §8). Falling back to the file hash when the
+        // image one is missing would be WORSE than leaving the field unknown, because then a
+        // peer carrying an image hash and a peer carrying a file hash would compare two
+        // different KINDS of number and refuse every time. Unknown warns; it never lies.
+        if (liveImageDigest is uint image)
         {
+            exe = image;
             known |= ContentDigest.Field.Exe;
         }
 
@@ -93,11 +109,13 @@ public static class InstallDigest
     }
 
     /// <summary>
-    /// Size and the two ends of the executable — enough to catch a different build, an
-    /// exe-patching mod (4 GB LAA, widescreen) or a different localisation, cheaply. A full
-    /// hash of a 5 MB file every start is unnecessary when only "same or not" matters.
+    /// Size and the two ends of the executable file. NO LONGER PART OF THE HANDSHAKE — it
+    /// says "different build" about a Steam install and a DRM-free one whose running code is
+    /// identical (see <see cref="Compute"/>). Kept because it is still a useful LABEL: the
+    /// agent prints it beside the image digest, and it is the number that tells a Steam
+    /// install from an unwrapped one at a glance in a log.
     /// </summary>
-    private static bool TryHashExecutable(string path, out uint digest)
+    public static bool TryHashExecutableFile(string path, out uint digest)
     {
         digest = 0;
 

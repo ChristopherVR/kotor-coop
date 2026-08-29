@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Plugin;
 
@@ -311,7 +312,55 @@ internal static unsafe partial class PluginHost
         WriteModuleName("kotor");
 
         Log($"shared block at 0x{memory:X} ({SharedBlock.TotalSize} bytes)");
+
+        // ⚠ HERE, and nowhere later: InstallHooks() has not run, so .text is still the
+        // pristine image the loader (or SteamStub) produced. See SharedBlock.ExeImage.cs.
+        PublishExeImageDigest();
         return true;
+    }
+
+    /// <summary>
+    /// Hashes the loaded executable image and publishes it for the agent's compatibility
+    /// handshake. This is what lets a Steam player and a DRM-free player share a session:
+    /// their FILES differ (SteamStub encrypts .text at rest), their running images do not.
+    /// docs/research/steam-support.md §8.
+    ///
+    /// Best effort. A failure leaves the "known" flag at zero, which downgrades the
+    /// executable check to a warning — never to a false match, and never to a crash: this
+    /// runs inside the game's startup and a bad read here must not be what takes it down.
+    /// </summary>
+    private static void PublishExeImageDigest()
+    {
+        try
+        {
+            nint imageBase = NativeMethods.GetModuleHandle(null);
+            if (imageBase == 0)
+            {
+                Log("exe image digest: GetModuleHandle(null) returned 0; executable identity unchecked");
+                return;
+            }
+
+            ReadOnlySpan<byte> headers = new((void*)imageBase, ExeImageDigestRule.HeaderWindow);
+            if (!ExeImageDigestRule.TryLocateText(
+                    headers, out uint textRva, out uint textSize, out uint headerHash, out string diagnostic))
+            {
+                Log($"exe image digest: {diagnostic}; executable identity unchecked");
+                return;
+            }
+
+            ReadOnlySpan<byte> text = new((void*)(imageBase + (nint)textRva), (int)textSize);
+            uint digest = ExeImageDigestRule.HashText(headerHash, text);
+
+            *(uint*)((byte*)_block + SharedBlock.OffsetExeImageDigest) = digest;
+            *(uint*)((byte*)_block + SharedBlock.OffsetExeImageDigestKnown) = 1;
+
+            Log($"exe image digest {digest:X8} over .text 0x{imageBase + (nint)textRva:X}"
+                + $"..0x{imageBase + (nint)textRva + (nint)textSize:X} ({textSize} bytes), taken before any hook");
+        }
+        catch (Exception ex)
+        {
+            Log($"exe image digest failed ({ex.Message}); executable identity unchecked");
+        }
     }
 
     private static void WriteModuleName(string value)

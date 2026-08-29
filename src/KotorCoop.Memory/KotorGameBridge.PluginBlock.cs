@@ -715,6 +715,33 @@ public sealed partial class KotorGameBridge
         _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideMask, overrideMask);
     }
 
+    // Live executable-image digest (shared block region 0x4720..0x4728, no TotalSize growth
+    // — it rides the gap between the minigame lock at 0x4704..0x4720 and the chargen
+    // handshake at 0x4780). Mirrors SharedBlock.OffsetExeImageDigest*. The plugin hashes the
+    // DECRYPTED, UNHOOKED image it is loaded into, which is the only fingerprint that says
+    // the same thing about a Steam install and a DRM-free one — the two files differ, the two
+    // running images do not. docs/research/steam-support.md §8.
+    private const int BlockExeImageDigest = 0x4720;
+    private const int BlockExeImageDigestKnown = 0x4724;
+
+    /// <summary>
+    /// The plugin's hash of the loaded executable image, or false if it has not published one
+    /// (no plugin, an older plugin, or a read that failed inside the game). False means the
+    /// executable check downgrades to a warning — never to a false match.
+    /// </summary>
+    public bool TryReadExeImageDigest(out uint digest)
+    {
+        digest = 0;
+
+        // Known is read FIRST and the digest second, the reverse of the plugin's write order,
+        // so a torn read can only ever produce "not known yet" — never a stale hash presented
+        // as current.
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockExeImageDigestKnown, out uint known)
+            && known != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockExeImageDigest, out digest);
+    }
+
     /// <summary>Diagnostics the plugin publishes back to us.</summary>
     public (uint Frames, uint Phantoms, int LastStatus) ReadPluginState()
     {

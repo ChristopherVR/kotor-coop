@@ -52,7 +52,7 @@ internal static class AgentComposition
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
-        ContentDigest digest = ComputeInstallDigest(memory.ProcessId);
+        ContentDigest digest = ComputeInstallDigest(memory.ProcessId, bridge);
 
         // This install's stable identity, so a client that relaunches (or issues the console's
         // `reconnect`, which builds a fresh session object) reclaims its existing peer slot
@@ -477,8 +477,13 @@ internal static class AgentComposition
     /// the game is GOG, Steam, or a second co-op copy. Returns <see
     /// cref="ContentDigest.Unknown"/> if anything is unreadable — the session then treats
     /// compatibility as unchecked rather than failing.
+    ///
+    /// The executable half comes from the PLUGIN, which hashes the decrypted, not-yet-hooked
+    /// image it is loaded into. That is what lets a Steam player and a DRM-free player share
+    /// a session: their swkotor.exe FILES differ (SteamStub encrypts .text at rest), the code
+    /// they are both about to hook does not. docs/research/steam-support.md §8.
     /// </summary>
-    private static ContentDigest ComputeInstallDigest(int processId)
+    private static ContentDigest ComputeInstallDigest(int processId, IGameBridge bridge)
     {
         try
         {
@@ -491,8 +496,28 @@ internal static class AgentComposition
                 return ContentDigest.Unknown;
             }
 
-            ContentDigest digest = InstallDigest.Compute(gameDir, exePath);
-            Console.WriteLine($"content digest: {DescribeDigest(digest)}");
+            uint? liveImage = bridge is KotorGameBridge kotor && kotor.TryReadExeImageDigest(out uint image)
+                ? image
+                : null;
+
+            ContentDigest digest = InstallDigest.Compute(gameDir, exePath, liveImage);
+
+            // The file hash is no longer compared, but it is still the number that tells a
+            // wrapped Steam install from an unwrapped one in a log, so it is printed as a
+            // label beside the one that IS compared.
+            string fileLabel = InstallDigest.TryHashExecutableFile(exePath, out uint fileHash)
+                ? $"exe file {fileHash:X8} ({SteamBuild.InspectFile(exePath, out _)})"
+                : "exe file unreadable";
+
+            Console.WriteLine($"content digest: {DescribeDigest(digest)} [{fileLabel}]");
+
+            if (liveImage is null)
+            {
+                Console.WriteLine(
+                    "the plugin published no executable-image digest; executable identity is UNCHECKED "
+                    + "for this session (an older plugin, or no plugin at all)");
+            }
+
             return digest;
         }
         catch (Exception ex)
@@ -512,7 +537,7 @@ internal static class AgentComposition
         List<string> parts = [];
         if (d.Knows(ContentDigest.Field.Exe))
         {
-            parts.Add($"exe {d.ExeDigest:X8}");
+            parts.Add($"exe image {d.ExeDigest:X8}");
         }
 
         if (d.Knows(ContentDigest.Field.Appearance))
