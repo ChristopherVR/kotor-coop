@@ -35,6 +35,8 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("ContainerLockResponseSerial", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ContainerLockResponseGranted", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ItemTemplateSpawnRing", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("MinigameLockActive", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
+        ("MinigameLockName", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
     ];
 
     [Fact]
