@@ -42,11 +42,14 @@ public static class PlayerIfo
     /// <summary>
     /// The stash the plugin restores from, written beside the pifo.
     ///
-    /// ⚠ NOT called "pifo", and that is the entire point. <c>LoadPCAutoSave</c> copies
-    /// <c>&lt;export&gt;\pifo</c> over <c>TEMP:pifo</c> BY NAME and truncates the destination
-    /// to zero when the staged save has no pifo to copy — which is every adopted world. A
-    /// copy under a different name survives that, and the plugin puts it back on the game's
-    /// own thread in the gap between the loader and the login.
+    /// ⚠ NOT called "pifo", and NOT inside <c>Temp\</c>, and both halves of that are the
+    /// point. <c>LoadPCAutoSave</c> copies <c>&lt;export&gt;\pifo</c> over <c>TEMP:pifo</c> BY
+    /// NAME and truncates the destination to zero when the staged save has no pifo to copy —
+    /// which is every adopted world — so the file must not be called "pifo"; and a MID-SESSION
+    /// adoption empties <c>Temp\</c> entirely on its way through (measured 2026-08-29, see
+    /// <see cref="TryWritePifo"/>), so the file must not live there either. It sits in the game
+    /// directory root, and the plugin copies it back over the pifo on the game's own thread in
+    /// the gap between the loader and the login.
     /// </summary>
     public const string CarriedCharacterFile = "kcoop_carried.ifo";
 
@@ -163,9 +166,20 @@ public static class PlayerIfo
             // LoadPCAutoSave truncating the pifo, and is what the plugin copies back over it
             // once the loader has finished with it. Writing only the pifo is what produced a
             // blank level-1 character in the first live adoption.
+            //
+            // ⚠ THE STASH LIVES IN THE GAME ROOT, NOT IN Temp\, AND THAT IS NOT COSMETIC.
+            // Measured live 2026-08-29 on a MID-SESSION adoption (join_mode = newcharacter,
+            // which is mid-session by construction): the stash was written next to the pifo at
+            // 13:49:10 and was GONE by 13:49:12.67, when the plugin looked for it immediately
+            // after LoadPCAutoSave returned - while pifo.ifo was still there at 0 bytes, i.e.
+            // the whole directory had been emptied and then the loader's source-less FileCopy
+            // recreated the one file it targets by name. The main-menu adoption never saw this
+            // because the wipe is on the mid-session teardown that path does not do
+            // (DestroyServer / CClientExoApp::UnloadModule, which run only when a server
+            // already exists). A stash inside a directory the engine empties is not a stash.
             string path = Path.Combine(temp, $"{PifoResRef}.ifo");
             File.WriteAllBytes(path, pifo);
-            File.WriteAllBytes(Path.Combine(temp, CarriedCharacterFile), pifo);
+            File.WriteAllBytes(Path.Combine(gameDirectory, CarriedCharacterFile), pifo);
 
             diagnostic = $"wrote {path} and the carried-character stash ({pifo.Length} bytes)";
             return true;

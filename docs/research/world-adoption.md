@@ -474,11 +474,13 @@ timing problem completely. The alternatives (finding the engine's flush point, o
 the pifo from the live `CSWCCreature` at `[mainCharGen+0x64]`) are both more work and one of
 them is explicitly rejected by character-login-chain.md §5.
 
-## Still open
+## Still open (as of that round — see "Still open after this round" at the foot for the current list)
 
-1. **The capture point** — see the live pass above. This is the blocking item.
-2. **`FireMidSessionPhase1` remains the weak link** — see decision 3. It had never run against
-   the game before this path used it.
+1. ~~**The capture point** — see the live pass above. This is the blocking item.~~ **CLOSED**:
+   there was nothing to capture; see "The capture point, answered" below.
+2. ~~**`FireMidSessionPhase1` remains the weak link** — see decision 3. It had never run against
+   the game before this path used it.~~ **CLOSED**: it has now run repeatedly, and it was indeed
+   where both of the round-2 bugs lived (the message-box gate and the `Temp\` wipe).
 2. **The party.** Unchanged from §8 item 1, and now sharper: a brand-new character adopting a
    mid-game host's world inherits the host's `PARTYTABLE.res`/`AVAILNPC0.utc`, i.e. companions a
    level-1 character has never met. The roster is host-authoritative anyway
@@ -625,3 +627,123 @@ finished chargen or the module has not come up.
 | `0x560CC0` | `CSWSPlayer::GetIsAllowedToSave` — literally `[player+0x3C] != 0`; checked at `0x524992`/`0x524A7A` in the save message handler |
 | `0x613434` | `CResGFF::WriteGFFFile("TEMP:temp", 0x7DF)` — the END of `SaveCharGenCreature`; `0x7DF` = "bic" |
 | `0x6A7230` | `CSWGuiDialog::HandleInputEvent` — **vtable slot 0x3C in BOTH dialogue panel vtables** (`0x7559E0`, `0x755800`); `ret 8`, arg1 = event code, arg2 = a nonzero payload |
+
+## LIVE PASS (2026-08-29, round 2): `join_mode = newcharacter` works END TO END
+
+Rig: host `C:\GOG Games\Star Wars KOTOR (GOG)` on demo save 1 in `END_M01AA` serving its world,
+client `D:\Games\swkotor-gog-p2` launched with `demo.ps1 -ClientNewCharacter` — no save loaded,
+sitting at the main menu. Character creation driven entirely through
+`blockpoke chargen newgame / quick 2 / accept`; no mouse input, no keyboard, nothing typed in
+the game.
+
+### The whole run, with timings
+
+| t | what | evidence |
+|---|---|---|
+| 13:55:25.890 | agent arms the capture | `newchar: armed (request 1) … chargen-save watch at 0x6DBE9B` |
+| 13:55:49.293 | `chargen accept` | drive status 0 |
+| 13:55:51.648 | the new game's first module is up | `newchar: the new game's first module is up with a player creature; saving in 4000 ms` |
+| 13:57:53.578 | the engine is asked to save | `newchar: asked the engine to save (request 1/5)` — **first request, no retry needed** |
+| 13:57:54.070 | the save is on disk | `saves\000000 - QUICKSAVE (566770 bytes of SAVEGAME.sav)` — **492 ms after the request** |
+| 13:57:55 | the host's world is adopted | `world adoption: adopted 'END_M01AA' (654,006 bytes, identity 0x155107BD), carrying the character from the character you just created` |
+| 13:57:56.623 | mid-session load fires | `mid-session load precondition [msgbox+0x64] = 0x06 … observed, not obeyed`, then the teardown |
+| 13:57:57.671 | the carried character is restored | `restored the carried character over TEMP:pifo (10110 bytes, from swkotor-gog-p2\kcoop_carried.ifo)` |
+| 13:57:59.580 | the world is up and on screen | no faction-repair line, i.e. a real PC, not the blank one |
+| 13:57:59 | the session reopens | `* reconnecting...`, and **no `W_SAVE` degraded warning** afterwards |
+
+**Wall clock from `chargen accept` to standing in the host's world: 2 minutes 10 seconds**, of
+which ~2 minutes is the settle before the save (see "the settle is not 4 seconds" below).
+
+### The character is the player's own — measured three ways
+
+`chargen quick 2` produced **Appearance_Type 171, Gender 0, PortraitId 24, MaxHitPoints 12**
+(read out of the client's own `000000 - QUICKSAVE` → `END_M01AA.sav` → `module.ifo` →
+`Mod_PlayerList`). The host's world carries **"Yasuko Kaar", Appearance_Type 114, Gender 1,
+PortraitId 15**.
+
+| | |
+|---|---|
+| client's live PC (`creature+0xA60`) | **171**, hp 12 — its own |
+| host's live PC | **114**, hp 12 |
+| host's phantom of the client | `appearanceRow=171` (from the host's own gait log) |
+
+So the joiner is neither the host nor a blank stranger, which is the failure §7 spent a round
+diagnosing. Position `(15.4, 20.1, -1.3)` — the module entry point, exactly as §7 item 3 says an
+adopted TEMP-path login lands, with the host at `(20.0, 22.2)`.
+
+### Convergence, on that same joined session
+
+`tools/verify.ps1`: **41 passed, 8 failed**, squarely inside this repository's documented
+baseline (~40-42 / 7-9) and with every failure in the long-known flaky set (the enemy-hit pair,
+the ground-item vanish pair, the death pair, the signature check, per-frame spam, the container
+walk). What matters here is what PASSED, on a client that had never played this game:
+
+* `enemy presence mirrored on the client` — presence 25, census 25
+* `census: MIRROR 25 id(s) 'END_M01AA': 25 resolve here, 0 do not` — **every one of the host's
+  object ids resolves on the joiner**, which is the whole point of adoption
+* `a door opened on the client opens on the host` — door `0x46`, host reads open-state 2
+* `the host still controls its companions` — `partystate`: both sides Trask `0x127` in slot 0,
+  client `soloMode 1` (host-authoritative, as designed)
+* party gold, PC experience, journal add/decrease/remove all reach the other instance
+* `no swkotor crash in the event log — clean`
+
+### Then: quit the client and rejoin with `join_mode = save`
+
+The client's `000000 - QUICKSAVE` is a real save of its own, so the next session needs nothing
+special. Relaunched with a plain `demo.ps1`; the client loaded its own new save (slot 1 is that
+quicksave), and at 14:14:32 the ordinary path took over by itself:
+
+```
+* co-op [W_SAVE] different save: enemies, doors, items and party are off - rejoin …
+* your world still differs from the host's - rejoining automatically
+* session-save: starting rejoin (SaveMismatch)
+* world adoption: carried the character from '000000 - QUICKSAVE' (117 fields, module 'END_M01AA')
+* world adoption: adopted 'END_M01AA' (654,006 bytes, identity 0x155107BD) …
+* rejoined 'END_M01AA'
+```
+
+Live PCs afterwards: client **171**, host **114**. One second, no intervention. §8's advice
+("save once and switch back to `save`") is now something the mod does for the player rather than
+something they have to be told.
+
+### Two things this round had to fix on the rig, both of them the mid-session path
+
+**1. The message-box precondition refused every mid-session load.** `FireMidSessionPhase1`
+faithfully replicated retail's `[gui+0x98]+0x64` bit-0 gate and returned failure 9 when it was
+clear, which it always is: measured directly, on BOTH instances at once, `[msgbox+0x64]` reads
+`0x06` — bit 0 clear — on a client mid-conversation AND on a host twenty minutes into ordinary
+play with nothing modal on screen. It marks the pause-menu ROUTE into `LoadGame`, not "safe to
+load", and our load never comes through that route. Four earlier live rounds
+(docs/research/session-save.md) had to poke the bit by hand to get a load at all. The bit is now
+LOGGED and not obeyed; a NULL sub-object is still a refusal. This also removes that documented
+rig trap from `loadgame`.
+
+**2. ⚠ A MID-SESSION ADOPTION EMPTIES `Temp\`, so the carried-character stash cannot live
+there.** First fixed run: `restored … TEMP:pifo` never fired,
+`adopting a world but kcoop_carried.ifo is missing; the login will produce a blank character`
+did, and the faction canary fired to match. On disk afterwards, `Temp\` held exactly one file —
+`pifo.ifo`, **0 bytes** — although the agent had written both it and an 11,918-byte stash two
+seconds earlier. So the directory was emptied and then `LoadPCAutoSave`'s source-less `FileCopy`
+recreated the one name it targets. The main-menu adoption never saw this because the wipe rides
+on the teardown only a mid-session load performs (`DestroyServer` / `CClientExoApp::UnloadModule`
+at `0x6CB310..0x6CB324`). `PlayerIfo.TryWritePifo` now writes the stash to the GAME DIRECTORY
+ROOT; `MenuLoadController.RestoreCarriedCharacter` prefers it there and keeps `Temp\` as a
+fallback so a newer plugin still works with an older agent. That is the difference between the
+13:49 run (blank character) and the 13:57 run (10,110 bytes restored, correct character).
+
+### Still open after this round
+
+1. **The settle is not 4 seconds in practice.** `WorldSettleMs` is 4000, but the save request
+   landed **122 seconds** after world-up (13:55:51.648 → 13:57:53.578). `MenuFrame` is the
+   game's own MainLoop and the Endar Spire's opening cinematic holds it (the same log records
+   `the main thread was gone for 12703 ms` across one stretch), so the poll simply does not run.
+   It is not a correctness problem — the flow completes and the player waits through an intro
+   they were going to watch anyway — but "a few seconds later" in the README is optimistic, and
+   a round that wants it faster should look at cutting the intro short rather than at the timer.
+2. **The party.** Unchanged: a level-1 character adopts the host's `PARTYTABLE.res`, so it comes
+   up with companions it has never met. `partystate` confirms the roster mirrors correctly and
+   `the host still controls its companions` passes, so this is cosmetic as predicted — but it is
+   still a first-time joiner standing next to a stranger the game thinks they recruited.
+3. **Arrival position.** The joiner lands at `ModEntryArea`, ~5 units from the host in
+   `END_M01AA`. Fine here; in a large module it would be a walk. No snap-to-host exists and none
+   was added this round.

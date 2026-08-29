@@ -808,3 +808,50 @@ verb: `skipkey`, no arguments, blockpoke-only, documented in docs/CONSOLE.md.
 ⚠ It is deliberately NOT wired into `FuncInterpHook`'s verb list, matching
 `skipline`/`selectreply`: dev-only live-test primitives stay reachable only through
 `tools/blockpoke.ps1`, never by a player typing at the in-game console.
+
+## LIVE-VERIFIED (2026-08-29, rig): the spectator's skip is swallowed, the owner's is not
+
+Two GOG instances, host `35220` on demo save 1, client `27404` — a client that had joined
+through `join_mode = newcharacter` and then rejoined off its own new save. The conversation was
+staged the way `verify.ps1` stages its own: the HOST opened one with `end_trask` through the
+test-drive channel (block `0x1D70` tag + `0x1D90` serial), and the client joined it as a
+spectator by itself.
+
+State when the keys went in — host owns, client follows:
+
+```
+host  : localPartner='end_trask'  remoteActive=0
+client: localPartner=''           remoteActive=1  remotePartner='end_trask'
+```
+
+| who | result |
+|---|---|
+| **CLIENT (spectator)** `skipkey` | `dialogue: skipkey dispatched at node -1; swallowed 0 -> 1 (SWALLOWED - spectator)` |
+| … and what moved | **nothing, on either instance**: host node index 0 → 0, client's followed index 0 → 0, no `dialogue-node-pub` on either side |
+| **HOST (owner)** `skipkey`, same conversation | `skipkey about to dispatch - owner 0x127 node 29/74 … isDialogDelay 1` then `dispatched at node 29; swallowed 0 -> 0 (passed through - owner)` |
+| … repeated on a freshly opened line | `node 19/74 … isDialogDelay 1`, `swallowed 0 -> 0 (passed through - owner)` |
+
+That is the oracle this document asked for, both halves: the gag's counter **increments on the
+spectator and stays flat on the owner**, and the spectator's press advanced nothing anywhere.
+The owner's presses reached the engine's own dispatch with a line genuinely playing
+(`isDialogDelay 1` — the guard `skipline`'s own probe reads).
+
+⚠ **What this pass did NOT capture: the owner's skip stepping the node index.** Both owner
+presses landed on nodes (29/74 and 19/74) where the following `dialogue-node-pub` never moved
+within several seconds. That is consistent with retail's own behaviour rather than with the gag
+— `skipline`'s table entry in console-cheats.md already records skip as "a correctly inert
+no-op on a reply-list screen", and `CSWGuiDialog::HandleInputEvent`'s switch sends the event to
+`SelectReply` instead of the skip case whenever `[panel+0x1DF8]` bit 0 is clear, which is
+exactly a reply screen. Note that this ALSO explains the owner's flat counter honestly: on a
+reply screen the event never reaches `0x6A7278` at all, so the hook could not have swallowed it
+even if it wanted to. The earlier `skipline` live pass is what has the owner-side node stepping
+(3–32 ms after the call); a future round wanting a single run that shows both should stage a
+narration stretch rather than `end_trask`'s opening node.
+
+⚠ **`startdialog` on the CLIENT could not open a conversation with `end_trask` at all** this
+round (three attempts, `ActionStartConversation queued` each time, no `StartDialog` ever
+reached), which is why the roles are host-owner / client-spectator rather than the other way
+round. The assertion is symmetric, so this does not weaken it, but it is worth knowing before
+scripting the mirror-image test: the client's Trask is a solo-mode companion driven by the host
+(`partystate`: client `soloMode 1`, companion `0x127`), and a companion the local engine is not
+driving is not something the local player can start a conversation with.

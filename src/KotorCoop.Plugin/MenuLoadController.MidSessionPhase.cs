@@ -39,11 +39,13 @@ internal sealed unsafe partial class MenuLoadController
     /// always non-null mid-session, since the session's own world-up already ran it.
     /// Retail's bFromMainMenu==0 branch of LoadGame reads THIS object's own +0x64 bit 0
     /// before doing anything else and returns without loading at all if it is clear.
-    /// Replicated defensively rather than skipped, so a genuine mid-session load never
-    /// diverges from retail's own precondition — its exact semantics were not independently
-    /// live-confirmed (no rig access this pass), only the read/branch shape itself, which
-    /// is why FireMidSessionPhase1 treats a clear bit as a REFUSAL (failure 9), not a crash
-    /// risk to route around.</summary>
+    ///
+    /// ⚠ We LOG that bit and proceed; only a NULL sub-object is a refusal. Measured live
+    /// 2026-08-29 on both rig instances simultaneously: `[msgbox+0x64]` = 0x06, bit 0 CLEAR,
+    /// on a healthy host twenty minutes into normal play as well as on the client. It marks
+    /// the pause-menu ROUTE into LoadGame, not "safe to load" — see FireMidSessionPhase1's
+    /// own comment for the full argument and for the four live loads that had to poke it by
+    /// hand before this changed.</summary>
     private const int InGameGuiMessageBox = 0x98;
 
     private const int MessageBoxStateBits = 0x64;
@@ -63,8 +65,9 @@ internal sealed unsafe partial class MenuLoadController
     ///      main-menu object, because there is no main menu to read <c>[menu+0x18]</c> from
     ///      mid-session.
     ///   2. The message-box precondition retail's <c>LoadGame</c> checks FIRST
-    ///      (<see cref="InGameGuiMessageBox"/>'s own +0x64 bit 0) is replicated rather than
-    ///      skipped.
+    ///      (<see cref="InGameGuiMessageBox"/>'s own +0x64 bit 0) is READ AND LOGGED rather
+    ///      than obeyed — see the comment at the check itself. A null sub-object is still a
+    ///      refusal.
     ///   3. <see cref="DestroyServer"/> + <see cref="ClientUnloadModule"/> run immediately
     ///      before <see cref="CreateServer"/>, exactly where retail's own disassembly places
     ///      them (0x006CB310..0x006CB331) — this is the actual teardown that makes
@@ -83,9 +86,9 @@ internal sealed unsafe partial class MenuLoadController
     /// <c>bFromMainMenu</c> bit only gates the four differences above, not the autosave
     /// branch itself.
     ///
-    /// ⚠ STATIC ANALYSIS ONLY. This has not run against the game — see
-    /// docs/research/session-save.md's dated entry for the exact live-test steps a follow-up
-    /// round should run before trusting it.
+    /// Live-verified: the DestroyServer/UnloadModule/CreateServer sequence has run cleanly on
+    /// the rig several times (docs/research/session-save.md's 2026-08-23 and 2026-08-24
+    /// passes), each of those after poking the bit above by hand.
     /// </summary>
     private int FireMidSessionPhase1()
     {
@@ -102,15 +105,42 @@ internal sealed unsafe partial class MenuLoadController
             return 8;
         }
 
-        // Retail's own FIRST check (0x006CB109..0x006CB120): abort rather than load over a
-        // state this bit says is not ready. See InGameGuiMessageBox's own remark — the bit's
-        // exact semantics were not independently live-confirmed, only the read/branch shape.
+        // Retail's own FIRST check (0x006CB109..0x006CB120). A NULL sub-object is still a real
+        // refusal: it means CGuiInGame::Initialize has not run, i.e. there is no in-game GUI to
+        // load over at all.
         nint messageBox = *(nint*)(gui + InGameGuiMessageBox);
-        if (messageBox == 0 || (*(byte*)(messageBox + MessageBoxStateBits) & 1) == 0)
+        if (messageBox == 0)
         {
-            PluginHost.Log("menu: mid-session load refused - the message-box precondition was not met");
+            PluginHost.Log("menu: mid-session load refused - there is no in-game GUI here yet");
             return 9;
         }
+
+        // ⚠ BIT 0 IS OBSERVED, NOT OBEYED — and that changed on 2026-08-29 on live evidence.
+        //
+        // Until then this returned failure 9 whenever the bit was clear, "defensively",
+        // because its semantics had only ever been read out of the disassembly. Four separate
+        // live rounds then had to poke the bit by hand to get a load at all
+        // (docs/research/session-save.md: msgboxpoke.ps1 twice, `partyselect ok` twice), and
+        // this round measured it directly on BOTH rig instances at once: `[msgbox+0x64]` reads
+        // 0x06 — bit 0 CLEAR — on a client mid-conversation AND on a host that had been playing
+        // normally for twenty minutes with nothing modal on screen. So the bit cannot mean
+        // "something is blocking"; on this evidence it marks the GUI ROUTE (the pause menu
+        // sets it on its way into LoadGame), and our load does not come through that route and
+        // never will. Replicating it was therefore not a safety net — it was a guaranteed
+        // refusal for every caller this function has.
+        //
+        // Nothing downstream reads the bit: retail's own branch only tests it here, and the
+        // sequence below (DestroyServer / UnloadModule / CreateServer / LoadPCAutoSave) never
+        // touches the message box. The four hand-poked live loads are the direct evidence that
+        // proceeding with it clear is safe, because a poke that sets a bit nothing reads is
+        // exactly equivalent to not reading it.
+        //
+        // It is still LOGGED, every time, because it is free evidence: if a future round ever
+        // sees a mid-session load misbehave, the first question is what this byte held.
+        byte messageBoxBits = *(byte*)(messageBox + MessageBoxStateBits);
+        PluginHost.Log(
+            $"menu: mid-session load precondition [msgbox+0x64] = 0x{messageBoxBits:X2} "
+            + $"(retail's own gate is bit 0 = {messageBoxBits & 1}; observed, not obeyed)");
 
         nint clientInternal = *(nint*)(client + InternalOffset);
         nint guiManager = clientInternal == 0 ? 0 : *(nint*)(clientInternal + ClientInternalGuiManager);
