@@ -2427,6 +2427,32 @@ transition, a staging-verb limitation unrelated to the fix.
 every mode-1 loopback test now sets its mode explicitly rather than relying on the old
 "`Enabled` alone means v1" default, which the flip changed.
 
+### 16.5b Final confirmation on the TRUE shipped defaults
+
+Every round above ran ONE channel at a time. The shipped default now has both on, which §6.3's
+own precedent had deliberately avoided (the single-slot arbitrated cheat channel). A final cycle
+ran with `coop.ini` copied verbatim from the flipped `profiles/coop.ini.example` —
+`party_pool_sync=2` AND `store_sync=2`, `dialogue_item_sync=1`, `script_item_sync=1`, all five
+party keys ON:
+
+| clause | measured |
+| --- | --- |
+| three rapid host `pooladd g_i_medeqpmnt01` | client applied exactly three times, one per deposit |
+| echo lines | **0** `script item grant` on the host, **0** `materialised loot`/`dialogue grant` on the client |
+| client publishes | only the two known connect-time first-sight ones (§16.6) |
+| cross-instance totals | host **60 of 60**, client **60 of 60** |
+| `tools/verify.ps1` | **41 passed, 8 failed** — inside the documented ~40-42/7-9 baseline, every failure in the known-flaky set (the hit-registration pair, the death/revive pair, the 4 pre-existing signature disagreements, a container too far to walk to, and per-frame gait spam). No crash on either side. |
+
+That run also produced direct positive evidence for §16.4's fix, from an unrelated check:
+
+```
+the host still controls its companions PASS  table 1 companion(s), CSWParty 2 (PC+companions),
+companion 0x127 (npc slot 0) commandable=1, host clamped this run: False
+```
+
+— `CSWParty+0x00` reads 2 with both members genuinely resolvable, which is exactly the case the
+restore is supposed to allow, and did.
+
 ### 16.6 What is still open
 
 - **The connect-time first-sight publish.** On both flip-round connects the client first-sighted
