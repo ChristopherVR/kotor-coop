@@ -56,6 +56,44 @@ public sealed partial class CoopHost
     private const long StoreStaleRemovalConfirmMs = 2_000;
 
     /// <summary>
+    /// Per key, the value <see cref="HandleStoreIntentV2"/>'s write-through predicted and the
+    /// moment that prediction stops being defended — see <see cref="_storeIntentEffectV2"/>.
+    /// </summary>
+    private readonly record struct StoreIntentEffectV2(int Expected, long UntilMs);
+
+    /// <summary>
+    /// ⚠ 2026-08-29, docs/research/shared-inventory-v2.md §15.5 — THE STORE WOBBLE'S ROOT CAUSE.
+    ///
+    /// <see cref="HandleStoreIntentV2"/>'s write-through moves this host's belief for a key the
+    /// instant an intent is accepted, so the very next broadcast already reflects it even with
+    /// the shop's GUI closed (§7's own reason for the write-through). But the engine apply that
+    /// write-through PREDICTS is queued, not done: it goes through the single-slot arbitrated
+    /// cheat channel and typically lands a second or two later. If the host's own store GUI
+    /// happens to be open in the meantime, its next scan reads the PRE-apply stock and
+    /// <see cref="PublishStoreSnapshotV2"/> overwrites the prediction with it — so the broadcast
+    /// says "1", then "0" (write-through), then "1" again (stale scan), then finally "0". Live,
+    /// that middle regression is exactly what made the client retire its outstanding credit, read
+    /// the restored "1" as the host's truth, and RE-INSERT the item it had just bought, removing
+    /// it again 3s later (§15.5's two spurious engine writes).
+    ///
+    /// The published snapshot must therefore be MONOTONE with respect to accepted intents: once
+    /// the host has told everyone a key moved because it accepted a client's intent, it must not
+    /// say otherwise again until it has genuinely re-observed the key at the predicted value (the
+    /// apply landed) or given up waiting. Until then a scan disagreeing with the prediction is
+    /// not evidence about this key — it is a read of an engine that has not run the apply yet.
+    /// Bounded by <see cref="StoreIntentEffectHoldMs"/> so a genuinely dropped apply still heals:
+    /// the scan wins once the hold lapses, and the client reconciles to it as usual.
+    /// </summary>
+    private readonly Dictionary<StoreStackKey, StoreIntentEffectV2> _storeIntentEffectV2 = [];
+
+    /// <summary>How long <see cref="_storeIntentEffectV2"/> defends a write-through prediction
+    /// against a scan that disagrees with it. Matches the client's own
+    /// <c>Pumps.StorePumpV2</c> intent/expected-movement timeout — comfortably past a realistic
+    /// backlog draining one at a time through the single-slot arbitrated cheat channel, and short
+    /// enough that a genuinely dropped apply self-heals inside one <c>AckGraceMs</c>.</summary>
+    private const long StoreIntentEffectHoldMs = 10_000;
+
+    /// <summary>
     /// Merges one store's fresh scan into the host's running cross-store belief, wholesale for
     /// <paramref name="storeObjectId"/>'s own keys only (a store's contents can only be scanned
     /// while its GUI is open — docs/research/shared-inventory-v2.md §2.6 — so every other
@@ -90,10 +128,20 @@ public sealed partial class CoopHost
         {
             _storeKnownIdsV2.Add(storeObjectId);
 
+            PruneStoreIntentEffectsV2(now);
+
             List<StoreStackKey>? stale = null;
             foreach (StoreStackKey key in _storeBeliefV2.Keys)
             {
                 if (key.StoreObjectId != storeObjectId || totals.ContainsKey(key))
+                {
+                    continue;
+                }
+
+                // A key whose accepted-intent prediction is still being defended is not
+                // "missing" — the apply that will put it there has not run yet. See
+                // _storeIntentEffectV2.
+                if (_storeIntentEffectV2.ContainsKey(key))
                 {
                     continue;
                 }
@@ -122,9 +170,54 @@ public sealed partial class CoopHost
 
             foreach ((StoreStackKey key, int count) in totals)
             {
+                if (_storeIntentEffectV2.TryGetValue(key, out StoreIntentEffectV2 effect))
+                {
+                    if (count != effect.Expected)
+                    {
+                        // The apply has not landed yet — this read is of an engine that has not
+                        // run it. Leave belief on the prediction and keep waiting.
+                        _storeMissingSinceV2.Remove(key);
+                        continue;
+                    }
+
+                    // Observed at the predicted value: the apply landed, the prediction is now an
+                    // observation, and ordinary scan-wins behaviour resumes for this key.
+                    _storeIntentEffectV2.Remove(key);
+                }
+
                 _storeBeliefV2[key] = count;
                 _storeMissingSinceV2.Remove(key);
             }
+        }
+    }
+
+    /// <summary>Drops every accepted-intent prediction whose hold has lapsed — after that the
+    /// host's own scan is the truth again for that key, exactly as it was before the intent. See
+    /// <see cref="_storeIntentEffectV2"/>. Caller holds <c>_gate</c>.</summary>
+    private void PruneStoreIntentEffectsV2(long now)
+    {
+        if (_storeIntentEffectV2.Count == 0)
+        {
+            return;
+        }
+
+        List<StoreStackKey>? lapsed = null;
+        foreach ((StoreStackKey key, StoreIntentEffectV2 effect) in _storeIntentEffectV2)
+        {
+            if (now >= effect.UntilMs)
+            {
+                (lapsed ??= []).Add(key);
+            }
+        }
+
+        if (lapsed is null)
+        {
+            return;
+        }
+
+        foreach (StoreStackKey key in lapsed)
+        {
+            _storeIntentEffectV2.Remove(key);
         }
     }
 
@@ -230,6 +323,11 @@ public sealed partial class CoopHost
                 // — this key's belief just changed for a real, known reason, not because a scan
                 // of its store came back without it.
                 _storeMissingSinceV2.Remove(intent.Key);
+
+                // ...and defend that prediction against this host's own pre-apply scan until the
+                // engine actually catches up — §15.5's wobble. See _storeIntentEffectV2.
+                _storeIntentEffectV2[intent.Key] =
+                    new StoreIntentEffectV2(after, now + StoreIntentEffectHoldMs);
             }
         }
 
@@ -263,7 +361,6 @@ public sealed partial class CoopHost
 
         _forceStoreV2Broadcast = false;
         _lastStoreV2BroadcastMs = now;
-        _storeGenerationV2++;
 
         // §7 (2026-08-29): unlike the party pool's own belief (replaced wholesale every
         // publish), _storeBeliefV2 is mutated IN PLACE by PublishStoreSnapshotV2's per-store
@@ -273,13 +370,18 @@ public sealed partial class CoopHost
         // Clone under the lock so Paginate only ever walks a private, unshared copy — see
         // CoopHost.PartyPoolV2.cs's BroadcastPartyPoolV2 for the identical discipline.
         Dictionary<StoreStackKey, int> belief;
+        uint generation;
         lock (_gate)
         {
+            // Incremented under the same lock HandleStoreIntentV2 reads it under, so the
+            // generation an ack promises ("the next one") can never name a cycle that has
+            // already gone out — §15.5.
+            generation = ++_storeGenerationV2;
             belief = new Dictionary<StoreStackKey, int>(_storeBeliefV2);
         }
 
         foreach (StoreSnapshotPacketV2 page in
-            StoreSnapshotPagingV2.Paginate(now, _storeGenerationV2, belief))
+            StoreSnapshotPagingV2.Paginate(now, generation, belief))
         {
             int length = PacketCodec.Write(_sendBuffer, page);
             if (length == 0)
