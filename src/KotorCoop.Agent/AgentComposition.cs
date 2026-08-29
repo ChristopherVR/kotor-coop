@@ -424,7 +424,11 @@ internal static class AgentComposition
 
         KotorCoop.Steam.SteamInviteService steam = new(enabled: true, Console.WriteLine);
 
-        if (installDirectory.Length > 0)
+        // Only stamp steam_appid.txt into the game folder when there is a redistributable that
+        // could read it. `uninstall` removes KotorCoop.* and nothing else, so a file written
+        // for a feature the player never enabled would simply stay there forever.
+        if (installDirectory.Length > 0
+            && KotorCoop.Steam.SteamInviteService.IsRedistributablePresent(installDirectory))
         {
             KotorCoop.Steam.SteamInviteService.TryEnsureAppIdFile(
                 installDirectory, AgentOptions.SteamAppId, Console.WriteLine);

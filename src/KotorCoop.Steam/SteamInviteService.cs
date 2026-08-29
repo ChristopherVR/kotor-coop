@@ -149,6 +149,34 @@ public sealed class SteamInviteService : IDisposable
         IsActive && _native!.InviteUserToGame(steamId, connectString);
 
     /// <summary>
+    /// Whether a <c>steam_api64.dll</c> is anywhere we would find one — beside the agent
+    /// assembly, or in <paramref name="directory"/>.
+    ///
+    /// Asked BEFORE <see cref="TryEnsureAppIdFile"/> so that a player who will never use Steam
+    /// does not get a <c>steam_appid.txt</c> dropped into their game folder. It would be inert,
+    /// but it is also a file <c>uninstall</c> would not remove (its rule is "everything
+    /// <c>KotorCoop.*</c> is ours"), and leaving litter behind in someone's game directory for
+    /// a feature they never switched on is not a trade worth making.
+    /// </summary>
+    public static bool IsRedistributablePresent(string directory)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(AppContext.BaseDirectory, SteamNative.LibraryName)))
+            {
+                return true;
+            }
+
+            return directory.Length > 0
+                && File.Exists(Path.Combine(directory, SteamNative.LibraryName));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Writes <c>steam_appid.txt</c> beside the agent if it is not already there, which is how
     /// <c>SteamAPI_Init</c> identifies an app it did not launch. Best-effort: a read-only game
     /// directory just means Steam support stays off, which is a state the whole design already
