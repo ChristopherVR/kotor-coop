@@ -758,3 +758,29 @@ Unit-pinned in `tests/KotorCoop.Tests/PartyCountRestoreRuleTests.cs`: refused at
 member, allowed at 2, the resolvable run is a hard ceiling rather than a hint, never lowers the
 count (that stays `party_together_fix`'s decision alone), and a count it does not recognise as a
 count is not written.
+
+**Can a REAL transition that leaves a companion behind hit the same fault?** The obvious candidate
+is `END_M01AA`'s own script dropping Trask at that door. No, and for two independent reasons:
+
+1. A companion being left behind means the party TABLE loses them, so `TryGetPartyTableMemberCount`
+   returns 0 and `truePopulation` is 1. `SafeRestoreCount` will not raise a count to 1 that is
+   already 1, and `CSWGuiInGameEquip::UpdatePortraits` only asks for member 1 when the count is
+   ABOVE 1 (`cmp [edi],1 / jle skip`). There is nothing to ask for.
+2. Even in the harder shape — the table still claiming a companion the new module has not
+   materialised — the resolvable-run ceiling refuses the raise until that member genuinely
+   resolves. That is the same guard, and it does not care WHY the member is missing (mid-load,
+   dropped by a script, or destroyed).
+
+The fault needed the count to exceed the resolvable members, and that is now unreachable from this
+path regardless of what the party table says.
+
+**Live status (2026-08-29):** five relocating warps across four sessions with all five party keys
+at their shipped ON defaults — `tar_m02aa` x2 and `tat_m17ac` x3, one of them on a `coop.ini`
+copied verbatim from `profiles/coop.ini.example` — all survived, with **zero** occurrences of
+`6B5FEE` in the host's plugin log, against a signature that was 6/6 deterministic before. A
+`tools/verify.ps1` run in the same configuration reported
+`the host still controls its companions PASS  table 1 companion(s), CSWParty 2 (PC+companions)`,
+i.e. the legitimate case (count 2, both members resolvable) still works. The real-door clause
+(`end_door10 -> end_m01ab`) is still **unexercised**: `usedoor`'s walk stalled short of the door
+on both attempts and never started a transition, a staging-verb/pathing limitation unrelated to
+this fix.
