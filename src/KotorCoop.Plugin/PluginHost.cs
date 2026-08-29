@@ -92,6 +92,7 @@ internal static unsafe partial class PluginHost
     private static MinigameNoticeController? _minigameNotice;
     private static SoloSegmentController? _soloSegment;
     private static SoloSegmentSpectateController? _soloSegmentSpectate;
+    private static MinigameLockController? _minigameLock;
     private static Thread? _worker;
     private static volatile bool _running = true;
 

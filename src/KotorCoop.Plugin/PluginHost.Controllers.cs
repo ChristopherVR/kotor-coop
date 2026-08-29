@@ -62,6 +62,7 @@ internal static unsafe partial class PluginHost
         _minigameNotice = new MinigameNoticeController(_view);
         _soloSegment = new SoloSegmentController(_view);
         _soloSegmentSpectate = new SoloSegmentSpectateController(_view);
+        _minigameLock = new MinigameLockController(_view);
 
         // The minimap draw runs on the render path and has no other route to peer
         // positions, so it reads the block directly.

@@ -48,6 +48,16 @@ public interface IPlayerBridge
     bool LockControlToPlayer() => false;
 
     /// <summary>
+    /// Publishes this tick's minigame peer-lock decision (<c>KotorCoop.Protocol
+    /// .MinigameLockRule</c>) into the plugin's shared block: while
+    /// <paramref name="locked"/> is true the plugin holds this instance's own player still
+    /// and shows "<paramref name="ownerName"/> is racing - waiting". A LEVEL, republished
+    /// whenever it changes; best-effort, like <see cref="ClearCoopState"/>, and a no-op on a
+    /// bridge with no plugin block. See docs/research/minigames.md §24.
+    /// </summary>
+    bool TryWriteMinigameLock(bool locked, string ownerName) => false;
+
+    /// <summary>
     /// Pushes this session's effective behaviour-override bits into the plugin's shared block
     /// — docs/research/mod-compatibility.md's "Behaviour-flag negotiation" gap, closed
     /// 2026-08-27: <c>KotorCoop.Session.SessionOverrides</c> already computes which of the
