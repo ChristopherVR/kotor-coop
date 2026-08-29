@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.RegularExpressions;
+using KotorCoop.Memory;
 using Microsoft.Win32;
 
 namespace KotorCoop.Agent;
@@ -25,7 +27,7 @@ namespace KotorCoop.Agent;
 /// dinput8.chain file lists the load order. Our two DLLs are recognised by markers, so a
 /// foreign dinput8.dll is never overwritten or deleted without being asked.
 /// </summary>
-public static class PackageInstaller
+public static partial class PackageInstaller
 {
     public const string PluginFileName = "dinput8.dll";
     public const string ChainPluginFileName = "KotorCoop.Plugin.dll";
@@ -329,9 +331,24 @@ public static class PackageInstaller
     public sealed record Candidate(string Directory, string Source, bool Supported);
 
     /// <summary>
-    /// Finds KOTOR installs: GOG's registry entry first (the supported build), then every
-    /// fixed drive's usual GOG/Galaxy folders, then Steam (listed so the user is told why it
-    /// will not work rather than silently ignored).
+    /// Finds KOTOR installs: GOG's registry entry first, then every fixed drive's usual
+    /// GOG/Galaxy folders, then every Steam library on the machine.
+    ///
+    /// ⚠ STEAM IS SUPPORTED, and used not to be. The Steam copy is the same link as the
+    /// DRM-free one wrapped in Valve's SteamStub v3, which decrypts <c>.text</c> in place
+    /// before the game's own entry point runs — every hardcoded engine address is the same VA
+    /// at runtime, and <c>dinput8.dll</c> is a static import of both files at the same thunk,
+    /// so the proxy loads identically (docs/research/steam-support.md §§1-5). The one thing
+    /// that genuinely blocked it was our own handshake hashing the FILE, fixed in §8. What is
+    /// still true of a Steam install, and belongs in documentation rather than in a refusal to
+    /// install: the wrapper goes through the Steam client, so <c>--instance 2</c> cannot start
+    /// a second local copy of THAT install (a dev-rig concern, never two players on two
+    /// machines), and Steam's overlay may own the SwapBuffers import slot the frame hook wants.
+    ///
+    /// Every candidate is labelled with the form its executable is actually in
+    /// (<see cref="SteamBuild"/>), not with the folder it was found in — a "GOG Games" folder
+    /// holding an unwrapped Steam exe is a real thing on this very machine, and the label
+    /// should say what is there rather than what the path suggests.
     /// </summary>
     public static IReadOnlyList<Candidate> FindGameDirectories()
     {
@@ -345,10 +362,20 @@ public static class PackageInstaller
             }
 
             string full = Path.GetFullPath(directory).TrimEnd('\\');
-            if (!found.Any(c => string.Equals(c.Directory, full, StringComparison.OrdinalIgnoreCase)))
+            if (found.Any(c => string.Equals(c.Directory, full, StringComparison.OrdinalIgnoreCase)))
             {
-                found.Add(new Candidate(full, source, supported));
+                return;
             }
+
+            KotorExecutableForm form = SteamBuild.InspectFile(Path.Combine(full, GameExecutable), out _);
+            string formLabel = form switch
+            {
+                KotorExecutableForm.SteamStub => "SteamStub-wrapped 1.0.3",
+                KotorExecutableForm.DrmFree => "DRM-free 1.0.3",
+                _ => "unrecognised build",
+            };
+
+            found.Add(new Candidate(full, $"{source}, {formLabel}", supported));
         }
 
         if (OperatingSystem.IsWindows())
@@ -393,18 +420,111 @@ public static class PackageInstaller
                 }
             }
 
-            // ⚠ "the binary differs" was WRONG and is corrected here: the Steam copy is the
-            // SAME LINK as the DRM-free one, wrapped in Valve's SteamStub v3, which decrypts
-            // .text in place before the game's own entry point runs. Every hardcoded address
-            // is the same VA at runtime, and every section but .text is byte-identical on disk
-            // (docs/research/steam-support.md §§1-4). What is genuinely unsupported is
-            // narrower: the wrapper goes through the Steam client, so `--instance 2` cannot
-            // start a second local copy, and InstallDigest hashes the FILE, so a Steam install
-            // and a DRM-free one refuse each other on ExeDigest (§8). Two Steam players on two
-            // machines is fine.
-            Add(Path.Combine(root, @"Program Files (x86)\Steam\steamapps\common\swkotor"), "Steam (partly supported: same binary under a DRM wrapper, but no second local instance, and it cannot pair with a DRM-free install - docs/research/steam-support.md)", supported: false);
+            // The default client location on this drive. Libraries anywhere else (a second
+            // drive, a custom folder) come from libraryfolders.vdf below.
+            Add(Path.Combine(root, @"Program Files (x86)\Steam\steamapps\common\swkotor"), "Steam", supported: true);
+        }
+
+        foreach (string library in SteamLibraryDirectories())
+        {
+            Add(Path.Combine(library, @"steamapps\common\swkotor"), "Steam library", supported: true);
         }
 
         return found;
     }
+
+    /// <summary>
+    /// Every Steam library root on this machine: the client's own install directory, plus
+    /// every path listed in its <c>steamapps\libraryfolders.vdf</c> — which is how a second
+    /// drive's library is found, the common case for a large collection.
+    ///
+    /// Deliberately a regex over the VDF rather than a parser. The only thing wanted is the
+    /// <c>"path"</c> values; a wrong or stale line costs nothing, because every result is
+    /// checked for <c>swkotor.exe</c> afterwards. Never throws: an unreadable or absent file
+    /// yields whatever was already found.
+    /// </summary>
+    public static IReadOnlyList<string> SteamLibraryDirectories()
+    {
+        List<string> roots = [];
+
+        void AddRoot(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                string full = Path.GetFullPath(path).TrimEnd('\\');
+                if (Directory.Exists(full) && !roots.Any(r => string.Equals(r, full, StringComparison.OrdinalIgnoreCase)))
+                {
+                    roots.Add(full);
+                }
+            }
+            catch (Exception)
+            {
+                // A malformed path in the VDF is simply not a library.
+            }
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using RegistryKey? user = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
+                AddRoot(user?.GetValue("SteamPath") as string);
+            }
+            catch (Exception)
+            {
+                // No registry access is just "not found".
+            }
+
+            foreach (string hive in new[] { @"SOFTWARE\WOW6432Node\Valve\Steam", @"SOFTWARE\Valve\Steam" })
+            {
+                try
+                {
+                    using RegistryKey? key = Registry.LocalMachine.OpenSubKey(hive);
+                    AddRoot(key?.GetValue("InstallPath") as string);
+                }
+                catch (Exception)
+                {
+                    // Same.
+                }
+            }
+        }
+
+        // The usual locations too, in case the registry says nothing.
+        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+        {
+            AddRoot(Path.Combine(drive.RootDirectory.FullName, @"Program Files (x86)\Steam"));
+            AddRoot(Path.Combine(drive.RootDirectory.FullName, "SteamLibrary"));
+        }
+
+        foreach (string root in roots.ToList())
+        {
+            try
+            {
+                string vdf = Path.Combine(root, "steamapps", "libraryfolders.vdf");
+                if (!File.Exists(vdf))
+                {
+                    continue;
+                }
+
+                foreach (Match match in SteamLibraryPathPattern().Matches(File.ReadAllText(vdf)))
+                {
+                    AddRoot(match.Groups[1].Value.Replace(@"\\", @"\"));
+                }
+            }
+            catch (Exception)
+            {
+                // Unreadable libraryfolders.vdf: the roots already found still stand.
+            }
+        }
+
+        return roots;
+    }
+
+    [GeneratedRegex("\"path\"\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex SteamLibraryPathPattern();
 }

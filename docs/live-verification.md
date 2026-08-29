@@ -2489,3 +2489,55 @@ built (a genuine enemy, never one of the local roster) is no longer left undress
 Every icon surface that could theoretically carry a portrait (minimap arrow, M-screen pin, party
 bar, name plate) was checked explicitly and cleared as structurally incapable of causing this —
 the defect was always the enemy-materialisation channel, never an icon-rendering one.
+
+## Steam: a Steam client in a session with a DRM-free host (2026-08-29)
+
+The first live run of this mod on the Steam build. Full write-up and every log line:
+[research/steam-support.md §18](research/steam-support.md). What matters for this checklist:
+
+**The rig can now be run cross-store, and the ordering is not the usual one.** A Steam install
+cannot be a second instance — `agent launch --instance 2` renames the mutex successfully and the
+Steam client still refuses the second copy. So **launch the Steam copy first** (through Steam,
+`steam://rungameid/32370`; it takes the plain `swkotor` mutex), then `agent launch --instance 2`
+on a DRM-free copy. `demo.ps1` cannot do this as-is — its instance 1 is the one that loads a save
+and its instance 2 is the one that gets `--instance` — so a cross-store pairing is driven by hand:
+`agent load --pid <each> --load-save 1`, then one `agent run --host` and one `agent run --join`.
+
+The Steam instance also **re-spawns its own agent** if you kill one, because `auto_start_agent` is
+read from coop.ini at plugin startup: editing coop.ini while the game is already up does not
+disarm it, and that stray agent holds the attach so your own `run --pid` refuses. Set the key
+before launching, or restart the game after editing.
+
+**The oracle for the executable check is a pair of lines and one absence.** Each agent prints, at
+startup:
+
+```
+GOG   content digest: exe image C6962619, 509 appearance rows, 2 override file(s), 49265 tlk entries [exe file 8B8EC44D (DrmFree)]
+Steam content digest: exe image C6962619, 556 appearance rows, 2665 override file(s), 49349 tlk entries [exe file 220AC31D (SteamStub)]
+```
+
+The `exe image` values must match and the `exe file` values are expected NOT to. The absence that
+matters is `executable identity unchecked` — if that note appears, the check did not run and a
+"it connected" result proves nothing about the executables. In this run it did not appear on
+either side, so the check was active and passed.
+
+**Verified in one session:** connect (`* Malak joined the game`), mutual presence
+(`phantoms 1  remotes 1`, `peers-here 1` on both), a module transition with the host's world
+transferred to the Steam client (`* world sent (663,173 bytes)`), and both instances ending in
+`end_m01ab` at the same coordinates. The console answers on the Steam process through the
+`FuncInterp` detour (`where` → `module END_M01AA  at 20.0 22.2 -1.3  hp 12/12`), and the block is
+found at version 60 by the usual signature scan.
+
+**Still not verified:** a real DOOR crossing with a Steam client in the session. Three
+`usedoor end_door10` attempts opened the door and stalled the walk 2.7 m short of it
+(`No transition happened - the door is still an obstacle, or the path stopped short`), and
+`walkto` did not move the PC — both are the known injected-input/pathing limits described above,
+on the DRM-free host, and neither is store-specific. The transition that WAS verified went through
+`warp`, which travels through the session the same way.
+
+**Steam invites, single-machine half:** with a borrowed `steam_api64.dll` beside the agent (for
+the smoke only — never committed, never packaged), a GOG host published its connect string:
+`steam: ready as app 32370 (ISteamFriends via SteamAPI_SteamFriends_v018)` and
+`steam: friends can now join this session (kc1/<public-ip>:27140)`. The receive half
+(`GameRichPresenceJoinRequested_t`, callback 337) and `InviteUserToGame` need a second machine and
+a second Steam account, and remain untested.

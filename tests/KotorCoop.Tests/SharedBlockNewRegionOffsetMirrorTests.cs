@@ -49,6 +49,13 @@ public class SharedBlockNewRegionOffsetMirrorTests
 
         ("MinigameLockActive", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
         ("MinigameLockName", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
+
+        // The live executable-image digest, which is what a Steam↔DRM-free session now passes
+        // its compatibility handshake on (docs/research/steam-support.md §8). A drifted offset
+        // here reads as "the plugin published nothing", which silently turns the one FATAL
+        // compatibility check into a warning — exactly the failure mode this test exists for.
+        ("ExeImageDigest", "SharedBlock.ExeImage.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("ExeImageDigestKnown", "SharedBlock.ExeImage.cs", "KotorGameBridge.PluginBlock.cs"),
     ];
 
     [Fact]

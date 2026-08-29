@@ -199,9 +199,31 @@ public static class ContentCompatibility
 
         // EXE — refuse. Every engine address the mod uses is absolute and per-binary; a
         // different exe means every write could land somewhere unrelated.
+        //
+        // ⚠ THIS IS THE RUNNING IMAGE, NOT THE FILE (ExeImageDigestRule, published by the
+        // plugin from inside the decrypted process before it installs a single hook). The
+        // file hash used to be what landed here, and it refused Steam↔DRM-free sessions over
+        // nothing: Steam ships the SAME LINK under SteamStub v3, which encrypts .text on disk
+        // and decrypts it in place before the game's entry point runs, so two installs whose
+        // running code is byte-identical hashed differently. Hashing the image instead is
+        // strictly stronger — it also catches a runtime patcher a file hash never sees — and
+        // it is the honest statement of what this check is actually about.
+        // docs/research/steam-support.md §8.
         if (BothKnow(local, remote, ContentDigest.Field.Exe) && local.ExeDigest != remote.ExeDigest)
         {
             return Refuse(RefusalReason.Executable);
+        }
+
+        // ...and say so when it could NOT be checked. One side without a published image
+        // digest (an older plugin, or an agent attached to a game that has none) leaves the
+        // single fatal check silently inactive, which is exactly the kind of thing that must
+        // be visible in the session log rather than inferred from its absence.
+        if (!BothKnow(local, remote, ContentDigest.Field.Exe))
+        {
+            notes.Add(new CompatibilityNote(
+                CompatibilityCode.Unchecked,
+                SessionCapabilities.None,
+                "executable identity unchecked: one side published no live image digest"));
         }
 
         // APPEARANCE — a reordered or resized appearance.2da makes a replicated row index
