@@ -1,4 +1,4 @@
-using KotorCoop.Memory;
+﻿using KotorCoop.Memory;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -22,7 +22,36 @@ public readonly record struct PerfTraceSnapshot(
     double PhantomGapAverageMs,
     double PhantomGapPeakMs,
     double PhantomStepAverageUnits,
-    double PhantomStepPeakUnits);
+    double PhantomStepPeakUnits)
+{
+    /// <summary>Per-phase cost attribution for the period — see <see cref="PerfTrace.NotePhase"/>.
+    /// An init-only member rather than a positional parameter purely to keep the (already long)
+    /// constructor readable at its one call site.</summary>
+    public IReadOnlyList<PumpPhaseCost> Phases { get; init; } = [];
+}
+
+/// <summary>One phase's share of a reporting period.</summary>
+public readonly record struct PumpPhaseCost(string Name, double Ms, long Reads, long ReadBytes);
+
+/// <summary>
+/// The slices of <c>CoopAgent.PumpOnce</c> the perf trace attributes cost to, in the order the
+/// method runs them. Not exhaustive — the cheap flag checks between them are left in nobody's
+/// column on purpose, so a phase's number means "this call did this" rather than "this call
+/// plus whatever happened to sit next to it".
+/// </summary>
+public enum PumpPhase
+{
+    /// <summary>Read the local player, publish it, sample the peers, write the phantoms. The
+    /// only part of the tick whose cadence a watching player can see.</summary>
+    Position = 0,
+    SpawnRing = 1,
+    Combat = 2,
+    Dialogue = 3,
+    Party = 4,
+    ContainerLoot = 5,
+    ScriptItemGrant = 6,
+    Heavy = 7,
+}
 
 /// <summary>
 /// The once-a-second measurement line behind <c>coop.ini perf_trace</c>.
@@ -75,6 +104,18 @@ public sealed class PerfTrace
     private double _phantomGapPeakMs;
     private double _phantomStepSumUnits;
     private double _phantomStepPeakUnits;
+
+    /// <summary>
+    /// Names of the <see cref="PumpPhase"/> slots, in enum order — what the per-phase table
+    /// prints. Deliberately short: this line already carries a lot and a phase that cannot be
+    /// picked out of a log at a glance is not worth measuring.
+    /// </summary>
+    private static readonly string[] PhaseNames =
+        ["position", "spawnring", "combat", "dialogue", "party", "loot", "scriptitem", "heavy"];
+
+    private readonly double[] _phaseMs = new double[PhaseNames.Length];
+    private readonly long[] _phaseReads = new long[PhaseNames.Length];
+    private readonly long[] _phaseReadBytes = new long[PhaseNames.Length];
 
     private long _lastPacketsSent;
     private long _lastPacketsReceived;
@@ -161,6 +202,23 @@ public sealed class PerfTrace
         }
     }
 
+    /// <summary>
+    /// Attributes one phase's wall-clock cost and cross-process read traffic.
+    ///
+    /// The point of splitting the tick this way: the total said 44 ms against a 33 ms budget
+    /// while the position path said 0.2 ms and the heavy pass said 0.4 ms, which is an
+    /// accusation with no defendant. Reads are counted alongside time because the two answer
+    /// different questions — a phase can be slow because it computes, or slow because it makes
+    /// ten thousand syscalls, and only the second is fixed by reading less.
+    /// </summary>
+    public void NotePhase(PumpPhase phase, double ms, long reads, long readBytes)
+    {
+        int i = (int)phase;
+        _phaseMs[i] += ms;
+        _phaseReads[i] += reads;
+        _phaseReadBytes[i] += readBytes;
+    }
+
     /// <summary>Forgets a peer's motion bookkeeping — a rejoin or a module change is not a
     /// teleport worth reporting as a 900-unit step.</summary>
     public void Forget(uint peerId) => _motion.Remove(peerId);
@@ -205,7 +263,10 @@ public sealed class PerfTrace
             PhantomGapAverageMs: _phantomMoves == 0 ? 0 : _phantomGapSumMs / _phantomMoves,
             PhantomGapPeakMs: _phantomGapPeakMs,
             PhantomStepAverageUnits: _phantomMoves == 0 ? 0 : _phantomStepSumUnits / _phantomMoves,
-            PhantomStepPeakUnits: _phantomStepPeakUnits);
+            PhantomStepPeakUnits: _phantomStepPeakUnits)
+        {
+            Phases = BuildPhases(),
+        };
 
         _periodStartMs = nowMs;
         _ticks = 0;
@@ -220,9 +281,23 @@ public sealed class PerfTrace
         _phantomGapPeakMs = 0;
         _phantomStepSumUnits = 0;
         _phantomStepPeakUnits = 0;
+        Array.Clear(_phaseMs);
+        Array.Clear(_phaseReads);
+        Array.Clear(_phaseReadBytes);
         BaselineNetwork(stats);
 
         return true;
+    }
+
+    private IReadOnlyList<PumpPhaseCost> BuildPhases()
+    {
+        PumpPhaseCost[] phases = new PumpPhaseCost[PhaseNames.Length];
+        for (int i = 0; i < phases.Length; i++)
+        {
+            phases[i] = new PumpPhaseCost(PhaseNames[i], _phaseMs[i], _phaseReads[i], _phaseReadBytes[i]);
+        }
+
+        return phases;
     }
 
     private void BaselineNetwork(SessionStats stats)
@@ -255,6 +330,37 @@ public sealed class PerfTrace
             + $"net out {s.PacketsSent / seconds:F0} pkt/s {s.BytesSent / seconds / 1024.0:F1} KiB/s, "
             + $"in {s.PacketsReceived / seconds:F0} pkt/s {s.BytesReceived / seconds / 1024.0:F1} KiB/s | "
             + $"phantom {s.PhantomMoves / seconds:F1} moves/s, gap {s.PhantomGapAverageMs:F0}/{s.PhantomGapPeakMs:F0} ms "
-            + $"avg/peak, step {s.PhantomStepAverageUnits:F3}/{s.PhantomStepPeakUnits:F3} u avg/peak";
+            + $"avg/peak, step {s.PhantomStepAverageUnits:F3}/{s.PhantomStepPeakUnits:F3} u avg/peak"
+            + FormatPhases(s.Phases, seconds);
+    }
+
+    /// <summary>The per-phase table, ms and read traffic per second of wall clock. Phases that
+    /// cost nothing this period are omitted — a line naming eight phases where two are doing
+    /// all the work reads worse than one naming the two.</summary>
+    private static string FormatPhases(IReadOnlyList<PumpPhaseCost> phases, double seconds)
+    {
+        if (phases.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        System.Text.StringBuilder sb = new(" | phases");
+        bool any = false;
+
+        foreach (PumpPhaseCost phase in phases)
+        {
+            if (phase.Ms < 0.05 && phase.Reads == 0)
+            {
+                continue;
+            }
+
+            any = true;
+            sb.Append(' ').Append(phase.Name).Append(' ')
+              .Append((phase.Ms / seconds).ToString("F1")).Append("ms/s ")
+              .Append((phase.Reads / seconds).ToString("F0")).Append("r/s ")
+              .Append((phase.ReadBytes / seconds / 1048576.0).ToString("F1")).Append("MiB/s;");
+        }
+
+        return any ? sb.ToString() : string.Empty;
     }
 }

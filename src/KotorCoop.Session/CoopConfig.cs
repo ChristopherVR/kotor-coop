@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -125,16 +125,17 @@ public sealed record CoopConfig
     public int InterpolationDelayMs { get; init; } = -1;
 
     /// <summary>
-    /// coop.ini <c>dejitter</c>, ON by default — file received avatar snapshots on a
+    /// coop.ini <c>dejitter</c>, OFF by default — file received avatar snapshots on a
     /// regularised playback timeline (inter-arrival gaps quantised to the sender's send
     /// period, byte-identical repeats not sampled at all) rather than stamping each one with
     /// the moment it happened to land. See
     /// <see cref="KotorCoop.Protocol.SnapshotTimingRule"/>: the sender's pump timer and its
     /// send timer are two free-running clocks at the same nominal rate, and the beat between
-    /// them is what a player sees as a peer moving in bursts. OFF is a true rollback to the
-    /// arrival-stamped behaviour.
+    /// them is what a player sees as a peer moving in bursts. Unit-proven but not yet
+    /// live-confirmed — see <see cref="SessionSettings.DejitterEnabled"/> for why the live A/B
+    /// could not settle it and what a conclusive round needs.
     /// </summary>
-    public bool Dejitter { get; init; } = true;
+    public bool Dejitter { get; init; }
 
     /// <summary>
     /// coop.ini <c>perf_trace</c>, OFF by default — once-a-second pump/network/phantom
@@ -662,7 +663,7 @@ public sealed record CoopConfig
             InterpolationDelayMs = int.TryParse(kv.GetValueOrDefault("interp_ms"), out int interp)
                 ? Math.Clamp(interp, 0, 500)
                 : -1,
-            Dejitter = !kv.ContainsKey("dejitter") || IsTruthy(kv.GetValueOrDefault("dejitter")),
+            Dejitter = IsTruthy(kv.GetValueOrDefault("dejitter")),
             PerfTrace = IsTruthy(kv.GetValueOrDefault("perf_trace")),
             PauseSync = !kv.ContainsKey("pause_sync") || IsTruthy(kv.GetValueOrDefault("pause_sync")),
             HidePeersInMinigame = !kv.ContainsKey("minigame_hide_peer")

@@ -1,4 +1,4 @@
-using KotorCoop.Protocol;
+﻿using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
 
@@ -14,7 +14,7 @@ namespace KotorCoop.Session;
 public sealed class SnapshotBuffer(
     int interpolationDelayMs = ProtocolConstants.DefaultInterpolationDelayMs,
     int sendPeriodMs = 1000 / ProtocolConstants.DefaultTickRate,
-    bool dejitter = true)
+    bool dejitter = false)
 {
     private const int MaxSamplesPerPeer = 32;
 

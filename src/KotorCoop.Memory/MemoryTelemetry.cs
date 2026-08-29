@@ -1,4 +1,4 @@
-namespace KotorCoop.Memory;
+﻿namespace KotorCoop.Memory;
 
 /// <summary>
 /// Process-wide counters for cross-process memory traffic — how many
@@ -58,6 +58,12 @@ public static class MemoryTelemetry
         Interlocked.Increment(ref _writes);
         Interlocked.Add(ref _writeBytes, bytes);
     }
+
+    /// <summary>The running call/byte totals WITHOUT resetting them — for a caller that wants
+    /// to attribute a slice of the traffic to one phase by differencing two peeks around it.
+    /// <see cref="Drain"/> is still what closes a reporting period.</summary>
+    public static (long Reads, long ReadBytes) Peek() =>
+        (Interlocked.Read(ref _reads), Interlocked.Read(ref _readBytes));
 
     /// <summary>Everything counted since the last <see cref="Drain"/>, and resets. Draining
     /// rather than reading cumulative totals is what lets the caller report a per-second rate

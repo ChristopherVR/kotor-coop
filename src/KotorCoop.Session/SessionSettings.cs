@@ -1,4 +1,4 @@
-// Construction-time settings for a host or client session: identity, networking, and the
+﻿// Construction-time settings for a host or client session: identity, networking, and the
 // content-fingerprint/compatibility knobs SessionManager reads before starting one.
 using KotorCoop.Protocol;
 
@@ -28,18 +28,28 @@ public sealed record SessionSettings
 
     /// <summary>
     /// Whether received avatar snapshots are filed on a regularised playback timeline instead
-    /// of raw arrival times — coop.ini <c>dejitter</c>, ON by default. See
+    /// of raw arrival times — coop.ini <c>dejitter</c>. See
     /// <see cref="KotorCoop.Protocol.SnapshotTimingRule"/> for the mechanism and for why
     /// arrival stamps manufacture a stall-then-dash pattern out of a perfectly healthy
-    /// localhost link. OFF restores the previous behaviour exactly: every arrival becomes a
-    /// sample, stamped when it landed.
+    /// localhost link.
+    ///
+    /// ⚠ OFF BY DEFAULT, and the reason is honest rather than technical: the mechanism is
+    /// unit-proven (<c>SnapshotDejitterTests</c> carries both the fix and a control showing the
+    /// arrival-stamped path bursting on the same stream) but the live A/B on the rig
+    /// (2026-08-29) could not confirm it, because the only mover available to an unattended
+    /// session is a <c>tp</c> hop — genuinely discontinuous motion, which is the one shape this
+    /// rule is not about. It measured no regression in pump health and a smaller mean applied
+    /// step on both instances, and a LONGER mean gap on the client, which on a hop-driven
+    /// stream is arguably correct behaviour rather than a fault. Turning it on wants a round
+    /// with a human actually walking (docs/live-verification.md's standing keystroke-injection
+    /// gap). Same rollout shape as <c>container_fast_pump</c>.
     ///
     /// Purely local playback, like <see cref="InterpolationDelayMs"/> itself: nothing about it
     /// crosses the wire, two peers may legitimately run it differently, and it is deliberately
     /// NOT part of the <see cref="Behaviour"/> negotiation for the same reason
     /// <c>interp_ms</c> is not.
     /// </summary>
-    public bool DejitterEnabled { get; init; } = true;
+    public bool DejitterEnabled { get; init; }
 
     public int PeerTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
 

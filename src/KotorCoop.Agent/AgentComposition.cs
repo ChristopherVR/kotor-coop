@@ -217,7 +217,7 @@ internal static class AgentComposition
             Port = effectivePort,
             TickRate = tickRate,
             InterpolationDelayMs = interpolationMs,
-            DejitterEnabled = config?.Dejitter ?? true,
+            DejitterEnabled = config?.Dejitter ?? false,
             Digest = digest,
             Behaviour = behaviourDigest,
             RequireIdenticalSave = options.RequireIdenticalSave,

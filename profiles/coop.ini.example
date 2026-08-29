@@ -1,4 +1,4 @@
-; coop.ini — copy to your game directory (beside swkotor.exe) and edit.
+﻿; coop.ini — copy to your game directory (beside swkotor.exe) and edit.
 ;
 ; The agent reads this when run with --menu, and connects when the player presses the
 ; in-game Co-op button. You can also connect at any time from the game's own console:
@@ -69,6 +69,26 @@ host_loss_release = 1
 ; the newest position immediately; a negative value (the unset default) keeps the built-in
 ; delay (80 ms).
 # interp_ms = -1
+
+; Regularise the PLAYBACK TIMING of received avatar snapshots instead of trusting the moment
+; each one happened to arrive. Every sender runs two free-running timers at the same nominal
+; rate - one samples the game, one puts the last sample on the wire - and the beat between them
+; makes the stream repeat a sample, then skip one. Stamped by arrival that reads as "stood
+; still, then moved twice as far", which is interpolated into a pause followed by a dash.
+; With this on, inter-arrival gaps are quantised to the send period and a byte-identical repeat
+; is not sampled at all.
+;
+; OFF by default: the mechanism is unit-proven but the live A/B on the rig could not settle it,
+; because the only mover an unattended session has is a `tp` hop and that is discontinuous
+; motion - the one shape this rule is not about. See docs/research/lag-audit.md's 2026-08-29
+; section. Costs nothing to try; turn it off again if a peer's movement looks worse.
+# dejitter = 0
+
+; Once-a-second pump/network/phantom telemetry into the agent log: ticks per second, tick cost
+; split by phase, ReadProcessMemory calls and bytes, packets and bytes both ways, and the gap
+; and distance of each position change actually applied to a phantom. A measurement instrument
+; for a rig round, not a player setting - it writes a line a second for as long as it is on.
+# perf_trace = 0
 
 ; --- hosting over the internet (roadmap item 24) -----------------------------------
 ; A relay-free approach: STUN tells you your own public address, UPnP tries to forward the
