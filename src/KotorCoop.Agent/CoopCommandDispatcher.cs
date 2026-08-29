@@ -311,6 +311,14 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SkipLine] = _ => SendCheat(new CheatRequest(CheatKinds.SkipLine)),
         [CoopCommandKind.SelectReply] = c => SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: c.Amount)),
         [CoopCommandKind.LoadGame] = c => TriggerMidSessionLoad(c.Amount),
+
+        // The character-creation drive verbs. NOT SendCheat: the cheat channel refuses every
+        // request with no player loaded and runs behind the plugin's world-epoch gate, and
+        // every one of these is only meaningful at the main menu. See
+        // KotorCoop.Plugin.CharGenDriveController.
+        [CoopCommandKind.NewGame] = _ => DriveChargen(ChargenDriveKinds.NewGame, 0),
+        [CoopCommandKind.ChargenQuick] = c => DriveChargen(ChargenDriveKinds.Quick, c.Amount),
+        [CoopCommandKind.ChargenAccept] = _ => DriveChargen(ChargenDriveKinds.Accept, 0),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
 
         // ⚠ Deliberately does NOT call NoteLocalItemGiven, unlike CoopCommandKind.GiveLoot's own
@@ -342,6 +350,11 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.RemoveParty] = c => SendCheat(new CheatRequest(CheatKinds.RemoveParty, Amount: c.Amount)),
         [CoopCommandKind.SetGold] = c => SendCheat(new CheatRequest(CheatKinds.SetGold, Amount: c.Amount)),
         [CoopCommandKind.FollowKick] = c => SendCheat(new CheatRequest(CheatKinds.FollowKick, Amount: c.Amount)),
+
+        // Amount carries method*100 + slot — see CoopCommandKind.FollowStall for why this
+        // dev-only verb packs two values into the one integer field CoopCommand has.
+        [CoopCommandKind.FollowStall] = c => SendCheat(new CheatRequest(
+            CheatKinds.FollowStall, Target: (uint)(c.Amount / 100), Amount: c.Amount % 100)),
 
         [CoopCommandKind.Cheats] = CheatsCommand,
     };

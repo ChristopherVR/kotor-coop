@@ -50,6 +50,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterTemplateTable.cs" Link="Plugin\PartyRosterTemplateTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FrameTimeHistogram.cs" Link="Plugin\FrameTimeHistogram.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyCreatureIdentity.cs" Link="Plugin\PartyCreatureIdentity.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PeerIdentityRule.cs" Link="Plugin\PeerIdentityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipApplyDecision.cs" Link="Plugin\EquipApplyDecision.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipSlotMap.cs" Link="Plugin\EquipSlotMap.cs" />
@@ -85,10 +86,12 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Dialogue.cs" Link="Plugin\SharedBlockView.Dialogue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Party.cs" Link="Plugin\SharedBlockView.Party.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\NewCharacterCaptureRule.cs" Link="Plugin\NewCharacterCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Phase2StallRule.cs" Link="Plugin\Phase2StallRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowPhaseReleaseRule.cs" Link="Plugin\FollowPhaseReleaseRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\FollowStallRule.cs" Link="Plugin\FollowStallRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceReleaseOrderRule.cs" Link="Plugin\PartyPresenceReleaseOrderRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceResolveCacheRule.cs" Link="Plugin\PartyPresenceResolveCacheRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />

@@ -45,11 +45,38 @@ public sealed partial class CoopHost
             return;
         }
 
-        FlagSnapshotPacket snapshot = new(Flags.Version, Flags.SnapshotEntries());
-        int length = PacketCodec.Write(_replyBuffer, snapshot);
-        if (length > 0)
+        // ⚠ PAGED, AND IT HAS TO BE. This reply is the ONLY way a host-side change reaches a
+        // client that did not watch it happen — there are no host→client flag ops (see
+        // SetFlag's own comment above) — and doors and placeables share this store with
+        // globals, which is never pruned. Sending one datagram meant everything past the first
+        // 106 entries of the session was undeliverable forever: measured live as a door OPEN on
+        // the host and CLOSED on the client, with the client re-requesting the same truncated
+        // head every 500 ms because the digest covers the whole store.
+        //
+        // Same shape as CoopHost.Journal's own paging, and the same loss model: each page
+        // carries the full version, so a lost page leaves a gap the client cannot detect until
+        // the next change bumps the version. That is acceptable for the journal because ops are
+        // its primary path; here it is merely much better than the alternative, and a client
+        // whose digest still disagrees re-requests on its own 500 ms timer anyway — which now
+        // actually converges instead of asking the same unanswerable question forever.
+        List<FlagSnapshotEntry> entries = Flags.SnapshotEntries();
+        uint version = Flags.Version;
+
+        for (int start = 0; ; start += ProtocolConstants.MaxFlagEntriesPerPacket)
         {
-            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+            List<FlagSnapshotEntry> page =
+                [.. entries.Skip(start).Take(ProtocolConstants.MaxFlagEntriesPerPacket)];
+
+            int length = PacketCodec.Write(_replyBuffer, new FlagSnapshotPacket(version, page));
+            if (length > 0)
+            {
+                _channel.Send(from, _replyBuffer.AsSpan(0, length));
+            }
+
+            if (start + ProtocolConstants.MaxFlagEntriesPerPacket >= entries.Count)
+            {
+                break;
+            }
         }
     }
 }

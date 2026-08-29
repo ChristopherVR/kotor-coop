@@ -227,6 +227,26 @@ public static partial class PacketCodec
         return r.Failed ? null : new ByePacket(peerId);
     }
 
+    public static int Write(Span<byte> buffer, HostByePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.HostBye);
+        w.WriteUInt32(packet.SessionId);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static HostByePacket? ReadHostBye(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.HostBye)
+        {
+            return null;
+        }
+
+        uint sessionId = r.ReadUInt32();
+        return r.Failed ? null : new HostByePacket(sessionId);
+    }
+
     public static int Write(Span<byte> buffer, WorldDigestPacket packet)
     {
         PacketWriter w = new(buffer);

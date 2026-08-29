@@ -66,6 +66,31 @@ default was a Steam path.
 - Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
   so the host's UDP port must be reachable from the client.
 
+## Host disconnected (crashed, quit, or the network dropped)
+
+A client that loses its host is not stuck: within `host_loss_timeout_ms` of silence (default
+5000ms, same as the ordinary reconnect trigger — near-instant instead if the host shut down
+cleanly rather than crashing) every co-op lock releases and you keep playing solo — companions
+respond to clicks again, doors and dialogue work normally, nothing stays frozen. A HUD/chat
+line says "Host connection lost - playing solo, will rejoin automatically." while this is
+happening.
+
+- The client keeps re-Helloing in the background the whole time; if the host comes back
+  (relaunched, or the network recovers) you rejoin automatically and everything re-mirrors —
+  no player action needed. A second HUD/chat line ("Host connection restored - rejoining.")
+  confirms it.
+- If you were mid-conversation with a shared NPC when the host vanished, you keep the reply
+  list you were already looking at and can keep clicking through it on your own — dialogue is
+  initiator-led, so this does not require the host.
+- `coop.ini host_loss_release = 0` turns this off and restores the old behaviour: every lock
+  stays held until you manually run `disconnect` in the console. `host_loss_timeout_ms` lets
+  the release wait longer than the reconnect attempt itself, if you would rather bet on a brief
+  blip resolving first. See [CONFIG.md](CONFIG.md) and
+  [disconnect-reconnect.md §11](research/disconnect-reconnect.md).
+- This does not apply to the HOST losing a client — a client vanishing mid-dialogue or
+  mid-interaction only ever releases what THAT client was holding; the host and every other
+  connected player are unaffected either way.
+
 ## I can't see my partner / their phantom never appears
 
 - Confirm both players are actually in the same module — a peer in a different module is
@@ -118,10 +143,25 @@ actual file against that table rather than assuming either side's "default" appl
 
 ## Companion stalls partway through a leg while following
 
-A known, narrow, well-characterised stall at the very last waypoint of a movement leg — see
-[party-reconciliation.md](research/party-reconciliation.md). Two fix candidates exist
-(`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`); both ship off by
-default because neither is confirmed live yet.
+**Fixed and on by default since 2026-08-29** (`party_follow_stall_recovery`). The engine's own
+"has the follower reached this waypoint" test is a STRICT comparison, and at the end of a leg the
+recorded waypoint collapses onto the follower's cached previous position — so the test compares a
+number against itself, can never pass, and the companion freezes where it stands. Live-reproduced
+4/4, including the severe form: a leader teleported 16.5 units away that the companion never
+recovered from at all.
+
+A runtime detector now watches for that exact wedged state and, once it has held for two seconds
+with the companion genuinely separated, gathers the party through the engine's own
+`CSWPartyTable::PositionParty` — the same call a module transition makes. Across five reps every
+wedge recovered on the first attempt (`party follow stall: recovered 0x... via positionparty` in
+`kotorcoop-plugin.log`). Note it RELOCATES the companion rather than walking it back: the engine's
+own long-distance pathfinding limit underneath is separate and still unfixed.
+
+Turn it off with `party_follow_stall_recovery=0`; `party_follow_stall_recovery_method` selects
+between six recoveries (the other five were each tried live and are documented, with their
+results, in [party-reconciliation.md](research/party-reconciliation.md) round 105). Two much older
+candidates (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) remain off —
+round 105 folded what they do into method `5` and measured it insufficient on its own.
 
 ## Swoop racing / a minigame won't start or gets stuck
 
@@ -231,6 +271,33 @@ recent (~200 MB each — a 32-bit game's full dump). Turn it back off with
 `install.ps1 -GameDir '...' -DisableCrashDumps`; it does not expire or undo itself. The
 dev-only `tools/crashlog.ps1 -EnableDumps` does the identical registry write for a hardcoded
 dev dump folder — the two are equivalent, just aimed at different audiences.
+
+## My partner looks like the wrong character (a stranger, or a companion) after a warp
+
+The body a peer is drawn with has two halves — the server object the mod writes, and the
+CLIENT TWIN the engine actually renders — and only the second one is what you see. Before
+2026-08-29 the mod decided "this phantom already wears the right look" from the server half
+alone, so a phantom re-spawned after a module change (a `warp`, a door, any transition) could
+be left rendering the `k_coop_phantom` blueprint for the rest of the module: the server field
+was correct, the twin did not exist yet at the moment it was written, and nothing re-applied
+it. It did not show at first connect, only after a transition — that ordering is the whole
+tell. Fixed by re-asserting the look on the twin until it lands, per body; see
+[research/name-plates.md](research/name-plates.md).
+
+If it still happens on a current build, the peer is probably PUBLISHING the wrong look rather
+than the mod applying it wrongly — i.e. that player's own agent has latched onto a body that is
+not their character. Check that side's agent log for `player: adopted the engine's own creature
+0x...` and `player 0x...: is-PC flag is ...` lines around the transition, and the receiving
+side's plugin log for the spawn line, which carries all three numbers that can disagree:
+
+```
+spawned phantom in slot 0: id 0x12D at 0x... (x, y, z) appearance 378 (peer published 378, renders 114), portrait 0
+```
+
+`appearance` is the server row, `renders` is the twin's row (what you see), and `peer
+published` is what came over the wire. Those three agreeing is the fix working; `renders`
+lagging is the twin gap above; `peer published` being someone else's row is the peer's own
+agent resolving the wrong player, which is a different bug and worth reporting with that line.
 
 ## Where to look next
 

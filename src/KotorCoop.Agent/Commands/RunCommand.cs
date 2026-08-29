@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using KotorCoop.Memory;
+using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
 
@@ -77,7 +78,16 @@ internal static class RunCommand
             // is no player creature to find — so an unresolved bridge is the expected state, not
             // a failure. The bridge re-resolves lazily once a save is loaded. Any other mode
             // genuinely needs the player now.
-            if (!options.MenuConnect)
+            //
+            // ⚠ EXCEPT coop.ini join_mode = newcharacter, which is the SAME situation reached a
+            // different way: that joiner has no save, so they are at the main menu on purpose and
+            // will be for as long as character creation takes. Refusing here is what made
+            // `run --join` exit 2 before a first-time joiner could do anything at all — the exact
+            // player the mode exists for. See NewCharacterJoinFlow.
+            bool newCharacterJoin = options.Mode == CoopMode.Join
+                && TryReadJoinMode(memory.ProcessId) == JoinMode.NewCharacter;
+
+            if (!options.MenuConnect && !newCharacterJoin)
             {
                 Console.Error.WriteLine($"could not locate player state: {diagnostic}");
                 return 2;
@@ -167,5 +177,31 @@ internal static class RunCommand
         ProfileGameBridge bridge = new(memory, profile, ownsMemory: false);
         resolved = bridge.TryResolveAnchor(out diagnostic);
         return bridge;
+    }
+
+    /// <summary>
+    /// coop.ini's <c>join_mode</c> for the install this process was launched from, read here
+    /// rather than taken from <see cref="AgentComposition"/> because the decision it feeds — may
+    /// this agent run with no world yet? — happens strictly before composition. Any failure
+    /// (no file, unreadable, no game directory) reads as the default, which is the mode that
+    /// requires a world, so an unreadable coop.ini can never silently relax the guard.
+    /// </summary>
+    private static JoinMode TryReadJoinMode(int processId)
+    {
+        try
+        {
+            using Process game = Process.GetProcessById(processId);
+            string? directory = Path.GetDirectoryName(game.MainModule?.FileName);
+            if (directory is null)
+            {
+                return JoinMode.Save;
+            }
+
+            return CoopConfig.TryLoad(CoopConfig.PathFor(directory))?.JoinMode ?? JoinMode.Save;
+        }
+        catch (Exception)
+        {
+            return JoinMode.Save;
+        }
     }
 }

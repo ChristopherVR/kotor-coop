@@ -27,6 +27,14 @@ public sealed record PongPacket(long OriginalSentTimeMs, long ServerTimeMs);
 
 public sealed record ByePacket(uint PeerId);
 
+/// <summary>host -&gt; every client: a clean shutdown announcement — see
+/// <see cref="PacketType.HostBye"/> for why this exists and why it is unreliable.
+/// <paramref name="SessionId"/> is carried purely as a sanity value for a future receiver that
+/// might want to confirm it against the one it saw in its own <see cref="WelcomePacket"/>;
+/// today's <see cref="KotorCoop.Session.CoopClient"/> does not need it because <c>Handle</c>
+/// already filters every inbound datagram to the single host endpoint this client joined.</summary>
+public sealed record HostByePacket(uint SessionId);
+
 /// <summary>
 /// A peer's in-world content fingerprint, sent both ways once a save is loaded and
 /// repeated periodically (and re-evaluated on every module change, since

@@ -115,15 +115,71 @@ public sealed partial class KotorGameBridge
     /// positive case) — once THAT is live-verified, passing <c>inSession: true</c> here too is
     /// the natural next step, not attempted by this pass.
     /// </summary>
-    public bool TryRequestAdoptedWorldLoad(out string diagnostic)
+    public bool TryRequestAdoptedWorldLoad(out string diagnostic) =>
+        TryRequestAdoptedWorldLoad(inSession: false, out diagnostic);
+
+    /// <summary>
+    /// The same adopted-world load, able to ask for the MID-SESSION replay.
+    ///
+    /// ⚠ WHY THE NEW-CHARACTER JOIN NEEDS IT. A joiner who creates a character through retail
+    /// chargen is, by the time that character exists, already standing in the Endar Spire — the
+    /// engine's own New Game path loads a module as part of finishing chargen, and there is no
+    /// safe place to interrupt it (the module name is built and consumed inside
+    /// <c>CSWGuiClassSelection::BeginPlayGame 0x6DBDF0</c>, after the pifo is written). So the
+    /// adoption that follows is not a main-menu load at all, and passing
+    /// <c>inSession: false</c> would make <c>MenuLoadController</c> ack-and-no-op the instant
+    /// it saw a server (its own <c>OnFrame</c>'s "server already exists" branch) — the player
+    /// would sit in the Endar Spire believing they had joined.
+    /// </summary>
+    public bool TryRequestAdoptedWorldLoad(bool inSession, out string diagnostic)
     {
-        bool ok = PluginMenuLoader.TryRequestLoad(_memory, out nint block, out diagnostic, adoptedWorld: true);
+        bool ok = PluginMenuLoader.TryRequestLoad(
+            _memory, out nint block, out diagnostic, adoptedWorld: true, inSession: inSession);
         if (ok)
         {
             _menuLoadBlock = block;
         }
 
         return ok;
+    }
+
+    /// <summary>The block the new-character capture was armed against, for
+    /// <see cref="TryGetNewCharacterCapture"/> to poll. 0 until it has been armed.</summary>
+    private nint _joinChargenBlock;
+
+    /// <summary>
+    /// Arms the plugin's new-character capture — coop.ini <c>join_mode = newcharacter</c>. See
+    /// <see cref="PluginMenuLoader.TryArmNewCharacterCapture"/> and
+    /// <c>KotorCoop.Plugin.NewCharacterCaptureController</c>.
+    /// </summary>
+    public bool TryArmNewCharacterCapture(out string diagnostic)
+    {
+        bool ok = PluginMenuLoader.TryArmNewCharacterCapture(_memory, out nint block, out diagnostic);
+        if (ok)
+        {
+            _joinChargenBlock = block;
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// Runs a character-creation drive verb through the plugin — <c>newgame</c>,
+    /// <c>chargen quick</c>, <c>chargen accept</c>. See
+    /// <see cref="PluginMenuLoader.TryDriveChargen"/> and
+    /// <c>KotorCoop.Plugin.CharGenDriveController</c>.
+    /// </summary>
+    public bool TryDriveChargen(uint kind, int classIndex, out string diagnostic) =>
+        PluginMenuLoader.TryDriveChargen(_memory, kind, classIndex, out diagnostic);
+
+    /// <summary>Polls the capture armed by <see cref="TryArmNewCharacterCapture"/>. False
+    /// while nothing has been armed yet or the block cannot be read.</summary>
+    public bool TryGetNewCharacterCapture(out uint state, out uint bytes)
+    {
+        state = 0;
+        bytes = 0;
+        return _joinChargenBlock != 0
+            && PluginMenuLoader.TryReadNewCharacterCapture(_memory, _joinChargenBlock, out state, out bytes);
     }
 
     /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> (or
@@ -231,8 +287,23 @@ public sealed partial class KotorGameBridge
     {
         List<KeyValuePair<uint, sbyte>> changed = [];
 
-        if (!_globals.IsResolved || _shadowBooleans is null || _shadowNumbers is null)
+        if (!_globals.IsResolved)
         {
+            return changed;
+        }
+
+        // A null shadow with a resolved table means ForgetWorldShadows dropped it because the
+        // world underneath was REPLACED (an adopted load). Re-take the baseline here and report
+        // nothing this pass, rather than waiting for the next TryResolve: the whole point of
+        // dropping it was to stop the OLD world's values being announced as changes, and this
+        // is the one place that can see the new ones. Self-healing on purpose — a channel that
+        // silently stops reporting for the rest of the session would be a worse bug than the
+        // one this fixes.
+        if (_shadowBooleans is null || _shadowNumbers is null)
+        {
+            _shadowBooleans = new byte[GlobalVariableTable.BooleanByteCount];
+            _shadowNumbers = new sbyte[GlobalVariableTable.NumberCount];
+            _globals.TryReadValues(_shadowBooleans, _shadowNumbers);
             return changed;
         }
 

@@ -152,6 +152,20 @@ internal static unsafe partial class PluginHost
             Log($"dialogue reply hook NOT installed: {replyDiagnostic}");
         }
 
+        // The other half of the same rule, and until now the missing half: a SPECTATOR must not
+        // be able to skip or advance somebody else's conversation. Skip is a different engine
+        // call one branch away from the reply commit inside the same switch — see
+        // DialogueSkipHook for the disassembly and for the live bug (a host joined a client's
+        // conversation and skipped a line).
+        if (DialogueSkipHook.Install(out string skipDiagnostic))
+        {
+            Log($"dialogue: {skipDiagnostic}");
+        }
+        else
+        {
+            Log($"dialogue skip hook NOT installed: {skipDiagnostic}");
+        }
+
         // One conversation for the whole session (the BG3 rule): while a peer holds the
         // token, this instance cannot start a dialogue at all. The spectate follow is
         // the one sanctioned exception (DialogueGateHook.BypassGrants).
@@ -307,6 +321,21 @@ internal static unsafe partial class PluginHost
             else
             {
                 Log($"minimap peers NOT installed: {minimapDiagnostic}");
+            }
+        }
+
+        // A default-OFF diagnostic, not a feature: four read-only splices on the delayed-
+        // script-situation path (DelayCommand -> AddEventDeltaTime -> the AI master's drain),
+        // for docs/research/minigames.md §24's root-cause question. See DelayEventProbeHook.
+        if (PluginConfig.ReadBool("delay_probe", false))
+        {
+            if (DelayEventProbeHook.Install(out string delayProbeDiagnostic))
+            {
+                Log($"minigame: {delayProbeDiagnostic}");
+            }
+            else
+            {
+                Log($"minigame: delayed-event probe NOT installed: {delayProbeDiagnostic}");
             }
         }
 

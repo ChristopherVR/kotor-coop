@@ -140,5 +140,6 @@ public class CoopSessionInterfaceShapeTests
         Assert.Empty(session.DrainDialogueGrants());
         Assert.Equal(WorldDigest.Empty, session.RemoteWorldDigest);
         Assert.Null(session.Network);
+        Assert.False(session.HostLost);
     }
 }

@@ -131,5 +131,10 @@ internal static class ConsoleVerbCatalog
         // A fifth live-test primitive (2026-08-28, docs/research/store-sync.md's live pass):
         // registered the same way. Does not shadow a retail verb.
         ("setgold", "setgold <amount>  (dev-only: sets party gold directly via CSWSCreature::SetGold; repairs a poisoned save)"),
+
+        // The character-creation drive verbs (2026-08-29). Only meaningful at the MAIN MENU,
+        // which is exactly where the console detour still works and the frame hook does not.
+        ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
+        ("chargen", "chargen quick [class 0-5] | chargen accept  (picks a class + Quick template, or presses Play)"),
     ];
 }

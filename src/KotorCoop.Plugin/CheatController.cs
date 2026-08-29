@@ -278,6 +278,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 FollowKick();
                 break;
 
+            case SharedBlock.CheatKindFollowStall:
+                FollowStall();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

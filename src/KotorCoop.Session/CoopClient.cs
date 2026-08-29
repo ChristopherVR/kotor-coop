@@ -65,6 +65,12 @@ public sealed partial class CoopClient : ICoopSession
     private string _rejectReason = string.Empty;
     private bool _reconnecting;
 
+    /// <summary>Backing field for <see cref="HostLost"/> — see that property's doc comment.
+    /// Set from <see cref="HostLossRule.ShouldDeclare"/> in <see cref="Tick"/> and from
+    /// <see cref="HandleHostBye"/>; cleared in <see cref="HandleWelcome"/> the moment a fresh
+    /// admission lands.</summary>
+    private bool _hostLost;
+
     /// <summary>Real gaps between successive <see cref="SendStateUpdate"/> calls — what
     /// <c>lagstats</c> shows so a live round can see the actual send cadence, not just the
     /// configured tick rate. See docs/research/lag-audit.md.</summary>
@@ -180,6 +186,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.StoreSnapshotV2] = HandleStoreSnapshotV2,
             [PacketType.StoreIntentAckV2] = HandleStoreIntentAckV2,
             [PacketType.Pong] = HandlePong,
+            [PacketType.HostBye] = HandleHostBye,
             [PacketType.None] = HandleNone,
         };
     }
@@ -192,6 +199,9 @@ public sealed partial class CoopClient : ICoopSession
     public NetworkSim Network => _channel.Sim;
 
     public bool IsConnected => _localPeerId != 0;
+
+    /// <inheritdoc cref="IPeerSession.HostLost"/>
+    public bool HostLost => _hostLost;
 
     public string LocalName => _settings.PlayerName;
 
@@ -287,9 +297,26 @@ public sealed partial class CoopClient : ICoopSession
         // so the SAME client — same nonce — rejoins automatically when the host returns,
         // and the host restores its slot rather than leaving a ghost. This is what makes
         // "the host restarted" or "the router blipped" recoverable in-game.
-        if (IsConnected && _lastInboundMs != 0 && now - _lastInboundMs > _settings.PeerTimeoutMs)
+        if (IsConnected && _lastInboundMs != 0)
         {
-            ForgetSession();
+            long silenceMs = now - _lastInboundMs;
+
+            // Checked BEFORE ForgetSession, which is what a timeout of the same duration hits
+            // in this very call otherwise: ForgetSession zeroes _lastInboundMs, and evaluating
+            // in the other order would read a silence of 0 on the tick that matters most. With
+            // the default HostLossTimeoutMs == PeerTimeoutMs the two fire in the same tick —
+            // declare-then-forget — which is deliberate: host loss is declared in the exact
+            // tick the client gives up and starts re-Helloing, not later.
+            if (HostLossRule.ShouldDeclare(
+                _settings.HostLossReleaseEnabled, _hostLost, silenceMs, _settings.HostLossTimeoutMs))
+            {
+                _hostLost = true;
+            }
+
+            if (silenceMs > _settings.PeerTimeoutMs)
+            {
+                ForgetSession();
+            }
         }
 
         if (!IsConnected)

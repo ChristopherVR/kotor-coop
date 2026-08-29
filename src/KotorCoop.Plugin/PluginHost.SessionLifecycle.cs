@@ -59,6 +59,7 @@ internal static unsafe partial class PluginHost
         // player's own creature that must not survive a disconnect either.
         _spectate?.ReleaseSession();
         _soloSegmentSpectate?.ReleaseSession();
+        _minigameLock?.ReleaseSession();
         _controlReturn?.ReleaseSession();
 
         // Then the bodies: faction and the min-1-hp pin, which are SAVED state.
@@ -200,6 +201,7 @@ internal static unsafe partial class PluginHost
         _spectate?.Invalidate();
         _soloSegment?.Invalidate();
         _soloSegmentSpectate?.Invalidate();
+        _minigameLock?.Invalidate();
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();
         _movieRelay?.Invalidate();

@@ -444,6 +444,20 @@ public static class CheatKinds
     /// ⚠ 45 is the highest number taken now. Take the next FREE one for a new verb.
     /// </summary>
     public const uint FollowKick = 45;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/party-reconciliation.md Round 105): dumps a
+    /// companion's follow-record wedge signature, then applies one of <c>FollowStallRule</c>'s
+    /// four candidate recoveries unconditionally — no wedge check, no stall timer, no cooldown,
+    /// unlike the automatic <c>party_follow_stall_recovery</c> pass. <c>Amount</c> is the
+    /// party-roster slot (0-8); <c>Target</c> is the method (1 phasereset, 2 followleader,
+    /// 3 positionparty, 4 priortie; 0 = whatever coop.ini selected). See
+    /// <c>SharedBlock.CheatKindFollowStall</c>.
+    ///
+    /// ⚠ 56 is taken from a reserved per-stream range, not the running maximum — check
+    /// <c>SharedBlock</c>'s own numbering note before adding another.
+    /// </summary>
+    public const uint FollowStall = 56;
 }
 
 /// <summary>

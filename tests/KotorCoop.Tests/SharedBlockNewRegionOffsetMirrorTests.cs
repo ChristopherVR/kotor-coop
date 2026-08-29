@@ -35,6 +35,19 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("ContainerLockResponseSerial", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ContainerLockResponseGranted", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ItemTemplateSpawnRing", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+
+        // The new-character (coop.ini join_mode = newcharacter) capture handshake. Its agent
+        // half lives in PluginMenuLoader rather than KotorGameBridge for the same reason the
+        // menu-load offsets next to it do: the bridge anchors on the player creature, which
+        // does not exist at the main menu, and this region's whole life is spent there.
+        // OffsetJoinChargenApplied is deliberately absent — the agent never reads the echo, so
+        // there is no second copy of it to drift.
+        ("JoinChargenRequest", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
+        ("JoinChargenState", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
+        ("JoinChargenBytes", "SharedBlock.JoinChargen.cs", "PluginMenuLoader.cs"),
+
+        ("MinigameLockActive", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
+        ("MinigameLockName", "SharedBlock.MinigameLock.cs", "KotorGameBridge.MinigameLock.cs"),
     ];
 
     [Fact]

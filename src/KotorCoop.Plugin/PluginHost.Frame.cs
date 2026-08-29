@@ -166,6 +166,17 @@ internal static unsafe partial class PluginHost
         // MainLoop fires at the menu and in-world alike, on the same game thread.
         _menuLoad?.OnFrame();
 
+        // The new-character capture, for the same reason and in the same place: it watches for
+        // the character retail chargen writes, which happens between the main menu and the very
+        // first world — the whole span where the swap hook is dormant. A no-op unless the agent
+        // has armed it (coop.ini join_mode = newcharacter).
+        _newCharacterCapture?.OnFrame();
+
+        // The chargen-drive verbs, here for the same reason: every one of them is only
+        // meaningful at the main menu and through the character-creation screens, where the
+        // SwapBuffers hook does not fire.
+        _chargenDrive?.OnFrame();
+
         // A locked server's password prompt. Here rather than on the swap hook for the same
         // reason the menu-load replay is: the ask lands while the player is at the main menu,
         // having just pressed Connect in the browser, where the swap hook does not fire. It is
@@ -207,6 +218,11 @@ internal static unsafe partial class PluginHost
         {
             RecordFrameTime();
         }
+
+        // Before the epoch gate: the delayed-event probe (coop.ini delay_probe, default OFF)
+        // records on the game's thread inside four engine splices and must be turned into log
+        // lines from somewhere file I/O is safe. Inert — and free — unless the probe installed.
+        DelayEventProbeHook.Drain();
 
         // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
         // where the gate returns early (no server) — the Enter chat prompt and the chat
@@ -497,6 +513,12 @@ internal static unsafe partial class PluginHost
         // the two never fight for SetCameraFollow on the same frame: a peer publishing a
         // solo-segment owner flag gets this instance parked on their fight instead.
         _soloSegmentSpectate?.OnFrame();
+
+        // After the solo-segment spectator, deliberately: both park the local player's input
+        // and both defer to a live conversation, so whichever asserted last would win a frame
+        // they overlapped on. A story-forced duel is the rarer and more fragile of the two, so
+        // it goes first and this one only ever adds to what it already did.
+        _minigameLock?.OnFrame();
 
         _controller?.OnFrame();
 

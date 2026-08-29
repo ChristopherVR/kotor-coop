@@ -692,3 +692,74 @@ What remains, honestly:
   engine advance, since the engine itself only processes one `UpdateDialog` tick per frame. The
   55-70ms real bursts measured here are a realistic reading of "a human mashing the skip key
   quickly," not an artificial worst case invented for this test.
+
+---
+
+# Addendum (2026-08-29): a SPECTATOR could skip, and now cannot
+
+## The report
+
+Live, from the user: a client started a conversation, the host joined it as a spectator, and
+the host pressed skip — and it advanced. Everything above treats skip as something only the
+owner would ever do; the word "spectator" does not appear in the 695 lines before this line.
+
+## Why the existing gate did not cover it
+
+Replies had been gated since the dialogue-sync work: `DialogueReplyHook` swallows
+`CSWGuiDialog::SelectReply 0x006A7110` and `CSWGuiDialogCinematic::SelectReply 0x006A7E20`
+while a peer holds the token. Skip is a **different engine call reached from a different
+branch of the same switch**, one branch away from the one that was hooked:
+
+```
+CSWGuiDialog::HandleInputEvent 0x006A7230   (event 0x27 = Enter/click, 0x2D)
+0x006A7266  mov  eax, [esi+0x1DF8]     ; the panel's own mode byte
+0x006A726C  test al, 1
+0x006A726E  je   0x6A729E              ; bit0=0 -> SelectReply            (GATED)
+0x006A7270  test al, 2
+0x006A7272  jne  0x6A730D              ; bit1=1 -> the engine's own no-op
+0x006A7278  mov  eax, [esi+0x19C0]     ; bit0=1,bit1=0 -> the SKIP case   (WAS UNGATED)
+0x006A7297  call 0x4AE970              ; CServerExoApp::SkipPastDialog
+```
+
+⚠ Correction to §"Round 79" above, which transcribed the call at `0x006A7288`: that address
+holds an id-fixup call (`0x4AEA30`); `SkipPastDialog` is at **`0x006A7297`**. The mechanism
+described there is right; those two addresses are off by one call.
+
+## The fix
+
+`DialogueSkipHook` splices `0x006A7278` — the skip case's own first instruction, six bytes, one
+whole instruction, reached only by fallthrough (`tools/xrefs.py 0x6A7278`: zero call/jmp sites,
+zero address literals, so neither of the switch's jump tables at `0x6A7374`/`0x6A7384` targets
+it). When swallowing it jumps to **`0x6A730D`**, which is precisely where the engine itself
+goes when it decides the event is already mid-skip — so a swallowed skip is bit-for-bit a skip
+that arrived one frame early, a state the engine handles many times per conversation.
+
+**One site covers both panel classes**, unlike the reply gag which needed two:
+`CSWGuiDialogCinematic` declares no `HandleInputEvent` of its own and inherits this one.
+
+The predicate is `DialogueSkipAuthorityRule.ShouldSwallowSkip(state)` — the same
+"anything but `Idle`" that `DialogueFollowMachine.SuppressReplies` uses, renewed on the same
+branch of the same frame pass with the same lease length, so the two can never disagree. The
+narrower `IsFollowing` would reopen `Standby` (the 15 s join window), `Yielding` and
+`BackingOff` — three windows this document's own follow machine records as measured in play.
+
+## Verified, and NOT verified
+
+VERIFIED live (2026-08-29): the hook's byte check passes against the real binary and it
+installs (`dialogue: dialogue skip authority at 0x6A7278`); the game then ran a full character
+creation, a module load, a two-player session and a real conversation with no crash. 16 unit
+tests pin the rule.
+
+⚠ **NOT verified live: an actual spectator keypress being swallowed.** The obvious instrument
+does not work for this — `skipline` pokes `CSWSObject+0x1F4` directly and never enters
+`HandleInputEvent`, so it exercises the owner-side primitive rather than the input path, and on
+the host it refuses outright (`no active conversation here to skip a line in`) because the
+spectate follow had not yet opened its own local copy. Driving a real keypress needs input
+injection, which this same session measured dropping clicks mid-sequence.
+
+**What the next round should add:** a `skipkey` live-test primitive that calls
+`CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)` on the resolved dialogue panel — thiscall,
+`ret 8`, panel found by vtable (`CSWGuiDialog 0x7559E0`, `CSWGuiDialogCinematic 0x755800`).
+That is the input path, so it goes through the hook, and
+`DialogueSkipHook.SwallowedCount` is then the oracle: it must increment on the spectator and
+stay flat on the owner, with the node index unchanged on both.

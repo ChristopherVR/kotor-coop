@@ -28,6 +28,8 @@ internal static unsafe partial class PluginHost
         _loot = new LootController(_view);
         _travel = new TravelController(_view);
         _menuLoad = new MenuLoadController(_view);
+        _newCharacterCapture = new NewCharacterCaptureController(_view);
+        _chargenDrive = new CharGenDriveController(_view);
         _connectMenu = new ConnectMenuController(_view);
         _chatInput = new ChatInputController();
         _passwordPrompt = new PasswordPromptController(_view);
@@ -62,6 +64,7 @@ internal static unsafe partial class PluginHost
         _minigameNotice = new MinigameNoticeController(_view);
         _soloSegment = new SoloSegmentController(_view);
         _soloSegmentSpectate = new SoloSegmentSpectateController(_view);
+        _minigameLock = new MinigameLockController(_view);
 
         // The minimap draw runs on the render path and has no other route to peer
         // positions, so it reads the block directly.

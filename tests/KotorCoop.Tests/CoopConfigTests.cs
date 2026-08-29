@@ -37,8 +37,44 @@ public class CoopConfigTests
             Assert.Equal("Malak", c.Name);
             Assert.True(c.MenuButton);
 
+            // Absent keys: the join path this config describes is the one that already
+            // shipped, and adoption is on. Pinned so a change to either default is caught as a
+            // behaviour change needing a docs/CONFIG.md update, not silent drift.
+            Assert.Equal(JoinMode.Save, c.JoinMode);
+            Assert.True(c.AutoAdoptWorld);
+
             Assert.NotNull(c.ResolveEndPoint());
             Assert.Equal(27140, c.ResolveEndPoint()!.Port);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// The first-time joiner's config: no save on this install, so the game's own character
+    /// creation supplies the character. Also pins that <c>auto_adopt_world = 0</c> is honoured
+    /// — the one lever that restores the pre-adoption "play degraded" behaviour exactly.
+    /// </summary>
+    [Fact]
+    public void ParsesJoinModeAndAutoAdoptWorld()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            host = 10.0.0.5
+            join_mode = newcharacter
+            auto_adopt_world = 0
+            """);
+
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+
+            Assert.NotNull(c);
+            Assert.Equal(JoinMode.NewCharacter, c.JoinMode);
+            Assert.False(c.AutoAdoptWorld);
         }
         finally
         {

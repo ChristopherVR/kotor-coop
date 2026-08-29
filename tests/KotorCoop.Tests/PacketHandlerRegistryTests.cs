@@ -56,6 +56,9 @@ public class PacketHandlerRegistryTests
         // intent — it originates those itself, and the host never relays one onward).
         PacketType.PartyPoolSnapshotV2, PacketType.PartyPoolIntentAckV2,
         PacketType.StoreSnapshotV2, PacketType.StoreIntentAckV2,
+        // host -> client only: a clean-shutdown announcement (PacketType.HostBye's own doc
+        // comment). The host never receives one, so HostHandledTypes above is unchanged.
+        PacketType.HostBye,
         PacketType.None,
     ];
 
