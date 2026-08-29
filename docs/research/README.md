@@ -22,7 +22,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [name-plates.md](name-plates.md) | Getting a phantom's name to actually render | Solved, fixed, live-verified |
+| [name-plates.md](name-plates.md) | Getting a phantom's name to actually render; a peer's LOOK after a warp; the census leak that materialised a duplicate companion | Solved, fixed, live-verified. 2026-08-29: the phantom's client twin is now re-dressed after re-spawn (`PeerIdentityRule`), and host companions no longer leak into the enemy census during the ~5s their follow pointer is null after a transition (`PartyCensusRule`, roster-based) — both fixes close the "peer/companion looks like Trask" reports, measured live |
 | [map-presence.md](map-presence.md) | Peer pins on the M-screen map | Solved, implemented, live-verified |
 | [animation-sync.md](animation-sync.md) | Weapon-draw/flourish/attack animation replication | Superseded by [animation-and-minimap.md](animation-and-minimap.md) |
 | [animation-and-minimap.md](animation-and-minimap.md) | Animation replication + minimap arrow, both bugs | Fixed, live-verified; supersedes animation-sync.md §1.2 |
@@ -36,8 +36,8 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | --- | --- | --- |
 | [transition-window-races.md](transition-window-races.md) | Four crash/desync races found by warping a live pair | Root-caused, fixed; established the project's four safe-write patterns |
 | [transition-smoothness.md](transition-smoothness.md) | Closing the gap between the host's door and the follower's warp | Door path implemented, live-verified, ~9x faster follower warp, ON by default; §11 extends the announce to every non-door `StartNewModule()` (galaxy map, Leviathan, Star Forge), ON by default; §12 (2026-08-27) live-verified the de-dup gate on a real door crossing, the galaxy-map/escape-pod legs still NEEDS-LIVE |
-| [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`) |
-| [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed |
+| [world-adoption.md](world-adoption.md) | A joiner plays the host's world with their own character | Implemented, live-verified (`agent adopt`). `join_mode = newcharacter` (2026-08-29): a first-time joiner runs the game's own character creation, the plugin quicksaves once the new game is up, and that PC carries into the host's served world — live-verified end to end (2 min 10 s, the player does nothing but chargen), arrival at the module entry ~5 units from the host (no snap yet), roster inherited from the host cosmetically. `auto_adopt_world` (ON) makes a `--join` with a mismatched save adopt automatically and a host serve its world by default. Post-adopt convergence fixes: the flag snapshot is now paged (was capped at 106 entries) and `ForgetWorldShadows()` clears stale world state on adopt |
+| [character-login-chain.md](character-login-chain.md) | Why an in-process load spawns a default-level-0 PC | Root-caused, fixed. **Retracted 2026-08-29**: an earlier write-up here claimed the `chargen` console verb writes `TEMP:pifo` — it does not; the chargen writer emits `Temp\temp.bic`. See world-adoption.md's 2026-08-29 correction |
 | [ingame-gui-transition.md](ingame-gui-transition.md) | Why an in-process load never leaves the main menu | Root-caused, fixed |
 | [cinematics.md](cinematics.md) | What a mid-module movie does to a live pair | Implemented, live-verified, ON by default |
 | [session-save.md](session-save.md) | Mid-session save/load: rejoin gates and the `loadgame` verb | ON by default; the `host_load_readopt` regression is CLOSED (a dangling-pointer write storm in `PartySelectSuppressionController`, fixed 2026-08-28, host-loadgame → client-re-adopt DIRECTLY live-verified post-fix). The STUNT_00 escape-pod crash the same round hoped the same fix closed did NOT stay closed — see galaxy-map-and-party-select.md's row and transition-crashes.md |
@@ -64,7 +64,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [dialogue-sync.md](dialogue-sync.md) | Synchronizing conversations across two instances | Implemented, live-verified |
+| [dialogue-sync.md](dialogue-sync.md) | Synchronizing conversations across two instances | Implemented, live-verified. Any peer may start (initiator-led replies); a spectator sees the rendered reply list with clicks swallowed, and (2026-08-29) a spectator's SKIP is now swallowed too — `DialogueSkipHook` intercepts the input-dispatch route `skipline` cannot reach, live-verified via the `skipkey` dev verb |
 | [dialogue-join-latency.md](dialogue-join-latency.md) | Why a joiner's subtitles lag | Measured; this doc's own A/B found no confirmed improvement (superseded in practice by dialogue-skip-desync.md's decisive case) |
 | [dialogue-skip-desync.md](dialogue-skip-desync.md) | Rapid mid-sentence skip desyncing a peer | Root-caused, fixed, live-verified; `dialogue_fast_join=1` flipped ON the same day |
 | [dialogue-consequences.md](dialogue-consequences.md) | Getting a reward node's effect and a recruit onto the peer | Design → implemented; recruit sync live-confirmed for two companions, code default OFF (shipped ini ON). `script_item_sync` live-verified 2026-08-27, full pass (core grant + all three controls, including container/corpse loot after a real ordering-race fix) — flipped ON by default |
@@ -112,7 +112,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [native-browser-panel.md](native-browser-panel.md) | Repurposing `CSWGuiSaveLoad` as the server browser | RE reference, implemented |
 | [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |
 | [connect-flow.md](connect-flow.md) | The in-game Connect panel and password entry | Implemented; connect/password flow live-verified. Persistent connection indicator live-verified 2026-08-27 (partial) — data path and peer tracking correct, on-screen render/`status_indicator=0` unconfirmed (shot.ps1 broken), `Reconnecting` state found unreachable |
-| [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; link-outage recovery live-verified. FlagAway (main menu / no player object) live-verified 2026-08-27 as FAILED — the local read masks the failure with transitional data (§10), root cause located, fix not yet shipped |
+| [disconnect-reconnect.md](disconnect-reconnect.md) | What happens when the link between two players fails | Implemented; link-outage recovery live-verified. FlagAway (main menu / no player object): first live pass (§10) FAILED — the local read masked the failure with transitional data — fixed the same day and re-verified PASS. §11 (2026-08-29): a client that loses its host releases every plugin-side lock within ~6s (`host_loss_release` ON, `host_loss_timeout_ms` 5000, `PacketType.HostBye`=70 for the fast path), keeps playing solo, and auto-rejoins when the host returns — live-verified |
 | [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host; internet play (STUN + UPnP, roadmap item 24) | STUN/UPnP built and unit-tested (2026-08-27) — NEEDS-LIVE against a real router; relay/hole-punching not planned |
 | [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |
 
@@ -128,7 +128,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop-race entry gate found and solved; the terminal transition call is BLOCKED, needs a real debugger this project doesn't have; turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-28: latch/park/toast all PASS on a real hand, a real edge-detector bug (rejecting the field's bare-`1` value) found and fixed — flipped ON by default; ending a hand mid-session still doesn't clear the flag, NEEDS-LIVE |
+| [minigames.md](minigames.md) | Swoop races, forced turret sequences, and Pazaak | Swoop race root-caused 2026-08-29 (§24): the "the race never dispatches" blocker was a wrong test premise, not an engine-level block — the race branch needs `Tar_SummonGadon` (not `Tar_SwoopEng`) plus three real reply picks, and with those the race runs end to end, no debugger needed. Co-op layer live-verified the same day: the racer races, every other peer is control-locked with a notice (`minigame_lock_peers` ON, `minigame_lock_timeout_s=600`, `minigame_modules`), follow-warp onto the track refused, rewards/globals cross via the existing channel; the keyboard half of the peer lock stays NEEDS-LIVE (injected keystrokes never reach this game), `delay_probe` ships OFF. Turret sequence confirmed working as designed. `pazaak_detect` live-verified 2026-08-28: latch/park/toast all PASS on a real hand, a real edge-detector bug (rejecting the field's bare-`1` value) found and fixed — flipped ON by default; ending a hand mid-session still doesn't clear the flag, NEEDS-LIVE |
 
 ## Mods
 

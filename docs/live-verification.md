@@ -2403,3 +2403,89 @@ trusting a negative plugin-side result.
   baseline, every failure in the long-known set.
 - `coop.ini delay_probe` was removed from both game directories at the end of the round; it ships
   OFF and nothing else in either file was touched.
+
+## Host loss: a client releases every lock and rejoins on its own (2026-08-29)
+
+Full write-up in [disconnect-reconnect.md](research/disconnect-reconnect.md) §11. Two-instance
+rig, `demo.ps1`, END_M01AA, Trask recruited. Shipped defaults (`host_loss_release` ON,
+`host_loss_timeout_ms` unset — keeps the built-in 5000ms).
+
+The client starts its OWN conversation with Trask (`startdialog end_trask` — dialogue is
+initiator-led, so this does not depend on the host), then the host's `swkotor.exe` is killed
+outright. Because the agent's own "dies with its game" watchdog tears the host's agent down the
+instant the game process disappears, this exercises the fast `HostBye` (`PacketType.HostBye`,
+70) path, not the 5 s silence fallback.
+
+| check | result |
+|---|---|
+| every plugin-side lock releases | PASS — block state sampled every second: `t+4.9s command 1 remotes 1 phantoms 1` → `t+6.1s command 0 remotes 0 phantoms 0` |
+| the release is announced | PASS — agent: `* Lanik left the game`, `* co-op: reconnecting...`; plugin: `[11:02:51.184] session: released - undoing what it did to this game`, followed by the companion-back-to-player-faction, death-suppression-lifted, interaction-locks-dropped and roster-is-yours-again lines, all firing end to end for the first time on a real (not manual) disconnect |
+| the client keeps playing solo | PASS — companion control, dialogue and doors all answered normally with the host gone |
+| the client's own reply list survives | PASS — the spectator-reply-list-rendering baseline (host-led, client joins at t=4) held node-sync for all 15 paired samples, confirming this path is unaffected by the change |
+
+The host's own side of the question — a CLIENT vanishing only ever releases what THAT client was
+holding, never the host's or another player's locks — is already correct by construction and was
+not re-tested this round. `host_loss_release=0` restores the pre-2026-08-29 behaviour (every lock
+held until a manual `disconnect`).
+
+## Companion follow-AI stall: the runtime detector, live (2026-08-29, round 105)
+
+Full write-up in [party-reconciliation.md](research/party-reconciliation.md) Round 105. Root
+cause named precisely: the engine's own `PathWaitDest` waypoint-reached test is a STRICT compare,
+and at the end of a leg the recorded trail node collapses onto the follower's cached prior
+position — so the compare reads a hard 0 and is arithmetically incapable of ever passing.
+Reproduced 4/4, including a leader teleported 16.5 units away that the companion never recovered
+from on its own.
+
+`FollowStallRule` (a runtime wedge detector, pure + unit-tested) plus a `followstall <slot>
+[method]` dev verb A/B'd all six candidate recoveries against the same reproduced wedge in one
+session:
+
+| method | live result |
+|---|---|
+| `1` phasereset | no effect — re-wedged identically |
+| `2` followleader | no effect |
+| `3` positionparty (`CSWPartyTable::PositionParty`, the same call a module transition makes) | **recovers** — 16.5 units behind to 0.88 units, in one call |
+| `4` priortie | real walking, then converges back onto the tie the strict compare rejects |
+| `5` destnode | 0.76u the wrong way |
+| `6` priorpush | 1.6u of progress, then a new frozen shape |
+
+Only `3` (`positionparty`) actually recovers the companion, so it ships as the default
+(`party_follow_stall_recovery=1`, `party_follow_stall_recovery_method=3`). Acceptance run: five
+reps, every wedge recovered on the FIRST attempt (including two at 8+ units behind), never more
+than 1/5 of the per-module anti-spin budget spent; a real door transition (`end_door10` →
+`end_m01ab`), two reconnects, and `verify.ps1` all clean at baseline (41/8), zero false
+positives across the whole battery. It RELOCATES the companion rather than walking it back — the
+engine's own long-distance pathfinding limit underneath is a separate, still-unfixed issue. A
+mirrored companion's follow-AI still does not run at all while mirroring holds, by design — this
+fix targets only the moment the wedge is detected, not that structural fact.
+
+## A peer looking like Trask after a warp: both root causes closed (2026-08-29)
+
+Two independent defects behind the "second Trask standing next to the party" and "my partner IS
+Trask" reports, both fixed and measured live. Full write-ups in
+[name-plates.md](research/name-plates.md) ("The peer's LOOK has the same two halves as its name"
+and "The census leak") and [enemy-materialisation.md](research/enemy-materialisation.md) §7.
+
+**The phantom's client twin** — the engine-rendered body, not the server-side object the mod
+writes — was left dressed as the bare `k_coop_phantom` blueprint after a re-spawn (a module
+transition, a `warp`, any transition), because the mod decided "already correct" from the server
+field alone while the twin did not exist yet at the moment it was written. Fixed by
+`PeerIdentityRule` re-asserting the look on the twin, per body, until it lands.
+
+**The census leak** — a companion whose party-FOLLOW pointer (`+0x4C0`) had not yet been
+(re)attached after a transition read as an ordinary hostile stranger and went out on the ENEMY
+channel; the receiving side, which cannot resolve that runtime id (party bodies are spawned by
+the party table at load, not placed in the GIT), built a stand-in wearing the companion's own
+appearance. Measured live on the rig, `end_m01ab`: Trask (appearance 378, party-table roster slot
+0) read `+0x4C0 == 0` for **5.5 seconds** (fifteen consecutive samples) on one run, 4.9s on a
+second. Fixed on both sides by `PartyCensusRule`: census membership now comes from the party
+TABLE's roster, not the follow pointer, and a mirror refuses to materialise a body for one of its
+own roster ids or for anything standing on one of its own companions wearing that companion's
+look — confirmed with the receiving side logging the refusal by name
+(`materialise: REFUSING owner 0x127 (appearance 378) - it is one of OUR party roster bodies`).
+Stand-ins get the same per-body dressing latch phantoms use, so a stand-in that IS legitimately
+built (a genuine enemy, never one of the local roster) is no longer left undressed either.
+Every icon surface that could theoretically carry a portrait (minimap arrow, M-screen pin, party
+bar, name plate) was checked explicitly and cleared as structurally incapable of causing this —
+the defect was always the enemy-materialisation channel, never an icon-rendering one.
