@@ -299,6 +299,34 @@ published` is what came over the wire. Those three agreeing is the fix working; 
 lagging is the twin gap above; `peer published` being someone else's row is the peer's own
 agent resolving the wrong player, which is a different bug and worth reporting with that line.
 
+## A second Trask (or Carth, or Bastila) is standing next to the party after a warp
+
+This one is not your partner wearing the wrong body — it is a **copy of your own companion**,
+and it arrives through the enemy channel, not the player channel. The tell is that the extra
+body has no name band and does not move with the party.
+
+Before 2026-08-29 the host decided "is this creature one of ours" from the engine's
+party-FOLLOW pointer, which the engine attaches some time *after* a companion's body exists.
+A module change (a `warp`, a door) is exactly that window, so Trask read as an ordinary
+stranger for a second, went out in the enemy census, and the other instance — which does not
+necessarily hold that companion under the same runtime object id, because party bodies are
+spawned by the party table at load rather than placed in the module — built a stand-in for
+him: Trask's own appearance row (378), standing where Trask stands.
+
+Fixed on both sides: the census now takes membership from the party TABLE's roster, and a
+mirror refuses to build a body for one of its own roster ids or for anything standing on one
+of its own companions wearing that companion's look. On a current build the receiving side's
+plugin log says so out loud when it happens anyway (an older host, say):
+
+```
+materialise: REFUSING owner 0x127 (appearance 378) - it is one of OUR party roster bodies
+```
+
+If you still get a duplicate companion, check the HOST's agent log rather than the client's:
+the census is published by whoever owns the fight, and a companion appearing in it at all is
+the defect. See [research/name-plates.md](research/name-plates.md) ("the census leak") and
+[research/enemy-materialisation.md](research/enemy-materialisation.md).
+
 ## Where to look next
 
 `docs/live-verification.md` has the two-instance checklist this project's own "live-verified"

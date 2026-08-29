@@ -341,3 +341,103 @@ not the log text) already translates through `MaterialisedEnemies.ToLocal` befor
 real stand-in), not on `0xB5` the number. The log line prints the OWNER id it was told to
 kill, not the local id it actually acted on — worth a clearer log line for whoever reads this
 next, but not a functional defect.
+
+## 7. What a stand-in LOOKS like — the twin gap, and the party leak that fed it (2026-08-29)
+
+Two independent defects, both closed this round. They compound: the first put the wrong
+CREATURE on the census, the second made every stand-in wear the wrong BODY.
+
+### 7.1 The census leak — a companion published as an enemy (MEASURED LIVE)
+
+`KotorGameBridge.ReadEnemies` excluded a creature when it was the player or when
+`CreatureRef.IsPartyMember` was true, and that flag is a read of the party-FOLLOW pointer,
+`CSWSCreature+0x4C0`. **That pointer is follow-AI state, not a membership record.** The engine
+attaches it some time after the body exists — which is exactly why `PartyFollowController` and
+`FollowPhaseReleaseRule` exist at all.
+
+Measured on the rig, `end_m01ab`, host instance, two independent runs:
+
+```
+13:20:19.485  roster[0] id 0x76 appearance 378 follow 0x0   *** roster member, follow NULL ***
+   ... 15 consecutive samples, 5.5 seconds ...
+13:20:24.958  roster[0] id 0x76 appearance 378 follow 0x0   *** roster member, follow NULL ***
+13:20:25.360  roster[0] id 0x76 appearance 378 follow 0x18851130   ok
+```
+
+Trask — appearance **378**, `CSWPartyTable+0x0C` roster slot 0 — spent **5.5 seconds** looking,
+to the old test, exactly like a hostile stranger. The window was opened here with
+`removeparty 0` / `recruit 0` (the dev verbs), the same body detach/attach the engine performs
+around a party rebuild; the first run measured 4.9 s, the second 5.5 s.
+
+What that costs on the receiving side is the whole "Trask icon" report:
+
+```
+client: resolve 0x76  ->  'no target: 0x76 resolves to 0x0 here'
+client: partyTable roster[0] = 0x74      (its OWN Trask, a different runtime id)
+```
+
+Party bodies are spawned by the party table at load, **not placed in the GIT**, so the two
+engines number them independently — measured, `0x76` on the host against `0x74` on the client
+for the same companion. A leaked companion id therefore resolves to nothing on the peer, sails
+straight past `TryMaterialise`'s "does it already exist locally" sweep, and gets a stand-in built
+for it, repainted to the row the census carried: **378, Unique_Trask, standing where the host's
+Trask stands.** That is a Trask-shaped body appearing next to the party after a relocation, out
+of the enemy channel, with no peer involved at all.
+
+**The fix** is `PartyCensusRule` (`KotorCoop.Protocol`, shared by source into the plugin):
+membership comes from the party TABLE's roster ids, `CSWPartyTable+0x0C`'s `int[9]`, which is
+written when a body is created and is therefore correct in the window the follow pointer is not.
+The follow-pointer test is KEPT as a widening belt — it is never wrong when true — and so is
+`IsPlayer`; see the warning at the end of `name-plates.md` for why `!IsPartyMember` must never be
+used to identify the player. Applied at all three census sites (`ReadEnemies`,
+`ReadCreatureLiveness`, and the external-mode phantom-body claim in `TryResolve`).
+
+Verified live, same window, same body: five `census 0x76` queries issued between 13:20:19.560
+and 13:20:23.370 — every one of them inside the follow-null window above — all answered
+**`not listed in this census`**. `verify.ps1` on a fresh demo afterwards: 40 pass / 9 fail,
+inside the documented ~40-42 / 7-9 baseline, with `enemy presence mirrored on the client PASS
+presence 25, census 25` — the same 25 ids as before the change, so nothing legitimate was lost.
+
+The mirror refuses too (`PartyCensusRule.MayMaterialise`): never a body for one of our own roster
+ids, and never one standing on our own companion wearing that companion's appearance.
+⚠ Appearance alone is deliberately not enough — refusing every enemy that shares a companion's
+row would make a real hostile invisible while it could still hurt us, which is the exact failure
+this whole file exists to remove. The POSITION is what makes it safe: a leaked companion is
+published at our own copy's feet, and a look-alike across the room is not.
+
+⚠ **Known consequence, accepted.** The roster array keeps a slot's object id after
+`RemovePartyMember` — measured, indefinitely, for a body the dev verb leaves standing — so a
+dismissed-but-present companion stays out of the enemy census. It is never anyone's enemy, and
+in real play the engine despawns that body anyway.
+
+### 7.2 Stand-ins were never dressed on the half that renders
+
+`TryMaterialise` wrote the appearance row once, at spawn, called the SERVER-side
+`RebuildAppearance`, and **never called `Odyssey.RebuildClientAppearance` at all, at any point**.
+The half that renders is the CLIENT TWIN, and `name-plates.md`'s live pass measured the twin
+absent at spawn on **100%** of spawns (re-confirmed this round: every phantom spawn logged
+`renders no twin yet`, the latch closing 30-380 ms later). So every stand-in rendered whatever
+`k_coop_phantom` gave it — appearance 114 — rather than the creature it stands for.
+
+Fixed with the identical per-body latch `PhantomController.ApplyAppearance` got one channel over:
+`Appearances[slot]` keeps the row the owner published, `TwinDressed[slot]` is the latch, and
+`Dress(slot)` re-asserts from the per-frame `Sweep` until `RebuildClientAppearance` returns true.
+It **re-resolves the body by id each pass** (`Odyssey.ResolveServerObject`) rather than trusting
+`Bodies[slot]`: this runs every frame until the latch closes, and a cached pointer to a freed
+body is the shape of crash the project's per-frame-write rule exists for. The spawn line now
+carries the twin's row alongside the server row, and a second line records the latch closing:
+
+```
+materialise: owner 0x3B -> local 0xB1 (appearance 355, renders no twin yet, faction 1)
+materialise: local 0xB1 (owner 0x3B) now renders appearance 355
+```
+
+⚠ **Unit-covered and mechanism-verified, NOT symptom-verified.** The latch is the same call, the
+same return value and the same discipline that was live-verified for phantoms on 2026-08-29, and
+this round re-confirmed the twin gap live on every phantom spawn — but no stand-in was
+materialised during the run to watch the new lines fire. Both instances loaded the same module,
+so all 25 (then 10) census ids resolved on both sides and there was nothing to build. Forcing a
+materialisation needs a creature that exists in exactly one engine; the natural source is an
+encounter spawn, and the one dev verb that creates a runtime body (`recruit`) creates a PARTY
+body, which §7.1 now excludes by construction. The next session that sees a real encounter spawn
+gets the answer for free from the two log lines above.
