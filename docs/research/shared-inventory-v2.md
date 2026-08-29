@@ -1408,3 +1408,156 @@ known.
 **Files touched this round**: this document only (correction), plus
 `tests/KotorCoop.Tests/WorldStatePumpItemsTests.cs` and `docs/live-verification.md` (see that
 entry). No production code changed.
+
+---
+
+## 12. 2026-08-29, root-cause pass on §10 — four real defects found and fixed, all four of them
+## decisions INSIDE one pump tick that no loopback rig could ever produce; a new direct
+## pump-level test suite; `party_pool_trace=1`
+
+§10's own "concrete next steps" asked for two things: a rig-only per-tick trace, and a root cause
+for the store's re-insertion loop. Both are here, and reading the code for the second found four
+separate defects — three of which explain live-observed symptoms this document has been attributing
+to "the same neighbourhood" for three rounds without ever pinning one.
+
+The common shape is worth stating first, because it is the reason §5/§7/§9's own loopback rounds
+kept passing while the rig kept failing: **every one of these is a decision made inside a single
+pump tick against what the bridge reported, and the loopback suite's fake bridge never reports
+anything but the perfect truth.** It cannot fail a scan (the real one documents that it does, and
+returns an empty dictionary when it does). It has no ambient-noise suppression, so it cannot merge
+a suppressed stack into a counted one. It never starts with pristine content both sides already
+hold. `SharedInventoryV2LoopbackTests` can only ever observe what the two ENGINES end up holding,
+which is exactly the wrong altitude for a bookkeeping bug. This pass therefore added a second,
+different vehicle — `tests/KotorCoop.Tests/SharedInventoryV2PumpTests.cs`, which constructs
+`PartyPoolPumpV2`/`StorePumpV2` directly against a scriptable bridge and a stub session and drives
+them one tick at a time (`KotorCoop.Session.csproj` gained the `InternalsVisibleTo` grant
+`KotorCoop.Memory` has always had, for the same reason). Seven of its cases were confirmed to FAIL
+against the pre-fix logic by reverting each fix in turn and re-running.
+
+### 12.1 The store's ~10-second re-insertion loop (§10.2): two independent causes, both closed
+
+`Pumps/StorePumpV2.cs` wrote `_belief[key]` only inside its `liveThisTick` branch. For a store
+whose GUI is closed — the ordinary case, and on §10.2's own rig the ONLY case, since the client's
+`openstore` never once succeeded — belief therefore stayed at its seed value permanently. The
+reconcile was held off re-firing by its `_expectedFromReconcile` entry alone, and that entry
+expired on a blind 10-second wall clock (`ExpectedTimeoutMs`) even though, with no scan possible,
+**nothing could ever consume it**. The moment it expired, `projected` collapsed back to `belief`
+and the identical insert was queued again. That is the observed period exactly: every known resref
+re-inserted every 10.1-10.9 s, 432 inserts across 18 keys, host clean at zero (the host never had
+this bug because its own pump only ever scans and publishes).
+
+**Fix (a)**: an expected-movement entry's expiry clock is slid forward for as long as its key
+cannot be observed at all (`SlideExpectedTimers`). Nothing can consume it while nothing can scan
+the store, so nothing may presume it resolved either. The moment the GUI does open, the clock runs
+again and a genuinely-dropped apply still self-heals through the same timeout §7's Bug 4 added it
+for.
+
+**Fix (b), the deeper one — a store's FIRST snapshot is its BASELINE, not a gap to close.** §9
+item 2 made the client's reconcile run blind (correctly: `InsertItemIntoStore` resolves its target
+by object id, no GUI needed) and seeded an unobservable key's belief to 0. But the client's own
+copy of a shop it has never opened is not empty — both instances loaded the same module, so it
+already holds that shop's entire pristine stock. Belief 0 against a snapshot naming 18 keys is
+therefore not "the host has 18 things I lack", it is "I cannot see the 18 things I already have",
+and the pump blind-inserted the whole shop into a copy that was already correct. That is why
+§10.2's re-inserted resrefs were the shop's whole base inventory rather than anything that round's
+recipe ever touched. `_baselinedStores` now records the first snapshot naming a store and seeds
+every key it carries as already-agreed; a key or quantity appearing in a LATER snapshot is a
+genuine host-side change and is still mirrored from 0, so §9's own "host sells while the client's
+GUI is closed" requirement keeps working (`StoreHostSellMirrorsToClientEvenWithTheClientsGuiClosed`
+was reworked to establish that baseline first, which is what a real session does).
+
+A third, smaller gap closed alongside: a belief the pump only ASSUMED (blind, from the snapshot) is
+now **re-seeded** by the first real scan of that store rather than diffed against. The difference
+between a guess and reality is not a player action, and reporting it as one is a phantom sale
+landing on the host's canonical engine — the same class as §6.4's "client buy-back never
+mirrors / host re-buy succeeds a second time", from the other end.
+
+### 12.2 The party pool's fabricated "local add of 6x" (§10.1): the ambient-suppression skip
+
+`KotorGameBridge.PartyPool.cs` kept ambient-script noise out of the totals by SKIPPING a suppressed
+item (party-pool-sync.md §20). That is sound only while an item id keeps its own separate stack
+forever, and the engine does not work that way: same-key stacks merge, and a merge can destroy
+EITHER id. A suppressed 6-unit ambient stack merging into a counted stack therefore made the
+COUNTED total jump by 6 with nothing in the pool having actually moved — which
+`PartyPoolPumpV2`'s belief-delta detect step read as a genuine local deposit of 6, published to
+the host, and the host applied. That is §10.1's unprompted `local add of 6x 'g_i_medeqpmnt01'`,
+landing between two real `pooladd`s and permanently splitting the two engines. The reverse merge
+gives the mirror image, which is §10.1's own spurious `remove of 4x ... no matching stack found`
+one second earlier.
+
+It also explains the single most specific clue §6.2 left and nobody could account for: the doubling
+ramp rode `g_w_blstrpstl001` and `g_a_clothes01` — `end_m01aa`'s own ambient tutorial gear, keys
+that round never touched — *simultaneously* with the targeted key. Those are precisely the items
+the suppression cache had decided about, and therefore precisely the items whose merges could
+fabricate movement.
+
+**Fix**: suppression itself (`IsAmbientPartyPoolNoise`, a permanent per-id decision) is unchanged;
+what is DONE with the answer is not. A new `PartyPoolAmbientBaseline` holds a per-KEY offset —
+the aggregate over every item of a key is stable however the engine reshuffles ids between stacks,
+so the ambient contribution comes off it as a constant. It self-corrects downward when the ambient
+content is itself consumed, and drops outright when the key leaves the pool, so a used-up ambient
+medpac cannot silently eat an unrelated genuine deposit later in the session
+(`tests/KotorCoop.Tests/PartyPoolAmbientBaselineTests.cs` pins every one of those merges).
+
+### 12.3 A failed party-pool scan was read as "the pool is empty"
+
+`PumpClient` called `bridge.TryScanPartyPoolTotals(out scan)` and **ignored the return value**
+(`PartyPoolPumpV2.cs` line 201 as it stood). `IPartyPoolBridge`'s own contract could not be more
+explicit — *"False when there is no world loaded yet (main menu, loading screen) or the read
+otherwise failed — the caller must not treat that as 'the pool is empty'"* — and
+`KotorGameBridge.PartyPool.cs` hands back an EMPTY dictionary in exactly that case. So a failed
+scan read as every key at once dropping to zero: a phantom REMOVE per key, published to the host
+and applied to the host's own canonical engine, followed by the mirror-image phantom ADD the moment
+the scan started working again. A transition, a loading screen, or a transiently unreadable pointer
+chain is enough. Fixed: a failed scan is NO OBSERVATION — the whole tick is skipped, reconcile
+included, because a reconcile computed against a value nobody actually read is just as wrong as a
+detection is.
+
+### 12.4 First sight published a key's entire standing quantity as a deposit
+
+§9 removed the old "seed silently, defer one tick" first-sight branch for a genuine reason (a delta
+design can never recover a value it silently absorbs) and replaced it with a flat belief of 0. But
+both instances load the same save and hold the same pool, so the first tick on which the pump and
+the first snapshot coincide publishes every stack in the stash as a fresh local deposit — a
+guaranteed publish-then-double, and a plausible additional contributor to every ramp §6/§8/§10
+recorded. Seeding to `min(actual, snapshotValue)` splits the two cases with no heuristic at all:
+whatever the host already agrees this key holds is standing shared content and is nobody's deposit,
+while anything beyond that is a genuine local surplus and is still reported immediately (§9's own
+`ThreeRapidClientDepositsConvergeToExactlySumOnBothSides` regression case still passes unchanged).
+
+### 12.5 Three smaller corrections made in the same pass
+
+- **The scan cache was never invalidated by mode 2.** §2.8 states plainly that
+  `InvalidatePartyPoolScanCache` "is still called the moment a mode-2 pump queues a reconcile
+  apply, for the identical reason mode 1 calls it". It is not called anywhere in either v2 pump,
+  and never has been. With the real bridge's 1-second throttle that means a landed reconcile can be
+  read out of a stale cache up to a full window later — on a tick whose expected-movement
+  bookkeeping has already moved on, which is one plausible route to §8.1's own live finding. Now
+  called on queueing a reconcile, on publishing a detected local change, and on the host after
+  draining accepted intents.
+- **An expected-movement entry could expire while its own apply was still queued.** Applies drain
+  one per dispatcher poll through the single-slot arbitrated channel, so a wall clock started at
+  QUEUE time expires the tail of any long burst while it is still sitting there undispatched —
+  after which the gap re-fires and the engine applies it twice. The clock now starts at dispatch
+  (`ExpectedReconcileMovement.Dispatched`, stamped by `TryDequeuePendingApply` under the same lock
+  that owns the queue), which is within one poll of true completion.
+- **A module change is re-seeded, not detected.** Clearing the ambient baseline makes the same
+  unchanged pool report LARGER totals than it did a tick before. A new
+  `IPartyPoolBridge.PartyPoolScanEpoch` (constant for every fake, bumped by the real bridge's
+  `ClearPartyPoolSuppressionCache`) tells the pump the step was bookkeeping, not engine movement.
+
+### 12.6 `party_pool_trace=1` (§10's own ask (a))
+
+One new coop.ini key, read by `CoopConfig`/`AgentSettings` and passed to BOTH v2 pumps (they share
+every bookkeeping mechanism, and a failure in one is diagnosed with the other's lines beside it).
+On every tick a key has any non-trivial state it prints `actual`, `belief`, `snap`, `raw`,
+`expected`, `outstanding`, `published`, `target`, `reconcile` — and, for the store, whether that
+tick was `live` or `blind` and whether it re-seeded. Three live rounds have now had to infer a root
+cause from log timestamps alone; this exists so the next one does not. OFF by default.
+
+### 12.7 Bench status
+
+`dotnet build KotorCoop.slnx -warnaserror` clean (0 warnings, 0 errors). Full suite
+`dotnet test tests/KotorCoop.Tests --no-build`: 2,540/2,541, the single failure
+(`DisconnectRecoveryTests.HeavyPacketLossStillConverges`) being this repository's own documented
+flake — passed 1/1 re-run alone immediately after. All 33 `SharedInventoryV2*` tests pass.
