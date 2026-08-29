@@ -183,8 +183,12 @@ dormant in retail KOTOR. Not on any KOTOR login path.
   **`Temp\pifo.ifo`** — a standalone one-player module-IFO carrying `Mod_PlayerList`.
   VERIFIED.
 * Writers of `Temp\pifo.ifo`, exhaustive by string xref (`0x745318 "pifo"`, `0x74554C
-  "TEMP:pifo"`): **(a)** chargen — `CSWCCreature::SaveCharGenCreature 0x6123E0` (new
-  game); **(b)** `CServerExoAppInternal::StorePlayerCharacters 0x4B2BA0` (in-game module
+  "TEMP:pifo"`): ~~**(a)** chargen — `CSWCCreature::SaveCharGenCreature 0x6123E0` (new
+  game)~~ **⚠ (a) IS WRONG — RETRACTED 2026-08-29, see the second addendum at the foot of this
+  file.** `SaveCharGenCreature` does not reference either literal; the five occurrences of
+  `0x745318` are `0x4B2D61`, `0x4B908D`, `0x561EC7`, `0x561F1F`, `0x6CA558`, all inside (b),
+  (c), `DoPCAutosave` and `LoadCharacterFromIFO`. **THE REAL LIST IS (b) AND (c) PLUS
+  `DoPCAutosave 0x4B8300`**; **(b)** `CServerExoAppInternal::StorePlayerCharacters 0x4B2BA0` (in-game module
   transitions via `StartNewModule`, snapshots each **live** creature; writes nothing when
   no player has a creature — return is `stored_count > 0`, `0x4B2E36`); **(c)**
   `LoadPCAutoSave 0x6CA250`, which after exporting the save's `SAVEGAME.sav` into
@@ -404,3 +408,42 @@ capture poll lives in.
 | `0x4B2BA0` | `StorePlayerCharacters` — transition-only TEMP:pifo writer; sets `[player+0x80]=-1` for creatureless players; **not on the from-menu path** (sole caller `StartNewModule 0x4BAAD6`) |
 | `0x7DE` | restype 2014 = "ifo" — `TEMP:pifo` ⇒ `Temp\pifo.ifo`; `CResRef("Module")+0x7DE` ⇒ `module.ifo` |
 | `0x525350` | `HandlePlayerToServerCharacterDownload` — vault reply machinery, creates nothing, dormant |
+
+---
+
+## Second addendum (2026-08-29): writer (a) is RETRACTED — chargen writes a BIC
+
+The addendum above built `join_mode = newcharacter` on §2's writer (a), "chargen —
+`CSWCCreature::SaveCharGenCreature 0x6123E0`". **That attribution is wrong**, it was caught by
+the live round that tried to use it, and the correction is recorded here because §2 is the page
+anyone building on `TEMP:pifo` reads first.
+
+What the live run measured: the plugin hooked the sole call site (`0x006DBE9B`) and looked at
+`Temp\pifo.ifo` the instant `SaveCharGenCreature` returned. The file was **0 bytes**, still 0
+after a 400 ms spin on the game thread, and `Temp\` was empty by the time the Endar Spire was
+up. That was diagnosed as a flush race. It was not a race — there was nothing being written.
+
+What the disassembly says:
+
+* **`SaveCharGenCreature` references neither literal.** `tools/xrefs.py 0x745318` (`"pifo"`)
+  gives five address-literal sites — `0x4B2D61`, `0x4B908D`, `0x561EC7`, `0x561F1F`,
+  `0x6CA558` — and `0x74554C` (`"TEMP:pifo"`) two more, `0x4B90CA` and `0x6CA605`. None is
+  inside `0x6123E0..0x6134B9`. The function was attributed to the FEATURE ("this is the new-game
+  path, so this must be the new-game writer") rather than to a hit on the string, and a
+  string-xref list cannot catch that: the second step is not the mechanical one.
+* **Its own tail names a different file and a different restype.** The GFF it builds is headed
+  `"BIC "` / `"V2.0"` (`0x745384`/`0x745338`, at `0x61245D`/`0x612445`) and it ends at
+  `0x00613434` with `CResGFF::WriteGFFFile("TEMP:" + "temp", 0x7DF)` — `0x745310` + `0x74F4F4`,
+  restype 2015 = **"bic"**. It writes `Temp\temp.bic`, a character file, not a module IFO.
+
+So the corrected §2 list has **three** writers, all of them server-side and none on the
+from-menu new-game path: `StorePlayerCharacters 0x4B2BA0` (module transitions, via
+`StartNewModule`), `DoPCAutosave 0x4B8300` (the autosave, which then copies `TEMP:pifo` into the
+save directory at `0x4B90FC`), and `LoadPCAutoSave 0x6CA250` (the load side's copy, and §7's
+truncation trap). A new game reaching its first module from the menu goes through
+`ExecuteLoadModule → LoadModule` (§1), which is exactly why none of them runs and why `Temp\`
+was empty.
+
+`join_mode = newcharacter` therefore takes the new character out of a real SAVE — see
+[world-adoption.md](world-adoption.md)'s "The capture point, answered" section. The pifo shape
+statement in the first addendum stands unchanged; only its provenance was wrong.

@@ -763,3 +763,48 @@ injection, which this same session measured dropping clicks mid-sequence.
 That is the input path, so it goes through the hook, and
 `DialogueSkipHook.SwallowedCount` is then the oracle: it must increment on the spectator and
 stay flat on the owner, with the node index unchanged on both.
+
+---
+
+## `skipkey` (2026-08-29): the primitive that actually reaches the hook
+
+Built exactly as the paragraph above specifies. `Odyssey.SendDialogueSkipKey` resolves the
+dialogue panel with the existing `GetDialoguePanel()` (vtable-matched against
+`CSWGuiDialog 0x7559E0` / `CSWGuiDialogCinematic 0x755800`, the same resolver
+`SelectDialogueReply` uses) and calls `HandleInputEvent` **through the panel's own vtable
+slot**, not the address.
+
+**The slot is 0x3C, and it is the same slot in both classes.** Read out of the two vtables:
+index 15 of each holds `0x006A7230`. `CSWGuiDialogCinematic` declares no override, which is the
+same fact that lets `DialogueSkipHook` cover both panel classes with one splice while the reply
+gag needed two — and calling through the slot rather than the address keeps that true if a
+future build ever changes it.
+
+**The arguments, re-derived rather than assumed** (`0x6A7230`, thiscall, `ret 8`):
+
+```
+0x006A7230  push ebp
+0x006A7231  mov  ebp, [esp+0x0C]      ; <- arg2 (one push deep)
+0x006A7235  test ebp, ebp
+0x006A723A  je   0x6A7333             ; arg2 == 0 -> straight to the return
+0x006A7240  push ebx
+0x006A7241  mov  ebx, [esp+0x10]      ; <- arg1 (three pushes deep)
+0x006A7245  cmp  ebx, 0x3D            ; ... 0x27 / 0x2D compared below
+```
+
+So arg1 is the EVENT CODE (`0x27`) and arg2 is a payload the function refuses outright when
+zero. `1` satisfies that test and is never dereferenced on this branch — only the `0x1F9` event
+reads through it, and `0x27` is not `0x1F9`. The jump table at `0x6A7374` is indexed by
+`event - 0x27` (`lea eax,[ebx-0x27]; cmp eax,0xB; ja 0x6A730D`), which is how `0x27` reaches the
+mode-byte test at `0x6A7266` and, from there, the skip case this document's hook sits on.
+
+**Why the counter is reported before AND after in one line.** `CheatController.SkipKey` reads
+`DialogueSkipHook.SwallowedCount`, dispatches, reads it again, and answers with both. The detour
+runs synchronously inside the call, on the same thread, so the pair is exact; and one console
+reply then distinguishes the two outcomes without a second round trip — `swallowed N -> N+1`
+means the gag fired (spectator), `swallowed N -> N` means it passed through (owner). Console
+verb: `skipkey`, no arguments, blockpoke-only, documented in docs/CONSOLE.md.
+
+⚠ It is deliberately NOT wired into `FuncInterpHook`'s verb list, matching
+`skipline`/`selectreply`: dev-only live-test primitives stay reachable only through
+`tools/blockpoke.ps1`, never by a player typing at the in-game console.

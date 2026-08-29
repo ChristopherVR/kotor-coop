@@ -262,6 +262,13 @@ strange thing to require of someone whose whole intent is co-op.
 
 ## The observation
 
+> ⚠ **THIS SECTION'S PREMISE IS FALSE, AND THE ROUND BELOW ("The capture point, answered")
+> replaces it.** Retail chargen does NOT write `TEMP:pifo`. `SaveCharGenCreature 0x6123E0`
+> does not reference the string at all and its own tail writes `Temp	emp.bic`. It is kept
+> here, unedited, because the whole live round that followed was spent measuring the
+> consequence, and a reader who only sees the fix would not know which of these paragraphs
+> to distrust elsewhere.
+
 **Retail chargen already writes the file adoption carries.** §2 of
 [character-login-chain.md](character-login-chain.md) enumerates the writers of `TEMP:pifo`
 exhaustively, by string xref, and the first of the three is
@@ -282,7 +289,7 @@ order:
 | Address | Call | Note |
 | --- | --- | --- |
 | `0x006DBE93` | `CreateServer(appManager, 0)` — `0x00401380` | the same call `MenuLoadController.FirePhase1` makes |
-| `0x006DBE9B` | **`SaveCharGenCreature([classSel+0x68])`** — `0x6123E0` | writes `Temp\pifo.ifo` |
+| `0x006DBE9B` | **`SaveCharGenCreature([classSel+0x68])`** — `0x6123E0` | ⚠ writes `Temp	emp.bic`, NOT `Temp\pifo.ifo` — see the correction below |
 | `0x006DBEDE` | `StartConnectToSession` — `0x005D5040` | the loopback connect, again as FirePhase1 |
 | `0x006DBF07` | `RequestStatus` — `0x006775E0` | |
 | `0x006DBF0C`+ | module name built from `[classSel+0x1558]`/`+0x155C` | the Endar Spire start |
@@ -403,7 +410,7 @@ opted out of neither sees no change.
 
 | Address | Symbol / meaning |
 | --- | --- |
-| `0x6123E0` | `CSWCCreature::SaveCharGenCreature` — writes `TEMP:pifo`; **one** call site, `0x006DBE9B` |
+| `0x6123E0` | `CSWCCreature::SaveCharGenCreature` — ⚠ writes **`TEMP:temp` restype `0x7DF` ("bic")** through `CResGFF::WriteGFFFile` at `0x613434`, NOT `TEMP:pifo`; **one** call site, `0x006DBE9B` |
 | `0x6DBDF0` | `CSWGuiClassSelection::BeginPlayGame` — the whole new-game start; CreateServer `0x6DBE93`, pifo `0x6DBE9B`, connect `0x6DBEDE`, RequestStatus `0x6DBF07`, module name `0x6DBF0C`+ |
 | `0x6EB320` | `CSWGuiMainCharGen::BeginPlayGame` — `RemoveSubPanels` then tail-jmp to `0x6DBDF0` with `this = [chargen+0x68]`; **no stack args** |
 | `0x67AFB0` | `CSWGuiMainMenu::OnNewGamePicked` — ⚠ dereferences its firing-control argument at `0x67AFF0`; do not pass 0 |
@@ -481,3 +488,140 @@ them is explicitly rejected by character-login-chain.md §5.
    lands at `ModEntryArea`, not next to the host. The presence/teleport machinery closes the gap
    afterwards; judging health on POSITION will still call every healthy adoption a failure.
 4. **Pressing New Game** — see the section above.
+
+---
+
+# The capture point, answered: chargen writes a BIC, not a pifo (2026-08-29, round 2)
+
+## The correction
+
+The previous round's blocking finding — `SaveCharGenCreature` "has not flushed the file when it
+returns", `Temp\pifo.ifo` 0 bytes at the hook and still 0 after a 400 ms spin — was measured
+correctly and diagnosed wrongly. There was no flush to wait for. **`SaveCharGenCreature` never
+writes a pifo at all.**
+
+Two independent reads say so, and they agree:
+
+* **String xref.** `tools/xrefs.py 0x745318` (the `"pifo"` literal) lists five address-literal
+  occurrences: `0x004B2D61` (`StorePlayerCharacters`), `0x004B908D` (`DoPCAutosave`),
+  `0x00561EC7`/`0x00561F1F` (`LoadCharacterFromIFO`), `0x006CA558` (`LoadPCAutoSave`).
+  `"TEMP:pifo"` (`0x74554C`) adds `0x004B90CA` and `0x006CA605`, in the same two functions.
+  **Not one of them is inside `0x6123E0..0x6134B9`.** So character-login-chain.md §2's writer
+  (a) is wrong, and it was wrong in the one way a string-xref list cannot self-correct: the
+  function was attributed to the *feature* ("chargen") rather than to a hit on the literal.
+* **The function's own tail.** `SaveCharGenCreature` builds a GFF whose header is `"BIC "` /
+  `"V2.0"` (`0x745384` / `0x745338`, pushed at `0x0061245D` / `0x00612445`), fills it with
+  `FirstName`, `LastName`, `Description`, `Gold`, appearance, class list and so on, and ends at
+  `0x00613434` with `CResGFF::WriteGFFFile(<name>, 0x7DF)` where the name is
+  `"TEMP:" + "temp"` (`0x745310` + `0x74F4F4`) and `0x7DF` = 2015 = **"bic"**. It writes
+  `Temp\temp.bic` — a character file — not a module IFO with a `Mod_PlayerList`.
+
+The file the previous round watched, `Temp\pifo.ifo`, reads as 0 bytes because
+`LoadCharacterFromIFO(-1)`'s own missing-resource branch (`0x561EF8`) fabricates an empty one,
+and empty is exactly what an unrelated leftover looks like. Every symptom that round recorded is
+consistent with a file nobody was writing.
+
+⚠ **Generalisation worth carrying**: a writer list that is "exhaustive by string xref" is only
+exhaustive for the *string*. Attributing an entry to a feature is a second, unchecked step, and
+this is the second time in this document that step has cost a live round (§7's `LoadPCAutoSave`
+truncation was the first). Re-derive the attribution from the disassembly before building on it.
+
+## What replaces it
+
+Exactly the recommendation the previous round's own "next step" named, and it needed no new RE
+beyond one call:
+
+```
+client                                                  host
+------                                                  ----
+agent: --join, coop.ini join_mode = newcharacter
+   |  connect (admitted, degraded - no world yet)       CoopHost + WorldTransfer.ServeAsync
+   v                                                    (auto_adopt_world, ON by default)
+bridge.TryArmNewCharacterCapture  ->  block 0x4780      state = 1 (armed)
+   |
+   v
+PLAYER creates a character (retail screens, untouched); the new game loads the Endar Spire
+   |
+   v
+NewCharacterCaptureController (MenuFrame, 250 ms)
+   |   Odyssey.HasPlayer, then a 4 s settle
+   v
+   Odyssey.RequestQuickSave()  ->  DoQuickSave 0x005F4B50      state = 4 (saving)
+   |   retried up to 5x, 8 s apart: GetIsAllowedToSave is a real gate
+   v
+   watch saves\ for a SAVEGAME.sav newer than world-up, >= 256 bytes, stable across two polls
+   |
+   v
+   block 0x47C0 = the directory NAME ; 0x478C = its bytes ; state = 2 (captured)
+   |
+   v
+agent: PlayerIfo.TryExtractPlayer(saves\<name>)   <- the SAME extraction join_mode = save uses
+   |
+   v
+WorldAdoption.TryAdoptWithCharacterAsync  ----- unchanged fetch/stage/verify ----->
+   |
+   v
+bridge.TryRequestAdoptedWorldLoad(inSession: TRUE) ; ForgetWorldShadows() ; manager.Reconnect()
+```
+
+The player still does nothing but character creation. The Endar Spire intro is cut short by the
+adoption load, which is a full `DestroyServer` / `UnloadModule` / `CreateServer` teardown
+(`FireMidSessionPhase1`) — the same teardown a real mid-session Load Game performs, so no
+dialogue state can survive it.
+
+### The save primitive
+
+`CClientExoAppInternal::DoQuickSave 0x005F4B50` is the whole retail quicksave and the smallest
+save entry point in the binary. Disassembled: it takes **no arguments and uses no `this`** (the
+first thing it does with `ecx` is overwrite it, `lea ecx,[esp+0xc]` at `0x5F4B6D`; it ends in a
+bare `ret`), so it binds as a plain Cdecl no-arg call. Its body is two
+`CExoString("QUICKSAVE")` (literal `0x74E9E0`) and
+`CClientExoApp::SendSaveGameRequest(client, 0, &name, &description)` at `0x5ED670` — the
+ordinary client→server save message, handled in `HandlePlayerToServerModuleMessage` behind
+`CSWSPlayer::GetIsAllowedToSave` (`[player+0x3C] != 0`, `0x560CC0`) and landing in
+`CServerExoAppInternal::SaveGame 0x4B58A0`, whose directory is
+`sprintf("SAVES:%06d - %s", number, name)` (format `0x7454D4`). Slot number 0, name
+`QUICKSAVE` — and it does not collide with `PluginMenuLoader.AutosaveSlot`
+(`000001 - AUTOSAVE`), the slot the adoption then stages over.
+
+Also exposed as the `save` console verb (docs/CONSOLE.md), which several previous rounds have
+wanted for its own sake.
+
+### Why the plugin names the directory rather than the agent guessing
+
+Both processes can see `saves\`, and "the newest directory" would usually be right. The plugin
+is the side that knows *when* the save was asked for and *when this world came up*, so it is the
+side that can distinguish a directory this session produced from one that was already on disk —
+and two processes each independently picking "the newest" is two chances to disagree at the one
+moment it matters. Block field `OffsetJoinChargenSaveDir 0x47C0`, 32 bytes of NUL-padded ASCII,
+written BEFORE the state goes to `captured` (payload first, serial last, as everywhere else
+here).
+
+### Three guards, each against a silent failure
+
+1. **The freshness cutoff is WORLD-UP, not arm.** An install has old saves; carrying a character
+   out of one would join as somebody the player did not create, with no symptom. Keying on
+   world-up also excludes a save made during a chargen that was cancelled and restarted.
+2. **The save is retried, and then given up on.** `GetIsAllowedToSave` is a real gate and a
+   refused save answers with a status message nothing in this plugin listens to, so "no
+   directory appeared" is the only signal there is. Five requests, 8 s apart, then a failure the
+   player can read — rather than an arm that waits forever.
+3. **Bytes, not just state.** `NewCharacterCaptureRule`'s three conditions (fresh / at least 256
+   bytes / stable across two polls) carried over unchanged, because they were never about the
+   pifo specifically — they are about reading a file another thread is still writing, and about
+   a file that was already there before this join started.
+
+`CharGenSaveHook` is kept and demoted: five bytes on a call that happens exactly once per
+character creation, now only a counter, so a stalled join's log can say whether the player has
+finished chargen or the module has not come up.
+
+### New key addresses (round 2)
+
+| Address | Symbol / meaning |
+| --- | --- |
+| `0x5F4B50` | `CClientExoAppInternal::DoQuickSave` — **no args, no `this`**, bare `ret`; `"QUICKSAVE"` literal `0x74E9E0`; `SendSaveGameRequest` at `0x5F4BA5` |
+| `0x5ED670` | `CClientExoApp::SendSaveGameRequest(int number, CExoString* name, CExoString* description)` |
+| `0x4B58A0` | `CServerExoAppInternal::SaveGame` — directory `sprintf("SAVES:%06d - %s", …)`, format literal `0x7454D4` |
+| `0x560CC0` | `CSWSPlayer::GetIsAllowedToSave` — literally `[player+0x3C] != 0`; checked at `0x524992`/`0x524A7A` in the save message handler |
+| `0x613434` | `CResGFF::WriteGFFFile("TEMP:temp", 0x7DF)` — the END of `SaveCharGenCreature`; `0x7DF` = "bic" |
+| `0x6A7230` | `CSWGuiDialog::HandleInputEvent` — **vtable slot 0x3C in BOTH dialogue panel vtables** (`0x7559E0`, `0x755800`); `ret 8`, arg1 = event code, arg2 = a nonzero payload |
