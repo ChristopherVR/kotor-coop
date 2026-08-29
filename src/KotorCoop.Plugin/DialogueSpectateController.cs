@@ -554,13 +554,22 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // RETURN — there is no early return above it any more, and even if one appeared the
         // hook's lease would expire on its own rather than leaving the player unable to answer
         // any conversation for the rest of the session. See DialogueReplyHook.
-        if (_machine.SuppressReplies)
+        //
+        // ⚠ SKIP RIDES THE SAME BRANCH, AND THAT IS THE FIX FOR A REAL LIVE BUG: a host that
+        // joined a client's conversation could press skip and advance it, because skip is a
+        // DIFFERENT engine call one branch away from the reply commit inside the same switch
+        // (CSWGuiDialog::HandleInputEvent 0x006A7230). Same predicate, same lease length, same
+        // renewal point — see DialogueSkipHook and Protocol's DialogueSkipAuthorityRule for why
+        // the width is SuppressReplies' "anything but Idle" rather than IsFollowing.
+        if (DialogueSkipAuthorityRule.ShouldSwallowSkip(_machine.State))
         {
             DialogueReplyHook.SuppressReplies();
+            DialogueSkipHook.SuppressSkips();
         }
         else
         {
             DialogueReplyHook.AllowReplies();
+            DialogueSkipHook.AllowSkips();
         }
 
         // Position is per follow. Clearing it whenever a follow is not live is what makes a
