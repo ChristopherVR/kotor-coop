@@ -251,7 +251,7 @@ unwrapped         : AddressOfEntryPoint falls inside .text
 either            : ImageBase 0x00400000, five sections, TimeDateStamp 0x402BC2D9
 ```
 
-That is what `SteamBuild` (implemented this wave, `src/KotorCoop.Session/SteamBuild.cs`,
+That is what `SteamBuild` (implemented this wave, `src/KotorCoop.Memory/SteamBuild.cs`,
 unit-tested) does. It is used for diagnostics today and is the input to §8's fix. It reads a
 file; it never launches anything.
 

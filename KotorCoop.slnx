@@ -5,6 +5,7 @@
     <Project Path="src/KotorCoop.MockGame/KotorCoop.MockGame.csproj" />
     <Project Path="src/KotorCoop.Protocol/KotorCoop.Protocol.csproj" />
     <Project Path="src/KotorCoop.Session/KotorCoop.Session.csproj" />
+    <Project Path="src/KotorCoop.Steam/KotorCoop.Steam.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/KotorCoop.Tests/KotorCoop.Tests.csproj" />

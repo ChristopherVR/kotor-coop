@@ -29,7 +29,8 @@ public sealed partial class CoopCommandDispatcher(
     Func<string, SessionSettings> settingsForPassword,
     Func<CoopConfig?>? loadConfig = null,
     Action? menuAutoLoad = null,
-    string gameDirectory = "")
+    string gameDirectory = "",
+    KotorCoop.Steam.SteamInviteService? steam = null)
 {
     private readonly KotorGameBridge? _kotor = bridge as KotorGameBridge;
 
@@ -159,6 +160,12 @@ public sealed partial class CoopCommandDispatcher(
                     AnnounceConnectionStatus();
                     AnnounceHostSaveAvailability();
                     AnnouncePublicAddress();
+
+                    // After AnnouncePublicAddress, deliberately: the connect string a friend
+                    // joins should carry the public endpoint STUN found, and this is the tick
+                    // at which that is freshest.
+                    MaintainSteamPresence();
+                    PumpSteamJoinRequests();
                     MaintainSessionSave();
                     MaintainWorldServing();
                     DrainChat();
