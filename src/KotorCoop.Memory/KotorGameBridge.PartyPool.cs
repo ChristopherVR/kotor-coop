@@ -204,26 +204,48 @@ public sealed partial class KotorGameBridge
         }
 
         Dictionary<PartyPoolStackKey, int> raw = [];
+        int unresolved = 0;
+        bool forcedRebuild = false;
 
         for (int i = 0; i < count; i++)
         {
             if (!_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId)
                 || itemId is 0 or >= 0x7F000000)
             {
+                unresolved++;
                 continue;
             }
 
-            // A miss (id not yet in the tag cache, or genuinely unreadable) simply cannot be
-            // aggregated this pass — the same "leave the far side alone" fallback item-identity
-            // reads use elsewhere. It reappears once the next scheduled cache rebuild sees it.
+            // ⚠ A MISS IS NOT AN ITEM WORTH ZERO — it is a gap in what this pass could read, and
+            // it is COUNTED rather than shrugged off. See ItemAggregateScanRule for the live
+            // round (docs/research/shared-inventory-v2.md §14) where every id in the pool missed
+            // at once and the resulting EMPTY aggregate was published as "the shared stash is
+            // empty", emptying the other instance's pool.
+            //
+            // One forced sweep per scan is spent trying to close the gap first: TryGetItemResref
+            // resolves an unknown id by rebuilding the item-tag cache, and EnsureItemKnown
+            // refuses to rebuild for ItemTagRebuildMs (15s) after the last one — so without the
+            // force, a pool whose bodies are newer than the last rebuild stays unreadable for a
+            // quarter of a minute. Bounded to once because the rebuild is a full item sweep.
             if (!TryGetItemResref(itemId, out string resref) || resref.Length == 0)
             {
-                continue;
+                if (!forcedRebuild)
+                {
+                    forcedRebuild = true;
+                    TryGetItemResref(itemId, out resref, force: true);
+                }
+
+                if (resref.Length == 0)
+                {
+                    unresolved++;
+                    continue;
+                }
             }
 
             if (!TryReadItemIdentity(itemId, out ItemIdentity identity) || !identity.IsKnown
                 || identity.StackSize == 0)
             {
+                unresolved++;
                 continue;
             }
 
@@ -241,6 +263,19 @@ public sealed partial class KotorGameBridge
             }
         }
 
+        // A partial walk is not a statement about the whole repository. Hand back the last GOOD
+        // scan — the same "stale but honest" answer the pointer-read failures above already give
+        // — and leave _partyPoolLastScan untouched so a later tick still has it. See
+        // ItemAggregateScanRule for why a partial aggregate is a removal order in disguise.
+        if (!ItemAggregateScanRule.IsObservation(count, unresolved))
+        {
+            LastPartyPoolScanNote = ItemAggregateScanRule.Explain("party pool", count, unresolved);
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
+        LastPartyPoolScanNote = string.Empty;
+
         Dictionary<PartyPoolStackKey, int> scan = _partyPoolAmbient.Net(raw);
 
         _partyPoolLastScan = scan;
@@ -248,6 +283,12 @@ public sealed partial class KotorGameBridge
         totals = _partyPoolLastScan;
         return true;
     }
+
+    /// <summary>Why the last party-pool scan refused to publish what it built, in words, or
+    /// empty when it published normally. Same "a guard that fails safe still has to say what it
+    /// saw" discipline as <c>Odyssey.LastPartyPoolNote</c> — this class of failure was inferred
+    /// from log timestamps across five live rounds before it was finally watched happen.</summary>
+    public string LastPartyPoolScanNote { get; private set; } = string.Empty;
 
     /// <summary>See the interface doc (<see cref="IPartyPoolBridge.InvalidatePartyPoolScanCache"/>).
     /// Resets the throttle deadline so the very next <see cref="TryScanPartyPoolTotals"/> call
