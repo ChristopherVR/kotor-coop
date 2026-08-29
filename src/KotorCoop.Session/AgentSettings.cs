@@ -54,6 +54,31 @@ public sealed record AgentSettings
     public bool HidePeersInMinigame { get; init; } = true;
 
     /// <summary>
+    /// While a PEER is inside a minigame, hold this instance's own player still and show
+    /// "&lt;name&gt; is racing - waiting" — and refuse to follow them onto the (single-seat)
+    /// track module. The product rule the swoop race needs: one player races, the rest wait.
+    /// coop.ini <c>minigame_lock_peers</c> (default on). See
+    /// <see cref="KotorCoop.Protocol.MinigameLockRule"/> and docs/research/minigames.md §24.
+    /// </summary>
+    public bool LockPeersDuringMinigame { get; init; } = true;
+
+    /// <summary>
+    /// How long a minigame peer-lock may stand before it releases itself regardless of what
+    /// the owner's flag still says. A peer whose agent died mid-race leaves its last published
+    /// state behind forever, and "frozen for the rest of the session" must not be reachable.
+    /// coop.ini <c>minigame_lock_timeout_s</c> (default 600 = ten minutes, comfortably longer
+    /// than any race in the game). Zero disables the timeout.
+    /// </summary>
+    public int MinigameLockTimeoutMs { get; init; } = 600_000;
+
+    /// <summary>
+    /// Extra module names to treat as single-seat minigame tracks, on top of
+    /// <see cref="KotorCoop.Protocol.MinigameModuleRule.BuiltIn"/> — for a mod that ships its
+    /// own. coop.ini <c>minigame_modules</c> (comma-separated; empty by default).
+    /// </summary>
+    public IReadOnlyList<string> ExtraMinigameModules { get; init; } = [];
+
+    /// <summary>
     /// When true, a client automatically travels to whatever module the host is in, the
     /// way a summoned phantom follows the world's owner. The host never follows anyone —
     /// it owns enemies and encounters, so its module is where the shared world happens.
@@ -268,6 +293,10 @@ public sealed record AgentSettings
     /// <see cref="PartyPoolSyncEnabled"/> above; use <see cref="EffectivePartyPoolSyncMode"/> to
     /// read the two reconciled.</summary>
     public int PartyPoolSyncMode { get; init; }
+
+    /// <summary>See <see cref="CoopConfig.PartyPoolTrace"/> — rig-only per-tick diagnostics for
+    /// both mode-2 shared-inventory pumps.</summary>
+    public bool PartyPoolTrace { get; init; }
 
     /// <summary>The mode <see cref="CoopAgent.PumpOnce"/> actually dispatches on: this mode if it
     /// was explicitly set to something other than 0, otherwise <see cref="PartyPoolSyncEnabled"/>

@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- Lets KotorCoop.Tests construct the internal Pumps/* classes directly, one tick at a
+         time, instead of only ever through a full CoopAgent loop over real sockets. The
+         identical grant KotorCoop.Memory already makes for the same reason. -->
+    <InternalsVisibleTo Include="KotorCoop.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\KotorCoop.Protocol\KotorCoop.Protocol.csproj" />
     <ProjectReference Include="..\KotorCoop.Memory\KotorCoop.Memory.csproj" />
   </ItemGroup>

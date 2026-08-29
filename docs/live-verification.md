@@ -2273,3 +2273,75 @@ unusable for exactly this feature. That is a pre-existing gap, not a regression.
   is then the oracle.
 * **Post-adopt door convergence in the game.** Covered by loopback tests (one of which was
   confirmed to FAIL against the pre-fix single-datagram snapshot); not re-run on the rig.
+
+## Swoop racing: root cause, and "one races, the rest wait" (2026-08-29)
+
+Full write-up in [minigames.md](research/minigames.md) §24. What was actually observed on the
+rig, in the order it happened.
+
+### Round 1 — the root cause
+
+`tools/demo.ps1`, both instances, a crafted `Tar_SwoopEng` save, `coop.ini delay_probe = 1`.
+Ran §22's own recipe verbatim (`travel tar_m11aa`, `tp 65.0 76.0 0.12`, `talk GadonThek112`) and
+got its own six-node chain, then read the new probe:
+
+- **ZERO `delayprobe: DelayCommand hasCaller=` lines** anywhere in the conversation window.
+  `ExecuteCommandDelayCommand` was never called — so the "the `DelayCommand` never dispatches"
+  claim §14-§22 spent eight rounds on had nothing to dispatch.
+- **One** dialogue node action script ran for the whole conversation:
+  `delayprobe: dialogue node script 'k_act_talktrue' runs as self=0x4` — and `k_act_talktrue` is
+  `EntryList[22].Script`, the "already talked to" branch, not entry 17's race branch.
+- The delayed-event machinery was demonstrably healthy the whole time: **1219 enqueues, 1076
+  dispatches, 0 discards** in the same session.
+
+Cause: `tar11_gadon112.dlg`'s starting entry 81 is gated by `k_ptar_zaerracex`, which reads the
+boolean global **`Tar_SummonGadon`** — not `Tar_SwoopEng`. Then `setglobal Tar_SummonGadon true`,
+`talk GadonThek112` and three reply picks (`selectreply 0` at entry 6, `1` at 11, `1` at 14) ran the
+race chain first try, with the plugin loaded:
+
+```
+10:01:41.220  delayprobe: dialogue node script 'k_ptar_racecs0' runs as self=0x2
+10:01:49.231  delayprobe: dialogue node script 'k_ptar_racecs1' runs as self=0x2
+10:01:49.232  delayprobe: DelayCommand hasCaller=1 self=0x2
+10:02:08.240  delayprobe: dialogue node script 'k_ptar_bekrace' runs as self=0x2
+10:02:08.241  delayprobe: DelayCommand hasCaller=1 self=0x2
+```
+
+and `where` then read `module tar_m03af`. **Not a mod bug, and no debugger was needed.**
+
+The same round found the real co-op problem: the follow-the-leader warp took the client onto the
+race track (`tar_m03mg`) and the client process died there.
+
+### Round 2 — the lock, the follow refusal and the rewards
+
+Shipped defaults (`minigame_lock_peers` not present in either game directory's `coop.ini`, so the
+ON-by-default path is what ran). Host warped to `tar_m03mg`.
+
+| check | result |
+|---|---|
+| host enters a real swoop minigame | PASS — `minigame: entered`, then `minigame: kind settled to Swoop` (the kind fills ~100 ms after the pointer, which is why §3's offset looked wrong) |
+| client is locked, and told why | PASS — agent: `minigame lock: Lanik started a minigame`; plugin: `minigame lock: a peer is racing — this player is held until it ends` |
+| client is NOT warped onto the track | PASS — both follow gates refused (`not following the announced transition to 'tar_m03mg'` and `not following to 'tar_m03mg': a peer is in a single-seat minigame there`); `where` read `END_M01AA` on the client while the host read `tar_m03mg` |
+| reward globals cross while the racer is in the minigame | PASS — `Tar_SwoopStatus` 3, `Tar_SwoopRaceCounter` 2, `Tar_SwoopRace` true and `TAR_SWOOP_MSEC` (byte 200 / signed -56) all read back already-set on the client |
+| the lock releases when the race ends | PASS — host `minigame: exited` 11:56:11.028, client `the minigame ended — control is yours again` 11:56:12.875 (~1.8 s, the module-load settle plus one heavy pump) |
+| no crash | PASS — both instances survived two relocating warps |
+
+**Still NEEDS-LIVE**: the keyboard half of the input lock. `MinigameLockController` uses the same
+two levers `SoloSegmentSpectateController` does (`creature+0xE8` commandable = 0 plus
+`HoldCreatureStill`), and neither has ever been watched stop a real physical WASD press, because
+injected keystrokes do not reach this game. What IS verified is the consequence that mattered: the
+follow-warp onto the single-seat track is refused, and the waiting player is told what is
+happening instead of standing in an unexplained frozen world.
+
+**Rig hazard worth reusing**: this round's first attempt showed every agent-side line firing while
+the client's PLUGIN log stayed silent — a concurrently-running agent had installed its own
+`dinput8.dll` over the second game directory between this session's install and its launch. The
+tell: the client's log had no `delayed-event probe armed` line while the host's did, and the two
+installed DLLs differed in size (2,063,360 vs 2,072,064). Compare both installed DLLs before
+trusting a negative plugin-side result.
+
+- `dotnet test tests/KotorCoop.Tests`: **2560/2560**.
+- `tools/verify.ps1` after the pass: **40 passed, 9 failed** — inside the documented ~40-42/7-9
+  baseline, every failure in the long-known set.
+- `coop.ini delay_probe` was removed from both game directories at the end of the round; it ships
+  OFF and nothing else in either file was touched.

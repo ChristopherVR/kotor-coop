@@ -142,6 +142,36 @@ pazaak_detect = 1
 ; the block never carries the flag for an excluded slot, so the notice will not show. See
 ; docs/research/minigames.md's dated section for the full explanation.
 minigame_wait_notice = 1
+
+; One player races, everybody else waits. A KOTOR swoop track (tar_m03mg) or turret deck
+; (m12ab) is a SINGLE-SEAT area: the engine swaps the racer's whole world for it, and there
+; is no second bike. With this on (default) the other players are held still with an
+; on-screen "<name> is racing - waiting", and - the part that actually matters - the
+; follow-the-leader warp refuses to drag them onto the track. Measured live 2026-08-29:
+; that follow-warp into tar_m03mg was the last thing the following instance did before it
+; died. The race's own rewards (gold, journal, the Tar_Swoop* / TAR_SWOOP_MIN/MSEC /
+; Tar_SwoopStatus / Tar_SwoopRaceCounter globals) still reach everyone through the ordinary
+; globals/journal/purse channels, which are not gated on this. 0 restores the old
+; free-for-all. See docs/research/minigames.md §24.
+;
+; A lock needs BOTH the peer's minigame flag AND a known track module, and that second half is
+; what keeps Pazaak out: pazaak_detect sets the same flag for a card hand on purpose, and
+; freezing everybody through a long optional side activity in a normal module would be wrong.
+minigame_lock_peers = 1
+
+; Safety valve for the above: seconds a lock may stand before releasing itself regardless
+; of what the racer's flag still says. A peer whose agent died mid-race leaves its last
+; published state behind forever, and "frozen for the rest of the session" must not be a
+; state this can reach. 600 = ten minutes, comfortably longer than any race in the game;
+; 0 disables the timeout.
+minigame_lock_timeout_s = 600
+
+; Extra module names to treat as single-seat minigame tracks, comma-separated, on top of
+; the four a stock install ships (tar_m03mg, manm26mg, tat_m17mg, m12ab - found by reading
+; every modules/*.rim area file for a MiniGame struct, not guessed). Only needed for a mod
+; that adds its own track. Empty by default.
+# minigame_modules =
+
 ; --- persistent connection indicator ------------------------------------------------
 ; Before this the only way to see connection state in-game was typing `status` at the ~
 ; console. This posts a short line ("co-op: connected, 2 players" / "reconnecting..." /
@@ -804,6 +834,17 @@ frame_stats=0
 # database and the disassembly, but none of it has been watched land on a running game yet -
 # defaults OFF until it has. 1 turns it on.
 party_pool_sync=0
+
+# Rig-only diagnostics for BOTH mode-2 shared-inventory pumps (party_pool_sync=2 and
+# store_sync=2 - one key, because the two share every bookkeeping mechanism and a failure in one
+# is diagnosed with the other's lines beside it). Prints, per key, on every tick that key has any
+# non-trivial state: the fresh scan value, this pump's own belief, the host's snapshot value, the
+# raw movement since last tick, what its own queued reconciles still expect, what it has
+# published to the host and not seen echoed, what it published THIS tick, and the reconcile
+# target/delta it computed. Three live rig rounds each had to infer a root cause from log
+# timestamps alone (docs/research/shared-inventory-v2.md 6/8/10) - this is so the next one does
+# not. Several lines a second on a busy pool; leave OFF outside a rig.
+party_pool_trace=0
 
 # Solo-segment spectate (docs/research/star-forge-finale.md): the product decision for a
 # story-forced solo segment - the Star Forge's Bastila-chamber duel (sta_m45ac, the door

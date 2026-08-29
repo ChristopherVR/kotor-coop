@@ -142,6 +142,33 @@ public sealed record CoopConfig
     public bool HidePeersInMinigame { get; init; } = true;
 
     /// <summary>
+    /// While a PEER is inside a minigame, hold this player still with an on-screen
+    /// "&lt;name&gt; is racing - waiting", and refuse to follow them onto the single-seat track
+    /// module. The swoop race is one bike: the product rule is that the player who starts it
+    /// races and everybody else waits, rather than wandering a world the racer's engine has
+    /// swapped out from under them (or being warped onto a track they cannot drive — measured
+    /// live 2026-08-29, the follow-warp into <c>tar_m03mg</c> was the last thing the following
+    /// instance did). On by default. <c>minigame_lock_peers = 0</c> restores the old
+    /// free-for-all. See docs/research/minigames.md §24.
+    /// </summary>
+    public bool LockPeersDuringMinigame { get; init; } = true;
+
+    /// <summary>
+    /// Seconds a minigame peer-lock may stand before releasing itself regardless of the
+    /// owner's flag — the safety valve for a peer whose agent died mid-race and left its last
+    /// published state behind forever. <c>minigame_lock_timeout_s</c>, default 600; 0 disables
+    /// the timeout entirely.
+    /// </summary>
+    public int MinigameLockTimeoutSeconds { get; init; } = 600;
+
+    /// <summary>
+    /// Extra module names to treat as single-seat minigame tracks, on top of the four a stock
+    /// install ships (<c>MinigameModuleRule.BuiltIn</c>) — for a mod with its own.
+    /// <c>minigame_modules</c>, comma-separated, empty by default.
+    /// </summary>
+    public IReadOnlyList<string> ExtraMinigameModules { get; init; } = [];
+
+    /// <summary>
     /// Hand this instance's camera to a peer while they race or man a turret, the way
     /// <c>SpectateController</c> already does for a downed player. NOT YET WIRED — the
     /// camera handoff needs a trigger distinct from "downed" and is left as the documented
@@ -482,6 +509,19 @@ public sealed record CoopConfig
     public int PartyPoolSyncMode { get; init; }
 
     /// <summary>
+    /// <c>party_pool_trace</c>: rig-only, per-tick diagnostic logging for BOTH mode-2 shared
+    /// inventory pumps (<c>Pumps/PartyPoolPumpV2.cs</c> and its store sibling
+    /// <c>Pumps/StorePumpV2.cs</c> — one key, since the two share every bookkeeping mechanism and
+    /// a failure in one is diagnosed with the other's lines beside it). Prints
+    /// actual/belief/snapshot/rawMovement/expected/outstanding/published/target/reconcile per key
+    /// on every tick that key has ANY non-trivial state, which is what
+    /// docs/research/shared-inventory-v2.md §10's own "concrete next steps" asked for after three
+    /// live rounds each had to infer a root cause from timestamps alone. OFF by default: on a
+    /// busy pool this is several lines a second, useful on a rig and nowhere else.
+    /// </summary>
+    public bool PartyPoolTrace { get; init; }
+
+    /// <summary>
     /// Story-forced solo segments (the Star Forge's Bastila and Malak duels —
     /// <see cref="KotorCoop.Protocol.SoloSegmentCatalogue"/>, docs/research/star-forge-finale.md
     /// §3.3/§3.5): while ON, the fighting player's OWN agent hides every peer from what it
@@ -603,6 +643,15 @@ public sealed record CoopConfig
             PauseSync = !kv.ContainsKey("pause_sync") || IsTruthy(kv.GetValueOrDefault("pause_sync")),
             HidePeersInMinigame = !kv.ContainsKey("minigame_hide_peer")
                 || IsTruthy(kv.GetValueOrDefault("minigame_hide_peer")),
+            LockPeersDuringMinigame = !kv.ContainsKey("minigame_lock_peers")
+                || IsTruthy(kv.GetValueOrDefault("minigame_lock_peers")),
+            MinigameLockTimeoutSeconds =
+                int.TryParse(kv.GetValueOrDefault("minigame_lock_timeout_s"), out int mgTimeout)
+                    ? Math.Clamp(mgTimeout, 0, 7200)
+                    : 600,
+            ExtraMinigameModules =
+                [.. (kv.GetValueOrDefault("minigame_modules") ?? string.Empty)
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
             SpectateMinigame = IsTruthy(kv.GetValueOrDefault("minigame_spectate")),
             PazaakDetect = IsTruthy(kv.GetValueOrDefault("pazaak_detect")),
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
@@ -675,6 +724,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
             PartyPoolSyncEnabled = IsTruthy(kv.GetValueOrDefault("party_pool_sync")),
             PartyPoolSyncMode = ParseSyncMode(kv.GetValueOrDefault("party_pool_sync")),
+            PartyPoolTrace = IsTruthy(kv.GetValueOrDefault("party_pool_trace")),
             SoloSegmentSpectateEnabled = !kv.ContainsKey("solo_segment_spectate")
                 || IsTruthy(kv.GetValueOrDefault("solo_segment_spectate")),
             StoreSyncEnabled = IsTruthy(kv.GetValueOrDefault("store_sync")),

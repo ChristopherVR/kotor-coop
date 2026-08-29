@@ -34,6 +34,16 @@ public class SharedInventoryV2LoopbackTests
     private static readonly StoreStackKey StoreBlaster =
         new(TestStoreId, "g_w_blstrpstl001", 0, 0, 0, ItemIdentity.FlagKnown);
 
+    /// <summary>A shop's own PRISTINE stock — the stock both instances loaded out of the same
+    /// module, present in both engines before anybody does anything. §12 (2026-08-29) made this
+    /// distinction load-bearing on the client's reconcile side: the FIRST snapshot naming a store
+    /// is that store's baseline, not a gap for the client to close by blind-inserting the whole
+    /// shop into a copy that already had it (docs/research/shared-inventory-v2.md §10.2's own
+    /// 432-insert cascade). A test that wants to exercise a host-side CHANGE has to establish
+    /// that baseline first, exactly as a real session does.</summary>
+    private static readonly StoreStackKey StorePristine =
+        new(TestStoreId, "g_i_belt006", 0, 0, 0, ItemIdentity.FlagKnown);
+
     private const string Module = "end_m01aa";
 
     /// <summary>
@@ -1163,7 +1173,23 @@ public class SharedInventoryV2LoopbackTests
         {
             await Task.Delay(300);
 
+            // Both engines hold the shop's own pristine stock, because both loaded the same
+            // module — establish that baseline first (§12), then sell into it. Without this the
+            // host's sell IS the store's first-ever snapshot, which is indistinguishable from
+            // pristine content and correctly seeds rather than mirrors.
+            rig.HostAgent.Bridge.TrueStore[StorePristine] = 4;
+            rig.ClientAgent.Bridge.TrueStore[StorePristine] = 4;
             rig.HostAgent.Bridge.OpenStoreId = TestStoreId;
+
+            Assert.True(
+                await WaitForAsync(
+                    () => rig.Client.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> t)
+                        && t.GetValueOrDefault(StorePristine) == 4,
+                    Timeout),
+                "client never learned the shop exists at all");
+
+            await Task.Delay(300);
+
             rig.HostAgent.Bridge.TrueStore[StoreBlaster] = 1;
 
             Assert.True(
@@ -1187,6 +1213,12 @@ public class SharedInventoryV2LoopbackTests
                     () => rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StoreBlaster) == 1,
                     TimeSpan.FromSeconds(4)),
                 "the client's engine must STAY at exactly 1 with its GUI closed the whole time");
+
+            // ...and the shop's own pristine stock must not have been touched either way — a
+            // blind reconcile that "converges" content both sides already agreed on is the
+            // §10.2 defect, not the feature.
+            Assert.Equal(4, rig.ClientAgent.Bridge.TrueStore.GetValueOrDefault(StorePristine));
+            Assert.Equal(4, rig.HostAgent.Bridge.TrueStore.GetValueOrDefault(StorePristine));
 
             Assert.Equal(0u, rig.ClientAgent.Bridge.OpenStoreId);
         }
