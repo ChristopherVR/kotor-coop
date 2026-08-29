@@ -47,6 +47,13 @@ public static class PluginMenuLoader
     private const int BlockJoinChargenState = 0x4788;
     private const int BlockJoinChargenBytes = 0x478C;
 
+    /// <summary>SharedBlock.OffsetJoinChargenSaveDir - the NAME of the save directory the
+    /// plugin had the engine write, relative to `saves\`, NUL-padded ASCII. Pinned equal to the
+    /// plugin's own constant by SharedBlockNewRegionOffsetMirrorTests.</summary>
+    private const int BlockJoinChargenSaveDir = 0x47C0;
+
+    private const int BlockJoinChargenSaveDirLength = 32;
+
     // SharedBlock's chargen-drive verb region (`newgame`, `chargen quick`, `chargen accept`).
     private const int BlockChargenDriveRequest = 0x4790;
     private const int BlockChargenDriveKind = 0x4794;
@@ -347,11 +354,13 @@ public static class PluginMenuLoader
     /// Arms the plugin's new-character capture — coop.ini <c>join_mode = newcharacter</c>.
     ///
     /// The plugin then watches for <c>Temp\pifo.ifo</c> to be written by the game's own
-    /// character creation (<c>CSWCCreature::SaveCharGenCreature</c> 0x6123E0, the chargen
-    /// entry in docs/research/character-login-chain.md §2's exhaustive writer list) and copies
-    /// it to the carried-character stash the adoption load restores from. The serial IS the
-    /// whole request — there is nothing else to say — so unlike <see cref="TryRequestLoad"/>
-    /// there is no "write the payload first" ordering to respect here.
+    /// character creation, lets the new game reach its first module, has the engine SAVE there,
+    /// and names that save back. (It used to watch <c>Temp\pifo.ifo</c>, on the belief that
+    /// retail chargen writes one; it does not - see
+    /// <c>KotorCoop.Plugin.NewCharacterCaptureController</c>'s header for the correction.) The
+    /// serial IS the whole request — there is nothing else to say — so unlike
+    /// <see cref="TryRequestLoad"/> there is no "write the payload first" ordering to respect
+    /// here.
     /// </summary>
     public static bool TryArmNewCharacterCapture(
         ProcessMemory memory, out nint block, out string diagnostic)
@@ -378,17 +387,33 @@ public static class PluginMenuLoader
     /// <c>SharedBlock.JoinChargenState*</c> (0 idle, 1 armed, 2 captured, 3 failed) and
     /// <paramref name="bytes"/> is the size of what was captured.
     ///
-    /// ⚠ READ THE BYTES, NOT JUST THE STATE. A zero-byte pifo is not "no file" — it is the
-    /// exact wreckage a source-less <c>FileCopy</c> leaves (world-adoption.md §7) and the
-    /// engine's login turns it into a blank level-1 stranger rather than an error. The plugin
-    /// already refuses to report a short capture; the size is here so the agent can say so too.
+    /// ⚠ READ THE BYTES, NOT JUST THE STATE. A zero-byte file is not "no file" — it is a write
+    /// that has been opened and not filled, and every reader downstream of here turns a
+    /// characterless input into a blank level-1 stranger rather than an error
+    /// (world-adoption.md §7). The plugin already refuses to report a short capture; the size is
+    /// here so the agent can say so too.
+    ///
+    /// <paramref name="saveDirectory"/> names the save the plugin had the engine write,
+    /// relative to <c>saves\</c>, and is meaningful only in the captured state.
     /// </summary>
     public static bool TryReadNewCharacterCapture(
-        ProcessMemory memory, nint block, out uint state, out uint bytes)
+        ProcessMemory memory, nint block, out uint state, out uint bytes, out string saveDirectory)
     {
         bytes = 0;
-        return memory.TryReadUInt32(block + BlockJoinChargenState, out state)
-            && memory.TryReadUInt32(block + BlockJoinChargenBytes, out bytes);
+        saveDirectory = string.Empty;
+
+        if (!memory.TryReadUInt32(block + BlockJoinChargenState, out state)
+            || !memory.TryReadUInt32(block + BlockJoinChargenBytes, out bytes))
+        {
+            return false;
+        }
+
+        // Best-effort: the name is only meaningful once the state says captured, and a failed
+        // string read must not turn a good poll into a dead one.
+        memory.TryReadAsciiString(
+            block + BlockJoinChargenSaveDir, BlockJoinChargenSaveDirLength, out saveDirectory);
+
+        return true;
     }
 
     /// <summary>

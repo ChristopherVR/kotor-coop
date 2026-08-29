@@ -1,60 +1,72 @@
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Catches the character the player just made in the game's OWN character-creation screens, so
-/// the agent can carry it into the host's world instead of into the Endar Spire.
+/// Gets the character a first-time joiner just made in the game's OWN character-creation
+/// screens into a form world adoption can carry — by letting the new game run to its first
+/// module and then asking the engine to SAVE.
 ///
 /// WHY THIS EXISTS. World adoption (docs/research/world-adoption.md) lets a joiner play the
-/// host's world with their own character — but it lifts that character out of the joiner's own
-/// SAVE, and a first-time joiner has no save. Before this, that player had nothing to join
-/// with: <c>WorldAdoption.TryAdoptAsync</c> fails at its very first step ("the save's
-/// Mod_PlayerList is empty") and, correctly, refuses to touch anything.
+/// host's world with their own character, but it lifts that character out of the joiner's own
+/// SAVE, and a first-time joiner has none. Before this, that player had nothing to join with:
+/// <c>WorldAdoption.TryAdoptAsync</c> fails at its very first step ("the save's
+/// <c>Mod_PlayerList</c> is empty") and, correctly, refuses to touch anything.
 ///
-/// THE OBSERVATION THAT MAKES IT CHEAP. Retail chargen already writes exactly the file adoption
-/// carries. <c>CSWCCreature::SaveCharGenCreature 0x6123E0</c> — one of the three
-/// <c>TEMP:pifo</c> writers docs/research/character-login-chain.md §2 enumerates exhaustively,
-/// and the only one on the New Game path — emits <c>Temp\pifo.ifo</c> when the player accepts
-/// their character: a standalone one-entry <c>Mod_PlayerList</c> IFO, the same shape
-/// <c>PlayerIfo.BuildPifo</c> hand-builds for an adopted join. So "let a first-time joiner make
-/// a character" needs no character-creation code of our own at all. It needs somebody to
-/// notice that file and put a copy somewhere safe.
+/// ⚠ THE FIRST DESIGN OF THIS CONTROLLER WAS BUILT ON A WRONG FACT, AND THE CORRECTION IS THE
+/// WHOLE OF THIS FILE'S CURRENT SHAPE. docs/research/character-login-chain.md §2 listed
+/// <c>CSWCCreature::SaveCharGenCreature 0x6123E0</c> as a writer of <c>TEMP:pifo</c>, so this
+/// controller watched <c>Temp\pifo.ifo</c> for the character — first with a 250 ms poll, then
+/// (when the poll never saw the file) with <see cref="CharGenSaveHook"/> spliced onto the call
+/// itself. The hook fired, and the file was ZERO BYTES; it was still zero after a 400 ms spin
+/// on the game thread, and <c>Temp\</c> was empty by world-up. The reason, disassembled
+/// afterwards: <c>SaveCharGenCreature</c> never writes a pifo at all. It does not reference the
+/// string — <c>tools/xrefs.py 0x745318</c> lists five sites and none is inside it — and its own
+/// tail writes <c>TEMP:temp</c> with restype <c>0x7DF</c> ("bic") through
+/// <c>CResGFF::WriteGFFFile</c> at 0x613434, i.e. <c>Temp\temp.bic</c>, a BIC character file.
+/// The three real <c>TEMP:pifo</c> writers (<c>StorePlayerCharacters</c>,
+/// <c>DoPCAutosave</c>, <c>LoadPCAutoSave</c>) are none of them on the chargen path.
 ///
-/// SOMEWHERE SAFE IS THE POINT. The adoption load that follows calls <c>LoadPCAutoSave</c>,
-/// which copies <c>&lt;export&gt;\pifo</c> over <c>TEMP:pifo</c> by name and TRUNCATES IT TO
-/// ZERO when the staged save has no pifo to copy — which every adopted world is
-/// (world-adoption.md §7, measured: a blank 1-hit-point stranger at the module start point).
-/// The stash that survives it is <c>Temp\kcoop_carried.ifo</c>, and
-/// <see cref="MenuLoadController.RestoreCarriedCharacter"/> already copies it back on the
-/// game's own thread in the one gap where nothing can race it. This controller writes THAT
-/// file, so the character a player creates and the character an adoption carries are the same
-/// bytes travelling the same road.
+/// So there is no file to catch, and the character is obtained the only way KOTOR makes one
+/// portable — the same way <c>join_mode = save</c> always has:
+/// <list type="number">
+/// <item>The player finishes character creation; the new game loads its first module (the
+/// Endar Spire).</item>
+/// <item>This controller notices a world is up and asks the engine to save
+/// (<see cref="Odyssey.RequestQuickSave"/> — retail's own quicksave).</item>
+/// <item>It watches <c>saves\</c> for the directory that appears, names it in the shared block,
+/// and the AGENT reads the PC out of it with <c>PlayerIfo.TryExtractPlayer</c> — byte-for-byte
+/// the extraction the verified save-join path uses.</item>
+/// </list>
 ///
-/// ⚠ A HOOK, AND THE FILE POLL THAT FAILED FIRST. This began as a 250 ms poll on
-/// <c>MenuFrame</c> and nothing else — no engine patch, on the reasoning that a poll cannot
-/// crash the game and a hook would buy only a fraction of a second. Measured live
-/// (2026-08-29, a real Quick Character through the retail screens): THE POLL NEVER SAW THE
-/// FILE. Pressing Play runs <c>CSWGuiClassSelection::BeginPlayGame 0x6DBDF0</c>, which writes
-/// the pifo and walks straight into the module load; this plugin's own log recorded "the main
-/// thread was gone for 1265 ms" across exactly that span, so no frame callback ran inside it,
-/// and by the time one did the whole <c>Temp\</c> directory was empty. The window is not short
-/// for a frame-driven poll — it does not exist. <see cref="CharGenSaveHook"/> is the fix: it
-/// sits on the call itself and copies the file on the game's own thread the instant the engine
-/// finishes writing it.
+/// WHAT THE PLAYER DOES: character creation, and nothing else. The Endar Spire intro is cut
+/// short by the adoption load that follows, which is a full server teardown and rebuild.
 ///
-/// The poll is KEPT, as a fallback and as the "still waiting" heartbeat. It costs one
-/// <c>FileInfo</c> every 250 ms while armed, it is the only thing that would still work if a
-/// future patch moved the call site out from under the hook's byte check, and its own
-/// conditions (fresh / big enough / stable) are the correctness rules either route must pass.
+/// EVERY STEP IS LATCHED ONE-SHOT AND LOGGED, per this codebase's per-frame-write rule: the
+/// save is requested at most <see cref="MaxSaveRequests"/> times (a module's opening cutscene
+/// can legitimately shut <c>CSWSPlayer::GetIsAllowedToSave</c>, and a refused save is silent),
+/// spaced by <see cref="SaveRetryMs"/>, and the whole phase gives up rather than asking
+/// forever.
 ///
-/// Runs from <c>PluginHost.MenuFrame</c>, not <c>OnFrame</c>: the whole point is the main menu
-/// and the chargen screens, where the SwapBuffers hook is dormant (the same reason
-/// <see cref="MenuLoadController"/> lives there).
+/// Runs from <c>PluginHost.MenuFrame</c> — the MainLoop hook, which fires at the main menu AND
+/// in-world, so one schedule covers both halves of this flow. The SwapBuffers hook would miss
+/// the first half entirely (dormant behind the menu movie), which is the same reason
+/// <see cref="MenuLoadController"/> lives there.
 /// </summary>
 internal sealed class NewCharacterCaptureController(SharedBlockView block)
 {
-    /// <summary>The engine's own chargen output — <c>TEMP:pifo</c>, restype 0x7DE ("ifo").
-    /// </summary>
-    private const string PifoFile = "pifo.ifo";
+    /// <summary>How long a world must have been up before the save is asked for. The module
+    /// load itself is over by the time a player creature answers, but the opening script pass
+    /// (spawns, party assembly, the first cutscene arming) is not, and asking mid-way is how a
+    /// save gets refused for reasons nothing reports.</summary>
+    private const int WorldSettleMs = 4000;
+
+    /// <summary>Gap between save requests. Long enough that a refusal caused by an opening
+    /// cutscene has a chance to stop being true.</summary>
+    private const int SaveRetryMs = 8000;
+
+    /// <summary>How many times the save is asked for before the join is failed. Five requests
+    /// over <see cref="SaveRetryMs"/> spans ~40 s, which is longer than the Endar Spire's
+    /// opening exchange.</summary>
+    private const int MaxSaveRequests = 5;
 
     /// <summary>Request serial already acted on, so one arm arms exactly once.</summary>
     private uint _armedSerial;
@@ -62,20 +74,31 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// <summary>True between arming and either a capture or a failure.</summary>
     private bool _armed;
 
-    /// <summary>UTC ticks at the moment of arming. Anything on disk older than this is a
-    /// LEFTOVER pifo from a previous session — see <see cref="NewCharacterCaptureRule"/>'s
-    /// first condition.</summary>
-    private long _armedAtTicksUtc;
-
     private long _nextPollMs;
-
-    /// <summary>The length seen on the previous poll, or -1 before the first one. The
-    /// stability half of <see cref="NewCharacterCaptureRule.ShouldCapture"/>.</summary>
-    private long _previousBytes = -1;
 
     /// <summary>Throttles the "still waiting" line so a player who takes ten minutes over their
     /// appearance does not produce ten minutes of log.</summary>
     private long _nextWaitingLogMs;
+
+    /// <summary><c>Environment.TickCount64</c> when a player creature was first seen, or 0 while
+    /// there is no world. Reset to 0 if the world goes away again, so a chargen that was
+    /// cancelled back to the menu does not leave a half-started save phase behind.</summary>
+    private long _worldUpAtMs;
+
+    /// <summary>UTC ticks at the same moment, for comparing against file timestamps. A save
+    /// older than this belongs to a world that is not the one the player just created.</summary>
+    private long _worldUpAtTicksUtc;
+
+    private int _saveRequests;
+
+    private long _lastSaveRequestMs;
+
+    /// <summary>The save directory currently being watched for stability, or null.</summary>
+    private string? _candidate;
+
+    /// <summary>The candidate's <c>SAVEGAME.sav</c> length on the previous poll, or -1. The
+    /// stability half of <see cref="NewCharacterCaptureRule.ShouldCapture"/>.</summary>
+    private long _previousBytes = -1;
 
     public void OnFrame()
     {
@@ -99,201 +122,235 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         }
 
         _nextPollMs = nowMs + NewCharacterCaptureRule.PollIntervalMs;
-        Poll(nowMs, fromHook: false);
+
+        try
+        {
+            Step(nowMs);
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.Message);
+        }
     }
 
     private void Arm(uint serial)
     {
         _armedSerial = serial;
         _armed = true;
-        _armedAtTicksUtc = DateTime.UtcNow.Ticks;
-        _previousBytes = -1;
         _nextPollMs = 0;
         _nextWaitingLogMs = Environment.TickCount64 + 15000;
-        _instance = this;
+        _worldUpAtMs = 0;
+        _worldUpAtTicksUtc = 0;
+        _saveRequests = 0;
+        _lastSaveRequestMs = 0;
+        _candidate = null;
+        _previousBytes = -1;
 
         block.JoinChargenBytes = 0;
+        block.PublishJoinChargenSaveDirectory(string.Empty);
         block.JoinChargenState = SharedBlock.JoinChargenStateArmed;
         block.JoinChargenApplied = serial;
 
-        // The engine patch goes in HERE rather than at plugin startup, so an install that never
-        // uses join_mode = newcharacter carries no patch at all. Main thread: MenuFrame is the
-        // game's own MainLoop.
+        // The chargen-finished marker goes in HERE rather than at plugin startup, so an install
+        // that never uses join_mode = newcharacter carries no engine patch at all. Main thread:
+        // MenuFrame is the game's own MainLoop.
         string hook = CharGenSaveHook.Install(out string hookDiagnostic)
             ? hookDiagnostic
-            : $"NO HOOK - {hookDiagnostic} (falling back to the file poll, which has been "
-                + "measured to miss the window)";
+            : $"NO CHARGEN MARKER - {hookDiagnostic} (harmless: the save phase keys on a world "
+                + "coming up, not on the marker)";
 
         // ASCII only: the plugin log is written as bytes, so an em-dash arrives as '?'.
         PluginHost.Log(
-            $"newchar: armed (request {serial}) - watching Temp\\{PifoFile} for the character "
-            + $"the game's own chargen writes; {hook}");
+            $"newchar: armed (request {serial}) - make a character; when the new game's first "
+            + $"module is up this will save it and hand the save to the agent; {hook}");
     }
 
-    /// <summary>The armed controller, for <see cref="CharGenSaveHook"/>'s static callback to
-    /// reach. There is one plugin instance per process, and this is set at arm time rather than
-    /// at construction so the hook can never act for a join nobody asked for.</summary>
-    private static NewCharacterCaptureController? _instance;
+    private void Step(long nowMs)
+    {
+        if (_saveRequests == 0)
+        {
+            WaitForWorld(nowMs);
+            return;
+        }
+
+        WatchForSave(nowMs);
+    }
+
+    /// <summary>Phase 1: the player is in character creation, or the first module is loading.
+    /// </summary>
+    private void WaitForWorld(long nowMs)
+    {
+        if (!Odyssey.HasPlayer)
+        {
+            if (_worldUpAtMs != 0)
+            {
+                // The world went away again (a cancelled chargen, a quit to menu). Start over
+                // rather than carrying a settle timer across two different worlds.
+                PluginHost.Log("newchar: the world went away again; back to waiting for a character");
+                _worldUpAtMs = 0;
+                _worldUpAtTicksUtc = 0;
+            }
+
+            if (nowMs >= _nextWaitingLogMs)
+            {
+                _nextWaitingLogMs = nowMs + 15000;
+                PluginHost.Log(
+                    "newchar: still waiting for the new game's first module "
+                    + $"(chargen finished {CharGenSaveHook.Sequence} time(s) so far)");
+            }
+
+            return;
+        }
+
+        if (_worldUpAtMs == 0)
+        {
+            _worldUpAtMs = nowMs;
+            _worldUpAtTicksUtc = DateTime.UtcNow.Ticks;
+            PluginHost.Log(
+                "newchar: the new game's first module is up with a player creature; "
+                + $"saving in {WorldSettleMs} ms so the character can be carried");
+            return;
+        }
+
+        if (nowMs - _worldUpAtMs < WorldSettleMs)
+        {
+            return;
+        }
+
+        RequestSave(nowMs);
+    }
+
+    private void RequestSave(long nowMs)
+    {
+        _saveRequests++;
+        _lastSaveRequestMs = nowMs;
+
+        if (!Odyssey.RequestQuickSave())
+        {
+            PluginHost.Log($"newchar: save request {_saveRequests} refused - no world loaded");
+            return;
+        }
+
+        block.JoinChargenState = SharedBlock.JoinChargenStateSaving;
+        PluginHost.Log(
+            $"newchar: asked the engine to save (request {_saveRequests}/{MaxSaveRequests}); "
+            + "watching saves\\ for the directory");
+    }
+
+    /// <summary>Phase 2: the save was asked for; watch <c>saves\</c> for what the engine wrote.
+    /// </summary>
+    private void WatchForSave(long nowMs)
+    {
+        string savesDirectory = Path.Combine(NativeMethods.GetGameDirectory(), "saves");
+
+        if (!TryFindFreshSave(savesDirectory, out string name, out long bytes, out long writtenTicks))
+        {
+            _candidate = null;
+            _previousBytes = -1;
+
+            if (nowMs - _lastSaveRequestMs >= SaveRetryMs)
+            {
+                if (_saveRequests >= MaxSaveRequests)
+                {
+                    // ⚠ A REFUSED SAVE IS SILENT. CSWSPlayer::GetIsAllowedToSave is a plain
+                    // [player+0x3C] flag and the engine answers a refusal with a status message
+                    // nothing here listens to, so "no directory appeared" is the only signal
+                    // there is. Failing (rather than asking forever) is what turns it into a
+                    // sentence the player can act on.
+                    Fail(
+                        $"the engine wrote no save after {MaxSaveRequests} requests - it may be "
+                        + "refusing to save here (a cutscene, or no disk space)");
+                    return;
+                }
+
+                RequestSave(nowMs);
+            }
+
+            return;
+        }
+
+        if (!string.Equals(name, _candidate, StringComparison.OrdinalIgnoreCase))
+        {
+            _candidate = name;
+            _previousBytes = -1;
+        }
+
+        if (!NewCharacterCaptureRule.ShouldCapture(
+                fileExists: true, bytes, _previousBytes, writtenTicks, _worldUpAtTicksUtc))
+        {
+            _previousBytes = bytes;
+            return;
+        }
+
+        _armed = false;
+
+        // NAME FIRST, STATE LAST — the same ordering every request region here uses, mirrored
+        // for a reply: the agent must never read "captured" and then find the name still empty.
+        block.PublishJoinChargenSaveDirectory(name);
+        block.JoinChargenBytes = (uint)Math.Min(bytes, uint.MaxValue);
+        block.JoinChargenState = SharedBlock.JoinChargenStateCaptured;
+
+        PluginHost.Log(
+            $"newchar: the engine saved the new character into saves\\{name} "
+            + $"({bytes} bytes of SAVEGAME.sav) - the agent can now adopt the host's world");
+    }
 
     /// <summary>
-    /// Called by <see cref="CharGenSaveHook"/> from inside the engine's own chargen path, on
-    /// the game thread, in the one window where <c>Temp\pifo.ifo</c> holds the character the
-    /// player just made. Copies it immediately — deferring to the next frame is exactly what
-    /// the live pass proved does not work.
+    /// The newest save directory whose <c>SAVEGAME.sav</c> was written after this world came up.
+    ///
+    /// ⚠ THE FRESHNESS CUTOFF IS WORLD-UP, NOT ARM. An install with saves on disk has old
+    /// <c>SAVEGAME.sav</c> files; carrying a character out of one of those would silently join
+    /// with somebody the player did not create — the same class of failure the stale-pifo rule
+    /// was written for. Keying on world-up (rather than on the arm) also correctly excludes a
+    /// save made during a chargen that was cancelled and restarted.
+    ///
+    /// ANY fresh save counts, not only the one this controller asked for: if the engine's own
+    /// autosave-on-entering-module beat the quicksave to it, that save holds the same character
+    /// and is just as good. The request exists to guarantee one exists, not to be the only one.
     /// </summary>
-    public static void OnCharacterSaved() => _instance?.CaptureFromHook();
-
-    /// <summary>How long the hook waits, on the game's own thread, for the engine to actually
-    /// flush the file it has just created.</summary>
-    private const int FlushWaitMs = 400;
-
-    private void CaptureFromHook()
+    private bool TryFindFreshSave(
+        string savesDirectory, out string name, out long bytes, out long writtenTicks)
     {
-        if (!_armed)
+        name = string.Empty;
+        bytes = 0;
+        writtenTicks = 0;
+
+        if (!Directory.Exists(savesDirectory))
         {
-            return;
+            return false;
         }
 
-        // ⚠ THE FILE EXISTS BUT IS EMPTY WHEN THE HOOK FIRES, MEASURED. SaveCharGenCreature
-        // returns with Temp\pifo.ifo created and ZERO BYTES — the write is still buffered
-        // behind the engine's own resource manager, which closes (and therefore flushes) it a
-        // moment later. So the hook's job is not "read the file", it is "be here when the file
-        // appears", and the honest way to use that is to WAIT for it — briefly, on this thread,
-        // before BeginPlayGame carries on into the module load whose Temp\ sweep is what
-        // destroys the file.
-        //
-        // A stall on the game thread is a real cost and it is paid exactly once, at a screen
-        // the player has just spent minutes on, immediately before a module load that takes
-        // seconds. Bounded so that an engine that never flushes costs 400 ms rather than a
-        // hang, and falling through leaves the capture ARMED so the ordinary poll gets its
-        // chance too.
-        string directory;
-        try
+        foreach (string directory in Directory.EnumerateDirectories(savesDirectory))
         {
-            directory = NativeMethods.GetGameDirectory();
-        }
-        catch (Exception ex)
-        {
-            Fail(ex.Message);
-            return;
-        }
+            string savegame = Path.Combine(directory, "SAVEGAME.sav");
+            FileInfo info = new(savegame);
 
-        string pifo = Path.Combine(directory, "Temp", PifoFile);
-        long deadline = Environment.TickCount64 + FlushWaitMs;
-        long bytes = 0;
-
-        while (Environment.TickCount64 < deadline)
-        {
-            try
+            if (!info.Exists)
             {
-                FileInfo info = new(pifo);
-                bytes = info.Exists ? info.Length : 0;
-                if (bytes >= NewCharacterCaptureRule.MinimumBytes)
-                {
-                    break;
-                }
-            }
-            catch (IOException)
-            {
-                // Mid-flush; that is precisely what we are waiting out.
+                continue;
             }
 
-            Thread.Sleep(5);
-        }
-
-        if (bytes < NewCharacterCaptureRule.MinimumBytes)
-        {
-            // Do NOT fail the join here. Staying armed costs nothing and the ordinary poll is
-            // still running; failing would turn "the flush was slower than 400 ms" into "you
-            // cannot join", which is the wrong trade by a wide margin.
-            PluginHost.Log(
-                $"newchar: the engine created Temp\\{PifoFile} but it was still {bytes} bytes "
-                + $"after {FlushWaitMs} ms - staying armed and leaving it to the poll");
-            _previousBytes = -1;
-            return;
-        }
-
-        // The stability check the poll needs (two agreeing lengths) is satisfied by
-        // construction here: we have just watched the length settle above.
-        Poll(Environment.TickCount64, fromHook: true);
-    }
-
-    private void Poll(long nowMs, bool fromHook)
-    {
-        try
-        {
-            string directory = NativeMethods.GetGameDirectory();
-            string temp = Path.Combine(directory, "Temp");
-            string pifo = Path.Combine(temp, PifoFile);
-
-            FileInfo info = new(pifo);
-            bool exists = info.Exists;
-            long bytes = exists ? info.Length : 0;
-            long writtenTicks = exists ? info.LastWriteTimeUtc.Ticks : 0;
-
-            if (fromHook)
+            long ticks = info.LastWriteTimeUtc.Ticks;
+            if (ticks < _worldUpAtTicksUtc || ticks <= writtenTicks)
             {
-                // Always say what the hook saw, whether or not it can be used. If the engine
-                // ever stops leaving the file where we expect it, THIS line is the evidence
-                // that says so — and it is the one moment nobody else can observe.
-                PluginHost.Log(
-                    $"newchar: chargen saved a character (hook): pifo exists={exists} bytes={bytes}");
+                continue;
             }
 
-            // The stability rule (two agreeing lengths) exists because the poll can read a file
-            // mid-write. The hook cannot: it runs after the engine's own write call returned,
-            // with nothing else touching the file. Passing the observed length as the previous
-            // one satisfies the rule truthfully rather than bypassing it.
-            long previous = fromHook ? bytes : _previousBytes;
-
-            if (!NewCharacterCaptureRule.ShouldCapture(
-                exists, bytes, previous, writtenTicks, _armedAtTicksUtc))
+            string candidate = Path.GetFileName(directory);
+            if (candidate.Length >= SharedBlock.JoinChargenSaveDirLength)
             {
-                _previousBytes = exists ? bytes : -1;
-
-                if (nowMs >= _nextWaitingLogMs)
-                {
-                    _nextWaitingLogMs = nowMs + 15000;
-                    PluginHost.Log(
-                        $"newchar: still waiting for a character (pifo exists={exists} bytes={bytes})");
-                }
-
-                return;
+                // It cannot be named across the block, so it cannot be handed over. Not a
+                // failure: the engine's own names are far shorter than this, and a directory
+                // this long was not written by the save path.
+                continue;
             }
 
-            string carried = Path.Combine(temp, MenuLoadController.CarriedCharacterFile);
-            File.Copy(pifo, carried, overwrite: true);
+            name = candidate;
+            bytes = info.Length;
+            writtenTicks = ticks;
+        }
 
-            long copied = new FileInfo(carried).Length;
-            if (copied < NewCharacterCaptureRule.MinimumBytes)
-            {
-                // The copy itself came out short. Do NOT report a capture the agent would then
-                // adopt with: a short pifo produces a blank level-1 stranger rather than an
-                // error, which is the single hardest failure in this whole area to diagnose.
-                Fail($"the copy came out {copied} bytes");
-                return;
-            }
-
-            _armed = false;
-            block.JoinChargenBytes = (uint)copied;
-            block.JoinChargenState = SharedBlock.JoinChargenStateCaptured;
-            PluginHost.Log(
-                $"newchar: captured the created character into Temp\\{MenuLoadController.CarriedCharacterFile} "
-                + $"({copied} bytes, via the {(fromHook ? "hook" : "poll")}) "
-                + "- the agent can now adopt the host's world");
-        }
-        catch (IOException ex) when (!fromHook)
-        {
-            // The engine still has the file open; try again next poll rather than failing the
-            // whole join on one unlucky quarter-second. Not tolerated from the hook: there is no
-            // next attempt there, so an IOException is a real failure the player must hear about.
-            _previousBytes = -1;
-            PluginHost.Log($"newchar: poll deferred ({ex.Message})");
-        }
-        catch (Exception ex)
-        {
-            Fail(ex.Message);
-        }
+        return name.Length > 0;
     }
 
     private void Fail(string why)

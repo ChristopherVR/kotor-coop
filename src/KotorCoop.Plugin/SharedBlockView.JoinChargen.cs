@@ -20,12 +20,22 @@ internal sealed unsafe partial class SharedBlockView
         set => *U32(SharedBlock.OffsetJoinChargenState) = value;
     }
 
-    /// <summary>Plugin -&gt; agent. Size of the captured character file, in bytes.</summary>
+    /// <summary>Plugin -&gt; agent. Size of the produced save's <c>SAVEGAME.sav</c>, in bytes.
+    /// </summary>
     public uint JoinChargenBytes
     {
         get => *U32(SharedBlock.OffsetJoinChargenBytes);
         set => *U32(SharedBlock.OffsetJoinChargenBytes) = value;
     }
+
+    /// <summary>Plugin -&gt; agent. Names the save directory the engine wrote, relative to
+    /// <c>saves\</c>. Written BEFORE <see cref="JoinChargenState"/> goes to
+    /// <c>JoinChargenStateCaptured</c>, so the agent can never read the state and then find the
+    /// name still empty — the same "payload first, serial last" ordering every other request
+    /// region here uses, mirrored for a reply.</summary>
+    public void PublishJoinChargenSaveDirectory(string directoryName) =>
+        WriteFixedAscii(
+            SharedBlock.OffsetJoinChargenSaveDir, directoryName, SharedBlock.JoinChargenSaveDirLength);
 
     /// <summary>Agent -&gt; plugin. Bumped to run a chargen-drive verb.</summary>
     public uint ChargenDriveRequest => *U32(SharedBlock.OffsetChargenDriveRequest);
