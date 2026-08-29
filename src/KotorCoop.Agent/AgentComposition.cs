@@ -129,6 +129,7 @@ internal static class AgentComposition
             SyncCompanionGear = config?.CompanionGearSync ?? true,
             PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? false,
             PartyPoolSyncMode = config?.PartyPoolSyncMode ?? 0,
+            PartyPoolTrace = config?.PartyPoolTrace ?? false,
             SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
             StoreSyncEnabled = config?.StoreSyncEnabled ?? false,
             StoreSyncMode = config?.StoreSyncMode ?? 0,

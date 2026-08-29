@@ -111,8 +111,8 @@ public sealed partial class CoopAgent
         _partyPump = new PartyPump(bridge, session, settings, _log);
         _partyPoolPump = new PartyPoolPump(bridge, session, _log);
         _storePump = new StorePump(bridge, session, _log);
-        _partyPoolPumpV2 = new PartyPoolPumpV2(bridge, session, _log);
-        _storePumpV2 = new StorePumpV2(bridge, session, _log);
+        _partyPoolPumpV2 = new PartyPoolPumpV2(bridge, session, _log, _settings.PartyPoolTrace);
+        _storePumpV2 = new StorePumpV2(bridge, session, _log, _settings.PartyPoolTrace);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.

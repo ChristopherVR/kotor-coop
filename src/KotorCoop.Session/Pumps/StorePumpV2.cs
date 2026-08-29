@@ -32,7 +32,12 @@ namespace KotorCoop.Session.Pumps;
 /// this instance can freshly observe at all; there is no way to notice a local change in a shop
 /// nobody has opened, matching v1's own limitation exactly.
 /// </summary>
-internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Action<string> log)
+internal sealed class StorePumpV2(
+    IGameBridge bridge,
+    ICoopSession session,
+    Action<string> log,
+    bool trace = false,
+    long expectedTimeoutMs = StorePumpV2.DefaultExpectedTimeoutMs)
 {
     private const int MaxPendingApplies = 256;
 
@@ -44,19 +49,20 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
     /// ONLY <see cref="RetireOutstandingBy"/>, never the detect step.</summary>
     private readonly Dictionary<StoreStackKey, int> _lastSnapshotValue = [];
 
-    /// <summary>See <see cref="PartyPoolPumpV2._belief"/>'s identical remarks. For a key whose
-    /// store has never once been open locally, seeded to 0 on first sight rather than a real scan
-    /// value (see <see cref="PumpClient"/>'s own remarks on the reconcile-without-GUI path) — the
-    /// same "unknown baseline treated as the safest available assumption" shape
-    /// docs/research/shared-inventory-v2.md §2.7 already accepts for the host's own apply
-    /// surface, now symmetric on the client's reconcile side too.</summary>
+    /// <summary>See <see cref="PartyPoolPumpV2._belief"/>'s identical remarks. Unlike the party
+    /// pool's, this value is only sometimes an OBSERVATION: a store can only be scanned while its
+    /// own GUI is open, so for every other store this is the pump's best assumption instead —
+    /// seeded from the host's own first snapshot of that store and then carried forward by
+    /// whatever reconciles have been queued against it. <see cref="_scannedStores"/> is how the
+    /// two are told apart; see <see cref="PumpClient"/>'s own seeding remarks.</summary>
     private readonly Dictionary<StoreStackKey, int> _belief = [];
 
     /// <summary>See <see cref="PartyPoolPumpV2._expectedFromReconcile"/>'s identical remarks.</summary>
     private readonly Dictionary<StoreStackKey, List<ExpectedReconcileMovement>> _expectedFromReconcile = [];
 
-    /// <summary>See <see cref="PartyPoolPumpV2.ExpectedTimeoutMs"/>'s identical remarks.</summary>
-    private const long ExpectedTimeoutMs = 10_000;
+    /// <summary>See <see cref="PartyPoolPumpV2.DefaultExpectedTimeoutMs"/>'s identical
+    /// remarks.</summary>
+    internal const long DefaultExpectedTimeoutMs = 10_000;
 
     private readonly Dictionary<StoreStackKey, List<OutstandingIntent>> _outstanding = [];
 
@@ -93,7 +99,47 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         public int Delta { get; set; } = delta;
 
         public long QueuedAtMs { get; } = queuedAtMs;
+
+        /// <summary>See <c>PartyPoolPumpV2.ExpectedReconcileMovement.Dispatched</c>'s identical
+        /// remarks.</summary>
+        public bool Dispatched { get; set; }
+
+        /// <summary>
+        /// See <c>PartyPoolPumpV2.ExpectedReconcileMovement.TimerFromMs</c>'s remarks. Doubly
+        /// load-bearing here: a store's stock can only be READ while its GUI is open, so for a
+        /// key whose store is closed there is no observation that could EVER consume this entry.
+        /// Expiring it on a wall clock in that state is what produced the live re-insertion loop
+        /// (docs/research/shared-inventory-v2.md §10.2) — the entry vanished, `projected`
+        /// collapsed back to `belief`, and the whole snapshot re-applied, every ~10s, forever.
+        /// The clock is therefore slid forward for as long as the key cannot be observed at all,
+        /// and only runs once it genuinely could have been seen landing.
+        /// </summary>
+        public long TimerFromMs { get; set; } = queuedAtMs;
     }
+
+    /// <summary>See <c>PartyPoolPumpV2._dispatchOrder</c>'s identical remarks.</summary>
+    private readonly Queue<ExpectedReconcileMovement?> _dispatchOrder = new();
+
+    /// <summary>Store ids this client has genuinely SCANNED at least once (its own GUI was open
+    /// on that store). Until then every belief for its keys is an ASSUMPTION, not an
+    /// observation — the first real scan re-seeds them all rather than diffing against the
+    /// guess. See <see cref="PumpClient"/>'s own first-sight seeding.</summary>
+    private readonly HashSet<uint> _scannedStores = [];
+
+    /// <summary>
+    /// Store ids this pump has already processed at least one host snapshot for. The FIRST
+    /// snapshot naming a store is that store's pristine content — the stock both instances
+    /// loaded out of the same module — so every key it carries is standing shared content, never
+    /// anybody's sale, and is seeded as already-agreed. A key or quantity that only appears in a
+    /// LATER snapshot is a genuine host-side change and is mirrored from 0.
+    ///
+    /// Without this split, a client that has never opened a shop reads the host's entire
+    /// published stock as missing from its own (belief 0) and blind-inserts all of it into a shop
+    /// that already had it — which is the other half of docs/research/shared-inventory-v2.md
+    /// §10.2's 432-insert cascade, and the reason its 18 re-inserted resrefs were the shop's
+    /// whole base inventory rather than anything that round ever touched.
+    /// </summary>
+    private readonly HashSet<uint> _baselinedStores = [];
 
     public void Pump(SessionCapabilities caps)
     {
@@ -159,6 +205,12 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
             keys.UnionWith(openScan.Keys);
         }
 
+        // Which stores this tick actually looked at — folded into the two "we have a baseline
+        // for this store now" sets only AFTER the whole loop, so every key of a store first seen
+        // this tick is seeded consistently rather than the first one baselining the rest.
+        HashSet<uint> touched = [];
+        HashSet<uint> scanned = [];
+
         foreach (StoreStackKey key in keys)
         {
             // §7 (2026-08-29), item 3: a store the host has never scanned is UNKNOWN, not zero —
@@ -183,22 +235,50 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
 
             bool liveThisTick = storeOpen && key.StoreObjectId == openStoreObjectId;
 
-            // §9 (2026-08-29): no special "first sight" branch — see
-            // PartyPoolPumpV2.PumpClient's identical remarks for why a delta-based design must
-            // never silently seed-and-defer a standing surplus (it can never recover it, unlike
-            // the old absolute-target design's one-tick defer). A key never locally observed
-            // defaults to belief 0 — the same "unknown baseline treated as the safest available
-            // assumption" shape §2.7 already accepts for the host's own cold-start apply surface,
-            // now symmetric here so a store this client has never opened can still reconcile UP
-            // to reflect another peer's real action against it (item 2's own "host sells while
-            // the client's GUI is closed" requirement) rather than being silently skipped forever
-            // the way the pre-§9 GUI-gated early return did.
-            int belief = _belief.GetValueOrDefault(key);
+            // ⚠ 2026-08-29 (shared-inventory-v2.md §12). First sight seeds to the host's own
+            // snapshot value, not 0 — in BOTH branches, for two different reasons that land on
+            // the same number:
+            //
+            // - Not live (this store's GUI is closed, and may never have been open here at all):
+            //   there is no way to read the real local baseline, and the only defensible
+            //   assumption is that this instance's own engine already holds what the host says it
+            //   does — both loaded the same module content. Seeding 0 instead, as §9 did, made
+            //   the very first blind reconcile "converge" a store that was already correct by
+            //   inserting its ENTIRE stock again, which is half of §10.2's 432-insert cascade.
+            // - Live: the same reasoning as PartyPoolPumpV2's own min() seeding, and it matters
+            //   even more here — a client opening a shop the host has already published would
+            //   otherwise read the shop's whole pristine stock as a fresh local DEPOSIT and
+            //   report it to the host, doubling the shop. min() still reports a genuine local
+            //   surplus beyond what the host knows, immediately.
+            //
+            // Any residual disagreement is not lost either way: the reconcile below pulls this
+            // instance's engine to the host's number, which is exactly what host-authoritative
+            // means (§2.1).
+            touched.Add(key.StoreObjectId);
+
+            // Re-seed rather than diff whenever this pump has no OBSERVED belief for the key:
+            // never seen it at all, or (the case a blind reconcile creates) the belief it does
+            // have was assumed from the host's snapshot and this is the first time the store's
+            // GUI has actually been open to check. Diffing a fresh scan against an assumption
+            // reports the difference between a guess and reality as a player action.
+            bool firstLocalSight = !_belief.TryGetValue(key, out int belief);
+            bool reseed = firstLocalSight
+                || (liveThisTick && !_scannedStores.Contains(key.StoreObjectId));
+            int rawMovement = 0;
+            int published = 0;
+            int actual = belief;
 
             if (liveThisTick)
             {
-                int actual = openScan.GetValueOrDefault(key);
-                int rawMovement = actual - belief;
+                scanned.Add(key.StoreObjectId);
+
+                actual = openScan.GetValueOrDefault(key);
+                if (reseed)
+                {
+                    belief = Math.Min(actual, snapshotValue);
+                }
+
+                rawMovement = actual - belief;
                 belief = actual;
                 _belief[key] = actual;
 
@@ -213,6 +293,7 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
                         uint serial = session.PublishStoreIntentV2(kind, key, count);
                         if (serial != 0)
                         {
+                            published = localChange;
                             log($"store: local {kind.ToString().ToLowerInvariant()} of {count}x "
                                 + $"'{key.Resref}' detected in store 0x{key.StoreObjectId:X}, "
                                 + $"requesting (serial {serial})");
@@ -221,16 +302,77 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
                     }
                 }
             }
+            else
+            {
+                if (firstLocalSight)
+                {
+                    // A store already baselined here (by a real scan, or by its own first
+                    // snapshot) has a belief for every key it held at that moment — including 0
+                    // for the ones it did not stock. A key first surfacing AFTER that is
+                    // therefore genuinely new: the host gained it since, and it is mirrored from
+                    // 0. A store being baselined right now (this is its first snapshot) is
+                    // pristine shared content instead, and is seeded as already agreed. See
+                    // _baselinedStores.
+                    belief = _baselinedStores.Contains(key.StoreObjectId) ? 0 : snapshotValue;
+                    _belief[key] = belief;
+                    actual = belief;
+                }
+
+                // ⚠ THE §10.2 RE-INSERTION LOOP LIVES HERE. `belief` cannot advance without a
+                // scan, so a reconcile queued for an unobservable store is held off re-firing by
+                // its expected-movement entry ALONE — and that entry used to expire on a blind
+                // 10s wall clock, at which point `projected` collapsed back to `belief` and the
+                // identical delta was queued again. Live: every one of a store's 18 known keys
+                // re-inserted every ~10.1-10.9s, 432 inserts in 13 minutes, host clean at 0.
+                // Nothing can consume the entry while nothing can scan the store, so nothing may
+                // expire it either: slide its clock for exactly as long as that stays true.
+                SlideExpectedTimers(key, now);
+            }
 
             // Reconcile runs EVERY tick, live scan or not — see the class remarks (item 2). Uses
             // `belief`, never a live-only `actual`, so a store whose GUI is closed this tick can
             // still be asked to converge based on this pump's own best current estimate.
             int target = ReconcileTarget(key, belief, snapshotValue);
-            int projected = belief + ExpectedFromReconcileNet(key);
+            int expectedNet = ExpectedFromReconcileNet(key);
+            int projected = belief + expectedNet;
             int reconcileDelta = target - projected;
             if (reconcileDelta != 0)
             {
                 QueueReconcile(key, reconcileDelta, now);
+            }
+
+            if (trace && (rawMovement != 0 || reconcileDelta != 0 || expectedNet != 0
+                || OutstandingNet(key) != 0 || reseed))
+            {
+                log($"store trace: '{key.Resref}'/c{key.Charges}/m{key.MaxCharges}/u{key.Upgrades}/f{key.Flags} in 0x{key.StoreObjectId:X} "
+                    + $"actual={actual} belief={belief} snap={snapshotValue} raw={rawMovement} "
+                    + $"expected={expectedNet} outstanding={OutstandingNet(key)} "
+                    + $"published={published} target={target} reconcile={reconcileDelta} "
+                    + (liveThisTick ? "live" : "blind")
+                    + (reseed ? " reseed" : string.Empty));
+            }
+        }
+
+        _baselinedStores.UnionWith(touched);
+        _scannedStores.UnionWith(scanned);
+    }
+
+    /// <summary>Pushes every not-yet-consumed expected-movement entry for <paramref name="key"/>
+    /// past this tick, so <see cref="PruneExpiredExpected"/> cannot presume it resolved. Called
+    /// on every tick the key's own store is not scannable — see the call site's own remarks and
+    /// <see cref="ExpectedReconcileMovement.TimerFromMs"/>.</summary>
+    private void SlideExpectedTimers(StoreStackKey key, long nowMs)
+    {
+        if (!_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries))
+        {
+            return;
+        }
+
+        lock (_pendingGate)
+        {
+            foreach (ExpectedReconcileMovement entry in entries)
+            {
+                entry.TimerFromMs = nowMs;
             }
         }
     }
@@ -245,14 +387,15 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         StoreOpKind kind = delta > 0 ? StoreOpKind.Add : StoreOpKind.Remove;
         ushort count = (ushort)Math.Min(Math.Abs(delta), ushort.MaxValue);
 
-        if (!EnqueueApply(kind, key, count))
+        ExpectedReconcileMovement expected = new(delta, nowMs);
+        if (!EnqueueApply(kind, key, count, expected))
         {
             return;
         }
 
         (_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries)
             ? entries
-            : _expectedFromReconcile[key] = []).Add(new ExpectedReconcileMovement(delta, nowMs));
+            : _expectedFromReconcile[key] = []).Add(expected);
     }
 
     /// <summary>See <see cref="PartyPoolPumpV2.ConsumeExpected"/>'s identical remarks.</summary>
@@ -327,12 +470,18 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         List<StoreStackKey>? emptied = null;
         foreach ((StoreStackKey key, List<ExpectedReconcileMovement> entries) in _expectedFromReconcile)
         {
-            int removed = entries.RemoveAll(e => nowMs - e.QueuedAtMs > ExpectedTimeoutMs);
+            int removed;
+            lock (_pendingGate)
+            {
+                removed = entries.RemoveAll(
+                    e => e.Dispatched && nowMs - e.TimerFromMs > expectedTimeoutMs);
+            }
+
             if (removed > 0)
             {
                 log($"store: expected-reconcile entry for '{key.Resref}' in store "
                     + $"0x{key.StoreObjectId:X} never observed landing within "
-                    + $"{ExpectedTimeoutMs / 1000}s — presumed resolved, re-evaluating fresh");
+                    + $"{expectedTimeoutMs / 1000}s — presumed resolved, re-evaluating fresh");
             }
 
             if (entries.Count == 0)
@@ -352,7 +501,9 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
         }
     }
 
-    private bool EnqueueApply(StoreOpKind kind, StoreStackKey key, ushort count)
+    private bool EnqueueApply(
+        StoreOpKind kind, StoreStackKey key, ushort count,
+        ExpectedReconcileMovement? expected = null)
     {
         lock (_pendingGate)
         {
@@ -364,6 +515,7 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
             }
 
             _pendingApplies.Enqueue(new CoopAgent.PendingStoreApply(kind, key, count));
+            _dispatchOrder.Enqueue(expected);
             return true;
         }
     }
@@ -521,7 +673,19 @@ internal sealed class StorePumpV2(IGameBridge bridge, ICoopSession session, Acti
     {
         lock (_pendingGate)
         {
-            return _pendingApplies.TryDequeue(out next);
+            if (!_pendingApplies.TryDequeue(out next))
+            {
+                return false;
+            }
+
+            if (_dispatchOrder.TryDequeue(out ExpectedReconcileMovement? expected)
+                && expected is not null)
+            {
+                expected.Dispatched = true;
+                expected.TimerFromMs = SessionClock.NowMs;
+            }
+
+            return true;
         }
     }
 }

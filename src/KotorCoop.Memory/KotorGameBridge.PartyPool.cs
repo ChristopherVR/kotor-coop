@@ -80,6 +80,19 @@ public sealed partial class KotorGameBridge
 
     private const int PartyPoolSuppressionCacheCapacity = 4096;
 
+    /// <summary>How a suppressed item is kept OUT of the reported totals — by per-key BASELINE,
+    /// never by skipping the item. See <see cref="PartyPoolAmbientBaseline"/>'s own remarks for
+    /// the stack-merge artifact that made skipping actively wrong.</summary>
+    private readonly PartyPoolAmbientBaseline _partyPoolAmbient = new();
+
+    private int _partyPoolScanEpoch;
+
+    /// <summary>See <see cref="IPartyPoolBridge.PartyPoolScanEpoch"/>. Bumped by
+    /// <see cref="ClearPartyPoolSuppressionCache"/> — i.e. on a module change, the one moment the
+    /// ambient baseline above is dropped wholesale and the totals this bridge reports can
+    /// therefore step for a reason that is not engine movement.</summary>
+    public int PartyPoolScanEpoch => _partyPoolScanEpoch;
+
     /// <summary>
     /// True when <paramref name="itemId"/> should be excluded from a party-pool scan's
     /// aggregate — see <see cref="_partyPoolSuppressionDecided"/>'s own remarks for why this is
@@ -132,6 +145,13 @@ public sealed partial class KotorGameBridge
     {
         _partyPoolSuppressionDecided.Clear();
         _partyPoolAmbientSuppressed.Clear();
+        _partyPoolAmbient.Clear();
+
+        // Dropping the baseline can make the very next scan's totals step UP for a key whose
+        // ambient content was previously offset — movement no engine action caused. A
+        // delta-based consumer must re-seed rather than read that as a deposit; the epoch is how
+        // it finds out. See IPartyPoolBridge.PartyPoolScanEpoch.
+        _partyPoolScanEpoch++;
     }
 
     /// <summary>Read-only; no plugin needed. The apply half (creating/destroying items) goes
@@ -183,7 +203,7 @@ public sealed partial class KotorGameBridge
             return _partyPoolEverScanned;
         }
 
-        Dictionary<PartyPoolStackKey, int> scan = [];
+        Dictionary<PartyPoolStackKey, int> raw = [];
 
         for (int i = 0; i < count; i++)
         {
@@ -207,17 +227,21 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
+            PartyPoolStackKey key = PartyPoolStackKey.From(resref, identity);
+            raw[key] = raw.GetValueOrDefault(key) + identity.StackSize;
+
             // Ambient-script noise (an item created and pooled by a vanilla k_* script, not by
-            // player action) is permanently excluded from the sync-relevant aggregate — see
-            // IsAmbientPartyPoolNoise's own remarks and docs/research/party-pool-sync.md §20.
+            // player action) is kept out of the sync-relevant aggregate — but by BASELINE, not by
+            // skipping the item, so a later stack merge cannot surface it as movement. See
+            // PartyPoolAmbientBaseline's own remarks, IsAmbientPartyPoolNoise's, and
+            // docs/research/party-pool-sync.md §20.
             if (IsAmbientPartyPoolNoise(itemId, now))
             {
-                continue;
+                _partyPoolAmbient.NoteSuppressed(itemId, key, identity.StackSize);
             }
-
-            PartyPoolStackKey key = PartyPoolStackKey.From(resref, identity);
-            scan[key] = scan.GetValueOrDefault(key) + identity.StackSize;
         }
+
+        Dictionary<PartyPoolStackKey, int> scan = _partyPoolAmbient.Net(raw);
 
         _partyPoolLastScan = scan;
         _partyPoolEverScanned = true;
