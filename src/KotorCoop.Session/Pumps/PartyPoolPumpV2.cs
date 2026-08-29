@@ -42,7 +42,12 @@ namespace KotorCoop.Session.Pumps;
 /// <see cref="ReconcileTarget"/> never reconciles away a local deposit the host has not echoed
 /// back yet, and never feeds the (now belief-based) detect step at all.
 /// </summary>
-internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, Action<string> log)
+internal sealed class PartyPoolPumpV2(
+    IGameBridge bridge,
+    ICoopSession session,
+    Action<string> log,
+    bool trace = false,
+    long expectedTimeoutMs = PartyPoolPumpV2.DefaultExpectedTimeoutMs)
 {
     private const int MaxPendingApplies = 256;
 
@@ -80,8 +85,18 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
     /// every other in-flight timeout in this codebase's family (<c>PartyPoolPump
     /// .ApplyInFlightTimeoutMs</c>, <see cref="IntentTimeoutMs"/>) — see
     /// <see cref="_expectedFromReconcile"/>'s own remarks for why an entry can otherwise never
-    /// resolve on its own.</summary>
-    private const long ExpectedTimeoutMs = 10_000;
+    /// resolve on its own. Overridable ONLY through this class's own constructor, and only so a
+    /// unit test can drive the expiry path in milliseconds instead of waiting out ten real
+    /// seconds (<c>SharedInventoryV2PumpTests</c>); production always takes the default.</summary>
+    internal const long DefaultExpectedTimeoutMs = 10_000;
+
+    /// <summary>The bridge's own <see cref="IPartyPoolBridge.PartyPoolScanEpoch"/> as of the last
+    /// tick — a change means the bridge dropped bookkeeping the totals depend on (a module
+    /// change), so the step in what it reports is NOT engine movement and must never be detected
+    /// as a local change. See <see cref="ResetForNewScanEpoch"/>.</summary>
+    private int _lastScanEpoch;
+
+    private bool _everPumped;
 
     /// <summary>Client only: every intent this pump has published but not yet seen acked or
     /// timed out, per key — the <c>Σ(outstanding)</c> term <see cref="ReconcileTarget"/> reads to
@@ -144,7 +159,36 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         public int Delta { get; set; } = delta;
 
         public long QueuedAtMs { get; } = queuedAtMs;
+
+        /// <summary>
+        /// False until the apply this entry stands for has actually been handed to the
+        /// single-slot arbitrated cheat channel (<see cref="TryDequeuePendingApply"/>). While it
+        /// is still sitting in this pump's OWN queue it definitionally cannot have landed, so
+        /// <see cref="PruneExpiredExpected"/> must never presume it resolved — the whole point of
+        /// the "presumed resolved" timeout is a landing this pump could not OBSERVE, not one that
+        /// has not been attempted yet. A burst of applies drains one per dispatcher poll, so a
+        /// wall-clock timer started at QUEUE time expires the tail of any long burst while it is
+        /// still queued, which is exactly the "expected entry vanishes, the gap re-fires" shape
+        /// that produced the live re-insertion loops (docs/research/shared-inventory-v2.md §10.2).
+        ///
+        /// Written under the same <c>_pendingGate</c> lock that owns the apply queue, and read
+        /// under it too — the dispatcher drain runs on a genuinely independent thread.
+        /// </summary>
+        public bool Dispatched { get; set; }
+
+        /// <summary>When this entry's expiry clock started running: the dispatch moment, not the
+        /// queue moment — see <see cref="Dispatched"/>. Also slid forward for as long as the
+        /// key cannot be observed at all, which the store's own sibling pump needs (a store whose
+        /// GUI is closed can never be scanned, so nothing can ever consume the entry).</summary>
+        public long TimerFromMs { get; set; } = queuedAtMs;
     }
+
+    /// <summary>Every <see cref="ExpectedReconcileMovement"/> in the exact order its apply was
+    /// enqueued, so <see cref="TryDequeuePendingApply"/> can stamp the right one dispatched.
+    /// <c>null</c> for a HOST-side apply (a drained client intent), which has no expected entry
+    /// of its own — the two queues must stay index-for-index aligned regardless. Guarded by
+    /// <see cref="_pendingGate"/>, exactly like <see cref="_pendingApplies"/> itself.</summary>
+    private readonly Queue<ExpectedReconcileMovement?> _dispatchOrder = new();
 
     public void Pump(SessionCapabilities caps)
     {
@@ -172,9 +216,19 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
 
         session.PublishPartyPoolSnapshotV2(totals);
 
+        bool queuedAny = false;
         foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
         {
-            EnqueueApply(intent.Kind, intent.Key, intent.Count);
+            queuedAny |= EnqueueApply(intent.Kind, intent.Key, intent.Count);
+        }
+
+        if (queuedAny)
+        {
+            // The host's own engine now owes an apply; its next PUBLISH must reflect the landing
+            // as soon as it is true rather than a cache window later, or a client waiting on the
+            // echo of its own intent sits on a stale snapshot for up to a full window and its
+            // outstanding ledger drifts against it.
+            bridge.InvalidatePartyPoolScanCache();
         }
     }
 
@@ -198,7 +252,34 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
             return;
         }
 
-        bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> scan);
+        // ⚠ 2026-08-29 (shared-inventory-v2.md §12): the return value is NOT optional. The bridge
+        // documents its own contract explicitly — "False when there is no world loaded yet
+        // (main menu, loading screen) or the read otherwise failed — the caller MUST NOT treat
+        // that as 'the pool is empty'" — and hands back an EMPTY dictionary in exactly that case
+        // (KotorGameBridge.PartyPool.cs returns `_partyPoolLastScan`, which is empty until the
+        // first successful sweep). Ignoring it made `actual` read 0 for every key at once, which
+        // this delta-based detect step then reads as the player having emptied the entire pool in
+        // one tick — a phantom REMOVE per key, published to the host and applied there — followed
+        // by the mirror-image phantom ADD the moment the scan starts working again. A failed scan
+        // is NO OBSERVATION: do nothing at all this tick, including no reconcile (a reconcile
+        // computed against a value we did not actually read is just as wrong as a detection is).
+        if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> scan))
+        {
+            return;
+        }
+
+        // A module change drops the bridge's ambient-noise baseline, so the same unchanged pool
+        // can report bigger totals than it did a tick ago (KotorGameBridge.PartyPool.cs's own
+        // _partyPoolAmbientBaseline). That step is not engine movement; re-seed rather than
+        // detect it. Covers the same ground for any future bridge-side bookkeeping reset.
+        int epoch = bridge.PartyPoolScanEpoch;
+        if (_everPumped && epoch != _lastScanEpoch)
+        {
+            ResetForNewScanEpoch();
+        }
+
+        _lastScanEpoch = epoch;
+        _everPumped = true;
 
         HashSet<PartyPoolStackKey> keys = new(snapshot.Keys);
         keys.UnionWith(scan.Keys);
@@ -245,10 +326,32 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
             // over-count docs/research/shared-inventory-v2.md §2.4 already documents (and
             // IdenticalAmbientNoiseOnBothSidesConvergesWithoutASecondRoundOfAmplification already
             // tolerates both outcomes).
-            int belief = _belief.GetValueOrDefault(key);
+            // ⚠ 2026-08-29 (shared-inventory-v2.md §12): first sight seeds to
+            // min(actual, snapshotValue), NOT to 0.
+            //
+            // §9 removed the old "seed silently and defer a tick" branch for a real reason (a
+            // delta design can never recover a value it silently absorbs) and replaced it with a
+            // flat 0 — which publishes a key's ENTIRE standing quantity as a fresh local deposit
+            // the first time this pump ever looks at it. At session start both instances have
+            // loaded the SAME save and hold the SAME pool, so that is a guaranteed
+            // publish-then-double of every stack in the stash, on the very first tick the pump
+            // and the first snapshot coincide. The minimum splits the two cases apart with no
+            // heuristic at all: whatever the host ALREADY agrees this key holds is standing
+            // shared content and is never anybody's deposit; anything this instance holds BEYOND
+            // that is a genuine local surplus and is still reported immediately, exactly as §9
+            // requires. (actual=3/snapshot=0 -> belief 0, publishes +3, §9's own regression case;
+            // actual=5/snapshot=5 -> belief 5, publishes nothing; actual=0/snapshot=5 -> belief
+            // 0, publishes nothing and reconciles UP.)
+            bool firstLocalSight = !_belief.TryGetValue(key, out int belief);
+            if (firstLocalSight)
+            {
+                belief = Math.Min(actual, snapshotValue);
+            }
+
             int rawMovement = actual - belief;
             _belief[key] = actual;
 
+            int published = 0;
             if (rawMovement != 0)
             {
                 int localChange = ConsumeExpected(key, rawMovement);
@@ -260,9 +363,18 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
                     uint serial = session.PublishPartyPoolIntentV2(kind, key, count);
                     if (serial != 0)
                     {
+                        published = localChange;
                         log($"party pool: local {kind.ToString().ToLowerInvariant()} of {count}x "
                             + $"'{key.Resref}' detected, requesting (serial {serial})");
                         AddOutstanding(key, serial, localChange, now);
+
+                        // A genuine local change just happened — the bridge's own scan cache (up
+                        // to 1s stale) must not mask a SECOND rapid change to this or any other
+                        // key behind the rest of that window. The identical call mode 1's own
+                        // PublishDetected makes, for the identical reason
+                        // (docs/research/party-pool-sync.md §14); §2.8 always claimed mode 2 made
+                        // it too and it never did.
+                        bridge.InvalidatePartyPoolScanCache();
                     }
                 }
             }
@@ -274,13 +386,39 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
             // tick, and a target that is already fully covered by what is already queued queues
             // nothing further.
             int target = ReconcileTarget(key, actual, snapshotValue);
-            int projected = actual + ExpectedFromReconcileNet(key);
+            int expectedNet = ExpectedFromReconcileNet(key);
+            int projected = actual + expectedNet;
             int reconcileDelta = target - projected;
             if (reconcileDelta != 0)
             {
                 QueueReconcile(key, reconcileDelta, now);
             }
+
+            if (trace && (rawMovement != 0 || reconcileDelta != 0 || expectedNet != 0
+                || OutstandingNet(key) != 0 || firstLocalSight))
+            {
+                log($"party pool trace: '{key.Resref}'/c{key.Charges}/m{key.MaxCharges}/u{key.Upgrades}/f{key.Flags} actual={actual} belief={belief} "
+                    + $"snap={snapshotValue} raw={rawMovement} expected={expectedNet} "
+                    + $"outstanding={OutstandingNet(key)} published={published} "
+                    + $"target={target} reconcile={reconcileDelta}"
+                    + (firstLocalSight ? " firstSight" : string.Empty));
+            }
         }
+    }
+
+    /// <summary>The bridge reset bookkeeping the totals depend on (a module change). Everything
+    /// this pump believes about LOCAL values is measured against those totals, so all of it is
+    /// now meaningless — drop it and let the per-key first-sight seeding above rebuild it from
+    /// whatever is true now. Deliberately keeps <see cref="_outstanding"/>: those are real
+    /// requests genuinely in flight to the host, and they retire on their own timers.</summary>
+    private void ResetForNewScanEpoch()
+    {
+        _belief.Clear();
+        _lastSnapshotValue.Clear();
+        _expectedFromReconcile.Clear();
+
+        log("party pool: the bridge reset its own scan bookkeeping (module change) — re-seeding "
+            + "local belief rather than reading the step as engine movement");
     }
 
     private void QueueReconcile(PartyPoolStackKey key, int delta, long nowMs)
@@ -293,14 +431,23 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         PartyPoolOpKind kind = delta > 0 ? PartyPoolOpKind.Add : PartyPoolOpKind.Remove;
         ushort count = (ushort)Math.Min(Math.Abs(delta), ushort.MaxValue);
 
-        if (!EnqueueApply(kind, key, count))
+        ExpectedReconcileMovement expected = new(delta, nowMs);
+        if (!EnqueueApply(kind, key, count, expected))
         {
             return;
         }
 
         (_expectedFromReconcile.TryGetValue(key, out List<ExpectedReconcileMovement>? entries)
             ? entries
-            : _expectedFromReconcile[key] = []).Add(new ExpectedReconcileMovement(delta, nowMs));
+            : _expectedFromReconcile[key] = []).Add(expected);
+
+        // This instance now owes its own engine an apply — the very next scan needs to be fresh
+        // so the landing (and anything else that moves meanwhile) is seen as soon as it is true,
+        // not delayed behind a cache window that started ticking before we had any reason to look
+        // again. Mode 1 has always done this (PartyPoolPump's own reconcile loop); §2.8 claimed
+        // mode 2 did too and it never did, so a landed reconcile could be read out of a stale
+        // cache one full window later and mistaken for a fresh local action.
+        bridge.InvalidatePartyPoolScanCache();
     }
 
     /// <summary>
@@ -390,11 +537,20 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         List<PartyPoolStackKey>? emptied = null;
         foreach ((PartyPoolStackKey key, List<ExpectedReconcileMovement> entries) in _expectedFromReconcile)
         {
-            int removed = entries.RemoveAll(e => nowMs - e.QueuedAtMs > ExpectedTimeoutMs);
+            int removed;
+            lock (_pendingGate)
+            {
+                // Dispatched-gated: an entry whose apply has not even left this pump's own queue
+                // yet CANNOT have landed, so "presumed resolved" would be a lie. See
+                // ExpectedReconcileMovement.Dispatched.
+                removed = entries.RemoveAll(
+                    e => e.Dispatched && nowMs - e.TimerFromMs > expectedTimeoutMs);
+            }
+
             if (removed > 0)
             {
                 log($"party pool: expected-reconcile entry for '{key.Resref}' never observed "
-                    + $"landing within {ExpectedTimeoutMs / 1000}s — presumed resolved, "
+                    + $"landing within {expectedTimeoutMs / 1000}s — presumed resolved, "
                     + "re-evaluating fresh");
             }
 
@@ -415,7 +571,9 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
         }
     }
 
-    private bool EnqueueApply(PartyPoolOpKind kind, PartyPoolStackKey key, ushort count)
+    private bool EnqueueApply(
+        PartyPoolOpKind kind, PartyPoolStackKey key, ushort count,
+        ExpectedReconcileMovement? expected = null)
     {
         lock (_pendingGate)
         {
@@ -427,6 +585,7 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
             }
 
             _pendingApplies.Enqueue(new CoopAgent.PendingPartyPoolApply(kind, key, count));
+            _dispatchOrder.Enqueue(expected);
             return true;
         }
     }
@@ -617,7 +776,22 @@ internal sealed class PartyPoolPumpV2(IGameBridge bridge, ICoopSession session, 
     {
         lock (_pendingGate)
         {
-            return _pendingApplies.TryDequeue(out next);
+            if (!_pendingApplies.TryDequeue(out next))
+            {
+                return false;
+            }
+
+            // The apply is now genuinely on its way to the engine through the single-slot
+            // arbitrated cheat channel — only NOW does its expected-movement entry start its
+            // "never observed landing" clock. See ExpectedReconcileMovement.Dispatched.
+            if (_dispatchOrder.TryDequeue(out ExpectedReconcileMovement? expected)
+                && expected is not null)
+            {
+                expected.Dispatched = true;
+                expected.TimerFromMs = SessionClock.NowMs;
+            }
+
+            return true;
         }
     }
 }

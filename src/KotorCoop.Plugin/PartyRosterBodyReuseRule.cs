@@ -48,7 +48,17 @@ internal static class PartyRosterBodyReuseRule
     /// id is never "found" by construction, so this does not need to re-check
     /// <see cref="IsWorthLookingUp"/> on its own, but callers are expected to have skipped the
     /// lookup entirely rather than pass <paramref name="foundLocally"/> true for one.
+    ///
+    /// ⚠ AND NEVER ONE OF OUR OWN SPAWNED BODIES. The premise of the whole check is GIT
+    /// identity — the peer's id names the same PLACED creature here — and the bodies this
+    /// plugin creates itself (a peer's phantom, a materialised enemy stand-in) are the one
+    /// class of object that premise is false for: they are allocated at runtime, from a
+    /// counter the two instances advance independently, so the peer's roster id can collide
+    /// with one of ours by pure arithmetic. Reusing that body would seat a REMOTE PLAYER's
+    /// avatar in this instance's party — party bar portrait, roster slot and all — which is
+    /// the wrong-identity failure class docs/research/name-plates.md exists for, in the one
+    /// place that shows a portrait at all.
     /// </summary>
-    public static bool ShouldReuse(uint hostBodyId, bool foundLocally) =>
-        IsWorthLookingUp(hostBodyId) && foundLocally;
+    public static bool ShouldReuse(uint hostBodyId, bool foundLocally, bool isOurOwnSpawnedBody) =>
+        IsWorthLookingUp(hostBodyId) && foundLocally && !isOurOwnSpawnedBody;
 }

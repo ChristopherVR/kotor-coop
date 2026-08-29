@@ -43,8 +43,9 @@ public class PartyRosterBodyReuseRuleTests
         // Even if the caller (incorrectly) claims a body was "found" for a 0/invalid id, this
         // rule never authorises a reuse from one — there is nothing a real lookup could ever
         // have found under a sentinel.
-        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(0, foundLocally: true));
-        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(PartyRosterBodyReuseRule.ObjectInvalid, foundLocally: true));
+        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(0, foundLocally: true, isOurOwnSpawnedBody: false));
+        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(
+            PartyRosterBodyReuseRule.ObjectInvalid, foundLocally: true, isOurOwnSpawnedBody: false));
     }
 
     [Fact]
@@ -54,7 +55,7 @@ public class PartyRosterBodyReuseRuleTests
         // begin with (found via a minigame, a crate, a cutscene reveal) — the id is real and
         // worth looking up, but CreatureFinder.FindByObjectId simply never finds a match here.
         // Reconcile must fall back to the ordinary off-stage recruit + spawn path, unchanged.
-        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(0x2, foundLocally: false));
+        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(0x2, foundLocally: false, isOurOwnSpawnedBody: false));
     }
 
     [Fact]
@@ -64,6 +65,17 @@ public class PartyRosterBodyReuseRuleTests
         // slot (its own placed body, converted in place by the real recruit dialogue), and this
         // instance's independently-loaded copy of the same GIT-placed module also has a live
         // creature at 0x2 — so the lookup found it, and the reuse is authorised.
-        Assert.True(PartyRosterBodyReuseRule.ShouldReuse(0x2, foundLocally: true));
+        Assert.True(PartyRosterBodyReuseRule.ShouldReuse(0x2, foundLocally: true, isOurOwnSpawnedBody: false));
+    }
+
+    [Fact]
+    public void ReuseIsRefusedForABodyThisPluginSpawnedItself()
+    {
+        // The wrong-identity hazard the GIT-identity premise does not cover: a peer's phantom
+        // and a materialised enemy stand-in are allocated at RUNTIME, from a counter the two
+        // instances advance independently, so a peer's roster id can land on one of ours by
+        // arithmetic alone — and the lookup would happily "find" it. Reusing it would seat a
+        // remote player's own avatar in this instance's party, portrait slot and all.
+        Assert.False(PartyRosterBodyReuseRule.ShouldReuse(0x2, foundLocally: true, isOurOwnSpawnedBody: true));
     }
 }

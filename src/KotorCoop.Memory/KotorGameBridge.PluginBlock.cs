@@ -285,9 +285,15 @@ public sealed partial class KotorGameBridge
 
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
 
+        // Same membership question, same answer, same reason as ReadEnemies — see
+        // PartyCensusRule. A companion leaked onto the liveness channel is reported to the peer
+        // as a creature it should be reconciling, which is not this channel's business either.
+        HashSet<uint> partyRoster = ReadPartyRosterIds();
+
         foreach (CreatureRef creature in EnumerateCreatures())
         {
-            if (creature.IsPlayer || creature.IsPartyMember)
+            if (PartyCensusRule.IsOwnParty(
+                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster))
             {
                 continue;
             }

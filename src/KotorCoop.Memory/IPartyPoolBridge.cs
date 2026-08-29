@@ -42,4 +42,19 @@ public interface IPartyPoolBridge
     void InvalidatePartyPoolScanCache()
     {
     }
+
+    /// <summary>
+    /// A counter this bridge bumps whenever it drops per-object bookkeeping the reported totals
+    /// DEPEND on — today exactly one thing does that: a module change clearing the ambient-noise
+    /// baseline (<c>KotorGameBridge.PartyPool.cs</c>'s <c>ClearPartyPoolSuppressionCache</c>),
+    /// after which the same unchanged pool can legitimately report LARGER totals than it did the
+    /// tick before.
+    ///
+    /// A consumer that reads totals as ABSOLUTE values can ignore this entirely. A consumer that
+    /// reads them as a DELTA against its own previous observation (<c>Pumps.PartyPoolPumpV2</c>'s
+    /// belief-delta detect step) must not read that step as engine movement — it re-seeds
+    /// instead. Constant for a bridge with no such bookkeeping (every test fake, and any bridge
+    /// with no plugin attached, where nothing is ever suppressed in the first place).
+    /// </summary>
+    int PartyPoolScanEpoch => 0;
 }

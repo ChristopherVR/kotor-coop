@@ -419,7 +419,8 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 ? CreatureFinder.FindByObjectId(hostBodyId)
                 : 0;
 
-            if (PartyRosterBodyReuseRule.ShouldReuse(hostBodyId, gitPlacedBody != 0)
+            if (PartyRosterBodyReuseRule.ShouldReuse(
+                    hostBodyId, gitPlacedBody != 0, IsOurOwnSpawnedBody(hostBodyId))
                 && Odyssey.TrySetSlotAvailable(addSlot))
             {
                 // TrySetSlotAvailable's own doc comment calls it insufficient ON ITS OWN — that
@@ -582,6 +583,38 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         {
             uint id = Odyssey.GetPartyRosterObjectId(slot);
             if (id == controlledId && id is not 0 and not Odyssey.ObjectInvalid)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when a local object id names a body THIS plugin spawned — a peer's phantom or a
+    /// materialised enemy stand-in — rather than something the module placed.
+    ///
+    /// See <see cref="PartyRosterBodyReuseRule.ShouldReuse"/> for why the reuse path must
+    /// refuse them: those ids come from a runtime counter the two instances advance
+    /// independently, so a peer's roster id can collide with one by arithmetic alone, and
+    /// reusing it would seat a remote player's avatar in this instance's party.
+    /// </summary>
+    private bool IsOurOwnSpawnedBody(uint objectId)
+    {
+        if (!PartyRosterBodyReuseRule.IsWorthLookingUp(objectId))
+        {
+            return false;
+        }
+
+        if (MaterialisedEnemies.ToOwner(objectId) != 0)
+        {
+            return true;
+        }
+
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            if (block.GetPhantomId(i) == objectId)
             {
                 return true;
             }

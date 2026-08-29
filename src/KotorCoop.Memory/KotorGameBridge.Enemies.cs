@@ -30,6 +30,13 @@ public sealed partial class KotorGameBridge
         // as an enemy, pinned, and mirrored.
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
 
+        // ⚠ THE PARTY TABLE, not the follow pointer. See PartyCensusRule: a companion whose
+        // +0x4C0 follow pointer has not been (re)attached yet reads exactly like a hostile
+        // stranger, and a transition is precisely when that happens — so the host published
+        // Trask into the enemy census and the client built a Trask-shaped stand-in next to the
+        // party. The roster is a membership record and is right in that window.
+        HashSet<uint> partyRoster = ReadPartyRosterIds();
+
         Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadCreatureOneShots();
 
         // Two passes: collect every candidate, then keep the ones that matter most. A
@@ -41,7 +48,8 @@ public sealed partial class KotorGameBridge
 
         foreach (CreatureRef creature in EnumerateCreatures())
         {
-            if (creature.IsPlayer || creature.IsPartyMember)
+            if (PartyCensusRule.IsOwnParty(
+                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster))
             {
                 continue;
             }
