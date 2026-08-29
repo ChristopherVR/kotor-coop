@@ -189,6 +189,12 @@ internal static class NewCharacterJoinFlow
                     return;
                 }
 
+                // Same order, same reason as the rejoin path: the world under the agent's diff
+                // shadows has been replaced, so the first scan of the new session must be a
+                // fresh silent baseline rather than a diff against the Endar Spire we were
+                // standing in a moment ago. See IWorldStateBridge.ForgetWorldShadows.
+                bridge.ForgetWorldShadows();
+
                 manager.Reconnect();
                 say($"new character: you are in '{adopted.Value.Module}' with the character you "
                     + "just made; reconnecting to the host.");

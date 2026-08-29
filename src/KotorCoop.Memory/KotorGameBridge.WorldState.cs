@@ -287,8 +287,23 @@ public sealed partial class KotorGameBridge
     {
         List<KeyValuePair<uint, sbyte>> changed = [];
 
-        if (!_globals.IsResolved || _shadowBooleans is null || _shadowNumbers is null)
+        if (!_globals.IsResolved)
         {
+            return changed;
+        }
+
+        // A null shadow with a resolved table means ForgetWorldShadows dropped it because the
+        // world underneath was REPLACED (an adopted load). Re-take the baseline here and report
+        // nothing this pass, rather than waiting for the next TryResolve: the whole point of
+        // dropping it was to stop the OLD world's values being announced as changes, and this
+        // is the one place that can see the new ones. Self-healing on purpose — a channel that
+        // silently stops reporting for the rest of the session would be a worse bug than the
+        // one this fixes.
+        if (_shadowBooleans is null || _shadowNumbers is null)
+        {
+            _shadowBooleans = new byte[GlobalVariableTable.BooleanByteCount];
+            _shadowNumbers = new sbyte[GlobalVariableTable.NumberCount];
+            _globals.TryReadValues(_shadowBooleans, _shadowNumbers);
             return changed;
         }
 

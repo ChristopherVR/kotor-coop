@@ -85,6 +85,23 @@ public interface IWorldStateBridge
     }
 
     /// <summary>
+    /// Forgets every agent-side world-state diff shadow, because the world underneath them has
+    /// been REPLACED rather than travelled through — an adopted load.
+    ///
+    /// The shadows are cleared on a module-NAME change and nothing else, which was correct
+    /// while that was the only way a world could be swapped. Adoption loads a different save of
+    /// the SAME module, so without this the joiner's next scan diffs the host's freshly staged
+    /// world against the world it left and announces the difference as its own local changes —
+    /// with a Lamport serial that outranks the host's. Live: a door OPEN on the host, CLOSED on
+    /// the client, permanently. See <c>KotorGameBridge.ForgetWorldShadows</c>.
+    ///
+    /// No-op for bridges with no shadows to forget (the mock harness).
+    /// </summary>
+    void ForgetWorldShadows()
+    {
+    }
+
+    /// <summary>
     /// Arms the plugin's new-character capture: it watches for the character retail chargen
     /// writes to <c>Temp\pifo.ifo</c> and stashes it where the adoption load cannot truncate
     /// it. coop.ini <c>join_mode = newcharacter</c>. False (with a reason) for bridges with no

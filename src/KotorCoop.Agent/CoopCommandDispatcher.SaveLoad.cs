@@ -416,6 +416,15 @@ public sealed partial class CoopCommandDispatcher
                     await Task.Delay(500).ConfigureAwait(false);
                 }
 
+                // ⚠ BEFORE THE SOCKET REOPENS, AND THIS ORDER IS THE FIX. The world under the
+                // diff shadows has been replaced (a different save of, usually, the SAME
+                // module), so the first scan of the new session must be a fresh silent baseline
+                // — otherwise it diffs the host's staged world against the one we left and
+                // announces the difference as our own changes, with a Lamport serial that
+                // outranks the host's. Safe here because the session is torn down for the whole
+                // load window, so nothing has scanned since. See ForgetWorldShadows.
+                bridge.ForgetWorldShadows();
+
                 manager.Reconnect();
                 Reply($"rejoined '{adopted.Value.Module}'");
             }

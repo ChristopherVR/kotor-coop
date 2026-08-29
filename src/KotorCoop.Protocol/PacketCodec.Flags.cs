@@ -82,8 +82,13 @@ public static partial class PacketCodec
 
         // 13 bytes per flag (FlagId 4 + Value 1 + Serial 4 + OriginPeerId 4, protocol 31 adds
         // the last two); stay inside one datagram.
-        int max = (ProtocolConstants.MaxPacketSize - 12) / 13;
-        int count = Math.Min(packet.Flags.Count, max);
+        //
+        // ⚠ THE CALLER MUST PAGE. This still clamps — a datagram is a datagram — but a clamp
+        // here is now a bug in the caller, not a documented trade: see
+        // ProtocolConstants.MaxFlagEntriesPerPacket for what silently dropping the tail of this
+        // store actually cost (a host-opened door that could never reach a client). CoopHost
+        // sends one packet per page, the way it already does for the journal.
+        int count = Math.Min(packet.Flags.Count, ProtocolConstants.MaxFlagEntriesPerPacket);
         w.WriteUInt16((ushort)count);
 
         for (int i = 0; i < count; i++)
