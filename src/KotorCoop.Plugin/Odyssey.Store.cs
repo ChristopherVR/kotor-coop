@@ -387,6 +387,39 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, void> HideSWInGameGuiFn =
         (delegate* unmanaged[Thiscall]<nint, int, void>)0x0062CBA0;
 
+    /// <summary>CGuiInGame + this = <c>CSWGuiManager*</c> (symbol DB: <c>CGuiInGame.manager</c>,
+    /// byte offset 56). The same object <c>CClientExoApp::GetSWGuiManager</c> 0x005EDA40
+    /// returns, which is how <see cref="HideSWInGameGuiFn"/> reaches it.</summary>
+    private const int InGameGuiManagerOffset = 0x38;
+
+    /// <summary>
+    /// CSWGuiManager + this = the ENTRY COUNT of <c>modal_stack</c> (symbol DB:
+    /// <c>CSWGuiManager.modal_stack</c>, a <c>GuiManagerModalStack</c> at byte offset 148 /
+    /// <c>0x94</c>; this is its second dword, the count beside the array pointer).
+    ///
+    /// This is the gate <c>HideSWInGameGui</c> bails on at <c>0x0062CBC9</c>-<c>0x0062CBD1</c>
+    /// (<c>mov eax,[edi+0x98]; test eax,eax; jne bail</c>, <c>edi</c> = the GUI manager), so it
+    /// is the one number that says whether the full-screen GUI can be taken down at all.
+    ///
+    /// MEASURED LIVE, 2026-08-29 (docs/research/shared-inventory-v2.md §14), and it is the
+    /// four-round store blocker in one line: on the HOST <c>CGuiInGame+0x30</c> = 0 and this
+    /// count = 0, so <c>openstore</c> succeeds first try; on the CLIENT, in END_M01AA, with no
+    /// warp and no conversation, <c>CGuiInGame+0x30</c> = 1 and this count = <b>1</b> — a modal
+    /// panel really is pushed, and the engine's own teardown therefore refuses. The old refusal
+    /// text guessed "galaxy map / party select"; both of those pointers are non-null on BOTH
+    /// instances (they are allocated panels, not a "showing" flag), which is why four rounds of
+    /// guessing from them got nowhere. The modal-stack count is the signal.
+    /// </summary>
+    private const int GuiManagerModalStackCountOffset = 0x98;
+
+    /// <summary>The number of panels on the GUI manager's modal stack, or -1 when the manager
+    /// could not be resolved. See <see cref="GuiManagerModalStackCountOffset"/>.</summary>
+    private static int ReadModalStackCount(nint gui)
+    {
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        return manager == 0 ? -1 : *(int*)(manager + GuiManagerModalStackCountOffset);
+    }
+
     /// <summary>
     /// Opens the store GUI for the local player against <paramref name="store"/> (a base
     /// CSWSStore* — see <see cref="ResolveStoreBase"/> or <see cref="CreatureFinder.FindStoreByTag"/>)
@@ -430,7 +463,8 @@ internal static unsafe partial class Odyssey
         if (fullScreenGui != 0)
         {
             reason = "the full-screen in-game GUI is up (equipment / inventory / character / "
-                + $"map / journal / options) — close it first (CGuiInGame+0x30 = {fullScreenGui})";
+                + $"map / journal / options) — close it first, e.g. `closegui` (CGuiInGame+0x30 = "
+                + $"{fullScreenGui}, GUI-manager modal stack = {ReadModalStackCount(gui)})";
             return false;
         }
 
@@ -498,18 +532,25 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        int modalsBefore = ReadModalStackCount(gui);
+
         int before = *(int*)(gui + InGameGuiBusyOffset);
         if (before == 0)
         {
-            detail = "the full-screen in-game GUI is already closed (CGuiInGame+0x30 = 0)";
+            detail = "the full-screen in-game GUI is already closed (CGuiInGame+0x30 = 0, "
+                + $"GUI-manager modal stack = {modalsBefore})";
             return true;
         }
 
         HideSWInGameGuiFn(gui, 0);
 
         int after = *(int*)(gui + InGameGuiBusyOffset);
-        detail = $"HideSWInGameGui called — CGuiInGame+0x30 {before} -> {after}"
-            + (after == 0 ? "" : " (the engine refused its own teardown: a modal message box is up)");
+        detail = $"HideSWInGameGui called — CGuiInGame+0x30 {before} -> {after}, "
+            + $"GUI-manager modal stack {modalsBefore} -> {ReadModalStackCount(gui)}"
+            + (after == 0
+                ? string.Empty
+                : " (the engine refused its own teardown — it bails at 0x0062CBD1 while the "
+                    + "GUI manager's modal stack is not empty; that stack has to be popped first)");
         return after == 0;
     }
 
