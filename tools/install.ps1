@@ -12,6 +12,23 @@
 #   pwsh install.ps1 -GameDir '...' -Force                         # overwrite a foreign dinput8.dll
 #   pwsh install.ps1 -GameDir '...' -Uninstall
 #
+# --- Steam installs ----------------------------------------------------------------------
+# Nothing special. -GameDir is the folder holding swkotor.exe, normally
+# 'C:\Program Files (x86)\Steam\steamapps\common\swkotor' (KotorCoop.Agent.exe finds Steam
+# libraries on other drives by itself, through steamapps\libraryfolders.vdf):
+#
+#   pwsh install.ps1 -GameDir 'C:\Program Files (x86)\Steam\steamapps\common\swkotor'
+#
+# dinput8.dll goes in the game folder there exactly as it does on a DRM-free install: the game
+# imports DINPUT8 statically and the loader searches its own directory first, and Valve's
+# SteamStub wrapper does not change either fact - it decrypts .text in place before the game's
+# entry point runs, long before our DirectInput8Create export is called. -Chain works there too;
+# chain mode is a file-name convention among mods and has nothing to do with the DRM wrapper.
+# The Steam overlay does NOT own the SwapBuffers import slot the frame hook wants (verified
+# live), so no overlay change is needed; docs/TROUBLESHOOTING.md has the fallback if a future
+# overlay build ever does. Do not unwrap or replace the Steam swkotor.exe.
+# See docs/research/steam-support.md 18.
+#
 # --- the coop.ini "upgrade trap" -----------------------------------------------------------
 # PackageInstaller.cs never overwrites an existing coop.ini (deliberately: a player's password,
 # name and tuned flags must survive an upgrade). When the shipped DEFAULT for a key changes
