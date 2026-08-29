@@ -288,29 +288,64 @@ internal static unsafe partial class Odyssey
         return flags;
     }
 
+    /// <summary>
+    /// The identity flags a shared-inventory apply may actually write onto a freshly-spawned
+    /// item: the requested Stolen bit (the one bit that IS part of a stack's identity — see
+    /// <see cref="PartyPoolIdentityMatcher.StackIdentityFlags"/>) plus, taken verbatim from the
+    /// body the engine has just built from the blueprint, its own Identified and NonEquippable
+    /// bits.
+    ///
+    /// ⚠ This is the half of the §13.2 keying fix that lives on the WRITE side, and it is not
+    /// optional. <see cref="ApplyItemIdentity"/> does not "leave a bit alone" — it SETS or CLEARS
+    /// all three unconditionally from what it is handed. A stack key can no longer carry
+    /// Identified (<c>ItemIdentity.StackIdentityFlagMask</c> narrows it away), so handing the key's
+    /// flags straight through would make every wire-driven apply, and every bare console
+    /// <c>pooladd</c>, actively CLEAR the identified bit on an item whose blueprint set it —
+    /// manufacturing exactly the unidentified twin of an identified save stack that
+    /// docs/research/shared-inventory-v2.md §13.2 watched split `g_i_medeqpmnt01` across `/f1` and
+    /// `/f3`. Preserving the template's own value instead means a created item matches what the
+    /// same blueprint produced for the save, on both instances, with no convention to agree on:
+    /// both loaded the same <c>.uti</c>.
+    /// </summary>
+    private static uint IdentityFlagsForCreatedItem(uint requestedWireFlags, in ItemIdentityFields spawned)
+    {
+        uint requested = requestedWireFlags == SharedBlock.CheatFieldUnchanged ? 0 : requestedWireFlags;
+        uint fromTemplate = EngineBitsToWireFlags(spawned.BitFlags)
+            & (SharedBlock.ItemIdentityIdentified | SharedBlock.ItemIdentityNonEquippable);
+
+        return (requested & SharedBlock.ItemIdentityStolen)
+            | fromTemplate
+            | SharedBlock.ItemIdentityKnown;
+    }
+
     /// <summary>True when a resolved item's non-stack identity (charges/max/upgrades/flags)
     /// matches the requested stack key. Thin engine-facing wrapper over
     /// <see cref="PartyPoolIdentityMatcher"/> (the pure, independently-tested rule — see its own
     /// remarks for the charge clamp and the <see cref="SharedBlock.CheatFieldUnchanged"/>
     /// wildcard docs/research/party-pool-sync.md §20 added): converts this item's raw engine
-    /// bits to wire shape and masks a wildcard request past the identity-bits mask before
-    /// handing both off, since the pure class has no <see cref="SharedBlock"/>/engine-offset
-    /// dependency of its own.</summary>
+    /// bits to wire shape and hands both off, since the pure class has no
+    /// <see cref="SharedBlock"/>/engine-offset dependency of its own.
+    ///
+    /// ⚠ The Identified and NonEquippable bits are NOT part of this match — see
+    /// <see cref="PartyPoolIdentityMatcher.StackIdentityFlags"/> for the engine disassembly that
+    /// settles it and docs/research/shared-inventory-v2.md §13.2/§14 for the live divergence
+    /// that comparing them caused.</summary>
     private static bool StackIdentityMatches(
         in ItemIdentityFields fields, uint charges, uint maxCharges, uint upgrades, uint flags)
     {
         (uint safeCharges, uint safeMaxCharges) =
             PartyPoolIdentityMatcher.SafeChargeFields(fields.Charges, fields.MaxCharges);
 
+        // Both sides go in as raw wire-shape flags; PartyPoolIdentityMatcher.Matches narrows
+        // them to PartyPoolIdentityMatcher.StackIdentityFlags itself (Stolen alone — the ONLY
+        // bit the engine's own merge predicate at 0x00553CF0 compares) and passes a Wildcard
+        // request through untouched. Doing the narrowing there rather than here keeps the rule
+        // in the one class that is unit-tested for it.
         uint wireBits = EngineBitsToWireFlags(fields.BitFlags);
-        uint wireBitsOnly = flags == PartyPoolIdentityMatcher.Wildcard
-            ? PartyPoolIdentityMatcher.Wildcard
-            : flags & (SharedBlock.ItemIdentityIdentified | SharedBlock.ItemIdentityStolen
-                | SharedBlock.ItemIdentityNonEquippable);
 
         return PartyPoolIdentityMatcher.Matches(
             safeCharges, safeMaxCharges, fields.Upgrades, wireBits,
-            charges, maxCharges, upgrades, wireBitsOnly);
+            charges, maxCharges, upgrades, flags);
     }
 
     /// <summary>
@@ -412,7 +447,7 @@ internal static unsafe partial class Odyssey
 
         if (!ApplyItemIdentity(
                 itemId, upgrades, (uint)count, charges, maxCharges,
-                flags | SharedBlock.ItemIdentityKnown, out after))
+                IdentityFlagsForCreatedItem(flags, spawned), out after))
         {
             LastPartyPoolNote = $"identity apply failed for 0x{itemId:X}: {LastItemResolveNote}";
             return false;

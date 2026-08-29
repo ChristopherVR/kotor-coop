@@ -45,6 +45,45 @@ public readonly record struct ItemIdentity(
     /// <summary>Nothing was read. The receiver must not apply any of it.</summary>
     public static ItemIdentity Unknown => default;
 
+    /// <summary>
+    /// The ONLY <see cref="Flags"/> bits that may take part in deciding whether two items of the
+    /// same resref are "the same stack" — <see cref="FlagKnown"/> (meta: an identity nobody read
+    /// is not the same fact as one that was) plus <see cref="FlagStolen"/>.
+    ///
+    /// ⚠ <see cref="FlagIdentified"/> and <see cref="FlagNonEquippable"/> are DELIBERATELY absent,
+    /// and the authority is the engine's own merge predicate rather than taste. `CSWSItem::MergeItem`
+    /// 0x00553F90's first act is a call to the "may these two stacks combine?" test at
+    /// <c>0x00553CF0</c>, whose entire flags comparison is two instructions
+    /// (<c>0x00553D60</c>-<c>0x00553D6E</c>):
+    ///
+    /// <code>
+    /// mov  eax, dword ptr [ebp + 0x288]   ; the other item's flags dword
+    /// xor  eax, dword ptr [ebx + 0x288]   ; XOR with this item's
+    /// test al, 0x20                       ; ...and test ONE bit: 0x20 == bit 5 == Stolen
+    /// jne  &lt;no merge&gt;
+    /// </code>
+    ///
+    /// Bit 0 (Identified) and bit 6 (NonEquippable) are never looked at, so the engine merges two
+    /// stacks that differ in them — and a key that encodes them claims a distinction the game does
+    /// not make. Live evidence that this is not academic:
+    /// docs/research/shared-inventory-v2.md §13.2 watched `g_i_medeqpmnt01` sit in the party pool
+    /// under `/f1` and `/f3` at the same time (a save's items are identified, a freshly-created
+    /// one was not), the engine merge units between the two, and the sync channel read that
+    /// migration as a fabricated remove on one key and a fabricated add on the other.
+    ///
+    /// Charges/MaxCharges/Upgrades are NOT flags and are unaffected by this mask; the same
+    /// predicate does compare <c>+0x294</c> (Upgrades) and <c>+0x258</c> (Charges) exactly.
+    /// (It does not compare <c>+0x25C</c>, MaxCharges — recorded in
+    /// docs/research/shared-inventory-v2.md §14 as a known, unobserved residual rather than
+    /// changed on speculation, since removing it from the key would also remove it from the
+    /// apply payload.)
+    /// </summary>
+    public const byte StackIdentityFlagMask = FlagKnown | FlagStolen;
+
+    /// <summary><see cref="Flags"/> reduced to <see cref="StackIdentityFlagMask"/> — what a
+    /// stack key may carry. See that constant's remarks for the engine evidence.</summary>
+    public byte StackIdentityFlags => (byte)(Flags & StackIdentityFlagMask);
+
     public bool IsKnown => (Flags & FlagKnown) != 0;
 
     public bool Identified => (Flags & FlagIdentified) != 0;

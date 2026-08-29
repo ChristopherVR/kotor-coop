@@ -128,9 +128,12 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // Identified/NonEquippable come from the blueprint the engine has just loaded, NOT from
+        // the wire key (which can no longer carry them) — see IdentityFlagsForCreatedItem in
+        // Odyssey.PartyPool.cs for why forcing them here would manufacture a split stack key.
         if (!ApplyItemIdentity(
                 itemId, upgrades, (uint)count, charges, maxCharges,
-                flags | SharedBlock.ItemIdentityKnown, out after))
+                IdentityFlagsForCreatedItem(flags, spawned), out after))
         {
             LastStoreNote = $"identity apply failed for 0x{itemId:X}: {LastItemResolveNote}";
             return false;
