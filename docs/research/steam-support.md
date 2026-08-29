@@ -37,7 +37,7 @@ to Steamworks partners, not to mod authors. The Steam *client* does not ship one
 searched; only individual games carry it). So phase 1 ships everything that does not need
 it — the connect-string codec, the config key, the CLI verb, the join wiring, and a
 lazily-bound facade that logs one line and does nothing when the DLL is absent — and phase 2
-adds the binding behind an explicit, user-supplied file. §§9–15.
+adds the binding behind an explicit, user-supplied file. §§9–16.
 
 ---
 
@@ -382,7 +382,7 @@ Every option above needs that file, and we cannot supply it:
 `KotorCoop.Agent.exe install-steam --from <path-to-steam_api64.dll>` (copied from a
 Steamworks SDK download or from any Steam game they own), or simply "drop `steam_api64.dll`
 next to `KotorCoop.Agent.exe`". `NativeLibrary.TryLoad` finds it or it does not, and the
-whole feature stays inert either way — which is what §13's fail-soft rule is for.
+whole feature stays inert either way — which is what §12's fail-soft rule is for.
 
 ## 12. `steam_appid.txt` = 32370, and what it costs
 
