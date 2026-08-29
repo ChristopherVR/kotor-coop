@@ -242,6 +242,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 OpenStore(playerId);
                 break;
 
+            case SharedBlock.CheatKindCloseGui:
+                CloseGui();
+                break;
+
             case SharedBlock.CheatKindPartySelectOk:
                 PartySelectOk();
                 break;

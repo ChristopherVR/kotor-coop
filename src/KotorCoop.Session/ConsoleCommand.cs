@@ -489,6 +489,22 @@ public enum CoopCommandKind
     OpenStore,
 
     /// <summary>
+    /// <c>closegui</c> — LIVE-TEST PRIMITIVE (docs/research/shared-inventory-v2.md §14). Closes
+    /// the full-screen in-game GUI (equipment / inventory / character / abilities / journal /
+    /// map / options) through the engine's own <c>CSWGuiInGame::HideSWInGameGui</c>.
+    ///
+    /// It exists for <see cref="OpenStore"/>. That screen is what sets <c>CGuiInGame+0x30</c>,
+    /// the precondition <c>ShowStoreGui</c> refuses on, and the refusal has blocked the CLIENT
+    /// half of every live store round this project has run — four rounds, six consecutive
+    /// refusals in the last. The documented <c>skipline</c>/<c>selectreply 0</c>/<c>partyselect
+    /// ok</c> retry loop cannot clear it, because none of those three writes that field.
+    ///
+    /// Takes no arguments, and answers "already closed" as SUCCESS rather than a refusal — the
+    /// caller asked for a state, not an event. Local only.
+    /// </summary>
+    CloseGui,
+
+    /// <summary>
     /// <c>partyselect ok</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
     /// 2026-08-28 addendum). Confirms the native party-selection screen
     /// (<c>CSWGuiPartySelection</c>) with its current on-screen selection, through the panel's
@@ -840,6 +856,7 @@ public static partial class ConsoleCommand
         new(["setglobal"], ParseSetGlobal),
         new(["pazaak"], ParsePazaak),
         new(["openstore"], ParseOpenStore),
+        new(["closegui"], ParseCloseGui),
         new(["partyselect"], ParsePartySelect),
         new(["faction"], ParseFaction),
         new(["buy"], ParseBuy),

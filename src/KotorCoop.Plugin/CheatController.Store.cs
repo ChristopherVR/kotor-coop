@@ -194,6 +194,29 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
+    /// LIVE-TEST PRIMITIVE (docs/research/shared-inventory-v2.md §14): closes the full-screen
+    /// in-game GUI through <see cref="Odyssey.CloseFullScreenGui"/>. Takes no arguments.
+    ///
+    /// Lives beside <see cref="OpenStore"/> because it exists FOR it: that screen sets the one
+    /// precondition <c>ShowStoreGui</c> refuses on, and that refusal has blocked the client half
+    /// of four consecutive live store rounds. See
+    /// <see cref="SharedBlock.CheatKindCloseGui"/> for the full account.
+    ///
+    /// A screen that was already closed answers APPLIED, not REFUSED — the caller asked for a
+    /// state, not for an event, and a retry loop that treats "already fine" as a failure is how
+    /// a recipe stalls on its own success.
+    /// </summary>
+    private void CloseGui()
+    {
+        bool closed = Odyssey.CloseFullScreenGui(out string detail);
+        PluginHost.Log($"closegui: {detail}");
+
+        Answer(
+            closed ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"closegui: {detail}");
+    }
+
+    /// <summary>
     /// LIVE-TEST PRIMITIVE (docs/research/store-sync.md's 2026-08-28 addendum): buys a resref
     /// from a store through the REAL <see cref="Odyssey.BuyFromStore"/> (the GUI's own Buy
     /// click handler) — gold and item both move through the engine's own path. See

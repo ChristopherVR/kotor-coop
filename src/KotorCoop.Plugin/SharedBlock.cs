@@ -949,4 +949,26 @@ internal partial struct SharedBlock
     /// streams. Take the next FREE number in YOUR range.
     /// </summary>
     public const uint CheatKindFollowStall = 56;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-29, docs/research/shared-inventory-v2.md §14): takes the
+    /// full-screen in-game GUI (equipment / inventory / character / abilities / journal / map /
+    /// options) back down through the engine's own <c>CSWGuiInGame::HideSWInGameGui</c>
+    /// 0x0062CBA0 — <c>Odyssey.CloseFullScreenGui</c>.
+    ///
+    /// Exists because <c>CGuiInGame+0x30</c>, which that screen sets, is the precondition
+    /// <c>ShowStoreGui</c> (and so <see cref="CheatKindOpenStore"/>) refuses on, and that
+    /// refusal has blocked the CLIENT half of every live store round this project has run —
+    /// four consecutive rounds, six refusals in the last one. The documented
+    /// <c>skipline</c>/<c>selectreply 0</c>/<c>partyselect ok</c> retry loop cannot clear it:
+    /// none of those three touches that field, and its only two writers in the whole class are
+    /// <c>ShowSWInGameGui</c> (sets 1) and <c>HideSWInGameGui</c> (clears).
+    ///
+    /// Takes no arguments. Local only — never crosses the network, and a no-op (reported as
+    /// such) when the screen is not up.
+    ///
+    /// ⚠ 53, from this stream's own reserved range (53-55). Take the next FREE number in YOUR
+    /// range.
+    /// </summary>
+    public const uint CheatKindCloseGui = 53;
 }
