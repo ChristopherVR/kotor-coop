@@ -74,6 +74,14 @@ internal static unsafe partial class PluginHost
 
     private static readonly bool _frameStatsEnabled = PluginConfig.ReadBool("frame_stats", false);
 
+    /// <summary>coop.ini <c>transition_close_client_world</c> — see the call site in
+    /// <c>OnFrame</c>. ON by default (today's behaviour and
+    /// docs/research/travel-map-init-crash.md's own fix); exists so
+    /// docs/research/shared-inventory-v2.md §15's deterministic host warp crash can be
+    /// bisected against it rather than argued about.</summary>
+    private static readonly bool _closeClientWorldOnTransition =
+        PluginConfig.ReadBool("transition_close_client_world", true);
+
     /// <summary>A frame slower than this counts as a "hitch" in the flushed summary. 33 ms is
     /// one dropped frame at 30 fps / two at 60 fps — coarse enough to ignore ordinary jitter,
     /// fine enough to catch a stall a player would notice.</summary>
@@ -237,7 +245,26 @@ internal static unsafe partial class PluginHost
         // module every frame without a null check. Closing the client's world here is what
         // the engine's dump-player handler would do a frame later — see
         // docs/research/travel-map-init-crash.md.
-        if (Odyssey.CloseClientWorldIfServerModuleGone())
+        //
+        // ⚠ BISECT LEVER (coop.ini transition_close_client_world, default 1 = today's
+        // behaviour), added 2026-08-29 for docs/research/shared-inventory-v2.md §15's own
+        // deterministic host crash on ANY relocating warp — 5/5, identical instruction and
+        // stack every time, symbolicated to:
+        //
+        //   CSWGuiInGameEquip::UpdatePortraits+0x48E  (0x006B5FEE, `mov edx,[eax]`)
+        //     <- CClientExoApp::GetSWParty 0x005ED8B0, then CSWParty::GetCharacter(1) 0x006346C0
+        //        returning NULL, with CSWGuiInGameEquip::Constructor+0xA23 and
+        //        CGuiInGame::Initialize+0x680 on the stack.
+        //
+        // i.e. the CLIENT-side party still reports a member count above 1 while member 1's
+        // object no longer resolves, and the new module's GUI construction walks it. The call
+        // below is the only thing in this codebase that empties the client's world early, and
+        // it fires 60-70 ms before the fault every time, so it is the prime suspect — but
+        // "prime suspect" is not evidence, and this project bisects plugin crashes by config
+        // flag rather than by guesswork. Setting the key to 0 restores the pre-fix behaviour
+        // (and, with it, travel-map-init-crash.md's own map-init fault), which is exactly what
+        // a clean A/B needs.
+        if (_closeClientWorldOnTransition && Odyssey.CloseClientWorldIfServerModuleGone())
         {
             Log("transition: closed the client world ahead of the map init");
             PluginEvents.RaiseServerModuleGone();

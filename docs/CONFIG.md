@@ -160,6 +160,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |
 | `minimap_peers` | ON | show peers on the minimap | [minimap-peers.md](research/minimap-peers.md) |
 | `frame_stats` | OFF | frame-time histogram diagnostic (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |
+| `transition_close_client_world` | ON | BISECT LEVER: close the client's world in the transition window where the server's module is already gone. 0 restores the pre-fix behaviour, and with it that document's own map-init fault - it exists so the deterministic host warp crash at `CSWGuiInGameEquip::UpdatePortraits+0x48E` can be A/B'd against this call rather than argued about | [travel-map-init-crash.md](research/travel-map-init-crash.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
 | `log_max_mb` | `8` | plugin log rotation cap, MB | — |
 | `hide_party_portraits` | ON | hide companion portraits (control lock) | [client-control-lock.md](research/client-control-lock.md) |
 | `spectate_on_down` | ON | hand the camera to a partner while downed | [spectate-camera.md](research/spectate-camera.md) |

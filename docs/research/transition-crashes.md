@@ -635,3 +635,52 @@ ordinary playthrough does not. See the corresponding addenda in `docs/CONSOLE.md
    `tar_m02aa` while the `duros` conversation is active, then immediately warp again) — Round 6's
    clean relocating warps are circumstantial support for the timing hypothesis, not a controlled
    test of it.
+
+---
+
+## The HOST's deterministic crash on any relocating `warp` (2026-08-29) — OURS, in one of five
+## party-channel config keys, not an engine transition defect
+
+Distinct from everything above: this one is **not** a stale-pointer race in the engine's own
+transition machinery, and it is not helped by preferring real doors over `warp`. It is
+deterministic — 6/6 across two different destination modules — and it kills the HOST specifically.
+
+```
+FIRST-CHANCE access violation (0xC0000005) at 0x6B5FEE, eip 0x6B5FEE, esp 0x1AFB80;
+image-range stack values: 0x414E89 0x418DCD 0x6B5B48 0x41773C 0x733618 0x6B76A8 ...
+```
+
+Symbolicated against `tools/kotor1_0_3.db`:
+
+```
+0x006B5FEE  CSWGuiInGameEquip::UpdatePortraits + 0x48E      mov edx, dword ptr [eax]
+  preceded by  CClientExoApp::GetSWParty   0x005ED8B0
+               CSWParty::GetCharacter(1)   0x006346C0  -> NULL
+  stack:  CSWGuiInGameEquip::Constructor + 0xA23,  CGuiInGame::Initialize + 0x680
+```
+
+`CSWParty::GetCharacter` returns 0 for `index < 0` or `index >= [this]` (the member count), else
+`GetCreatureByGameObjectID(entry[index].objectId)`. Its caller guards with `cmp [edi],1 / jle skip`
+— it only asks for member 1 when the party count is **above 1**. So the fault says exactly one
+thing: **the CLIENT-side party reports a member count above 1 while member 1's object no longer
+resolves**, and the incoming module's own GUI construction walks it.
+
+Bisected live, twice (docs/research/shared-inventory-v2.md §15.6):
+
+- `transition_close_client_world=0` — which disables `Odyssey.CloseClientWorldIfServerModuleGone`,
+  the only thing in this codebase that empties the client's world early, and the prime suspect
+  since it logs 60-70 ms before every fault — **does not help**: the crash is byte-identical.
+  Ruled out. The key stays in the tree as a bisect lever; leave it at 1 in normal use or the
+  map-init fault documented above comes back.
+- With `party_roster_sync=0`, `party_together_fix=0`, `hide_party_portraits=0`,
+  `party_follow_stall_recovery=0` and `party_select_host_only=0`, **the host survives**, repeatedly
+  (four warps across two sessions, no crash).
+
+`party_roster_sync` alone was already eliminated by shared-inventory-v2.md §14.5. The remaining
+suspects are `party_together_fix` — which writes the party table's member count, and "count above
+1 with a dead member 1" is precisely its failure mode — `hide_party_portraits`,
+`party_follow_stall_recovery` and `party_select_host_only`. Narrowing to one costs one rig cycle
+per key.
+
+**Workaround until it is fixed**: a rig recipe that needs the host to change module should turn
+those five keys off. That is what made the store round in shared-inventory-v2.md §15.5 possible.
