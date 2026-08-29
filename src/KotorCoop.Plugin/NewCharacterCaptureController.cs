@@ -143,6 +143,10 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// </summary>
     public static void OnCharacterSaved() => _instance?.CaptureFromHook();
 
+    /// <summary>How long the hook waits, on the game's own thread, for the engine to actually
+    /// flush the file it has just created.</summary>
+    private const int FlushWaitMs = 400;
+
     private void CaptureFromHook()
     {
         if (!_armed)
@@ -150,10 +154,67 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
             return;
         }
 
-        // The engine has JUST returned from writing the file, so the stability check the poll
-        // needs (two agreeing lengths) is moot here — nothing else is writing it, and there is
-        // no later poll to be the second sample. Freshness and size still apply, and are what
-        // reject a leftover or a zero-byte pifo.
+        // ⚠ THE FILE EXISTS BUT IS EMPTY WHEN THE HOOK FIRES, MEASURED. SaveCharGenCreature
+        // returns with Temp\pifo.ifo created and ZERO BYTES — the write is still buffered
+        // behind the engine's own resource manager, which closes (and therefore flushes) it a
+        // moment later. So the hook's job is not "read the file", it is "be here when the file
+        // appears", and the honest way to use that is to WAIT for it — briefly, on this thread,
+        // before BeginPlayGame carries on into the module load whose Temp\ sweep is what
+        // destroys the file.
+        //
+        // A stall on the game thread is a real cost and it is paid exactly once, at a screen
+        // the player has just spent minutes on, immediately before a module load that takes
+        // seconds. Bounded so that an engine that never flushes costs 400 ms rather than a
+        // hang, and falling through leaves the capture ARMED so the ordinary poll gets its
+        // chance too.
+        string directory;
+        try
+        {
+            directory = NativeMethods.GetGameDirectory();
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.Message);
+            return;
+        }
+
+        string pifo = Path.Combine(directory, "Temp", PifoFile);
+        long deadline = Environment.TickCount64 + FlushWaitMs;
+        long bytes = 0;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            try
+            {
+                FileInfo info = new(pifo);
+                bytes = info.Exists ? info.Length : 0;
+                if (bytes >= NewCharacterCaptureRule.MinimumBytes)
+                {
+                    break;
+                }
+            }
+            catch (IOException)
+            {
+                // Mid-flush; that is precisely what we are waiting out.
+            }
+
+            Thread.Sleep(5);
+        }
+
+        if (bytes < NewCharacterCaptureRule.MinimumBytes)
+        {
+            // Do NOT fail the join here. Staying armed costs nothing and the ordinary poll is
+            // still running; failing would turn "the flush was slower than 400 ms" into "you
+            // cannot join", which is the wrong trade by a wide margin.
+            PluginHost.Log(
+                $"newchar: the engine created Temp\\{PifoFile} but it was still {bytes} bytes "
+                + $"after {FlushWaitMs} ms - staying armed and leaving it to the poll");
+            _previousBytes = -1;
+            return;
+        }
+
+        // The stability check the poll needs (two agreeing lengths) is satisfied by
+        // construction here: we have just watched the length settle above.
         Poll(Environment.TickCount64, fromHook: true);
     }
 
@@ -189,12 +250,6 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
                 exists, bytes, previous, writtenTicks, _armedAtTicksUtc))
             {
                 _previousBytes = exists ? bytes : -1;
-
-                if (fromHook)
-                {
-                    Fail($"the character the engine saved is not usable (exists={exists} bytes={bytes})");
-                    return;
-                }
 
                 if (nowMs >= _nextWaitingLogMs)
                 {

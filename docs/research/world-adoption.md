@@ -411,9 +411,66 @@ opted out of neither sees no change.
 | `0x7592A8` | `CSWGuiMainCharGen` vtable (size `0x22DC`) |
 | `0x758020` | `CSWGuiClassSelection` vtable (size `0x1560`) |
 
+## Live pass (2026-08-29) — the drive verbs work; the CAPTURE POINT is wrong
+
+Run on the rig: host on demo save 1 in END_M01AA, client launched with
+`demo.ps1 -ClientNewCharacter` (no save loaded, `join_mode = newcharacter`), everything driven
+through `blockpoke chargen …` — no mouse input at all.
+
+**What is VERIFIED working:**
+
+| | |
+|---|---|
+| `agent run --join` with `join_mode = newcharacter` at the main menu | runs (it used to exit 2) |
+| the arm handshake, agent → block → plugin | `newchar: armed (request 1)` |
+| `CharGenSaveHook` byte check + install | `chargen-save watch at 0x6DBE9B`, no crash |
+| `DialogueSkipHook` byte check + install | `dialogue skip authority at 0x6A7278`, no crash |
+| `newgame` | class-selection screen up and rendering — **screenshot-confirmed** |
+| `chargen quick 2` | class picked, optimised template applied |
+| `chargen accept` | `BeginPlayGame` runs, the new game starts |
+| the hook firing at the right instant | `newchar: chargen saved a character (hook)` immediately after `BeginPlayGame` |
+
+**Two things the live run corrected, both of which had looked right on paper:**
+
+* **`AddPanel`'s layer argument is 2, not 0.** Retail's call at `0x67B130` is
+  `push 1; push ebx; push eax` with EBX still holding the 2 set at `0x67B02E` — the same slot
+  `OnSelectButton` passes **3** in for the chargen panel (`0x6DBA4D`). Added at 0 the panel is
+  constructed and registered and then never driven: the screen stayed black and all six class
+  controls read zero. It looked exactly like a bad constructor argument.
+* **`OnSelectButton`'s argument is an EVENT, not a control.** It reads `[arg+0x48]` as an event
+  id and `[arg+0x4C]` as that event's DATA, bailing silently on a zero — and only then derives
+  the class index from the pointer's own address. Those fields are filled by the GUI manager
+  while it dispatches a real click, so a call without them is a guaranteed no-op. The driver
+  now writes `[choice+0x4C] = 1`, calls, and puts the old value back.
+
+### ⚠ STILL OPEN, and this is the one thing that blocks the feature
+
+**`SaveCharGenCreature` has not flushed the file when it returns.** Measured, twice:
+`Temp\pifo.ifo` EXISTS and is **0 bytes** at the hook, and is still 0 bytes 400 ms later with
+the hook spinning on it; by the time the Endar Spire is up the whole `Temp\` directory is
+empty. The write goes into the resource manager's `TEMP:` cache and materialises — if at all —
+somewhere inside the module load, in a window where the main loop is gone for over a second
+(`cinematic: the main thread was gone for 1265 ms`), and is swept before any frame callback
+sees it. So neither a poll nor a hook at the write site can have the bytes.
+
+The hook is still the right instrument and stays: it is a precise, verified "chargen finished"
+signal, and it is what turned this from a guess into a measurement. What has to change is
+WHERE the character is taken from.
+
+**Recommended next step, and it needs no new RE:** let the new game run into the Endar Spire —
+it already does — and take the character the way `join_mode = save` already does, from a save.
+Once the client is in the world it has a real PC, so the flow becomes: chargen → the game's own
+first module → the agent saves once → `PlayerIfo.TryExtractPlayer` on that save → the existing
+adoption, `inSession: true`. Every step of that is machinery this document has already
+verified; it costs the player the first few seconds of the Endar Spire and removes the pifo
+timing problem completely. The alternatives (finding the engine's flush point, or hand-building
+the pifo from the live `CSWCCreature` at `[mainCharGen+0x64]`) are both more work and one of
+them is explicitly rejected by character-login-chain.md §5.
+
 ## Still open
 
-1. **`FireMidSessionPhase1` remains the weak link** — see decision 3. It had never run against
+1. **The capture point** — see the live pass above. This is the blocking item.
+2. **`FireMidSessionPhase1` remains the weak link** — see decision 3. It had never run against
    the game before this path used it.
 2. **The party.** Unchanged from §8 item 1, and now sharper: a brand-new character adopting a
    mid-game host's world inherits the host's `PARTYTABLE.res`/`AVAILNPC0.utc`, i.e. companions a

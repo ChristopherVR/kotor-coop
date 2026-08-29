@@ -75,6 +75,11 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
 
     private const int ClassSelectionSize = 0x1560;
 
+    /// <summary>The panel-layer <c>AddPanel</c>'s second stack argument selects. Retail passes
+    /// 2 for the class-selection panel (EBX at 0x67B12A, set at 0x67B02E) and 3 for the chargen
+    /// panel (0x6DBA4D).</summary>
+    private const int ClassSelectionPanelLayer = 2;
+
     /// <summary>CSWGuiClassSelection + this = the first of six embedded CSWGuiClassSelChar
     /// controls, each 0x25C apart — the addresses <c>OnSelectButton</c> compares against to
     /// learn which class was clicked.</summary>
@@ -83,6 +88,18 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
     private const int ClassSelectionChoiceStride = 0x25C;
 
     private const int ClassChoiceCount = 6;
+
+    /// <summary>CSWGuiClassSelChar + this = the DATA of the event being dispatched
+    /// (<c>[+0x48]</c> is the event id). <c>OnSelectButton</c> bails silently when this is zero
+    /// (0x6DB9CB), and it is only ever filled while the GUI manager is dispatching a real
+    /// click.</summary>
+    private const int GuiControlEventData = 0x4C;
+
+    /// <summary>CSWGuiClassSelChar + this = that class's creature — the pointer
+    /// <c>OnSelectButton</c> copies to <c>[classSel+0x68]</c> (0x6DBA0D reads
+    /// <c>[index*0x25C + classSel + 0x2C0]</c>, i.e. this offset from the choice control).
+    /// </summary>
+    private const int ClassSelectionChoiceCreature = 0x2C0 - ClassSelectionFirstChoice;
 
     /// <summary>CSWGuiMainCharGen + this = the CSWGuiQuickPanel*, from the constructor's own
     /// store at 0x6EBCC6.</summary>
@@ -249,14 +266,31 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
 
         ResetSessionStartTime();
         ClassSelectionCtor(panel, guiManager, &module);
-        AddPanel(guiManager, panel, 0, 1);
+
+        // ⚠ LAYER 2, NOT 0, AND THIS COST A LIVE ROUND. Retail's AddPanel call at 0x67B130 is
+        // `push 1; push ebx; push eax` with EBX still holding the 2 set at 0x67B02E — the same
+        // slot OnSelectButton passes 3 in for the chargen panel it adds (0x6DBA4D). Added at 0
+        // the panel is constructed and registered but never driven: measured live, the screen
+        // stayed black and every one of the six class controls had its +0x4C still zero, which
+        // is precisely OnSelectButton's own silent bail. It looked exactly like a bad
+        // constructor argument and was not.
+        AddPanel(guiManager, panel, ClassSelectionPanelLayer, 1);
 
         // ⚠ After this the menu object is condemned; do not read `menu` again.
         *(uint*)(menu + MenuStateBits) = (*(uint*)(menu + MenuStateBits) & ~0x300u) | 0x400u;
 
         ExoStringDtor((nint)(&module));
 
-        PluginHost.Log($"chargen: newgame opened character creation (panel 0x{panel:X})");
+        // ⚠ WHICH MANAGER. Retail adds the panel to the MENU's manager ([menu+0x18]); the one
+        // that hit-tests and updates is the global at [0x7A39F4]. If those are ever different
+        // objects the panel lands somewhere nothing drives, which looks exactly like "the panel
+        // exists but its controls were never built" — the failure this line exists to tell
+        // apart from every other reason a chargen screen could stay blank.
+        nint globalManager = *(nint*)GuiManagerPtr;
+        PluginHost.Log(
+            $"chargen: newgame opened character creation (panel 0x{panel:X}, "
+            + $"menu manager 0x{guiManager:X}, global manager 0x{globalManager:X}, "
+            + $"{(guiManager == globalManager ? "same" : "DIFFERENT")})");
         return 0;
     }
 
@@ -288,7 +322,45 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
             // comparing the control pointer against this->0x6C + i*0x25C, so the only value
             // that can mean "class i" is the genuine embedded control at that address.
             nint choice = classSel + ClassSelectionFirstChoice + (classIndex * ClassSelectionChoiceStride);
-            OnSelectClass(classSel, choice);
+
+            nint creature = *(nint*)(choice + ClassSelectionChoiceCreature);
+            if (creature == 0)
+            {
+                PluginHost.Log(
+                    $"chargen: quick refused - class {classIndex} has no creature yet "
+                    + "(the panel is still building)");
+                return 7;
+            }
+
+            // ⚠ THE ARGUMENT IS AN EVENT, NOT A CONTROL, and the difference is why this needs a
+            // poke at all. OnSelectButton reads `[arg+0x48]` as an EVENT ID (comparing it to
+            // 0x2D to decide whether to play a click sound) and `[arg+0x4C]` as that event's
+            // DATA, bailing silently when the data is zero (0x6DB9CB) — and only then does it
+            // derive the class index by comparing the pointer against `this+0x6C + i*0x25C`.
+            // So the six embedded CSWGuiClassSelChar objects begin with an event header, and
+            // the data field is filled by the GUI manager while it is dispatching a real click.
+            // Measured live: the panel renders perfectly and every one of those fields is still
+            // zero, so a call with no poke is a guaranteed silent no-op.
+            //
+            // Written, called, and PUT BACK. One dword, restored on every path, so nothing
+            // outside this call can observe it — the same "touch the precondition, make the
+            // call, leave no trace" shape Odyssey.ConfirmPartySelect already uses for the
+            // party-selection message-box bit.
+            nint* eventData = (nint*)(choice + GuiControlEventData);
+            nint saved = *eventData;
+            *eventData = 1;
+
+            try
+            {
+                PluginHost.Log(
+                    $"chargen: quick selecting class {classIndex} - panel 0x{classSel:X} "
+                    + $"control 0x{choice:X} creature 0x{creature:X}");
+                OnSelectClass(classSel, choice);
+            }
+            finally
+            {
+                *eventData = saved;
+            }
 
             mainCharGen = FindPanel(MainCharGenVtable);
             if (mainCharGen == 0)
