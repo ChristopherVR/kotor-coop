@@ -397,7 +397,7 @@ internal sealed class PartyPoolPumpV2(
             if (trace && (rawMovement != 0 || reconcileDelta != 0 || expectedNet != 0
                 || OutstandingNet(key) != 0 || firstLocalSight))
             {
-                log($"party pool trace: '{key.Resref}' actual={actual} belief={belief} "
+                log($"party pool trace: '{key.Resref}'/c{key.Charges}/m{key.MaxCharges}/u{key.Upgrades}/f{key.Flags} actual={actual} belief={belief} "
                     + $"snap={snapshotValue} raw={rawMovement} expected={expectedNet} "
                     + $"outstanding={OutstandingNet(key)} published={published} "
                     + $"target={target} reconcile={reconcileDelta}"

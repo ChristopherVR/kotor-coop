@@ -344,7 +344,7 @@ internal sealed class StorePumpV2(
             if (trace && (rawMovement != 0 || reconcileDelta != 0 || expectedNet != 0
                 || OutstandingNet(key) != 0 || reseed))
             {
-                log($"store trace: '{key.Resref}' in 0x{key.StoreObjectId:X} "
+                log($"store trace: '{key.Resref}'/c{key.Charges}/m{key.MaxCharges}/u{key.Upgrades}/f{key.Flags} in 0x{key.StoreObjectId:X} "
                     + $"actual={actual} belief={belief} snap={snapshotValue} raw={rawMovement} "
                     + $"expected={expectedNet} outstanding={OutstandingNet(key)} "
                     + $"published={published} target={target} reconcile={reconcileDelta} "
