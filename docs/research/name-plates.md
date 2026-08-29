@@ -121,30 +121,100 @@ alone.** Nothing local is ever a source. Two consequences that are not obvious:
 - **There is no local fallback and there must not be one.** Every wrong-identity report this
   project has had is the same shape — a value sourced from something other than that peer.
 
-### What this does NOT explain, and what to check next (NEEDS-LIVE)
+### Live pass, 2026-08-29 (rig, both instances, demo save 1)
+
+**The twin gap is real and it is UNIVERSAL, not occasional.** Every phantom spawn observed —
+host and client, before and after a warp, seven spawns across two rig sessions — logged:
+
+```
+spawned phantom in slot 0: id 0x12E ... appearance 114 (peer published 114, renders no twin yet), portrait 0
+identity: phantom slot 0 (0x12E) now renders appearance 114 (server row was 114, peer published 114)
+```
+
+`renders no twin yet` is the spawn-time `RebuildClientAppearance` finding nothing to dress —
+**it happened on 100% of spawns**, which is what the ordering argument above predicts and what
+makes the old "only on an actual row change" guard fatal: `peer published 114` means the row
+was already known at spawn, so the server field was written there and matched forever
+afterwards, and the spawn-time no-op was the only client-side apply that would ever run. The
+second line is the new latch closing 30-230 ms later.
+
+Post-warp state, read out of both processes with `identityprobe.ps1` (server row `+0xA60`, twin
+row `+0x224 -> +0x38C`):
+
+| | id | tag | is_pc | follow `+0x4C0` | server row | twin row | portrait |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| host: PC | `0x7FFFFFFF` | | 1 | non-null | 114 | 114 | 15 |
+| host: peer's phantom | `0x72` | `coop_phantom` | 0 | null | 114 | **114** | 0 |
+| client: PC | `0x7FFFFFFF` | | 1 | non-null | 114 | 114 | 15 |
+| client: peer's phantom | `0x7B` | `coop_phantom` | 0 | null | 114 | **114** | 0 |
+
+Screenshots after the warp confirm it visually on both screens: the peer stands there under its
+own player name band (`MALAK`) wearing the peer's own model, not a companion's and not a
+commoner's.
+
+**Two measured facts that kill the "the peer publishes Trask's row" theory** (the alternative
+the section above flagged as NEEDS-LIVE):
+
+- **Trask reads `is_pc == 0`** (`stats+0x6C`, live, `end_m01aa`). So
+  `ScanCreatures`/`StillLooksLikeThePlayer` cannot latch him as the player, and the agent
+  cannot publish his appearance as a peer's. That whole path is ruled out.
+- **The PC's own `+0x4C0` party-follow pointer is NON-NULL** (`0x191216E0`), i.e. the PC reads
+  `IsPartyMember == true` in `ScanCreatures`. Anyone tempted to "fix" a player-resolution bug
+  by adding `&& !c.IsPartyMember` would break player resolution outright. Recorded so the next
+  round does not try it.
+
+⚠ **A limitation of this rig, stated plainly**: demo save 1's PC is appearance **114**, which is
+also `k_coop_phantom`'s own blueprint row. A phantom left wearing the blueprint therefore looks
+*correct* on this save, so the rig can prove the twin gap exists and that the latch closes it
+(the log lines and the twin-row readout do that) but it cannot show the wrong-model symptom
+itself. A save whose PC is not row 114 would; the observable proxy is the twin row, not the
+screen.
+
+⚠ **The reported symptom was "a Trask icon" specifically, and that was NOT reproduced here.**
+Trask does not follow a `warp` in this save (he is absent from `end_m01ab` on both instances
+after the transition), so the reporter's scenario — companions present after a relocation —
+was not reachable this round. What is fixed is the mechanism that makes a peer render as
+something that is not that peer after a module change; whether the reporter's Trask is this
+bug wearing a companion-shaped blueprint on their save, or a second mechanism, is open. The
+next round should reproduce with a save where the PC is NOT appearance 114 and the party
+actually crosses the transition.
+
+### What is still open after the live pass
 
 The blueprint rows are 114 / 17. **Neither is Trask** (`end_trask.utc`: `Appearance_Type` 378
-`Unique_Trask`, `PortraitId` 40 = `po_ptrask`, the LAST row of `portraits.2da`). So if a peer
-literally renders as *Trask* rather than as the blueprint, a second mechanism is publishing
-Trask's row as that peer's, and the candidate is the agent's own player resolution:
+`Unique_Trask`, `PortraitId` 40 = `po_ptrask`, the LAST row of `portraits.2da` — worth knowing,
+because a portrait id that is clamped or read out of range lands on exactly that row). So a
+peer rendering as *Trask* specifically needs a mechanism that puts 378 on that body, and only
+two things in this codebase ever write an appearance row: `PhantomController.ApplyAppearance`
+(from the peer's own packet) and `MaterialisedEnemies` (from the enemy census).
 
-- `KotorGameBridge.TryReadLocalState` publishes `_player.Address + 0xA60` verbatim, and
-  `_player` falls back to `creatures.FirstOrDefault(c => c.IsPlayer)` — `is_pc`
-  (`stats+0x6C`) with no tie-break — whenever the plugin block is momentarily unreadable,
-  which a module transition's main-thread stall can cause (that exact stall is already on
-  record in `TryReadLocalState`'s own comments).
-- **The open question is whether a party companion reads `is_pc != 0` in this engine.** If it
-  does, the scan can latch Trask, `StillLooksLikeThePlayer` keeps passing (it checks vtable +
-  `is_pc`, nothing else), and the peer publishes Trask's position AND appearance as its own
-  until the plugin block is found again and the adoption branch overrides it.
-- Measure it with `identityprobe.ps1` (scratchpad) or `tools/creatures.ps1`'s own `pc` column:
-  read Trask's `stats+0x6C` live. If it is non-zero, the fix is a tie-break in
-  `ScanCreatures`/`TryResolve` (prefer a creature that is `is_pc` and NOT a party member) —
-  which needs its own live check that the PC does not itself carry a party-follow pointer at
-  `+0x4C0`.
+Ruled out this round, measured on the rig, not reasoned: **the agent cannot latch a companion
+as the local player.** `KotorGameBridge` requires `is_pc` (`stats+0x6C`) for both the scan
+(`creatures.FirstOrDefault(c => c.IsPlayer)`) and the cached-pointer revalidation
+(`StillLooksLikeThePlayer`), and Trask reads `is_pc == 0` live. A peer publishing Trask's row
+as its own is therefore not a reachable state through player resolution.
 
-Sibling defect found while reading, NOT fixed here (it is the enemy channel, not the peer
-channel): `MaterialisedEnemies` writes a stand-in's appearance row at spawn — before the twin
-exists, exactly as above — and never calls `RebuildClientAppearance` at all, at any point. By
-X2's own live result that means every materialised stand-in renders as the `k_coop_phantom`
-blueprint rather than as the creature it stands for. The fix is the same latch.
+Left for the next round, in order:
+
+1. **Reproduce on a save the rig cannot represent.** Demo save 1's PC is appearance 114, the
+   same row as `k_coop_phantom`, so a phantom wearing the blueprint is invisible here (see the
+   limitation above), and `warp` leaves Trask behind so the reporter's "companions present
+   after a relocation" scenario never occurred. A save with a non-114 PC that crosses a real
+   door with a companion in the party is the test that would settle whether the report is this
+   bug or a second one.
+2. **The census path.** `KotorGameBridge.ReadEnemies` excludes a creature only when
+   `IsPlayer || IsPartyMember`, and `IsPartyMember` is the `+0x4C0` follow pointer — which is
+   exactly the field `PartyFollowController`/`FollowPhaseReleaseRule` exist because it is not
+   always attached when you expect. A host companion published into the census while that
+   pointer is null would have a stand-in materialised for it on the client, at appearance 378,
+   standing where the companion is. That is a second, independent way for a Trask-shaped body
+   to appear near the party after a transition, and it has not been measured.
+3. **Sibling defect, found while reading, NOT fixed here** (it is the enemy channel, not the
+   peer channel): `MaterialisedEnemies` writes a stand-in's appearance row at spawn — before
+   the twin exists, exactly as above — and never calls `RebuildClientAppearance` at all, at any
+   point. Given the live finding that the spawn-time twin is missing on 100% of spawns, that
+   means every materialised stand-in renders as the `k_coop_phantom` blueprint rather than as
+   the creature it stands for. The fix is the same latch this round added one channel over.
+
+⚠ Do NOT "fix" a player-resolution bug with `&& !c.IsPartyMember`: the PC's own `+0x4C0` reads
+non-null (measured, above), so that filter rejects the player.
