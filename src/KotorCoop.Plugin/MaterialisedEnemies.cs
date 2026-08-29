@@ -1,3 +1,5 @@
+using KotorCoop.Protocol;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -52,6 +54,15 @@ internal static unsafe class MaterialisedEnemies
     private static readonly nint[] Bodies = new nint[SharedBlock.EnemyCapacity];
     private static readonly double[] LastSeen = new double[SharedBlock.EnemyCapacity];
     private static readonly double[] SpawnedAt = new double[SharedBlock.EnemyCapacity];
+
+    /// <summary>The appearance.2da row the OWNER published for this stand-in — the only source
+    /// there is for what it should look like, kept per slot so <see cref="Dress"/> can keep
+    /// trying after the spawn frame.</summary>
+    private static readonly uint[] Appearances = new uint[SharedBlock.EnemyCapacity];
+
+    /// <summary>Per-BODY latch: has the owner's appearance row reached this stand-in's CLIENT
+    /// TWIN, which is the half that actually renders? See <see cref="Dress"/>.</summary>
+    private static readonly bool[] TwinDressed = new bool[SharedBlock.EnemyCapacity];
 
     private static int _spawnCooldown;
     private static int _spawnFailures;
@@ -191,6 +202,18 @@ internal static unsafe class MaterialisedEnemies
             return; // table full; the census cap is the same size, so this is transient
         }
 
+        // ⚠ NEVER BUILD A SECOND COPY OF ONE OF OUR OWN COMPANIONS (docs/research/name-plates.md,
+        // "the census leak"; the rule is PartyCensusRule). The publisher is supposed to keep its
+        // party out of the census, and now does — but this side must refuse too, because the
+        // publisher may be an older build and because the two engines number party bodies
+        // independently (the party table spawns them at load; they are not GIT-placed), so a
+        // companion's id can arrive here matching nothing and sail straight past the "does it
+        // already exist locally" sweep below that stops every other duplicate.
+        if (!MayMaterialise(enemy))
+        {
+            return;
+        }
+
         // Take the cooldown BEFORE the existence check, so a repeated false alarm costs one
         // memory sweep per half-second rather than one per frame.
         _spawnCooldown = SpawnCooldownFrames;
@@ -261,14 +284,6 @@ internal static unsafe class MaterialisedEnemies
         Odyssey.ClaimCreature(creature);
         Odyssey.MarkAsMirroredEnemy(creature);
 
-        // Repaint before the client twin exists, so it never renders as the blueprint.
-        ushort* appearanceField = (ushort*)(creature + CreAppearanceType);
-        if (*appearanceField != enemy.Appearance)
-        {
-            *appearanceField = enemy.Appearance;
-            Odyssey.RebuildAppearance(creature);
-        }
-
         // The owner's faction verbatim — hostile reads hostile, a neutral bystander stays
         // neutral. Through the engine's own membership call, so every targeting path that
         // re-reads faction live agrees. An implausible id keeps the blueprint's Neutral.
@@ -282,13 +297,147 @@ internal static unsafe class MaterialisedEnemies
         Bodies[slot] = creature;
         LastSeen[slot] = now;
         SpawnedAt[slot] = now;
+        Appearances[slot] = enemy.Appearance;
+        TwinDressed[slot] = false;
+
+        // Almost certainly a no-op on the client half this frame — the engine builds the twin
+        // a frame or more after the server object exists — which is exactly why Sweep keeps
+        // calling this until the latch closes. See Dress.
+        Dress(slot);
+
+        if (_logged < 20)
+        {
+            _logged++;
+            string twinRow = Odyssey.TryGetTwinAppearanceRow(creature, out ushort renderedRow)
+                ? $"renders {renderedRow}"
+                : "renders no twin yet";
+            PluginHost.Log(
+                $"materialise: owner 0x{enemy.ObjectId:X} -> local 0x{localId:X} "
+                + $"(appearance {enemy.Appearance}, {twinRow}, faction {enemy.Faction})");
+        }
+    }
+
+    /// <summary>
+    /// Whether this published enemy may have a body built for it here at all.
+    ///
+    /// Pure decision in <see cref="PartyCensusRule.MayMaterialise"/>; this half does the two
+    /// engine reads it needs — our own party table's roster ids, and where our own companions
+    /// are standing and what they are wearing. See that rule's doc comment.
+    /// </summary>
+    private static bool MayMaterialise(in EnemyPresenceView enemy)
+    {
+        bool ownRosterBody = false;
+        bool coincides = false;
+
+        for (int slot = 0; slot < Odyssey.PartyRosterSlots; slot++)
+        {
+            uint rosterId = Odyssey.GetPartyRosterObjectId(slot);
+            if (!PartyCensusRule.IsRosterId(rosterId))
+            {
+                continue;
+            }
+
+            if (rosterId == enemy.ObjectId)
+            {
+                ownRosterBody = true;
+                break;
+            }
+
+            nint body = Odyssey.ResolveServerObject(rosterId);
+            if (body == 0)
+            {
+                continue;
+            }
+
+            Vec3 at = Odyssey.GetPosition(body);
+            float dx = at.X - enemy.Position.X;
+            float dy = at.Y - enemy.Position.Y;
+
+            if (PartyCensusRule.CoincidesWithOwnCompanion(
+                    enemy.Appearance, *(ushort*)(body + CreAppearanceType), (dx * dx) + (dy * dy)))
+            {
+                coincides = true;
+                break;
+            }
+        }
+
+        if (PartyCensusRule.MayMaterialise(ownRosterBody, coincides))
+        {
+            return true;
+        }
+
+        if (_partyRefusalsLogged < 5)
+        {
+            _partyRefusalsLogged++;
+            PluginHost.Log(
+                $"materialise: REFUSING owner 0x{enemy.ObjectId:X} (appearance {enemy.Appearance}) — "
+                + (ownRosterBody
+                    ? "it is one of OUR party roster bodies"
+                    : "it stands on one of our own companions wearing that companion's appearance")
+                + "; the publisher leaked a party member into its enemy census "
+                + "(docs/research/name-plates.md, the census leak)");
+        }
+
+        return false;
+    }
+
+    private static int _partyRefusalsLogged;
+
+    /// <summary>
+    /// Makes a stand-in wear the row its OWNER published — on both halves of the object.
+    ///
+    /// ⚠ THE HALF THAT RENDERS IS THE CLIENT TWIN, and it does not exist on the frame the body
+    /// is spawned. This class used to write the appearance field once, at spawn, and never call
+    /// <see cref="Odyssey.RebuildClientAppearance"/> at all — so the twin the engine built a
+    /// frame later kept whatever the blueprint gave it and EVERY stand-in rendered as
+    /// <c>k_coop_phantom</c> (appearance 114) instead of the creature it stands for. The live
+    /// pass in docs/research/name-plates.md measured the twin missing at spawn on 100% of
+    /// phantom spawns, which is the same ordering; this is the identical per-body latch
+    /// <c>PhantomController.ApplyAppearance</c> got one channel over.
+    ///
+    /// Cheap while the twin is missing (a resolve and two reads) and fires its engine calls
+    /// exactly once per body once it exists — the per-object latch discipline, not a cadence.
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    private static void Dress(int slot)
+    {
+        uint row = Appearances[slot];
+        if (TwinDressed[slot] || OwnerIds[slot] == 0 || !PeerIdentityRule.IsUsableAppearance(row))
+        {
+            return;
+        }
+
+        // ⚠ RE-RESOLVED, not Bodies[slot]. This runs every frame until the latch closes, and a
+        // cached pointer to a body the engine has since freed is the shape of crash this
+        // project's per-frame-write rule exists for. The engine's own object array is the only
+        // thing that can say the body is still there.
+        nint creature = Odyssey.ResolveServerObject(LocalIds[slot]);
+        if (creature == 0)
+        {
+            return;
+        }
+
+        ushort* field = (ushort*)(creature + CreAppearanceType);
+        if (*field != (ushort)row)
+        {
+            *field = (ushort)row;
+            Odyssey.RebuildAppearance(creature);
+        }
+
+        if (!Odyssey.RebuildClientAppearance(creature))
+        {
+            return;
+        }
+
+        TwinDressed[slot] = true;
+        Bodies[slot] = creature;
 
         if (_logged < 20)
         {
             _logged++;
             PluginHost.Log(
-                $"materialise: owner 0x{enemy.ObjectId:X} -> local 0x{localId:X} "
-                + $"(appearance {enemy.Appearance}, faction {enemy.Faction})");
+                $"materialise: local 0x{LocalIds[slot]:X} (owner 0x{OwnerIds[slot]:X}) now renders "
+                + $"appearance {row}");
         }
     }
 
@@ -324,6 +473,17 @@ internal static unsafe class MaterialisedEnemies
         if (_spawnCooldown > 0)
         {
             _spawnCooldown--;
+        }
+
+        // Finish dressing anything whose client twin did not exist when it was spawned — which
+        // is the ordinary case, every time. Latched per body, so the steady state is one array
+        // read per slot. See Dress.
+        for (int i = 0; i < OwnerIds.Length; i++)
+        {
+            if (OwnerIds[i] != 0 && !TwinDressed[i])
+            {
+                Dress(i);
+            }
         }
 
         for (int i = 0; i < OwnerIds.Length; i++)
@@ -372,6 +532,7 @@ internal static unsafe class MaterialisedEnemies
         _spawnDisabled = false;
         _spawnCooldown = 0;
         _falseAlarmsLogged = 0;
+        _partyRefusalsLogged = 0;
         _provenCount = 0;   // a module change reassigns every object id
     }
 
@@ -449,6 +610,8 @@ internal static unsafe class MaterialisedEnemies
         LastSeen[slot] = 0;
         SpawnedAt[slot] = 0;
         DestroyAttempts[slot] = 0;
+        Appearances[slot] = 0;
+        TwinDressed[slot] = false;
     }
 
     /// <summary>CSWSCreature + this = the appearance.2da row, u16 — the same field the
