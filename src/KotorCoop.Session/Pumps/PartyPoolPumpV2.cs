@@ -242,7 +242,6 @@ internal sealed class PartyPoolPumpV2(
         }
 
         PruneOutstanding(now);
-        PruneExpiredExpected(now);
 
         if (!session.TryGetPartyPoolSnapshotV2(out IReadOnlyDictionary<PartyPoolStackKey, int> snapshot))
         {
@@ -263,10 +262,28 @@ internal sealed class PartyPoolPumpV2(
         // by the mirror-image phantom ADD the moment the scan starts working again. A failed scan
         // is NO OBSERVATION: do nothing at all this tick, including no reconcile (a reconcile
         // computed against a value we did not actually read is just as wrong as a detection is).
-        if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> scan))
+        //
+        // ⚠ 2026-08-29 (shared-inventory-v2.md §15): "the read failed" is not the only way a tick
+        // can carry no observation. Every failure path in the real bridge hands back the LAST
+        // GOOD scan and returns TRUE — "stale but honest" — and a delta detect step is fine with
+        // that (an unchanged value moves nothing). The EXPIRY clock is not. A freshly created
+        // item's id cannot be resolved to a resref until the item-tag cache is rebuilt, and
+        // EnsureItemKnown refuses to rebuild for 15s, which is longer than this pump's own 10s
+        // expected-movement timeout: a reconcile apply that landed correctly went unobservable
+        // for the whole window, was "presumed resolved", re-queued and applied a SECOND time.
+        // Watched happen 20 seconds into a live session, doubling a frag grenade. So a stale tick
+        // is treated exactly like a failed one — nothing detected, nothing reconciled — and every
+        // in-flight expiry clock is slid past it, since a clock that runs while nothing can be
+        // seen is timing the blindness rather than the apply. Same fix, same reasoning, as §12.1's
+        // own SlideExpectedTimers on the store side.
+        if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> scan)
+            || bridge.LastPartyPoolScanWasStale)
         {
+            SlideExpectedTimers(now);
             return;
         }
+
+        PruneExpiredExpected(now);
 
         // A module change drops the bridge's ambient-noise baseline, so the same unchanged pool
         // can report bigger totals than it did a tick ago (KotorGameBridge.PartyPool.cs's own
@@ -532,6 +549,27 @@ internal sealed class PartyPoolPumpV2(
     /// intermediate value entirely). Called BEFORE the per-key loop builds its key set, so a
     /// freed entry no longer suppresses that key's detect step the SAME tick rather than waiting
     /// one more.</summary>
+    /// <summary>Pushes every not-yet-consumed expected-movement entry past this tick, so
+    /// <see cref="PruneExpiredExpected"/> cannot presume it resolved. Called on every tick the
+    /// pool could not actually be OBSERVED — see the call site's own remarks and
+    /// <see cref="ExpectedReconcileMovement.TimerFromMs"/>. The store pump's own
+    /// <c>SlideExpectedTimers</c> is the per-key version of this (a store can be unscannable on
+    /// its own while others are fine; the party pool is one repository, so it is all or
+    /// nothing).</summary>
+    private void SlideExpectedTimers(long nowMs)
+    {
+        lock (_pendingGate)
+        {
+            foreach ((_, List<ExpectedReconcileMovement> entries) in _expectedFromReconcile)
+            {
+                foreach (ExpectedReconcileMovement entry in entries)
+                {
+                    entry.TimerFromMs = nowMs;
+                }
+            }
+        }
+    }
+
     private void PruneExpiredExpected(long nowMs)
     {
         List<PartyPoolStackKey>? emptied = null;
