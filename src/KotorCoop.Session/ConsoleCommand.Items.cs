@@ -441,6 +441,26 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.CloseGui)
             : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: closegui  (takes no arguments)");
 
+    // popmodal [count]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.PopModal. The optional count
+    // is how many panels to pop at most; a modal stack is a handful deep at worst, so it is
+    // clamped rather than trusted.
+    private static CoopCommand ParsePopModal(string[] rest)
+    {
+        const string usage = "usage: popmodal [count]  (count 1-8, default 1)";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.PopModal, Amount: 1);
+        }
+
+        if (rest.Length > 1 || !int.TryParse(rest[0], out int count) || count is < 1 or > 8)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        return new CoopCommand(CoopCommandKind.PopModal, Amount: count);
+    }
+
     // buy <store-tag|id> <resref> [count]  - LIVE-TEST PRIMITIVE, see CoopCommandKind.Buy.
     private static CoopCommand ParseBuy(string[] rest) => ParseStoreTrade(rest, CoopCommandKind.Buy, "buy");
 

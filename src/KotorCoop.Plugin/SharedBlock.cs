@@ -1016,4 +1016,23 @@ internal partial struct SharedBlock
     /// range.
     /// </summary>
     public const uint CheatKindCloseGui = 53;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (2026-08-29, docs/research/shared-inventory-v2.md §15): pops panels
+    /// off the GUI manager's own modal stack through <c>CSWGuiManager::PopModalPanel</c>
+    /// 0x0040BE00 — <c>Odyssey.PopModalPanels</c>.
+    ///
+    /// The other half of <see cref="CheatKindCloseGui"/>, and the one that actually unblocks the
+    /// client. <c>HideSWInGameGui</c> bails at 0x0062CBD1 while <c>CSWGuiManager+0x98</c> is
+    /// non-zero, so `closegui` on its own could never clear <c>CGuiInGame+0x30</c> — which is the
+    /// field <c>ShowStoreGui</c> refuses on. §14 measured the blocker and named this call; this
+    /// is it.
+    ///
+    /// <see cref="CheatAmount"/> is how many panels to pop at most (default 1, clamped 1..8).
+    /// Local only, and a deliberate no-op — reported as success — on an already-empty stack.
+    ///
+    /// ⚠ 54, from this stream's own reserved range (54-55). Take the next FREE number in YOUR
+    /// range.
+    /// </summary>
+    public const uint CheatKindPopModal = 54;
 }

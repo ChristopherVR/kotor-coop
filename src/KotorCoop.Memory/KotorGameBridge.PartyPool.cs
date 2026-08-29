@@ -93,6 +93,12 @@ public sealed partial class KotorGameBridge
     /// therefore step for a reason that is not engine movement.</summary>
     public int PartyPoolScanEpoch => _partyPoolScanEpoch;
 
+    /// <summary>See <see cref="IPartyPoolBridge.LastPartyPoolScanWasStale"/>. Set by every
+    /// <see cref="TryScanPartyPoolTotals"/> path that hands back <see cref="_partyPoolLastScan"/>
+    /// without having read the repository this call — the throttle's own sub-second replay is
+    /// deliberately NOT one of them, since that IS the current observation, only cached.</summary>
+    public bool LastPartyPoolScanWasStale { get; private set; }
+
     /// <summary>
     /// True when <paramref name="itemId"/> should be excluded from a party-pool scan's
     /// aggregate — see <see cref="_partyPoolSuppressionDecided"/>'s own remarks for why this is
@@ -168,12 +174,16 @@ public sealed partial class KotorGameBridge
         long now = Environment.TickCount64;
         if (_partyPoolEverScanned && now < _nextPartyPoolScanTicks)
         {
+            // The throttle's replay is the CURRENT observation, at most PartyPoolScanIntervalMs
+            // old, so it is not stale in the sense LastPartyPoolScanWasStale means: nothing was
+            // unreadable, there was simply no reason to look again yet.
             totals = _partyPoolLastScan;
             return true;
         }
 
         if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
         {
+            LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;
         }
@@ -190,6 +200,7 @@ public sealed partial class KotorGameBridge
             // ordinary "nothing in it yet" case, not a resolve failure.
             _partyPoolLastScan = [];
             _partyPoolEverScanned = true;
+            LastPartyPoolScanWasStale = false;
             totals = _partyPoolLastScan;
             return true;
         }
@@ -199,6 +210,7 @@ public sealed partial class KotorGameBridge
             || !_memory.TryReadPointer(repo + RepositoryItemArray, out nint ids)
             || (count > 0 && ids == 0))
         {
+            LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;
         }
@@ -270,11 +282,13 @@ public sealed partial class KotorGameBridge
         if (!ItemAggregateScanRule.IsObservation(count, unresolved))
         {
             LastPartyPoolScanNote = ItemAggregateScanRule.Explain("party pool", count, unresolved);
+            LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;
         }
 
         LastPartyPoolScanNote = string.Empty;
+        LastPartyPoolScanWasStale = false;
 
         Dictionary<PartyPoolStackKey, int> scan = _partyPoolAmbient.Net(raw);
 

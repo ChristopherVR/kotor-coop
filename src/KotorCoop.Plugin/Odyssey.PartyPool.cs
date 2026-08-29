@@ -375,6 +375,185 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Every id currently linked into <paramref name="repo"/> paired with that item's own stack
+    /// size. Taken BEFORE a deposit so the engine's own merge can be identified by membership
+    /// rather than inferred from stack arithmetic — see <see cref="PartyPoolDepositRule"/>.
+    /// Null when the repository's count/array fields do not read sanely, which every caller
+    /// treats as "there is nothing here I may reason about".
+    /// </summary>
+    private static (uint Id, uint Stack)[]? SnapshotRepositoryStacks(nint repo)
+    {
+        if (repo == 0)
+        {
+            return null;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (count is < 0 or > 4096 || (count > 0 && ids == 0))
+        {
+            return null;
+        }
+
+        (uint Id, uint Stack)[] snapshot = new (uint, uint)[count];
+        for (int i = 0; i < count; i++)
+        {
+            uint id = *(uint*)(ids + (nint)(i * 4));
+            nint item = id == 0 ? 0 : ResolveItemBase(id);
+            snapshot[i] = (id, item == 0 ? 0u : *(uint*)(item + ItemStackSize));
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>True when <paramref name="snapshot"/> (from
+    /// <see cref="SnapshotRepositoryStacks"/>) already held <paramref name="itemId"/>, handing
+    /// back the stack size it carried then. A null snapshot answers false — an unreadable
+    /// repository is never evidence that an item is new.</summary>
+    private static bool TryFindSnapshotStack((uint Id, uint Stack)[]? snapshot, uint itemId, out uint stack)
+    {
+        stack = 0;
+        if (snapshot is null)
+        {
+            return false;
+        }
+
+        foreach ((uint id, uint size) in snapshot)
+        {
+            if (id == itemId)
+            {
+                stack = size;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>How many array slots of <paramref name="repo"/> currently hold
+    /// <paramref name="itemId"/>. Legitimately 0 or 1; anything higher is a pre-fix build's own
+    /// double link, and every aggregate scan counts that item's stack once per slot.</summary>
+    private static int CountRepositoryLinks(nint repo, uint itemId)
+    {
+        if (repo == 0)
+        {
+            return 0;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 4096)
+        {
+            return 0;
+        }
+
+        int links = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (*(uint*)(ids + (nint)(i * 4)) == itemId)
+            {
+                links++;
+            }
+        }
+
+        return links;
+    }
+
+    /// <summary>
+    /// Temporarily sets the Stolen bit on every item in <paramref name="repo"/> whose Tag is
+    /// <paramref name="resrefAscii"/> and which does not already carry it, so that a
+    /// <c>CreateItemOnObject</c> issued while they are flipped CANNOT merge into any of them and
+    /// is guaranteed to produce a fresh body. Stolen (engine bit 5) is the ONE flag bit the
+    /// engine's merge predicate 0x00553CF0 compares — three instructions, fully disassembled in
+    /// docs/research/item-identity.md §14 — so flipping it is the narrowest possible way to
+    /// refuse a merge, and it is restored synchronously by <see cref="RestoreStolenBits"/> in the
+    /// caller's own <c>finally</c>.
+    ///
+    /// Only <see cref="Odyssey.InsertItemIntoStore"/> needs this: a store deposit has to end up
+    /// as a body it can MOVE, and a merged stack cannot be moved without dragging the player's
+    /// own standing units into the shop. The party pool wants the opposite — a merge there is
+    /// the correct outcome and is simply accounted for (<see cref="PartyPoolDepositRule"/>).
+    ///
+    /// Returns how many entries of <paramref name="flipped"/> were filled in. MAIN THREAD ONLY.
+    /// </summary>
+    private static int BlockMergesForTag(nint repo, byte* resrefAscii, int resrefLength, nint[] flipped)
+    {
+        if (repo == 0)
+        {
+            return 0;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 4096)
+        {
+            return 0;
+        }
+
+        int n = 0;
+        for (int i = 0; i < count && n < flipped.Length; i++)
+        {
+            uint id = *(uint*)(ids + (nint)(i * 4));
+            nint item = id == 0 ? 0 : ResolveItemBase(id);
+            if (item == 0 || !TagEqualsIgnoreCase(item, resrefAscii, resrefLength))
+            {
+                continue;
+            }
+
+            uint bits = *(uint*)(item + ItemBitFlags);
+            if ((bits & ItemBitStolen) != 0)
+            {
+                // Already unmergeable with a blueprint-fresh body, which carries the template's
+                // own (clear) Stolen bit — leave it exactly as it is.
+                continue;
+            }
+
+            *(uint*)(item + ItemBitFlags) = bits | ItemBitStolen;
+            flipped[n++] = item;
+        }
+
+        return n;
+    }
+
+    /// <summary>Undoes <see cref="BlockMergesForTag"/> — clears the Stolen bit on exactly the
+    /// items it set it on, and only those (it never records one that already carried it).</summary>
+    private static void RestoreStolenBits(nint[] flipped, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            nint item = flipped[i];
+            if (item != 0)
+            {
+                *(uint*)(item + ItemBitFlags) &= ~ItemBitStolen;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The repository a creature's own <c>AcquireItem</c> deposits into:
+    /// <c>CSWSCreature::GetItemRepository(this, 1)</c> — the SHARED PARTY POOL for a live party
+    /// member, that creature's own individual backpack otherwise. Falls back to the raw
+    /// <see cref="CreatureItemRepo"/> field only if the engine call answers null.
+    ///
+    /// ⚠ Reading <c>+0xA30</c> directly (what this code did until
+    /// docs/research/shared-inventory-v2.md §15) is wrong for exactly the case the shared
+    /// inventory always hits: a spawn onto a party member lands in the party pool, so the
+    /// "unlink it from the player's backpack" step was a guaranteed no-op — which is half of
+    /// why every deposit ended up linked into the pool twice. Odyssey.Store.cs's own section
+    /// header flagged this hazard for both callers; this is it being taken.
+    /// </summary>
+    private static nint ResolveCreatureItemRepo(nint creature)
+    {
+        if (creature == 0)
+        {
+            return 0;
+        }
+
+        nint shared = GetItemRepositoryFn(creature, 1);
+        return shared != 0 ? shared : *(nint*)(creature + CreatureItemRepo);
+    }
+
+    /// <summary>
     /// Adds <paramref name="count"/> units of a resref+identity stack to the shared party pool:
     /// spawns the item straight into the local player's own inventory (the same
     /// <c>CreateItemOnObject</c> VM routine <see cref="GiveItemToInventory"/> already wraps —
@@ -408,12 +587,21 @@ internal static unsafe partial class Odyssey
     /// own player id rather than re-resolving it) — see <see cref="SetPossessorFn"/>'s own doc
     /// comment. Net effect: the SAME array link and the SAME possessor write <c>AddItem</c> used
     /// to perform for a fresh (non-merging) deposit, with neither of its two crash triggers ever
-    /// armed. Native merging (stacking into an identical existing entry) is intentionally NOT
-    /// reproduced here — this codebase's own content-keyed aggregation already happens at the
-    /// store/wire layer (docs/research/party-pool-sync.md §2.1), never relied on the engine's own
-    /// merge for correctness, and a duplicate-resref deposit simply becomes a second, discrete
-    /// array entry, which every existing read/remove path (Tag+identity matching, not native
-    /// merge state) already handles correctly.
+    /// armed.
+    ///
+    /// ⚠ §15 (docs/research/shared-inventory-v2.md) then found that on the ordinary path — a
+    /// spawn onto a live party member — NONE of that relink is reached correctly, and both of
+    /// its halves were actively destructive. <c>CreateItemOnObject</c> routes through
+    /// <c>CSWSCreature::AcquireItem</c>, which files the item into
+    /// <c>GetItemRepository(creature, 1)</c> — the party pool ITSELF — and merges it into any
+    /// stack already there, handing back that pre-existing stack's object id. So the unlink
+    /// targeted a repository the item was never in (a no-op), the insert linked an
+    /// already-linked id a SECOND time, and the identity apply overwrote the merged stack's size
+    /// with the requested count, destroying the units it landed on. See
+    /// <see cref="PartyPoolDepositRule"/> for the arithmetic that produces, and §14.3's live
+    /// trace it reproduces exactly. This method now decides through that rule: it relinks ONLY
+    /// when the engine did not file the item itself, adds to a merged stack instead of
+    /// overwriting it, and drops any duplicate link a pre-fix build left behind.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -432,6 +620,15 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // Snapshot the pool BEFORE the spawn. The engine's own CreateItemOnObject ->
+        // CSWSCreature::AcquireItem -> CItemRepository::AddItem(wantMerge=1) may hand back a
+        // PRE-EXISTING pool stack rather than a new body (it writes the merge target's pointer
+        // back through ppItem), and "was this id already in the repository?" is the only
+        // observation that identifies that without guessing from stack arithmetic. See
+        // PartyPoolDepositRule for the full mechanism and the live trace it reproduces.
+        int countBefore = *(int*)(repo + RepositoryItemCount);
+        (uint Id, uint Stack)[]? before = SnapshotRepositoryStacks(repo);
+
         itemId = GiveItemToInventory(playerObjectId, resrefAscii, resrefLength, count, out int failure);
         if (itemId is 0 or ObjectInvalid)
         {
@@ -445,57 +642,82 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        bool merged = TryFindSnapshotStack(before, itemId, out uint stackBefore);
+        int linksNow = CountRepositoryLinks(repo, itemId);
+        PartyPoolDepositRule.Deposit deposit =
+            PartyPoolDepositRule.ForCreatedItem(merged, stackBefore, linksNow, count);
+
+        // A merge landed our units on somebody else's stack: its charges/upgrades/flags belong
+        // to the units that were already there and are rewritten from the engine's own current
+        // values, not from the request — which the merge predicate (0x00553CF0) already proved
+        // equal for every field it compares. Only the stack size moves, and it moves to
+        // standing + requested rather than to the request alone. That last word is the whole
+        // §14.3 defect: overwriting it destroyed the standing units and made the next scan
+        // report a REMOVE for a deposit.
+        uint applyUpgrades = deposit.KeepEngineIdentity ? spawned.Upgrades : upgrades;
+        uint applyCharges = deposit.KeepEngineIdentity ? spawned.Charges : charges;
+        uint applyMaxCharges = deposit.KeepEngineIdentity ? spawned.MaxCharges : maxCharges;
+        uint applyFlags = deposit.KeepEngineIdentity
+            ? EngineBitsToWireFlags(spawned.BitFlags) | SharedBlock.ItemIdentityKnown
+            : IdentityFlagsForCreatedItem(flags, spawned);
+
         if (!ApplyItemIdentity(
-                itemId, upgrades, (uint)count, charges, maxCharges,
-                IdentityFlagsForCreatedItem(flags, spawned), out after))
+                itemId, applyUpgrades, deposit.TargetStackSize, applyCharges, applyMaxCharges,
+                applyFlags, out after))
         {
             LastPartyPoolNote = $"identity apply failed for 0x{itemId:X}: {LastItemResolveNote}";
             return false;
         }
 
-        nint player = GetGameObjectFn(GetServer(), playerObjectId);
-        nint playerRepo = player == 0 ? 0 : *(nint*)(player + CreatureItemRepo);
         nint item = ResolveItemBase(itemId);
-
-        if (playerRepo == 0 || item == 0)
+        if (item == 0)
         {
-            LastPartyPoolNote = $"0x{itemId:X} spawned but could not resolve player backpack/item base";
+            LastPartyPoolNote = $"0x{itemId:X} spawned but could not resolve the item base";
             return false;
         }
 
-        // Unlink from the player's own backpack, link into the pool via InsertItem's own
-        // (fully-verified, side-effect-free) append path — see WithRepoBit0Cleared's and
-        // RepositoryInsertItemFn's own doc comments for why the bit needs clearing here and why
-        // this avoids both of AddItem's crash triggers (docs/research/party-pool-sync.md §18).
-        //
-        // DIAGNOSTIC (docs/research/party-pool-sync.md §13.3's own "two lookups, one frame" ask,
-        // kept through every round since): dump the repo pointer and its item_count field
-        // immediately before and after the call, plus whether the item's own id shows up in the
-        // post-insert array walk — so a live round can tell "no-op" (count unchanged, id not
-        // found — §15/§16's now-fixed symptom) from a genuine append (count+1, id found) without
-        // guessing from log timing alone.
-        int countBefore = *(int*)(repo + RepositoryItemCount);
-        RepositoryRemoveItemFn(playerRepo, item);
-        WithRepoBit0Cleared(repo, () => RepositoryInsertItemFn(repo, item, -1));
-        SetPossessorFn(item, playerObjectId, 0, 0, ObjectInvalid);
-        int countAfter = *(int*)(repo + RepositoryItemCount);
-        nint idsAfter = *(nint*)(repo + RepositoryItemArray);
-        bool foundAfter = false;
-        if (idsAfter != 0 && countAfter is > 0 and <= 4096)
+        if (deposit.NeedsLink)
         {
-            for (int i = 0; i < countAfter; i++)
+            // The engine did NOT file it into the pool itself (the spawn target was not a live
+            // party member, so AcquireItem used its own individual backpack). Unlink it from
+            // there and link it into the pool via InsertItem's own (fully-verified,
+            // side-effect-free) append path — see WithRepoBit0Cleared's and
+            // RepositoryInsertItemFn's own doc comments for why the bit needs clearing and why
+            // this avoids both of AddItem's crash triggers (party-pool-sync.md §18).
+            nint player = GetGameObjectFn(GetServer(), playerObjectId);
+            nint playerRepo = ResolveCreatureItemRepo(player);
+            if (playerRepo == 0)
             {
-                if (*(uint*)(idsAfter + (nint)(i * 4)) == itemId)
-                {
-                    foundAfter = true;
-                    break;
-                }
+                LastPartyPoolNote = $"0x{itemId:X} spawned but could not resolve the player's repository";
+                return false;
             }
+
+            RepositoryRemoveItemFn(playerRepo, item);
+            WithRepoBit0Cleared(repo, () => RepositoryInsertItemFn(repo, item, -1));
+            SetPossessorFn(item, playerObjectId, 0, 0, ObjectInvalid);
         }
 
+        // Heal a pool a PREVIOUS build double-linked: an id can only legitimately occupy one
+        // slot, and every extra one makes every aggregate scan report that stack's size again.
+        for (int i = 0; i < deposit.DuplicateLinksToDrop; i++)
+        {
+            RepositoryRemoveItemFn(repo, item);
+            PluginHost.Log(
+                $"party pool: dropped a DUPLICATE array link of 0x{itemId:X} (a pre-fix build "
+                + "linked an already-pooled item a second time; every scan counted it twice)");
+        }
+
+        // DIAGNOSTIC (docs/research/party-pool-sync.md §13.3's own "two lookups, one frame" ask,
+        // kept through every round since), now also reporting the merge decision — which is what
+        // five rounds of divergence turned out to hinge on.
+        int countAfter = *(int*)(repo + RepositoryItemCount);
         PluginHost.Log(
             $"party pool: add diag — repo 0x{repo:X}, item_count {countBefore}->{countAfter}, "
-            + $"0x{itemId:X} {(foundAfter ? "IS" : "is NOT")} in the post-insert array walk");
+            + $"0x{itemId:X} links {linksNow}->{CountRepositoryLinks(repo, itemId)}, "
+            + (merged
+                ? $"MERGED into a standing stack of {stackBefore} (stack now {after.StackSize})"
+                : $"fresh body ({(deposit.NeedsLink ? "linked by us" : "linked by the engine")}, "
+                    + $"stack {after.StackSize})"));
 
         return true;
     }
@@ -555,12 +777,35 @@ internal static unsafe partial class Odyssey
         // about a given item's id.
         string targetResref = Encoding.ASCII.GetString(resrefAscii, resrefLength);
 
+        // An id can occupy more than one slot if a pre-fix build double-linked it (see
+        // AddItemToPartyPool's own remarks and PartyPoolDepositRule). Visiting it twice would
+        // credit the same physical units twice — an "asked for 2, removed 2" that took only 1.
+        int visitedCount = 0;
+        uint[] visited = new uint[snapshot.Length];
+
         foreach (uint id in snapshot)
         {
             if (removed >= countToRemove)
             {
                 break;
             }
+
+            bool seen = false;
+            for (int i = 0; i < visitedCount; i++)
+            {
+                if (visited[i] == id)
+                {
+                    seen = true;
+                    break;
+                }
+            }
+
+            if (seen)
+            {
+                continue;
+            }
+
+            visited[visitedCount++] = id;
 
             nint item = ResolveItemBase(id);
             if (item == 0)

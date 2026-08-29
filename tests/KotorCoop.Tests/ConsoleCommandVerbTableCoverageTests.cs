@@ -80,6 +80,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Pazaak] = "pazaak",
         [CoopCommandKind.OpenStore] = "openstore kebla_yurt_shop",
         [CoopCommandKind.CloseGui] = "closegui",
+        [CoopCommandKind.PopModal] = "popmodal 1",
         [CoopCommandKind.PartySelectOk] = "partyselect ok",
         [CoopCommandKind.Faction] = "faction 0x14",
         [CoopCommandKind.PazaakEnd] = "pazaak end",

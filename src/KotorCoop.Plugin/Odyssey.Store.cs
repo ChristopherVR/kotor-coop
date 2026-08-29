@@ -115,11 +115,77 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // ⚠ Where a spawn actually LANDS, corrected in docs/research/shared-inventory-v2.md §15.
+        // CreateItemOnObject routes through CSWSCreature::AcquireItem, which files the item into
+        // CSWSCreature::GetItemRepository(creature, 1) — the SHARED PARTY POOL for a live party
+        // member, not the +0xA30 backpack this code used to unlink from. Reading +0xA30 made the
+        // unlink below a guaranteed no-op, so every store insert left the item linked in the
+        // party pool as well as the store: one body, two repositories, counted by both channels'
+        // scans. The section header further down this file flagged exactly this hazard for this
+        // caller; this is it being taken.
+        nint player = GetGameObjectFn(GetServer(), playerObjectId);
+        nint sourceRepo = ResolveCreatureItemRepo(player);
+        if (sourceRepo == 0)
+        {
+            LastStoreNote = "could not resolve the spawning player's own repository";
+            return false;
+        }
+
+        // AcquireItem also asks for a MERGE (wantMerge=1), so a spawn of something the player
+        // already carries hands back that PRE-EXISTING stack rather than a new body — moving
+        // which into a shop would drag the player's own standing units in with it. Snapshot
+        // first so that is detectable, then undo and retry with merges refused.
+        (uint Id, uint Stack)[]? before = SnapshotRepositoryStacks(sourceRepo);
+
         itemId = GiveItemToInventory(playerObjectId, resrefAscii, resrefLength, count, out int failure);
         if (itemId is 0 or ObjectInvalid)
         {
             LastStoreNote = $"did not spawn (failure {failure})";
             return false;
+        }
+
+        if (TryFindSnapshotStack(before, itemId, out uint stackBefore))
+        {
+            nint mergedInto = ResolveItemBase(itemId);
+            if (mergedInto != 0)
+            {
+                *(uint*)(mergedInto + ItemStackSize) = stackBefore;
+            }
+
+            nint[] flipped = new nint[64];
+            int flippedCount = BlockMergesForTag(sourceRepo, resrefAscii, resrefLength, flipped);
+            try
+            {
+                itemId = GiveItemToInventory(playerObjectId, resrefAscii, resrefLength, count, out failure);
+            }
+            finally
+            {
+                RestoreStolenBits(flipped, flippedCount);
+            }
+
+            if (itemId is 0 or ObjectInvalid)
+            {
+                LastStoreNote = $"did not spawn on the merge-free retry (failure {failure})";
+                return false;
+            }
+
+            if (TryFindSnapshotStack(before, itemId, out uint stillMerged))
+            {
+                nint again = ResolveItemBase(itemId);
+                if (again != 0)
+                {
+                    *(uint*)(again + ItemStackSize) = stillMerged;
+                }
+
+                LastStoreNote =
+                    $"the engine merged the spawn into the player's own stack 0x{itemId:X} twice "
+                    + "— refusing rather than moving their units into the shop";
+                return false;
+            }
+
+            PluginHost.Log(
+                $"store: the spawn merged into the player's own stack (restored to {stackBefore}); "
+                + $"retried with merges blocked and got a fresh 0x{itemId:X}");
         }
 
         if (!TryReadItemIdentityFields(itemId, out ItemIdentityFields spawned) || spawned.LooksUnloaded)
@@ -139,22 +205,24 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint player = GetGameObjectFn(GetServer(), playerObjectId);
-        nint playerRepo = player == 0 ? 0 : *(nint*)(player + CreatureItemRepo);
         nint item = ResolveItemBase(itemId);
-
-        if (playerRepo == 0 || item == 0)
+        if (item == 0)
         {
-            LastStoreNote = $"0x{itemId:X} spawned but could not resolve player backpack/item base";
+            LastStoreNote = $"0x{itemId:X} spawned but could not resolve the item base";
             return false;
         }
 
-        // Unlink from the player's own backpack, link into the store. Deliberately NOT calling
+        // Unlink from wherever the engine filed it, link into the store. Deliberately NOT calling
         // SetPossessor — same reasoning AddItemToPartyPool's own remarks give: the item's
         // possessor is left as the spawning player's id rather than fought back to
         // OBJECT_INVALID. NEEDS-LIVE, docs/research/store-sync.md.
-        RepositoryRemoveItemFn(playerRepo, item);
+        int unlinked = RepositoryRemoveItemFn(sourceRepo, item);
         RepositoryInsertItemFn(repo, item, -1);
+
+        PluginHost.Log(
+            $"store: insert diag — 0x{itemId:X} x{count}, unlinked from the player's repository "
+            + $"0x{sourceRepo:X} ({(unlinked != 0 ? "yes" : "NO — it was not there")}), "
+            + $"linked into store repo 0x{repo:X}");
 
         return true;
     }
@@ -552,6 +620,83 @@ internal static unsafe partial class Odyssey
                 : " (the engine refused its own teardown — it bails at 0x0062CBD1 while the "
                     + "GUI manager's modal stack is not empty; that stack has to be popped first)");
         return after == 0;
+    }
+
+    /// <summary>
+    /// <c>CSWGuiManager::PopModalPanel(this)</c> 0x0040BE00 — VERIFIED, full disassembly this
+    /// pass (docs/research/shared-inventory-v2.md §15). <c>__thiscall(this = CSWGuiManager*)</c>,
+    /// <b>no stack arguments</b> (it ends in a bare <c>ret</c>, not <c>ret 4</c>), returning the
+    /// popped panel pointer in <c>eax</c>.
+    ///
+    /// Its very first act is the guard that makes it safe to call speculatively:
+    /// <c>mov eax,[esi+0x98]; test eax,eax; je &lt;ret&gt;</c> — an EMPTY modal stack returns
+    /// immediately having touched nothing. On a non-empty one it removes the top entry from the
+    /// <c>+0x94</c> array (<c>CExoArrayList::Remove</c> 0x006857A0), calls the manager's own
+    /// 0x0040ACC0 (focus/refresh), and re-activates whatever panel is now on top through its
+    /// vtable's <c>+0x44</c>/<c>+0x7C</c> slots. It does <b>not</b> delete the popped panel —
+    /// there is no <c>operator delete</c> anywhere in the function — so this unregisters, it
+    /// does not free.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint> PopModalPanelFn =
+        (delegate* unmanaged[Thiscall]<nint, nint>)0x0040BE00;
+
+    /// <summary>
+    /// Pops up to <paramref name="max"/> panels off the GUI manager's modal stack — the
+    /// `popmodal` live-test primitive, and the missing half of
+    /// <see cref="CloseFullScreenGui"/>.
+    ///
+    /// ⚠ Why this exists (docs/research/shared-inventory-v2.md §15). <c>HideSWInGameGui</c>
+    /// refuses its own teardown while <c>CSWGuiManager+0x98</c> is non-zero, so `closegui` alone
+    /// could never clear <c>CGuiInGame+0x30</c> — the field <c>ShowStoreGui</c> gates on, and
+    /// therefore the reason the CLIENT half of every live store round this project has run was
+    /// refused. §14 measured the blocker (both numbers = 1 on the client, 0 on the host) and
+    /// named this call as the next step; this is that step.
+    ///
+    /// It stops the moment the stack reports empty and never loops more than
+    /// <paramref name="max"/> times regardless, so a manager whose count field does not behave
+    /// the way the disassembly says cannot spin the main thread.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool PopModalPanels(int max, out string detail)
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            detail = "no in-game GUI resolved (not in a loaded module)";
+            return false;
+        }
+
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        if (manager == 0)
+        {
+            detail = "no GUI manager resolved (CGuiInGame+0x38 is null)";
+            return false;
+        }
+
+        int before = *(int*)(manager + GuiManagerModalStackCountOffset);
+        if (before <= 0)
+        {
+            detail = $"the GUI manager's modal stack is already empty (count = {before})";
+            return true;
+        }
+
+        int popped = 0;
+        for (int i = 0; i < max; i++)
+        {
+            if (*(int*)(manager + GuiManagerModalStackCountOffset) <= 0)
+            {
+                break;
+            }
+
+            PopModalPanelFn(manager);
+            popped++;
+        }
+
+        int after = *(int*)(manager + GuiManagerModalStackCountOffset);
+        detail = $"popped {popped} modal panel(s) — GUI-manager modal stack {before} -> {after}, "
+            + $"CGuiInGame+0x30 = {*(int*)(gui + InGameGuiBusyOffset)}";
+        return after < before;
     }
 
     // ---- buy/sell: drive the real GUI button handlers directly (2026-08-28 addendum) -------

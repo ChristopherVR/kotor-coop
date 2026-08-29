@@ -246,6 +246,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 CloseGui();
                 break;
 
+            case SharedBlock.CheatKindPopModal:
+                PopModal();
+                break;
+
             case SharedBlock.CheatKindPartySelectOk:
                 PartySelectOk();
                 break;

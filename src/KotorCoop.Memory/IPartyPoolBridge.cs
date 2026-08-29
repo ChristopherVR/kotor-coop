@@ -57,4 +57,28 @@ public interface IPartyPoolBridge
     /// with no plugin attached, where nothing is ever suppressed in the first place).
     /// </summary>
     int PartyPoolScanEpoch => 0;
+
+    /// <summary>
+    /// True when the totals the most recent <see cref="TryScanPartyPoolTotals"/> handed back
+    /// were a REPEAT of an older sweep rather than anything read this tick — the "stale but
+    /// honest" answer every failure path gives (no world loaded, an unreadable pointer chain,
+    /// or a walk that could not resolve every id and so is not evidence about the whole
+    /// repository — see <c>ItemAggregateScanRule</c>).
+    ///
+    /// ⚠ It returned <c>true</c> alongside those totals, and for a DELTA consumer that is
+    /// harmless in itself: an unchanged value moves nothing and nothing is published. What it is
+    /// NOT harmless for is any clock that measures "how long has an apply I queued gone
+    /// unobserved?" — because during a blind window nothing CAN be observed, so such a clock is
+    /// timing the blindness, not the apply. That is not hypothetical: a freshly created item's
+    /// id cannot be resolved to a resref until the item-tag cache is rebuilt, which
+    /// <c>EnsureItemKnown</c> refuses to do for 15s after the last rebuild, while
+    /// <c>PartyPoolPumpV2.DefaultExpectedTimeoutMs</c> is 10s. A reconcile apply that landed
+    /// correctly was therefore "presumed resolved", re-queued, and applied a SECOND time —
+    /// watched happen 20 seconds into a live session (docs/research/shared-inventory-v2.md §15).
+    ///
+    /// A consumer that reads totals as absolute values may ignore this. A consumer holding
+    /// expiry timers must slide them, and must not reconcile against a value nobody read.
+    /// False for a bridge that never serves stale totals (every test fake).
+    /// </summary>
+    bool LastPartyPoolScanWasStale => false;
 }

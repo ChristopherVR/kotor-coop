@@ -1998,3 +1998,292 @@ their code default of **0** everywhere.
   fixed for this rig.
 - One remaining party-pool defect, **cleanly reproduced with a one-command repro**, and one
   deterministic host crash flagged for a bisect.
+
+---
+
+## 15. 2026-08-29, sixth rig round — §14.3's party-pool defect is ROOT-CAUSED and CLOSED (the
+## deposit was a PRODUCT, not a sum: `CreateItemOnObject` merges into the pool and hands back
+## the stack it merged into), the whole §6.1 recipe passes clean; the five-round CLIENT STORE
+## BLOCKER is CLEARED (`popmodal`) and the client store half executes end to end for the first
+## time; and the host's warp crash is bisected to a party channel. Both modes still ship at
+## **0** — the pool because its own flip was gated on the store passing too, the store because
+## one clause of its recipe still wobbles and one session is not three.
+
+Two-instance rig (`tools/demo.ps1`), both game directories `build.ps1 -Install -WarnAsError`'d
+and SHA-256-verified after every install (publish output, host and client `dinput8.dll`
+byte-identical each time; `KotorCoop.Session.dll` identical across both installs and byte-scanned
+at both alignments for this pass's own literals). Both installs' `saves\000002 - Game1` verified
+file-by-file identical before every launch (§14.0's hazard, checked five times this round and
+clean each time). Four rig cycles: one for the party pool, one for the crash bisect lever, one
+for the party-channel bisect, one for the store.
+
+### 15.1 Item 1 — the party pool's remaining defect, root cause found in the PLUGIN, not the pumps
+
+§14.3 left a one-command repro: settle `END_M01AA`, then a single `pooladd g_w_blstrpstl001` on
+either side, which scanned as `raw=-2 published=-2` and made the host apply a REMOVE of 2 for a
+deposit of +1. §14.3 attributed it to `PartyPoolAmbientBaseline`. That was wrong, and the
+previous round's own archived logs were enough to settle it without a single new rig minute.
+
+**The plugin log names the mechanism directly.** Both instances, every deposit:
+
+```
+[14:51:52.744] party pool: add diag - repo 0x19685DD8, item_count 5->6,  0x132 IS in the post-insert array walk
+[15:03:49.750] party pool: add diag - repo 0x19685DD8, item_count 11->12, 0x132 IS in the post-insert array walk
+[15:06:18.848] party pool: add diag - repo 0x19685DD8, item_count 13->14, 0x132 IS in the post-insert array walk
+```
+
+The SAME object id, appended to the pool's id array again on every single deposit, while
+`item_count` climbs. `AddItemToPartyPool` had two independent bugs, and this line is both of them
+at once:
+
+`CreateItemOnObject(resref, aPartyMember, n)` does not hand back a loose body to file away. It
+routes through `CSWSCreature::AcquireItem` 0x005158E0, which calls
+`CItemRepository::AddItem(ppItem, wantMerge=1, 0, markNewItem=1)` on the repository
+`CSWSCreature::GetItemRepository(this, 1)` 0x004EF770 returns — and for a live party member that
+IS the shared party pool, not the `+0xA30` backpack this code unlinked from. (Both facts were
+already written down in this repository: `RepositoryAddItemFn`'s own doc comment traces
+`AcquireItem`'s argument shape, and `Odyssey.Store.cs`'s section header had flagged `+0xA30` as
+the wrong repository for exactly these two callers. Nobody had put them together.) So on every
+deposit:
+
+1. the item was **already linked into the pool by the engine**;
+2. if the pool already held a stack the merge predicate 0x00553CF0 accepts, `AddItem` merged into
+   THAT stack and wrote its pointer back through `ppItem` — so the "created" id handed back was a
+   **pre-existing pool item carrying its own standing units**;
+3. `ApplyItemIdentity(..., stackSize: count, ...)` then **overwrote that stack's size with the
+   requested count**, destroying the units it had just landed on; and
+4. the unlink targeted a repository the item was never in (a silent no-op, `RemoveItem` returns 0
+   when the item is not there), so `InsertItem` linked the same id into the pool's array a
+   **second time**.
+
+A repository array holding one id N times reports that item's stack size N times to every
+aggregate scan. **The total a party-pool scan reports for such a key is therefore `N x S` — a
+PRODUCT of "how many deposits have ever been made" and "how many units the last one asked for" —
+not a sum.** That reproduces §14.3's client trace exactly, arithmetic for arithmetic:
+
+| event | links N | stack S | scan reports | trace |
+| --- | --- | --- | --- | --- |
+| start | 1 | 1 | 1 | `actual=1 firstSight` |
+| `+1` | 2 | 1 | 2 | `actual=2 raw=1` (looks right) |
+| `+2` | 3 | 2 | **6** | `actual=6 raw=4` — +4 for an add of 2 |
+| `+1` | 4 | 1 | **4** | `actual=4 raw=-2 published=-2` — the §14.3 line |
+
+It also explains why §14.1's own live pass signed the channel off: `N x 1` grows by exactly 1 per
+deposit, so a run of `count=1` deposits is **indistinguishable from correct**. Every clean result
+this document has ever recorded for the pool used count=1; every ramp involved a count that was
+not 1. And it is a strong candidate for a large share of §6/§8/§10's ramps, which no pump-level
+reasoning ever accounted for.
+
+**Fix**, via a new pure `PartyPoolDepositRule` (plugin, compiled into the test project):
+
+- snapshot the repository BEFORE the spawn, so a merge is identified by **membership** — the one
+  observation that cannot be confused by an engine that merges a different amount than asked;
+- a merge sets the stack to **standing + requested**, never to the request alone, and keeps the
+  engine's own identity for it (the merge predicate already proved every field it compares equal,
+  so rewriting them would rewrite units that were already there);
+- link only when the engine did NOT file the item itself;
+- drop any duplicate array link a pre-fix build left, so an existing pool heals on its next
+  deposit;
+- `RemovePartyPoolStack` skips an id it has already visited, so a duplicated link cannot credit
+  the same physical units twice.
+
+`Odyssey.Store.cs`'s `InsertItemIntoStore` had the same root cause and is fixed with it: it now
+resolves the spawning player's real repository through `GetItemRepository(creature, 1)`, so a
+store insert no longer leaves the item linked in the party pool as well as the store, and a spawn
+that merges into the player's own stack is undone and retried with merges refused — by transiently
+setting the **Stolen** bit, the one flag bit the merge predicate compares (item-identity.md §14) —
+rather than dragging the player's standing units into the shop.
+
+Unit-pinned in `tests/KotorCoop.Tests/PartyPoolDepositRuleTests.cs`, which models the repository
+(an id array that may hold one id twice, plus a stack size per id) and replays the live trace
+against both the old behaviour and the rule: the old path reproduces `1 -> 2 -> 6 -> 4` exactly,
+the rule gives `1 -> 2 -> 4 -> 5`, and a separate case pins that a run of count=1 deposits looks
+identical under both — the reason the defect survived five rounds.
+
+### 15.2 A SECOND party-pool defect, caught live 20 seconds into the round: a blind window is not
+### elapsed time
+
+Before any recipe step ran, with the fix above installed:
+
+```
+16:27:11  reconcile queued: add of 1x 'g_w_fraggren01'
+16:27:12  plugin: added 'g_w_fraggren01' x1 to the party pool          <- it LANDED
+16:27:12..21  trace: actual=0 on every tick                            <- nothing can see it
+16:27:21  "expected-reconcile entry never observed landing within 10s"
+16:27:21  reconcile queued AGAIN, applied again
+16:27:27  actual=2, published +1 to the host as a local deposit
+```
+
+The item was brand new, and a fresh object id cannot be resolved to a resref until the item-tag
+cache is rebuilt — `EnsureItemKnown` refuses to rebuild for `ItemTagRebuildMs` (**15 s**). Every
+scan in that window walked an id it could not resolve, correctly refused to publish a partial
+aggregate (§14.2's `ItemAggregateScanRule`) and handed back the last good sweep, which still said
+zero. `PartyPoolPumpV2`'s expected-movement timeout is **10 s** — shorter — so the entry expired
+while the apply had in fact succeeded.
+
+The bug is the clock, not the scan: during a blind window nothing CAN be observed, so a "has this
+gone unobserved too long?" timer is timing the blindness. §12.1 already fixed exactly this shape
+on the store side (`SlideExpectedTimers` for an unscannable shop); the party pool never had the
+equivalent because its failure paths hand back stale totals under a `true` return, so the pump
+could not tell a repeat from an observation. `IPartyPoolBridge` now carries
+`LastPartyPoolScanWasStale` (default false, so no fake changed); a stale tick is treated exactly
+like a failed one — nothing detected, nothing reconciled — and every in-flight expiry clock is slid
+past it. `PruneExpiredExpected` moved to after the scan, so it only ever runs on a tick that
+observed something. Two pump-level tests pin it, including that a genuinely dropped apply still
+expires once sight returns.
+
+### 15.3 Item 1 verdict — the §6.1 recipe passes clean, end to end
+
+Rebuilt, reinstalled, hash-verified, relaunched. `party_pool_sync=2`/`store_sync=2`,
+`dialogue_item_sync=0`/`script_item_sync=0`, `party_pool_trace=1`.
+
+| clause | expected | measured |
+| --- | --- | --- |
+| **§14.3's own one-command repro**: client `pooladd g_w_blstrpstl001` x1 on the ambient-baselined key | client +1, host +1 | `actual=2 belief=1 snap=1 raw=1 published=1` — host applied `add of 1x` **once**. Was `raw=-2 published=-2` and a `remove of 2`. |
+| both idle 5 min | no drift | 16:38:55 -> 16:43:55: **zero** trace lines, **zero** publishes, **zero** engine writes on either side |
+| host `pooladd g_i_medeqpmnt01` x3 | client +3 | client mirrored 2 -> 3 -> 4 -> 5, one apply per deposit, `published=0` on every line |
+| client `poolremove` x1 | host -1 | `published=-1` once; host applied `remove of 1x` |
+| client `pooladd` x2 during a host `equip` | +2, and the host's own spawn mirrored | `published=1` twice, host applied twice; the host's `equip` spawn (a blaster into the host pool) mirrored to the client with `published=0` |
+| both idle 5 min again | no drift | 16:47:08 -> 16:52:08: **zero** new lines on either side; both instances `Responding=True` |
+
+**Zero spurious publishes for the whole session.** This is the first round in this document's
+history where the party pool did not fabricate a single unit.
+
+### 15.4 Item 2 — the client store blocker is CLEARED, and it was ours
+
+§14.4 measured the blocker (`CGuiInGame+0x30` = 1 and `CSWGuiManager+0x98` = 1 on the client, both
+0 on the host) and named `PopModalPanel` 0x0040BE00 as the next step. Both halves landed.
+
+**The call, disassembled in full**: `__thiscall(this = CSWGuiManager*)`, **no stack arguments** (it
+ends in a bare `ret`, not `ret 4`), returning the popped panel in `eax`. Its first act is
+`mov eax,[esi+0x98]; test eax,eax; je <ret>` — an empty stack returns having touched nothing, so it
+is safe to call speculatively. On a non-empty stack it removes the top entry from the `+0x94` array
+(`CExoArrayList::Remove` 0x006857A0), calls the manager's own 0x0040ACC0, and re-activates the new
+top through its vtable `+0x44`/`+0x7C`. No `operator delete` anywhere in it: it unregisters, it
+does not free. New verb **`popmodal [count]`** (default 1, clamped 1..8), cheat kind 54, local
+only, "already empty" answers APPLIED.
+
+**And what puts the panel there is this project's own menu-load path.** This round measured BOTH
+instances at `CGuiInGame+0x30` = 1 and modal stack = 1, where §14 measured the host at 0 — the
+difference being that both were loaded through the plugin this time.
+`MenuLoadController.MainMenuPhase` constructs a `CSWGuiSaveLoad` panel (`SaveLoadCtor` 0x006CC680)
+purely as `LoadPCAutoSave`'s `this` and deliberately never `AddPanel`s or `PopModalPanel`s it — so
+the panel its constructor registers is left on the modal stack for the rest of the session, and the
+engine has considered the full-screen GUI up ever since. Five rounds of "another modal screen is
+up" on the client were our own loader's leftovers.
+
+Live, on the client, first try:
+
+```
+popmodal : popped 1 modal panel(s) - GUI-manager modal stack 1 -> 0, CGuiInGame+0x30 = 1
+closegui : HideSWInGameGui called - CGuiInGame+0x30 1 -> 0, GUI-manager modal stack 0 -> 0
+openstore: store 'k_ptat_yukastore': opened
+```
+
+### 15.5 Item 2 — the store recipe, executed in full for the first time
+
+Module `tat_m17ac` (Yuka Laka), §14.4's own calmest pick. `store_sync=2`, `party_pool_sync=0`
+(§6.3's precedent). Both stores opened; the client's first live scan agreed with the host's
+snapshot on all 27 keys (`live reseed`, `published=0` everywhere).
+
+| clause | measured |
+| --- | --- |
+| client `openstore` | **succeeded, first try** — the first time in six rounds |
+| client `buy g_i_drdshld005` | client stock 1 -> 0, `published=-1` once; host applied `remove of 1x` |
+| client `sell g_i_drdshld005` | client 0 -> 1, `published=1` once; host applied `insert of 1x` |
+| host re-buy of the client-sold item | **succeeded exactly once** |
+| host re-buy a SECOND time | correctly refused: `no stock matching that resref` — §6.4's double-sell defect does **not** recur |
+| host buy mirrored to the client | client removed x1, both converged to 0 |
+| close both GUIs, idle 150 s | **zero** new store lines on either side, zero re-inserts |
+| whole-session engine writes | client 1 insert / 2 removes, host 1 insert / 1 remove — every one accounted for |
+
+**One clause wobbled, and it is why `store_sync` stays 0.** Two seconds after the client published
+its buy, its outstanding ledger retired while the host's snapshot still said 1:
+
+```
+17:30:19  local remove of 1x detected, requesting (serial 1)   outstanding=-1 published=-1
+17:30:21  actual=0 belief=0 snap=1 outstanding=0  target=1 reconcile=1   <- ledger already retired
+17:30:22  inserted 'g_i_drdshld005' x1 into store 0x1A          <- re-inserted what it just bought
+17:30:24  snap=0 arrives -> reconcile=-1
+17:30:25  removed 'g_i_drdshld005' x1
+```
+
+Two spurious engine writes, self-healed in 4 seconds, bounded, and the same class as §7.1's
+"retired the outstanding ledger on the weakest possible evidence" — an outstanding entry must
+survive until the host's snapshot actually reflects it, not until a timer says so. It did not
+recur on the sell or on the host's own buy. It is not disqualifying on its own, but "flip the
+shipped default" was asked for on **three clean sessions in a row**, and this is one session with
+a known wobble.
+
+### 15.6 Item 3 — the host's warp crash: not module-specific, fully symbolicated, and bisected to
+### a party channel
+
+§14.5 recorded it as `warp tar_m02aa`-specific and unattributed. Neither holds.
+
+**Not module-specific.** It reproduced identically on `warp tat_m17ac` — same instruction, same
+`esp`, same image-range stack values, 3/3 more attempts (6/6 overall). It fires whether the HOST
+issues the warp or the CLIENT does and the host follows: it is the host's own transition that dies.
+
+**Fully symbolicated** against `tools/kotor1_0_3.db`:
+
+```
+0x006B5FEE  CSWGuiInGameEquip::UpdatePortraits + 0x48E     mov edx, dword ptr [eax]
+  ...preceded by  CClientExoApp::GetSWParty  0x005ED8B0
+                  CSWParty::GetCharacter(1)  0x006346C0  -> NULL
+  stack:  CSWGuiInGameEquip::Constructor + 0xA23,  CGuiInGame::Initialize + 0x680
+```
+
+`CSWParty::GetCharacter` is `index<0 or index>=[this] -> return 0`, else
+`GetCreatureByGameObjectID(entry[index].objectId)`. The caller guards with
+`cmp [edi],1 / jle skip` — i.e. it only asks for member 1 when the party count is **above 1**. So
+the fault is precisely: **the CLIENT-side party reports a member count above 1 while member 1's
+object no longer resolves**, and the new module's own GUI construction walks it.
+
+**Bisected, in two steps, both live:**
+
+1. New coop.ini `transition_close_client_world` (ON by default) gates
+   `Odyssey.CloseClientWorldIfServerModuleGone` — the only thing in this codebase that empties the
+   client's world early, and it logs 60-70 ms before the fault every time, so it was the prime
+   suspect. **Set to 0: the crash is byte-identical.** Ruled out, and the lever stays in the tree
+   for the next person.
+2. With `party_roster_sync=0`, `party_together_fix=0`, `hide_party_portraits=0`,
+   `party_follow_stall_recovery=0` and `party_select_host_only=0` all off, **both instances survived
+   the warp**, and survived a second one in the next cycle. The store round above then ran two more
+   warps in that configuration with no crash.
+
+So the crash **is ours**, it lives in one of those five keys, and §14.5's `party_roster_sync=0`
+attempt already eliminates that one on its own. The remaining suspects are `party_together_fix`
+(which writes the party table's member count, and "count above 1 with a dead member 1" is exactly
+its failure mode), `hide_party_portraits`, `party_follow_stall_recovery` and
+`party_select_host_only`. Narrowing to one costs one rig cycle per key and was not reached this
+round.
+
+⚠ Practical consequence for anyone running a store or travel recipe until it is fixed: turn those
+five keys off and the host survives module travel. That is what made §15.5 possible at all.
+
+### 15.7 Item 4 — flip the defaults: NOT DONE, deliberately
+
+`profiles/coop.ini.example`, `CoopConfig`/`AgentSettings` defaults, `docs/CONFIG.md`, `README.md`,
+`docs/roadmap-seamless.md`, `tools/package-README.md` and `docs/live-verification.md` are unchanged
+for both flags — `party_pool_sync` and `store_sync` stay at **0**.
+
+`party_pool_sync=2` met **every clause** of its own recipe this round, for the first time, with
+zero fabricated units. `store_sync=2` executed its full recipe for the first time and passed
+everything except the outstanding-ledger wobble in §15.5, on one session rather than three. The
+flip was asked for on both passing; it is one wobble and two sessions short, and the honest place
+to stop is here with the numbers written down.
+
+### 15.8 What this round bought
+
+- The party pool's remaining defect **root-caused to the plugin's deposit primitive** and closed,
+  with the arithmetic (`N x S`, not a sum) that also explains why five rounds of count=1 testing
+  kept signing it off.
+- A **second** party-pool defect found live and fixed: an expiry clock that ran through a
+  15-second blind window shorter than nothing.
+- The **five-round client store blocker cleared**, traced to this project's own menu-load path,
+  with a new `popmodal` verb and a full disassembly of the call behind it.
+- The **client store half executed end to end** — buy, sell, host re-buy, refusal on the second
+  re-buy, clean idle — for the first time since the channel was written.
+- The host warp crash moved from "unattributed, `tar_m02aa`-specific" to "ours, in one of five
+  named config keys, with the faulting engine read symbolicated and a config lever left in the
+  tree".

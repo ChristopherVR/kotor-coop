@@ -824,6 +824,20 @@ movie_relay=1
 # configured tick rate.
 frame_stats=0
 
+# BISECT LEVER. During a module transition there is a frame in which the SERVER's module is
+# already destroyed but the CLIENT still holds one, and the engine's own map init dereferences
+# the server module with no null check (docs/research/travel-map-init-crash.md). The plugin
+# closes the client's world in that window - the exact call the engine's own dump-player handler
+# makes, one frame earlier than the queued message would.
+#
+# 2026-08-29 (docs/research/shared-inventory-v2.md section 15): the HOST crashes deterministically
+# on ANY relocating warp, 5/5, at CSWGuiInGameEquip::UpdatePortraits+0x48E - the CLIENT-side party
+# reporting a member count above 1 while member 1's object no longer resolves, walked by the new
+# module's own GUI construction. The close above is the only thing that empties the client's world
+# early and it fires 60-70 ms before the fault every time. Set to 0 to run the A/B; leave at 1
+# otherwise, or travel-map-init-crash.md's own fault comes back.
+transition_close_client_world=1
+
 # Sync the shared party item pool (CSWPartyTable+0x118, the "party inventory" both players'
 # stash panels read from) both ways: an item deposited on one instance appears on the other's,
 # and a withdrawal removes it from both. Content-keyed (resref + charges/max charges/upgrades/

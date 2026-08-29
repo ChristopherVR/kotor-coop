@@ -48,6 +48,17 @@ public class SharedInventoryV2PumpTests
         /// FALSE, with an EMPTY dictionary. See KotorGameBridge.PartyPool.cs.</summary>
         public bool PoolScanFails { get; set; }
 
+        /// <summary>When true, <see cref="TryScanPartyPoolTotals"/> answers the way the real
+        /// bridge does when it CANNOT vouch for what it walked — an unresolvable id, an
+        /// unreadable pointer chain: it hands back the LAST GOOD sweep and returns TRUE, with
+        /// <see cref="LastPartyPoolScanWasStale"/> saying so. See
+        /// IPartyPoolBridge.LastPartyPoolScanWasStale for why the difference matters.</summary>
+        public bool PoolScanStale { get; set; }
+
+        public bool LastPartyPoolScanWasStale { get; private set; }
+
+        private Dictionary<PartyPoolStackKey, int> _lastGoodPool = [];
+
         /// <summary>0 = no store GUI open here this tick (the ordinary case).</summary>
         public uint OpenStoreId { get; set; }
 
@@ -79,10 +90,20 @@ public class SharedInventoryV2PumpTests
         {
             if (PoolScanFails)
             {
+                LastPartyPoolScanWasStale = true;
                 totals = new Dictionary<PartyPoolStackKey, int>();
                 return false;
             }
 
+            if (PoolScanStale)
+            {
+                LastPartyPoolScanWasStale = true;
+                totals = new Dictionary<PartyPoolStackKey, int>(_lastGoodPool);
+                return true;
+            }
+
+            LastPartyPoolScanWasStale = false;
+            _lastGoodPool = new Dictionary<PartyPoolStackKey, int>(Pool);
             totals = new Dictionary<PartyPoolStackKey, int>(Pool);
             return true;
         }
@@ -914,5 +935,92 @@ public class SharedInventoryV2PumpTests
         pump.Pump(Caps);
 
         Assert.Single(session.PoolIntents);
+    }
+    // ---- defect F: a blind window is not elapsed time -----------------------------------
+
+    /// <summary>
+    /// docs/research/shared-inventory-v2.md §15, watched happen 20 seconds into a live session.
+    ///
+    /// The client's reconcile queued ONE add of a frag grenade and the plugin applied it
+    /// correctly ("added 'g_w_fraggren01' x1 to the party pool"). But the item had just been
+    /// CREATED, and a fresh id cannot be resolved to a resref until the item-tag cache is
+    /// rebuilt — which <c>EnsureItemKnown</c> refuses to do for 15 seconds after the last
+    /// rebuild. Every scan in that window walked an id it could not resolve, refused to publish a
+    /// partial aggregate (§14.2, correctly) and handed back the LAST GOOD sweep — which still
+    /// said zero. The pump's own expected-movement entry expires after 10s, which is SHORTER, so
+    /// it was "presumed resolved" while it had in fact landed, re-queued, and applied a second
+    /// time: two grenades for one reconcile, then published back to the host as a local deposit.
+    ///
+    /// The rule this pins: a tick on which nothing could be OBSERVED is not elapsed time for any
+    /// expiry clock. Same fix and same reasoning as §12.1's own SlideExpectedTimers on the store
+    /// side, which had the identical shape for an unscannable shop.
+    /// </summary>
+    [Fact]
+    public void AReconcileIsNeverPresumedLostWhileTheScanCannotSeeAnythingAtAll()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new();
+        session.PoolSnapshot[Medpac] = 1;
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { }, expectedTimeoutMs: 50);
+
+        // Tick 1: the host says 1, the client's engine holds 0 -> one reconcile add, dispatched
+        // into the cheat channel.
+        pump.Pump(Caps);
+        Assert.Equal(1, DispatchPoolAppliesWithoutLanding(pump));
+
+        // It LANDS in the engine — but the item is brand new, so every scan from here on walks an
+        // id it cannot resolve and hands back the last good sweep, which still says zero.
+        bridge.Pool[Medpac] = 1;
+        bridge.PoolScanStale = true;
+
+        int extra = 0;
+        for (int i = 0; i < 12; i++)
+        {
+            Thread.Sleep(20);
+            pump.Pump(Caps);
+            extra += DispatchPoolAppliesWithoutLanding(pump);
+        }
+
+        // Against the pre-fix pump the entry expires on the very first of those windows and the
+        // identical add is queued again — the live round's second grenade.
+        Assert.Equal(0, extra);
+        Assert.Empty(session.PoolIntents);
+
+        // The moment the item-tag cache does rebuild and the scan can vouch for what it walked,
+        // the landing is seen, the entry is consumed, and NOTHING is reported as a local action.
+        bridge.PoolScanStale = false;
+        pump.Pump(Caps);
+        pump.Pump(Caps);
+
+        Assert.Empty(session.PoolIntents);
+        Assert.Equal(0, DispatchPoolAppliesWithoutLanding(pump));
+        Assert.Equal(1, bridge.Pool.GetValueOrDefault(Medpac));
+    }
+
+    /// <summary>A genuinely dropped apply must still self-heal — the slide above must not turn
+    /// the expiry off, only pause it for as long as nothing can be seen.</summary>
+    [Fact]
+    public void AReconcileThatTrulyNeverLandsStillExpiresOnceTheScanWorksAgain()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new();
+        session.PoolSnapshot[Medpac] = 1;
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { }, expectedTimeoutMs: 50);
+
+        pump.Pump(Caps);
+        Assert.Equal(1, DispatchPoolAppliesWithoutLanding(pump));
+
+        // The apply is lost. The scan is fine throughout, so the clock runs.
+        int requeued = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            Thread.Sleep(30);
+            pump.Pump(Caps);
+            requeued += DispatchPoolAppliesWithoutLanding(pump);
+        }
+
+        Assert.True(requeued > 0, "a dropped apply must be re-queued once its expiry genuinely elapses");
     }
 }
