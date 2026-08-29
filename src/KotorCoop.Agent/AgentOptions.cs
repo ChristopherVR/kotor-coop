@@ -1,5 +1,6 @@
 using System.Net;
 using KotorCoop.Protocol;
+using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
 
@@ -210,6 +211,16 @@ public sealed record AgentOptions
     /// <summary>Steam app id for Knights of the Old Republic.</summary>
     public const int SteamAppId = 32370;
 
+    /// <summary>
+    /// The rich-presence <c>connect</c> string this run was started from, when it was started
+    /// by Steam's "Join Game" rather than by a person. Decoded by
+    /// <see cref="SteamConnectStringRule"/> into <see cref="Mode"/>/<see cref="HostEndPoint"/>/
+    /// <see cref="Password"/> during parsing, so everything downstream sees an ordinary join
+    /// and no code path has to know Steam exists. Kept on the record purely so a log line can
+    /// say where the join came from.
+    /// </summary>
+    public string? SteamConnect { get; init; }
+
     public static AgentOptions Parse(string[] args)
     {
         if (args.Length == 0)
@@ -271,6 +282,7 @@ public sealed record AgentOptions
         bool loadViaMenuClicks = false;
         bool requireIdenticalSave = false;
         string password = string.Empty;
+        string? steamConnect = null;
         bool syncParty = true;
         bool syncProgression = true;
         bool menuConnect = false;
@@ -399,6 +411,54 @@ public sealed record AgentOptions
                     password = Next() ?? password;
                     break;
 
+                // Steam's "Join Game" launches the app with the inviting host's rich-presence
+                // connect string. Decoded here into the SAME three fields a typed
+                // `--join <host:port> --password <pw>` would have set, so the Steam path and
+                // the hand-typed path converge before anything downstream sees them.
+                //
+                // ⚠ UNTRUSTED INPUT: this arrives from another user's Steam client.
+                // SteamConnectStringRule is total and does no I/O; a string it rejects ends
+                // the run with the help text rather than being partly believed.
+                case "--steam-join":
+                    if (Next() is not { } connect
+                        || !SteamConnectStringRule.TryParse(
+                            connect, out string steamHost, out int steamPort, out string steamPassword))
+                    {
+                        Console.Error.WriteLine(
+                            "--steam-join needs a connect string of the form "
+                            + $"'{SteamConnectStringRule.Prefix}<host>:<port>[/<token>]'.");
+                        return new AgentOptions { Command = AgentCommand.Help };
+                    }
+
+                    // Re-bracket an IPv6 literal: the rule hands the host back bare, and
+                    // ParseEndPoint needs the brackets to know which colon is the port's.
+                    string steamTarget = steamHost.Contains(':')
+                        ? $"[{steamHost}]:{steamPort}"
+                        : $"{steamHost}:{steamPort}";
+
+                    try
+                    {
+                        hostEndPoint = ParseEndPoint(steamTarget, steamPort);
+                    }
+                    catch (Exception ex)
+                    {
+                        // ParseEndPoint resolves names, and this name came off the network.
+                        // Program.Main parses options OUTSIDE its own try, so an escaping
+                        // exception here would be an unhandled crash on a hostile string.
+                        Console.Error.WriteLine($"--steam-join: could not resolve '{steamHost}': {ex.Message}");
+                        return new AgentOptions { Command = AgentCommand.Help };
+                    }
+
+                    steamConnect = connect;
+                    mode = CoopMode.Join;
+
+                    if (steamPassword.Length > 0)
+                    {
+                        password = steamPassword;
+                    }
+
+                    break;
+
                 case "--no-party-sync":
                     syncParty = false;
                     break;
@@ -508,6 +568,7 @@ public sealed record AgentOptions
             LoadViaMenuClicks = loadViaMenuClicks,
             RequireIdenticalSave = requireIdenticalSave,
             Password = password,
+            SteamConnect = steamConnect,
             SyncParty = syncParty,
             SyncProgression = syncProgression,
             MenuConnect = menuConnect,
@@ -608,7 +669,7 @@ public sealed record AgentOptions
         LAUNCH OPTIONS
 
           --game-path <path>   game executable
-                               (default: the Steam install under Program Files (x86))
+                               (default: the DRM-free install under C:\GOG Games)
           --windowed           set FullScreen=0 in swkotor.ini first, backing it up.
                                Strongly recommended: you cannot watch a console behind a
                                fullscreen game.
@@ -642,6 +703,11 @@ public sealed record AgentOptions
                                password may join; on --join, the password to present.
                                A dropped client rejoins automatically when the link
                                returns, keeping its slot.
+          --steam-join <s>     join the session named by a Steam rich-presence connect
+                               string (kc1/<host>:<port>[/<token>]). This is what Steam's
+                               friends-list "Join Game" passes; equivalent to --join with
+                               the host, port and password it carries. Works without Steam
+                               running - it is just a decoder.
           --no-party-sync      do not reconcile the party. By default the host drives the
                                companions (Trask, Carth...) and clients freeze their own
                                copies and mirror the host's, so companions stay one

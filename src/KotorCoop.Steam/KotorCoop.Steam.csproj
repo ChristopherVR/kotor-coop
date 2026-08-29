@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    DELIBERATELY DEPENDENCY-FREE. No PackageReference and no ProjectReference:
+
+      * tools/package.ps1 THROWS on any file in the agent publish output that is not named
+        KotorCoop.*, because that is the rule the uninstaller uses to decide what it owns.
+        A Steamworks.NET or Facepunch.Steamworks package reference would drop a foreign
+        assembly there and break the release zip. So the ~8 flat-API entry points we need
+        are bound by hand (SteamNative), which costs less than it sounds and keeps the
+        published file list to KotorCoop.Steam.dll alone.
+
+      * steam_api64.dll is NOT bundled. Valve licenses the Steamworks redistributable to
+        partners shipping on Steam, not to mod authors, and the Steam client itself does not
+        contain a copy to borrow. The player supplies it or the whole feature stays inert.
+
+    See docs/research/steam-support.md §§10-11.
+  -->
+
+</Project>

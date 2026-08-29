@@ -393,7 +393,16 @@ public static class PackageInstaller
                 }
             }
 
-            Add(Path.Combine(root, @"Program Files (x86)\Steam\steamapps\common\swkotor"), "Steam (not supported: DRM refuses a second instance and the binary differs)", supported: false);
+            // ⚠ "the binary differs" was WRONG and is corrected here: the Steam copy is the
+            // SAME LINK as the DRM-free one, wrapped in Valve's SteamStub v3, which decrypts
+            // .text in place before the game's own entry point runs. Every hardcoded address
+            // is the same VA at runtime, and every section but .text is byte-identical on disk
+            // (docs/research/steam-support.md §§1-4). What is genuinely unsupported is
+            // narrower: the wrapper goes through the Steam client, so `--instance 2` cannot
+            // start a second local copy, and InstallDigest hashes the FILE, so a Steam install
+            // and a DRM-free one refuse each other on ExeDigest (§8). Two Steam players on two
+            // machines is fine.
+            Add(Path.Combine(root, @"Program Files (x86)\Steam\steamapps\common\swkotor"), "Steam (partly supported: same binary under a DRM wrapper, but no second local instance, and it cannot pair with a DRM-free install - docs/research/steam-support.md)", supported: false);
         }
 
         return found;

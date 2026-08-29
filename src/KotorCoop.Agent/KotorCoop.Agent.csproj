@@ -7,6 +7,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\KotorCoop.Session\KotorCoop.Session.csproj" />
+
+    <!--
+      Optional at RUNTIME, not at build time: KotorCoop.Steam is always published (it is a
+      KotorCoop.* file, so tools/package.ps1 is happy), but it loads nothing until something
+      asks it to and does nothing at all without a steam_api64.dll the player supplied.
+      docs/research/steam-support.md §§10-12.
+    -->
+    <ProjectReference Include="..\KotorCoop.Steam\KotorCoop.Steam.csproj" />
   </ItemGroup>
 
   <!--

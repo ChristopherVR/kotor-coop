@@ -87,6 +87,24 @@ stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302
 ; means "forward the port yourself" in the status line, not an error. 0 disables the attempt.
 upnp = 1
 
+; --- Steam friends-list invites ----------------------------------------------------
+; Lets a friend join straight from Steam's friends list ("Join Game") instead of being told
+; an IP: while you host, the agent publishes a `connect` rich-presence string, and accepting
+; an invite dials it. Works only between two people who both own KOTOR on Steam.
+;
+; ON by default and completely INERT unless all three of these are true, so leaving it on
+; costs a GOG install exactly one line in the log:
+;   1. steam_api64.dll sits beside KotorCoop.Agent.exe. This mod cannot ship one - Valve
+;      licenses the Steamworks redistributable to Steam partners, not to mod authors - so you
+;      supply it yourself (see the README's Steam section).
+;   2. Steam is running.
+;   3. the Steam account owns app 32370 (Knights of the Old Republic).
+;
+; Set to 0 to stop the agent from talking to Steam at all, including the "playing KOTOR"
+; presence that owning the app would otherwise show your friends.
+; See docs/research/steam-support.md.
+steam_invites = 1
+
 ; --- in-game chat overlay ---------------------------------------------------------
 ; An always-on, unobtrusive readout of chat (say <msg> in the ~ console). Lines fade out
 ; after a delay so the screen is clear the rest of the time.

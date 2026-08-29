@@ -243,6 +243,8 @@ internal static class AgentComposition
         // moment it is up — hosting immediately, joining once the handshake lands, and
         // only if the game is verifiably still at the main menu (never mid-world, never
         // again on a reconnect, never after a refused join).
+        string gameDirectory = installDirectory ?? string.Empty;
+
         CoopCommandDispatcher dispatcher = new(
             manager,
             bridge,
@@ -250,7 +252,8 @@ internal static class AgentComposition
             SettingsFor,
             loadConfig: () => TryLoadCoopConfig(memory.ProcessId),
             menuAutoLoad: () => _ = Task.Run(() => EnterTheWorld(), cts.Token),
-            gameDirectory: TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty);
+            gameDirectory: gameDirectory,
+            steam: ComposeSteam(config, gameDirectory, options));
 
         // How a session that started from the game's own menu gets into a world. Two paths, and
         // which one runs is re-read from coop.ini at the moment of the press (not captured at
@@ -397,6 +400,57 @@ internal static class AgentComposition
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Builds the Steam friends-list service, or returns null when there is nothing for it to
+    /// do. Null and "constructed but never activates" are both silent no-ops downstream; the
+    /// difference is only that null skips writing <c>steam_appid.txt</c> into the game
+    /// directory, which is worth avoiding for a player who has turned the feature off.
+    ///
+    /// ⚠ `?? true` — <c>steam_invites</c> is ON by default, and an absent coop.ini must mean
+    /// the default, not OFF. (docs/CONFIG.md footnote ³ is about exactly this class of
+    /// mistake: a key documented ON whose composition path silently falls back to false.)
+    /// ON is safe because every layer below is inert without a player-supplied
+    /// <c>steam_api64.dll</c> — see docs/research/steam-support.md §12.
+    /// </summary>
+    private static KotorCoop.Steam.SteamInviteService? ComposeSteam(
+        CoopConfig? config, string installDirectory, AgentOptions options)
+    {
+        if (!(config?.SteamInvites ?? true))
+        {
+            return null;
+        }
+
+        KotorCoop.Steam.SteamInviteService steam = new(enabled: true, Console.WriteLine);
+
+        // Only stamp steam_appid.txt into the game folder when there is a redistributable that
+        // could read it. `uninstall` removes KotorCoop.* and nothing else, so a file written
+        // for a feature the player never enabled would simply stay there forever.
+        if (installDirectory.Length > 0
+            && KotorCoop.Steam.SteamInviteService.IsRedistributablePresent(installDirectory))
+        {
+            KotorCoop.Steam.SteamInviteService.TryEnsureAppIdFile(
+                installDirectory, AgentOptions.SteamAppId, Console.WriteLine);
+        }
+
+        // A JOINER must be listening for callbacks before an invite can arrive, so bring Steam
+        // up eagerly for anything that is not already a host. A host activates lazily instead,
+        // on its first Publish — by which point it has an address worth publishing.
+        //
+        // A run started BY a Steam invite (--steam-join) says so, because "how did I get into
+        // this session" is the first question a confusing join raises.
+        if (options.SteamConnect is { Length: > 0 } connect)
+        {
+            Console.WriteLine($"steam: joining from an invite ({connect})");
+        }
+
+        if (options.Mode != CoopMode.Host)
+        {
+            steam.TryActivate();
+        }
+
+        return steam;
     }
 
     /// <summary>

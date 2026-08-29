@@ -75,8 +75,9 @@ every decision is said on screen with a code (`E_EXE`, `W_GIT`, `W_SAVE`, ...). 
 
 - Windows. The packaged zip needs only the .NET 10 runtime; building from source needs the .NET 10 SDK and the
   Visual Studio 2022 MSVC x86 C++ toolset (NativeAOT `win-x86` plugin, C chain loader).
-- **The DRM-free GOG build of KOTOR 1** (v1.0.3), not Steam — Steam's DRM refuses a second instance and its packed
-  binary defeats static analysis (no ASLR). KOTOR 2 is untouched.
+- **KOTOR 1, v1.0.3.** A DRM-free build is what everything here is developed and tested against. The Steam copy is
+  the *same binary* under a DRM wrapper and its addresses match at runtime, but it is only partly supported — see
+  [Steam](#steam) below. KOTOR 2 is untouched.
 - For two instances on one machine: a second copy of the game directory — the single-instance guard is just a named
   mutex, renamed in memory by `agent launch --instance 2`.
 
@@ -130,6 +131,47 @@ runtime — as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`, renames the 
 writes a `dinput8.chain` list. Each entry forwards to the next, the first proxy being ours; `coop.ini`'s
 `dinput8_next` overrides the plugin's next hop explicitly. `uninstall` restores the other mod under its original
 name.
+
+## Steam
+
+Full write-up: [docs/research/steam-support.md](docs/research/steam-support.md).
+
+**The Steam copy of KOTOR is the same binary this mod was built against.** Steam ships retail 1.0.3 wrapped in
+Valve's SteamStub v3, which encrypts only the `.text` section on disk and decrypts it in place before the game's own
+entry point runs. Everything else — the section table, `.rdata`, `.data`, `.rsrc`, the import table, the fixed
+`0x00400000` load address — is byte-identical to the DRM-free file. So every hardcoded engine address is correct on
+both at runtime, and the plugin loads the same way (`dinput8.dll` is a static import of both, and we start from
+`DirectInput8Create` — well after the wrapper has finished).
+
+What that leaves is a shorter list of real limitations:
+
+| | |
+| --- | --- |
+| **Steam ↔ Steam** | Expected to work. **Not yet run** — no live verification of the Steam build has been done. |
+| **Steam ↔ DRM-free** | **Refused today.** The compatibility handshake hashes the exe *file*, and the wrapped and unwrapped files hash differently even though the code is identical. Fix designed, not shipped. Both players should be on the same store. |
+| **Two copies on one PC** | Not possible from a Steam install: the wrapper goes through the Steam client. `agent launch --instance 2` needs a DRM-free build. Irrelevant for two players on two machines. |
+| **Steam overlay** | May own the `SwapBuffers` import we hook. The plugin refuses rather than corrupting it and says so in `kotorcoop-plugin.log`; if that happens, turn the overlay off for KOTOR (Properties → General). |
+
+### Friends-list invites ("Join Game")
+
+Optional, off unless you set it up, and **not yet live-verified**. When it is on, hosting publishes a Steam
+rich-presence `connect` string so friends can join from the friends list without being told an IP, and accepting an
+invite dials it through the normal join path (password included, so you are never asked for one you were never
+given).
+
+It needs `steam_api64.dll` beside `KotorCoop.Agent.exe`, and **this project cannot ship one** — Valve licenses the
+Steamworks redistributable to Steam partners, not to mod authors. Copy one from the Steamworks SDK or from any Steam
+game you own. Without it you get a single line in the log and everything else works exactly as before, which is why
+`steam_invites` is on by default. Both players need to own KOTOR on Steam; while the agent runs, Steam shows you as
+playing KOTOR.
+
+```ini
+steam_invites = 1     ; coop.ini; 0 stops the agent talking to Steam at all
+```
+
+```powershell
+KotorCoop.Agent.exe run --steam-join 'kc1/203.0.113.7:27140'   # what "Join Game" passes; also usable by hand
+```
 
 ## Building from source
 

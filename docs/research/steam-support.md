@@ -1,0 +1,537 @@
+# Steam support — the Steam build, and native Steam invites (2026-08-29)
+
+Two questions asked together: *does this mod work on the Steam copy of KOTOR at all*, and
+*can two players start a session from Steam's own friends list ("Join Game") instead of
+typing an IP*. They have very different answers. The first is settled — measured, from
+disk, on this machine. The second is a design with one hard external dependency that this
+wave deliberately does not ship.
+
+Tag key: **VERIFIED** = read from the binary here, from the source in this worktree, or
+covered by a passing test · **INFERRED** = deduced, not yet run · **NEEDS-LIVE** = must be
+confirmed on the running game.
+
+## Headline
+
+**The Steam build is the same binary we already reverse-engineered.** Not "the same
+version" — the same *link*, byte for byte, under a DRM wrapper. Steam ships retail 1.0.3
+wrapped in Valve's own SteamStub v3, which encrypts only the `.text` section on disk and
+decrypts it in place at load. Every other section — `.rdata`, `.data`, `.rsrc`, and the
+wrapper's own `.bind` — is byte-identical to the DRM-free exe this project's entire address
+database was built against. Same `ImageBase`, same section table, same PE timestamp, same
+import table. **Every hardcoded address in `Odyssey*.cs` is the same VA on the Steam build
+at runtime**, and no per-build address table is needed (§7 says what to build instead of
+one, and why). `PackageInstaller`'s current "Steam (not supported: … the binary differs)"
+label is wrong on its second clause and should be corrected.
+
+**What actually blocks Steam today is our own compatibility handshake, not the engine.**
+`ContentCompatibility` hard-refuses a session whose two `ExeDigest`s differ
+(`RefusalReason.Executable`), and `InstallDigest` hashes the file on disk — so a wrapped
+Steam host and an unwrapped host hash differently and refuse each other, even though the
+code they are about to hook is identical. Steam↔Steam is fine. **Steam↔DRM-free is refused,
+and that is a bug in the digest, not a real incompatibility** (§8).
+
+**Native Steam invites are feasible but need `steam_api64.dll`, which we must not ship.**
+The Steamworks flat API is the only way to publish a rich-presence `connect` string and
+receive `GameRichPresenceJoinRequested`, and it lives in a native DLL that Valve licenses
+to Steamworks partners, not to mod authors. The Steam *client* does not ship one (VERIFIED:
+searched; only individual games carry it). So phase 1 ships everything that does not need
+it — the connect-string codec, the config key, the CLI verb, the join wiring, and a
+lazily-bound facade that logs one line and does nothing when the DLL is absent — and phase 2
+adds the binding behind an explicit, user-supplied file. §§9–16.
+
+---
+
+# PART 1 — is the Steam build compatible?
+
+## 1. The two binaries, measured
+
+Both files present on this machine (VERIFIED):
+
+| | path | size | SHA-256 |
+| --- | --- | --- | --- |
+| DRM-free (the RE target) | `C:\GOG Games\Star Wars KOTOR (GOG)\swkotor.exe` | 4,395,008 | `D3432B32…173E381A` |
+| Steam | `C:\Program Files (x86)\Steam\steamapps\common\swkotor\swkotor.exe` | 4,395,008 | `34E6D971…39F34C88` |
+| the wrapped original, kept beside the unwrapped one | `C:\GOG Games\…\swkotor.rexa` | 4,395,008 | `34E6D971…39F34C88` |
+
+The third row is the whole proof in one line: **the DRM-free install directory still
+contains the wrapped binary it was made from, and that file is byte-identical to the one
+Steam ships today.** The "GOG" folder is a Steam install whose `swkotor.exe` was unwrapped
+in place, the original renamed aside. It also still carries Steam's own
+`32370_install.vdf`. So the exe this project has spent months disassembling is, provably,
+*the Steam exe with its DRM removed* — not a different release that merely happens to agree.
+
+PE headers agree on everything that matters (VERIFIED):
+
+```
+                     unwrapped            Steam
+machine              0x014C               0x014C
+timestamp            0x402BC2D9           0x402BC2D9    (2004-02-12 18:15:53 UTC)
+ImageBase            0x00400000           0x00400000
+AddressOfEntryPoint  0x002FB38D           0x0046D2ED    <-- the ONLY header difference
+.text    vaddr 0x00001000 vsize 0x0033B1D0 rawptr 0x00001000 rawsize 0x0033C000   (both)
+.rdata   vaddr 0x0033D000 vsize 0x0004FBFE rawptr 0x0033D000 rawsize 0x00050000   (both)
+.data    vaddr 0x0038D000 vsize 0x000A8498 rawptr 0x0038D000 rawsize 0x00017000   (both)
+.rsrc    vaddr 0x00436000 vsize 0x00036BD8 rawptr 0x003A4000 rawsize 0x00037000   (both)
+.bind    vaddr 0x0046D000 vsize 0x00056000 rawptr 0x003DB000 rawsize 0x00056000   (both)
+```
+
+There is no `.reloc`: the image is fixed-base at `0x00400000` and cannot be rebased, so an
+absolute address is an absolute address on both.
+
+Import tables are identical, entry for entry, including the same `firstThunk` RVAs
+(VERIFIED) — `OPENGL32`, `KERNEL32`, `USER32`, `GDI32`, `ole32`, `binkw32`, `mss32`,
+**`DINPUT8`** (`firstThunk` RVA `0x0033D000` on both), `GLU32`, `VERSION`, `IMM32`. Neither
+build imports `steam_api.dll`; the game has no Steamworks integration of its own at all
+(VERIFIED — no `steam_api*.dll` anywhere in the Steam KOTOR directory).
+
+## 2. The diff is exactly one section
+
+`cmp -l` reports 3,378,359 differing bytes — 77% of the file — which looks alarming until
+you plot where they are. Bucketed over 64 KiB (VERIFIED):
+
+```
+0x00000000   61359 / 65536   93.6%     <- 4 header bytes (AddressOfEntryPoint) + .text from 0x1000
+0x00010000 … 0x00320000  ~65280 / 65536  ~99.6%   <- .text, every bucket
+0x00330000   53037 / 65536   80.9%     <- .text ends at raw 0x33D000
+0x00340000 onwards            0 / 65536      0%   <- .rdata, .data, .rsrc, .bind: IDENTICAL
+```
+
+The differing range is precisely `.text`'s raw extent `[0x1000, 0x33D000)`, plus the
+four-byte entry-point field. Nothing else in the file differs — not one byte of `.rdata`
+(where the vtables and string literals every piece of our RE keyed off live), not one byte
+of `.data`, not one byte of `.rsrc`.
+
+Shannon entropy over 256 KiB samples says why (VERIFIED):
+
+```
+              unwrapped   Steam
+.text @0x001000   6.3946   7.9993      <- 8.0 bits/byte is ciphertext, not code
+.text @0x100000   6.2999   7.9994
+.text @0x200000   6.4402   7.9993
+.rdata @0x33D000  5.2536   5.2536      <- identical file, identical entropy
+.bind  @0x3DB000  7.9896   7.9896
+```
+
+`.text` in the Steam file is encrypted. `.text` in the unwrapped file is ordinary MSVC x86
+(22,150 `0xCC` alignment-padding bytes, versus 13,216 statistically-random ones in the
+ciphertext).
+
+## 3. The wrapper is SteamStub v3, not SecuROM
+
+Worth pinning down, because the two have very different runtime behaviour. The evidence
+(VERIFIED):
+
+* The wrapper section is named **`.bind`** and the Steam entry point lives inside it
+  (RVA `0x0046D2ED`, i.e. `.bind` + `0x2ED`). SecuROM 4/5 uses `.cms_t`/`.cms_d`; neither
+  section exists here.
+* Immediately before the entry point sit the bytes `EB 04 DE C0 DE C0` — a `jmp +4` over
+  the little-endian dword `0xC0DEC0DE`, landing exactly on `AddressOfEntryPoint`. That
+  marker-then-OEP layout is Valve's SteamStub signature, and `0xC0DEC0DE` occurs exactly
+  once in the whole 4.4 MB image.
+* The stub entry itself is `53 51 52 56 57 55 8B EC 81 EC 00 10 00 00 C7 85 …`
+  (`push ebx/ecx/edx/esi/edi/ebp; mov ebp,esp; sub esp,0x1000; mov [ebp-0x88], 0x0086F204`)
+  — the SteamStub variant-3 x86 prologue.
+* The `HKEY_LOCAL_MACHINE\SOFTWARE\BioWare\SW\SecuROM` block in Steam's
+  `32370_install.vdf` (with its "Please insert the … Play disc" strings) is a **retail
+  install-script leftover**: it writes registry strings, and there is no SecuROM code in
+  the image to read them. Do not be misled by it — it is the one piece of evidence that
+  points the wrong way.
+
+Why the distinction matters: SecuROM does continuous, in-play integrity verification and
+anti-debug work, and would be a genuine threat to inline hooks. SteamStub v3 is a
+load-time unpacker — it decrypts `.text`, restores imports, checks that Steam is running
+and the app is owned, and jumps to the OEP. It does not stay resident re-checksumming the
+code section. **INFERRED**, from the wrapper's known shape rather than from instrumenting
+it; the practical confirmation is §6's live checklist.
+
+## 4. Therefore: the addresses are the same, and this is provable rather than hopeful
+
+The three probes asked for, at their file offsets (`.text` has `rawptr == vaddr`, so
+file offset = RVA = VA − `0x400000`) — VERIFIED:
+
+| symbol | VA | unwrapped bytes | Steam bytes |
+| --- | --- | --- | --- |
+| `CSWSObject::StartDialog` | `0x004CF490` | `6A FF 68 9E 9D 71 00 64 A1 …` | `27 D5 D4 CB EE 4B CA DE 2B …` |
+| `CItemRepository::InsertItem` | `0x0055D2C0` | `F6 41 08 01 75 60 8B 44 24 08 …` | `C2 70 29 0B CF D3 05 C0 CE …` |
+| `CClientExoAppInternal::DoQuickSave` | `0x005F4B50` | `6A FF 68 50 5C 72 00 64 A1 …` | `34 E5 47 94 1E 20 B5 4A 19 …` |
+
+The unwrapped column is exactly what `docs/research/engine-api.md` describes: two of the
+three are the textbook MSVC SEH prologue `push -1; push <handler>; mov eax, fs:[0]`. The
+Steam column is ciphertext, as every byte of its `.text` is **on disk**.
+
+That is the important qualifier. The addresses match **at runtime**, because:
+
+1. SteamStub decrypts `.text` in place, at the same RVAs, in an image that cannot be
+   rebased; and
+2. the unwrapped file *is* that decryption, written back — which is what "the wrapped
+   original is still sitting beside it as `swkotor.rexa`" proves. An unwrapper produces its
+   output by performing the stub's own decryption and restoring the OEP; the fact that the
+   two files differ in `.text` **and nothing else** is the signature of exactly that
+   operation, and rules out any additional patching having been done to the copy we
+   reverse-engineered.
+
+So there is no per-build address divergence to abstract over. A disk-based signature scan
+of the Steam exe is impossible (there is nothing to match — it is ciphertext), and
+unnecessary.
+
+## 5. `dinput8.dll` loads identically
+
+`DINPUT8.dll` is a *static* import of both files at the same `firstThunk` (VERIFIED, §1), so
+the Windows loader maps our proxy from the application directory before the entry point
+runs, on both builds. `dinput8.dll` is not a KnownDLL, so the game directory wins the search
+order. Nothing about the wrapper changes this — the import descriptors live in `.rdata`,
+which is byte-identical.
+
+Ordering against the stub is favourable, and by accident rather than design (VERIFIED from
+`src/KotorCoop.Plugin/Exports.cs:208`): **we do not install hooks from `DllMain`.** The
+plugin starts from the `DirectInput8Create` export, which the game calls during its own
+startup — that is, long after the stub has finished decrypting `.text` and jumped to the
+OEP. If we hooked at load time we would be patching ciphertext and the stub would overwrite
+us; we do not, so the sequence is:
+
+```
+loader maps swkotor.exe + dinput8.dll (ours)      -> our DllMain, which installs nothing
+SteamStub entry 0x0086D2ED                        -> decrypts .text in place, restores IAT,
+                                                     ownership check, jmp OEP 0x006FB38D
+game startup -> DirectInput8Create (ours)         -> PluginHost.EnsureStarted, hooks installed
+```
+
+The same ordering is why a startup-time integrity check by the stub cannot see our patches:
+it runs before there are any.
+
+The chain loader (`src/KotorCoop.Loader`, `dinput8.chain`) is unaffected — it is a file-name
+convention among mods in the game directory and has nothing to do with the exe's DRM.
+
+## 6. Steam's overlay is the one real conflict, and the code already knows
+
+`GameOverlayRenderer.dll` (x86, 1,347,224 bytes) ships with the client and is injected into
+every Steam-launched game (VERIFIED it exists; injection is standard behaviour). KOTOR is an
+OpenGL title that presents through **`GDI32!SwapBuffers`**, and `FrameHook` gets its
+once-per-frame callback by overwriting the single IAT slot at `0x0073D00C` that holds it
+(`src/KotorCoop.Plugin/FrameHook.cs`).
+
+`FrameHook.Install` already validates the slot before touching it and names the culprit:
+
+```
+IAT slot 0x73D00C holds 0x... but gdi32!SwapBuffers is 0x...; something else already hooked it. Refusing.
+```
+
+with the comment *"If some other layer (the Steam overlay, for instance) has already wrapped
+it … refuse rather than corrupt the import."* So the failure mode is a clean refusal with a
+diagnostic, not corruption. Two outcomes are possible and only a live run separates them
+(**NEEDS-LIVE**):
+
+* the overlay detours `gdi32!SwapBuffers` **inline** (patches the function prologue in
+  gdi32) — then `GetProcAddress` returns the same address the IAT still holds, our check
+  passes, and both coexist with the overlay outermost;
+* the overlay rewrites the game's **IAT slot** — then we refuse and the mod is inert, and
+  the fix is either to install before the overlay does or to fall back to detouring
+  `gdi32!SwapBuffers` ourselves.
+
+Mitigation if it bites: telling players to disable the Steam overlay for KOTOR
+(Properties → General → uncheck "Enable the Steam Overlay while in-game") is a one-click
+fix and should be the documented answer before any code change.
+
+## 7. What to build instead of a per-build address table
+
+The abstraction the brief asked for — "a per-build address table keyed by exe hash, with
+signature scanning as the fallback" — is the right shape for a game with several different
+links. It is the wrong shape here: there is exactly one link, and the only variation is
+whether it is wrapped. Building a table would add a lookup, a failure mode, and a second
+source of truth for the ~9,700 addresses in `tools/kotor1_0_3.db`, in exchange for nothing.
+
+What is worth building instead is **build *recognition*** — a cheap, pure, offline check of
+which of the two forms an install is in, so the mod can say something useful rather than
+guess. Everything it needs is in the PE header:
+
+```
+wrapped (Steam)   : AddressOfEntryPoint falls inside a section named .bind, and the four
+                    bytes at (entry - 4) are DE C0 DE C0
+unwrapped         : AddressOfEntryPoint falls inside .text
+either            : ImageBase 0x00400000, five sections, TimeDateStamp 0x402BC2D9
+```
+
+That is what `SteamBuild` (implemented this wave, `src/KotorCoop.Memory/SteamBuild.cs`,
+unit-tested) does. It is used for diagnostics today and is the input to §8's fix. It reads a
+file; it never launches anything.
+
+If a second genuinely different link ever turns up (a real GOG-store release with a
+different layout, say), the escalation path is: keep the current addresses as the default
+set, add `SteamBuild`-style recognition for the new one, and only then introduce a table.
+Not before.
+
+## 8. THE ACTUAL BLOCKER: our own exe digest refuses cross-store play
+
+`InstallDigest.TryHashExecutable` FNV-1a-hashes **the file on disk**, and
+`ContentCompatibility` (`src/KotorCoop.Protocol/ContentCompatibility.cs:202`) treats a
+mismatch as fatal:
+
+```csharp
+// EXE — refuse. Every engine address the mod uses is absolute and per-binary; a
+// different exe means every write could land somewhere unrelated.
+if (BothKnow(local, remote, ContentDigest.Field.Exe) && local.ExeDigest != remote.ExeDigest)
+{
+    return Refuse(RefusalReason.Executable);
+}
+```
+
+There is no override for it — not `--require-identical-save`, not `auto_adopt_world`,
+nothing. The reasoning in that comment is exactly right *in general* and exactly wrong *for
+this pair*: the wrapped and unwrapped files hash differently and hook identically. So today
+(VERIFIED by reading the code, **NEEDS-LIVE** to see the refusal in a real session):
+
+| host | client | verdict |
+| --- | --- | --- |
+| Steam | Steam | works — both wrapped, same hash |
+| DRM-free | DRM-free | works — today's rig |
+| Steam | DRM-free | **refused, `RefusalReason.Executable`** |
+
+**The fix, for the wave that next bumps the protocol version.** Do not weaken the check;
+make it describe the right thing. Two options, in preference order:
+
+1. **Hash the live image, not the file.** The agent already has `ProcessMemory` open on the
+   game and attaches long after the stub has run, so `.text` is plaintext by then. Hashing
+   `[ImageBase+0x1000, +0x33D000)` out of the process makes wrapped and unwrapped agree
+   *because they genuinely are the same bytes*, and makes the check strictly stronger — it
+   would also catch a runtime patcher that a file hash misses. Costs one 3.4 MB read at
+   startup.
+2. **Add a second, wrapper-invariant field.** Keep `ExeDigest` as the file hash (demoted to
+   a note), add `ExeImageDigest` over `.rdata + .data + .rsrc + the section table + the PE
+   timestamp` — the bytes proven identical in §2 — and refuse on *that*. Cheaper (no process
+   read) but weaker: it stops noticing `.text` mods entirely.
+
+Both change what `ContentDigest` means on the wire and so must land with a
+`ProtocolConstants.Version` bump, which is why this wave designs it rather than shipping it.
+Until then, cross-store sessions are refused and the honest instruction is "both players on
+the same store".
+
+---
+
+# PART 2 — native Steam invites
+
+## 9. Which process talks to Steam
+
+The agent, not the plugin. Not a close call:
+
+* The plugin is x86 NativeAOT inside `swkotor.exe`; the Steamworks redistributable most
+  readily available is x64, and putting a Steam client connection inside the game process
+  buys nothing.
+* The agent is an ordinary x64 .NET process, already owns the session lifecycle
+  (`SessionManager`), already knows the host address and port, already has a public
+  address from STUN, and already exposes `CoopCommandDispatcher.OnConnectRequest(string)`
+  as *the* "something outside asked us to join this address" entry point — the same one the
+  in-game Co-op button, the browser panel and the `~` console all funnel through.
+* An incoming Steam join request therefore lands as one call into machinery that is already
+  written and already tested.
+
+## 10. Binding choice: none of them
+
+| option | licence | fit |
+| --- | --- | --- |
+| Steamworks.NET | MIT wrapper; **needs `steam_api64.dll`** | thin, 1:1, well-maintained, AOT-tolerable. Adds `Steamworks.NET.dll` to the publish output. |
+| Facepunch.Steamworks | MIT wrapper; **needs `steam_api64.dll`** | nicer API, generated interop, weaker trimming story, quieter maintenance. Adds `Facepunch.Steamworks.Win64.dll`. |
+| hand-rolled P/Invoke | none | ~8 exports. No new files in the publish output. |
+
+The deciding constraint is not the licence of the wrapper — both are MIT — it is
+`tools/package.ps1`:
+
+```powershell
+$stray = Get-ChildItem $agentPublishDir -File | Where-Object { $_.Name -notlike 'KotorCoop.*' }
+if ($stray) { throw "agent publish contains non-KotorCoop.* files the installer cannot track: ..." }
+```
+
+The packager *throws* on any file in the agent publish that is not named `KotorCoop.*`,
+because the uninstaller's rule for what it owns is "everything `KotorCoop.*`". A NuGet
+binding breaks the build; so would a bundled `steam_api64.dll`. **So: hand-rolled.** The
+flat API is a stable C ABI and we need very little of it:
+
+```
+SteamAPI_Init / SteamAPI_Shutdown
+SteamAPI_ManualDispatch_Init / _RunFrame / _GetNextCallback / _FreeLastCallback
+SteamAPI_SteamFriends_v017            (interface accessor)
+SteamAPI_ISteamFriends_SetRichPresence
+SteamAPI_ISteamFriends_InviteUserToGame
+SteamAPI_SteamUser_v023 + _GetSteamID
+```
+
+`SteamAPI_ManualDispatch_*` exists precisely so non-C++ bindings can pump callbacks without
+the C++ `CCallback` machinery, which is the part that makes hand-rolling tractable. The one
+callback we need is `GameRichPresenceJoinRequested_t`, id **337**
+(`k_iSteamFriendsCallbacks` 300 + 37), whose payload is `{ CSteamID m_steamIDFriend; char
+m_rgchConnect[256]; }`.
+
+## 11. The `steam_api64.dll` problem, stated plainly
+
+Every option above needs that file, and we cannot supply it:
+
+* Valve's Steamworks SDK licence permits redistribution by **Steamworks partners shipping
+  on Steam**. A mod distributed as a GitHub zip is not that. Bundling it is not something
+  this project should do on a "probably fine" reading.
+* The Steam **client** does not contain one (VERIFIED: a recursive search of
+  `C:\Program Files (x86)\Steam` finds `steam_api64.dll` only inside *individual games'*
+  directories — twelve of them on this machine — and never in the client's own `bin`,
+  `public`, or `package` folders). So we cannot borrow it from a guaranteed location.
+* `steamclient64.dll` **is** shipped by the client (26 MB, present) and is what
+  `steam_api64.dll` itself loads and forwards to. Driving it directly (`CreateInterface`,
+  pipe/user handshake) needs no redistribution at all — but it is an undocumented internal
+  interface with a version-suffixed name that Valve changes, and a broken co-op mod after a
+  client update is a bad trade for saving the user one file copy. Rejected for now; recorded
+  because it is the only zero-file option.
+
+**The phase-2 answer** is therefore: the user supplies the file, once, deliberately. Either
+`KotorCoop.Agent.exe install-steam --from <path-to-steam_api64.dll>` (copied from a
+Steamworks SDK download or from any Steam game they own), or simply "drop `steam_api64.dll`
+next to `KotorCoop.Agent.exe`". `NativeLibrary.TryLoad` finds it or it does not, and the
+whole feature stays inert either way — which is what §12's fail-soft rule is for.
+
+## 12. `steam_appid.txt` = 32370, and what it costs
+
+`SteamAPI_Init` needs to know which app it is. Outside a Steam-launched process that comes
+from a `steam_appid.txt` beside the executable. Writing `32370` there makes the agent
+present *as KOTOR*, which is what makes "Join Game" appear on a friend's entry.
+
+Consequences, all of which have to be accepted deliberately:
+
+* **The user must own KOTOR on Steam.** `SteamAPI_Init` fails for a non-owner. A GOG-only
+  player gets `false`, one log line, and the LAN/direct-IP path exactly as it works today.
+  This is the whole reason the feature is optional and fail-soft rather than a dependency.
+* **Steam will show the user as playing KOTOR** while the agent runs. Since the agent only
+  runs alongside the game, that is honest, but it is a visible side effect and belongs in
+  the README.
+* `steam_appid.txt` beside `KotorCoop.Agent.exe` means beside `swkotor.exe`, since the agent
+  is installed into the game root. That is also where the *game* would look if it were a
+  Steamworks app — it is not (§1), so there is no interference.
+* It is a plain 5-byte text file with a fixed content, so unlike `steam_api64.dll` there is
+  no licence question and the packager can ship it. It is inert without the DLL.
+
+## 13. The connect string, and why it is a versioned rule
+
+Steam's contract: a host calls
+`SetRichPresence("connect", "<arbitrary string, ≤256 bytes>")`; a friend who picks "Join
+Game" causes *their* client to launch the app with `+connect <that string>` on the command
+line, or — if the app is already running — to deliver
+`GameRichPresenceJoinRequested_t` carrying it. The string is opaque to Steam. It is,
+however, **attacker-influenced input from the network's point of view**: it arrives from
+another user's client and gets turned into a socket connection and a password. So it is
+parsed by a pure, total, versioned rule with no exceptions thrown, in the house `*Rule`
+style:
+
+```
+kc1/<host>:<port>[/<token>]
+```
+
+* `kc1/` — an explicit version prefix, so a future format can be recognised and rejected
+  rather than half-parsed. Anything that does not start with a known prefix is rejected.
+* `<host>` — IPv4/IPv6 literal or DNS name. Bracketed for IPv6, so the port colon is
+  unambiguous.
+* `<port>` — 1..65535, rejected otherwise.
+* `<token>` — optional, URL-safe base64 of the session password. Present so a private
+  session is joinable by invitation without the invitee being asked to type a password they
+  were never told; **absent** when the host has no password. It is obfuscation, not
+  encryption — Steam already restricts who can read a friend's rich presence, and the
+  threat model here is "a password should not be sitting in a plaintext field", not "resist
+  a determined attacker". Said plainly in the code so nobody mistakes it for security.
+
+Total length is bounded well under Steam's 256, and the rule refuses anything longer rather
+than emitting something Steam would silently truncate.
+
+`SteamConnectStringRule` (`src/KotorCoop.Session/`) implements `Format`/`TryParse` and is
+unit-tested against round-trips, IPv6, absent tokens, and every malformed shape.
+
+## 14. Rich presence only. Not lobbies.
+
+`ISteamMatchmaking` lobbies are the heavier alternative: a real Valve-hosted object with
+members, metadata, chat, and a `LobbyGameCreated` handshake. They buy three things we
+either already have or do not want:
+
+* *a place to advertise a session before it starts* — we do not have a pre-session concept;
+  a KotorCoop host is hosting the moment the agent says so;
+* *matchmaking with strangers* — explicitly not a goal; the LAN browser plus a typed
+  address is the existing story, and the whole point of this feature is inviting a *friend*;
+* *member lists and lobby chat* — we have peers and an in-game chat overlay.
+
+And they cost a whole second state machine that must be kept consistent with
+`SessionManager`, plus every "the lobby and the session disagree" bug that implies. Rich
+presence is one string, published on transition into hosting and cleared on transition out
+— the same diff-and-repost shape `PublicAddressAnnouncer` already uses.
+
+The one thing lobbies give that rich presence does not is a stable rendezvous identity
+independent of IP, which matters only if the transport becomes SDR (§15). If that ever
+happens, revisit; not before.
+
+## 15. Steam Datagram Relay — the interesting one, deliberately not now
+
+`docs/research/network-topology.md` §7 lists NAT traversal as the real missing piece for
+internet play, and records that relay and hole-punching are out of scope. `ISteamNetworking
+Messages` would solve it outright: connect by `CSteamID` instead of `IPEndPoint`, Valve's
+backbone does the relaying, no port forwarding, no UPnP, no STUN, and the connect string
+collapses to a SteamID.
+
+It is genuinely attractive and it is genuinely a large change, because it replaces the
+transport rather than sitting beside it: `UdpChannel` binds a socket and sends to an
+`IPEndPoint`, and `CoopHost`/`CoopClient`, the world-transfer TCP path, the LAN browser and
+the reconnect logic are all written against that. It also drags in the ownership
+requirement (§12) for *both* players, which contradicts the "GOG users keep working"
+constraint unless both transports are maintained forever.
+
+Recorded as phase 3 with a precondition: only worth doing once phase 2 has shown that
+enough of the player base has Steam for the second transport to pay for itself.
+
+## 16. Recommended design, phased
+
+**Phase 1 — everything that does not need the native DLL. (Implemented this wave.)**
+
+* `SteamConnectStringRule` — pure, versioned, unit-tested codec (§13).
+* `SteamBuild` — pure PE recognition of wrapped vs unwrapped (§7), unit-tested.
+* `steam_invites` in `coop.ini`, ON by default and inert without Steam (§12's fail-soft).
+* `KotorCoop.Steam` — a separate project holding the lazily-bound facade. Loads nothing at
+  construction; `NativeLibrary.TryLoad("steam_api64.dll")` on first use, one log line on
+  failure, every method a no-op afterwards. No NuGet, no bundled native file, output named
+  `KotorCoop.Steam.dll` so the packager's `KotorCoop.*` rule holds.
+* `--steam-join <connect-string>` on the agent, which decodes and dials through the existing
+  join path. Testable with no Steam client at all — it is just a CLI verb.
+* Host-side publish point wired to the same transition `PublicAddressAnnouncer` watches.
+
+**Phase 2 — the binding.** The `steam_api64.dll` P/Invoke surface (§10) behind a
+user-supplied file (§11); `SteamAPI_Init` with `steam_appid.txt`; `SetRichPresence("connect",
+…)` on host; manual-dispatch pump for callback 337 into `OnConnectRequest`; the
+`InviteUserToGame` path for inviting from our side. Ship the §8 digest fix in the same wave,
+since without it a Steam↔GOG invite would connect and then be refused.
+
+**Phase 3 — SDR**, only if phase 2 justifies it (§15).
+
+---
+
+## 17. What is verified, and what is not
+
+**VERIFIED (from disk, on this machine, read-only):** both binaries' sizes, SHA-256s, PE
+headers, section tables, import tables, entry points; that the diff is exactly `.text` plus
+the entry-point field; the entropy of both `.text`s; the three probe addresses; the
+SteamStub `0xC0DEC0DE` marker and its uniqueness; that the unwrapped install still holds the
+wrapped original as `swkotor.rexa` with Steam's own hash; that no `steam_api*.dll` exists in
+the Steam KOTOR directory or the Steam client; that `GameOverlayRenderer.dll` does; that
+`FrameHook` already refuses a pre-hooked IAT slot; that the plugin starts from
+`DirectInput8Create` and not `DllMain`; that `ContentCompatibility` hard-refuses an
+`ExeDigest` mismatch; that `tools/package.ps1` throws on a non-`KotorCoop.*` publish file.
+
+**INFERRED:** that SteamStub v3 performs no continuous integrity checking after the OEP
+jump (§3); that the runtime `.text` of the Steam build equals the unwrapped file's `.text`
+byte for byte (§4 — argued from the unwrap's provenance and the shape of the diff, not
+observed in memory).
+
+**NEEDS-LIVE, in priority order:**
+
+1. Launch the Steam build with the plugin installed and read `kotorcoop-plugin.log`. The
+   two things to look for are the `frame hook installed:` line (does the Steam overlay own
+   the IAT slot? §6) and whether the game survives its first hooked frame (does the stub
+   re-verify? §3).
+2. A Steam↔Steam session, to confirm §4's address parity end to end rather than by argument.
+3. A Steam↔DRM-free join, to see §8's `RefusalReason.Executable` refusal actually happen and
+   confirm the fix is needed.
+4. Whether a second Steam instance can be started at all — `--instance` relies on a renamed
+   mutex and the DRM-free build; the stub's own ownership check and Steam's one-copy rule
+   almost certainly forbid it (**INFERRED**). This affects the dev rig only, never two
+   players on two machines.
+
+None of these were run: this wave is research, design and non-live implementation, and the
+rig was not used.

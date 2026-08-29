@@ -47,6 +47,10 @@ namespace KotorCoop.Session;
 ///                               ; privacy note (contacts a third party).
 ///   upnp = 1                   ; HOST only: attempt a UPnP router port mapping. Default on,
 ///                               ; fails soft (0 to disable and forward the port by hand).
+///   steam_invites = 1          ; Steam friends-list "Join Game". Default on and INERT
+///                               ; without a player-supplied steam_api64.dll, without Steam
+///                               ; running, or without owning app 32370 - see
+///                               ; docs/research/steam-support.md.
 /// </code>
 /// </summary>
 public sealed record CoopConfig
@@ -429,6 +433,21 @@ public sealed record CoopConfig
     /// </summary>
     public bool Upnp { get; init; } = true;
 
+    /// <summary>
+    /// coop.ini <c>steam_invites</c>: whether the agent offers Steam's own friends-list
+    /// "Join Game" — a host publishes a <c>connect</c> rich-presence string, and an incoming
+    /// join request is routed onto the ordinary join path.
+    ///
+    /// ON by default and INERT unless three separate things are true: the player supplied a
+    /// <c>steam_api64.dll</c> (this project cannot redistribute Valve's), Steam is running,
+    /// and the account owns app 32370. A GOG install satisfies none of them, gets one log
+    /// line, and behaves exactly as it did before this key existed — which is why ON by
+    /// default is safe. Set to 0 to stop the agent from talking to Steam at all, including
+    /// the "you are playing KOTOR" presence that owning the app implies. See
+    /// docs/research/steam-support.md §12.
+    /// </summary>
+    public bool SteamInvites { get; init; } = true;
+
     // ── Digest-only keys ────────────────────────────────────────────────────────────────
     // Everything below is a PLUGIN-side key (docs/CONFIG.md's "Plugin-side keys" table,
     // PluginConfig.cs + per-controller reads) that this agent-side reader never acted on
@@ -705,6 +724,8 @@ public sealed record CoopConfig
                 ? stunServers
                 : PublicAddressDiscovery.DefaultServers,
             Upnp = !kv.ContainsKey("upnp") || IsTruthy(kv.GetValueOrDefault("upnp")),
+            SteamInvites = !kv.ContainsKey("steam_invites")
+                || IsTruthy(kv.GetValueOrDefault("steam_invites")),
 
             // Digest-only (see the field group's own doc comment above): plugin-owned keys,
             // parsed here purely so the outgoing BehaviourDigest can compare them.

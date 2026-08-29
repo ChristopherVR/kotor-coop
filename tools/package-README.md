@@ -106,11 +106,37 @@ see `docs/research/network-topology.md` if you want the full picture.
 
 - Windows, and the **.NET 10 runtime** (Windows offers to install it the first time
   `KotorCoop.Agent.exe` starts if it is missing).
-- **KOTOR 1 from GOG.** Steam's copy refuses to run twice and is packed differently; the
-  engine addresses this mod relies on are verified against the GOG binary only.
+- **KOTOR 1, v1.0.3.** A DRM-free (GOG) copy is what this is developed and tested against.
+  Steam's copy is the *same binary* under a DRM wrapper — the engine addresses are correct on
+  it too — but it is only partly supported; see **Steam** below.
 - For two players on **one** machine: a second copy of the game folder, with this installed
   into both. Start the second copy through the helper (it renames the game's single-instance
   lock): `KotorCoop.Agent.exe launch --instance 2 --game-path <second copy>\swkotor.exe`.
+
+## Steam
+
+Steam's KOTOR is retail 1.0.3 wrapped in Valve's DRM. The wrapper only encrypts the code
+section on disk and unpacks it before the game starts, so this mod's engine addresses are
+correct on the Steam copy too and `dinput8.dll` loads the same way. Three caveats:
+
+- **Both players should be on the same store.** A Steam install and a DRM-free one currently
+  refuse each other: the compatibility check compares the exe *file*, and the wrapped and
+  unwrapped files differ even though the code is identical. Steam + Steam is fine.
+- **Two copies on one PC needs a DRM-free build.** The Steam copy always goes through the
+  Steam client, which will not run it twice.
+- **If the Steam overlay is in the way**, `kotorcoop-plugin.log` will say
+  `frame hook NOT installed: ... something else already hooked it`. Turn the overlay off for
+  KOTOR (right-click the game → Properties → General) and relaunch.
+
+None of the above has been verified on a live Steam install yet — it is read off the binaries.
+
+**Friends-list invites** ("Join Game", `steam_invites` in `coop.ini`) let a friend join without
+being told an IP. Optional and off unless you set it up: copy a `steam_api64.dll` next to
+`KotorCoop.Agent.exe` (from the Steamworks SDK, or from any Steam game you own — this mod is
+not allowed to ship Valve's). Without that file you get one line in the log and everything else
+works exactly as before. Both players need to own KOTOR on Steam, and while the agent runs
+Steam will show you as playing KOTOR. Set `steam_invites = 0` to stop the agent talking to
+Steam at all.
 
 ## Configure
 
