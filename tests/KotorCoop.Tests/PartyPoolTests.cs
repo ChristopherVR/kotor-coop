@@ -385,11 +385,20 @@ public class PartyPoolTests
             requestedCharges: 50, requestedMaxCharges: 50, requestedUpgrades: 0, requestedWireFlags: 1));
     }
 
+    /// <summary>
+    /// ⚠ The flags row demands STOLEN (bit 2, wire) against an item that is not stolen, rather
+    /// than the bare "1 vs 0" it used to. Since docs/research/shared-inventory-v2.md §14 the
+    /// matcher narrows both sides to <see cref="PartyPoolIdentityMatcher.StackIdentityFlags"/> —
+    /// Stolen alone, the ONE bit the engine's own merge predicate at 0x00553CF0 compares — so a
+    /// difference in any OTHER flag bit is deliberately no longer a refusal, and a row asserting
+    /// that it is would be asserting the defect §13.2 recorded. Stolen still refuses, which is
+    /// what this row now pins.
+    /// </summary>
     [Theory]
     [InlineData(49u, 50u, 0u, 1u)]
     [InlineData(50u, 49u, 0u, 1u)]
     [InlineData(50u, 50u, 1u, 1u)]
-    [InlineData(50u, 50u, 0u, 0u)]
+    [InlineData(50u, 50u, 0u, 4u)]
     public void ASingleMismatchedFieldRefusesTheWholeMatch(
         uint requestedCharges, uint requestedMaxCharges, uint requestedUpgrades, uint requestedWireFlags)
     {
