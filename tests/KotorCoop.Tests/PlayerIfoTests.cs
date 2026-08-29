@@ -247,11 +247,17 @@ public sealed class PlayerIfoTests : IDisposable
         Assert.True(PlayerIfo.TryStagePlayer(game, save, out _));
 
         string pifo = Path.Combine(game, "Temp", "pifo.ifo");
-        string stash = Path.Combine(game, "Temp", PlayerIfo.CarriedCharacterFile);
+        string stash = Path.Combine(game, PlayerIfo.CarriedCharacterFile);
 
         Assert.True(File.Exists(stash));
         Assert.Equal(File.ReadAllBytes(pifo), File.ReadAllBytes(stash));
         Assert.NotEqual("pifo.ifo", PlayerIfo.CarriedCharacterFile);
+
+        // ⚠ AND NOT IN Temp\, which is the half that was learned the hard way. A MID-SESSION
+        // adoption empties that directory on its way through (measured live 2026-08-29: the
+        // stash was written, was gone two seconds later, and the login produced a blank
+        // character), so a stash beside the pifo is not a stash at all.
+        Assert.False(File.Exists(Path.Combine(game, "Temp", PlayerIfo.CarriedCharacterFile)));
     }
 
     [Fact]

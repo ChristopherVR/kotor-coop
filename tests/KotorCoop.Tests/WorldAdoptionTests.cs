@@ -360,9 +360,12 @@ public sealed class WorldAdoptionTests : IDisposable
         Assert.Equal(hostIdentity, adopted!.Value.SaveIdentity);
         Assert.Equal("the character you just created", adopted.Value.CharacterSource);
 
-        // Both files, because only the stash survives the loader's own FileCopy.
+        // Both files, because only the stash survives the loader's own FileCopy — and the
+        // stash is in the GAME ROOT, because a mid-session adoption empties Temp\ (measured
+        // live 2026-08-29; join_mode = newcharacter is mid-session by construction, so this
+        // caller is exactly the one that would have lost it).
         string pifo = Path.Combine(joinerGame, "Temp", "pifo.ifo");
-        string stash = Path.Combine(joinerGame, "Temp", PlayerIfo.CarriedCharacterFile);
+        string stash = Path.Combine(joinerGame, PlayerIfo.CarriedCharacterFile);
         Assert.True(File.Exists(pifo));
         Assert.True(File.Exists(stash));
         Assert.Equal(File.ReadAllBytes(pifo), File.ReadAllBytes(stash));
