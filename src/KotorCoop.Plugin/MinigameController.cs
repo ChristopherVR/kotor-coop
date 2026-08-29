@@ -81,6 +81,10 @@ internal static unsafe class MinigameController
     private static readonly bool PazaakDetectEnabled = PluginConfig.ReadBool("pazaak_detect", false);
 
     private static bool _wasInMiniGame;
+
+    /// <summary>The kind last written to the log, so the late-settle line in
+    /// <see cref="OnFrame"/> fires once per change rather than every frame.</summary>
+    private static MinigameKind _lastLoggedKind = MinigameKind.None;
     private static bool _wasInPazaak;
     private static bool _bannerLogged;
 
@@ -146,10 +150,23 @@ internal static unsafe class MinigameController
 
         if (inMiniGame == _wasInMiniGame)
         {
+            // ⚠ THE KIND CAN ARRIVE LATE. Live 2026-08-29 (docs/research/minigames.md §24.6):
+            // entering the real Taris swoop track logged "entered (Unknown)" even though
+            // m03mg.are's own MiniGame/Type is 1, so whatever CSWMiniGame+0x80 holds at the
+            // instant the pointer first goes non-null is not yet the loaded type. The kind is a
+            // local label only and gates nothing, so rather than guess at the fill order this
+            // logs the LATER settle too and lets a live pass read the answer off the log.
+            if (inMiniGame && LocalKind != _lastLoggedKind)
+            {
+                _lastLoggedKind = LocalKind;
+                PluginHost.Log($"minigame: kind settled to {LocalKind}");
+            }
+
             return;
         }
 
         _wasInMiniGame = inMiniGame;
+        _lastLoggedKind = LocalKind;
         PluginHost.Log(inMiniGame
             ? $"minigame: entered ({LocalKind}) — peers will park this player's phantom"
             : "minigame: exited — back in the shared world");
