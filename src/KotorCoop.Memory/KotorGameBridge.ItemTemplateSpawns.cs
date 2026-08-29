@@ -182,7 +182,7 @@ public sealed partial class KotorGameBridge
             }
 
             // Same trim/lowercase discipline every other resref this bridge reports goes
-            // through (RebuildItemTagCache's own tag read) — defensive here too, even though
+            // through (ApplyItemScanHits's own tag read) — defensive here too, even though
             // TryReadAsciiString already refused anything outside printable ASCII.
             string resref = SanitiseResref(raw);
             if (resref.Length > 0)

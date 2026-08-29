@@ -974,3 +974,203 @@ also `~Store`-matched, so 318 total includes both new tests).
 
 `dotnet test tests/KotorCoop.Tests --no-build` (full suite): **2,475/2,475 passed**, 0 failed, 0
 skipped.
+
+## 2026-08-29 — "the other player catches up in bursts": the cause was a full 180 MiB memory
+## scan running on the position thread once a second, and it is now off that thread entirely
+
+Player report: on the local rig (two instances, one machine, loopback) the other player's
+movement arrives in bursts rather than smoothly, and animations such as opening a container play
+slowly and stutter. This section is the measurement that found the cause and the numbers before
+and after.
+
+The premise every previous round of this document worked from — that the agent pump is cheap
+(0.3-0.5 ms average, ≤3.1 ms peak, measured 2026-08-22) and the game's frame time is fine
+(1.8-2.7 ms mean) — was true and also beside the point. Both instruments average. `lagstats`
+reports the pump's mean and peak over the last 100 ticks and `frame_stats` reports frame time,
+and NEITHER reports the thing a player actually watches: how often the position written into the
+game changes, and by how much when it does. That gap is what `perf_trace` was built to close.
+
+### New instrument: `coop.ini perf_trace`
+
+`PerfTrace` (`src/KotorCoop.Session/PerfTrace.cs`) writes one line a second into the agent log:
+ticks per second, tick cost split into the real-time path and the heavy world pass, a per-phase
+table of `PumpOnce`'s slices (`PumpPhase`: position, spawnring, combat, dialogue, party, loot,
+scriptitem, heavy) in both milliseconds and cross-process reads, packets and bytes both ways,
+and — the metric nothing had — the GAP and DISTANCE of each position change actually applied to
+a phantom. `MemoryTelemetry` (`src/KotorCoop.Memory/MemoryTelemetry.cs`) counts the
+`ReadProcessMemory`/`WriteProcessMemory` calls and bytes behind that, gated on a static bool so
+it costs one relaxed read per call when off.
+
+A stream that updates every 33 ms by 0.13 units and one that updates every 66 ms by 0.26 units
+have identical averages, identical pump costs and identical packet counts. The second is the
+bug. `phantom gap ... avg/peak` is what tells them apart.
+
+### What the first measured line said
+
+Rig, END_M01AA, both instances connected, nobody moving, `perf_trace=1`:
+
+```
+perf: 12.8 ticks/s, tick 49.57/636.4 ms avg/peak, position path 0.24 ms, heavy 1x 0.5/0.5 ms
+  | rpm 8466 reads/s (185994.0 KiB/s, 1 failed) | ...
+  | phases position 3.1ms/s; combat 2.1ms/s 1608r/s; party 2.2ms/s 1403r/s;
+    scriptitem 625.9ms/s 2500r/s 181.6MiB/s; heavy 0.5ms/s;
+```
+
+The pump was running at **12.8 Hz against a 30 Hz timer**, its average tick cost **49.6 ms
+against a 33 ms budget**, with individual ticks of **636 ms** (2,409 ms was seen). The real-time
+path itself cost **0.24 ms** and the heavy pass **0.5 ms** — so neither was the defendant. The
+per-phase table named it outright: `ScriptItemGrantPump` was consuming **626 ms of every second**
+and issuing **181.6 MiB/s** of `ReadProcessMemory` against the live game.
+
+### Root cause: `ListItems()` never honoured the rate limit every other item path did
+
+`ScriptItemGrantPump` samples the local PC's inventory once a second via
+`IItemBridge.ReadPossessedItems`, which was implemented as "sweep the whole world, then filter to
+one creature": `ReadPossessedItems` → `ListItems()` → `RebuildItemTagCache()` →
+`PatternScanner.ScanAll(ItemVtable, PrivateCommitted, 4096)`. That sweep reads roughly 180 MiB —
+every private committed region of the game — looking for a 4-byte vtable constant, and costs
+300-660 ms.
+
+`EnsureItemKnown` has guarded exactly this since it was written, and says why in its own doc: *"a
+sweep of the game's committed memory per miss per tick once dropped the pump to about 4 Hz and
+measured as peers lagging by seconds."* `ListItems()` simply did not go through that guard — it
+called `RebuildItemTagCache()` unconditionally. It was written for the interactive `items`
+console verb, where a fresh sweep is the right answer and a human is waiting; nothing noticed
+that a pump-thread caller had been routed through it.
+
+So once a second, between two position writes, the agent stopped for half a second. That is
+precisely "the other player freezes, then catches up in a burst" — and 180 MiB/s of
+`ReadProcessMemory` aimed at the game process is also the most plausible reason its own
+animations felt slow, since that traffic is kernel work charged against the target.
+
+### Three fixes, in the order they were measured
+
+**(1) `ListItems(bool force)`.** The interactive verb forces; `ReadPossessedItems` does not, and
+gets the same at-most-`ItemTagRebuildMs` (15 s) view every other pump-thread item lookup has
+always had.
+
+| | before | after |
+| --- | --- | --- |
+| pump rate | 12.8 ticks/s | **30.0-31.5 ticks/s** |
+| tick cost, mean | 49.6 ms | **0.65-0.91 ms** |
+| tick cost, worst | 636 ms | **1.4-3.5 ms** |
+| pump-thread read traffic | 186,000 KiB/s | **70 KiB/s** |
+
+The residual was a single ~660 ms tick every 15 s when the limit expired — and it exposed a
+second sweeper the first one had been masking: `party 415.9ms/s 242.9MiB/s` on that same tick.
+
+**(2) `ItemScanWorker` — sweeps run on a background thread.**
+(`src/KotorCoop.Memory/ItemScanWorker.cs`.) A sweep is pure reads: `ReadProcessMemory` on a
+handle is safe from several threads and `PatternScanner` holds no mutable state. The worker
+returns a plain list of addresses; the caller, on its own thread, does every follow-up read and
+every dictionary write that turns those into a cache. The expensive half is the half that is safe
+to move; the half that mutates bridge state never left the pump thread. One sweep at a time
+across all vtables — two concurrent 180 MiB sweeps would cost the game more than the inline
+version being replaced.
+
+Three caches now serve stale while refreshing: the item tag/address cache
+(`ServiceItemTagCache`), the world-object address cache (`CachedScan` — doors, placeables,
+encounters, 30 s TTL), and the creature address cache (`EnumerateCreatures`, 15 s TTL). Each
+still blocks on its FIRST build, deliberately, because every consumer reads an empty result as
+"there are none of these in the world" — and for the creature cache the empty case additionally
+keeps its blocking `EmptyCreatureCacheMs` path, because "no world yet" flips exactly once at load
+and the seamless-arrival hold is watching for it. `ScanCreatures` was split into the sweep and a
+new `ReadCreatures(List<nint>)` to make that division possible.
+
+**(3) `coop.ini dejitter` — shipped OFF.** A separate, real defect found while reading the
+receive path: every sender runs two free-running timers at the same nominal rate (`PumpOnce`
+publishes, `Tick` sends) and nothing synchronises them, so the stream alternates between
+repeating a sample and skipping one; the receiver stamped each arrival with its own wall clock,
+so a duplicate read as "stood still for a tick" and the next sample as "covered two ticks in
+one", which `SnapshotBuffer` faithfully interpolated into a pause and a double-speed dash.
+`SnapshotTimingRule` (`src/KotorCoop.Protocol/SnapshotTimingRule.cs`) quantises inter-arrival
+gaps to the sender's send period and declines to sample a byte-identical repeat, with a resync
+escape past `ResyncGapMs` (400 ms) and a drift bound of `MaxDriftMs` (120 ms).
+
+It is **unit-proven and not live-confirmed**, and is off by default for that reason.
+`SnapshotDejitterTests` carries both the fix and a CONTROL test asserting that the
+arrival-stamped path still bursts on the same stream, so the fix test cannot quietly stop
+measuring anything. The live A/B could not settle it: the only mover an unattended session has is
+a `tp` hop, which is genuinely discontinuous motion — the one shape this rule is not about. See
+"what could not be measured" below.
+
+### Before and after, 120 s walk per leg, both instances moving
+
+Both PCs driven along perpendicular legs by evenly-spaced `tp` hops (768 hops per instance per
+leg, `scratchpad/perfwalk.ps1`), `perf_trace=1`, `dejitter=0` in both legs so this table isolates
+the scan work alone.
+
+| | baseline (before) HOST | final HOST | baseline CLIENT | final CLIENT |
+| --- | --- | --- | --- | --- |
+| pump rate, mean | 12.8 ticks/s | **30.29** | 16.6 ticks/s | **30.29** |
+| pump rate, worst second | 3.3 ticks/s | **30.0** | 12.6 ticks/s | **29.5** |
+| tick cost, mean | 49.6 ms | **0.67 ms** | 30.1 ms | **0.89 ms** |
+| tick cost, worst peak | 2,409 ms | **8.4 ms** | 605.7 ms | **29.2 ms** |
+| position path, mean | 0.24 ms | 0.25 ms | 0.24 ms | 0.24 ms |
+| pump-thread read traffic | 186,000 KiB/s | **70 KiB/s** | 162,000 KiB/s | **~34 KiB/s** |
+
+The headline is the worst tick: **2,409 ms → 8.4 ms**, and a pump that never drops below 29.5 Hz
+where it previously spent whole seconds at 3.3 Hz. There is no longer any point in the tick at
+which the avatar stream stops.
+
+`rpm ... KiB/s` in the per-second lines still reads tens of MiB/s on some seconds after the fix.
+That is correct and is the background thread: `MemoryTelemetry` counts process-wide, deliberately,
+so the traffic is still reported honestly — it simply no longer lands between two position writes.
+
+### What could NOT be measured this pass
+
+- **The `dejitter` A/B.** With the `tp`-hop mover the host's mean applied gap improved
+  (102.8 → 83.2 ms) and both instances' mean applied step got smaller (host 0.60 → 0.39 u, client
+  0.54 → 0.34 u), but the client's mean gap regressed (111.1 → 192.2 ms). On a hop-driven stream a
+  longer hold between hops is arguably the CORRECT behaviour — the peer genuinely is standing
+  still between teleports, and declining to sample the repeats is the rule working as designed —
+  but that cannot be distinguished from a fault without continuous motion. **NEEDS-LIVE: a round
+  with a human actually walking**, which is still blocked on `docs/live-verification.md`'s
+  standing keystroke-injection gap.
+- **The burst-ratio metric is dominated by the mover, not the network.** Worst applied step held
+  at ~4.5 u across every leg, which is the mover's own leg reversal (8 hops × 0.5 u), not a
+  network burst. Recorded so nobody reads the ~8x ratio in these tables as a remaining defect.
+- **The container animation was not reproduced.** `useplaceable` on the demo save refused —
+  *"the sweep found 64 placeable(s) but none close enough"* — so the reported slow/stuttery
+  container open was never watched directly. The mirror path itself was read and is already
+  correctly latched per edge (`InteractionLockController.ReconcileContainerAnimations` diffs
+  through the pure `ContainerAnimationEdges`, and `CSWSObject::SetAnimation 0x004CCF60` has its
+  own dirty-on-change latch), so a per-tick re-trigger is ruled out by construction. The
+  remaining hypothesis, untested, is that it was the same starvation: 180 MiB/s of
+  `ReadProcessMemory` aimed at the game is kernel work charged against it, and an animation is
+  the most visible thing in a frame that arrives late.
+- **No plugin-side change was made and none was needed.** `frame_stats` was on throughout; the
+  plugin's per-frame cost was never the suspect and was not measured to have changed.
+- **`ItemTagRebuildMs`, `ObjectScanCacheMs`, `CreatureCacheMs` and `ScriptItemGrantSampleIntervalMs`
+  were all left exactly as they were.** The fix is about which THREAD the work happens on, not
+  how often; changing a TTL as well would have made the measurement unattributable.
+
+### A consequence worth stating plainly
+
+`ScriptItemGrantPump`'s detection latency is now bounded by `ItemTagRebuildMs` (15 s) rather than
+by its own 1 s sample interval, because a script-created item body cannot appear in a listing
+until a sweep has found its address. It was never really 1 s — the sweep it was forcing every
+second is exactly what made the session unplayable — so this is the honest version of a number
+that was previously being paid for out of everyone's frame rate.
+
+### Verification tags (this pass)
+
+- **LIVE-VERIFIED 2026-08-29**: the before/after table above; two 120 s walking legs plus a
+  20 s and a 45 s idle leg, both instances, on the demo save (END_M01AA).
+- **LIVE-VERIFIED 2026-08-29**: `tools/verify.ps1` after the change — **43 passed, 6 failed**,
+  against this document's own stated baseline of ~40-42 pass / 7-9 fail. No check regressed.
+- **VERIFIED (unit test, this pass)**: `SnapshotTimingRuleTests` (11 tests) and
+  `SnapshotDejitterTests` (6 tests, one of them the control).
+- **VERIFIED (source, this pass)**: `ListItems()`'s unconditional `RebuildItemTagCache()` and
+  `EnsureItemKnown`'s pre-existing rate limit on the same cache.
+- **NEEDS-LIVE, still open**: `dejitter=1` with a human walker; the container-animation report.
+
+### Test suite and build
+
+`pwsh src/KotorCoop.Plugin/build.ps1 -Install` (both game dirs, `dinput8.dll` byte-identical to
+the publish output in each), `dotnet build` clean with 0 warnings.
+
+`dotnet test tests/KotorCoop.Tests` (full suite): **2,756/2,757 passed**. The single failure,
+`SharedInventoryV2LoopbackTests.ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay`, passes
+on its own (16/16 in that class) — a fixed-port loopback flake of the kind this document's
+sibling notes already list, untouched by anything in this pass.

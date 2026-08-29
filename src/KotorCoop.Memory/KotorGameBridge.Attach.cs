@@ -1,4 +1,4 @@
-// Engine-symbol offsets (CSWSCreature/CSWSObject fields, verified live against this build)
+﻿// Engine-symbol offsets (CSWSCreature/CSWSObject fields, verified live against this build)
 // plus discovery/scan/attach: enumerating creatures, confirming they are still live, and
 // resolving the player and the in-process plugin.
 using KotorCoop.Protocol;
@@ -161,11 +161,37 @@ public sealed partial class KotorGameBridge
         // TTL keeps the melt-down protection (still at most ~1 scan/s while worldless,
         // the same rate the resolve limiter allows) without ever hiding a fresh world.
         int ttlMs = _creatureCache is { Count: 0 } ? EmptyCreatureCacheMs : CreatureCacheMs;
-        if (_creatureCache is null || nowMs - _creatureCacheAtMs >= ttlMs)
+
+        // A sweep that finished on the background thread is turned into creature records here,
+        // on this thread — the reads-per-hit half was never the expensive part.
+        if (_creatureCache is { Count: > 0 } && ItemScanWorker.TryTakeHits(CreatureVtable, out List<nint> fresh))
         {
-            _creatureCache = ScanCreatures();
+            _creatureCache = ReadCreatures(fresh);
             _creatureCacheAtMs = nowMs;
             _liveCache = null;
+        }
+        else if (_creatureCache is null || _creatureCache.Count == 0)
+        {
+            // ⚠ BLOCKING, and deliberately. This is the "no world yet" path the warning above
+            // is about: it flips exactly once, at load, and the seamless-arrival hold is
+            // watching for it. Handing back a stale nothing while a background sweep runs
+            // would reintroduce precisely the arrival delay EmptyCreatureCacheMs exists to
+            // prevent. It is also the cheapest case to block on — there is no world.
+            if (_creatureCache is null || nowMs - _creatureCacheAtMs >= ttlMs)
+            {
+                _creatureCache = ScanCreatures();
+                _creatureCacheAtMs = nowMs;
+                _liveCache = null;
+            }
+        }
+        else if (nowMs - _creatureCacheAtMs >= ttlMs)
+        {
+            // In-session refresh: serve the addresses we have and let the sweep run off the
+            // pump thread. Creature addresses are stable while a module is loaded (Invalidate
+            // is what a load calls), so a list a little past its TTL is the same list — and
+            // the alternative, measured on the rig (2026-08-29, perf_trace), was an ~800 ms
+            // tick in which no remote player's position reached the game at all.
+            ItemScanWorker.Request(CreatureVtable, 512);
         }
 
         // ⚠ CONFIRMED FAR MORE OFTEN THAN IT IS SCANNED, and that is the point. The scan
@@ -426,12 +452,37 @@ public sealed partial class KotorGameBridge
     {
         long nowMs = Environment.TickCount64;
 
-        if (_scanCache.TryGetValue(vtable, out (List<nint> Hits, long AtMs) cached)
-            && nowMs - cached.AtMs < ttlMs)
+        // A sweep that finished on the background thread is adopted here, on the caller's
+        // thread, before anything else looks at the cache.
+        if (ItemScanWorker.TryTakeHits(vtable, out List<nint> fresh))
         {
+            _scanCache[vtable] = (fresh, nowMs);
+            return fresh;
+        }
+
+        if (_scanCache.TryGetValue(vtable, out (List<nint> Hits, long AtMs) cached))
+        {
+            // ⚠ STALE IS SERVED, and a refresh is merely REQUESTED. This used to block for a
+            // full ~180 MiB sweep the moment the TTL expired — measured at 554 ms inside one
+            // heavy pass on the rig (2026-08-29, perf_trace), which is 554 ms during which no
+            // remote player's position was written into the game. These are addresses of
+            // objects that "do not move while a module is loaded" (this cache's own premise),
+            // so handing back a list a few hundred milliseconds past its TTL while the
+            // replacement is on its way is strictly inside the contract the cache already had.
+            // A module change clears the cache outright, which is the case that actually
+            // invalidates an address.
+            if (nowMs - cached.AtMs >= ttlMs)
+            {
+                ItemScanWorker.Request(vtable, limit);
+            }
+
             return cached.Hits;
         }
 
+        // Nothing cached at all: block once. Every consumer of this list treats "empty" as
+        // "there are none of these in the world", so serving an empty first answer would have
+        // doors, placeables and encounters all reporting themselves absent for as long as the
+        // first sweep took.
         PatternScanner scanner = new(_memory);
         List<nint> hits = scanner.ScanAll(
             BytePattern.FromBytes(BitConverter.GetBytes(vtable)), ScanScope.PrivateCommitted, limit);
@@ -448,12 +499,23 @@ public sealed partial class KotorGameBridge
 
     private List<CreatureRef> ScanCreatures()
     {
-        List<CreatureRef> creatures = [];
-
         BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(CreatureVtable));
         PatternScanner scanner = new(_memory);
 
-        foreach (nint address in scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 512))
+        return ReadCreatures(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, limit: 512));
+    }
+
+    /// <summary>
+    /// Turns one sweep's raw hit addresses into creature records. Split out of
+    /// <see cref="ScanCreatures"/> so the SWEEP can run on <see cref="ItemScanWorker"/>'s
+    /// thread while this — the part that reads fields and builds objects — stays on the
+    /// caller's, which is the same split the item cache makes for the same reason.
+    /// </summary>
+    private List<CreatureRef> ReadCreatures(List<nint> hits)
+    {
+        List<CreatureRef> creatures = [];
+
+        foreach (nint address in hits)
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId))
             {

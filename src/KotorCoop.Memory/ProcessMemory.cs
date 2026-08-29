@@ -114,8 +114,10 @@ public sealed class ProcessMemory : IDisposable
 
         fixed (byte* pointer = buffer)
         {
-            return NativeMethods.ReadProcessMemory(_handle, address, pointer, (nuint)buffer.Length, out nuint read)
+            bool ok = NativeMethods.ReadProcessMemory(_handle, address, pointer, (nuint)buffer.Length, out nuint read)
                 && read == (nuint)buffer.Length;
+            MemoryTelemetry.NoteRead(buffer.Length, ok);
+            return ok;
         }
     }
 
@@ -213,6 +215,7 @@ public sealed class ProcessMemory : IDisposable
 
         fixed (byte* pointer = data)
         {
+            MemoryTelemetry.NoteWrite(data.Length);
             return NativeMethods.WriteProcessMemory(_handle, address, pointer, (nuint)data.Length, out nuint written)
                 && written == (nuint)data.Length;
         }

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -127,6 +127,29 @@ public sealed record CoopConfig
     /// unevenly. Negative means "keep the built-in default".
     /// </summary>
     public int InterpolationDelayMs { get; init; } = -1;
+
+    /// <summary>
+    /// coop.ini <c>dejitter</c>, OFF by default — file received avatar snapshots on a
+    /// regularised playback timeline (inter-arrival gaps quantised to the sender's send
+    /// period, byte-identical repeats not sampled at all) rather than stamping each one with
+    /// the moment it happened to land. See
+    /// <see cref="KotorCoop.Protocol.SnapshotTimingRule"/>: the sender's pump timer and its
+    /// send timer are two free-running clocks at the same nominal rate, and the beat between
+    /// them is what a player sees as a peer moving in bursts. Unit-proven but not yet
+    /// live-confirmed — see <see cref="SessionSettings.DejitterEnabled"/> for why the live A/B
+    /// could not settle it and what a conclusive round needs.
+    /// </summary>
+    public bool Dejitter { get; init; }
+
+    /// <summary>
+    /// coop.ini <c>perf_trace</c>, OFF by default — once-a-second pump/network/phantom
+    /// telemetry into the agent log (tick count, tick cost split by phase, cross-process
+    /// read/write calls and bytes, packets and bytes both ways, and the applied per-peer
+    /// phantom position delta). A rig-measurement instrument, not a player-facing setting:
+    /// it turns on <see cref="KotorCoop.Memory.MemoryTelemetry"/>'s counting and writes a line
+    /// a second forever. See <c>PerfTrace</c> and docs/research/lag-audit.md.
+    /// </summary>
+    public bool PerfTrace { get; init; }
 
     /// <summary>
     /// Mirror a peer's pause into this game. On by default. Turn it off if a pause ever
@@ -659,6 +682,8 @@ public sealed record CoopConfig
             InterpolationDelayMs = int.TryParse(kv.GetValueOrDefault("interp_ms"), out int interp)
                 ? Math.Clamp(interp, 0, 500)
                 : -1,
+            Dejitter = IsTruthy(kv.GetValueOrDefault("dejitter")),
+            PerfTrace = IsTruthy(kv.GetValueOrDefault("perf_trace")),
             PauseSync = !kv.ContainsKey("pause_sync") || IsTruthy(kv.GetValueOrDefault("pause_sync")),
             HidePeersInMinigame = !kv.ContainsKey("minigame_hide_peer")
                 || IsTruthy(kv.GetValueOrDefault("minigame_hide_peer")),

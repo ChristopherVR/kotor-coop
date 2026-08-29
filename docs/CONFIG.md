@@ -1,4 +1,4 @@
-# Configuration
+﻿# Configuration
 
 `coop.ini` lives beside the game executable and is parsed by two independent readers that
 never talk to each other: the external agent (`src/KotorCoop.Session/CoopConfig.cs`) and the
@@ -51,6 +51,8 @@ actually runs with.
 | `menu_button` | ON⁷ | show the in-game Co-op menu button | [menu-frame-hook.md](research/menu-frame-hook.md) |
 | `tick_rate` | `0` (keeps the built-in rate) | state send rate in Hz, clamped 5-120 | [lag-audit.md](research/lag-audit.md) |
 | `interp_ms` | `-1` (keeps the built-in delay) | how far in the past peers render, ms, clamped 0-500 | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
+| `dejitter` | OFF | file received avatar snapshots on a regularised playback timeline instead of raw arrival times | [lag-audit.md](research/lag-audit.md) |
+| `perf_trace` | OFF | once-a-second pump/network/phantom telemetry into the agent log (rig measurement) | [lag-audit.md](research/lag-audit.md) |
 | `pause_sync` | ON | mirror a peer's pause into this game | — |
 | `minigame_hide_peer` | ON | park a peer's phantom while they race/man a turret | [minigames.md](research/minigames.md) |
 | `minigame_spectate` | OFF | hand the camera to a racing/turret peer (not yet wired) | [minigames.md](research/minigames.md) |

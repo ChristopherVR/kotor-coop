@@ -1,4 +1,4 @@
-using KotorCoop.Protocol;
+﻿using KotorCoop.Protocol;
 using KotorCoop.Session;
 using Xunit;
 
@@ -8,13 +8,23 @@ public class SnapshotBufferTests
 {
     private const int Delay = 100;
 
+    /// <summary>
+    /// Every test in THIS class exercises the interpolation arithmetic against hand-made
+    /// timestamps that are deliberately not a real send cadence (0 ms, 100 ms and 5 s gaps at
+    /// a nominal 33 ms period), so they are built with the arrival-stamped behaviour and say
+    /// exactly what they mean. The regularised timeline the shipping default uses has its own
+    /// tests — <see cref="SnapshotDejitterTests"/> and <see cref="SnapshotTimingRuleTests"/> —
+    /// rather than being smuggled into assertions written to pin down something else.
+    /// </summary>
+    private static SnapshotBuffer NewBuffer() => new(Delay, dejitter: false);
+
     private static PlayerState At(float x, string module = "end_m01aa", float facing = 0f) =>
         new(new Vector3f(x, 0f, 0f), facing, module, 100, 0);
 
     [Fact]
     public void InterpolatesBetweenBracketingSnapshots()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f), 1000);
         buffer.Push(2, "Malak", At(10f), 1100);
@@ -29,7 +39,7 @@ public class SnapshotBufferTests
     [Fact]
     public void HoldsNewestRatherThanExtrapolating()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f), 1000);
         buffer.Push(2, "Malak", At(10f), 1100);
@@ -43,7 +53,7 @@ public class SnapshotBufferTests
     [Fact]
     public void ClampsToOldestWhenRenderTimePredatesBuffer()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(4f), 1000);
         buffer.Push(2, "Malak", At(8f), 1100);
@@ -56,7 +66,7 @@ public class SnapshotBufferTests
     [Fact]
     public void ModuleChangeSnapsInsteadOfInterpolating()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f, "end_m01aa"), 1000);
         buffer.Push(2, "Malak", At(90f, "tar_m02aa"), 1100);
@@ -72,7 +82,7 @@ public class SnapshotBufferTests
     [Fact]
     public void FacingInterpolatesTheShortWayAroundZero()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         float justBelowFull = Angles.TwoPi - 0.2f;
         buffer.Push(2, "Malak", At(0f, facing: justBelowFull), 1000);
@@ -90,7 +100,7 @@ public class SnapshotBufferTests
     [Fact]
     public void OutOfOrderPacketsAreDiscarded()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f), 1000);
         buffer.Push(2, "Malak", At(10f), 1100);
@@ -104,7 +114,7 @@ public class SnapshotBufferTests
     [Fact]
     public void ImplausibleStatesAreIgnored()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         // What a wrong offset profile produces. It must never reach the render path.
         buffer.Push(2, "Malak", new PlayerState(new Vector3f(float.NaN, 0f, 0f), 0f, "m", 1, 0), 1000);
@@ -115,7 +125,7 @@ public class SnapshotBufferTests
     [Fact]
     public void StalePeersArePruned()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f), 1000);
         Assert.Equal(1, buffer.PeerCount);
@@ -127,7 +137,7 @@ public class SnapshotBufferTests
     [Fact]
     public void TracksMultiplePeersIndependently()
     {
-        SnapshotBuffer buffer = new(Delay);
+        SnapshotBuffer buffer = NewBuffer();
 
         buffer.Push(2, "Malak", At(0f), 1000);
         buffer.Push(3, "Bastila", At(50f), 1000);

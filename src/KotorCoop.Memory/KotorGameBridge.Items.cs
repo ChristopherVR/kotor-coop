@@ -1,4 +1,4 @@
-// Item identity and the tag/address cache it is built on: resolving an inventory slot's
+﻿// Item identity and the tag/address cache it is built on: resolving an inventory slot's
 // engine object id down to a blueprint resref, reading a live item's per-instance identity
 // (stack size, charges, upgrades), and listing every item body the sweep can see.
 using KotorCoop.Protocol;
@@ -121,15 +121,71 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public string LastItemScanNote { get; private set; } = "no item sweep yet";
 
-    private void RebuildItemTagCache()
+    /// <summary>The background sweeper — see <see cref="ItemScanWorker"/> for why the scan does
+    /// not run on the caller's thread. Created lazily because <c>_memory</c> is not available
+    /// until the bridge has attached.</summary>
+    private ItemScanWorker? _itemScanWorker;
+
+    private ItemScanWorker ItemScanWorker => _itemScanWorker ??= new ItemScanWorker(_memory);
+
+    /// <summary>
+    /// Brings the item tag/address caches up to date WITHOUT ever blocking the caller, and
+    /// returns whether they are usable at all yet.
+    ///
+    /// Three states. The caches have never been built (attach, or a module change cleared
+    /// them): sweep inline, once, and accept the stall — nothing is being rendered from this
+    /// data yet and every caller would otherwise have to cope with an empty inventory, which
+    /// <c>ScriptItemGrantPump</c> in particular must never see (an empty baseline followed by a
+    /// full one reads as "a script just granted the player everything they own"). A finished
+    /// background sweep is waiting: apply it, which is a few thousand small reads and costs
+    /// tens of milliseconds rather than hundreds. Otherwise: ask for a sweep if the view has
+    /// gone stale, and carry on with what we have.
+    /// </summary>
+    private bool ServiceItemTagCache()
+    {
+        if (_itemTagsBuiltAtMs == 0)
+        {
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            RebuildItemTagCacheNow();
+            return true;
+        }
+
+        if (ItemScanWorker.TryTakeHits(ItemVtable, out List<nint> hits))
+        {
+            ApplyItemScanHits(hits);
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            return true;
+        }
+
+        if (Environment.TickCount64 - _itemTagsBuiltAtMs >= ItemTagRebuildMs)
+        {
+            ItemScanWorker.Request(ItemVtable, ItemScanLimit);
+        }
+
+        return _itemAddresses.Count > 0;
+    }
+
+    /// <summary>The blocking sweep. Only two callers may reach it: the first build after attach
+    /// (see <see cref="ServiceItemTagCache"/>) and an interactive console verb with a human
+    /// waiting. Everything on the pump thread goes through the background worker.</summary>
+    private void RebuildItemTagCacheNow()
+    {
+        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
+        PatternScanner scanner = new(_memory);
+
+        ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit));
+    }
+
+    /// <summary>
+    /// Turns one sweep's raw hit addresses into the tag/address caches. This half stays on the
+    /// caller's thread on purpose — it is the only part that mutates bridge state, and it is
+    /// cheap (a handful of small reads per hit) next to the sweep that produced the list.
+    /// </summary>
+    private void ApplyItemScanHits(List<nint> hits)
     {
         _itemTags.Clear();
         _itemAddresses.Clear();
 
-        BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
-        PatternScanner scanner = new(_memory);
-
-        List<nint> hits = scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit);
         int duplicates = 0;
 
         foreach (nint address in hits)
@@ -208,14 +264,19 @@ public sealed partial class KotorGameBridge
             return true;
         }
 
-        long nowMs = Environment.TickCount64;
-        if (!force && nowMs - _itemTagsBuiltAtMs < ItemTagRebuildMs)
+        if (force)
         {
-            return false;
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            RebuildItemTagCacheNow();
+            return _itemAddresses.ContainsKey(itemObjectId);
         }
 
-        _itemTagsBuiltAtMs = nowMs;
-        RebuildItemTagCache();
+        // A miss on the pump thread asks the background worker for a refresh and answers "not
+        // known" for now, instead of stopping the position stream for a third of a second to
+        // go and look. The rate limit still applies — inside ServiceItemTagCache — for exactly
+        // the reason it was added: a sweep per miss per tick once dropped the pump to about
+        // 4 Hz and measured as peers lagging by seconds.
+        ServiceItemTagCache();
         return _itemAddresses.ContainsKey(itemObjectId);
     }
 
@@ -456,10 +517,41 @@ public sealed partial class KotorGameBridge
     /// game's committed memory and is not free — call it from a command surface, never from
     /// the pump.
     /// </summary>
-    public IReadOnlyList<ItemListing> ListItems()
+    public IReadOnlyList<ItemListing> ListItems() => ListItems(force: true);
+
+    /// <summary>
+    /// <paramref name="force"/> decides whether this listing is allowed to trigger a fresh
+    /// <see cref="RebuildItemTagCacheNow"/> sweep, or must make do with whatever the last one
+    /// found.
+    ///
+    /// ⚠ THIS PARAMETER IS A PERFORMANCE CONTRACT, and it exists because the unconditional
+    /// sweep this method used to do was measured (2026-08-29, rig, <c>perf_trace</c>) costing
+    /// <b>640 ms of every second</b> on the agent's pump thread and <b>180 MiB/s</b> of
+    /// <c>ReadProcessMemory</c> against the live game. <see cref="ReadPossessedItems"/> is
+    /// called once a second by <c>ScriptItemGrantPump</c> on that thread, so a full sweep of
+    /// the game's committed memory was landing between two position writes: the pump ran at
+    /// 12-17 Hz instead of 30 with individual ticks of 500-670 ms, and both players saw the
+    /// other's avatar freeze and then dash. That is the same failure
+    /// <see cref="EnsureItemKnown"/>'s own rate limit was added for ("a sweep of the game's
+    /// committed memory per miss per tick once dropped the pump to about 4 Hz") — this method
+    /// simply was not honouring it.
+    ///
+    /// So: an INTERACTIVE caller (the console's <c>items</c> verb, where a human is waiting and
+    /// wants the truth as of now) forces. A PUMP caller does not, and gets a view at most
+    /// <see cref="ItemTagRebuildMs"/> old — the same freshness every other pump-thread item
+    /// lookup in this class has always had.
+    /// </summary>
+    public IReadOnlyList<ItemListing> ListItems(bool force)
     {
-        _itemTagsBuiltAtMs = Environment.TickCount64;
-        RebuildItemTagCache();
+        if (force)
+        {
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            RebuildItemTagCacheNow();
+        }
+        else
+        {
+            ServiceItemTagCache();
+        }
 
         List<ItemListing> listings = new(_itemAddresses.Count);
 
@@ -509,7 +601,11 @@ public sealed partial class KotorGameBridge
         }
 
         List<(uint, string, ItemIdentity)> result = [];
-        foreach (ItemListing item in ListItems())
+
+        // force: false — this runs on the agent's pump thread, between two position writes.
+        // See ListItems(bool)'s own remarks for the measured cost of the sweep this declines
+        // to trigger.
+        foreach (ItemListing item in ListItems(force: false))
         {
             if (possessorIds.Contains(item.Possessor))
             {

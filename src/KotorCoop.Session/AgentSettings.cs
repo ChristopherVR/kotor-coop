@@ -1,4 +1,4 @@
-using KotorCoop.Memory;
+﻿using KotorCoop.Memory;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -14,6 +14,15 @@ public sealed record AgentSettings
 
     /// <summary>Mirror a peer's pause into this game (coop.ini pause_sync=0 opts out).</summary>
     public bool SyncPause { get; init; } = true;
+
+    /// <summary>
+    /// coop.ini <c>perf_trace</c> — emit <see cref="PerfTrace"/>'s once-a-second pump/network/
+    /// phantom line into the agent log, and switch on
+    /// <see cref="KotorCoop.Memory.MemoryTelemetry"/>'s cross-process call counting. OFF by
+    /// default and meant to stay that way outside a measurement run: the counting itself is
+    /// nearly free, but a line a second forever is not something a player's log wants.
+    /// </summary>
+    public bool PerfTrace { get; init; }
 
     /// <summary>
     /// ⚠ This is a LATENCY knob, not a freshness knob. A world-state pass still costs

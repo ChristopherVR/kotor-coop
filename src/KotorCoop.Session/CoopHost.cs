@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -138,7 +138,8 @@ public sealed partial class CoopHost : ICoopSession
     {
         _settings = settings;
         _channel = new UdpChannel(settings.Port);
-        _buffer = new SnapshotBuffer(settings.InterpolationDelayMs);
+        _buffer = new SnapshotBuffer(
+            settings.InterpolationDelayMs, 1000 / settings.TickRate, settings.DejitterEnabled);
         _sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
 
         // Roadmap item 24: hosting over the internet without a relay. Both are best-effort and
