@@ -925,4 +925,28 @@ internal partial struct SharedBlock
     /// ⚠ 45, because 1-44 are taken. Take the next FREE number.
     /// </summary>
     public const uint CheatKindFollowKick = 45;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-08-29, docs/research/party-reconciliation.md Round
+    /// 105): dumps the named companion's follow-record wedge signature (phase, attempts,
+    /// pathNode/destNode/writeCursor, and the two squared distances <c>PathWaitDest</c>'s own
+    /// accept test compares) to the plugin log, then applies ONE of
+    /// <c>FollowStallRule</c>'s recoveries through <c>Odyssey.TryRecoverFollowStall</c>
+    /// UNCONDITIONALLY — no wedge check, no stall timer, no cooldown, unlike the automatic
+    /// <c>party_follow_stall_recovery</c> pass.
+    ///
+    /// Exists so a live A/B can isolate all four candidate recoveries inside ONE game session:
+    /// the automatic pass reads its method from coop.ini at plugin construction, so testing four
+    /// candidates through it alone would mean four full rig restarts.
+    ///
+    /// <see cref="OffsetCheatAmount"/> is the party-roster slot (0-8, same range
+    /// <c>recruit</c>/<c>leader</c>/<c>followkick</c> already use);
+    /// <see cref="OffsetCheatTarget"/> is the recovery method (1 phasereset, 2 followleader,
+    /// 3 positionparty, 4 priortie; 0 means "whatever coop.ini selected"). Local only — never
+    /// crosses the network.
+    ///
+    /// ⚠ 56, from this stream's own reserved range (56-58); 46-55 belong to other concurrent
+    /// streams. Take the next FREE number in YOUR range.
+    /// </summary>
+    public const uint CheatKindFollowStall = 56;
 }

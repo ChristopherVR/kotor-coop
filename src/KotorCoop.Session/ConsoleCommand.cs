@@ -591,6 +591,28 @@ public enum CoopCommandKind
     /// different phase-7 near-target freeze Round 96 found. Local only.
     /// </summary>
     FollowKick,
+
+    /// <summary>
+    /// <c>followstall &lt;slot&gt; [method]</c> — DEV-ONLY LIVE-TEST PRIMITIVE
+    /// (docs/research/party-reconciliation.md Round 105). Dumps NPC roster slot's follow-record
+    /// WEDGE SIGNATURE (phase, attempts, pathNode/destNode/writeCursor, and the two squared
+    /// distances <c>PathWaitDest</c>'s own strict accept test compares at 0x00512BF2), then
+    /// applies one of <c>FollowStallRule</c>'s four candidate recoveries UNCONDITIONALLY — no
+    /// wedge check, no stall timer, no cooldown, unlike the automatic
+    /// <c>party_follow_stall_recovery</c> pass.
+    ///
+    /// <c>method</c> is 1 phasereset, 2 followleader, 3 positionparty, 4 priortie; omitted means
+    /// "whatever <c>party_follow_stall_recovery_method</c> selected". It exists so a live A/B can
+    /// isolate all four candidates inside ONE game session — the automatic pass reads its method
+    /// once at plugin construction, so isolating them through it alone would cost four rig
+    /// restarts.
+    ///
+    /// ⚠ <see cref="CoopCommand.Amount"/> carries BOTH values, encoded as
+    /// <c>method * 100 + slot</c> — <see cref="CoopCommand"/> has no second integer field and
+    /// this dev-only verb is not worth widening a record every other verb shares. The dispatcher
+    /// splits it back apart. Local only.
+    /// </summary>
+    FollowStall,
 }
 
 /// <summary>
@@ -795,6 +817,7 @@ public static partial class ConsoleCommand
         new(["removeparty"], ParseRemoveParty),
         new(["setgold"], ParseSetGold),
         new(["followkick"], ParseFollowKick),
+        new(["followstall"], ParseFollowStall),
         new(["cheats"], ParseCheats),
     ];
 

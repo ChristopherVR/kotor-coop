@@ -581,4 +581,31 @@ public enum PacketType : byte
     /// <summary>host -&gt; the sending client: acks (or refuses) one <see cref="StoreIntentV2"/>
     /// serial — the store's mirror of <see cref="PartyPoolIntentAckV2"/>.</summary>
     StoreIntentAckV2 = 65,
+
+    // 66-69 reserved for concurrent work on this tree (the same numbering discipline as the
+    // 39/47/48 skips above). 70-72 are this stream's own reservation (docs/research/HOSTLOSS
+    // wave notes) — only 70 is used so far.
+
+    /// <summary>
+    /// host -&gt; every connected client: "I am shutting down cleanly" — sent once, best-effort,
+    /// the instant the host's own tick loop stops (a player-initiated disconnect or a graceful
+    /// process exit), before the socket closes. NOT sent on a crash — there is nothing left to
+    /// send it — so the ordinary <see cref="ProtocolConstants.PeerTimeoutMs"/> silence-based
+    /// detection (<c>CoopClient.Tick</c>) remains the fallback for that case and is what a
+    /// crash still relies on entirely.
+    ///
+    /// WHY IT EXISTS: without it, a clean host shutdown was indistinguishable on the client
+    /// from a network blip until <c>PeerTimeoutMs</c> (5 s) of silence had actually elapsed —
+    /// five seconds during which the client's control lock, dialogue spectate and every other
+    /// plugin-side lock stayed engaged for no reason, since the host was never coming back this
+    /// session. This lets a client that hears it declare "host lost" (see
+    /// <c>CoopClient.HostLost</c>) immediately and start releasing those locks and re-Helloing
+    /// right away, rather than waiting out the full timeout. See
+    /// docs/research/disconnect-reconnect.md's "host loss" section.
+    ///
+    /// UNRELIABLE, like <see cref="Bark"/>: a lost datagram costs nothing but the difference
+    /// between "instant" and "up to <see cref="ProtocolConstants.PeerTimeoutMs"/> later" — the
+    /// silence-based fallback already covers that gap completely, so no ack and no retransmit.
+    /// </summary>
+    HostBye = 70,
 }

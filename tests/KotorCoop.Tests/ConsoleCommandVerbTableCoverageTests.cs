@@ -83,6 +83,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.RemoveParty] = "removeparty 0",
         [CoopCommandKind.SetGold] = "setgold 5000",
         [CoopCommandKind.FollowKick] = "followkick 0",
+        [CoopCommandKind.FollowStall] = "followstall 0 1",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

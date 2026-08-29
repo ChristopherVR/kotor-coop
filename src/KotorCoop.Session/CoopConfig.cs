@@ -183,6 +183,26 @@ public sealed record CoopConfig
     /// unset keeps <see cref="ProtocolConstants.DefaultConnectTimeoutMs"/>.
     /// </summary>
     public int ConnectTimeoutMs { get; init; }
+
+    /// <summary>
+    /// Whether a CLIENT that loses its host runs the full plugin-side lock release (control
+    /// lock, party-select suppression, follow mirroring, dialogue spectate, minigame lock, ...)
+    /// instead of leaving every lock held until a manual disconnect — coop.ini
+    /// <c>host_loss_release</c>. ON by default — see <see cref="SessionSettings.HostLossReleaseEnabled"/>
+    /// for the full reasoning and docs/research/disconnect-reconnect.md's "host loss" section.
+    /// Ignored by a host.
+    /// </summary>
+    public bool HostLossRelease { get; init; } = true;
+
+    /// <summary>
+    /// How long a CLIENT'S host may stay silent before the <see cref="HostLossRelease"/> pass
+    /// fires — coop.ini <c>host_loss_timeout_ms</c>. 0 or unset keeps
+    /// <see cref="ProtocolConstants.PeerTimeoutMs"/> (5000), the same instant the existing
+    /// silence-based reconnect logic already gives up and starts re-Helloing. See
+    /// <see cref="SessionSettings.HostLossTimeoutMs"/>.
+    /// </summary>
+    public int HostLossTimeoutMs { get; init; }
+
     /// Show the persistent connection indicator ("co-op: connected, 2 players" /
     /// "co-op: reconnecting..." / "co-op: disconnected"), reposted only when it changes. On
     /// by default. Before this the ~ console's <c>status</c> verb was the only way to see any
@@ -598,6 +618,11 @@ public sealed record CoopConfig
                 : 9000,
             ConnectTimeoutMs = int.TryParse(kv.GetValueOrDefault("connect_timeout_ms"), out int ct)
                 ? Math.Max(ct, 0)
+                : 0,
+            HostLossRelease = !kv.ContainsKey("host_loss_release")
+                || IsTruthy(kv.GetValueOrDefault("host_loss_release")),
+            HostLossTimeoutMs = int.TryParse(kv.GetValueOrDefault("host_loss_timeout_ms"), out int hlt)
+                ? Math.Max(hlt, 0)
                 : 0,
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")

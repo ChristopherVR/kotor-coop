@@ -223,6 +223,10 @@ internal static class AgentComposition
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
                 : ProtocolConstants.DefaultConnectTimeoutMs,
+            HostLossReleaseEnabled = config?.HostLossRelease ?? true,
+            HostLossTimeoutMs = config is { HostLossTimeoutMs: > 0 }
+                ? config.HostLossTimeoutMs
+                : ProtocolConstants.PeerTimeoutMs,
 
             // Roadmap item 24: hosting over the internet without a relay. Both ignored by a
             // client (SessionSettings' own doc comments); a host with neither configured keeps

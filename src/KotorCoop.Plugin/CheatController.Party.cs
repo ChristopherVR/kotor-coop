@@ -284,4 +284,92 @@ internal sealed unsafe partial class CheatController
             SharedBlock.CheatStatusApplied,
             $"0x{objectId:X} phase {phaseBefore} -> {phaseAfter} (forced TeleportForward)");
     }
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (see <see cref="SharedBlock.CheatKindFollowStall"/>,
+    /// docs/research/party-reconciliation.md Round 105): dumps NPC roster slot
+    /// <see cref="SharedBlockView.CheatAmount"/>'s follow-record WEDGE SIGNATURE — the exact
+    /// fields <see cref="FollowStallRule.IsWedgedShape"/> decides on, including the two squared
+    /// distances <c>PathWaitDest</c>'s own strict accept test compares — and then applies one of
+    /// <see cref="Odyssey.TryRecoverFollowStall"/>'s four candidate recoveries UNCONDITIONALLY:
+    /// no wedge check, no 2-second stall timer, no anti-spin cooldown, unlike the automatic
+    /// <c>party_follow_stall_recovery</c> pass this same code backs.
+    ///
+    /// The method comes from <see cref="SharedBlockView.CheatTarget"/>, falling back to
+    /// <c>party_follow_stall_recovery_method</c> when it is 0. That parameter is the whole point
+    /// of the verb: the automatic pass reads its method once at plugin construction, so isolating
+    /// four candidates through it alone would cost four full rig restarts; through this verb they
+    /// are four console round-trips in one session.
+    /// </summary>
+    private void FollowStall()
+    {
+        int slot = block.CheatAmount;
+        if (slot is < 0 or >= SharedBlock.PartyRosterSlots)
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"followstall: slot must be 0-{SharedBlock.PartyRosterSlots - 1} (got {slot})");
+            return;
+        }
+
+        int method = (int)block.CheatTarget;
+        if (method == 0)
+        {
+            method = PluginConfig.ReadInt(
+                "party_follow_stall_recovery_method", FollowStallRule.DefaultMethod);
+        }
+
+        if (!FollowStallRule.IsKnownMethod(method))
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                "followstall: method must be 1 (phasereset), 2 (followleader), 3 (positionparty), "
+                + $"4 (priortie), 5 (destnode) or 6 (priorpush) — got {method}");
+            return;
+        }
+
+        uint objectId = Odyssey.GetPartyRosterObjectId(slot);
+        if (objectId is 0 or Odyssey.ObjectInvalid)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"followstall: no NPC in roster slot {slot}");
+            return;
+        }
+
+        // allowCountRestore: true — this is a one-shot verb, not a per-frame pass, so the engine
+        // field write party_together_fix's clamp makes necessary (round 101) cannot possibly
+        // become the repeated write docs/research/party-reconciliation.md's own per-frame rule
+        // forbids.
+        if (Odyssey.TryGetFollowStallState(objectId, allowCountRestore: true, out Odyssey.FollowStallState before)
+            && before.Valid)
+        {
+            PluginHost.Log(
+                $"followstall: 0x{objectId:X} BEFORE — phase={before.Phase} attempts={before.Attempts} "
+                + $"pathNode={before.PathNode} destNode={before.DestNode} writeCursor={before.WriteCursor} "
+                + $"distSqToTarget={before.DistSqToTarget:F4} distSqToPrior={before.DistSqToPrior:F4} "
+                + $"cannotAccept={FollowStallRule.CannotAccept(before.DistSqToTarget, before.DistSqToPrior)} "
+                + $"wedged={FollowStallRule.IsWedgedShape(before.Phase, before.Attempts, before.PathNode, before.DestNode, before.DistSqToTarget, before.DistSqToPrior)} "
+                + $"countRestored={before.CountWasRestored}");
+        }
+        else
+        {
+            PluginHost.Log(
+                $"followstall: 0x{objectId:X} — no follow record to dump before the poke "
+                + "(GetIndex refused even after restoring CSWParty's own member count)");
+        }
+
+        nint leader = Odyssey.GetPlayerCreaturePointer();
+        Vec3 leaderPos = leader == 0 ? default : Odyssey.GetPosition(leader);
+
+        if (!Odyssey.TryRecoverFollowStall(
+                objectId, method, leaderPos, allowCountRestore: true, out bool wrote, out string detail))
+        {
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"followstall: roster slot {slot} (0x{objectId:X}) — {detail}");
+            return;
+        }
+
+        PluginHost.Log($"followstall: 0x{objectId:X} AFTER — {detail} (wrote={wrote})");
+        Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} {detail}");
+    }
 }

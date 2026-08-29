@@ -66,6 +66,31 @@ default was a Steam path.
 - Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
   so the host's UDP port must be reachable from the client.
 
+## Host disconnected (crashed, quit, or the network dropped)
+
+A client that loses its host is not stuck: within `host_loss_timeout_ms` of silence (default
+5000ms, same as the ordinary reconnect trigger — near-instant instead if the host shut down
+cleanly rather than crashing) every co-op lock releases and you keep playing solo — companions
+respond to clicks again, doors and dialogue work normally, nothing stays frozen. A HUD/chat
+line says "Host connection lost - playing solo, will rejoin automatically." while this is
+happening.
+
+- The client keeps re-Helloing in the background the whole time; if the host comes back
+  (relaunched, or the network recovers) you rejoin automatically and everything re-mirrors —
+  no player action needed. A second HUD/chat line ("Host connection restored - rejoining.")
+  confirms it.
+- If you were mid-conversation with a shared NPC when the host vanished, you keep the reply
+  list you were already looking at and can keep clicking through it on your own — dialogue is
+  initiator-led, so this does not require the host.
+- `coop.ini host_loss_release = 0` turns this off and restores the old behaviour: every lock
+  stays held until you manually run `disconnect` in the console. `host_loss_timeout_ms` lets
+  the release wait longer than the reconnect attempt itself, if you would rather bet on a brief
+  blip resolving first. See [CONFIG.md](CONFIG.md) and
+  [disconnect-reconnect.md §11](research/disconnect-reconnect.md).
+- This does not apply to the HOST losing a client — a client vanishing mid-dialogue or
+  mid-interaction only ever releases what THAT client was holding; the host and every other
+  connected player are unaffected either way.
+
 ## I can't see my partner / their phantom never appears
 
 - Confirm both players are actually in the same module — a peer in a different module is
@@ -118,10 +143,25 @@ actual file against that table rather than assuming either side's "default" appl
 
 ## Companion stalls partway through a leg while following
 
-A known, narrow, well-characterised stall at the very last waypoint of a movement leg — see
-[party-reconciliation.md](research/party-reconciliation.md). Two fix candidates exist
-(`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`); both ship off by
-default because neither is confirmed live yet.
+**Fixed and on by default since 2026-08-29** (`party_follow_stall_recovery`). The engine's own
+"has the follower reached this waypoint" test is a STRICT comparison, and at the end of a leg the
+recorded waypoint collapses onto the follower's cached previous position — so the test compares a
+number against itself, can never pass, and the companion freezes where it stands. Live-reproduced
+4/4, including the severe form: a leader teleported 16.5 units away that the companion never
+recovered from at all.
+
+A runtime detector now watches for that exact wedged state and, once it has held for two seconds
+with the companion genuinely separated, gathers the party through the engine's own
+`CSWPartyTable::PositionParty` — the same call a module transition makes. Across five reps every
+wedge recovered on the first attempt (`party follow stall: recovered 0x... via positionparty` in
+`kotorcoop-plugin.log`). Note it RELOCATES the companion rather than walking it back: the engine's
+own long-distance pathfinding limit underneath is separate and still unfixed.
+
+Turn it off with `party_follow_stall_recovery=0`; `party_follow_stall_recovery_method` selects
+between six recoveries (the other five were each tried live and are documented, with their
+results, in [party-reconciliation.md](research/party-reconciliation.md) round 105). Two much older
+candidates (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) remain off —
+round 105 folded what they do into method `5` and measured it insufficient on its own.
 
 ## Swoop racing / a minigame won't start or gets stuck
 
