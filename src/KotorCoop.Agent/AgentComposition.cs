@@ -245,8 +245,34 @@ internal static class AgentComposition
             effectivePort,
             SettingsFor,
             loadConfig: () => TryLoadCoopConfig(memory.ProcessId),
-            menuAutoLoad: () => _ = Task.Run(() => LoadIntoTheWorld(memory), cts.Token),
+            menuAutoLoad: () => _ = Task.Run(() => EnterTheWorld(), cts.Token),
             gameDirectory: TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty);
+
+        // How a session that started from the game's own menu gets into a world. Two paths, and
+        // which one runs is re-read from coop.ini at the moment of the press (not captured at
+        // startup) for the same reason every other menu-time setting is: an edit made at the
+        // menu must be honoured without restarting the agent.
+        //
+        // The default is unchanged — load the player's own save. join_mode = newcharacter is
+        // for the joiner who has none, and sends them through the game's own character creation
+        // first; see NewCharacterJoinFlow.
+        async Task EnterTheWorld()
+        {
+            CoopConfig? current = TryLoadCoopConfig(memory.ProcessId);
+
+            if (current?.JoinMode == JoinMode.NewCharacter && manager.Current is not CoopHost)
+            {
+                await NewCharacterJoinFlow.RunAsync(
+                    manager,
+                    bridge,
+                    TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty,
+                    Console.WriteLine,
+                    cts.Token).ConfigureAwait(false);
+                return;
+            }
+
+            LoadIntoTheWorld(memory);
+        }
 
         // Roadmap item 14 phase 1's "OR on clean disconnect" trigger: the dispatcher's own
         // save-identity watch gets one more chance to capture a client's progressed
@@ -307,6 +333,27 @@ internal static class AgentComposition
 
             dispatcher.Dispatch(new CoopCommand(
                 CoopCommandKind.Connect, Address: options.HostEndPoint.ToString()));
+
+            // ⚠ The CLI join does NOT arm the dispatcher's menu auto-load — that is a
+            // menu-BUTTON affordance, and `--join` has always left "get into a world" to the
+            // caller (`agent load`, demo.ps1's own -Save). join_mode = newcharacter is the one
+            // case where there is nothing for the caller to load, so the flow is started here
+            // explicitly, waiting for the handshake first through the same MenuAutoLoad gate
+            // the button path uses: a REFUSED join must not send the player through character
+            // creation for a session they were never admitted to.
+            if (config?.JoinMode == JoinMode.NewCharacter)
+            {
+                string newCharacterDirectory = installDirectory ?? string.Empty;
+                _ = Task.Run(
+                    () => MenuAutoLoad.RunAsync(
+                        manager,
+                        host: false,
+                        load: () => _ = NewCharacterJoinFlow.RunAsync(
+                            manager, bridge, newCharacterDirectory, Console.WriteLine, cts.Token),
+                        cts.Token,
+                        Console.WriteLine),
+                    cts.Token);
+            }
         }
 
         Task dispatchTask = dispatcher.RunAsync(cts.Token);

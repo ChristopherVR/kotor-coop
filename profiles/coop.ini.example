@@ -22,6 +22,20 @@ password =
 ; Name shown to the other players. Optional: blank = a generated "playerNNN".
 name =
 
+; For mode = join: how you get a character into the host's world. Ignored when hosting.
+;   save          the default - you already have a save, and its character is what you bring.
+;   newcharacter  you have never played this game. Choose NEW GAME at the main menu and make
+;                 a character as usual; when you finish you are taken into the host's world
+;                 with it instead of into the Endar Spire. Afterwards, save once and you can
+;                 switch back to `save`.
+; See docs/research/world-adoption.md.
+join_mode = save
+
+; When your world does not match the host's, fetch and adopt the host's world instead of
+; playing a degraded session (enemies, doors, containers and party all off). Your own saves
+; are never touched - only the autosave slot is written. 0 restores the old behaviour.
+auto_adopt_world = 1
+
 ; Name shown for this session in the server browser. Falls back to the `name` above when
 ; unset (commented out).
 # server_name =

@@ -112,6 +112,14 @@ internal static unsafe class FuncInterpHook
         // shadow a retail verb.
         "removeparty",
 
+        // The character-creation drive verbs (2026-08-29, docs/research/world-adoption.md's
+        // join_mode section). Registered here, unlike the blockpoke-only primitives above, for
+        // one reason a rig cannot work around: they are only ever meaningful AT THE MAIN MENU,
+        // and this detour is the one console surface that works there (see this file's own
+        // header). None shadows a retail verb — retail's own new-game entry is the menu button,
+        // and there is no `chargen` interpreter function.
+        "newgame", "chargen",
+
         // A fifth live-test primitive (2026-08-28, docs/research/store-sync.md's live pass):
         // registered here so a rig session can repair a poisoned gold value directly at the
         // in-game console. Does not shadow a retail verb (retail's own credits verb is

@@ -107,9 +107,111 @@ public static class WorldAdoption
 
         log?.Invoke($"world adoption: {diagnostic}");
 
-        GffStruct player = ownPlayer;
-        string characterSource = $"'{Path.GetFileName(ownSaveDirectory)}' (own save)";
+        string ownSource = $"'{Path.GetFileName(ownSaveDirectory)}' (own save)";
 
+        return await FetchStageAndVerifyAsync(
+            gameDirectory,
+            host,
+            passwordHash,
+            expectedSaveIdentity,
+            log,
+            // 2b. Decided AFTER the fetch, deliberately, not before: the preference rule's
+            //     host-identity check needs the save identity the fetch just learned, and
+            //     reading a sidecar (like reading the own save) is non-destructive, so nothing
+            //     about the fail-fast order in step 1 is weakened by deciding late.
+            expected =>
+            {
+                if (sidecar is not { } carried)
+                {
+                    return (ownPlayer, ownSource);
+                }
+
+                DateTime ownSaveLastWriteUtc = Directory.Exists(ownSaveDirectory)
+                    ? Directory.GetLastWriteTimeUtc(ownSaveDirectory)
+                    : DateTime.MinValue;
+
+                bool prefer = ClientCharacterPersistence.ShouldPreferSidecar(
+                    sidecarValid: true,
+                    carried.Metadata.CapturedAtUtc,
+                    ownSaveLastWriteUtc,
+                    carried.Metadata.HostSaveIdentity,
+                    expected,
+                    out string reason);
+
+                if (prefer)
+                {
+                    return (carried.Player,
+                        $"the session-saved character (captured {carried.Metadata.CapturedAtUtc:u}) — {reason}");
+                }
+
+                log?.Invoke($"world adoption: session-saved character not used — {reason}");
+                return (ownPlayer, ownSource);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The first-time joiner's adoption: the character is HANDED IN rather than lifted out of a
+    /// save, because there is no save to lift it out of.
+    ///
+    /// WHAT THIS IS FOR. coop.ini <c>join_mode = newcharacter</c>. A player joining a co-op
+    /// session on a fresh install has never played, so every other overload here fails at its
+    /// very first step — correctly, and without touching anything ("the save's
+    /// <c>Mod_PlayerList</c> is empty (no character to carry)"). They go through the game's own
+    /// New Game / character-creation screens instead, and the character retail chargen writes to
+    /// <c>TEMP:pifo</c> (<c>CSWCCreature::SaveCharGenCreature 0x6123E0</c>) is what arrives
+    /// here. It is the same shape <see cref="PlayerIfo.BuildPifo"/> emits — a one-entry
+    /// <c>Mod_PlayerList</c> — so from this point on the adoption is bit-for-bit the ordinary
+    /// one, with a different provenance.
+    ///
+    /// ⚠ THERE IS NOTHING TO FAIL FAST ON HERE, and that is a real difference. The other
+    /// overloads extract the character before a single byte is fetched or written, because an
+    /// unreadable save is the likeliest failure and must not cost the joiner their autosave
+    /// slot. Here the character is already in hand and already validated by the caller, so the
+    /// fetch is the first thing that can fail — which is also the first thing that would have
+    /// failed anyway.
+    /// </summary>
+    /// <param name="carriedPlayer">The character to carry in. Its <c>ObjectId</c> is the
+    /// engine's own <c>0x7FFFFFFF</c> sentinel on a chargen creature exactly as on a saved one,
+    /// so the engine mints a fresh id on load and it cannot collide with anything already in
+    /// the host's world.</param>
+    /// <param name="characterSource">A one-line description for the log and the on-screen line
+    /// — where this character came from.</param>
+    public static Task<AdoptedWorld?> TryAdoptWithCharacterAsync(
+        string gameDirectory,
+        GffStruct carriedPlayer,
+        string characterSource,
+        IPEndPoint host,
+        uint passwordHash,
+        uint expectedSaveIdentity,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(carriedPlayer);
+
+        return FetchStageAndVerifyAsync(
+            gameDirectory, host, passwordHash, expectedSaveIdentity, log,
+            _ => (carriedPlayer, characterSource), cancellationToken);
+    }
+
+    /// <summary>
+    /// Everything after the character is decided: fetch the host's world, stage it over the
+    /// autosave slot, write the pifo, and prove the staged world fingerprints the same as the
+    /// host's.
+    ///
+    /// <paramref name="chooseCharacter"/> is invoked once, AFTER the fetch, and is handed the
+    /// save identity the fetch established — because the one caller that has a choice to make
+    /// (own save versus session-saved sidecar) cannot make it before that number exists.
+    /// </summary>
+    private static async Task<AdoptedWorld?> FetchStageAndVerifyAsync(
+        string gameDirectory,
+        IPEndPoint host,
+        uint passwordHash,
+        uint expectedSaveIdentity,
+        Action<string>? log,
+        Func<uint, (GffStruct Player, string Source)> chooseCharacter,
+        CancellationToken cancellationToken)
+    {
         // 2. The host's world.
         FetchedWorld fetched;
         try
@@ -149,35 +251,8 @@ public static class WorldAdoption
             bytes += file.Data.Length;
         }
 
-        // 2b. NOW that the host's real save identity is known, decide whether a "resume
-        //     tomorrow" sidecar beats the own save — deliberately after the fetch, not
-        //     before: the preference rule's host-identity check needs the value we just
-        //     learned, and reading a sidecar (like reading the own save) is non-destructive,
-        //     so nothing about the fail-fast order in step 1 is weakened by deciding late.
-        if (sidecar is { } carried)
-        {
-            DateTime ownSaveLastWriteUtc = Directory.Exists(ownSaveDirectory)
-                ? Directory.GetLastWriteTimeUtc(ownSaveDirectory)
-                : DateTime.MinValue;
-
-            bool prefer = ClientCharacterPersistence.ShouldPreferSidecar(
-                sidecarValid: true,
-                carried.Metadata.CapturedAtUtc,
-                ownSaveLastWriteUtc,
-                carried.Metadata.HostSaveIdentity,
-                expected,
-                out string reason);
-
-            if (prefer)
-            {
-                player = carried.Player;
-                characterSource = $"the session-saved character (captured {carried.Metadata.CapturedAtUtc:u}) — {reason}";
-            }
-            else
-            {
-                log?.Invoke($"world adoption: session-saved character not used — {reason}");
-            }
-        }
+        // 2b. NOW that the host's real save identity is known, the caller picks the character.
+        (GffStruct player, string characterSource) = chooseCharacter(expected);
 
         // 3. Stage it, and carry the character in. Both writes, then the verification.
         string slot = Path.Combine(gameDirectory, "saves", PluginMenuLoader.AutosaveSlot);
@@ -192,9 +267,9 @@ public static class WorldAdoption
             return null;
         }
 
-        if (!PlayerIfo.TryWritePifo(gameDirectory, player, out diagnostic))
+        if (!PlayerIfo.TryWritePifo(gameDirectory, player, out string pifoDiagnostic))
         {
-            log?.Invoke($"world adoption: {diagnostic}");
+            log?.Invoke($"world adoption: {pifoDiagnostic}");
             return null;
         }
 

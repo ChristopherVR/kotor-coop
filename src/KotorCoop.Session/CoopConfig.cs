@@ -20,6 +20,12 @@ namespace KotorCoop.Session;
 ///                       ; ProtocolConstants.DefaultPort (27015) — see docs/CONFIG.md footnote 8
 ///   password = swordfish
 ///   name = Malak
+///   join_mode = save         ; or newcharacter - go through the game's own New Game /
+///                             ; character-creation screens and carry THAT character into the
+///                             ; host's world. Default `save` (today's behaviour).
+///   auto_adopt_world = 1     ; a joiner whose world does not match the host's adopts the
+///                             ; host's world automatically instead of playing degraded
+///                             ; (default on) - docs/research/world-adoption.md
 ///   menu_button = 1    ; the in-game Co-op menu button (default on; 0 hides it)
 ///   minigame_hide_peer = 1   ; park a peer's phantom while they swoop-race/man a turret
 ///   minigame_spectate = 0    ; watch a racing/turret peer instead (not yet wired)
@@ -46,6 +52,30 @@ namespace KotorCoop.Session;
 public sealed record CoopConfig
 {
     public bool Host { get; init; }
+
+    /// <summary>
+    /// How a JOINER gets a character into the host's world — coop.ini <c>join_mode</c>,
+    /// default <see cref="JoinMode.Save"/> (this install already has a save; its PC is what
+    /// gets carried). <see cref="JoinMode.NewCharacter"/> is the first-time joiner: no save,
+    /// no character, so they go through the retail New Game / character-creation screens and
+    /// the character chargen writes to <c>TEMP:pifo</c> is carried into the host's world
+    /// instead of into the Endar Spire's own story start. Ignored when hosting. See
+    /// <see cref="JoinModeRule"/> and docs/research/world-adoption.md.
+    /// </summary>
+    public JoinMode JoinMode { get; init; } = JoinMode.Save;
+
+    /// <summary>
+    /// Whether a joiner whose world does not fingerprint the same as the host's adopts the
+    /// host's world automatically — coop.ini <c>auto_adopt_world</c>, ON by default.
+    ///
+    /// OFF restores the pre-adoption behaviour exactly: the join is still admitted, but
+    /// <c>ContentCompatibility.ApplyWorldMismatch</c> turns every object-id-keyed channel
+    /// (enemies, doors, placeables, container loot, encounters) off and the two players share
+    /// little more than chat and presence. ON is the default because that degraded session is
+    /// almost never what anyone wanted, and adoption never touches the joiner's own saves —
+    /// only the autosave slot.
+    /// </summary>
+    public bool AutoAdoptWorld { get; init; } = true;
 
     public string HostAddress { get; init; } = "127.0.0.1";
 
@@ -551,6 +581,12 @@ public sealed record CoopConfig
         return new CoopConfig
         {
             Host = host,
+
+            // Tolerant on purpose (JoinModeRule.Parse): a misspelled value must degrade to
+            // today's behaviour, never to a character creation the player did not ask for.
+            JoinMode = JoinModeRule.Parse(kv.GetValueOrDefault("join_mode")),
+            AutoAdoptWorld = !kv.ContainsKey("auto_adopt_world")
+                || IsTruthy(kv.GetValueOrDefault("auto_adopt_world")),
             HostAddress = kv.GetValueOrDefault("host", "127.0.0.1"),
             HasHostAddress = kv.TryGetValue("host", out string? hostValue) && hostValue.Length > 0,
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,

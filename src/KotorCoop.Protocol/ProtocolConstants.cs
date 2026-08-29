@@ -149,6 +149,25 @@ public static class ProtocolConstants
     /// </summary>
     public const int MaxJournalEntriesPerPacket = 28;
 
+    /// <summary>
+    /// Flag entries per snapshot datagram: <c>FlagId</c> 4 + <c>Value</c> 1 + <c>Serial</c> 4 +
+    /// <c>OriginPeerId</c> 4 = 13 bytes each, after a 12-byte header, so 106 is what fits inside
+    /// <see cref="MaxPacketSize"/>. A longer store is sent as several snapshot packets in one
+    /// burst, exactly like <see cref="MaxJournalEntriesPerPacket"/>.
+    ///
+    /// ⚠ THIS USED TO BE A SILENT TRUNCATION, AND IT WAS THE HOST-TO-CLIENT BACKFILL PATH FOR
+    /// DOORS. There are no host→client flag OPS — <c>CoopHost.SetFlag</c> applies locally and
+    /// says "clients pick them up through the version tripwire" — so this one packet IS the
+    /// only way a host-side door open, placeable search or global ever reaches a client that
+    /// did not see it happen. Doors and placeables mint keys into the SAME
+    /// <c>EventFlagStore</c> as globals and nothing is ever pruned from it, so a session
+    /// reaches 106 entries in ordinary play, after which every later change was structurally
+    /// undeliverable — and, because the digest is computed over the WHOLE store, the client
+    /// then re-requested the same truncated head every 500 ms for the rest of the session.
+    /// Live symptom: a door OPEN on the host, CLOSED on the client, forever.
+    /// </summary>
+    public const int MaxFlagEntriesPerPacket = 106;
+
     /// <summary>Odyssey resource references are at most 16 characters.</summary>
     public const int MaxResrefLength = 16;
 

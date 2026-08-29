@@ -613,6 +613,37 @@ public enum CoopCommandKind
     /// splits it back apart. Local only.
     /// </summary>
     FollowStall,
+
+
+    /// <c>newgame</c> — opens the game's OWN character-creation screens from the main menu, by
+    /// replaying <c>CSWGuiMainMenu::OnNewGamePicked</c>'s body (construct
+    /// <c>CSWGuiClassSelection</c>, register it, mark the menu for teardown). The same door a
+    /// click on NEW GAME opens; the player still uses the screens normally.
+    ///
+    /// Built because scripted mouse input is not trustworthy here — KOTOR's menu input dies
+    /// intermittently and undiagnosably (the trap that made the menu-load replay exist), and a
+    /// scripted click sequence was measured dropping a click mid-chargen and silently
+    /// cancelling. Local only, and only meaningful at the main menu. See
+    /// <c>KotorCoop.Plugin.CharGenDriveController</c>.
+    /// </summary>
+    NewGame,
+
+    /// <summary>
+    /// <c>chargen quick [class 0-5]</c> — picks a class through the panel's own
+    /// <c>CSWGuiClassSelection::OnSelectButton</c> and applies the optimised template the
+    /// Quick Character route applies (<c>SetVisiblePanel(2)</c> then
+    /// <c>CSWGuiQuickPanel::DoQuickStats</c>). <see cref="CoopCommand.Amount"/> is the class
+    /// index, default 0. Local only.
+    /// </summary>
+    ChargenQuick,
+
+    /// <summary>
+    /// <c>chargen accept</c> — presses Play: <c>CSWGuiMainCharGen::BeginPlayGame</c>, which is
+    /// what writes the finished character to <c>TEMP:pifo</c> and starts the module. With a
+    /// new-character join armed (<c>join_mode = newcharacter</c>) this is the moment the
+    /// character is captured. Local only.
+    /// </summary>
+    ChargenAccept,
 }
 
 /// <summary>
@@ -819,6 +850,8 @@ public static partial class ConsoleCommand
         new(["followkick"], ParseFollowKick),
         new(["followstall"], ParseFollowStall),
         new(["cheats"], ParseCheats),
+        new(["newgame"], ParseNewGame),
+        new(["chargen"], ParseChargen),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

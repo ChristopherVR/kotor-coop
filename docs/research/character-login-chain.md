@@ -358,6 +358,45 @@ if (players >= 1)
 | `0x652860` / `0x678030` | client EndStartNewModule handler / `LoginIFOCharacte` reply `70 02 0F` |
 | `0x56CC50` | `SendServerToPlayerModule_EndStartNewModule` — `50 03 0C` to `[0x74C52C]` |
 | `0x4B3A90` | `InitiateModuleForPlayer` — **the default-PC factory**: blank `CSWSCreature` `0x4B3ABD`, start-point placement when `[player+0x40]==0`; sole caller `0x52489A` (module msg minor 2, state==1 && mode==2) |
+
+---
+
+## Addendum (2026-08-29): writer (a) turned out to be a feature, not a footnote
+
+§2's writer list has three entries, and (a) — chargen, `CSWCCreature::SaveCharGenCreature
+0x6123E0` — was recorded only to make the list exhaustive. It is now load-bearing.
+
+`coop.ini join_mode = newcharacter` (see
+[world-adoption.md](world-adoption.md)'s 2026-08-29 section) lets a joiner who has never played
+this game create a character through the retail New Game screens and be dropped into the
+HOST's world with it. The whole mechanism is: notice the file writer (a) produces, copy it
+aside before the adoption load's own `FileCopy` truncates it, and hand it to
+`WorldAdoption` as the carried character. No new engine call, no chargen code of our own.
+
+Two facts from this doc are what make that work, and both are worth restating here because
+they are what a reader of §2 would want to know next:
+
+* **The pifo shape is not chargen-specific.** Writer (a)'s output and `PlayerIfo.BuildPifo`'s
+  emit the same thing — an `IFO ` GFF whose root holds a one-element `Mod_PlayerList` — so
+  `LoadCharacterFromIFO(-1)`'s `[player+0x80] == 0` index is correct for either, by
+  construction.
+* **The flag flavour is already right.** A chargen game runs with `DoingStartNewModule` SET;
+  that is the flavour §3 describes as reading `TEMP:pifo`, and it is exactly the flavour world
+  adoption asks for (`block+0x3320`). The `SetDoingStartNewModule(server, 0)` reroute in
+  `MenuLoadController` — §5's RECIPE — is the thing an adopted load deliberately SKIPS.
+
+Newly disassembled this pass, filling in the one gap §2 left (where writer (a) is called from):
+
+| Address | Symbol / meaning |
+| --- | --- |
+| `0x6DBDF0` | `CSWGuiClassSelection::BeginPlayGame` — the entire retail "start a new game" step. `CreateServer 0x401380` at `0x6DBE93`; **`SaveCharGenCreature` at `0x6DBE9B`** (the pifo write, `this = [classSel+0x68]`, a `CSWCCreature`); `StartConnectToSession 0x5D5040` at `0x6DBEDE`; `RequestStatus 0x6775E0` at `0x6DBF07`; the start module's name built from `[classSel+0x1558]`/`+0x155C` from `0x6DBF0C`. |
+| `0x6EB320` | `CSWGuiMainCharGen::BeginPlayGame` — `RemoveSubPanels 0x6EA830`, then `mov ecx,[this+0x68]` and a tail `jmp 0x6DBDF0`. No stack arguments; `[mainCharGen+0x68]` is the `CSWGuiClassSelection`. |
+| `0x6123E0` | `SaveCharGenCreature` has **exactly one** call site in the image (`tools/xrefs.py`: one direct call at `0x6DBE9B`, zero address-literal occurrences), so §2's "chargen" attribution is not just a string xref — nothing else can reach it. |
+
+⚠ Note for anyone reading §2's writer (b): `StorePlayerCharacters 0x4B2BA0` writes nothing when
+no player has a creature (`stored_count > 0` at `0x4B2E36`), which is why the chargen pifo
+SURVIVES the chargen→module transition that immediately follows it. That is the window the
+capture poll lives in.
 | `0x677490` | client `SendPlayerToServerModule_ModuleLoaded` `70 03 02` — the trigger of InitiateModuleForPlayer |
 | `0x6CA250` | `LoadPCAutoSave` — GAMEINPROGRESS export `0x6CA50C`, pifo FileCopy `0x6CA634`, `SetLoadFromIFO(1)` `0x6CA652`, flag set `0x6CAA09`, `ExecuteLoadModule(entry)` `0x6CAA1B` (entry read only there) |
 | `0x406990` | `CExoResMan::FileCopy(src, dst, restype, 0xFFFF)` — direction proven by `DoPCAutosave 0x4B90FC` |

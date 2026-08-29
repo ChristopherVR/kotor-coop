@@ -46,6 +46,26 @@ public sealed partial class CoopCommandDispatcher
     private bool HostLoadReadoptEnabled =>
         _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? false;
 
+    /// <summary>
+    /// coop.ini <c>auto_adopt_world</c> — ON by default, unlike its two neighbours above,
+    /// because it is the gate on the thing a joiner almost always wants: a world that differs
+    /// from the host's gets ADOPTED instead of played degraded.
+    ///
+    /// ⚠ THIS TOOK OVER <see cref="RejoinTrigger.SaveMismatch"/> FROM
+    /// <see cref="ClientLoadRejoinEnabled"/>, and that is a deliberate behaviour change rather
+    /// than a tidy-up. The two triggers are different questions that happened to share an
+    /// answer: <c>client_load_rejoin</c> is "when I load a save mid-session, put me back in the
+    /// host's world", while this is "when my world simply is not the host's, fix it". A joiner
+    /// who has turned the first off — they never load mid-session — was silently also refusing
+    /// the second, which is the only mechanism that could ever have admitted them to the
+    /// object-id-keyed channels at all. Both default ON, so nothing changes for an install that
+    /// has not opted out of either.
+    /// </summary>
+    private bool? _autoAdoptWorldEnabled;
+
+    private bool AutoAdoptWorldEnabled =>
+        _autoAdoptWorldEnabled ??= loadConfig?.Invoke()?.AutoAdoptWorld ?? true;
+
     /// <summary>Roadmap item 14 phase 2's rejoin decision state — see
     /// <see cref="ClientLoadRejoinRule"/>. Best-effort threading: written synchronously from
     /// this dispatcher's own tick when a rejoin starts, and once more (back to Idle) by the
@@ -223,9 +243,14 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void MaintainWorldServing()
     {
+        // auto_adopt_world joins the OR for the same reason the other two are in it: a client
+        // with it on will fetch this host's world, and the host cannot see which gates any
+        // given client has set. It is ON by default, so in practice a host now serves its world
+        // unless it has explicitly turned all three off — which is the behaviour a joiner who
+        // has never played needs, since there is no other way for them to obtain a world at all.
         bool shouldServe = manager.Current is CoopHost
             && !string.IsNullOrEmpty(gameDirectory)
-            && (ClientLoadRejoinEnabled || HostLoadReadoptEnabled);
+            && (ClientLoadRejoinEnabled || HostLoadReadoptEnabled || AutoAdoptWorldEnabled);
 
         if (!shouldServe)
         {
@@ -273,6 +298,28 @@ public sealed partial class CoopCommandDispatcher
         });
     }
 
+    /// <summary>
+    /// Runs one of the character-creation drive verbs (<c>newgame</c>, <c>chargen quick</c>,
+    /// <c>chargen accept</c>) by asking the plugin to call the engine's own button handler.
+    ///
+    /// Synchronous by design, unlike <see cref="TriggerMidSessionLoad"/>: these are single
+    /// engine calls the plugin makes on its next MainLoop frame, not module loads, so there is
+    /// nothing to poll and nothing that could block this dispatcher's tick.
+    /// </summary>
+    private void DriveChargen(uint kind, int classIndex)
+    {
+        if (_kotor is null)
+        {
+            Reply("chargen: this agent is not attached to a KOTOR process (needs --kotor)");
+            return;
+        }
+
+        // The diagnostic says what happened either way — a refusal is not an error here, it is
+        // an answer ("character creation is not open", "not at the main menu").
+        _kotor.TryDriveChargen(kind, classIndex, out string diagnostic);
+        Reply(diagnostic);
+    }
+
     /// <summary>Reads the CURRENT session save fresh — the world+identity pair a rejoining
     /// client should receive if it connects RIGHT NOW, never a snapshot captured when serving
     /// started. Same resolution <see cref="MaintainSessionSave"/>'s client branch already uses
@@ -306,9 +353,11 @@ public sealed partial class CoopCommandDispatcher
         {
             RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
             RejoinTrigger.HostReload => HostLoadReadoptEnabled,
-            // Same gate as OwnLoad: this is still "the client notices its own world is wrong
-            // and fixes it", just via a level (PersistentSaveMismatchRule) instead of an edge.
-            RejoinTrigger.SaveMismatch => ClientLoadRejoinEnabled,
+            // ⚠ auto_adopt_world, NOT client_load_rejoin — see AutoAdoptWorldEnabled's own doc
+            // comment. This is "the client notices its own world is not the host's and adopts
+            // the host's", which is a different question from "put me back after I load a
+            // save", and had no gate of its own until it needed one for join_mode.
+            RejoinTrigger.SaveMismatch => AutoAdoptWorldEnabled,
             _ => false,
         };
 
@@ -366,6 +415,15 @@ public sealed partial class CoopCommandDispatcher
 
                     await Task.Delay(500).ConfigureAwait(false);
                 }
+
+                // ⚠ BEFORE THE SOCKET REOPENS, AND THIS ORDER IS THE FIX. The world under the
+                // diff shadows has been replaced (a different save of, usually, the SAME
+                // module), so the first scan of the new session must be a fresh silent baseline
+                // — otherwise it diffs the host's staged world against the one we left and
+                // announces the difference as our own changes, with a Lamport serial that
+                // outranks the host's. Safe here because the session is torn down for the whole
+                // load window, so nothing has scanned since. See ForgetWorldShadows.
+                bridge.ForgetWorldShadows();
 
                 manager.Reconnect();
                 Reply($"rejoined '{adopted.Value.Module}'");

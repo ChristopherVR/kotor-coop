@@ -245,3 +245,239 @@ failure; judge on hit points and experience.
 | `0x6CA250` | `LoadPCAutoSave` — export 0x6CA50C, **pifo FileCopy 0x6CA634**, Temp create 0x6CA542 |
 | `0x4C5D90` | `GetPrimaryPlayerIndex` — the is-PC mark, `Mod_IsPrimaryPlr` on disk |
 | `0x7DE` | restype 2014 "ifo" — `TEMP:pifo` ⇒ `Temp\pifo.ifo` |
+
+---
+
+# The joiner who has never played: `join_mode = newcharacter` (2026-08-29)
+
+## The hole this fills
+
+Everything above assumes the joiner HAS a save. `PlayerIfo.TryExtractPlayer` opens their
+`SAVEGAME.sav`, walks to `module.ifo` → `Mod_PlayerList`, and carries that entry. A player who
+has just installed the game and wants to join a friend has none of that, so
+`WorldAdoption.TryAdoptAsync` returns null at its first step with "the save's `Mod_PlayerList`
+is empty (no character to carry)" — correct, and deliberately before anything is written, but
+it left exactly one piece of advice: *go play single-player for a few minutes first*. That is a
+strange thing to require of someone whose whole intent is co-op.
+
+## The observation
+
+**Retail chargen already writes the file adoption carries.** §2 of
+[character-login-chain.md](character-login-chain.md) enumerates the writers of `TEMP:pifo`
+exhaustively, by string xref, and the first of the three is
+`CSWCCreature::SaveCharGenCreature 0x6123E0` — new game. Its single call site is `0x006DBE9B`
+(`tools/xrefs.py 0x6123E0`: one direct call, zero address literals), inside
+`CSWGuiClassSelection::BeginPlayGame 0x006DBDF0` — the same function
+[network-topology.md](network-topology.md) already names for its
+`StartConnectToSession 0x005D5040` call at `0x006DBEDE`.
+
+So the file a first-time joiner needs is one the engine writes for them, in the ordinary course
+of starting a game, in exactly the shape `PlayerIfo.BuildPifo` hand-builds: an `IFO ` GFF whose
+root carries a single-element `Mod_PlayerList`. Nothing had to be created; something had to be
+*noticed*.
+
+`CSWGuiClassSelection::BeginPlayGame`, disassembled (`tools/disasm.py 0x6DBDF0 0x180`), in
+order:
+
+| Address | Call | Note |
+| --- | --- | --- |
+| `0x006DBE93` | `CreateServer(appManager, 0)` — `0x00401380` | the same call `MenuLoadController.FirePhase1` makes |
+| `0x006DBE9B` | **`SaveCharGenCreature([classSel+0x68])`** — `0x6123E0` | writes `Temp\pifo.ifo` |
+| `0x006DBEDE` | `StartConnectToSession` — `0x005D5040` | the loopback connect, again as FirePhase1 |
+| `0x006DBF07` | `RequestStatus` — `0x006775E0` | |
+| `0x006DBF0C`+ | module name built from `[classSel+0x1558]`/`+0x155C` | the Endar Spire start |
+
+## The shape
+
+```
+client                                              host
+------                                              ----
+agent: --join, coop.ini join_mode = newcharacter
+   |  connect (admitted, degraded - no world yet)   CoopHost + WorldTransfer.ServeAsync
+   v                                                (auto_adopt_world, ON by default)
+bridge.TryArmNewCharacterCapture  ->  block 0x4780
+   |
+   v
+PLAYER clicks New Game and creates a character (retail, untouched)
+   |   SaveCharGenCreature -> Temp\pifo.ifo
+   v
+NewCharacterCaptureController (MenuFrame, 250 ms poll)
+   |   fresh? >= 256 bytes? stable across two polls?
+   v
+   File.Copy -> Temp\kcoop_carried.ifo ; block 0x4788 = 2, 0x478C = bytes
+   |
+   v
+agent: PlayerIfo.TryExtractPlayerFromPifoBytes(stash)
+   |
+   v
+WorldAdoption.TryAdoptWithCharacterAsync  ----- the SAME fetch/stage/verify as above ----->
+   |
+   v
+bridge.TryRequestAdoptedWorldLoad(inSession: TRUE)
+   |
+   v
+manager.Reconnect()   -> the digests now agree BY CONSTRUCTION; SessionCapabilities.All
+```
+
+Shared block region `0x4780..0x47A0`: `OffsetJoinChargenRequest` (agent → plugin serial),
+`OffsetJoinChargenApplied`, `OffsetJoinChargenState` (0 idle / 1 armed / 2 captured / 3 failed),
+`OffsetJoinChargenBytes`.
+
+## Three decisions worth defending
+
+**1. A file poll, not a hook on `0x6123E0`.** The function has exactly one call site, so a
+detour there would fire exactly once per chargen — a clean capture point, and tempting. It was
+not taken: a poll cannot crash the game, and the only thing a hook buys is a quarter of a
+second on a step the player has just spent several minutes on. The plugin does the copy (rather
+than the agent, which could poll the same file from outside) for one reason — the DESTINATION.
+`Temp\kcoop_carried.ifo` is the name §7's `LoadPCAutoSave` `FileCopy` does not target, and
+`MenuLoadController.RestoreCarriedCharacter` already owns putting it back on the game's own
+thread. One owner for the whole carried-character lifetime beats two racing ones.
+
+**2. The three capture conditions, each a silent failure.** The engine's `0xF` login branch
+ignores `LoadCharacterFromIFO`'s return value (character-login-chain.md §1), so a bad pifo does
+not error — it produces a blank level-1 stranger at the module entry point, which is what §7
+spent a live round diagnosing. Hence: *newer than the arm* (a stale `Temp\pifo.ifo` survives
+across runs on any install that has ever loaded an autosave — capturing it would silently carry
+a previous session's character); *at least 256 bytes* (a real one measured 11,918; zero is the
+wreckage a source-less `FileCopy` leaves); *stable across two polls* (the engine writes from its
+own thread; a length read mid-write is a truncated character). All three are pinned by
+`NewCharacterCaptureRuleTests`.
+
+**3. `inSession: true`.** Retail chargen finishes by LOADING A MODULE — the player is standing
+in the Endar Spire by the time their character exists — so the adoption that follows is
+mid-session by construction. A main-menu-only request would be acked and mooted the instant
+`MenuLoadController` saw a server (its `OnFrame`'s "server already exists" branch), and the
+player would sit in single-player believing they had joined. This is the first thing to
+exercise `FireMidSessionPhase1`, which was written from static analysis only (see
+[session-save.md](session-save.md)); it is therefore also the riskiest part of this path, and
+the first suspect if a `newcharacter` join lands in the wrong world.
+
+Aborting the Endar Spire load instead — so there is only one load, not two — was considered and
+rejected for this pass. The module name is built and consumed inside `BeginPlayGame` after the
+pifo is written, with no reachable seam between them, and forcing a different module name there
+would load a *pristine* module from the game data rather than the host's stored world, which is
+the one thing adoption exists to avoid.
+
+## ⚠ Deliberately NOT done: pressing "New Game" for the player
+
+The player clicks it themselves. `CSWGuiMainMenu::OnNewGamePicked 0x0067AFB0` is a thiscall
+with ONE stack argument, and — unlike `CSWGuiPartySelection::ConfirmPartySelection 0x006BEC90`,
+the precedent for calling a panel's own handler with a null firing control — it DEREFERENCES
+that argument: `mov ecx, [esp+0x3C]` / `mov eax, [ecx+0x4C]` / `test eax,eax` at
+`0x0067AFEC..0x0067AFF5`. Passing 0 faults. The offset of `BTN_NEWGAME` inside
+`CSWGuiMainMenu` is not researched (only `BTN_WARP`'s `menu+0x1248` is).
+
+Replaying the handler's BODY is entirely feasible and is the natural follow-up: it is only
+`operator new(0x1560)` (`0x0067B0F7`) → `CSWGuiClassSelection::Constructor 0x006DC3C0`
+(`0x0067B11C`) → `AddPanel 0x0040BC70` (`0x0067B130`) → the same `[menu+0x44] = (&~0x300)|0x400`
+teardown mark `FirePhase1` already writes (`0x0067B147..0x0067B158`). What stopped it this pass
+is the constructor's second argument: a `CExoString` built through a resource-directory dance at
+`0x0067B01B..0x0067B0F2` (`AddResourceDirectory 0x408800`, two `ResourceExists 0x408BC0` probes
+against restype `0x7DB`, literals `0x752F58` and `0x73D90C`) whose meaning is not pinned.
+Guessing it is the exact class of mistake the engine-write rules exist to prevent. One click by
+the player is a cheap price for not guessing.
+
+Related, and useful if that follow-up is picked up: `CSWGuiMainCharGen::BeginPlayGame 0x6EB320`
+IS argument-free (`RemoveSubPanels 0x6EA830`, then `mov ecx,[this+0x68]` and a tail
+`jmp 0x6DBDF0`), so "finish chargen with whatever is on screen" is one guarded, vtable-checked
+call (`CSWGuiMainCharGen` vtable `0x7592A8`, size `0x22DC`) away — the automation primitive a
+fully unattended live test of this path would need.
+
+## Config
+
+| key | default | meaning |
+| --- | --- | --- |
+| `join_mode` | `save` | `save` = carry this install's own save's character (today's behaviour). `newcharacter` = go through retail chargen and carry that. |
+| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts instead of playing degraded. Also what makes a HOST serve its world by default — a joiner with no save has no other way to obtain one. |
+
+`auto_adopt_world` took `RejoinTrigger.SaveMismatch` over from `client_load_rejoin`. They were
+answering different questions that happened to share an answer: `client_load_rejoin` is "when I
+load a save mid-session, put me back in the host's world"; this is "when my world simply is not
+the host's, fix it". A joiner who had turned the first off — because they never load
+mid-session — was silently also refusing the second, the only mechanism that could ever have
+admitted them to the object-id-keyed channels at all. Both default ON, so an install that has
+opted out of neither sees no change.
+
+## Key addresses (this section)
+
+| Address | Symbol / meaning |
+| --- | --- |
+| `0x6123E0` | `CSWCCreature::SaveCharGenCreature` — writes `TEMP:pifo`; **one** call site, `0x006DBE9B` |
+| `0x6DBDF0` | `CSWGuiClassSelection::BeginPlayGame` — the whole new-game start; CreateServer `0x6DBE93`, pifo `0x6DBE9B`, connect `0x6DBEDE`, RequestStatus `0x6DBF07`, module name `0x6DBF0C`+ |
+| `0x6EB320` | `CSWGuiMainCharGen::BeginPlayGame` — `RemoveSubPanels` then tail-jmp to `0x6DBDF0` with `this = [chargen+0x68]`; **no stack args** |
+| `0x67AFB0` | `CSWGuiMainMenu::OnNewGamePicked` — ⚠ dereferences its firing-control argument at `0x67AFF0`; do not pass 0 |
+| `0x6DC3C0` | `CSWGuiClassSelection::Constructor(guiManager, CExoString*)` |
+| `0x7592A8` | `CSWGuiMainCharGen` vtable (size `0x22DC`) |
+| `0x758020` | `CSWGuiClassSelection` vtable (size `0x1560`) |
+
+## Live pass (2026-08-29) — the drive verbs work; the CAPTURE POINT is wrong
+
+Run on the rig: host on demo save 1 in END_M01AA, client launched with
+`demo.ps1 -ClientNewCharacter` (no save loaded, `join_mode = newcharacter`), everything driven
+through `blockpoke chargen …` — no mouse input at all.
+
+**What is VERIFIED working:**
+
+| | |
+|---|---|
+| `agent run --join` with `join_mode = newcharacter` at the main menu | runs (it used to exit 2) |
+| the arm handshake, agent → block → plugin | `newchar: armed (request 1)` |
+| `CharGenSaveHook` byte check + install | `chargen-save watch at 0x6DBE9B`, no crash |
+| `DialogueSkipHook` byte check + install | `dialogue skip authority at 0x6A7278`, no crash |
+| `newgame` | class-selection screen up and rendering — **screenshot-confirmed** |
+| `chargen quick 2` | class picked, optimised template applied |
+| `chargen accept` | `BeginPlayGame` runs, the new game starts |
+| the hook firing at the right instant | `newchar: chargen saved a character (hook)` immediately after `BeginPlayGame` |
+
+**Two things the live run corrected, both of which had looked right on paper:**
+
+* **`AddPanel`'s layer argument is 2, not 0.** Retail's call at `0x67B130` is
+  `push 1; push ebx; push eax` with EBX still holding the 2 set at `0x67B02E` — the same slot
+  `OnSelectButton` passes **3** in for the chargen panel (`0x6DBA4D`). Added at 0 the panel is
+  constructed and registered and then never driven: the screen stayed black and all six class
+  controls read zero. It looked exactly like a bad constructor argument.
+* **`OnSelectButton`'s argument is an EVENT, not a control.** It reads `[arg+0x48]` as an event
+  id and `[arg+0x4C]` as that event's DATA, bailing silently on a zero — and only then derives
+  the class index from the pointer's own address. Those fields are filled by the GUI manager
+  while it dispatches a real click, so a call without them is a guaranteed no-op. The driver
+  now writes `[choice+0x4C] = 1`, calls, and puts the old value back.
+
+### ⚠ STILL OPEN, and this is the one thing that blocks the feature
+
+**`SaveCharGenCreature` has not flushed the file when it returns.** Measured, twice:
+`Temp\pifo.ifo` EXISTS and is **0 bytes** at the hook, and is still 0 bytes 400 ms later with
+the hook spinning on it; by the time the Endar Spire is up the whole `Temp\` directory is
+empty. The write goes into the resource manager's `TEMP:` cache and materialises — if at all —
+somewhere inside the module load, in a window where the main loop is gone for over a second
+(`cinematic: the main thread was gone for 1265 ms`), and is swept before any frame callback
+sees it. So neither a poll nor a hook at the write site can have the bytes.
+
+The hook is still the right instrument and stays: it is a precise, verified "chargen finished"
+signal, and it is what turned this from a guess into a measurement. What has to change is
+WHERE the character is taken from.
+
+**Recommended next step, and it needs no new RE:** let the new game run into the Endar Spire —
+it already does — and take the character the way `join_mode = save` already does, from a save.
+Once the client is in the world it has a real PC, so the flow becomes: chargen → the game's own
+first module → the agent saves once → `PlayerIfo.TryExtractPlayer` on that save → the existing
+adoption, `inSession: true`. Every step of that is machinery this document has already
+verified; it costs the player the first few seconds of the Endar Spire and removes the pifo
+timing problem completely. The alternatives (finding the engine's flush point, or hand-building
+the pifo from the live `CSWCCreature` at `[mainCharGen+0x64]`) are both more work and one of
+them is explicitly rejected by character-login-chain.md §5.
+
+## Still open
+
+1. **The capture point** — see the live pass above. This is the blocking item.
+2. **`FireMidSessionPhase1` remains the weak link** — see decision 3. It had never run against
+   the game before this path used it.
+2. **The party.** Unchanged from §8 item 1, and now sharper: a brand-new character adopting a
+   mid-game host's world inherits the host's `PARTYTABLE.res`/`AVAILNPC0.utc`, i.e. companions a
+   level-1 character has never met. The roster is host-authoritative anyway
+   (`party_select_host_only`), so this should be cosmetic rather than broken, but it is
+   untested.
+3. **Arrival position.** Same as §7 item 3: `[player+0x40] == 0` on the TEMP path, so the joiner
+   lands at `ModEntryArea`, not next to the host. The presence/teleport machinery closes the gap
+   afterwards; judging health on POSITION will still call every healthy adoption a failure.
+4. **Pressing New Game** — see the section above.

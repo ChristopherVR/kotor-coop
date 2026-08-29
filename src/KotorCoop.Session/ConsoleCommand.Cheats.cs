@@ -281,6 +281,47 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
     }
 
+    // newgame  - opens the game's own character-creation screens. See CoopCommandKind.NewGame.
+    private static CoopCommand ParseNewGame(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "newgame takes no arguments")
+            : new CoopCommand(CoopCommandKind.NewGame);
+
+    // chargen quick [class 0-5] | chargen accept  - see CoopCommandKind.ChargenQuick/ChargenAccept.
+    private static CoopCommand ParseChargen(string[] rest)
+    {
+        const string usage = "chargen quick [class 0-5] | chargen accept";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (rest[0].Equals("accept", StringComparison.OrdinalIgnoreCase))
+        {
+            return rest.Length > 1
+                ? new CoopCommand(CoopCommandKind.Invalid, Error: "chargen accept takes no arguments")
+                : new CoopCommand(CoopCommandKind.ChargenAccept);
+        }
+
+        if (!rest[0].Equals("quick", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        int classIndex = 0;
+        if (rest.Length > 1 && (!int.TryParse(rest[1], out classIndex) || classIndex is < 0 or > 5))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "chargen quick takes a class index 0-5 (the six portraits, left to right)");
+        }
+
+        return rest.Length > 2
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: usage)
+            : new CoopCommand(CoopCommandKind.ChargenQuick, Amount: classIndex);
+    }
+
     // startdialog <npc-tag|id> [dlg-resref]  - LIVE-TEST PRIMITIVE, see
     // CoopCommandKind.StartDialog.
     private static CoopCommand ParseStartDialog(string[] rest)
