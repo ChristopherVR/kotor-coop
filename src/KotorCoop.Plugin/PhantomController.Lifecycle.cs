@@ -224,12 +224,19 @@ internal sealed unsafe partial class PhantomController
         // a fresh creature stands next to the party is exactly when something shoots it.
         Odyssey.MarkAsRemotePlayer(creature);
 
-        // Dress the phantom as its remote player immediately, while the client twin does
-        // not exist yet, so it never renders a single frame as the commoner blueprint.
+        // Dress the phantom as its remote player immediately, so it never renders a single
+        // frame as the commoner blueprint. This is a HALF measure by construction — the client
+        // twin does not exist yet, and the twin is what renders — so ApplyAppearance leaves
+        // _twinDressed clear and the drive loop finishes the job the moment the twin appears.
+        // Before that latch existed this call was the ONLY one that ever ran after a re-spawn,
+        // which is why a peer came out of a warp wearing the blueprint. Also note the row is
+        // the peer's own, or the last one that peer published (PeerIdentityRule) — a peer
+        // mid-transition publishes 0, and 0 must never mean "use whatever the body has".
         RemoteView owner = block.GetRemote(slot);
+        _phantomIds[slot] = objectId;
         if (owner.Active)
         {
-            ApplyAppearance(creature, owner.Appearance);
+            ApplyAppearance(slot, creature, owner.Appearance);
         }
 
         // Name it after its player, same reasoning: set before the twin exists so every
@@ -255,9 +262,21 @@ internal sealed unsafe partial class PhantomController
         // From here on, damage landing on this body is the peer's to take.
         PhantomHitHook.Watch(slot, objectId);
 
+        // The identity fields go in the spawn line because "what does this body look like, and
+        // who says so" is the first question a wrong-look report asks and nothing logged it.
+        // Server row and twin row are BOTH here on purpose: they are the two halves that can
+        // disagree (see ApplyAppearance), and a line carrying one of them proves nothing.
+        ushort serverRow = *(ushort*)(creature + CreAppearanceType);
+        ushort portrait = *(ushort*)(creature + ObjPortraitId);
+        string twinRow = Odyssey.TryGetTwinAppearanceRow(creature, out ushort renderedRow)
+            ? renderedRow.ToString()
+            : "no twin yet";
+
         PluginHost.Log(
             $"spawned phantom in slot {slot}: id 0x{objectId:X} at 0x{creature:X} "
-            + $"({spawnPosition.X:F2}, {spawnPosition.Y:F2}, {spawnPosition.Z:F2})");
+            + $"({spawnPosition.X:F2}, {spawnPosition.Y:F2}, {spawnPosition.Z:F2}) "
+            + $"appearance {serverRow} (peer published {owner.Appearance}, renders {twinRow}), "
+            + $"portrait {portrait}");
         PluginEvents.RaisePeerSlotSpawned(slot, objectId);
     }
 }

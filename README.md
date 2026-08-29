@@ -27,7 +27,7 @@ attaches from outside with `OpenProcess`.
 | Companion local combat | Narrow case live-verified | [party-reconciliation.md](docs/research/party-reconciliation.md) |
 | Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
-| Minigames — swoop race | Blocked, needs a debugger | [minigames.md](docs/research/minigames.md) |
+| Minigames — swoop race | Root-caused 2026-08-29 (the blocker was the test recipe, not the mod); race runs end to end, peers locked out of the single-seat track | [minigames.md](docs/research/minigames.md) |
 | Minigames — Pazaak detection, "waiting" notice | Live-verified 2026-08-28 (a range-guard bug that silenced detection was found and fixed); `pazaak_detect` flipped ON by default | [minigames.md](docs/research/minigames.md) |
 | Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) |
@@ -240,10 +240,15 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 - **Mod-compatibility mismatch handling is live-verified for most categories**, but
   module-GIT/globals-catalogue mismatches are unforced in testing and a same-resref,
   differently-modded item isn't detected. See [mod-compatibility.md](docs/research/mod-compatibility.md).
-- **Swoop racing is blocked** (entry gate found, terminal transition call never fires — needs a
-  debugger this project doesn't have); **creature liveness reconciliation** (a body alive on one
+- **Swoop racing works, but only one player at a time.** The eight-round "the race never starts"
+  blocker turned out to be a wrong test recipe, not the mod: the race branch of Gadon's dialogue
+  needs the `Tar_SummonGadon` global and three real reply picks, and with those it runs end to end
+  with the plugin loaded. A KOTOR track is a single-seat area, so `minigame_lock_peers` (on by
+  default) holds the other players still with a "&lt;name&gt; is racing - waiting" notice and refuses
+  to warp them onto the track; the race's rewards (gold, journal, the `Tar_Swoop*` globals) reach
+  everyone through the ordinary channels. **Creature liveness reconciliation** (a body alive on one
   screen, dead on the other) ships off by default, correction mechanism works, a freshness theory
-  is unconfirmed. See [minigames.md](docs/research/minigames.md) and
+  is unconfirmed. See [minigames.md](docs/research/minigames.md) §24 and
   [creature-liveness.md](docs/research/creature-liveness.md).
 - **Chain mode serialises `dinput8` proxies, it doesn't merge them** — a proxy that always
   loads the system DLL itself must be last in `dinput8.chain`; "load me" DLLs (`.asi`) go anywhere.

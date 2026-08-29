@@ -174,18 +174,43 @@ internal static unsafe partial class Odyssey
     /// (server-side, <c>UpdateAppearanceDependantInfo</c>) already ran; this is the CLIENT-side
     /// counterpart the engine's own network appearance-change handler would have triggered, which
     /// nothing in this codebase called before this. MAIN THREAD ONLY.
+    ///
+    /// ⚠ Returns FALSE when there is no client twin yet — which is the ordinary case at spawn
+    /// time, since the engine builds the twin a frame or more after the server object exists.
+    /// The caller has to keep asking until it returns true, or the twin renders whatever the
+    /// blueprint gave it forever: nothing else in the engine reloads it, and a server-side
+    /// field that already reads correct gives a "has it been applied" check the wrong answer.
+    /// <see cref="PeerIdentityRule.ShouldApply"/> is that latch for the phantom.
     /// </summary>
-    public static void RebuildClientAppearance(nint creature)
+    public static bool RebuildClientAppearance(nint creature)
     {
         nint twin = GetClientTwin(creature);
         if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
         {
-            return;
+            return false;
         }
 
         ushort row = *(ushort*)(creature + CreServerAppearanceRow);
         *(ushort*)(twin + TwinDesiredAppearanceRow) = row;
         ForceAppearanceUpdateFn(twin);
+        return true;
+    }
+
+    /// <summary>The appearance row the CLIENT twin is currently built for — what actually
+    /// renders — or false when the body has no twin yet. Diagnostic only: the server row
+    /// (<c>creature + 0xA60</c>) and this one disagreeing IS the wrong-look bug, so a log line
+    /// that carries only one of them cannot tell them apart. MAIN THREAD ONLY.</summary>
+    public static bool TryGetTwinAppearanceRow(nint creature, out ushort row)
+    {
+        row = 0;
+        nint twin = GetClientTwin(creature);
+        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        {
+            return false;
+        }
+
+        row = *(ushort*)(twin + TwinDesiredAppearanceRow);
+        return true;
     }
 
     /// <summary>CSWCAnimBase + this = Gob* (the render/scene node this animbase drives).
