@@ -240,6 +240,19 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.Invalid, Error: "skipline takes no arguments")
             : new CoopCommand(CoopCommandKind.SkipLine);
 
+    // skipkey  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SkipKey. NOT a synonym of skipline:
+    // this one goes through the engine's input dispatch, which is where DialogueSkipHook lives.
+    private static CoopCommand ParseSkipKey(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "skipkey takes no arguments")
+            : new CoopCommand(CoopCommandKind.SkipKey);
+
+    // save  - see CoopCommandKind.Save.
+    private static CoopCommand ParseSave(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "save takes no arguments")
+            : new CoopCommand(CoopCommandKind.Save);
+
     // quittomenu  - LIVE-TEST PRIMITIVE, see CoopCommandKind.QuitToMenu.
     private static CoopCommand ParseQuitToMenu(string[] rest) =>
         rest.Length > 0
@@ -470,8 +483,13 @@ public static partial class ConsoleCommand
         "                      omitted = coop.ini's party_follow_stall_recovery_method); local only",
         "  skipline            finish your OWNED conversation's current line/VO right now,",
         "                      in-process (no OS input); no-op if nothing is playing",
+        "  skipkey             send a skip KEYPRESS into the dialogue panel's own input",
+        "                      dispatch - the only route through the spectator skip gag;",
+        "                      answers with the gag's swallow count before -> after",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
         "                      (no OS input); test-only navigation helper for skipline",
+        "  save                quicksave through the engine's own DoQuickSave (asynchronous:",
+        "                      the directory appears a tick or two later)",
         "  loadgame <slot>     fire a GENUINE mid-session Load Game action, in-process (no",
         "                      clicks); slot is 0-based, most-recent-first",
         "  pooladd <resref> [stack]     add a resref stack to the shared party item pool",

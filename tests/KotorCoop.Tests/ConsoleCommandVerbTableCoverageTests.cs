@@ -60,6 +60,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Leader] = "leader pc",
         [CoopCommandKind.Recruit] = "recruit 2",
         [CoopCommandKind.SkipLine] = "skipline",
+        [CoopCommandKind.SkipKey] = "skipkey",
+        [CoopCommandKind.Save] = "save",
         [CoopCommandKind.SelectReply] = "selectreply 0",
         [CoopCommandKind.WalkTo] = "walkto 1 2",
         [CoopCommandKind.LoadGame] = "loadgame 0",

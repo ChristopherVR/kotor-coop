@@ -282,6 +282,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 FollowStall();
                 break;
 
+            case SharedBlock.CheatKindSkipKey:
+                SkipKey();
+                break;
+
+            case SharedBlock.CheatKindQuickSave:
+                QuickSave();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;
