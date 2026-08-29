@@ -128,6 +128,10 @@ minigame_wait_notice = 1
 ; Tar_SwoopStatus / Tar_SwoopRaceCounter globals) still reach everyone through the ordinary
 ; globals/journal/purse channels, which are not gated on this. 0 restores the old
 ; free-for-all. See docs/research/minigames.md §24.
+;
+; A lock needs BOTH the peer's minigame flag AND a known track module, and that second half is
+; what keeps Pazaak out: pazaak_detect sets the same flag for a card hand on purpose, and
+; freezing everybody through a long optional side activity in a normal module would be wrong.
 minigame_lock_peers = 1
 
 ; Safety valve for the above: seconds a lock may stand before releasing itself regardless

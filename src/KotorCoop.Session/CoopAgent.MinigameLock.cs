@@ -60,7 +60,8 @@ public sealed partial class CoopAgent
         _minigameLockPeers.Clear();
         foreach (RemotePeer peer in peers)
         {
-            _minigameLockPeers.Add(new MinigameLockPeer(peer.PeerId, peer.Name, peer.State.IsInMinigame));
+            _minigameLockPeers.Add(new MinigameLockPeer(
+                peer.PeerId, peer.Name, peer.State.IsInMinigame, peer.State.Module));
         }
 
         MinigameLockRule rule = new(Enabled: true, TimeoutMs: _settings.MinigameLockTimeoutMs);
@@ -69,7 +70,8 @@ public sealed partial class CoopAgent
             _minigameLockPeers,
             _minigameLockOwner,
             _minigameLockStartedAtMs,
-            SessionClock.NowMs);
+            SessionClock.NowMs,
+            _settings.ExtraMinigameModules);
 
         if (!decision.Locked)
         {

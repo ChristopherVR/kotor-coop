@@ -27,7 +27,11 @@ public class MinigameLockLoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
-    private const string Module = "tar_m03af";
+    /// <summary>Both fakes publish this as their module. It is the Taris swoop TRACK on
+    /// purpose: <see cref="MinigameLockRule"/> requires the flag AND a track module (that second
+    /// half is what keeps a Pazaak hand from freezing everybody), so a test publishing an
+    /// ordinary module name would never lock however the flag moved.</summary>
+    private const string Module = "tar_m03mg";
 
     /// <summary>
     /// Stands in for <c>KotorGameBridge</c>. <see cref="InMinigame"/> drives the published

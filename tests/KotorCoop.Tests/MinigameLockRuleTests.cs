@@ -16,9 +16,19 @@ public class MinigameLockRuleTests
 {
     private static readonly MinigameLockRule Rule = new(Enabled: true, TimeoutMs: 600_000);
 
-    private static MinigameLockPeer Racing(uint id, string name = "Malak") => new(id, name, true);
+    /// <summary>A peer on the Taris swoop track: the flag set AND a track module, which is what
+    /// the rule requires (see <see cref="MinigameLockRule"/>'s own remarks on why the module half
+    /// exists).</summary>
+    private static MinigameLockPeer Racing(uint id, string name = "Malak") =>
+        new(id, name, true, "tar_m03mg");
 
-    private static MinigameLockPeer Idle(uint id, string name = "Malak") => new(id, name, false);
+    private static MinigameLockPeer Idle(uint id, string name = "Malak") =>
+        new(id, name, false, "tar_m03af");
+
+    /// <summary>A peer mid-Pazaak-hand: <c>pazaak_detect</c> sets the SAME flag, in an ORDINARY
+    /// module. Nobody waits for a card game.</summary>
+    private static MinigameLockPeer PlayingPazaak(uint id, string name = "Malak") =>
+        new(id, name, true, "tar_m02ae");
 
     [Fact]
     public void APeerEnteringAMinigameLocksThisPlayerAndNamesThem()
@@ -30,6 +40,63 @@ public class MinigameLockRuleTests
         Assert.Equal(7u, decision.OwnerId);
         Assert.Equal("Malak", decision.OwnerName);
         Assert.Contains("Malak", decision.Reason);
+    }
+
+    [Fact]
+    public void APeerPlayingPazaakDoesNotLockAnyone()
+    {
+        // pazaak_detect (ON by default) sets PlayerState.FlagInMinigame for a card hand, on
+        // purpose - a player at a Pazaak table is as absent as one on a bike for
+        // phantom-parking purposes. Freezing everyone else through a long optional side
+        // activity in a NORMAL module would be a plain regression, and the module is the only
+        // thing on the wire that tells the two apart.
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false, [PlayingPazaak(7)], currentOwnerId: 0, lockStartedAtMs: 0, nowMs: 1000);
+
+        Assert.False(decision.Locked);
+    }
+
+    [Fact]
+    public void APeerLeavingTheTrackButKeepingTheFlagStillReleasesTheLock()
+    {
+        // The engine can hold the minigame flag for a moment past the module change; the module
+        // half of the test is what ends the lock promptly rather than a poll later.
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false,
+            [new MinigameLockPeer(7, "Malak", true, "tar_m03af")],
+            currentOwnerId: 7,
+            lockStartedAtMs: 1000,
+            nowMs: 60_000);
+
+        Assert.False(decision.Locked);
+        Assert.Contains("finished", decision.Reason);
+    }
+
+    [Fact]
+    public void AModdedTrackNamedInConfigLocksToo()
+    {
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false,
+            [new MinigameLockPeer(7, "Malak", true, "mod_track01")],
+            currentOwnerId: 0,
+            lockStartedAtMs: 0,
+            nowMs: 1000,
+            extraModules: ["mod_track01"]);
+
+        Assert.True(decision.Locked);
+    }
+
+    [Fact]
+    public void TheTurretDeckLocksAsWellAsASwoopTrack()
+    {
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false,
+            [new MinigameLockPeer(7, "Malak", true, "M12ab")],
+            currentOwnerId: 0,
+            lockStartedAtMs: 0,
+            nowMs: 1000);
+
+        Assert.True(decision.Locked);
     }
 
     [Fact]

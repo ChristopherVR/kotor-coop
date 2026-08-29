@@ -26,10 +26,21 @@ public readonly record struct MinigameLockDecision(
 /// lock that fails to RELEASE is the worst outcome this feature has (a player frozen for the
 /// rest of the session), so every release path gets its own test.
 ///
-/// Ownership is FIRST-COME and sticky: the first peer observed with the flag set owns the lock
-/// until their flag clears, so two peers entering minigames a tick apart do not make the notice
-/// flicker between two names. Ties among simultaneous starters break on the lowest peer id,
-/// which is stable across ticks (unlike roster order).
+/// Ownership is FIRST-COME and sticky: the first peer observed racing owns the lock until they
+/// stop, so two peers entering minigames a tick apart do not make the notice flicker between two
+/// names. Ties among simultaneous starters break on the lowest peer id, which is stable across
+/// ticks (unlike roster order).
+///
+/// ⚠ A LOCK NEEDS BOTH THE FLAG AND A TRACK MODULE, and the second half is not belt-and-braces
+/// — it is what keeps Pazaak out. <c>pazaak_detect</c> (ON by default) deliberately sets the SAME
+/// <c>PlayerState.FlagInMinigame</c> bit for a running card hand, because for phantom-parking
+/// purposes a player staring at a Pazaak table is exactly as absent as one on a swoop bike. For
+/// LOCKING purposes they are not remotely the same: a Pazaak hand is an ordinary, long, optional
+/// side activity that happens in a normal module, and freezing everybody else through one would be
+/// a plain regression. The flag alone cannot tell the two apart (it is one bit, and widening it
+/// would be a wire change); the peer's published MODULE can, and already crosses the network.
+/// See <see cref="MinigameModuleRule"/> for the catalogue and the <c>minigame_modules</c> escape
+/// hatch for a mod with its own track.
 /// </summary>
 /// <param name="Enabled">coop.ini <c>minigame_lock_peers</c> — default ON.</param>
 /// <param name="TimeoutMs">coop.ini <c>minigame_lock_timeout_s</c> x 1000. A lock older than
@@ -47,8 +58,10 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
     /// <param name="localInMinigame">True when THIS player is the one racing. The racer is
     /// never locked by their own race, and a peer who also happens to be in a minigame does
     /// not lock them either — two players in separate minigames simply both play.</param>
-    /// <param name="peers">Every peer this instance currently knows: id, published name and
-    /// minigame flag.</param>
+    /// <param name="peers">Every peer this instance currently knows: id, published name,
+    /// minigame flag and module.</param>
+    /// <param name="extraModules">coop.ini <c>minigame_modules</c> — extra track module names
+    /// on top of <see cref="MinigameModuleRule.BuiltIn"/>.</param>
     /// <param name="currentOwnerId">The owner from the previous tick, or 0. Passing this back
     /// in is what makes ownership sticky.</param>
     /// <param name="lockStartedAtMs">When the current lock began (only meaningful while
@@ -59,7 +72,8 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
         IReadOnlyList<MinigameLockPeer> peers,
         uint currentOwnerId,
         long lockStartedAtMs,
-        long nowMs)
+        long nowMs,
+        IReadOnlyList<string>? extraModules = null)
     {
         if (!Enabled)
         {
@@ -87,7 +101,7 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
                     continue;
                 }
 
-                if (!peer.InMinigame)
+                if (!IsRacing(peer, extraModules))
                 {
                     return new MinigameLockDecision(false, 0, string.Empty,
                         $"{Describe(peer.Name)} finished — control is yours again");
@@ -112,7 +126,7 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
         MinigameLockPeer? candidate = null;
         foreach (MinigameLockPeer peer in peers)
         {
-            if (peer.InMinigame && (candidate is null || peer.PeerId < candidate.Value.PeerId))
+            if (IsRacing(peer, extraModules) && (candidate is null || peer.PeerId < candidate.Value.PeerId))
             {
                 candidate = peer;
             }
@@ -124,10 +138,17 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
             : default;
     }
 
+    /// <summary>Is this peer in a minigame that other players must WAIT for — as opposed to one
+    /// they can simply ignore? See the class remarks for why the module test carries as much
+    /// weight as the flag.</summary>
+    private static bool IsRacing(MinigameLockPeer peer, IReadOnlyList<string>? extraModules) =>
+        peer.InMinigame && MinigameModuleRule.IsMinigameModule(peer.Module, extraModules);
+
     private static string Describe(string name) => name.Length == 0 ? "A peer" : name;
 }
 
-/// <summary>One row of <see cref="MinigameLockRule.Decide"/>'s input: the three things about a
+/// <summary>One row of <see cref="MinigameLockRule.Decide"/>'s input: the four things about a
 /// peer the decision actually reads, so a test does not have to build a whole
-/// <c>RemotePeer</c>.</summary>
-public readonly record struct MinigameLockPeer(uint PeerId, string Name, bool InMinigame);
+/// <c>RemotePeer</c>. <paramref name="Module"/> is the peer's own published module name — the
+/// half of the decision that separates a swoop track from a Pazaak table.</summary>
+public readonly record struct MinigameLockPeer(uint PeerId, string Name, bool InMinigame, string Module);

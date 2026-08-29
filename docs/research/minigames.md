@@ -3342,6 +3342,14 @@ degraded experience, it is an invalid one.
   paths, each with its own test: the owner's flag clears, the owner leaves the roster (a
   disconnect mid-race), `minigame_lock_timeout_s` expires, or this player turns out to be in a
   minigame too. A lock that fails to release is the worst thing this feature can do.
+  **A lock needs the flag AND a track module**, and the second half is not belt-and-braces — it
+  is what keeps Pazaak out. §23's `pazaak_detect` (ON by default) deliberately sets the SAME
+  `PlayerState.FlagInMinigame` bit for a running card hand, because for phantom-parking purposes a
+  player at a Pazaak table is exactly as absent as one on a bike. For LOCKING purposes they are
+  nothing alike: a Pazaak hand is a long, optional side activity in an ordinary module, and
+  freezing everybody else through one would be a plain regression this feature would otherwise
+  have shipped. One wire bit cannot separate them; the peer's published MODULE can, and already
+  crosses the network.
 * `KotorCoop.Protocol.MinigameModuleRule` refuses the follow-warp, on either of two independent
   signals: the peer publishing `FlagInMinigame`, or the destination naming a known track module
   (the four above, plus anything in `coop.ini minigame_modules`). The module-name gate catches the
@@ -3351,7 +3359,10 @@ degraded experience, it is an invalid one.
   stylistic: `minigame_hide_peer` (default ON) removes a racing peer from the block's remote slots
   in the very tick their flag turns true, so a plugin-side reader of those slots could never see
   the owner — the identical trap §23.3 recorded for the HUD notice.
-* `MinigameLockController` (plugin) holds the waiting player with the same two levers
+* `MinigameLockController` (plugin) refuses to trust the lock level past a dead agent — it is a
+  LEVEL written by a separate process, and if that process dies mid-race the agent-side timeout
+  cannot help because it runs in the process that just died, so the plugin adds its own
+  `AgentLiveness` + active-session condition on top. It holds the waiting player with the same two levers
   `SoloSegmentSpectateController` already stacks (`creature+0xE8` commandable = 0, plus
   `HoldCreatureStill` reasserted every 30 frames) and draws "&lt;name&gt; is racing - waiting" on
   HUD row 9. The keyboard half of that lock stays NEEDS-LIVE for the same reason it does there —

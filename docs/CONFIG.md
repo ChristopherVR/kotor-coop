@@ -53,7 +53,7 @@ actually runs with.
 | `minigame_hide_peer` | ON | park a peer's phantom while they race/man a turret | [minigames.md](research/minigames.md) |
 | `minigame_spectate` | OFF | hand the camera to a racing/turret peer (not yet wired) | [minigames.md](research/minigames.md) |
 | `pazaak_detect` | ON⁹ | treat a running Pazaak hand as "in a minigame" too (live-verified 2026-08-28) | [minigames.md](research/minigames.md) |
-| `minigame_lock_peers` | ON | one player races, everybody else waits: hold non-racers still with a "&lt;name&gt; is racing - waiting" notice, and refuse to follow a peer onto a single-seat track module | [minigames.md](research/minigames.md) §24 |
+| `minigame_lock_peers` | ON | one player races, everybody else waits: hold non-racers still with a "&lt;name&gt; is racing - waiting" notice, and refuse to follow a peer onto a single-seat track module. Needs the peer's minigame flag AND a track module, so a Pazaak hand (same flag, ordinary module) never locks anyone | [minigames.md](research/minigames.md) §24 |
 | `minigame_lock_timeout_s` | `600` | seconds a minigame lock may stand before releasing itself regardless of the racer's flag (0 = no timeout) | [minigames.md](research/minigames.md) §24 |
 | `minigame_modules` | unset (the four stock tracks only) | comma-separated extra module resrefs to treat as single-seat minigame tracks, on top of `tar_m03mg`/`manm26mg`/`tat_m17mg`/`m12ab` | [minigames.md](research/minigames.md) §24 |
 | `chat_overlay` | ON | show the always-on chat overlay | [chat-input-scroll.md](research/chat-input-scroll.md) |
