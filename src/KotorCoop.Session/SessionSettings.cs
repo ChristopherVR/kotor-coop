@@ -29,6 +29,35 @@ public sealed record SessionSettings
     public int PeerTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
 
     /// <summary>
+    /// Whether a CLIENT that has lost its host (silence past <see cref="HostLossTimeoutMs"/>,
+    /// or an explicit <see cref="HostByePacket"/>) declares itself <c>HostLost</c> — coop.ini
+    /// <c>host_loss_release</c>, ON by default. <see cref="CoopClient.HostLost"/> is what
+    /// <c>CoopAgent.PumpOnce</c> reads to run every plugin-side lock's release
+    /// (<c>KotorGameBridge.ClearCoopState</c>) and stop re-asserting the client-side control
+    /// lock, so a solo player is never left holding a lock a host that is not coming back this
+    /// tick still owns. OFF restores the pre-existing behaviour exactly: the client still
+    /// re-Hellos in the background (nothing about reconnecting itself is gated on this), it
+    /// simply never runs the extra release pass while doing so — every lock stays held until a
+    /// full manual disconnect, the same as before this existed. Ignored by a host, which is
+    /// never "lost" to itself. See docs/research/disconnect-reconnect.md's "host loss" section.
+    /// </summary>
+    public bool HostLossReleaseEnabled { get; init; } = true;
+
+    /// <summary>
+    /// How long a CLIENT'S host may stay silent before <see cref="HostLossReleaseEnabled"/>'s
+    /// release pass fires — coop.ini <c>host_loss_timeout_ms</c>. Defaults to the SAME value as
+    /// <see cref="PeerTimeoutMs"/> (5000), so out of the box "host lost" is declared in the
+    /// exact tick the existing silence-based reconnect logic
+    /// (<c>CoopClient.Tick</c>/<c>ForgetSession</c>) already gives up and starts re-Helloing —
+    /// no new delay, just a release that used to never happen at all. Kept as an independent
+    /// knob (rather than reusing <see cref="PeerTimeoutMs"/> outright) so a player who wants
+    /// the release to wait a little longer than the reconnect attempt itself — betting a brief
+    /// blip resolves before locks let go — can set this higher without changing how soon
+    /// re-Helloing starts.
+    /// </summary>
+    public int HostLossTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
+
+    /// <summary>
     /// This install's content fingerprint, announced to the peer so a mod mismatch that
     /// would corrupt shared state is caught at join time. Defaults to
     /// <see cref="ContentDigest.Unknown"/> (agents without game-file access, and the mock

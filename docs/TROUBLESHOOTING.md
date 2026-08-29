@@ -66,6 +66,31 @@ default was a Steam path.
 - Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
   so the host's UDP port must be reachable from the client.
 
+## Host disconnected (crashed, quit, or the network dropped)
+
+A client that loses its host is not stuck: within `host_loss_timeout_ms` of silence (default
+5000ms, same as the ordinary reconnect trigger — near-instant instead if the host shut down
+cleanly rather than crashing) every co-op lock releases and you keep playing solo — companions
+respond to clicks again, doors and dialogue work normally, nothing stays frozen. A HUD/chat
+line says "Host connection lost - playing solo, will rejoin automatically." while this is
+happening.
+
+- The client keeps re-Helloing in the background the whole time; if the host comes back
+  (relaunched, or the network recovers) you rejoin automatically and everything re-mirrors —
+  no player action needed. A second HUD/chat line ("Host connection restored - rejoining.")
+  confirms it.
+- If you were mid-conversation with a shared NPC when the host vanished, you keep the reply
+  list you were already looking at and can keep clicking through it on your own — dialogue is
+  initiator-led, so this does not require the host.
+- `coop.ini host_loss_release = 0` turns this off and restores the old behaviour: every lock
+  stays held until you manually run `disconnect` in the console. `host_loss_timeout_ms` lets
+  the release wait longer than the reconnect attempt itself, if you would rather bet on a brief
+  blip resolving first. See [CONFIG.md](CONFIG.md) and
+  [disconnect-reconnect.md §11](research/disconnect-reconnect.md).
+- This does not apply to the HOST losing a client — a client vanishing mid-dialogue or
+  mid-interaction only ever releases what THAT client was holding; the host and every other
+  connected player are unaffected either way.
+
 ## I can't see my partner / their phantom never appears
 
 - Confirm both players are actually in the same module — a peer in a different module is

@@ -36,6 +36,17 @@ menu_button = 1
 ; built-in 15000.
 # connect_timeout_ms = 0
 
+; When a CLIENT loses its host (silence, or the host shutting down cleanly), release every
+; plugin-side lock (control lock, party-select suppression, follow mirroring, dialogue
+; spectate, minigame lock, ...) so play continues solo instead of staying locked out until a
+; manual disconnect. On by default; the client still auto-reconnects in the background either
+; way. Set 0 to restore the old behaviour of leaving every lock held until manual disconnect.
+host_loss_release = 1
+
+; How long (ms) the host may stay silent before the release above fires. 0 or unset keeps the
+; built-in 5000 — the same instant the client already gives up and starts re-Helloing.
+# host_loss_timeout_ms = 0
+
 ; State send rate in Hz, clamped 5-120. 0 or unset keeps the agent's own built-in rate (30 Hz,
 ; ProtocolConstants.DefaultTickRate).
 # tick_rate = 0
