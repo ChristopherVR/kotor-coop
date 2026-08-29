@@ -228,6 +228,31 @@ internal static unsafe partial class Odyssey
     /// recorded node strictly closer to <c>Target</c> than to <c>Prior</c> whenever the companion
     /// is genuinely short of it — the engine's own unmodified test then accepts on its own, and
     /// commits its own phase. One field plus a flag; no phase forced, no body moved.</item>
+    /// <item><b>5, <c>destnode</c></b> — the union of two previously-shipped-but-OFF candidates
+    /// (<c>party_follow_advance_destnode_phase6</c> and <c>party_follow_extend_final_node</c>),
+    /// now driven by a real wedge detector with anti-spin instead of firing unconditionally on
+    /// every frame the shape happens to hold — which is precisely why their own live A/Bs came
+    /// back "inconclusive". It never touches the phase field and never manufactures a geometric
+    /// verdict: it makes <c>DestNode</c> DIFFER from <c>CurrentPathNode</c>, so the wedged
+    /// handler's own forward search walks forward and takes its OTHER, UNCONDITIONAL accept
+    /// branch, and the unmodified engine handler decides and commits from there. With real
+    /// unconsumed trail ahead (<c>gap &gt;= 2</c>) it repoints <c>DestNode</c> at
+    /// <c>writeCursor - 1</c>; with the trail exhausted (<c>gap == 1</c>) it appends exactly one
+    /// node at the leader's own position, advances the shared cursor, and points <c>DestNode</c>
+    /// at the new node.</item>
+    /// <item><b>6, <c>priorpush</c></b> — round 105's own answer to round 97's closing question
+    /// ("whatever fixes this needs to address <c>PathWaitDest</c>'s accept condition directly").
+    /// Method 4 established live that moving <c>PriorPoint</c> alone genuinely restarts real
+    /// walking, but it converges to the point where <c>|node - me| == |node - Target|</c> and
+    /// re-wedges on that tie, because the STRICT compare rejects equality. This places
+    /// <c>PriorPoint</c> at <c>node + PriorPushMultiple * (node - Target)</c> — mirrored through
+    /// the node, directly AWAY from the target — so <c>|node - Prior|</c> is a fixed multiple of
+    /// <c>|node - Target|</c> and the strict inequality holds by construction rather than by
+    /// luck of geometry. When node and target coincide (the degenerate <c>0 vs 0</c> tie round 97
+    /// captured) the same push is built from the node-to-companion vector instead, which is
+    /// non-zero exactly when the companion has not arrived. Still one field plus the dirty flag:
+    /// no phase forced, no body moved, no index rewritten — the unmodified engine handler
+    /// performs its own accept and commits its own phase.</item>
     /// </list>
     ///
     /// Returns false when the record does not resolve, or when
@@ -237,7 +262,12 @@ internal static unsafe partial class Odyssey
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool TryRecoverFollowStall(
-        uint companionServerObjectId, int method, bool allowCountRestore, out bool wrote, out string detail)
+        uint companionServerObjectId,
+        int method,
+        Vec3 leaderPos,
+        bool allowCountRestore,
+        out bool wrote,
+        out string detail)
     {
         wrote = false;
         detail = string.Empty;
@@ -332,6 +362,141 @@ internal static unsafe partial class Odyssey
                 detail = $"priortie prior ({priorBefore.X:F2},{priorBefore.Y:F2},{priorBefore.Z:F2}) -> "
                     + $"({self.X:F2},{self.Y:F2},{self.Z:F2}), snapshotPending -> 1" + restoredNote;
                 return true;
+            }
+
+            case FollowStallRule.MethodPushPriorPastNode:
+            {
+                nint creature = ResolveServerObject(companionServerObjectId);
+                if (creature == 0)
+                {
+                    detail = "priorpush refused - companion body does not resolve here";
+                    return false;
+                }
+
+                int pathNode = *(int*)(record + 0x24);
+                nint followData = party + 0x2DC;
+                if (pathNode is < 0 or >= 100 || !NativeMethods.IsReadable(followData + (pathNode * 40) + 8))
+                {
+                    detail = $"priorpush refused - trail node {pathNode} is not readable";
+                    return false;
+                }
+
+                Vec3 node = *(Vec3*)(followData + (pathNode * 40));
+                Vec3 target = *(Vec3*)(record + 0x28);
+                Vec3 priorBefore = *(Vec3*)(record + 0x18);
+
+                float ax = node.X - target.X;
+                float ay = node.Y - target.Y;
+                float az = node.Z - target.Z;
+                string basis = "node-to-target";
+
+                if ((ax * ax) + (ay * ay) + (az * az) < FollowStallRule.DirectionEpsilonSquared)
+                {
+                    // The node sits exactly on the target — round 97's own 0-vs-0 capture. Mirror
+                    // through the node away from the COMPANION instead; that vector is non-zero
+                    // exactly when the companion has not arrived, which is the only case this
+                    // recovery is ever asked to act on.
+                    Vec3 self = GetPosition(creature);
+                    ax = node.X - self.X;
+                    ay = node.Y - self.Y;
+                    az = node.Z - self.Z;
+                    basis = "node-to-companion";
+                }
+
+                if ((ax * ax) + (ay * ay) + (az * az) < FollowStallRule.DirectionEpsilonSquared)
+                {
+                    detail = "priorpush refused - companion, trail node and target all coincide "
+                        + "(genuinely arrived; nothing to recover)";
+                    return false;
+                }
+
+                Vec3 pushed = default;
+                pushed.X = node.X + (FollowStallRule.PriorPushMultiple * ax);
+                pushed.Y = node.Y + (FollowStallRule.PriorPushMultiple * ay);
+                pushed.Z = node.Z + (FollowStallRule.PriorPushMultiple * az);
+
+                *(Vec3*)(record + 0x18) = pushed;
+                *(int*)(record + 0x68) = 1;
+
+                wrote = true;
+                detail = $"priorpush prior ({priorBefore.X:F2},{priorBefore.Y:F2}) -> "
+                    + $"({pushed.X:F2},{pushed.Y:F2}) pushed {FollowStallRule.PriorPushMultiple:F0}x "
+                    + $"past node {pathNode} ({node.X:F2},{node.Y:F2}) along {basis}, "
+                    + "snapshotPending -> 1" + restoredNote;
+                return true;
+            }
+
+            case FollowStallRule.MethodAdvanceDestNode:
+            {
+                int destBefore = *(int*)(record + 0x34);
+                int pathNode = *(int*)(record + 0x24);
+
+                nint followData = party + 0x2DC;
+                if (!NativeMethods.IsReadable(followData + 0xFA4))
+                {
+                    detail = "destnode refused - the trail's write cursor is not readable";
+                    return false;
+                }
+
+                int writeCursor = *(int*)(followData + 0xFA4);
+                if (pathNode is < 0 or >= 100 || writeCursor is < 0 or >= 100)
+                {
+                    detail = $"destnode refused - pathNode {pathNode} / writeCursor {writeCursor} "
+                        + "outside the 100-slot trail";
+                    return false;
+                }
+
+                int gap = writeCursor - pathNode;
+                if (gap < 0)
+                {
+                    gap += 100;
+                }
+
+                if (gap is >= 2 and <= 90)
+                {
+                    // Round 83's own live-disproven pitfall: a DestNode set to the SAME value as
+                    // the write cursor is structurally unreachable, because the search's "give
+                    // up" exit tests index == WriteCursor immediately AFTER the increment, one
+                    // iteration before it could re-test that index against DestNode. WriteCursor-1
+                    // is always found first.
+                    int newDest = FinalNodeGeometryRule.WrapTrailIndex(writeCursor - 1 + 100);
+                    *(int*)(record + 0x34) = newDest;
+                    wrote = true;
+                    detail = $"destnode destNode {destBefore} -> {newDest} "
+                        + $"(pathNode {pathNode}, writeCursor {writeCursor}, gap {gap} - the "
+                        + "search now reaches its unconditional accept branch)" + restoredNote;
+                    return true;
+                }
+
+                if (gap == 1)
+                {
+                    // Nothing further is recorded to walk toward, so manufacture exactly one
+                    // reachable node at the leader's own position and point DestNode at it. Order
+                    // matters: the cursor must advance BEFORE DestNode is written, or DestNode
+                    // lands on the unreachable equal-to-cursor value above.
+                    nint newNodeAddress = followData + (writeCursor * 40);
+                    if (!NativeMethods.IsReadable(newNodeAddress + 8))
+                    {
+                        detail = $"destnode refused - trail slot {writeCursor} is not writable";
+                        return false;
+                    }
+
+                    *(Vec3*)newNodeAddress = leaderPos;
+                    int newWriteCursor = FinalNodeGeometryRule.WrapTrailIndex(writeCursor + 1);
+                    *(int*)(followData + 0xFA4) = newWriteCursor;
+                    *(int*)(record + 0x34) = writeCursor;
+
+                    wrote = true;
+                    detail = $"destnode appended node {writeCursor} at "
+                        + $"({leaderPos.X:F2},{leaderPos.Y:F2},{leaderPos.Z:F2}), writeCursor "
+                        + $"{writeCursor} -> {newWriteCursor}, destNode {destBefore} -> "
+                        + $"{writeCursor} (pathNode {pathNode}, gap was 1)" + restoredNote;
+                    return true;
+                }
+
+                detail = $"destnode refused - gap {gap} is outside the sane 1..90 range "
+                    + $"(pathNode {pathNode}, writeCursor {writeCursor})";
+                return false;
             }
 
             default:

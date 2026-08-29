@@ -118,10 +118,25 @@ actual file against that table rather than assuming either side's "default" appl
 
 ## Companion stalls partway through a leg while following
 
-A known, narrow, well-characterised stall at the very last waypoint of a movement leg — see
-[party-reconciliation.md](research/party-reconciliation.md). Two fix candidates exist
-(`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`); both ship off by
-default because neither is confirmed live yet.
+**Fixed and on by default since 2026-08-29** (`party_follow_stall_recovery`). The engine's own
+"has the follower reached this waypoint" test is a STRICT comparison, and at the end of a leg the
+recorded waypoint collapses onto the follower's cached previous position — so the test compares a
+number against itself, can never pass, and the companion freezes where it stands. Live-reproduced
+4/4, including the severe form: a leader teleported 16.5 units away that the companion never
+recovered from at all.
+
+A runtime detector now watches for that exact wedged state and, once it has held for two seconds
+with the companion genuinely separated, gathers the party through the engine's own
+`CSWPartyTable::PositionParty` — the same call a module transition makes. Across five reps every
+wedge recovered on the first attempt (`party follow stall: recovered 0x... via positionparty` in
+`kotorcoop-plugin.log`). Note it RELOCATES the companion rather than walking it back: the engine's
+own long-distance pathfinding limit underneath is separate and still unfixed.
+
+Turn it off with `party_follow_stall_recovery=0`; `party_follow_stall_recovery_method` selects
+between six recoveries (the other five were each tried live and are documented, with their
+results, in [party-reconciliation.md](research/party-reconciliation.md) round 105). Two much older
+candidates (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) remain off —
+round 105 folded what they do into method `5` and measured it insufficient on its own.
 
 ## Swoop racing / a minigame won't start or gets stuck
 

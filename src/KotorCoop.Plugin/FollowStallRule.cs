@@ -101,8 +101,8 @@ internal static class FollowStallRule
 
     /// <summary>The recovery methods <c>party_follow_stall_recovery_method</c> selects between —
     /// see <see cref="Odyssey.TryRecoverFollowStall"/> for what each one actually writes and
-    /// docs/research/party-reconciliation.md round 105 for the live A/B that picked the
-    /// default.</summary>
+    /// docs/research/party-reconciliation.md round 105 for the live A/B that picked
+    /// <see cref="DefaultMethod"/> out of them.</summary>
     public const int MethodPhaseReset = 1;
 
     /// <inheritdoc cref="MethodPhaseReset"/>
@@ -114,11 +114,83 @@ internal static class FollowStallRule
     /// <inheritdoc cref="MethodPhaseReset"/>
     public const int MethodBreakPriorTie = 4;
 
+    /// <summary>
+    /// The recovery round 105's own live A/B settled on — see
+    /// <see cref="Odyssey.TryRecoverFollowStall"/> for what it writes. It is the ONLY one of the
+    /// five that never touches the phase field, never moves the body, and never manufactures a
+    /// geometric verdict: it repoints <c>DestNode</c> so the wedged handler's own forward search
+    /// reaches its OTHER, UNCONDITIONAL accept branch, and lets the unmodified engine handler
+    /// decide and commit from there.
+    /// </summary>
+    public const int MethodAdvanceDestNode = 5;
+
+    /// <summary>
+    /// <inheritdoc cref="MethodPhaseReset"/>
+    /// </summary>
+    public const int MethodPushPriorPastNode = 6;
+
     /// <summary>Whether <paramref name="method"/> names a recovery this codebase implements —
     /// a typo in coop.ini must degrade to "do nothing", never to "poke an engine field with a
     /// value nobody chose".</summary>
     public static bool IsKnownMethod(int method) =>
-        method is MethodPhaseReset or MethodFollowLeader or MethodPositionParty or MethodBreakPriorTie;
+        method is MethodPhaseReset
+            or MethodFollowLeader
+            or MethodPositionParty
+            or MethodBreakPriorTie
+            or MethodAdvanceDestNode
+            or MethodPushPriorPastNode;
+
+    /// <summary>
+    /// How far past the recorded trail node <see cref="MethodPushPriorPastNode"/> places
+    /// <c>PriorPoint</c>, as a multiple of the node-to-target distance it is mirroring. Any value
+    /// strictly greater than 1 makes <c>|node - Prior|</c> strictly greater than
+    /// <c>|node - Target|</c>, which is exactly what <c>PathWaitDest</c>'s <c>fcompp</c> needs to
+    /// fall through to its accept; 2 is the smallest round number that leaves real headroom for
+    /// float rounding at the sub-centimetre distances this wedge actually presents
+    /// (<c>distSqToTarget</c> live-measured as low as 0.0207).
+    /// </summary>
+    public const float PriorPushMultiple = 2.0f;
+
+    /// <summary>Below this squared length a direction vector is float noise, not a direction —
+    /// used by <see cref="MethodPushPriorPastNode"/> to decide whether the node-to-target vector
+    /// is usable or whether it must fall back to the node-to-companion one.</summary>
+    public const float DirectionEpsilonSquared = 1e-6f;
+
+    /// <summary>
+    /// The recovery <c>party_follow_stall_recovery</c> applies unless coop.ini says otherwise.
+    ///
+    /// Round 105's live A/B ran all six against the same reproduced wedge on the rig, one at a
+    /// time through the <c>followstall</c> dev verb, and this is the only one that actually ended
+    /// with the companion back with its leader. The decisive case was an instant 16.5-unit
+    /// separation (the leader teleported away — a "transition/separation" in the plainest
+    /// possible form) with the companion frozen at <c>phase=7 attempts=0 pathNode=destNode=19
+    /// writeCursor=20 distSqToPrior=0</c>:
+    /// <list type="bullet">
+    /// <item><b>1 phasereset</b> — the FSM restarted and re-wedged on the identical geometry
+    /// within 8s, zero position change.</item>
+    /// <item><b>2 followleader</b> — the VM dispatch succeeded and changed literally nothing.</item>
+    /// <item><b>3 positionparty</b> — 16.5 units behind to 0.88 units, in one call. Chosen.</item>
+    /// <item><b>4 priortie</b> — real walking (3.44 units from a 6.6-unit separation) but it
+    /// converges onto the exact <c>|node - me| == |node - Target|</c> tie the STRICT compare
+    /// rejects, and re-wedges there.</item>
+    /// <item><b>5 destnode</b> — advanced the trail index and moved the companion 0.76 units, in
+    /// the wrong direction, into a different frozen state.</item>
+    /// <item><b>6 priorpush</b> — 1.6 units of real progress, then a NEW frozen shape
+    /// (<c>phase=3</c>, <c>pathNode != destNode</c>) this detector does not even watch.</item>
+    /// </list>
+    ///
+    /// The honest reading: 4, 5 and 6 all prove the geometric diagnosis is right — poking exactly
+    /// the fields <c>PathWaitDest</c>'s own test reads DOES restart genuine walking — but the
+    /// engine's own long-distance pathfinding then stalls again downstream, on the separate
+    /// limit round 88 already documented and this round reconfirmed. Chasing that would be a
+    /// different investigation; <c>PositionParty</c> (0x00565B00) sidesteps it entirely by being
+    /// the engine's OWN answer to "the party is scattered, gather it" — the exact call
+    /// <c>MovePlayerToArea</c> makes at every module transition, walkmesh snap, formation and
+    /// follow-data reset included. It relocates rather than walks the companion, which is why it
+    /// is gated behind a 2-second wedge, a real separation, a 3-second cooldown and a
+    /// per-module budget rather than run freely.
+    /// </summary>
+    public const int DefaultMethod = MethodPositionParty;
 
     /// <summary>The two dispatch phases whose handlers share the strict-inequality accept test
     /// this rule's whole detection rests on.</summary>

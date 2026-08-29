@@ -284,22 +284,35 @@ party_follow_phase7_release=0
 # companion. Set to 0 to turn the whole detector off.
 party_follow_stall_recovery=1
 
-# Which recovery the detector applies. Exists so a live A/B can isolate one engine write at a
-# time (this project's standing rule) - the dev-only `followstall <slot> [method]` console verb
-# applies any of them on demand without a rebuild.
-#   1  phasereset    write the engine's own watchdog sentinel (-1) into the phase field, zero
-#                    attempts, and re-point pathNode/destNode at the trail's live write cursor,
-#                    so the already-default-ON TryResetStuckFollowPhase turns it into a clean
-#                    phase-0 FindPath on the very next frame
-#   2  followleader  reissue the engine's own ActionFollowLeader through the VM, bypassing the
-#                    head-type/busy/3-unit gates the normal reissue path applies
-#   3  positionparty run the engine's own CSWPartyTable::PositionParty - resets all follow data
-#                    and re-snaps every member into formation (it MOVES the companion; also
-#                    clears solo mode and unstealths the party). Heaviest; last resort
-#   4  priortie      break the degenerate tie directly: write the companion's own position into
-#                    the cached prior field so the engine's unmodified accept test can pass on
-#                    its own. Narrowest of the four - one field plus a dirty flag
-party_follow_stall_recovery_method=1
+# Which recovery the detector applies. All six were run live against the same reproduced wedge,
+# one at a time, through the dev-only `followstall <slot> [method]` console verb; only 3 actually
+# ended with the companion back beside its leader, so 3 is the shipped default. The others are
+# kept, numbered and documented because each one taught something real - see round 105 in
+# docs/research/party-reconciliation.md for the full A/B.
+#   1  phasereset    engine watchdog sentinel (-1) into the phase field + pathNode/destNode
+#                    re-pointed at the write cursor, so TryResetStuckFollowPhase makes it a clean
+#                    phase-0 FindPath next frame.  LIVE: restarted and re-wedged identically
+#                    within 8s, zero position change
+#   2  followleader  reissue ActionFollowLeader through the VM, bypassing the head-type/busy/
+#                    3-unit gates.  LIVE: dispatched cleanly, changed nothing at all
+#   3  positionparty the engine's own CSWPartyTable::PositionParty - the exact call a module
+#                    transition makes; resets all follow data and re-snaps every member into
+#                    formation.  LIVE: 16.5 units behind -> 0.88 units, in one call.  DEFAULT.
+#                    It relocates the companion rather than walking it, and also clears solo
+#                    mode and unstealths the party, which is why the detector gates it behind a
+#                    2s wedge, a real separation, a 3s cooldown and a per-module budget
+#   4  priortie      write the companion's own position into the cached prior field so the
+#                    engine's unmodified accept test can pass.  LIVE: real walking (3.44 units
+#                    from a 6.6-unit separation) but it converges onto the exact tie the STRICT
+#                    compare rejects and re-wedges there
+#   5  destnode      make DestNode differ from CurrentPathNode so the handler's forward search
+#                    reaches its unconditional accept branch (the union of the two older OFF
+#                    candidates).  LIVE: advanced the trail index, moved the companion 0.76
+#                    units the WRONG way, into a different frozen state
+#   6  priorpush     put prior a fixed multiple past the trail node, away from the target, so the
+#                    strict inequality holds by construction rather than by luck.  LIVE: 1.6
+#                    units of real progress, then a NEW frozen shape the detector does not watch
+party_follow_stall_recovery_method=3
 
 # The client-door root cause fix (docs/research/party-reconciliation.md, transition-smoothness.md
 # SS8.5): CSWParty - the CLIENT-SIDE struct CSWParty::IsPartyTogether actually reads, a different

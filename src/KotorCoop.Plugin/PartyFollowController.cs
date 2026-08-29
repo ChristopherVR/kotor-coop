@@ -240,7 +240,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// project's standing rule for engine writes) rather than needing a rebuild per candidate.
     /// See docs/CONFIG.md for the value table.</summary>
     private readonly int _stallRecoveryMethod =
-        PluginConfig.ReadInt("party_follow_stall_recovery_method", FollowStallRule.MethodPhaseReset);
+        PluginConfig.ReadInt("party_follow_stall_recovery_method", FollowStallRule.DefaultMethod);
 
     /// <summary>Consecutive recoveries fired for this slot, this module, with no confirmed
     /// recovery in between — <see cref="FollowStallRule"/>'s own anti-spin budget.</summary>
@@ -880,6 +880,8 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         FollowStallRule.MethodFollowLeader => "followleader",
         FollowStallRule.MethodPositionParty => "positionparty",
         FollowStallRule.MethodBreakPriorTie => "priortie",
+        FollowStallRule.MethodAdvanceDestNode => "destnode",
+        FollowStallRule.MethodPushPriorPastNode => "priorpush",
         _ => $"unknown({method})",
     };
 
@@ -996,7 +998,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
 
         // 3. Fire.
         bool applied = Odyssey.TryRecoverFollowStall(
-            objectId, _stallRecoveryMethod, allowCountRestore: false, out bool wrote, out string detail);
+            objectId, _stallRecoveryMethod, leaderPos, allowCountRestore: false, out bool wrote, out string detail);
 
         // Count a refusal exactly like a fire: a method that cannot apply here must not be retried
         // on every cooldown for the rest of the session either.

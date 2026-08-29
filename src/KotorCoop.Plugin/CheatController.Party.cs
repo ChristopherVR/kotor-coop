@@ -316,15 +316,15 @@ internal sealed unsafe partial class CheatController
         if (method == 0)
         {
             method = PluginConfig.ReadInt(
-                "party_follow_stall_recovery_method", FollowStallRule.MethodPhaseReset);
+                "party_follow_stall_recovery_method", FollowStallRule.DefaultMethod);
         }
 
         if (!FollowStallRule.IsKnownMethod(method))
         {
             Answer(
                 SharedBlock.CheatStatusRefused,
-                $"followstall: method must be 1 (phasereset), 2 (followleader), 3 (positionparty) "
-                + $"or 4 (priortie) — got {method}");
+                "followstall: method must be 1 (phasereset), 2 (followleader), 3 (positionparty), "
+                + $"4 (priortie), 5 (destnode) or 6 (priorpush) — got {method}");
             return;
         }
 
@@ -357,8 +357,11 @@ internal sealed unsafe partial class CheatController
                 + "(GetIndex refused even after restoring CSWParty's own member count)");
         }
 
+        nint leader = Odyssey.GetPlayerCreaturePointer();
+        Vec3 leaderPos = leader == 0 ? default : Odyssey.GetPosition(leader);
+
         if (!Odyssey.TryRecoverFollowStall(
-                objectId, method, allowCountRestore: true, out bool wrote, out string detail))
+                objectId, method, leaderPos, allowCountRestore: true, out bool wrote, out string detail))
         {
             Answer(
                 SharedBlock.CheatStatusEngineRefused,

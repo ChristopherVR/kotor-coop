@@ -214,8 +214,10 @@ public sealed class FollowStallRuleTests
     [InlineData(FollowStallRule.MethodFollowLeader, true)]
     [InlineData(FollowStallRule.MethodPositionParty, true)]
     [InlineData(FollowStallRule.MethodBreakPriorTie, true)]
+    [InlineData(FollowStallRule.MethodAdvanceDestNode, true)]
+    [InlineData(FollowStallRule.MethodPushPriorPastNode, true)]
     [InlineData(0, false)]
-    [InlineData(5, false)]
+    [InlineData(7, false)]
     [InlineData(-1, false)]
     public void OnlyImplementedRecoveryMethodsAreAccepted(int method, bool known)
     {
@@ -233,6 +235,35 @@ public sealed class FollowStallRuleTests
         Assert.Equal(2, FollowStallRule.MethodFollowLeader);
         Assert.Equal(3, FollowStallRule.MethodPositionParty);
         Assert.Equal(4, FollowStallRule.MethodBreakPriorTie);
+        Assert.Equal(5, FollowStallRule.MethodAdvanceDestNode);
+        Assert.Equal(6, FollowStallRule.MethodPushPriorPastNode);
+    }
+
+    [Fact]
+    public void TheShippedDefaultIsTheOneMethodTheLiveAbActuallyRecovered()
+    {
+        // Round 105's rig round ran all six against the same reproduced wedge; only
+        // positionparty ended with the companion back beside its leader (16.5 units behind ->
+        // 0.88 units, one call). If a future round changes this, it needs its own live A/B — see
+        // FollowStallRule.DefaultMethod's own remarks for what each of the other five did.
+        Assert.Equal(FollowStallRule.MethodPositionParty, FollowStallRule.DefaultMethod);
+        Assert.True(FollowStallRule.IsKnownMethod(FollowStallRule.DefaultMethod));
+    }
+
+    [Fact]
+    public void ThePriorPushMultipleGuaranteesTheStrictAcceptCanFire()
+    {
+        // Method 6's whole point: |node - Prior| becomes PriorPushMultiple x |node - Target|, so
+        // the STRICT compare at 0x00512BF2 has real headroom instead of landing on the tie
+        // method 4 was live-measured converging onto. Squared distances, so the ratio is the
+        // multiple squared.
+        Assert.True(FollowStallRule.PriorPushMultiple > 1.0f);
+
+        const float distSqToTarget = 0.0207f; // round 105's own live capture
+        float distSqToPrior = FollowStallRule.PriorPushMultiple
+            * FollowStallRule.PriorPushMultiple * distSqToTarget;
+
+        Assert.False(FollowStallRule.CannotAccept(distSqToTarget, distSqToPrior));
     }
 
     [Fact]
