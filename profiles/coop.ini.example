@@ -757,14 +757,15 @@ companion_xp_sync=1
 companion_gear_sync=1
 
 # Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
-# choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
-# them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a
-# peer's phantom leaves them free to act on their own screen, and a client's Stasis on an
-# enemy only affects their private mirror, which the host drives anyway. Live-verified in both
-# directions (docs/research/effect-sync.md); capture, forward AND apply all gate on this, not
-# just the apply half. Knockdown, Paralyze and Sleep are captured but never replayed
-# regardless of this flag - see the doc for why (an unverified engine-call signature for
-# Knockdown, and two OnApplySetState sub-codes not yet matched to an English name).
+# choke, Force push/whirlwind, heal, temporary hitpoints, confused) that land on a peer's
+# phantom, so their real character feels them too - the gap plain damage (always forwarded)
+# leaves open: today a Force-Stun on a peer's phantom leaves them free to act on their own
+# screen, and a client's Stasis on an enemy only affects their private mirror, which the host
+# drives anyway. Also the one HELPFUL direction: a medpac/Cure/stim applied to a peer's
+# phantom reaches their real body the same way. Live-verified in both directions for the
+# original nine kinds (docs/research/effect-sync.md); heal/temporary-hitpoints/confused
+# (effect-sync.md §10) are static-analysis-only, NEEDS-LIVE. Capture, forward AND apply all
+# gate on this one flag, not just the apply half.
 effect_sync=1
 
 # Reveal fog-of-war on this instance's map around each remote peer's position (roadmap item

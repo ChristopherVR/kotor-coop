@@ -16,18 +16,23 @@ namespace KotorCoop.Plugin;
 /// <c>PeerEffectRules</c>' allowlist rather than referencing it (NativeAOT plugin code cannot
 /// reference either <c>Odyssey</c>'s private members or <c>KotorCoop.Protocol</c>).
 ///
-/// Knockdown, Paralyze and Sleep are named and constructible through the SAME native handler,
-/// <c>ExecuteCommandEffectComplex</c> (<c>0x005313F0</c>), which is registered at over twenty
-/// routine numbers in the VM's command table (a compiler CSE reusing one preloaded register
-/// across many <c>mov [table+off], eax</c> stores — invisible to a raw address-literal scan).
-/// Their routine numbers — <c>EffectKnockdown</c>=134, <c>EffectParalyze</c>=148,
-/// <c>EffectSleep</c>=154 — are VERIFIED against K1 <c>nwscript.nss</c>'s declaration order;
+/// Knockdown, Paralyze, Sleep and (effect-sync.md §10, 2026-09-02) Confused are named and
+/// constructible through the SAME native handler, <c>ExecuteCommandEffectComplex</c>
+/// (<c>0x005313F0</c>), which is registered at over twenty routine numbers in the VM's command
+/// table (a compiler CSE reusing one preloaded register across many <c>mov [table+off], eax</c>
+/// stores — invisible to a raw address-literal scan). Their routine numbers —
+/// <c>EffectKnockdown</c>=134, <c>EffectParalyze</c>=148, <c>EffectSleep</c>=154,
+/// <c>EffectConfused</c>=157 — are VERIFIED against K1 <c>nwscript.nss</c>'s declaration order;
 /// stack arithmetic on the handler's own prologue confirms it reads the CALLING routine number
 /// (not a popped script argument) as its dispatch key, so each is safe to invoke with zero
 /// pushed script arguments, exactly like the zero-param constructors below. See
 /// <see cref="ApplyComplexEffect"/> for why <c>FindRoutine</c>'s first-match linear scan cannot
-/// be reused here — it would resolve to routine 51 (<c>EffectAssuredHit</c>) for all three,
-/// which is wrong. Full verification: docs/research/effect-sync.md §7.
+/// be reused here — it would resolve to routine 51 (<c>EffectAssuredHit</c>) for all four,
+/// which is wrong. Full verification: docs/research/effect-sync.md §7, §10.
+///
+/// Heal and TemporaryHitpoints (also §10) are a DIFFERENT shape — each has its own dedicated,
+/// unaliased one-int-parameter constructor (<see cref="ApplyOneIntParamEffect"/>), the same
+/// family <see cref="ApplySlowEffect"/> already proves live.
 ///
 /// MAIN THREAD ONLY, same as every other VM-dispatching call in this codebase.
 /// </summary>
@@ -75,6 +80,24 @@ internal static unsafe class OdysseyEffects
     private const int RoutineEffectParalyze = 148;  // -> effect type 8, sub-code 5
     private const int RoutineEffectSleep = 154;     // -> effect type 8, sub-code 6
 
+    /// <summary>Routine number for the fourth complex-family effect this pass adds
+    /// (effect-sync.md §10, 2026-09-02), named alongside Knockdown/Paralyze/Sleep in the same
+    /// three-way cross-check (§7.3) but not shipped that pass.</summary>
+    private const int RoutineEffectConfused = 157; // -> effect type 8, sub-code 1
+
+    /// <summary>The two heal-family one-int-parameter VM effect constructors added in
+    /// effect-sync.md §10 (2026-09-02) — VERIFIED via fresh disassembly: each pops exactly one
+    /// int off the VM stack through the same shared stack-pop helper Slow's own constructor
+    /// uses (<c>ExecuteCommandEffectMovementSpeedDecrease</c>'s <c>[esp+0x24]</c> read), feeds
+    /// it straight to <c>SetInteger(effect, 0, value)</c>, and writes the SHARED null/no-op
+    /// effect type (global <c>0x74667C</c> = 0) instead of its own real type if the popped
+    /// value is not positive — so a non-positive magnitude self-neuters into a harmless no-op,
+    /// not a corrupted call. Only ONE registration each was found in the VM's command table
+    /// (<c>tools/xrefs.py</c>), unlike <see cref="ExpectedEffectComplex"/>'s 20+ aliases, so
+    /// <see cref="FindRoutine"/>'s ordinary linear scan is safe for both.</summary>
+    private const nint ExpectedEffectHeal = 0x00532A70;                 // 1 param (int nDamageToHeal) — type 39
+    private const nint ExpectedEffectTemporaryHitpoints = 0x00534490;   // 1 param (int nHitPoints) — type 15
+
     private static int _routineApplyEffect = -1;
     private static int _routineDroidStun = -1;
     private static int _routineChoke = -1;
@@ -85,6 +108,9 @@ internal static unsafe class OdysseyEffects
     private static int _routineKnockdown = -1;
     private static int _routineParalyze = -1;
     private static int _routineSleep = -1;
+    private static int _routineConfused = -1;
+    private static int _routineHeal = -1;
+    private static int _routineTemporaryHitpoints = -1;
 
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int> StackPushInteger =
         (delegate* unmanaged[Thiscall]<nint, int, int>)0x005D1010;
@@ -154,6 +180,19 @@ internal static unsafe class OdysseyEffects
     private const int MaxSlowPercent = 90;
     private const int DefaultSlowPercent = 50;
 
+    /// <summary>Heal/TemporaryHitpoints magnitude clamp. Unlike Slow's percent, a heal/temp-HP
+    /// AMOUNT has no natural engine-side upper bound (nothing analogous to "can't slow past
+    /// 100%") — this is a sanity bound against a corrupted or malicious wire value, not a
+    /// measured game figure, and the default is a plausible medpac-ish amount, not a measured
+    /// one either.</summary>
+    private const int MinHealMagnitude = 1;
+    private const int MaxHealMagnitude = 999;
+    private const int DefaultHealMagnitude = 20;
+
+    private const int MinTemporaryHitpointsMagnitude = 1;
+    private const int MaxTemporaryHitpointsMagnitude = 999;
+    private const int DefaultTemporaryHitpointsMagnitude = 20;
+
     /// <summary>
     /// Applies one peer-effect kind to <paramref name="objectId"/> (expected: the local
     /// player) through the engine's own VM pipeline. Returns false with a nonzero
@@ -200,6 +239,24 @@ internal static unsafe class OdysseyEffects
             case PeerEffectKindValues.Sleep:
                 return ApplyComplexEffect(
                     objectId, RoutineEffectSleep, ref _routineSleep, durationMs, out failure);
+
+            case PeerEffectKindValues.Confused:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectConfused, ref _routineConfused, durationMs, out failure);
+
+            case PeerEffectKindValues.Heal:
+                // Instant, like ForcePush: healing lands once, it does not persist as a state
+                // — the literal 0 discards whatever durationMs the packet carried, same as
+                // ForcePush's own case above.
+                return ApplyOneIntParamEffect(
+                    objectId, ExpectedEffectHeal, ref _routineHeal, 0, magnitude,
+                    MinHealMagnitude, MaxHealMagnitude, DefaultHealMagnitude, instant: true, out failure);
+
+            case PeerEffectKindValues.TemporaryHitpoints:
+                return ApplyOneIntParamEffect(
+                    objectId, ExpectedEffectTemporaryHitpoints, ref _routineTemporaryHitpoints, durationMs,
+                    magnitude, MinTemporaryHitpointsMagnitude, MaxTemporaryHitpointsMagnitude,
+                    DefaultTemporaryHitpointsMagnitude, instant: false, out failure);
 
             default:
                 failure = -1;
@@ -372,6 +429,107 @@ internal static unsafe class OdysseyEffects
         }
 
         if (StackPushInteger(vm, DurationTypeTemporary) == 0)
+        {
+            failure = 8;
+            return false;
+        }
+
+        var applyEffect = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedApplyEffectToObject;
+        if (applyEffect(implementer, _routineApplyEffect, 4) != 0)
+        {
+            failure = 9;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 10;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Heal, TemporaryHitpoints — the two one-int-parameter constructors added in
+    /// effect-sync.md §10 (2026-09-02). Same shape as <see cref="ApplySlowEffect"/> (a single
+    /// declared <c>int</c>, VERIFIED via fresh disassembly of
+    /// <c>ExecuteCommandEffectHeal</c>/<c>ExecuteCommandEffectTemporaryHitpoints</c>), factored
+    /// out separately rather than folded into <see cref="ApplySlowEffect"/> itself so that
+    /// method — already live-tested — is not touched by this pass. <paramref name="instant"/>
+    /// picks Heal's one-shot application (like <see cref="ApplyZeroParamEffect"/>'s ForcePush
+    /// case) versus TemporaryHitpoints' durable one (like Slow).
+    /// </summary>
+    private static bool ApplyOneIntParamEffect(
+        uint objectId, nint expectedHandler, ref int cachedRoutine, uint durationMs, uint magnitude,
+        int minMagnitude, int maxMagnitude, int defaultMagnitude, bool instant, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (cachedRoutine < 0)
+        {
+            cachedRoutine = FindRoutine(table, expectedHandler);
+        }
+
+        if (_routineApplyEffect < 0)
+        {
+            _routineApplyEffect = FindRoutine(table, ExpectedApplyEffectToObject);
+        }
+
+        if (cachedRoutine < 0 || _routineApplyEffect < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        float durationSeconds = instant ? 0f : durationMs / 1000f;
+        if (StackPushFloat(vm, durationSeconds) == 0 || StackPushObject(vm, objectId) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        int value = (int)magnitude;
+        if (value < minMagnitude || value > maxMagnitude)
+        {
+            value = defaultMagnitude;
+        }
+
+        if (StackPushInteger(vm, value) == 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        var effectCtor = (delegate* unmanaged[Thiscall]<nint, int, int, int>)expectedHandler;
+        if (effectCtor(implementer, cachedRoutine, 1) != 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        if (StackPushInteger(vm, instant ? DurationTypeInstant : DurationTypeTemporary) == 0)
         {
             failure = 8;
             return false;

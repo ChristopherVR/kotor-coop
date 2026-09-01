@@ -1150,6 +1150,22 @@ public class PacketCodecTests
         Assert.Equal(original, PacketCodec.ReadPeerEffect(buffer[..length]));
     }
 
+    /// <summary>Heal (effect-sync.md §10, 2026-09-02) is the first allowlist member with a wire
+    /// <c>Kind</c> byte value above 9 — worth its own case so a codec bug in the single-byte
+    /// encoding that only shows up in the double-digit range cannot hide behind the earlier
+    /// cases' single-digit values.</summary>
+    [Fact]
+    public void PeerEffectRoundTripsWithHealKind()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PeerEffectPacket original = new(
+            FromPeerId: 4, TargetPeerId: 5, Kind: PeerEffectKind.Heal, DurationMs: 0, Magnitude: 30, Sequence: 2);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPeerEffect(buffer[..length]));
+    }
+
     [Fact]
     public void BarkRoundTrips()
     {

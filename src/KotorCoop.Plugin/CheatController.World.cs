@@ -81,12 +81,13 @@ internal sealed unsafe partial class CheatController
     private void ApplyEffect(nint player)
     {
         uint kind = (uint)block.CheatAmount;
-        if (kind is PeerEffectKindValues.None || kind > PeerEffectKindValues.Whirlwind)
+        if (kind is PeerEffectKindValues.None || kind > PeerEffectKindValues.Confused)
         {
             Answer(
                 SharedBlock.CheatStatusRefused,
-                $"unknown effect kind {kind} (1..9 - stun, paralyze, knockdown, slow, "
-                + "frightened, sleep, choke, forcepush, whirlwind)");
+                $"unknown effect kind {kind} (1..12 - stun, paralyze, knockdown, slow, "
+                + "frightened, sleep, choke, forcepush, whirlwind, heal, temporaryhitpoints, "
+                + "confused)");
             return;
         }
 

@@ -15,8 +15,8 @@ namespace KotorCoop.Protocol;
 ///
 /// The desync this comment used to warn about (this copy briefly ahead of
 /// <c>PhantomEffectHook.cs</c>'s own copy on sub-codes 5/6) has since closed — see
-/// docs/research/effect-sync.md. Both copies list all nine allowlist members today, capture
-/// and apply alike.
+/// docs/research/effect-sync.md. Both copies list every allowlist member today (twelve as of
+/// §10, 2026-09-02), capture and apply alike.
 /// </summary>
 public static class PeerEffectRules
 {
@@ -37,22 +37,24 @@ public static class PeerEffectRules
             case 8: // OnApplySetState — the shared state-effect family
                 switch (subCode)
                 {
+                    case 1: kind = PeerEffectKind.Confused; return true;    // EffectConfused (effect-sync.md §10)
                     case 3: kind = PeerEffectKind.Stun; return true;        // EffectDroidStun
                     case 5: kind = PeerEffectKind.Paralyze; return true;    // EffectParalyze (effect-sync.md §7)
                     case 6: kind = PeerEffectKind.Sleep; return true;       // EffectSleep (effect-sync.md §7)
                     case 7: kind = PeerEffectKind.Choke; return true;       // EffectChoke
                     case 8: kind = PeerEffectKind.Frightened; return true;  // EffectHorrified
                     case 10: kind = PeerEffectKind.Whirlwind; return true;  // EffectWhirlWind
-                    // 1 (EffectConfused), 2 (EffectFrightened — a DISTINCT native from the
-                    // EffectHorrified this table calls "Frightened" above) and 4
-                    // (EffectStunned, the general/non-droid stun) are now NAMED
-                    // (effect-sync.md §7) but not on the wire allowlist — no PeerEffectKind
-                    // exists for them yet; a future pass's call, not this one's.
+                    // 2 (EffectFrightened — a DISTINCT native from the EffectHorrified this
+                    // table calls "Frightened" above) and 4 (EffectStunned, the
+                    // general/non-droid stun) are NAMED (effect-sync.md §7) but not on the
+                    // wire allowlist — no PeerEffectKind exists for them yet.
                     default: kind = PeerEffectKind.None; return false;
                 }
 
+            case 15: kind = PeerEffectKind.TemporaryHitpoints; return true; // OnApplyTemporaryHitpoints (effect-sync.md §10)
             case 20: kind = PeerEffectKind.Knockdown; return true;  // OnApplyKnockdown
             case 29: kind = PeerEffectKind.Slow; return true;       // OnApplyMovementSpeedDecrease
+            case 39: kind = PeerEffectKind.Heal; return true;       // OnApplyHeal (effect-sync.md §10)
             case 60: kind = PeerEffectKind.ForcePush; return true;  // OnApplyForcePush
 
             default:
@@ -63,9 +65,12 @@ public static class PeerEffectRules
 
     /// <summary>
     /// Which kinds have a real apply-side constructor today (<c>OdysseyEffects</c>). Per
-    /// effect-sync.md §7 that is all nine allowlist members — Knockdown, Paralyze
+    /// effect-sync.md §7 that was all nine original allowlist members — Knockdown, Paralyze
     /// and Sleep all route through the shared <c>ExecuteCommandEffectComplex</c> handler at
-    /// their own VERIFIED routine numbers (134, 148, 154). Kept here, not just in
+    /// their own VERIFIED routine numbers (134, 148, 154) — and effect-sync.md §10
+    /// (2026-09-02) adds Heal, TemporaryHitpoints (one-int-parameter constructors, same shape
+    /// as Slow) and Confused (a fourth member of the Knockdown/Paralyze/Sleep
+    /// <c>ExecuteCommandEffectComplex</c> family, routine 157). Kept here, not just in
     /// <c>OdysseyEffects</c>, so a test can assert the two lists agree without touching
     /// unmanaged code.
     /// </summary>
@@ -80,6 +85,9 @@ public static class PeerEffectRules
         PeerEffectKind.Choke => true,
         PeerEffectKind.ForcePush => true,
         PeerEffectKind.Whirlwind => true,
+        PeerEffectKind.Heal => true,
+        PeerEffectKind.TemporaryHitpoints => true,
+        PeerEffectKind.Confused => true,
         _ => false,
     };
 

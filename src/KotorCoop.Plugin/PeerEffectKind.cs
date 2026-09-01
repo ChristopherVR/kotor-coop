@@ -48,4 +48,19 @@ internal static class PeerEffectKindValues
     /// <summary>Engine type 8, sub-code 10 (<c>EffectWhirlWind</c>). Has an apply-side
     /// constructor.</summary>
     public const uint Whirlwind = 9;
+
+    /// <summary>Engine type 39 (<c>OnApplyHeal</c>, routine 78 <c>EffectHeal</c>). Has an
+    /// apply-side constructor as of effect-sync.md §10 (2026-09-02) — one <c>int</c>
+    /// parameter, applied instant.</summary>
+    public const uint Heal = 10;
+
+    /// <summary>Engine type 15 (<c>OnApplyTemporaryHitpoints</c>, routine 314
+    /// <c>EffectTemporaryHitPoints</c>). Has an apply-side constructor as of effect-sync.md
+    /// §10 (2026-09-02) — one <c>int</c> parameter, applied durable/temporary.</summary>
+    public const uint TemporaryHitpoints = 11;
+
+    /// <summary>Engine type 8, sub-code 1 (routine 157 <c>EffectConfused</c>). Has an
+    /// apply-side constructor as of effect-sync.md §10 (2026-09-02), same
+    /// <c>ExecuteCommandEffectComplex</c> family as Knockdown/Paralyze/Sleep.</summary>
+    public const uint Confused = 12;
 }
