@@ -16,9 +16,10 @@ public class LocalCombatDeferralRuleTests
     public void ComputeDeferred_ExcludesTheHolder_KeepsEveryoneElse()
     {
         uint[] eligible = [0x10, 0x11, 0x12];
+        uint[] holders = [0x11];
         uint[] deferred = new uint[8];
 
-        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holderOwnerId: 0x11, deferred);
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holders.Length, deferred);
 
         Assert.Equal(2, count);
         Assert.Equal(0x10u, deferred[0]);
@@ -29,9 +30,10 @@ public class LocalCombatDeferralRuleTests
     public void ComputeDeferred_NoHolder_EveryEligibleIdIsDeferred()
     {
         uint[] eligible = [0x10, 0x11];
+        uint[] holders = [];
         uint[] deferred = new uint[8];
 
-        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holderOwnerId: 0, deferred);
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holderCount: 0, deferred);
 
         Assert.Equal(2, count);
     }
@@ -40,9 +42,10 @@ public class LocalCombatDeferralRuleTests
     public void ComputeDeferred_NothingEligible_IsZero()
     {
         uint[] eligible = new uint[8];
+        uint[] holders = [0x11];
         uint[] deferred = new uint[8];
 
-        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligibleCount: 0, holderOwnerId: 0x11, deferred);
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligibleCount: 0, holders, holders.Length, deferred);
 
         Assert.Equal(0, count);
     }
@@ -52,9 +55,10 @@ public class LocalCombatDeferralRuleTests
     {
         // The common case: one hostile engaged, nothing else nearby yet.
         uint[] eligible = [0x11];
+        uint[] holders = [0x11];
         uint[] deferred = new uint[8];
 
-        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holderOwnerId: 0x11, deferred);
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holders.Length, deferred);
 
         Assert.Equal(0, count);
     }
@@ -63,11 +67,40 @@ public class LocalCombatDeferralRuleTests
     public void ComputeDeferred_NeverOverflowsTheCallersBuffer()
     {
         uint[] eligible = [0x1, 0x2, 0x3, 0x4, 0x5];
+        uint[] holders = [];
         uint[] deferred = new uint[2];
 
-        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holderOwnerId: 0, deferred);
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holderCount: 0, deferred);
 
         Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public void ComputeDeferred_MultipleHolders_ExcludesAllOfThem()
+    {
+        // N-slot local_combat (docs/research/combat-participation.md §11): two fights already
+        // running, a third hostile still waiting its turn.
+        uint[] eligible = [0x10, 0x11, 0x12];
+        uint[] holders = [0x10, 0x12];
+        uint[] deferred = new uint[8];
+
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holders.Length, deferred);
+
+        Assert.Equal(1, count);
+        Assert.Equal(0x11u, deferred[0]);
+    }
+
+    [Fact]
+    public void ComputeDeferred_EveryEligibleIdIsAlreadyHeld_DeferredIsEmpty()
+    {
+        // Local_combat_slots=3 and all three armed: nothing left to defer.
+        uint[] eligible = [0x10, 0x11, 0x12];
+        uint[] holders = [0x10, 0x11, 0x12];
+        uint[] deferred = new uint[8];
+
+        int count = LocalCombatDeferralRule.ComputeDeferred(eligible, eligible.Length, holders, holders.Length, deferred);
+
+        Assert.Equal(0, count);
     }
 
     [Fact]

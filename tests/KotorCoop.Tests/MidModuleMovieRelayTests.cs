@@ -209,8 +209,9 @@ public class MidModuleMovieRelayTests
         // the unrelated companion-equipment channel, see SharedBlock.cs's own version-54
         // comment, then to 0x4700 for the item-template-spawn ring (version 58), then to 0x4800
         // for that ring's own per-entry cheat flag (version 59, docs/research/
-        // party-pool-sync.md §20).
-        Assert.Equal(0x4800, SharedBlock.TotalSize);
+        // party-pool-sync.md §20), then to 0x4B00 for N-slot local_combat's excluded-id array
+        // (version 61, docs/research/combat-participation.md §11).
+        Assert.Equal(0x4B00, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------
