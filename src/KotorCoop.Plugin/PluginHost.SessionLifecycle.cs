@@ -183,6 +183,7 @@ internal static unsafe partial class PluginHost
         _incomingDamage?.Invalidate();
         _peerEffects?.Invalidate();
         _peerDamage?.Invalidate();
+        _companionDamage?.Invalidate();
         _testDrive?.Invalidate();
         _cheats?.Invalidate();
         PhantomHitHook.Invalidate();

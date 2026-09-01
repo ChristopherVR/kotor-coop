@@ -133,6 +133,50 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void CompanionDamageRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        CompanionDamagePacket original = new(2, 4,
+            [new CompanionDamageEntry(1, 27), new CompanionDamageEntry(3, 5)]);
+
+        int length = PacketCodec.Write(buffer, original);
+        CompanionDamagePacket? decoded = PacketCodec.ReadCompanionDamage(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(2u, decoded.PeerId);
+        Assert.Equal(4u, decoded.Generation);
+        Assert.Equal(original.Damage, decoded.Damage);
+    }
+
+    [Fact]
+    public void ATruncatedCompanionDamageReportIsRejected()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new CompanionDamagePacket(2, 1, [new CompanionDamageEntry(1, 40)]));
+
+        Assert.Null(PacketCodec.ReadCompanionDamage(buffer[..(length - 1)]));
+    }
+
+    [Fact]
+    public void AFullCompanionDamageReportFitsInOneDatagram()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        List<CompanionDamageEntry> damage = [];
+        for (int i = 0; i < ProtocolConstants.MaxPartyMembers; i++)
+        {
+            damage.Add(new CompanionDamageEntry((uint)(i + 1), uint.MaxValue));
+        }
+
+        int length = PacketCodec.Write(buffer, new CompanionDamagePacket(uint.MaxValue, uint.MaxValue, damage));
+
+        Assert.InRange(length, 1, ProtocolConstants.MaxPacketSize);
+        Assert.Equal(damage, PacketCodec.ReadCompanionDamage(buffer[..length])!.Damage);
+    }
+
+    [Fact]
     public void ProgressionReportRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

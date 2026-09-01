@@ -756,6 +756,22 @@ companion_xp_sync=1
 # by default.
 companion_gear_sync=1
 
+# THE GAP companion_local_combat's own release left open: a companion released to fight on a
+# CLIENT takes real hits through that client's own engine, but the host's authoritative body
+# never saw any of it - there was no client->host channel for companion health at all, so the
+# host's higher figure overwrote the client's own damage on the very next mirror pass. A
+# released companion was therefore effectively invulnerable, and one downed on the client
+# popped back up. This forwards cumulative damage TAKEN (never a health sample - the same
+# "level, not event" shape docs/research/peer-damage-ledger.md already proved for enemies) to
+# the host, which spends it as real damage on its own authoritative body through the ordinary
+# engine pipeline - the same win the enemy channel gets: a real temp-death, corpse-free but the
+# real TempDeathUpdate the host's own engine expects. ON by default, and safe by construction:
+# the whole channel is INERT unless companion_local_combat (itself OFF by default) has actually
+# released a companion - with no release, the plugin's watch never starts and an older plugin
+# simply has never heard of the block region this reads. See docs/research/
+# companion-state-sync.md section 13. NEEDS-LIVE.
+companion_damage_sync=1
+
 # Forward non-damage combat effects (stun, paralyze, knockdown, slow, frightened, sleep,
 # choke, Force push/whirlwind) that land on a peer's phantom, so their real character feels
 # them too - the gap plain damage (always forwarded) leaves open: today a Force-Stun on a

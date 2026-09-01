@@ -584,7 +584,7 @@ public enum PacketType : byte
 
     // 66-69 reserved for concurrent work on this tree (the same numbering discipline as the
     // 39/47/48 skips above). 70-72 are this stream's own reservation (docs/research/HOSTLOSS
-    // wave notes) — only 70 is used so far.
+    // wave notes) — 70 and 71 are used (HostBye, CompanionDamage), 72 is still open.
 
     /// <summary>
     /// host -&gt; every connected client: "I am shutting down cleanly" — sent once, best-effort,
@@ -608,4 +608,26 @@ public enum PacketType : byte
     /// silence-based fallback already covers that gap completely, so no ack and no retransmit.
     /// </summary>
     HostBye = 70,
+
+    /// <summary>
+    /// client -&gt; host: cumulative damage taken by each of this peer's companions that
+    /// <c>companion_local_combat</c> has released to fight through its own engine AI — the
+    /// companion sibling of <see cref="EnemyDamage"/>, mirrored for the opposite direction.
+    ///
+    /// THE GAP THIS CLOSES: a released companion takes real hits locally, but the host's
+    /// authoritative body never saw any of it (there was no channel at all), so the host's
+    /// higher figure overwrote the client's own damage on the very next mirror pass — a
+    /// companion fighting on a client was effectively invulnerable, and a companion downed on
+    /// the client popped back up. Keyed by NPC ROSTER SLOT rather than object id: unlike an
+    /// enemy, a companion's identity is stable across a module transition, so there is no
+    /// module label to carry. A running CUMULATIVE total, never an event — the host banks each
+    /// peer's RISE and applies the difference through its own engine's real damage pipeline,
+    /// the same "level, not event" rule <see cref="EnemyDamage"/> uses and for the identical
+    /// reason. See docs/research/companion-state-sync.md §13.
+    /// </summary>
+    CompanionDamage = 71,
+
+    // 72 remains reserved for concurrent work on this tree (the same numbering discipline as
+    // the 39/47/48 skips above) — see the HOSTLOSS wave note on HostBye's own block: 70 and 71
+    // are both now used (HostBye, CompanionDamage), 72 alone is still open.
 }

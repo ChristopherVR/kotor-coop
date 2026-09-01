@@ -564,6 +564,12 @@ internal static unsafe partial class PluginHost
         Odyssey.TickFireScriptWatch(Log);
         _partyPresence?.OnFrame();
 
+        // After the companion mirror, so a release/reclaim decided THIS frame
+        // (PartyPresenceController.DriveOne's WatchCompanion calls) is already reflected before
+        // this publishes what the watch has measured or applies a peer's owed total. See
+        // docs/research/companion-state-sync.md §13.
+        _companionDamage?.OnFrame();
+
         // ROUND 71: re-arms real follow-AI on a genuinely-owned, idle companion — see
         // PartyFollowController's own class comment for why this backs off the instant
         // PartyPresenceController is actively mirroring instead (a client's companions).

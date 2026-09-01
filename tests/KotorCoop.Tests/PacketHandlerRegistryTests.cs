@@ -22,6 +22,7 @@ public class PacketHandlerRegistryTests
         PacketType.ItemOp, PacketType.ItemSyncRequest, PacketType.ContainerLoot,
         PacketType.ContainerLootAck, PacketType.LootSyncRequest, PacketType.MaterialisedLootAck,
         PacketType.JournalOp, PacketType.JournalSyncRequest, PacketType.EnemyDamage,
+        PacketType.CompanionDamage,
         PacketType.ProgressionReport, PacketType.CompanionXpReport, PacketType.WorldDigest, PacketType.PhantomDamage,
         PacketType.PeerEffect, PacketType.EncounterTrigger, PacketType.TriggerRelay,
         PacketType.MidModuleMovie, PacketType.DialogueRequest, PacketType.Chat, PacketType.Bark,

@@ -677,6 +677,11 @@ public sealed partial class CoopAgent
             _livenessPump.PumpCreatureLiveness(local, caps);
             _combatPump.PumpPhantomDamage(caps);
             _combatPump.PumpPeerEffects(caps);
+
+            // Companion damage TAKEN by a companion_local_combat-released companion, forwarded
+            // to the host — same cadence as the enemy damage-dealt channel above, and for the
+            // same reason (docs/research/companion-state-sync.md §13).
+            _combatPump.PumpCompanionDamage(_settings.SyncCompanionDamage);
             _lootPump.PumpMaterialisedLoot(local.Module);
 
             // ⚠ PARTY RODE HERE TOO, ONCE — same shape as dialogue below. Left as the

@@ -106,7 +106,16 @@ internal partial struct SharedBlock
     /// next clean 0x100 boundary past that, the same choice every earlier growth in this file
     /// made.
     /// </summary>
-    public const int TotalSize = 0x4800;
+    /// <summary>
+    /// Grown from 0x4800 for the companion-damage channel (version 63,
+    /// docs/research/companion-state-sync.md §13): the minigame-lock/exe-digest/chargen tail
+    /// past 0x4700 runs to 0x47C8, leaving no room for this region, and 0x4800..0x4A00 is left
+    /// DELIBERATELY UNUSED — reserved for concurrent work on this tree (versions 61/62), the
+    /// same "leave a parallel branch's claimed range alone" discipline every growth here
+    /// follows. This region starts at 0x4A00 and needs only 0x90 bytes (0x4A00..0x4A90); rounded
+    /// up to the next clean 0x100 boundary past that, the same choice every earlier growth made.
+    /// </summary>
+    public const int TotalSize = 0x4B00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -183,7 +192,10 @@ internal partial struct SharedBlock
     /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13. Version 59
     /// (2026-08-28) widened each item-template-spawn ring entry with
     /// <see cref="ItemTemplateSpawnIsCheatOffset"/> — see SharedBlock.ItemTemplateSpawns.cs and
-    /// docs/research/party-pool-sync.md §20.
+    /// docs/research/party-pool-sync.md §20. Versions 61/62 are reserved for concurrent work on
+    /// this tree, not yet merged into this branch. Version 63 (2026-09-02) added
+    /// <see cref="OffsetCompanionDamageSlots"/>/<see cref="OffsetCompanionDamageOwedSlots"/> —
+    /// see SharedBlock.CompanionDamage.cs and docs/research/companion-state-sync.md §13.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

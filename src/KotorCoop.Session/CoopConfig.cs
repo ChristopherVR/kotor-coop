@@ -528,6 +528,18 @@ public sealed record CoopConfig
     /// slots, sub-3s latency). <c>companion_gear_sync = 0</c> turns it off.
     /// </summary>
     public bool CompanionGearSync { get; init; } = true;
+
+    /// <summary>
+    /// Whether a client's own damage TAKEN by a <c>companion_local_combat</c>-released
+    /// companion is forwarded to the host, which spends it as real damage on its own
+    /// authoritative body — see
+    /// <see cref="KotorCoop.Session.AgentSettings.SyncCompanionDamage"/>. Default ON; inert
+    /// unless <c>companion_local_combat</c> (itself OFF by default) has actually released a
+    /// companion. <c>companion_damage_sync = 0</c> turns it off. See
+    /// docs/research/companion-state-sync.md §13.
+    /// </summary>
+    public bool CompanionDamageSync { get; init; } = true;
+
     /// <summary>
     /// Syncs the shared party item pool (<c>CSWPartyTable+0x118</c>) both ways. ON by default
     /// since 2026-08-29 — see <see cref="PartyPoolSyncMode"/>, which carries the mode this
@@ -790,6 +802,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),
             CompanionGearSync = !kv.ContainsKey("companion_gear_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_gear_sync")),
+            CompanionDamageSync = !kv.ContainsKey("companion_damage_sync")
+                || IsTruthy(kv.GetValueOrDefault("companion_damage_sync")),
             // ON by default at mode 2 (2026-08-29) — the ON-by-default idiom, widened to the
             // small-integer parse: an absent key means the shipped default, a present one means
             // exactly what it says, including 0.

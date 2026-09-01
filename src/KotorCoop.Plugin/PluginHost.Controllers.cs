@@ -21,6 +21,7 @@ internal static unsafe partial class PluginHost
         _incomingDamage = new IncomingDamageController(_view);
         _peerEffects = new PeerEffectController(_view);
         _peerDamage = new PeerDamageController(_view);
+        _companionDamage = new CompanionDamageController(_view);
         _testDrive = new TestDriveController(_view);
         _cheats = new CheatController(_view);
         _doors = new DoorController(_view);

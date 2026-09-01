@@ -55,6 +55,7 @@ internal static unsafe partial class PluginHost
     private static PeerEffectController? _peerEffects;
 
     private static PeerDamageController? _peerDamage;
+    private static CompanionDamageController? _companionDamage;
     private static TestDriveController? _testDrive;
     private static CheatController? _cheats;
     private static DoorController? _doors;
@@ -294,7 +295,16 @@ internal static unsafe partial class PluginHost
         //      SharedBlock.MinigameLock.cs), new-character join capture handshake (0x4780..
         //      and 0x47C0, SharedBlock.JoinChargen.cs), cheat kinds 53 closegui, 56 followstall,
         //      59 skipkey, 60 quicksave. Live-verified — docs/live-verification.md (2026-08-29).
-        _block->Version = 60;
+        // 61/62 = reserved for concurrent work on this tree, not yet merged into this branch.
+        // 63 = 2026-09-02: companion damage TAKEN at 0x4A00..0x4A90 (TotalSize grown to
+        //      0x4B00, 0x4800..0x4A00 left deliberately unused for the two reserved versions
+        //      above). PhantomHitHook's companion watch + CompanionDamageController close the
+        //      gap docs/research/companion-state-sync.md §13 names: a companion
+        //      companion_local_combat releases to fight on a client took real hits with no
+        //      channel back to the host, so its authoritative body never saw any of it and the
+        //      next mirror pass overwrote the lower figure — effectively invulnerable, and a
+        //      downed companion popped back up. See SharedBlock.CompanionDamage.cs. NEEDS-LIVE.
+        _block->Version = 63;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

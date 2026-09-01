@@ -128,6 +128,7 @@ internal static class AgentComposition
             MovieRelayEnabled = config?.MovieRelayEnabled ?? true,
             SyncCompanionXp = config?.CompanionXpSync ?? true,
             SyncCompanionGear = config?.CompanionGearSync ?? true,
+            SyncCompanionDamage = config?.CompanionDamageSync ?? true,
             // ON by default at mode 2 (2026-08-29): with no coop.ini at all, the shipped
             // default is what a fresh install would have got from profiles/coop.ini.example.
             PartyPoolSyncEnabled = config?.PartyPoolSyncEnabled ?? true,

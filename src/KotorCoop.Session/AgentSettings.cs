@@ -287,6 +287,23 @@ public sealed record AgentSettings
     /// ON. coop.ini <c>companion_gear_sync</c>.
     /// </summary>
     public bool SyncCompanionGear { get; init; } = true;
+
+    /// <summary>
+    /// When true, a client reports cumulative damage its own engine's pipeline has actually
+    /// dealt to each companion <c>companion_local_combat</c> has released to it, and the host
+    /// spends the rise as real damage on its own authoritative body (roadmap Tier 1: "a
+    /// released companion is effectively invulnerable"). Read from and applied through
+    /// <c>CombatPump.PumpCompanionDamage</c> on the same 150ms cadence
+    /// <see cref="Pumps.CombatPump.PumpEnemies"/> uses, since both are the same shape of
+    /// channel (a client's own damage pipeline, forwarded as a cumulative total). Default ON —
+    /// safe because the whole channel is INERT unless <c>companion_local_combat</c> (itself OFF
+    /// by default) has actually released a companion: with no release, the plugin's watch never
+    /// starts, nothing is ever recorded, and an older plugin build (which does not know the
+    /// block region this reads) simply returns an empty report. See
+    /// docs/research/companion-state-sync.md §13. coop.ini <c>companion_damage_sync</c>.
+    /// </summary>
+    public bool SyncCompanionDamage { get; init; } = true;
+
     /// When true, <see cref="Pumps.PartyPoolPump"/> runs on the heavy pass: syncing the shared
     /// party item pool (<c>CSWPartyTable+0x118</c>) both ways — detecting a local player's own
     /// deposit/withdrawal and applying a peer's, through the staging-cheat channel. ON by

@@ -1268,3 +1268,241 @@ from `companion_gear_sync` now being ON. `dotnet test tests/KotorCoop.Tests --no
 **2355 passed, 0 failed** (same run reported in the verdict above — no source changed between
 the two checks). `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/
 build.ps1 -WarnAsError`: both clean. No crash on either instance across the whole round.
+
+---
+
+## 13. Companion damage TAKEN (`companion_damage_sync`, 2026-09-02) — closing the gap
+`PartyPresenceController`'s own class comment named: "their damage goes nowhere, because there
+is no client->host channel for companion health, so the host never sees any of it"
+
+### 13.1 The gap, restated
+
+`companion_local_combat` (§0 above and `party-reconciliation.md`'s dated entries) releases a
+companion near a client's own local fight to that client's own engine AI instead of mirroring
+it. Released, the companion is a real, faction-PLAYER, non-pinned body that can genuinely take
+hits from the enemy it and the client are fighting — but until this round, nothing carried
+those hits anywhere. The host's `PartyPresenceController.DriveOne` writes the host's absolute
+health onto every mirrored companion every pass (`⚠ THE HOST OWNS COMPANION HEALTH`), and the
+one companion released this pass is the only exception (it "never reaches this line at all this
+pass"). So on a MIRRORING instance the released companion took real local damage; on the HOST
+its health never moved; and on the client's own NEXT release cycle (or a peer reclaiming the
+slot) the host's untouched, higher figure would have overwritten whatever the client's own fight
+had done to it, the moment mirroring resumed. In practice this meant: a released companion could
+not be worn down, could not go down, and any HP loss visible on the client's own screen was
+cosmetic and reverted the instant the host mirror wrote again.
+
+### 13.2 Design — mirror the enemy damage-DEALT ledger, direction reversed, keyed by roster slot
+
+Read `docs/research/peer-damage-ledger.md` first — this channel is a direct structural copy of
+the one it already proved, with one simplification: **VERIFIED** (design, by construction; the
+arithmetic itself is unit-tested, see §13.4) health cannot carry a companion's damage taken for
+the identical reason it could not carry a peer's damage dealt to an enemy — it is a LEVEL that
+has to be sampled, and the owner's own mirror write erases it between samples. A cumulative SUM
+of damage taken cannot be raced, because nothing in this codebase ever reads it back out of the
+game.
+
+**Two differences from the enemy channel, both simplifications:**
+
+1. **Direction.** The enemy channel is peer → owner (client deals damage, host applies it to
+   ITS enemy). This channel is the same peer → owner shape (client's companion takes damage,
+   host applies it to ITS companion) — so structurally identical, not mirrored.
+2. **Key.** An enemy is keyed by engine object id, which is reassigned per module load, so the
+   enemy ledger needs a module label and a per-module epoch. A companion is keyed by NPC ROSTER
+   SLOT (`PartyPresenceView.RosterSlotPlusOne`'s own "plus one" convention, 1..9), which names
+   the same companion identity for the WHOLE SESSION — `PartyPresenceController` already
+   resolves companions by roster slot for exactly this reason. So `CompanionDamageLedger`
+   (`src/KotorCoop.Session/CompanionDamageLedger.cs`) carries no module and no epoch; only a
+   per-report GENERATION (the sender's own reset marker) survives from the enemy design, for the
+   ordinary "tell a legitimate restart from a stale datagram" reason every cumulative channel
+   here needs.
+
+**The channel, end to end:**
+
+```
+client (released companion)                          host (owns the companion)
+────────────────────────────                          ─────────────────────────
+PhantomHitHook.OnDamage
+  targetId matches a WATCHED companion slot
+  (PartyPresenceController.WatchCompanion,
+  only while released)?
+      _companionCumulative[slot] += total
+                │
+   CompanionDamageController (frame thread)
+      block 0x4A08: 4 x {rosterSlotPlusOne,
+      cumulative, serial} + count + generation
+                │
+   agent: bridge.ReadCompanionDamageTaken()
+                │
+      CompanionDamagePacket (type 71, ~150ms
+      cadence — CombatPump.PumpCompanionDamage,
+      same gate PumpEnemies uses)
+                │
+                └──────────►  CoopHost: freshness (2s) filter
+                                       │
+                              CompanionDamageLedger.Merge
+                                bank each peer's RISE per roster slot
+                                       │
+                              bridge.TryPublishCompanionDamageOwed
+                                block 0x4A44: 9 x {rosterSlotPlusOne,
+                                cumulative} (agent -> plugin)
+                                       │
+                              CompanionDamageController.ApplyOwed
+                                delta = owed − applied (DamageOwedLedger,
+                                reused as-is, keyed by roster slot instead
+                                of object id)
+                                Odyssey.ApplyDamageEffect(objectId, delta)
+                                       │
+                              the engine's own damage pipeline — resistance,
+                              shields, difficulty scaling on the HOST's real
+                              body all apply — and, at ≤ 0 hp, the engine's
+                              own REAL temp-death (TempDeathUpdate)
+                                       │
+                              the ordinary PartySnapshot channel carries the
+                              new (lower) health back down to every mirroring
+                              client — no new wire type needed for that half
+```
+
+**Why no host → client packet is needed for the "owed" half.** The host's `ApplyDamageEffect`
+call changes the host's OWN authoritative companion body's hit points through the ordinary
+engine pipeline, which the existing `PartySnapshot`/`PartyMemberState.Health` channel already
+carries to every client every tick. The gap this closes was entirely in the OTHER direction
+(client → host); once the host's body is genuinely hurt, everything downstream of that already
+worked before this round.
+
+**Why the "same creature, re-run the pipeline" argument still holds.** Exactly the peer-damage-
+ledger.md §2 argument, unchanged: the number carried on the wire is read at `OnApplyDamage`'s
+entry, before the target's resistance/immunity/reduction virtuals run and overwrite it (§1.1
+there), and the two bodies — the client's released companion and the host's authoritative one —
+are the SAME creature (same blueprint, same equipment, same NPC identity), so applying it
+through the host's own `EffectDamage` runs the pipeline exactly once, not twice.
+
+### 13.3 Block layout, packet, version numbers
+
+SharedBlock version 63 (plugin `PluginHost.cs`, agent `KotorGameBridge.cs`'s
+`PluginSignature`), region `0x4A00..0x4A90` (`SharedBlock.CompanionDamage.cs`), `TotalSize`
+grown `0x4800 -> 0x4B00` — `0x4800..0x4A00` deliberately left unused (reserved for concurrent
+versions 61/62 on this tree, the same "leave a parallel branch's claimed range alone"
+discipline every earlier growth in `SharedBlock.cs` follows):
+
+```
+block, plugin -> agent (client role: what this instance's engine has actually done)
+  0x4A00   u32 count
+  0x4A04   u32 generation      (the plugin's watch restarting — module change, re-attach,
+                                 a fresh release after a reclaim)
+  0x4A08   4 x { u32 rosterSlotPlusOne, u32 cumulative, u32 serial }   (id written last)
+
+block, agent -> plugin (host role: what every peer has dealt to OUR companions)
+  0x4A40   u32 count
+  0x4A44   9 x { u32 rosterSlotPlusOne, u32 cumulative }   (id written last)
+  0x4A8C   u32 applications run (plugin -> agent diagnostic)
+```
+
+`ProtocolConstants.Version` 47 → 49 (48 reserved for concurrent work not yet merged),
+`PacketType.CompanionDamage` = 71 (70 was the highest in use, `HostBye`; 72 stays reserved).
+`CompanionDamagePacket(PeerId, Generation, IReadOnlyList<CompanionDamageEntry>)`, one entry per
+released companion (`RosterSlotPlusOne`, `CumulativeDamage`), capped at
+`ProtocolConstants.MaxPartyMembers` (4) per datagram — a handful of bytes; the whole packet is
+nowhere near the datagram budget (`AFullCompanionDamageReportFitsInOneDatagram`).
+
+### 13.4 What is VERIFIED (by test) versus NEEDS-LIVE
+
+**VERIFIED (unit-tested):**
+* `CompanionDamageLedgerTests` — the rise-only bank, a repeated/out-of-order report changing
+  nothing, two companions banked independently, two peers' damage to the same slot summed, a
+  peer going silent not un-hurting the companion, the generation reset rule, a roster slot of 0
+  ignored, saturation instead of wrap, and an end-to-end "one hit is one hit through loss and
+  duplication" run reusing the plugin's own `DamageOwedLedger` unmodified.
+* `CompanionDamagePacket`/codec — round trip, a truncated packet rejected, a full 4-entry report
+  fits one datagram (`PacketCodecTests.cs`).
+* `CompanionDamageLoopbackTests` — a real `CoopHost`/`CoopClient` pair over loopback UDP: a
+  client's report reaches `CoopHost.GetCompanionDamage()`, a rising report supersedes the last
+  one, and the host never reports to itself.
+* Plugin build (`build.ps1 -WarnAsError`) and root build (`dotnet build -warnaserror`) both
+  clean — `SharedBlock`/`SharedBlockView`/`PhantomHitHook`/`PartyPresenceController`/
+  `CompanionDamageController` all compile and wire together.
+
+**NEEDS-LIVE (reasoned, not yet observed running — fails safe: worst case is the pre-existing
+gap, not a new failure):**
+1. **The headline scenario itself.** A companion released via `companion_local_combat` actually
+   takes real hits on the client's screen, the host's log shows `companion damage: applied N of
+   a peer's damage to companion 0x... (roster slot S, owed M)` climbing, and the HOST's own
+   `PartyMemberState.Health` for that slot genuinely falls — not just the client's local copy.
+2. **A companion downed on the client stays down on the host**, and the ordinary co-op
+   temp-death channel (`death-handling.md`) then treats it exactly like any other companion
+   down: the host's `TempDeathUpdate` runs its real recovery timer, and every client (including
+   the one that dealt the damage) sees it as a genuine down/stand-up rather than the old
+   "pop back up on the next mirror pass" artifact.
+3. **`PhantomHitHook.WatchCompanion`'s "only while released" guard** — that a still-MIRRORED
+   companion's block region stays at count 0 even while combat is happening nearby (i.e., the
+   mirror write path never accidentally trips the companion-damage hook because it writes hit
+   points directly rather than through `OnApplyDamage`).
+4. **Two companions released simultaneously**, each taking independent damage, banked into
+   independent roster slots with no cross-slot contamination — the same scenario
+   `party-reconciliation.md`'s 2026-08-24 entry (§13.5 below) already live-confirmed for the
+   RELEASE/ATTACK half; this round adds the DAMAGE half on top of that same recipe.
+5. **A module transition mid-release.** The companion is reclaimed on the client (release state
+   is not saved-game state; `ReleaseSession`/the roster-freeze guard already restore faction/pin
+   on any transition), and `CompanionDamageController.Invalidate`'s generation bump + the
+   plugin-side watch clear together mean nothing is owed against a stale roster-slot debt from
+   before the transition. Reasoned from the exact same guard the enemy channel already relies
+   on; not independently observed for this channel.
+
+### 13.5 The exact live recipe (verbatim from the release-half's own live-confirmed round —
+`party-reconciliation.md`'s "the two-companion `companion_local_combat` release... Flipped ON
+by default" entry, 2026-08-24 — extended with what THIS round's damage channel needs on top)
+
+1. `tools/demo.ps1` (or the two-instance manual rig), a save with Trask still native (slot 0)
+   and Zaalbar recruited into an active party slot (slot 8) on the HOST — the exact roster the
+   2026-08-24 round used, chosen because it needs no fresh recruit ceremony beyond what that
+   round already did once. `companion-combat-credit-plan.md`'s round 82/83 entries cover how to
+   stage the recruit if starting from a fresh save instead (`CheatKindRecruit`/`recruit <slot>`
+   console verb, local-only, never crosses the network).
+2. Both instances' `coop.ini`: `companion_local_combat=1`, `companion_local_combat_range=80`
+   (generous — the companion follow-AI stall makes physically reuniting two companions
+   unreliable in most modules, so a wide range lets both qualify independently without needing
+   them adjacent) and `companion_damage_sync=1` (the shipped default; set explicitly if testing
+   against an older `coop.ini`). **These are read once at plugin construction** — a full rig
+   restart is required after editing them, not just a reconnect (the same trap
+   `party-reconciliation.md`'s "second, unrelated, newly-discovered bug" entry names for
+   `companion_local_combat` itself).
+3. Connect both instances; confirm `PartySnapshot` has converged (both companions visible in the
+   client's mirrored party).
+4. Position the CLIENT's own player and a single excluded hostile within
+   `companion_local_combat_range` of BOTH companions and the player at once — the 2026-08-24
+   round used `tar05_gammorean` (object `0x3`) with a fresh `tools/creatures.ps1` position sweep
+   confirming player-to-enemy 57.2 units, Zaalbar-to-enemy 25.5 units, Trask-to-enemy 55.5 units,
+   all under the 80-unit range.
+5. Force the fight (an inert scripted placement will not swing on its own — the same reason
+   every other combat channel in this codebase stages via a console verb rather than trusting
+   ordinary AI): `blockpoke.ps1 attack 0x7FFFFFFF 0x3` on the CLIENT, exactly the command the
+   2026-08-24 round used to get both companions' `party drive: companion 0x... released to fight
+   locally` lines to fire in the same tick.
+6. Let the fight run long enough for the enemy to land several hits on at least one released
+   companion (a Gammorean is not trivial; do not `slay` it immediately).
+
+**What proves it worked — read BOTH logs:**
+* **Client** `kotorcoop-plugin.log`: the existing `party drive: companion 0x... released to
+  fight locally` / `drove companion 0x...'s attack on 0x3 directly` lines (release half, already
+  live-confirmed), PLUS (new) nothing extra is logged on the taken side by design — the watch is
+  silent bookkeeping; confirm instead via `blockpoke.ps1` reading the companion's live HP
+  dropping on the client's own screen through ordinary play.
+* **Host** `kotorcoop-plugin.log`: `companion damage: applied N of a peer's damage to companion
+  0x... (roster slot S, owed M)` climbing across the fight, and — if the fight runs long enough —
+  either a run of refusals stopping (a temp-death applied) or, if the debt exceeds current HP,
+  the companion's own `TempDeathUpdate`-driven down/stand-up cycle firing exactly as it does for
+  any other companion.
+* **Cross-instance agreement**: the client's own locally-observed HP for the released companion
+  and the HOST's `PartyMemberState.Health` for the same roster slot should converge to the same
+  figure within one `CombatPumpIntervalMs` cycle (~150ms) plus one heavy-pump `PartySnapshot`
+  broadcast — diff the two directly (`blockpoke.ps1` against each instance, or the console
+  `census`-style read this codebase already has for the enemy channel) rather than trusting
+  either side's own belief alone, the same "the agent believes X is not the same claim as X is
+  true" discipline `verify.ps1`'s own header states.
+
+### 13.6 Test suite and build
+
+`CompanionDamageLedgerTests` (10 pure-arithmetic tests), `PacketCodecTests` (+3: round trip,
+truncation, datagram-budget), `CompanionDamageLoopbackTests` (+2: wire round trip, host-does-
+not-report-to-itself). `dotnet build KotorCoop.slnx` and `src/KotorCoop.Plugin/build.ps1
+-WarnAsError`: both clean. `dotnet test KotorCoop.slnx`: see the session's own final report for
+the exact before/after count.

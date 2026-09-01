@@ -107,4 +107,29 @@ public interface IPartyBridge
     /// </summary>
     int TryWritePartyMembers(IReadOnlyList<PartyMemberState> members, bool applyEquipment) =>
         TryWritePartyMembers(members);
+
+    /// <summary>False when this bridge cannot see companion damage-taken at all (no plugin,
+    /// or one too old to know the block region).</summary>
+    bool SupportsCompanionDamageSync => false;
+
+    /// <summary>
+    /// Client side: cumulative damage this instance's own engine has actually applied to each
+    /// companion <c>companion_local_combat</c> has released to it, straight out of the
+    /// plugin's watch — the companion sibling of <c>IEnemyBridge.ReadDamageDealt</c>.
+    /// <paramref name="generation"/> changes whenever the plugin's own watch restarts (a
+    /// module change, a re-attach, a fresh release after being reclaimed), which is how the
+    /// host tells a legitimate restart from a stale datagram. Default (0, []) means "nothing
+    /// released, or an older plugin that has never heard of this channel" — both fail safe to
+    /// silence, never to a phantom debt.
+    /// </summary>
+    (uint Generation, List<CompanionDamageEntry> Damage) ReadCompanionDamageTaken() => (0, []);
+
+    /// <summary>
+    /// Host side: hands the plugin the total every peer has dealt to each of this host's own
+    /// companions, keyed by NPC roster slot, for it to spend as real engine damage on the
+    /// game thread — the companion sibling of <c>IEnemyBridge.TryPublishDamageOwed</c>. No
+    /// epoch: unlike an enemy's object id, a roster slot names the same companion for the
+    /// whole session, so there is nothing to invalidate across a module change.
+    /// </summary>
+    bool TryPublishCompanionDamageOwed(IReadOnlyList<CompanionDamageEntry> owed) => false;
 }
