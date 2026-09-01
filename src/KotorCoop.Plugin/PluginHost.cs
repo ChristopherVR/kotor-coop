@@ -294,7 +294,11 @@ internal static unsafe partial class PluginHost
         //      SharedBlock.MinigameLock.cs), new-character join capture handshake (0x4780..
         //      and 0x47C0, SharedBlock.JoinChargen.cs), cheat kinds 53 closegui, 56 followstall,
         //      59 skipkey, 60 quicksave. Live-verified — docs/live-verification.md (2026-08-29).
-        _block->Version = 60;
+        // 61 = N-slot local_combat: the excluded-id array at 0x4800..0x4900 (block grown to
+        //      0x4B00), SharedBlock.OffsetLocalCombatExcludedIds — widens local_combat from one
+        //      locally-fought enemy to up to LocalCombatSlotCapacity (3), coop.ini
+        //      local_combat_slots. See docs/research/combat-participation.md §11. NEEDS-LIVE.
+        _block->Version = 61;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

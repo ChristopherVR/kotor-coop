@@ -106,7 +106,17 @@ internal partial struct SharedBlock
     /// next clean 0x100 boundary past that, the same choice every earlier growth in this file
     /// made.
     /// </summary>
-    public const int TotalSize = 0x4800;
+    /// <summary>
+    /// Grown from 0x4800 for the N-slot local_combat excluded-id array (version 61, region
+    /// 0x4800..0x4900, docs/research/combat-participation.md §11): version 60's own additions
+    /// (minigame lock, join-chargen handshake, the exe-image digest) filled the 0xFC bytes
+    /// TotalSize 0x4800 left after the item-template-spawn cursor, so this region starts
+    /// cleanly at the old boundary — the same choice every earlier growth in this file made —
+    /// and TotalSize is set to 0x4B00 (shared with other parallel work landing the same pass,
+    /// so the merge stays textually clean; this region only actually uses the first 0xC bytes
+    /// of the 0x300 reserved).
+    /// </summary>
+    public const int TotalSize = 0x4B00;
 
     public const int ProfileVisibleSize = 0x250;
 

@@ -1,3 +1,4 @@
+using System.Linq;
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
 
@@ -200,29 +201,30 @@ internal sealed partial class CombatPump
         // cleanly resumes normal mirroring on the very next pump with no separate "un-exclude"
         // round trip.
         IReadOnlyList<EnemyState> enemies = session.GetEnemies(local.Module);
-        uint excludedId = bridge.ReadLocalCombatExcludedId();
-        if (excludedId != 0)
+        IReadOnlyList<uint> excludedIds = bridge.ReadLocalCombatExcludedIds();
+        if (excludedIds.Count > 0)
         {
             List<EnemyState> filtered = new(enemies.Count);
             foreach (EnemyState enemy in enemies)
             {
-                if (enemy.ObjectId != excludedId)
+                if (!excludedIds.Contains(enemy.ObjectId))
                 {
                     filtered.Add(enemy);
                 }
             }
 
-            // DIAGNOSTIC (temporary): confirms the exclusion filter is actually removing the
+            // DIAGNOSTIC (temporary): confirms the exclusion filter is actually removing every
             // excluded id before assuming a bug lies elsewhere. See
             // docs/research/combat-when-apart.md.
-            log($"local combat diag (agent): excludedId=0x{excludedId:X} enemies.Count={enemies.Count} "
-                + $"filtered.Count={filtered.Count} (removed {enemies.Count - filtered.Count})");
+            log($"local combat diag (agent): excludedIds=[{string.Join(",", excludedIds.Select(id => $"0x{id:X}"))}] "
+                + $"enemies.Count={enemies.Count} filtered.Count={filtered.Count} "
+                + $"(removed {enemies.Count - filtered.Count})");
 
             enemies = filtered;
         }
 
         bool wrote = bridge.TryWriteEnemies(enemies);
-        if (excludedId != 0)
+        if (excludedIds.Count > 0)
         {
             log($"local combat diag (agent): TryWriteEnemies returned {wrote}, wrote {enemies.Count} enemies");
         }
