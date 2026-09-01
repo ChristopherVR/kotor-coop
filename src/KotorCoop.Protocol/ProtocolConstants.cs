@@ -143,7 +143,10 @@ public static class ProtocolConstants
     /// types, but a v46 peer would misread a paged snapshot). See
     /// docs/research/disconnect-reconnect.md §11 and world-adoption.md (2026-08-29).
     ///
-    /// Version 48: reserved for concurrent work on this tree, not yet merged into this branch.
+    /// Version 48: <see cref="PhantomDamagePacket"/> gains <c>Attackers</c> — the same
+    /// cumulative total split per attacker id, up to <see cref="MaxPhantomAttackerEntries"/>
+    /// entries, instead of just the single last-attacker id. No new packet type; the existing
+    /// <c>PhantomDamage</c> (31) is extended. See docs/research/peer-damage-ledger.md §7.
     ///
     /// Version 49: <see cref="PacketType.CompanionDamage"/> (71) — a companion
     /// <c>companion_local_combat</c> has released to fight on a client's own engine forwards
@@ -151,7 +154,8 @@ public static class ProtocolConstants
     /// authoritative body. The companion sibling of <see cref="PacketType.EnemyDamage"/>'s
     /// damage-DEALT channel, and the same "cumulative total, never a health sample" shape for
     /// the identical reason (docs/research/peer-damage-ledger.md). <c>companion_damage_sync</c>,
-    /// default ON. See docs/research/companion-state-sync.md §13.
+    /// default ON. See docs/research/companion-state-sync.md §13. (48 and 49 landed together
+    /// from parallel branches in the 2026-09-02 combat wave.)
     /// </summary>
     public const byte Version = 49;
 
@@ -250,6 +254,16 @@ public static class ProtocolConstants
     /// and not yet seen die.
     /// </summary>
     public const int MaxEnemyDamageEntries = 32;
+
+    /// <summary>
+    /// Per-attacker breakdown entries on one <see cref="PhantomDamagePacket"/> — matches the
+    /// plugin's own capture-side capacity (<c>SharedBlock.PhantomAttackerCapacity</c>) and the
+    /// applied-side ledger's (<see cref="PhantomAttackerAppliedLedger.Capacity"/>). 8 bytes
+    /// each (attacker id + cumulative), so a full 4 is 32 bytes — trivial next to
+    /// <see cref="MaxPacketSize"/>; the cap exists to bound the fixed table this rides on, not
+    /// the datagram. See docs/research/peer-damage-ledger.md §7.
+    /// </summary>
+    public const int MaxPhantomAttackerEntries = 4;
 
     /// <summary>
     /// Creature-liveness entries per <see cref="CreatureLivenessPacket"/> datagram.

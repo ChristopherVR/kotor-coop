@@ -247,6 +247,86 @@ public sealed partial class KotorGameBridge
         return _memory.TryWrite(_pluginBlock + BlockIncomingDamage, cumulative) && ok;
     }
 
+    // Per-attacker phantom-damage attribution (shared block version 62, region
+    // 0x4900..0x4A00 plus 0x4AA0..0x4AC0, TotalSize grown to 0x4B00). Mirrors SharedBlock.OffsetPhantomAttacker*/
+    // OffsetIncomingDamageAttackers. Two directions, same entry shape (id u32 @0, cumulative
+    // u32 @4, id written last): plugin -> agent per PHANTOM SLOT (what hit our phantoms here,
+    // captured by PhantomHitHook), agent -> plugin for the LOCAL PLAYER only (the merged owed
+    // breakdown from every sender). See docs/research/peer-damage-ledger.md §7.
+    private const int BlockPhantomAttackerSlots = 0x4900;
+    private const int BlockPhantomAttackerSlotStride = 0x20;
+    private const int BlockPhantomAttackerCapacity = 4;
+    private const int BlockPhantomAttackerEntryStride = 0x08;
+    private const int BlockIncomingDamageAttackers = 0x4AA0;   // past the companion-damage region (0x4A00..0x4A90)
+
+    public bool SupportsPerAttackerPhantomHit => _pluginBlock != 0;
+
+    /// <summary>Reads the per-attacker breakdown <c>PhantomHitHook</c> captured for one
+    /// watched phantom slot. A zero id marks an empty entry (the table's own convention), so
+    /// the returned count can be smaller than the table's raw capacity.</summary>
+    public int ReadPhantomHitAttackers(int slot, Span<uint> attackerIds, Span<uint> cumulativeDamage)
+    {
+        if (_pluginBlock == 0 || slot is < 0 or >= BlockSlotCapacity)
+        {
+            return 0;
+        }
+
+        nint table = _pluginBlock + BlockPhantomAttackerSlots + (slot * BlockPhantomAttackerSlotStride);
+        int capacity = Math.Min(
+            BlockPhantomAttackerCapacity, Math.Min(attackerIds.Length, cumulativeDamage.Length));
+
+        int count = 0;
+        for (int i = 0; i < capacity; i++)
+        {
+            nint entry = table + (i * BlockPhantomAttackerEntryStride);
+            if (!_memory.TryReadUInt32(entry + 0x00, out uint id) || id == 0)
+            {
+                continue;
+            }
+
+            if (!_memory.TryReadUInt32(entry + 0x04, out uint cumulative))
+            {
+                continue;
+            }
+
+            attackerIds[count] = id;
+            cumulativeDamage[count] = cumulative;
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>Hands the plugin the merged owed-per-attacker breakdown for the local player.
+    /// Always writes all <see cref="BlockPhantomAttackerCapacity"/> entries (zeroing the tail
+    /// past <paramref name="attackers"/>'s own count) so a shrinking breakdown never leaves a
+    /// stale entry behind.</summary>
+    public bool TryWriteIncomingDamageAttackers(IReadOnlyList<PhantomAttackerEntry> attackers)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = true;
+        int count = Math.Min(attackers.Count, BlockPhantomAttackerCapacity);
+
+        for (int i = 0; i < BlockPhantomAttackerCapacity; i++)
+        {
+            nint entry = _pluginBlock + BlockIncomingDamageAttackers + (i * BlockPhantomAttackerEntryStride);
+            uint id = i < count ? attackers[i].AttackerId : 0;
+            uint cumulative = i < count ? attackers[i].CumulativeDamage : 0;
+
+            ok &= _memory.TryWrite(entry + 0x04, cumulative);
+
+            // Id last, same discipline as every other slot array in this file: the plugin
+            // must never pair a fresh id with the previous entry's stale cumulative.
+            ok &= _memory.TryWrite(entry + 0x00, id);
+        }
+
+        return ok;
+    }
+
     // Peer effects (non-damage combat effects, shared block version 44, region
     // 0x3A00..0x3B88). Mirrors SharedBlock.OffsetPeerEffect*. See
     // docs/research/effect-sync.md.

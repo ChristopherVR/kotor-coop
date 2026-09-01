@@ -300,8 +300,15 @@ internal static unsafe partial class PluginHost
         //      widens local_combat from one locally-fought enemy to up to
         //      LocalCombatSlotCapacity (3), coop.ini local_combat_slots. See
         //      docs/research/combat-participation.md §11. NEEDS-LIVE.
-        // 62 = same wave: per-attacker phantom damage attribution at 0x4900..0x4A00
-        //      (SharedBlock.IncomingDamage*, docs/research/incoming-damage.md). NEEDS-LIVE.
+        // 62 = same wave: per-attacker phantom-damage attribution (0x4900..0x4A00 plus
+        //      0x4AA0..0x4AC0): a 4-entry, least-total-eviction table per phantom slot of
+        //      (attackerId, cumulative) pairs (SharedBlock.OffsetPhantomAttackerSlots, plugin ->
+        //      agent — what hit OUR phantoms), and a 4-entry merged owed-per-attacker table for
+        //      the LOCAL player (SharedBlock.OffsetIncomingDamageAttackers, agent -> plugin), so
+        //      IncomingDamageController can absorb/apply a delta PER ATTACKER instead of billing
+        //      a whole pump window's damage to whichever id landed last. The legacy scalar
+        //      total/last-attacker fields next to each stay live as the fallback for an older
+        //      reader. NEEDS-LIVE. See docs/research/peer-damage-ledger.md §7.
         // 63 = same wave: companion damage TAKEN at 0x4A00..0x4A90. PhantomHitHook's companion
         //      watch + CompanionDamageController close the gap
         //      docs/research/companion-state-sync.md §13 names: a companion

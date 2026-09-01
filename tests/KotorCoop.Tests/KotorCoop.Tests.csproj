@@ -106,6 +106,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\StoreAffordabilityRule.cs" Link="Plugin\StoreAffordabilityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StoreSellGuard.cs" Link="Plugin\StoreSellGuard.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MaxHitPointsRule.cs" Link="Plugin\MaxHitPointsRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PhantomAttackerTable.cs" Link="Plugin\PhantomAttackerTable.cs" />
   </ItemGroup>
 
   <ItemGroup>

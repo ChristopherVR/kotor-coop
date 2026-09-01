@@ -114,10 +114,13 @@ internal partial struct SharedBlock
     /// starts at a clean boundary — the same choice every earlier growth in this file made.
     ///   0x4800..0x4900  version 61, N-slot local_combat excluded-id array (uses 0xC bytes),
     ///                   docs/research/combat-participation.md §11.
-    ///   0x4900..0x4A00  version 62, per-attacker phantom damage attribution,
-    ///                   docs/research/incoming-damage.md.
+    ///   0x4900..0x4A00  version 62, per-attacker phantom-damage attribution OUT table (per
+    ///                   phantom slot), docs/research/peer-damage-ledger.md §7.
     ///   0x4A00..0x4B00  version 63, companion damage TAKEN channel (uses 0x90 bytes),
     ///                   docs/research/companion-state-sync.md §13.
+    ///   0x4AA0..0x4AC0  version 62's IN table (the local player's merged owed-per-attacker
+    ///                   breakdown), relocated here at merge time because 63 had already
+    ///                   claimed 0x4A00 on its branch.
     /// </summary>
     public const int TotalSize = 0x4B00;
 
@@ -196,10 +199,12 @@ internal partial struct SharedBlock
     /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13. Version 59
     /// (2026-08-28) widened each item-template-spawn ring entry with
     /// <see cref="ItemTemplateSpawnIsCheatOffset"/> — see SharedBlock.ItemTemplateSpawns.cs and
-    /// docs/research/party-pool-sync.md §20. Versions 61/62 are reserved for concurrent work on
-    /// this tree, not yet merged into this branch. Version 63 (2026-09-02) added
-    /// <see cref="OffsetCompanionDamageSlots"/>/<see cref="OffsetCompanionDamageOwedSlots"/> —
-    /// see SharedBlock.CompanionDamage.cs and docs/research/companion-state-sync.md §13.
+    /// docs/research/party-pool-sync.md §20. 60 (2026-08-29) added the minigame peer lock and
+    /// new-character join-chargen handshake — see PluginHost.cs's own remarks. Version 62
+    /// (2026-09-02) added <see cref="OffsetPhantomAttackerSlots"/>/<see cref="OffsetIncomingDamageAttackers"/>
+    /// — see SharedBlock.Combat.cs and docs/research/peer-damage-ledger.md §7. Version 63
+    /// (same day) added <see cref="OffsetCompanionDamageSlots"/>/<see cref="OffsetCompanionDamageOwedSlots"/>
+    /// — see SharedBlock.CompanionDamage.cs and docs/research/companion-state-sync.md §13.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

@@ -157,10 +157,20 @@ internal sealed unsafe partial class SharedBlockView
 
     // ---- combat participation ----------------------------------------------------
 
-    /// <summary>Publishes what a peer's phantom has taken here, for the agent to forward.
-    /// The phantom id is written last, so the agent never pairs an id with another
-    /// phantom's total.</summary>
-    public void SetPhantomHit(int index, uint phantomId, uint cumulative, uint attacker, uint serial)
+    /// <summary>
+    /// Publishes what a peer's phantom has taken here, for the agent to forward: the legacy
+    /// scalar cumulative/attacker/serial (unchanged — an older reader still works off these
+    /// alone), PLUS the per-attacker breakdown PhantomHitHook captured for the same slot, up
+    /// to <see cref="SharedBlock.PhantomAttackerCapacity"/> entries. The phantom id is written
+    /// last on the scalar fields, and each attacker entry's own id last too — the same
+    /// "payload then key" discipline every fixed table in this block uses. Entries beyond
+    /// <paramref name="attackerIds"/>'s own length are zeroed, so a shrinking breakdown (an
+    /// evicted attacker, a phantom that stopped taking hits) never leaves a stale entry
+    /// behind. See docs/research/peer-damage-ledger.md §7.
+    /// </summary>
+    public void SetPhantomHit(
+        int index, uint phantomId, uint cumulative, uint attacker, uint serial,
+        ReadOnlySpan<uint> attackerIds, ReadOnlySpan<uint> attackerCumulative)
     {
         byte* slot = baseAddress + SharedBlock.OffsetPhantomHitSlots
             + (Clamp(index, SharedBlock.SlotCapacity) * SharedBlock.PhantomHitStride);
@@ -169,6 +179,31 @@ internal sealed unsafe partial class SharedBlockView
         *(uint*)(slot + 0x08) = attacker;
         *(uint*)(slot + 0x0C) = serial;
         *(uint*)(slot + 0x00) = phantomId;
+
+        byte* table = baseAddress + SharedBlock.OffsetPhantomAttackerSlots
+            + (Clamp(index, SharedBlock.SlotCapacity) * SharedBlock.PhantomAttackerSlotStride);
+
+        int count = Math.Min(attackerIds.Length, SharedBlock.PhantomAttackerCapacity);
+        for (int i = 0; i < SharedBlock.PhantomAttackerCapacity; i++)
+        {
+            byte* entry = table + (i * SharedBlock.PhantomAttackerEntryStride);
+            uint id = i < count ? attackerIds[i] : 0;
+            uint entryCumulative = i < count && i < attackerCumulative.Length ? attackerCumulative[i] : 0;
+
+            *(uint*)(entry + 0x04) = entryCumulative;
+            *(uint*)(entry + 0x00) = id;
+        }
+    }
+
+    /// <summary>Agent-written: the LOCAL PLAYER's merged owed-per-attacker breakdown — summed
+    /// across every peer that has hit their phantom elsewhere. Id 0 marks an empty entry, the
+    /// same convention <see cref="SetPhantomHit"/>'s own attacker table uses.</summary>
+    public (uint AttackerId, uint CumulativeDamage) GetIncomingDamageAttacker(int index)
+    {
+        byte* entry = baseAddress + SharedBlock.OffsetIncomingDamageAttackers
+            + (Clamp(index, SharedBlock.PhantomAttackerCapacity) * SharedBlock.PhantomAttackerEntryStride);
+
+        return (*(uint*)(entry + 0x00), *(uint*)(entry + 0x04));
     }
 
 

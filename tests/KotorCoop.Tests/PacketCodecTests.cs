@@ -1160,11 +1160,66 @@ public class PacketCodecTests
     public void PhantomDamageRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        PhantomDamagePacket original = new(FromPeerId: 3, TargetPeerId: 7, CumulativeDamage: 142, AttackerId: 0x14);
+        PhantomDamagePacket original = new(
+            FromPeerId: 3, TargetPeerId: 7, CumulativeDamage: 142, AttackerId: 0x14, Attackers: []);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
-        Assert.Equal(original, PacketCodec.ReadPhantomDamage(buffer[..length]));
+
+        PhantomDamagePacket? decoded = PacketCodec.ReadPhantomDamage(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(original.FromPeerId, decoded.FromPeerId);
+        Assert.Equal(original.TargetPeerId, decoded.TargetPeerId);
+        Assert.Equal(original.CumulativeDamage, decoded.CumulativeDamage);
+        Assert.Equal(original.AttackerId, decoded.AttackerId);
+        Assert.Equal(original.Attackers, decoded.Attackers);
+    }
+
+    [Fact]
+    public void PhantomDamageWithAttackerBreakdownRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PhantomDamagePacket original = new(
+            FromPeerId: 3, TargetPeerId: 7, CumulativeDamage: 142, AttackerId: 0x14,
+            Attackers:
+            [
+                new PhantomAttackerEntry(0x14, 90),
+                new PhantomAttackerEntry(0x22, 40),
+                new PhantomAttackerEntry(0x33, 12),
+            ]);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        PhantomDamagePacket? decoded = PacketCodec.ReadPhantomDamage(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(original.FromPeerId, decoded.FromPeerId);
+        Assert.Equal(original.TargetPeerId, decoded.TargetPeerId);
+        Assert.Equal(original.CumulativeDamage, decoded.CumulativeDamage);
+        Assert.Equal(original.AttackerId, decoded.AttackerId);
+        Assert.Equal(original.Attackers, decoded.Attackers);
+    }
+
+    [Fact]
+    public void PhantomDamageAttackerBreakdownIsCappedAtMaxEntries()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        List<PhantomAttackerEntry> tooMany = [];
+        for (int i = 0; i < ProtocolConstants.MaxPhantomAttackerEntries + 3; i++)
+        {
+            tooMany.Add(new PhantomAttackerEntry((uint)(0x10 + i), (uint)(i + 1)));
+        }
+
+        PhantomDamagePacket original = new(
+            FromPeerId: 3, TargetPeerId: 7, CumulativeDamage: 142, AttackerId: 0x14, Attackers: tooMany);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        PhantomDamagePacket? decoded = PacketCodec.ReadPhantomDamage(buffer[..length]);
+        Assert.NotNull(decoded);
+        Assert.Equal(ProtocolConstants.MaxPhantomAttackerEntries, decoded!.Attackers.Count);
+        Assert.Equal(tooMany.GetRange(0, ProtocolConstants.MaxPhantomAttackerEntries), decoded.Attackers);
     }
 
     [Fact]

@@ -70,6 +70,18 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.CumulativeDamage);
         w.WriteUInt32(packet.AttackerId);
 
+        // Appended (protocol version 48): the per-attacker breakdown behind the scalar total
+        // above. Capped rather than truncated silently out of range — see ReadPhantomDamage.
+        int attackerCount = Math.Min(packet.Attackers.Count, ProtocolConstants.MaxPhantomAttackerEntries);
+        w.WriteUInt8((byte)attackerCount);
+
+        for (int i = 0; i < attackerCount; i++)
+        {
+            PhantomAttackerEntry entry = packet.Attackers[i];
+            w.WriteUInt32(entry.AttackerId);
+            w.WriteUInt32(entry.CumulativeDamage);
+        }
+
         return w.Failed ? 0 : w.Position;
     }
 
@@ -85,7 +97,27 @@ public static partial class PacketCodec
         uint target = r.ReadUInt32();
         uint cumulative = r.ReadUInt32();
         uint attacker = r.ReadUInt32();
+        byte attackerCount = r.ReadUInt8();
 
-        return r.Failed ? null : new PhantomDamagePacket(from, target, cumulative, attacker);
+        if (r.Failed || attackerCount > ProtocolConstants.MaxPhantomAttackerEntries)
+        {
+            return null;
+        }
+
+        List<PhantomAttackerEntry> attackers = new(attackerCount);
+        for (int i = 0; i < attackerCount; i++)
+        {
+            uint id = r.ReadUInt32();
+            uint entryCumulative = r.ReadUInt32();
+
+            if (r.Failed)
+            {
+                return null;
+            }
+
+            attackers.Add(new PhantomAttackerEntry(id, entryCumulative));
+        }
+
+        return r.Failed ? null : new PhantomDamagePacket(from, target, cumulative, attacker, attackers);
     }
 }

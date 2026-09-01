@@ -68,6 +68,7 @@
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentRule.cs" Link="Shared\SoloSegmentRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\PartyCensusRule.cs" Link="Shared\PartyCensusRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ExeImageDigestRule.cs" Link="Shared\ExeImageDigestRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\PhantomAttackerLedger.cs" Link="Shared\PhantomAttackerLedger.cs" />
   </ItemGroup>
 
 </Project>

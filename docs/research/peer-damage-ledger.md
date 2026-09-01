@@ -373,3 +373,130 @@ unfalsifiable: both ends look healthy, for ever. It now logs
 `combat: a peer owes N damage to 0xID, which does not resolve here` on its own bounded budget,
 separate from the successful-apply budget so a flood of applies cannot crowd it out. That one
 line turned "nothing happened" into a located defect inside a single run.
+
+## 7. 2026-09-02: per-attacker attribution on the phantom-damage wire
+
+§6 item 4 named the correctness gap directly: `IncomingDamageController` billed a whole pump
+window's forwarded damage to whichever attacker id landed LAST, because the wire carried one
+cumulative total plus one attacker id. Under `local_combat`, a window that mixed a locally-
+fought attacker with a mirrored one had to be billed wholesale to one or the other — either
+double-counted (billed to the local one, which is also swinging for real through the engine)
+or dropped (billed to the mirrored one, absorbed, while the local one's own contribution is
+never applied at all). This section replaces that single id with a per-attacker breakdown, end
+to end: capture, wire, and apply.
+
+### Table layout
+
+Three tables, one shape, all `(attackerId u32, cumulativeDamage u32)` — id written LAST per
+entry, same "payload then key" discipline every fixed table in `SharedBlock` already uses:
+
+| Table | Where | Capacity | Semantics |
+|---|---|---|---|
+| Capture (`PhantomAttackerTable`) | Plugin, per phantom slot (native, `PhantomHitHook`) | 4 | Accumulates raw hit deltas per attacker; least-total eviction when a 5th attacker lands a hit |
+| `SharedBlock.OffsetPhantomAttackerSlots` (0x4900..0x4A00) | Plugin -> agent, per phantom slot | 4 x `SharedBlock.SlotCapacity` (8) | Mirrors the capture table, published each drive pass alongside the legacy scalar `OffsetPhantomHitSlots` fields |
+| `PhantomDamagePacket.Attackers` | Wire (protocol version 48) | `ProtocolConstants.MaxPhantomAttackerEntries` = 4 | Appended after the legacy 4 scalar fields; capped, never truncated silently — `ReadPhantomDamage` refuses a packet over the cap |
+| `PhantomAttackerMerge` | Session (`CoopHost`/`CoopClient`), per target | unbounded input, capped to 4 output | Sums each attacker id across every sender's latest report, takes the top 4 by total |
+| `SharedBlock.OffsetIncomingDamageAttackers` (0x4AA0..0x4AC0 — moved past the companion-damage region 0x4A00..0x4A90 at merge time) | Agent -> plugin, ONE target (the local player) | 4 | The merged breakdown, for `IncomingDamageController` |
+| `PhantomAttackerAppliedLedger` | Plugin, victim-side (`IncomingDamageController`) | 4 | Per-attacker owed/applied reconciliation — the class that actually fixes the bug; least-total eviction, monotonic per attacker id, a regressed total is treated as a RESET (adopt the lower baseline) not a refusal |
+
+`SharedBlock.Version` 62 (regions 0x4900..0x4A00 and 0x4AA0..0x4AC0, `TotalSize` grown 0x4800 -> 0x4B00, 61
+deliberately skipped — reserved for parallel work in flight); `ProtocolConstants.Version` 48
+(`PhantomDamagePacket` extended, no new `PacketType`); `KotorGameBridge.PluginSignature` byte 8
+`3C` -> `3E`.
+
+### The correctness fix
+
+`IncomingDamageController.OnFrame` now prefers a per-attacker pass
+(`RunPerAttackerPass`) whenever the block carries a non-empty attacker breakdown, classifying
+EACH attacker independently — absorbed (locally engaged) or applied — instead of one whole-
+window verdict. Absorbed and applied entries are tracked in the same
+`PhantomAttackerAppliedLedger`, so a mixed window (one locally-fought attacker, one mirrored)
+now splits correctly: the local one's contribution is absorbed, the mirrored one's is applied,
+in the SAME pass, with neither double-counted nor dropped. Every apply-candidate attacker's
+delta is summed into ONE capped `Odyssey.ApplyDamageEffect` call (never per attacker — several
+small, individually-under-cap deltas must not add up to a one-shot the cap exists to prevent),
+then the spent budget is distributed back across the candidates in order so a capped remainder
+stays owed for the next pass, per attacker.
+
+The legacy single-total path (`RunLegacyScalarPass`) is unchanged and is the fallback whenever
+the block's attacker table is empty — an older peer's report (rejected at Hello by `E_PROTO`
+anyway, so this is not a wire-compatibility path), or before the first attacker id has
+resolved this session.
+
+### VERIFIED (by test)
+
+- `PhantomDamageWithAttackerBreakdownRoundTrips`/`PhantomDamageAttackerBreakdownIsCappedAtMaxEntries`
+  (`PacketCodecTests.cs`): the wire shape round-trips and refuses/caps correctly.
+- `PhantomAttackerAppliedLedgerTests.cs`: mixed-attacker window splits correctly
+  (`MixedAttackerWindowSplitsCorrectly`), absorbed vs applied stays independent per attacker
+  (`AbsorbedAndAppliedAreTrackedIndependentlyPerAttacker`), reordering/duplication is harmless
+  and a genuine sender restart is adopted rather than refused forever
+  (`ReorderingAndDuplicationAreHarmless`, `ARestartedSenderIsAdoptedRatherThanRefusedForever`),
+  and the eviction rule holds past 4 distinct attackers
+  (`EvictionDropsTheSmallestTotalWhenAFifthAttackerArrives`).
+- `PhantomAttackerTableTests.cs`: the capture-side table's own accumulation and eviction rule.
+- `PhantomAttackerMergeTests.cs`: the session-layer merge sums correctly across senders, keeps
+  distinct attackers separate, and caps at capacity by keeping the biggest totals.
+- `CoopSessionInterfaceShapeTests.cs`: the new `IDamageSession` members default correctly for a
+  session that has not been upgraded.
+- `TransitionMovieTests.TheBlockVersionMovedInBothHalves` /
+  `ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves`: the version bump is the same
+  number in `PluginHost.cs` and `KotorGameBridge.cs`.
+- `MidModuleMovieRelayTests.TheRegionDoesNotOverlapAnyExistingField`: `TotalSize` matches the
+  new region's own end.
+
+### NEEDS-LIVE
+
+Nothing in the plugin-side capture/apply path or the wire codec has been run against a live
+game this pass — everything above is unit-tested arithmetic and codec round-trips only.
+
+1. **The split itself, live.** Two mirrored enemies attacking one client at once, one of the
+   two locally-fought (`local_combat=1`) and the other purely mirrored. Expect the log to show
+   BOTH a `combat: absorbed N ... (last attacker 0x<local one's id>)` line AND a
+   `combat: took N damage from a hit on our phantom (attacker 0x<mirrored one's id>)` line in
+   the SAME pass window, and the victim's hit points to fall by exactly the mirrored attacker's
+   contribution — not by both combined (double-count), not by zero (drop).
+2. **No double-count, no drop, over a longer fight.** Sum every `took N damage` log line for
+   the mirrored attacker across the whole fight and compare it against that attacker's own
+   `combat: applied N of a peer's damage to 0x<id>` total on the OWNER's side (the enemy-damage
+   ledger, §1/§2) — they should match exactly, the same cross-check §6 item 2 already asks for
+   on the other direction of this channel.
+3. **The 4-entry cap under real pressure.** Stage (or find) a fight with 5+ simultaneous
+   attackers on one phantom and confirm the evicted 5th's damage still counts inside the
+   legacy scalar total (so nothing is lost, only its PER-ATTACKER breakdown is coarser) rather
+   than vanishing.
+4. **A sender restart mid-fight** (a module transition on the attacking peer) does not stall
+   that attacker's contribution — `ARestartedSenderIsAdoptedRatherThanRefusedForever` is unit-
+   tested, but the live path (CombatPump -> CoopHost/Client -> SharedBlock -> ledger) has not
+   been run through a real transition.
+5. **Aggro/creator attribution (§6 item 4 itself) remains NOT implemented and NOT investigated
+   further this pass beyond confirming it needs fresh RE.** `Odyssey.ApplyDamageEffectCore`
+   constructs the `CGameEffect` through the VM's own `EffectDamage`/`ApplyEffectToObject`
+   script-command routines; the effect lives on the VM's argument stack between the two calls,
+   and this codebase has no verified layout for a VM stack ENTRY (its type tag vs. its engine-
+   structure pointer) to safely read that pointer back out and poke `creator_id`
+   (`CGameEffect+0x18`) to the local resolution of the attacker id before `ApplyEffectToObject`
+   consumes it. `PhantomHitHook` only ever READS that field on an effect the engine already
+   built; nothing in this codebase has ever WRITTEN it before applying. Doing this safely needs
+   fresh disassembly of `EffectDamage`'s return-to-stack convention and
+   `ApplyEffectToObject`'s argument-popping order — neither exists in `docs/re/` today. Left
+   undone, behind no config key (there is nothing partially built to gate).
+
+### Live recipe (verbatim, once a rig is available)
+
+1. Load a 3-instance rig (host + two clients) on a module with at least two independently
+   targetable hostiles reachable at once (`demo3.ps1`/a hand-built save).
+2. Client A: `local_combat=1` (default). Engage ONE hostile so `StartLocalFight` pulls it out
+   of the census (log: `combat: local fight started against 0x<id>`).
+3. Client A: while still fighting the first, get a SECOND, un-engaged hostile from the same
+   owner's census to also land hits on Client A's phantom on the OWNER's screen (walk into its
+   aggro range, or `giveloot`-style stage a hit via the existing `testhit` cheat aimed at the
+   right phantom slot if a live second hostile cannot be arranged).
+4. Watch Client A's `kotorcoop-plugin.log` for, in the same pump window: an `absorbed` line
+   naming the locally-fought hostile's id, and a `took N damage ... (attacker 0x<id>)` line
+   naming the SECOND hostile's id — proving the split. Confirm Client A's hit points fell by
+   exactly the second hostile's contribution (cross-check against the owner's own `applied N
+   of a peer's damage to 0x<id>` line for that hostile, per NEEDS-LIVE item 2 above).
+5. A single `combat: took N ... (attacker 0x<id>)` line naming ONLY the locally-fought
+   hostile's id (double-count) or the absorbed line's total silently swallowing the second
+   hostile's contribution (drop) are both regressions of the bug this section fixes.

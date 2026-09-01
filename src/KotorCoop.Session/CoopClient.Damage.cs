@@ -12,18 +12,20 @@ public sealed partial class CoopClient
 {
     // ---- phantom damage (combat participation) -----------------------------------
 
-    private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageOut = [];
+    private readonly Dictionary<uint, PhantomDamageReport> _phantomDamageOut = [];
 
     /// <summary>Running totals owed to the local player, keyed by the peer that dealt them.
     /// See <see cref="GetIncomingPhantomDamage"/>: with three players two different peers can
     /// be hitting this player's phantom, and their totals add.</summary>
-    private readonly Dictionary<uint, (uint Damage, uint Attacker)> _phantomDamageIn = [];
+    private readonly Dictionary<uint, PhantomDamageReport> _phantomDamageIn = [];
 
     private uint _lastIncomingAttacker;
 
     /// <summary>Queued for the next tick's send; the host relays it to the addressee (or
     /// keeps it, when the host is the one being hit).</summary>
-    public void PublishPhantomDamage(uint targetPeerId, uint cumulativeDamage, uint attackerId)
+    public void PublishPhantomDamage(
+        uint targetPeerId, uint cumulativeDamage, uint attackerId,
+        IReadOnlyList<PhantomAttackerEntry>? attackers = null)
     {
         if (targetPeerId == 0 || targetPeerId == _localPeerId)
         {
@@ -32,7 +34,8 @@ public sealed partial class CoopClient
 
         lock (_gate)
         {
-            _phantomDamageOut[targetPeerId] = (cumulativeDamage, attackerId);
+            _phantomDamageOut[targetPeerId] =
+                new PhantomDamageReport(cumulativeDamage, attackerId, attackers ?? []);
         }
     }
 
@@ -49,12 +52,24 @@ public sealed partial class CoopClient
         lock (_gate)
         {
             ulong total = 0;
-            foreach ((uint damage, uint _) in _phantomDamageIn.Values)
+            foreach (PhantomDamageReport report in _phantomDamageIn.Values)
             {
-                total += damage;
+                total += report.Damage;
             }
 
             return ((uint)Math.Min(total, uint.MaxValue), _lastIncomingAttacker);
+        }
+    }
+
+    /// <summary>The same total as <see cref="GetIncomingPhantomDamage"/>, split per attacker
+    /// id and merged across every sender — see <see cref="PhantomAttackerMerge"/>.</summary>
+    public IReadOnlyList<PhantomAttackerEntry> GetIncomingPhantomAttackers()
+    {
+        lock (_gate)
+        {
+            return PhantomAttackerMerge.Merge(
+                _phantomDamageIn.Values.Select(report => report.Attackers),
+                ProtocolConstants.MaxPhantomAttackerEntries);
         }
     }
 
@@ -72,13 +87,14 @@ public sealed partial class CoopClient
             // backwards and make the plugin re-apply the difference. The host relays another
             // client's report with the ORIGINATOR in FromPeerId, so this key really does
             // separate the attackers rather than lumping everything under the host.
-            if (_phantomDamageIn.TryGetValue(packet.FromPeerId, out (uint Damage, uint Attacker) seen)
+            if (_phantomDamageIn.TryGetValue(packet.FromPeerId, out PhantomDamageReport seen)
                 && packet.CumulativeDamage <= seen.Damage)
             {
                 return;
             }
 
-            _phantomDamageIn[packet.FromPeerId] = (packet.CumulativeDamage, packet.AttackerId);
+            _phantomDamageIn[packet.FromPeerId] =
+                new PhantomDamageReport(packet.CumulativeDamage, packet.AttackerId, packet.Attackers);
 
             if (packet.AttackerId != 0)
             {
@@ -89,7 +105,7 @@ public sealed partial class CoopClient
 
     private void SendPhantomDamage()
     {
-        List<KeyValuePair<uint, (uint Damage, uint Attacker)>> owed;
+        List<KeyValuePair<uint, PhantomDamageReport>> owed;
         lock (_gate)
         {
             if (_phantomDamageOut.Count == 0 || _localPeerId == 0)
@@ -100,15 +116,16 @@ public sealed partial class CoopClient
             owed = [.. _phantomDamageOut];
         }
 
-        foreach ((uint targetPeerId, (uint damage, uint attacker)) in owed)
+        foreach ((uint targetPeerId, PhantomDamageReport report) in owed)
         {
-            if (damage == 0)
+            if (report.Damage == 0)
             {
                 continue;
             }
 
             int length = PacketCodec.Write(
-                _sendBuffer, new PhantomDamagePacket(_localPeerId, targetPeerId, damage, attacker));
+                _sendBuffer,
+                new PhantomDamagePacket(_localPeerId, targetPeerId, report.Damage, report.Attacker, report.Attackers));
             if (length > 0)
             {
                 _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
