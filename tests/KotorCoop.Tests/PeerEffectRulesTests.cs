@@ -24,6 +24,9 @@ public class PeerEffectRulesTests
     [InlineData((ushort)20, 0, PeerEffectKind.Knockdown)]   // OnApplyKnockdown, no sub-code
     [InlineData((ushort)29, 0, PeerEffectKind.Slow)]        // OnApplyMovementSpeedDecrease
     [InlineData((ushort)60, 0, PeerEffectKind.ForcePush)]   // OnApplyForcePush
+    [InlineData((ushort)8, 1, PeerEffectKind.Confused)]     // EffectConfused, routine 157 — effect-sync.md §10
+    [InlineData((ushort)39, 0, PeerEffectKind.Heal)]        // OnApplyHeal, routine 78 — effect-sync.md §10
+    [InlineData((ushort)15, 0, PeerEffectKind.TemporaryHitpoints)] // OnApplyTemporaryHitpoints, routine 314 — effect-sync.md §10
     public void MapsEveryVerifiedTypeAndSubCode(ushort engineType, int subCode, PeerEffectKind expected)
     {
         Assert.True(PeerEffectRules.TryMapAllowlist(engineType, subCode, out PeerEffectKind kind));
@@ -31,7 +34,6 @@ public class PeerEffectRulesTests
     }
 
     [Theory]
-    [InlineData((ushort)8, 1)]   // EffectConfused, routine 157 — NAMED (effect-sync.md §7) but not shipped
     [InlineData((ushort)8, 2)]   // EffectFrightened, routine 158 — NAMED but not shipped (distinct from sub-code 8)
     [InlineData((ushort)8, 4)]   // EffectStunned (general, non-droid), routine 161 — NAMED but not shipped
     [InlineData((ushort)8, 9)]   // never minted by anything this pass found
@@ -39,6 +41,15 @@ public class PeerEffectRulesTests
     [InlineData((ushort)38, 0)]  // OnApplyDamage — a real handler, but PhantomHitHook's job
     [InlineData((ushort)19, 0)]  // OnApplyDeath — nothing to do with crowd control
     [InlineData((ushort)0, 0)]   // never dispatched by the engine (type <= 0 is refused upstream)
+    [InlineData((ushort)48, 0)]  // OnApplyACIncrease — deliberately NOT shipped, effect-sync.md §10: a
+                                  // stat buff on a phantom is meaningless, not the "peer's real body
+                                  // feels it" case this channel exists for
+    [InlineData((ushort)35, 0)]  // OnApplyPoison — deliberately NOT shipped, effect-sync.md §10: poison
+                                  // damage already re-enters the existing OnApplyDamage/PhantomHitHook
+                                  // channel, no new kind needed
+    [InlineData((ushort)31, 0)]  // OnApplyAreaOfEffect — deliberately NOT shipped, effect-sync.md §10:
+                                  // spawns a script-driven trigger volume, not a "one effect landed on a
+                                  // phantom" event this channel's model covers
     public void RefusesEverythingNotOnTheAllowlist(ushort engineType, int subCode)
     {
         Assert.False(PeerEffectRules.TryMapAllowlist(engineType, subCode, out PeerEffectKind kind));
@@ -57,18 +68,21 @@ public class PeerEffectRulesTests
     [InlineData(PeerEffectKind.Knockdown, true)]    // routine 134 — effect-sync.md §7
     [InlineData(PeerEffectKind.Paralyze, true)]     // routine 148 — effect-sync.md §7
     [InlineData(PeerEffectKind.Sleep, true)]        // routine 154 — effect-sync.md §7
+    [InlineData(PeerEffectKind.Heal, true)]              // routine 78 — effect-sync.md §10
+    [InlineData(PeerEffectKind.TemporaryHitpoints, true)] // routine 314 — effect-sync.md §10
+    [InlineData(PeerEffectKind.Confused, true)]          // routine 157 — effect-sync.md §10
     [InlineData(PeerEffectKind.None, false)]
     public void ApplyConstructorCoverageMatchesEffectSyncMd(PeerEffectKind kind, bool expected)
     {
         Assert.Equal(expected, PeerEffectRules.HasApplyConstructor(kind));
     }
 
-    /// <summary>Every allowlist member now has an apply-side constructor (effect-sync.md §7,
-    /// 2026-08-22) — pinned as its own fact so a future regression (someone reverting one of
-    /// the three new cases) fails loudly rather than only showing up as a parametrized-theory
-    /// gap.</summary>
+    /// <summary>Every allowlist member has an apply-side constructor (effect-sync.md §7,
+    /// 2026-08-22; extended §10, 2026-09-02) — pinned as its own fact so a future regression
+    /// (someone reverting one of the added cases) fails loudly rather than only showing up as
+    /// a parametrized-theory gap.</summary>
     [Fact]
-    public void AllNineAllowlistMembersHaveAnApplyConstructor()
+    public void EveryAllowlistMemberHasAnApplyConstructor()
     {
         foreach (PeerEffectKind kind in Enum.GetValues<PeerEffectKind>())
         {

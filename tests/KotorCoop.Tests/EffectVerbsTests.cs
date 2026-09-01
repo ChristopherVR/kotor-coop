@@ -88,6 +88,10 @@ public class EffectVerbsTests
     [InlineData("choke", PeerEffectKind.Choke)]
     [InlineData("forcepush", PeerEffectKind.ForcePush)]
     [InlineData("whirlwind", PeerEffectKind.Whirlwind)]
+    [InlineData("heal", PeerEffectKind.Heal)]
+    [InlineData("HEAL", PeerEffectKind.Heal)]
+    [InlineData("temporaryhitpoints", PeerEffectKind.TemporaryHitpoints)]
+    [InlineData("Confused", PeerEffectKind.Confused)]
     public void EveryAllowlistKindParsesCaseInsensitively(string word, PeerEffectKind expected)
     {
         CoopCommand command = ConsoleCommand.Parse($"applyeffect {word}");
@@ -216,6 +220,26 @@ public class EffectVerbsTests
     [InlineData("applyeffect paralyze", PeerEffectKind.Paralyze)]
     [InlineData("applyeffect sleep", PeerEffectKind.Sleep)]
     public void KnockdownParalyzeAndSleepReachThePluginWithTheRightKind(string line, PeerEffectKind expected)
+    {
+        (CoopCommandDispatcher dispatcher, EffectBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, line);
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.ApplyEffect, request.Kind);
+            Assert.Equal((int)expected, request.Amount);
+        }
+    }
+
+    /// <summary>Heal, TemporaryHitpoints and Confused (effect-sync.md §10) reach the plugin the
+    /// same way the earlier three did — pinned as its own theory alongside
+    /// <see cref="KnockdownParalyzeAndSleepReachThePluginWithTheRightKind"/>.</summary>
+    [Theory]
+    [InlineData("applyeffect heal", PeerEffectKind.Heal)]
+    [InlineData("applyeffect temporaryhitpoints", PeerEffectKind.TemporaryHitpoints)]
+    [InlineData("applyeffect confused", PeerEffectKind.Confused)]
+    public void HealTemporaryHitpointsAndConfusedReachThePluginWithTheRightKind(string line, PeerEffectKind expected)
     {
         (CoopCommandDispatcher dispatcher, EffectBridge bridge, SessionManager manager) = NewDispatcher();
         using (manager)

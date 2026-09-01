@@ -7,17 +7,20 @@ namespace KotorCoop.Protocol;
 ///
 /// See docs/research/effect-sync.md for the full derivation. The short version: every one of
 /// these funnels through <c>CSWSEffectListHandler::OnEffectApplied</c>'s 110-entry dispatch
-/// table, and five of the nine are all registered under the SAME table entry (effect type 8,
-/// <c>OnApplySetState</c>), distinguished only by an integer sub-code the game itself reads out
-/// of the effect. As of effect-sync.md §7 (2026-08-22) every member of this enum has a real,
-/// VERIFIED-by-name identity and a real apply-side constructor in <c>OdysseyEffects</c> — the
-/// three that did not (Knockdown, Paralyze, Sleep) were named and wired up by disassembling
+/// table; most (Stun, Paralyze, Sleep, Choke, Frightened, Whirlwind, Confused) are registered
+/// under the SAME table entry (effect type 8, <c>OnApplySetState</c>), distinguished only by an
+/// integer sub-code the game itself reads out of the effect, while Knockdown/Slow/ForcePush/
+/// Heal/TemporaryHitpoints each have their own dedicated table entry. As of effect-sync.md §7
+/// (2026-08-22) — extended §10 (2026-09-02) for Heal/TemporaryHitpoints/Confused — every member
+/// of this enum has a real, VERIFIED-by-name identity and a real apply-side constructor in
+/// <c>OdysseyEffects</c>. Knockdown/Paralyze/Sleep were named and wired up by disassembling
 /// <c>CSWVirtualMachineCommands::InitializeCommands</c>' routine-table population directly and
 /// cross-checking against a K1 <c>nwscript.nss</c>'s declaration order. See the
-/// VERIFIED/NEEDS-LIVE table in effect-sync.md §3.1/§7 before trusting any one of these names
-/// over what the research doc actually says about it — and see <see cref="Frightened"/>'s own
-/// note for one case where the ENGLISH NAME (not the numeric identity) turned out to be a
-/// pre-existing guess that a genuinely different, still-unshipped engine effect actually owns.
+/// VERIFIED/NEEDS-LIVE table in effect-sync.md §3.1/§7/§10 before trusting any one of these
+/// names over what the research doc actually says about it — and see
+/// <see cref="Frightened"/>'s own note for one case where the ENGLISH NAME (not the numeric
+/// identity) turned out to be a pre-existing guess that a genuinely different, still-unshipped
+/// engine effect actually owns.
 /// </summary>
 public enum PeerEffectKind : byte
 {
@@ -77,4 +80,30 @@ public enum PeerEffectKind : byte
     /// <summary>Engine effect type 8, sub-code 10 — VERIFIED BY NAME
     /// (<c>ExecuteCommandEffectWhirlWind</c>). Fully implemented.</summary>
     Whirlwind = 9,
+
+    /// <summary>Engine effect type 39 (<c>OnApplyHeal</c>), VM constructor
+    /// <c>ExecuteCommandEffectHeal</c> (<c>0x00532A70</c>, routine 78) — VERIFIED single
+    /// <c>int nDamageToHeal</c> parameter, effect-sync.md §10 (2026-09-02): the constructor
+    /// gates on the caller's declared param count (refuses up front if not exactly 1), pops
+    /// the int through the shared VM stack-pop helper, and self-neuters into a null/no-op
+    /// effect type if the popped value is not positive. Applied INSTANT (like ForcePush), not
+    /// durable. The one member of this channel that forwards something HELPFUL rather than
+    /// harmful: a medpac/Cure/stim applied to a peer's phantom reaches their real body the
+    /// same way a hostile effect does — real gameplay, not cosmetics.</summary>
+    Heal = 10,
+
+    /// <summary>Engine effect type 15 (<c>OnApplyTemporaryHitpoints</c>), VM constructor
+    /// <c>ExecuteCommandEffectTemporaryHitpoints</c> (<c>0x00534490</c>, routine 314) —
+    /// VERIFIED single <c>int nHitPoints</c> parameter, effect-sync.md §10 (2026-09-02); same
+    /// one-int shape as Heal, but applied DURABLE (temporary, real duration) rather than
+    /// instant.</summary>
+    TemporaryHitpoints = 11,
+
+    /// <summary>Engine effect type 8, sub-code 1 (routine 157, <c>EffectConfused</c>) —
+    /// VERIFIED BY NAME effect-sync.md §7.3 (2026-08-22; named but not shipped that pass).
+    /// Shipped effect-sync.md §10 (2026-09-02) through the same
+    /// <c>ExecuteCommandEffectComplex</c> shared-handler routing Knockdown/Paralyze/Sleep
+    /// already use — zero pushed script arguments, dispatched on the calling routine
+    /// number.</summary>
+    Confused = 12,
 }

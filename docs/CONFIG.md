@@ -159,7 +159,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
 | `pause_button_hook` | ON | hook the in-game pause button | — |
-| `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, ...) | [effect-sync.md](research/effect-sync.md) |
+| `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |
 | `minimap_peers` | ON | show peers on the minimap | [minimap-peers.md](research/minimap-peers.md) |
 | `frame_stats` | OFF | frame-time histogram diagnostic (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |

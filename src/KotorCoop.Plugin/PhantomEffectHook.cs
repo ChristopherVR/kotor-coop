@@ -5,9 +5,10 @@ namespace KotorCoop.Plugin;
 
 /// <summary>
 /// Watches the engine's GENERIC effect dispatcher for non-damage effects landing on a peer's
-/// phantom — stun, paralyze, knockdown, slow, frightened, sleep, choke, Force push/whirlwind —
-/// so they can be forwarded to that peer and replayed on their real character. The non-damage
-/// sibling of <see cref="PhantomHitHook"/>.
+/// phantom — stun, paralyze, knockdown, slow, frightened, sleep, choke, Force push/whirlwind,
+/// and (effect-sync.md §10, 2026-09-02) heal/temporary-hitpoints/confused — so they can be
+/// forwarded to that peer and replayed on their real character. The non-damage sibling of
+/// <see cref="PhantomHitHook"/>.
 ///
 /// The hook point is <c>CSWSEffectListHandler::OnEffectApplied 0x004D8320</c> — the SAME kind
 /// of choke point <c>OnApplyDamage</c> is, one level up: every effect the game applies to
@@ -83,6 +84,7 @@ internal static unsafe class PhantomEffectHook
             case 8: // OnApplySetState — the shared state-effect family
                 switch (subCode)
                 {
+                    case 1: kind = PeerEffectKindValues.Confused; return true;    // EffectConfused (effect-sync.md §10)
                     case 3: kind = PeerEffectKindValues.Stun; return true;        // EffectDroidStun
                     case 5: kind = PeerEffectKindValues.Paralyze; return true;    // EffectParalyze (routine 148)
                     case 6: kind = PeerEffectKindValues.Sleep; return true;       // EffectSleep (routine 154)
@@ -92,8 +94,10 @@ internal static unsafe class PhantomEffectHook
                     default: kind = PeerEffectKindValues.None; return false;      // unnamed sub-codes
                 }
 
+            case 15: kind = PeerEffectKindValues.TemporaryHitpoints; return true; // OnApplyTemporaryHitpoints (effect-sync.md §10)
             case 20: kind = PeerEffectKindValues.Knockdown; return true;  // OnApplyKnockdown
             case 29: kind = PeerEffectKindValues.Slow; return true;        // OnApplyMovementSpeedDecrease
+            case 39: kind = PeerEffectKindValues.Heal; return true;        // OnApplyHeal (effect-sync.md §10)
             case 60: kind = PeerEffectKindValues.ForcePush; return true;   // OnApplyForcePush
 
             default:
@@ -258,7 +262,11 @@ internal static unsafe class PhantomEffectHook
                 return;
             }
 
-            uint magnitude = engineType == 29 && aux > 0 ? (uint)aux : 0;
+            // integer_list[0] carries the real magnitude for every single-int-parameter
+            // constructor this hook understands: percent for Slow (29), heal amount for Heal
+            // (39), hit-point amount for TemporaryHitpoints (15) — same field, same read,
+            // three different meanings depending on engineType, exactly like `aux` above.
+            uint magnitude = (engineType is 29 or 39 or 15) && aux > 0 ? (uint)aux : 0;
 
             float durationSeconds = *(float*)(effect + EffectDuration);
             uint durationMs = durationSeconds > 0f && durationSeconds < MaxSaneDurationSeconds

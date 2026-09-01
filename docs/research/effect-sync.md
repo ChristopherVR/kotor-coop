@@ -963,3 +963,244 @@ specifically.
 
 `dotnet test`: no production code changed this pass (a pure live-verification run against
 already-shipped code) — see this round's own commit for the full-suite pass/fail count.
+
+---
+
+## 10. Heal family + poison/AoE analysis (2026-09-02)
+
+Static analysis only, same discipline as every prior round of this document (`tools/disasm.py`,
+`tools/xrefs.py`, `tools/q.py` against `kotor1_0_3.db`, direct reads of the binary's data
+section — nothing modified, no game run, no game function called). Two tasks: (1) ship the
+heal-family kinds the roadmap named but this document never covered, and (2) settle whether
+poison/AoE damage needs a new capture path or already rides the existing one.
+
+### 10.1 Heal (type 39) and TemporaryHitpoints (type 15) — VERIFIED, shipped
+
+`tools/q.py func Heal` / `func Temporary` name the two handlers directly from the symbol DB (a
+stronger source than the sub-code inference §7 needed — these are the engine's own dispatch-table
+entries, already listed in §5's table): `CSWSEffectListHandler::OnApplyHeal` (`0x004E0750`, type
+39) and `CSWSEffectListHandler::OnApplyTemporaryHitpoints` (`0x004D92D0`, type 15).
+
+Their VM constructors were disassembled fresh:
+
+- **`CSWVirtualMachineCommands::ExecuteCommandEffectHeal`** (`0x00532A70`) — VERIFIED single
+  `int nDamageToHeal` parameter. The function reads its OWN raw stack arg2 (`[esp+0x14]` before
+  the SEH prologue, `esp0+8` by the same stack arithmetic §7.2 used) and `cmp`s it against `1`,
+  refusing up front (`mov eax, 0xFFFFF82F; ret 8`) if the caller's declared param count is not
+  exactly 1 — a stronger, earlier gate than Slow's own constructor has. If the gate passes, it
+  pops one int via the shared VM stack-pop helper at `0x005D1000` (itself a thunk to
+  `0x005D24C0` — VERIFIED by disassembly: this helper checks a stack-depth counter and the
+  top-of-stack's TYPE TAG byte before popping, returning 0 rather than corrupting anything on
+  underflow or a type mismatch — the real safety net, independent of any per-constructor gate).
+  If the popped value is `> 0` it writes effect type 39 (global `0x746718`, read directly:
+  **VERIFIED = 39**) and calls `SetInteger(effect, 0, value)` (`0x005036A0`); otherwise it writes
+  the SHARED null/no-op type (global `0x74667C`, read directly: **VERIFIED = 0**) — a
+  non-positive heal amount silently becomes an unregistered effect type, which
+  `OnEffectApplied`'s own `type <= 0` / null-table-entry checks (§1) already refuse harmlessly.
+  Routine number **78** — VERIFIED by disassembling `InitializeCommands`' table-store site
+  (`0x0054D0C9: mov dword ptr [edx+0x138], 0x532a70`; `0x138/4 = 0x4E = 78`).
+- **`CSWVirtualMachineCommands::ExecuteCommandEffectTemporaryHitpoints`** (`0x00534490`) —
+  VERIFIED single `int nHitPoints` parameter, same one-int-pop shape via the same `0x005D1000`
+  helper (no separate up-front `cmp nParams,1` gate visible for this one specifically, but the
+  pop itself is internally guarded exactly the same way, so this is equally safe to call).
+  Positive value → effect type 15 (global `0x7466B8`, **VERIFIED = 15**) + `SetInteger(0,
+  value)`; non-positive → the same shared null type. Routine number **314** — VERIFIED
+  (`0x0054D1ED: mov dword ptr [edx+0x4e8], 0x534490`; `0x4E8/4 = 0x13A = 314`).
+
+`tools/xrefs.py` on both constructor addresses finds exactly **one** address-literal occurrence
+each (unlike `ExecuteCommandEffectComplex`'s 20+ aliases) — confirming `FindRoutine`'s ordinary
+first-match linear scan is safe for both, no `ApplyComplexEffect`-style specific-index lookup
+needed.
+
+Both match §4's already-established "one declared `int` parameter" shape exactly (the same
+shape `MovementSpeedDecrease`/Slow already ships and has live-verified) — implemented as
+`OdysseyEffects.ApplyOneIntParamEffect`, the same push/construct/apply choreography
+`ApplySlowEffect` uses, factored out separately so that already-tested method is untouched.
+**Heal applies INSTANT** (like ForcePush — healing lands once, it is not an ongoing state);
+**TemporaryHitpoints applies DURABLE** (like Slow — a temporary buff that should actually last
+the requested duration). Neither magnitude has a natural engine-side upper bound the way Slow's
+percent does, so the clamp (`1..999`, default `20`) is a sanity bound against a corrupted or
+malicious wire value, not a measured game figure — flagged NEEDS-LIVE below.
+
+**Direction, per §1**: the hook captures effects the LOCAL engine applies TO a phantom and
+forwards them to that phantom's owner. A medpac, `Cure`, or `Heal` cast BY the local player ON a
+peer's phantom (host heals a client's phantom, or vice versa) lands on the phantom exactly like a
+hostile effect would, gets captured by `PhantomEffectHook` (already extended to types 39/15/
+sub-code 1 below), forwarded, and replayed on the peer's REAL character via
+`OdysseyEffects.ApplyEffect` — real HP change, not a cosmetic. `OnApplyACIncrease` (type 48) was
+read from the same §5 table but is deliberately **not** shipped: a stat buff applied to a
+phantom (which nothing else reads) has no real-body counterpart worth forwarding, unlike HP.
+
+`PeerEffectKind.Heal = 10`, `PeerEffectKind.TemporaryHitpoints = 11` (`KotorCoop.Protocol` and
+its `PeerEffectKindValues` plugin-side mirror); `PeerEffectRules.TryMapAllowlist` maps engine
+type 39/15 directly (no sub-code involved, same shape as Knockdown/Slow/ForcePush);
+`PhantomEffectHook.cs`'s own copy updated in the same commit (both copies changed together this
+pass — no repeat of §7.4's temporary desync). The magnitude capture in `PhantomEffectHook.OnEffect`
+(previously only read for type 29/Slow) now also reads `integer_list[0]` for types 39 and 15 —
+same field, same bounded read, three different meanings.
+
+### 10.2 Confused (type 8, sub-code 1) — VERIFIED, shipped
+
+§7.3 already named sub-code 1 as `EffectConfused` (routine 157) through the same three-way
+cross-check (fresh `InitializeCommands` disassembly, `nwscript.nss` declaration order, the
+`xoreos-tools` public routine table) that named Knockdown/Paralyze/Sleep/Stunned/Frightened, but
+explicitly left it unshipped ("out of this pass's scope"). It is mechanically IDENTICAL to
+Knockdown/Paralyze/Sleep — same shared `ExecuteCommandEffectComplex` handler (`0x005313F0`), same
+zero-pushed-argument call shape (the handler dispatches on the CALLING routine number, not a
+popped script value — §7.2), same `table[157] == ExpectedEffectComplex` specific-index safety
+check `ApplyComplexEffect` already performs for the other three. Adding it was a four-line change
+(a `RoutineEffectConfused = 157` constant, a cached routine field, a `case` in `ApplyEffect`'s
+switch reusing the existing `ApplyComplexEffect` method verbatim, and a `case 1:` in both
+allowlist copies) — no new mechanism, no new risk beyond what §7 already live-verified for the
+other three complex-family members. `PeerEffectKind.Confused = 12`.
+
+### 10.3 Poison (type 35) — VERIFIED shared entry point, INFERRED conclusion: no new kind needed
+
+**The question**: does a poison tick re-enter `OnApplyDamage` (`0x004DFA40`, the choke point
+`PhantomHitHook` already hooks — combat-participation.md §4.2, "every damage event in the
+game"), or does it write HP some other, more direct way that would leave phantom-sourced poison
+unforwarded?
+
+**`Global::OnApplyPoison`** (`0x004DB320`, the type-35 dispatch-table entry) — VERIFIED: a large
+(~0x4D0-byte) one-time setup routine. It posts poison-state icons/flags through the same
+"set state" helper (`0x004D7780`) §2.1 already documents for the `OnApplySetState` family, then
+— near its end — calls `CSWSCreature::ApplyPoisonDamage` directly:
+
+```
+0x004DB638  push 0x3f800000     ; 1.0f (severity/tick multiplier)
+0x004DB63D  push 0
+0x004DB63F  push esi            ; the poison CGameEffect itself
+0x004DB640  push ebx            ; creator/attacker id
+0x004DB641  mov ecx, edi        ; ecx = the poisoned creature
+0x004DB643  call 0x4ee770       ; CSWSCreature::ApplyPoisonDamage
+```
+
+**`CSWSCreature::ApplyPoisonDamage`** (`0x004EE770`) — VERIFIED: builds a genuine `CGameEffect`
+of **TYPE 38** (Damage) — confirmed by reading the type-constant global it writes directly:
+`0x746714 = 38` — filling the SAME `integer_list` slot layout `combat-participation.md`
+documents for `EffectDamage` (`SetInteger` at indices `0, 0xE, 0x10, 0x11, 0x12, 0x15`), then
+hands it to:
+
+```
+0x004EECB2  call 0x4d14f0       ; CSWSObject::ApplyEffect
+```
+
+**`CSWSObject::ApplyEffect`** (`0x004D14F0`) — VERIFIED as the SAME function
+`ApplyEffectToObject` (`0x0052E570` — the VM's own script-facing "apply this effect" wrapper,
+already called by every `OdysseyEffects.ApplyEffect` constructor this document ships) itself
+calls, at its own `0x0052E6D6: call 0x4d14f0`. Both call sites were read directly from the
+instruction stream. This makes `CSWSObject::ApplyEffect` the single canonical "give this object
+an effect" entry point in the engine — melee/ranged combat damage (already proven LIVE to reach
+`OnApplyDamage`/`PhantomHitHook`, §6/§9) and poison's own tick both build a type-38 effect and
+hand it to this exact function.
+
+**What was NOT independently single-stepped**: the one remaining hop, `CSWSObject::ApplyEffect`'s
+own dispatch through the `CSWSEffectListHandler` vtable (`OnEffectApplied` is slot 2 — VERIFIED:
+the vtable at `0x744274` has `0x4D8320` at `+8`, `(0x74427C-0x744274)/4 = 2`). A grep of every
+`call dword ptr [reg+off]` across a ~2200-byte disassembly of `CSWSObject::ApplyEffect` and its
+immediate neighbors found offsets `0x10, 0x30, 0x94, 0x98, 0x9C, 0xD8, 0xDC` — never `+8` — so
+the actual vtable hop happens somewhere this pass's static reach did not cover (a deeper nested
+call, or a helper `ApplyEffect` calls that this pass did not expand). Every other fact matches
+(same effect type, same integer layout, same single apply entry point already proven to carry
+live-verified damage) but this specific hop is graded **INFERRED**, not VERIFIED, for that
+reason — high confidence, not a completed trace.
+
+**Practical answer**: no new `PeerEffectKind` is proposed for Poison. If the INFERRED conclusion
+holds, a poison tick landing on a peer's phantom is **already forwarded today, for free**,
+through the existing, already-shipped, already-live-verified `PhantomHitHook`/damage channel —
+there is nothing to build. **NEEDS-LIVE**: poison a phantom (a poison-type hostile, or a
+synthetic `EffectPoison` staged the way §3.3 describes for the unnamed sub-codes) and confirm the
+owner's `combat: taken N` ledger fires per tick the same way a weapon hit does. If it does not,
+this conclusion is wrong and poison needs its own capture path after all — but nothing here
+should be trusted as shipped until that check runs.
+
+### 10.4 AreaOfEffect (type 31) — VERIFIED: not a "landed effect", out of scope by design
+
+**`CSWSEffectListHandler::OnApplyAreaOfEffect`** (`0x004DADE0`) — VERIFIED: does not apply
+anything to a creature. It allocates and constructs a `CSWSAreaOfEffectObject` (`0x290` bytes,
+`call 0x594480`) and sets its enter/heartbeat/exit NWScript names — read via
+`CGameEffect::GetString` at integer_list-adjacent string indices 0/1/2 (`call 0x503700`) into the
+new object's own `+0x270`/`+0x260`/... slots (`call 0x5e5c50`). In other words, AreaOfEffect
+spawns a persistent trigger VOLUME whose enter/heartbeat/exit are ordinary NWScript callbacks the
+VM runs like any other script event, per creature that enters/lingers/exits it. Whatever those
+scripts do — apply damage, apply a state effect, whatever the specific AoE spell's author wrote —
+happens through the SAME generic `ApplyEffectToObject`/`OnEffectApplied`/`OnApplyDamage` channels
+already covered by `PhantomHitHook`/`PhantomEffectHook`.
+
+**Not added as a `PeerEffectKind`, and no periodic-model design proposed** — this is not a gap
+needing one. AreaOfEffect itself carries no discrete magnitude/duration a phantom "feels" the way
+Stun or Heal does; its `target` argument names the zone/area, not a creature something landed on.
+It is simply outside the "one effect lands on a phantom" model this whole channel is built
+around, and whatever it eventually triggers already rides the existing generic dispatch.
+
+### 10.5 What shipped this pass
+
+- `PeerEffectKind` (`KotorCoop.Protocol`) / `PeerEffectKindValues` (`KotorCoop.Plugin`): `Heal =
+  10`, `TemporaryHitpoints = 11`, `Confused = 12`.
+- `PeerEffectRules.TryMapAllowlist` / `PhantomEffectHook.TryMapAllowlist` (both copies, same
+  commit): type 39 → Heal, type 15 → TemporaryHitpoints, type 8 sub-code 1 → Confused.
+- `PeerEffectRules.HasApplyConstructor`: all twelve kinds now `true`.
+- `PhantomEffectHook.OnEffect`'s magnitude capture: extended from type 29 only to types
+  `29, 39, 15`.
+- `OdysseyEffects.ApplyEffect`: three new `case`s — Heal/TemporaryHitpoints through the new
+  `ApplyOneIntParamEffect` (same choreography as `ApplySlowEffect`, factored out separately so
+  that already-live-tested method is untouched), Confused through the existing
+  `ApplyComplexEffect` (routine 157).
+- `CheatController.World.ApplyEffect`'s range check and refusal message; `ConsoleCommand.Effects`'s
+  `applyeffect` usage string — both now name all twelve kinds and accept `1..12`.
+- No `SharedBlock` field, version bump, or `PacketType` change — the wire `Kind` byte
+  (`PacketCodec.Effects.cs`) already had 246 unused values; the peer-effect ring's shape
+  (`SharedBlock.Combat.cs`) is unchanged. This is purely "more kinds fit through the same pipe."
+- Tests: `PeerEffectRulesTests` gained allowlist-mapping rows for (8,1)/(39,0)/(15,0), apply-
+  constructor-coverage rows for the three new kinds, and explicit refusal rows for ACIncrease
+  (48), Poison (35) and AreaOfEffect (31) documenting they are deliberately not on the allowlist;
+  `AllNineAllowlistMembersHaveAnApplyConstructor` renamed
+  `EveryAllowlistMemberHasAnApplyConstructor` (no longer nine). `EffectVerbsTests` gained parser
+  and dispatcher-routing coverage for `heal`/`temporaryhitpoints`/`confused`.
+  `PacketCodecTests.PeerEffectRoundTripsWithHealKind` pins the wire `Kind` byte at a value above
+  9 for the first time (every prior kind was single-digit).
+
+### 10.6 NEEDS-LIVE
+
+1. **Heal/TemporaryHitpoints/Confused have never been fired end-to-end on a live game** — static
+   analysis only this pass, same caveat every earlier round of new kinds carried before its own
+   live pass (§6, §9). Shape-matches already-live-verified patterns (`ApplySlowEffect` for the
+   first two, `ApplyComplexEffect` for the third) but that is not the same as having run it.
+2. **The magnitude clamp (`1..999`, default `20`) for Heal/TemporaryHitpoints is not a measured
+   figure** — worth checking against what a real medpac/Cure/stim actually heals in this game
+   (`spells.2da`/item property values) so the default is a plausible number, not just a safe one.
+3. **Poison's INFERRED conclusion (§10.3)** — the practical claim that poison ticks already
+   forward through the existing damage channel needs the live check described there before
+   anyone treats it as confirmed.
+4. **Confused's visible effect** (what the target's screen/animation does, whether it can still
+   act) was not investigated — out of scope for a wiring pass, same as §3.3/§8 left open for
+   Paralyze/Sleep's own visible confirmation.
+
+### 10.7 Live recipe for the next pass
+
+Same staging verbs as §6/§8/§9 (`applyeffect`/`effects`, `tools/blockpoke.ps1 <pid> console
+'...'`), extended to the three new kinds:
+
+```
+applyeffect heal me 0 30                 (local: heals the caster's own player by 30 — proves
+                                           the constructor without touching the network)
+applyeffect temporaryhitpoints me 8000 20 (local: 20 temporary HP for 8s)
+applyeffect confused me                   (local smoke test)
+
+applyeffect heal 0 30                     (blank target = nearest phantom, the full forward
+                                           test — a "medpac applied to a peer's phantom" stand-in)
+applyeffect temporaryhitpoints 8000 20
+applyeffect confused
+```
+
+**What proves the real body's HP rose** (task's own question): `applyeffect heal` is the verb;
+there is no bespoke "HP rose" log line — `PeerEffectController.ApplyIncoming`'s existing generic
+line (`effect: applied kind 10 from peer 0x{id} (duration {durationMs}ms, magnitude {magnitude})`,
+`src/KotorCoop.Plugin/PeerEffectController.cs`) only confirms the packet arrived and the
+constructor call did not refuse — it does not itself read HP. The actual HP change has to be read
+directly, the same way §6's damage-regression check did (`"the client's real health dropped
+12/12 -> 5/12"`): `tools/sethp.ps1 <receiverPid> 0x7FFFFFFF` before and after the sender's
+`applyeffect heal` (object id `0x7FFFFFFF` is the local player on every instance — the same
+constant `ConsoleCommand.Effects.cs`'s own `me`/`self` resolution already uses). A successful
+live pass reads a HIGHER number after than before, bounded by the character's max HP (healing
+past full should clamp, not overflow — worth confirming as part of the same pass).
