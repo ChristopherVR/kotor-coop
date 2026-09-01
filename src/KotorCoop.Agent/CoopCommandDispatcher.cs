@@ -300,6 +300,14 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.God] = c => SendCheat(new CheatRequest(CheatKinds.God, Amount: c.Amount)),
         [CoopCommandKind.TopUp] = c => SendCheat(new CheatRequest(CheatKinds.TopUp, Amount: c.Amount)),
         [CoopCommandKind.StandUp] = c => SendCheat(new CheatRequest(CheatKinds.StandUp, Amount: c.Amount)),
+
+        // c.X carries the party-roster slot (0-8), or negative for "yourself" — see
+        // CoopCommandKind.Hurt/Down's own doc comments for why X, not Amount, holds it.
+        [CoopCommandKind.Hurt] = c => SendCheat(new CheatRequest(
+            CheatKinds.Hurt, Target: HurtDownTarget(c.X), Amount: c.Amount)),
+        [CoopCommandKind.Down] = c => SendCheat(new CheatRequest(
+            CheatKinds.Down, Target: HurtDownTarget(c.X))),
+
         [CoopCommandKind.Slay] = c => Slay(c.Address),
         [CoopCommandKind.Teleport] = c => SendCheat(new CheatRequest(CheatKinds.Teleport, X: c.X, Y: c.Y, Z: c.Z)),
         [CoopCommandKind.WalkTo] = c => SendCheat(new CheatRequest(CheatKinds.WalkTo, X: c.X, Y: c.Y, Z: c.Z)),
@@ -384,6 +392,12 @@ public sealed partial class CoopCommandDispatcher(
     /// this is the one place that decides "fire now" versus "queue behind whatever is still
     /// waiting on an answer" — never "overwrite it".
     /// </summary>
+    /// <summary>Shared by <c>hurt</c>/<c>down</c>: the console's own "blank slot = yourself"
+    /// convention (<see cref="CoopCommand.X"/> &lt; 0) becomes
+    /// <see cref="CheatKinds.LocalPlayerTarget"/> in the request; a typed slot (already
+    /// range-checked 0-8 by <c>ParseHurt</c>/<c>ParseDown</c>) crosses as-is.</summary>
+    private static uint HurtDownTarget(float slot) => slot < 0 ? CheatKinds.LocalPlayerTarget : (uint)slot;
+
     private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null)
     {
         if (!bridge.SupportsCheats)

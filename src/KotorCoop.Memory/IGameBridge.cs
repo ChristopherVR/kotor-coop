@@ -497,6 +497,38 @@ public static class CheatKinds
     /// <see cref="CloseGui"/> succeed — the engine refuses its own full-screen teardown while
     /// that stack is occupied. See <c>SharedBlock.CheatKindPopModal</c>.</summary>
     public const uint PopModal = 54;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/death-handling.md's 2026-09-02 follow-up):
+    /// real damage through the engine's own <c>EffectDamage</c>/<c>DoDamage</c> path — shields,
+    /// difficulty scaling and both 1-hp floors apply exactly as they would to a live hit.
+    /// <c>Amount</c> is the damage; <c>Target</c> is <see cref="LocalPlayerTarget"/> for
+    /// yourself or a party-roster slot 0-8. See <c>SharedBlock.CheatKindHurt</c>.
+    ///
+    /// ⚠ 63, next free after every noted range through 62 as of 2026-09-02.
+    /// </summary>
+    public const uint Hurt = 63;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/death-handling.md's 2026-09-02 follow-up):
+    /// forces the SAME genuine temp-death state a real lethal hit produces (bypassing any
+    /// <c>min1hp</c> pin, then restoring it) on yourself or a party-roster companion — the
+    /// live-testable trigger for the whole downed/revive/game-over pipeline. <c>Target</c> is
+    /// <see cref="LocalPlayerTarget"/> or a party-roster slot 0-8, same as <see cref="Hurt"/>.
+    /// See <c>SharedBlock.CheatKindDown</c>.
+    ///
+    /// ⚠ 64, next free after every noted range through 62 as of 2026-09-02.
+    /// </summary>
+    public const uint Down = 64;
+
+    /// <summary>
+    /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
+    /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
+    /// is also the engine's own verified player object id (docs/re/object-model.md), so it
+    /// never needs translation on either side. Used by <see cref="Hurt"/>/<see cref="Down"/>'s
+    /// "blank slot = yourself" default.
+    /// </summary>
+    public const uint LocalPlayerTarget = 0x7FFFFFFF;
 }
 
 /// <summary>

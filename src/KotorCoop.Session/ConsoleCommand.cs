@@ -143,6 +143,23 @@ public enum CoopCommandKind
     /// <summary>Stand the local player up out of the co-op downed state.</summary>
     StandUp,
 
+    /// <summary>
+    /// DEV-ONLY: real damage through the engine's own path, to yourself or a party-roster
+    /// companion — the live-test trigger for the downed/revive pipeline.
+    /// <see cref="CoopCommand.Amount"/> is the damage; <see cref="CoopCommand.X"/> is the
+    /// party-roster slot (0-8), or negative for "yourself" (the default when none is typed).
+    /// See docs/research/death-handling.md's 2026-09-02 section.
+    /// </summary>
+    Hurt,
+
+    /// <summary>
+    /// DEV-ONLY: forces the SAME genuine temp-death state a real lethal hit produces, on
+    /// yourself or a party-roster companion. <see cref="CoopCommand.X"/> is the party-roster
+    /// slot (0-8), or negative for "yourself". See docs/research/death-handling.md's
+    /// 2026-09-02 section.
+    /// </summary>
+    Down,
+
     /// <summary>Kill a creature through whichever authority path this instance owns. The
     /// target token (tag or id) is in <see cref="CoopCommand.Address"/>; empty means
     /// "the nearest hostile", resolved by the agent from its own enemy census.</summary>
@@ -860,6 +877,8 @@ public static partial class ConsoleCommand
         new(["god"], ParseGod),
         new(["topup"], ParseTopUp),
         new(["standup", "getup"], ParseStandUp),
+        new(["hurt"], ParseHurt),
+        new(["down"], ParseDown),
         new(["slay"], ParseSlay),
         new(["tp"], ParseTeleport),
         new(["walkto"], ParseWalkTo),

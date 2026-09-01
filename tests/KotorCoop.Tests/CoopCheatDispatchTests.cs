@@ -169,6 +169,60 @@ public class CoopCheatDispatchTests
     }
 
     /// <summary>
+    /// hurt/down (2026-09-02, docs/research/death-handling.md §6): the "blank slot = yourself"
+    /// console convention becomes <see cref="CheatKinds.LocalPlayerTarget"/> — never the bare
+    /// value 0, which is a real party-roster slot — and a typed slot crosses verbatim.
+    /// </summary>
+    [Fact]
+    public async Task HurtAndDownCarryTheDamageAndTheLocalPlayerSentinel()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            CheatRequest hurtSelf = await TypeAndAnswer(dispatcher, bridge, "hurt 50");
+            Assert.Equal(CheatKinds.Hurt, hurtSelf.Kind);
+            Assert.Equal(50, hurtSelf.Amount);
+            Assert.Equal(CheatKinds.LocalPlayerTarget, hurtSelf.Target);
+
+            CheatRequest downSelf = await TypeAndAnswer(dispatcher, bridge, "down");
+            Assert.Equal(CheatKinds.Down, downSelf.Kind);
+            Assert.Equal(CheatKinds.LocalPlayerTarget, downSelf.Target);
+
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
+    /// <summary>A typed party-roster slot — including slot 0, which must NOT be read back as
+    /// the local-player sentinel — crosses to the plugin verbatim.</summary>
+    [Fact]
+    public async Task HurtAndDownCarryATypedPartySlotVerbatim()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            CheatRequest hurtSlot = await TypeAndAnswer(dispatcher, bridge, "hurt 50 3");
+            Assert.Equal(50, hurtSlot.Amount);
+            Assert.Equal(3u, hurtSlot.Target);
+
+            CheatRequest hurtSlotZero = await TypeAndAnswer(dispatcher, bridge, "hurt 10 0");
+            Assert.Equal(0u, hurtSlotZero.Target);
+
+            CheatRequest downSlot = await TypeAndAnswer(dispatcher, bridge, "down 8");
+            Assert.Equal(8u, downSlot.Target);
+
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
+    /// <summary>
     /// ROOT CAUSE 7's own direct regression pin (2026-08-28, docs/research/party-pool-sync.md
     /// §26): a second staging cheat typed while the first is still unanswered used to overwrite
     /// the first request's own bytes in the shared block outright — <c>SendCheat</c> had no
@@ -450,6 +504,17 @@ public class CoopCheatDispatchTests
     [InlineData("destroyobject me")]
     [InlineData("destroyobject not-an-id")]
     [InlineData("destroyobject")]
+    [InlineData("hurt")]
+    [InlineData("hurt 0")]
+    [InlineData("hurt -5")]
+    [InlineData("hurt nonsense")]
+    [InlineData("hurt 50 9")]
+    [InlineData("hurt 50 -1")]
+    [InlineData("hurt 50 1 2")]
+    [InlineData("down 9")]
+    [InlineData("down -1")]
+    [InlineData("down nonsense")]
+    [InlineData("down 1 2")]
     public void ARefusedLineNeverReachesThePlugin(string line)
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();

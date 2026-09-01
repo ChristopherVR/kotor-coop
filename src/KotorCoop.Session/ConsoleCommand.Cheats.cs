@@ -64,6 +64,69 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.StandUp, Amount: reviveHitPoints);
     }
 
+    /// <summary>hurt &lt;amount&gt; [slot] — DEV-ONLY LIVE-TEST PRIMITIVE, see
+    /// <see cref="CoopCommandKind.Hurt"/>. <c>X</c> carries the slot as a float (this record
+    /// has no spare int field once <c>Amount</c> is taken); -1 is the "blank = yourself"
+    /// sentinel, matching <c>ParseDown</c> below.</summary>
+    private static CoopCommand ParseHurt(string[] rest)
+    {
+        const string usage = "hurt <amount> [slot]  amount: real damage through the engine's "
+            + "own path (shields and both 1-hp floors apply); slot: party-roster 0-8, blank = yourself";
+
+        if (rest.Length is < 1 or > 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!int.TryParse(rest[0], out int amount) || amount <= 0)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[0]}' is not a positive damage amount - {usage}");
+        }
+
+        float slot = -1f;
+        if (rest.Length == 2)
+        {
+            if (!int.TryParse(rest[1], out int parsedSlot) || parsedSlot is < 0 or > 8)
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid,
+                    Error: $"'{rest[1]}' is not a party-roster slot (0-8) - {usage}");
+            }
+
+            slot = parsedSlot;
+        }
+
+        return new CoopCommand(CoopCommandKind.Hurt, Amount: amount, X: slot);
+    }
+
+    /// <summary>down [slot] — DEV-ONLY LIVE-TEST PRIMITIVE, see
+    /// <see cref="CoopCommandKind.Down"/>.</summary>
+    private static CoopCommand ParseDown(string[] rest)
+    {
+        const string usage = "down [slot]  slot: party-roster 0-8, blank = yourself";
+
+        if (rest.Length > 1)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        float slot = -1f;
+        if (rest.Length == 1)
+        {
+            if (!int.TryParse(rest[0], out int parsedSlot) || parsedSlot is < 0 or > 8)
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid,
+                    Error: $"'{rest[0]}' is not a party-roster slot (0-8) - {usage}");
+            }
+
+            slot = parsedSlot;
+        }
+
+        return new CoopCommand(CoopCommandKind.Down, X: slot);
+    }
+
     private static CoopCommand ParseSlay(string[] rest)
     {
         if (rest.Length == 0)
@@ -425,6 +488,10 @@ public static partial class ConsoleCommand
         "  god [on|off]        your damage floors at 1 hp; yours only",
         "  topup [n]           your hit points to n, or to full",
         "  standup [n]         stand yourself up out of the downed state",
+        "  hurt <n> [slot]     dev-only: real damage through the engine's own path (shields",
+        "                      and both 1-hp floors apply) to yourself or party slot (0-8)",
+        "  down [slot]         dev-only: force the SAME genuine temp-death a real lethal hit",
+        "                      produces on yourself or party slot (0-8); bypasses min1hp",
         "  slay [tag|id]       kill an enemy; a client routes it to the host",
         "  destroyobject <id>  destroy a creature outright (Odyssey.DestroyObjectById);",
         "                      HOST-ONLY, no forward path - refused on a mirroring instance",
