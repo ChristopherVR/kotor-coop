@@ -50,6 +50,27 @@ internal sealed unsafe partial class EnemyPresenceController
     public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", true);
 
     /// <summary>
+    /// How many mirrored enemies this instance's own engine may fight simultaneously via
+    /// local_combat, coop.ini <c>local_combat_slots</c> (default 3, clamped 1..
+    /// <see cref="SharedBlock.LocalCombatSlotCapacity"/> — the shared-block excluded-id array's
+    /// own fixed width, docs/research/combat-participation.md §11). 1 reproduces the original
+    /// single-fight behaviour bit for bit: the exact same candidate ranking
+    /// (<see cref="LocalFightSlotAssignmentRule"/> with one free slot reduces to the old
+    /// highest-<see cref="LocalFightCandidateRule.Beats"/> winner), the exact same
+    /// <see cref="StartLocalFight"/>/<see cref="MaintainLocalFight"/> machinery, running for
+    /// physical slot 0 only — slots 1 and 2 simply never arm.
+    /// </summary>
+    internal static readonly int LocalCombatSlots = LoadSlotCount();
+
+    private static int LoadSlotCount()
+    {
+        int slots = Math.Clamp(
+            PluginConfig.ReadInt("local_combat_slots", 3), 1, SharedBlock.LocalCombatSlotCapacity);
+        PluginHost.Log($"local_combat_slots={slots} (default 3, clamped 1..{SharedBlock.LocalCombatSlotCapacity})");
+        return slots;
+    }
+
+    /// <summary>
     /// DIAGNOSTIC (docs/research/shared-state-audit.md §2, round 47), dev-only. `coop.ini local_combat_bisect_mask`, hex,
     /// default 0. Each bit DISABLES exactly one distinct per-frame engine write/call this
     /// controller performs on a mirrored (not-yet-fighting) creature — see the bit table on
@@ -169,25 +190,43 @@ internal sealed unsafe partial class EnemyPresenceController
     // classify an attacker id it sees land on the LOCAL PC. See
     // docs/research/shared-state-audit.md §2, round 52.
 
-    /// <summary>Owner-space id of the ONE creature <see cref="StartLocalFight"/> most
-    /// recently armed, mirrored into a static field every frame right where
-    /// <c>block.LocalCombatExcludedId</c> already publishes the same value — see the
-    /// <c>OnFrame</c> call site. 0 when nothing is currently fighting locally.</summary>
-    private static uint _locallyFightingIdShared;
+    /// <summary>Owner-space ids of every creature <see cref="StartLocalFight"/> currently has
+    /// armed (up to <see cref="SharedBlock.LocalCombatSlotCapacity"/>), mirrored into a static
+    /// array every frame right where <c>block.SetLocalCombatExcludedIds</c> already publishes
+    /// the same values — see the <c>OnFrame</c> call site. A zero entry means that physical
+    /// slot is free. The N-wide sibling of the pre-N-slot single <c>_locallyFightingIdShared</c>
+    /// field.</summary>
+    private static readonly uint[] _locallyFightingIdsShared = new uint[SharedBlock.LocalCombatSlotCapacity];
 
     /// <summary>Owner-space ids this instance actually drove (placed, claimed, permitted to
     /// attack) on the most recent pass — the general "driven/mirrored census creature" set,
     /// broader than <see cref="IsLocallyEngaged"/> (which also requires proximity) and
-    /// broader than <see cref="_locallyFightingIdShared"/> (which is at most one id).
+    /// broader than <see cref="_locallyFightingIdsShared"/> (which is at most
+    /// <see cref="SharedBlock.LocalCombatSlotCapacity"/> ids).
     /// Populated only at DriveOne's genuine "driven this frame" exit, not its early-return
     /// skips. Frame thread only.</summary>
     private static readonly uint[] DrivenOwnerId = new uint[SharedBlock.EnemyCapacity];
     private static int _drivenCount;
 
-    /// <summary>Whether <paramref name="ownerObjectId"/> is the exact creature currently
-    /// pulled out of the census to fight the local player for real.</summary>
-    public static bool IsLocallyFightingCreature(uint ownerObjectId) =>
-        ownerObjectId != 0 && ownerObjectId == _locallyFightingIdShared;
+    /// <summary>Whether <paramref name="ownerObjectId"/> is one of the creatures currently
+    /// pulled out of the census to fight the local player for real, in any slot.</summary>
+    public static bool IsLocallyFightingCreature(uint ownerObjectId)
+    {
+        if (ownerObjectId == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _locallyFightingIdsShared.Length; i++)
+        {
+            if (_locallyFightingIdsShared[i] == ownerObjectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Whether <paramref name="ownerObjectId"/> was one of the enemies this
     /// instance mirrored on the most recent pass, regardless of engagement/proximity.</summary>
