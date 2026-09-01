@@ -41,7 +41,7 @@ internal sealed partial class CombatPump
                 continue;
             }
 
-            session.PublishPhantomDamage(peerId, cumulative, attacker);
+            session.PublishPhantomDamage(peerId, cumulative, attacker, ReadPhantomAttackers(slot));
         }
 
         // Inbound: hand the plugin the running total. Level state, written every tick —
@@ -60,7 +60,42 @@ internal sealed partial class CombatPump
         if (owed > 0 && !default(MinigameRule).ShouldSuppressIncomingDamage(bridge.IsInMinigame))
         {
             bridge.TryWriteIncomingDamage(owed, from);
+
+            IReadOnlyList<PhantomAttackerEntry> attackers = session.GetIncomingPhantomAttackers();
+            if (attackers.Count > 0)
+            {
+                bridge.TryWriteIncomingDamageAttackers(attackers);
+            }
         }
+    }
+
+    /// <summary>Reads the per-attacker breakdown PhantomHitHook captured for one watched
+    /// phantom slot, for <see cref="PumpPhantomDamage"/> to publish alongside the legacy
+    /// scalar total. Empty on a bridge without the region (an older-shaped fake, a bridge with
+    /// no in-process plugin) — the receiver falls back to the scalar total's last-attacker id.</summary>
+    private List<PhantomAttackerEntry> ReadPhantomAttackers(int slot)
+    {
+        if (!bridge.SupportsPerAttackerPhantomHit)
+        {
+            return [];
+        }
+
+        Span<uint> ids = stackalloc uint[ProtocolConstants.MaxPhantomAttackerEntries];
+        Span<uint> totals = stackalloc uint[ProtocolConstants.MaxPhantomAttackerEntries];
+        int count = bridge.ReadPhantomHitAttackers(slot, ids, totals);
+
+        if (count == 0)
+        {
+            return [];
+        }
+
+        List<PhantomAttackerEntry> entries = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            entries.Add(new PhantomAttackerEntry(ids[i], totals[i]));
+        }
+
+        return entries;
     }
 
     /// <summary>The non-damage sibling of <see cref="PumpPhantomDamage"/>: stun, paralyze,

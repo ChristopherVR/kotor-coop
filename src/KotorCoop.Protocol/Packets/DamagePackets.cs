@@ -41,8 +41,13 @@ public readonly record struct PeerEnemyDamage(
 /// receiver applies the difference against what it has already taken, so a lost datagram
 /// costs a tick of staleness rather than a missed hit and a duplicate applies nothing.
 /// Same "level, not event" rule as enemy health. <paramref name="AttackerId"/> is the
-/// engine object id of whoever last landed one, which is the same number in both
-/// instances.
+/// engine object id of whoever LAST landed one — kept for an older reader during the one-
+/// release overlap; <paramref name="Attackers"/> (protocol version 48) is the same total
+/// split per attacker, up to <see cref="ProtocolConstants.MaxPhantomAttackerEntries"/>
+/// entries, which is what lets the receiver bill a mixed local/mirrored window correctly
+/// instead of wholesale to whichever id landed last. See
+/// docs/research/peer-damage-ledger.md §7.
 /// </summary>
 public sealed record PhantomDamagePacket(
-    uint FromPeerId, uint TargetPeerId, uint CumulativeDamage, uint AttackerId);
+    uint FromPeerId, uint TargetPeerId, uint CumulativeDamage, uint AttackerId,
+    IReadOnlyList<PhantomAttackerEntry> Attackers);

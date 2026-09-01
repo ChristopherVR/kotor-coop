@@ -92,6 +92,42 @@ internal partial struct SharedBlock
     /// re-attach cannot replay the whole history onto the player.</summary>
     public const int OffsetIncomingDamageApplied = 0x1D58;
 
+
+    // ---- per-attacker phantom-damage attribution (version 62, region 0x4900..0x4A20) ----
+    //
+    // Extends the two channels above with a per-attacker breakdown, so IncomingDamageController
+    // can absorb/apply a delta PER ATTACKER instead of billing a whole pump window's damage to
+    // whichever id landed last — the bug the single-attacker fields above cannot fix: a window
+    // mixing a locally-fought attacker with a mirrored one had to be billed wholesale to one or
+    // the other, either double-counting or dropping the other's contribution. The legacy scalar
+    // fields (OffsetPhantomHitSlots' cumulative/attacker/serial, OffsetIncomingDamage*) stay
+    // live alongside this — an older reader still works off them alone. See
+    // docs/research/peer-damage-ledger.md §7.
+    //
+    // Both tables share one entry shape: attackerId u32 @0, cumulative damage u32 @4, id
+    // written last (the same "payload then key" discipline every fixed table in this block
+    // uses) so a reader never pairs a fresh id with the previous entry's stale total. An id of
+    // 0 marks an empty entry.
+
+    /// <summary>Plugin -&gt; agent. Per PHANTOM SLOT (paired with <see cref="OffsetPhantomHitSlots"/>
+    /// by index): up to <see cref="PhantomAttackerCapacity"/> (attackerId, cumulative) pairs
+    /// PhantomHitHook captured landing on that phantom, least-total eviction when a fifth
+    /// attacker needs a slot. Occupies 0x4900..0x4A00 (8 slots x 4 entries x 8 bytes).</summary>
+    public const int OffsetPhantomAttackerSlots = 0x4900;
+
+    public const int PhantomAttackerSlotStride = 0x20;
+
+    public const int PhantomAttackerCapacity = 4;
+
+    public const int PhantomAttackerEntryStride = 0x08;
+
+    /// <summary>Agent -&gt; plugin. The LOCAL PLAYER's merged owed-per-attacker breakdown —
+    /// summed across every peer that has hit their phantom elsewhere (KotorCoop.Protocol's
+    /// <c>PhantomAttackerMerge</c>). One target only (unlike the OUT table above, which is
+    /// per phantom slot), so this needs only <see cref="PhantomAttackerCapacity"/> entries.
+    /// Occupies 0x4A00..0x4A20.</summary>
+    public const int OffsetIncomingDamageAttackers = 0x4A00;
+
     /// <summary>
     /// Agent -&gt; plugin, TEST HOOK. Applies a real engine damage effect to a phantom, the
     /// same way <see cref="OffsetPickUpRequest"/> drives a real pickup: staging a genuine

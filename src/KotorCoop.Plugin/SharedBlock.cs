@@ -106,7 +106,17 @@ internal partial struct SharedBlock
     /// next clean 0x100 boundary past that, the same choice every earlier growth in this file
     /// made.
     /// </summary>
-    public const int TotalSize = 0x4800;
+    /// <summary>
+    /// Grown from 0x4800 for the per-attacker phantom-damage attribution channel (version 62,
+    /// docs/research/peer-damage-ledger.md §7): the 2026-08-29 seamless wave's own regions
+    /// (minigame lock, join-chargen handshake, live-image digest) leave 0x4800..0x4900 free for
+    /// parallel work in flight (version 61, deliberately skipped here — do not fill it), so this
+    /// starts cleanly at the boundary past that. Occupies 0x4900..0x4A20 (the phantom-slot OUT
+    /// table at 0x4900..0x4A00, the local-player IN table at 0x4A00..0x4A20); rounded up a full
+    /// 0x100 past the OUT table's own end, the same "round up to a clean boundary" choice every
+    /// earlier growth here made, this time with headroom for the IN table alongside it.
+    /// </summary>
+    public const int TotalSize = 0x4B00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -183,7 +193,11 @@ internal partial struct SharedBlock
     /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13. Version 59
     /// (2026-08-28) widened each item-template-spawn ring entry with
     /// <see cref="ItemTemplateSpawnIsCheatOffset"/> — see SharedBlock.ItemTemplateSpawns.cs and
-    /// docs/research/party-pool-sync.md §20.
+    /// docs/research/party-pool-sync.md §20. 60 (2026-08-29) added the minigame peer lock and
+    /// new-character join-chargen handshake — see PluginHost.cs's own remarks. 61 is skipped
+    /// (reserved for parallel work in flight). Version 62 (2026-09-02) added
+    /// <see cref="OffsetPhantomAttackerSlots"/>/<see cref="OffsetIncomingDamageAttackers"/> —
+    /// see SharedBlock.Combat.cs and docs/research/peer-damage-ledger.md §7.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

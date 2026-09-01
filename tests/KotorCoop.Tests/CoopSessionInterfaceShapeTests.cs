@@ -127,6 +127,7 @@ public class CoopSessionInterfaceShapeTests
         Assert.Empty(session.GetCreatureLiveness("end_m01aa"));
         Assert.Empty(session.GetEnemyDamage("end_m01aa"));
         Assert.Equal((0u, 0u), session.GetIncomingPhantomDamage());
+        Assert.Empty(session.GetIncomingPhantomAttackers());
         Assert.Empty(session.DrainPeerEffects());
         Assert.Empty(session.DrainBarks("end_m01aa"));
         Assert.Empty(session.DrainTransitionMovies());

@@ -20,6 +20,29 @@ public interface IPluginChannelBridge
     /// phantom elsewhere. No-op without a plugin.</summary>
     bool TryWriteIncomingDamage(uint cumulative, uint attacker) => false;
 
+    /// <summary>Whether this bridge can also read the per-attacker breakdown alongside
+    /// <see cref="TryReadPhantomHit"/> (SharedBlock version 62 and later). False lets a test
+    /// fake or an older-shaped bridge implementation compile with no changes — the caller
+    /// falls back to <see cref="TryReadPhantomHit"/>'s single cumulative total. See
+    /// docs/research/peer-damage-ledger.md §7.</summary>
+    bool SupportsPerAttackerPhantomHit => false;
+
+    /// <summary>
+    /// Up to 4 (attackerId, cumulativeDamage) pairs <c>PhantomHitHook</c> captured for one
+    /// watched phantom slot, in the OWNER's id space — the same numbering
+    /// <see cref="TryReadPhantomHit"/>'s attacker id already uses. Writes into
+    /// <paramref name="attackerIds"/>/<paramref name="cumulativeDamage"/> (each expected at
+    /// least <c>SharedBlock.PhantomAttackerCapacity</c> long) and returns how many entries
+    /// were valid; 0 without a plugin or when <see cref="SupportsPerAttackerPhantomHit"/> is
+    /// false.
+    /// </summary>
+    int ReadPhantomHitAttackers(int slot, Span<uint> attackerIds, Span<uint> cumulativeDamage) => 0;
+
+    /// <summary>Hands the plugin the merged owed-per-attacker breakdown for the local player —
+    /// summed across every peer that has reported hits on their phantom elsewhere (see
+    /// <see cref="PhantomAttackerMerge"/>). No-op without a plugin.</summary>
+    bool TryWriteIncomingDamageAttackers(IReadOnlyList<PhantomAttackerEntry> attackers) => false;
+
     /// <summary>Non-damage effects (stun, paralyze, knockdown, slow, frightened, sleep, choke,
     /// Force push/whirlwind) captured landing on this instance's phantoms since the plugin
     /// last published them. Empty for bridges without an in-process plugin. See

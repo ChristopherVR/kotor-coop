@@ -88,6 +88,23 @@ internal static unsafe class PhantomHitHook
     private static readonly uint[] _lastAttacker = new uint[SharedBlock.SlotCapacity];
     private static readonly uint[] _serial = new uint[SharedBlock.SlotCapacity];
 
+    /// <summary>Per-slot per-attacker breakdown of the same hits <see cref="_cumulative"/>
+    /// sums — see <see cref="PhantomAttackerTable"/>'s own doc comment for the eviction rule.
+    /// One instance per phantom slot, constructed once; every method after that touches only
+    /// its own fixed arrays, so this stays allocation-free on the damage hook's hot path.</summary>
+    private static readonly PhantomAttackerTable[] _attackerTables = CreateAttackerTables();
+
+    private static PhantomAttackerTable[] CreateAttackerTables()
+    {
+        var tables = new PhantomAttackerTable[SharedBlock.SlotCapacity];
+        for (int i = 0; i < tables.Length; i++)
+        {
+            tables[i] = new PhantomAttackerTable();
+        }
+
+        return tables;
+    }
+
     /// <summary>Damage the local side has dealt, per target object id.</summary>
     private static readonly DamageDealtTable _dealt = new(SharedBlock.DamageLedgerCapacity);
 
@@ -157,6 +174,7 @@ internal static unsafe class PhantomHitHook
             _cumulative[slot] = 0;
             _lastAttacker[slot] = 0;
             _serial[slot] = 0;
+            _attackerTables[slot].Clear();
         }
     }
 
@@ -201,6 +219,37 @@ internal static unsafe class PhantomHitHook
         cumulative = _cumulative[slot];
         attacker = _lastAttacker[slot];
         serial = _serial[slot];
+    }
+
+    /// <summary>The per-attacker breakdown captured for a watched phantom slot, for the
+    /// controller to publish alongside <see cref="ReadSlot"/>'s legacy scalar total. Writes
+    /// into <paramref name="ids"/>/<paramref name="totals"/> (each expected at least
+    /// <see cref="PhantomAttackerTable.Capacity"/> long) and returns how many entries were
+    /// valid.</summary>
+    public static int ReadAttackers(int slot, Span<uint> ids, Span<uint> totals)
+    {
+        if (slot is < 0 or >= SharedBlock.SlotCapacity)
+        {
+            return 0;
+        }
+
+        PhantomAttackerTable table = _attackerTables[slot];
+        int count = 0;
+
+        for (int i = 0; i < PhantomAttackerTable.Capacity && count < ids.Length && count < totals.Length; i++)
+        {
+            uint id = table.IdAt(i);
+            if (id == 0)
+            {
+                continue;
+            }
+
+            ids[count] = id;
+            totals[count] = table.TotalAt(i);
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>The per-type amounts of the most recent hit, for the controller to log
@@ -255,6 +304,11 @@ internal static unsafe class PhantomHitHook
         Array.Clear(_ourAttacker);
         _ourAttackerCount = 0;
         _dealt.Clear();
+
+        for (int i = 0; i < _attackerTables.Length; i++)
+        {
+            _attackerTables[i].Clear();
+        }
     }
 
     /// <summary>Verify-bytes-or-refuse, like every other patch here. MAIN THREAD, once.</summary>
@@ -405,6 +459,11 @@ internal static unsafe class PhantomHitHook
             _cumulative[slot] += (uint)total;
             _lastAttacker[slot] = attacker is 0 or ObjectInvalid ? _lastAttacker[slot] : attacker;
             _serial[slot]++;
+
+            if (attacker is not (0 or ObjectInvalid))
+            {
+                _attackerTables[slot].Add(attacker, (uint)total);
+            }
         }
         catch
         {

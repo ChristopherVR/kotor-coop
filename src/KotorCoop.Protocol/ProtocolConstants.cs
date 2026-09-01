@@ -142,8 +142,13 @@ public static class ProtocolConstants
     /// timeout (<c>host_loss_release</c>). Also the flag snapshot became paged (same packet
     /// types, but a v46 peer would misread a paged snapshot). See
     /// docs/research/disconnect-reconnect.md §11 and world-adoption.md (2026-08-29).
+    ///
+    /// Version 48: <see cref="PhantomDamagePacket"/> gains <c>Attackers</c> — the same
+    /// cumulative total split per attacker id, up to <see cref="MaxPhantomAttackerEntries"/>
+    /// entries, instead of just the single last-attacker id. No new packet type; the existing
+    /// <c>PhantomDamage</c> (31) is extended. See docs/research/peer-damage-ledger.md §7.
     /// </summary>
-    public const byte Version = 47;
+    public const byte Version = 48;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -240,6 +245,16 @@ public static class ProtocolConstants
     /// and not yet seen die.
     /// </summary>
     public const int MaxEnemyDamageEntries = 32;
+
+    /// <summary>
+    /// Per-attacker breakdown entries on one <see cref="PhantomDamagePacket"/> — matches the
+    /// plugin's own capture-side capacity (<c>SharedBlock.PhantomAttackerCapacity</c>) and the
+    /// applied-side ledger's (<see cref="PhantomAttackerAppliedLedger.Capacity"/>). 8 bytes
+    /// each (attacker id + cumulative), so a full 4 is 32 bytes — trivial next to
+    /// <see cref="MaxPacketSize"/>; the cap exists to bound the fixed table this rides on, not
+    /// the datagram. See docs/research/peer-damage-ledger.md §7.
+    /// </summary>
+    public const int MaxPhantomAttackerEntries = 4;
 
     /// <summary>
     /// Creature-liveness entries per <see cref="CreatureLivenessPacket"/> datagram.

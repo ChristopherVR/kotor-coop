@@ -144,6 +144,11 @@ internal sealed unsafe partial class PhantomController
             _lastStep = now;
         }
 
+        // Reused across every slot below (CA2014: a stackalloc inside the loop risks a stack
+        // overflow if the compiler cannot prove it runs only once per call).
+        Span<uint> attackerIds = stackalloc uint[PhantomAttackerTable.Capacity];
+        Span<uint> attackerCumulative = stackalloc uint[PhantomAttackerTable.Capacity];
+
         for (int i = 0; i < SharedBlock.SlotCapacity; i++)
         {
             RemoteView remote = i < wanted ? block.GetRemote(i) : default;
@@ -209,7 +214,12 @@ internal sealed unsafe partial class PhantomController
 
             // Forward what this body has taken to the peer whose character it stands for.
             PhantomHitHook.ReadSlot(i, out uint watchedId, out uint cumulative, out uint attacker, out uint hitSerial);
-            block.SetPhantomHit(i, watchedId, cumulative, attacker, hitSerial);
+
+            int attackerCount = PhantomHitHook.ReadAttackers(i, attackerIds, attackerCumulative);
+
+            block.SetPhantomHit(
+                i, watchedId, cumulative, attacker, hitSerial,
+                attackerIds[..attackerCount], attackerCumulative[..attackerCount]);
 
             ApplyTestHit(i);
             LogHitBreakdown();

@@ -294,7 +294,17 @@ internal static unsafe partial class PluginHost
         //      SharedBlock.MinigameLock.cs), new-character join capture handshake (0x4780..
         //      and 0x47C0, SharedBlock.JoinChargen.cs), cheat kinds 53 closegui, 56 followstall,
         //      59 skipkey, 60 quicksave. Live-verified — docs/live-verification.md (2026-08-29).
-        _block->Version = 60;
+        // 61 = skipped — reserved for parallel work in flight; do not fill it.
+        // 62 = per-attacker phantom-damage attribution (region 0x4900..0x4A20, TotalSize grown
+        //      to 0x4B00): a 4-entry, least-total-eviction table per phantom slot of
+        //      (attackerId, cumulative) pairs (SharedBlock.OffsetPhantomAttackerSlots, plugin ->
+        //      agent — what hit OUR phantoms), and a 4-entry merged owed-per-attacker table for
+        //      the LOCAL player (SharedBlock.OffsetIncomingDamageAttackers, agent -> plugin), so
+        //      IncomingDamageController can absorb/apply a delta PER ATTACKER instead of billing
+        //      a whole pump window's damage to whichever id landed last. The legacy scalar
+        //      total/last-attacker fields next to each stay live as the fallback for an older
+        //      reader. NEEDS-LIVE. See docs/research/peer-damage-ledger.md §7.
+        _block->Version = 62;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

@@ -33,8 +33,15 @@ public interface IDamageSession
     /// phantom has taken here in total, so their real character can take it too. Sent every
     /// tick as a running total rather than per hit: the receiver applies the difference, so
     /// a lost datagram costs a tick of staleness and a duplicate costs nothing.
+    ///
+    /// <paramref name="attackers"/> (protocol version 48) is the same total split per
+    /// attacker id, up to <see cref="ProtocolConstants.MaxPhantomAttackerEntries"/> entries —
+    /// null (the default) is treated as empty by every implementation, which degrades to the
+    /// legacy last-attacker-only wire shape. See docs/research/peer-damage-ledger.md §7.
     /// </summary>
-    void PublishPhantomDamage(uint targetPeerId, uint cumulativeDamage, uint attackerId)
+    void PublishPhantomDamage(
+        uint targetPeerId, uint cumulativeDamage, uint attackerId,
+        IReadOnlyList<PhantomAttackerEntry>? attackers = null)
     {
     }
 
@@ -43,6 +50,15 @@ public interface IDamageSession
     /// other instances, and who last landed one. (0, 0) when nobody has hit them.
     /// </summary>
     (uint CumulativeDamage, uint AttackerId) GetIncomingPhantomDamage() => (0, 0);
+
+    /// <summary>
+    /// The same running total as <see cref="GetIncomingPhantomDamage"/>, split per attacker
+    /// id and merged across every sender that has hit this player's phantom elsewhere — see
+    /// <see cref="PhantomAttackerMerge"/>. Empty when nobody has hit them, or from a session
+    /// that has not been upgraded to carry the breakdown; the plugin falls back to the legacy
+    /// scalar total in that case. See docs/research/peer-damage-ledger.md §7.
+    /// </summary>
+    IReadOnlyList<PhantomAttackerEntry> GetIncomingPhantomAttackers() => [];
 
     /// <summary>
     /// Tells the peer that owns <paramref name="targetPeerId"/> that a non-damage effect
