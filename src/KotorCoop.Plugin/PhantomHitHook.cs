@@ -4,9 +4,12 @@ using System.Runtime.InteropServices;
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Watches the engine's single damage choke point, for two things at once: damage landing
-/// on a peer's PHANTOM (forwarded to that peer's real character), and damage the local
-/// player DEALS to anything (forwarded to whoever owns that creature's fight).
+/// Watches the engine's single damage choke point, for THREE things at once: damage landing
+/// on a peer's PHANTOM (forwarded to that peer's real character), damage the local player
+/// DEALS to anything (forwarded to whoever owns that creature's fight), and damage landing on
+/// a companion <c>companion_local_combat</c> has RELEASED to fight here (forwarded to the
+/// host, whose authoritative body never otherwise sees it — see
+/// docs/research/companion-state-sync.md §13 and <see cref="WatchCompanion"/>).
 ///
 /// The choke point is <c>CSWSEffectListHandler::OnApplyDamage 0x004DFA40</c> — the damage
 /// analog of the animation hook's dispatch site: every point of weapon, grenade and force
@@ -90,6 +93,25 @@ internal static unsafe class PhantomHitHook
 
     /// <summary>Damage the local side has dealt, per target object id.</summary>
     private static readonly DamageDealtTable _dealt = new(SharedBlock.DamageLedgerCapacity);
+
+    /// <summary>
+    /// Companion presence slots currently RELEASED to their own engine AI
+    /// (<c>companion_local_combat</c>), watched for damage TAKEN — the reverse of the dealt
+    /// table above. Indexed by presence slot, exactly like the phantom watch arrays, and only
+    /// ever nonzero while <see cref="PartyPresenceController"/> has that slot released: the
+    /// blanket "host owns companion health" mirror write goes through
+    /// <c>Odyssey.SetCurrentHitPoints</c> directly and never touches this hook, so there is
+    /// nothing here to suppress the way <see cref="SuppressDealt"/> guards the dealt side.
+    /// </summary>
+    private static readonly uint[] _companionId = new uint[SharedBlock.CompanionDamageSlotCapacity];
+
+    /// <summary>The NPC roster slot (plus one; 0 = unused) each watched companion id stands
+    /// for — the identity that survives a module transition, carried alongside the id so the
+    /// publisher never has to ask <see cref="PartyPresenceController"/> for it again.</summary>
+    private static readonly uint[] _companionRosterSlotPlusOne = new uint[SharedBlock.CompanionDamageSlotCapacity];
+
+    private static readonly uint[] _companionCumulative = new uint[SharedBlock.CompanionDamageSlotCapacity];
+    private static readonly uint[] _companionSerial = new uint[SharedBlock.CompanionDamageSlotCapacity];
 
     /// <summary>
     /// Object ids whose damage counts as OURS: the local player and its party.
@@ -242,10 +264,53 @@ internal static unsafe class PhantomHitHook
 
     public static DamageDealtTable Dealt => _dealt;
 
+    // ---- companion damage TAKEN ---------------------------------------------------
+
+    /// <summary>
+    /// Starts (or stops, with id 0) watching a released companion's damage taken. Called every
+    /// pass from <see cref="PartyPresenceController"/> — only ever with a nonzero id while that
+    /// presence slot is actually released to its own engine AI. Counters are kept across a
+    /// re-register of the SAME id (the companion stays released across consecutive passes) so
+    /// an ordinary frame-to-frame call does not replay damage already taken; a DIFFERENT id (or
+    /// a reclaim, 0) resets the slot, because the companion identity behind it has changed.
+    /// </summary>
+    public static void WatchCompanion(int slot, uint objectId, uint rosterSlotPlusOne)
+    {
+        if (slot is < 0 or >= SharedBlock.CompanionDamageSlotCapacity)
+        {
+            return;
+        }
+
+        if (_companionId[slot] != objectId)
+        {
+            _companionId[slot] = objectId;
+            _companionRosterSlotPlusOne[slot] = objectId == 0 ? 0 : rosterSlotPlusOne;
+            _companionCumulative[slot] = 0;
+            _companionSerial[slot] = 0;
+        }
+    }
+
+    public static void ReadCompanionSlot(
+        int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial)
+    {
+        if (slot is < 0 or >= SharedBlock.CompanionDamageSlotCapacity || _companionId[slot] == 0)
+        {
+            rosterSlotPlusOne = 0;
+            cumulative = 0;
+            serial = 0;
+            return;
+        }
+
+        rosterSlotPlusOne = _companionRosterSlotPlusOne[slot];
+        cumulative = _companionCumulative[slot];
+        serial = _companionSerial[slot];
+    }
+
     /// <summary>Drops every watch and its totals — a module change frees the bodies and the
     /// peer's own health is re-published from scratch. The dealt ledger goes with it: object
     /// ids are assigned per module load, so a total carried across would be credited against
-    /// a completely different creature.</summary>
+    /// a completely different creature. The companion-damage watch goes with it too, for the
+    /// same reason.</summary>
     public static void Invalidate()
     {
         Array.Clear(_watchedId);
@@ -255,6 +320,10 @@ internal static unsafe class PhantomHitHook
         Array.Clear(_ourAttacker);
         _ourAttackerCount = 0;
         _dealt.Clear();
+        Array.Clear(_companionId);
+        Array.Clear(_companionRosterSlotPlusOne);
+        Array.Clear(_companionCumulative);
+        Array.Clear(_companionSerial);
     }
 
     /// <summary>Verify-bytes-or-refuse, like every other patch here. MAIN THREAD, once.</summary>
@@ -364,9 +433,23 @@ internal static unsafe class PhantomHitHook
                 }
             }
 
-            bool ours = slot < 0 && !SuppressDealt && IsOursToCredit(target, targetId, effect);
+            int companionSlot = -1;
+            if (slot < 0)
+            {
+                for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity; i++)
+                {
+                    if (_companionId[i] != 0 && _companionId[i] == targetId)
+                    {
+                        companionSlot = i;
+                        break;
+                    }
+                }
+            }
 
-            if (slot < 0 && !ours)
+            bool ours = slot < 0 && companionSlot < 0 && !SuppressDealt
+                && IsOursToCredit(target, targetId, effect);
+
+            if (slot < 0 && companionSlot < 0 && !ours)
             {
                 return;
             }
@@ -374,6 +457,13 @@ internal static unsafe class PhantomHitHook
             int total = ReadTotal(effect, breakdown: slot >= 0);
             if (total <= 0)
             {
+                return;
+            }
+
+            if (companionSlot >= 0)
+            {
+                _companionCumulative[companionSlot] += (uint)total;
+                _companionSerial[companionSlot]++;
                 return;
             }
 

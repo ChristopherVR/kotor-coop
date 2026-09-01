@@ -536,6 +536,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         {
             case CompanionLocalFightAction.ReleaseAndLog:
                 _released[slot] = true;
+                // Start the companion-damage watch (docs/research/companion-state-sync.md §13)
+                // the same frame it is released, so the very first hit it takes is not missed
+                // waiting for next pass's StayReleased branch below.
+                PhantomHitHook.WatchCompanion(slot, objectId, member.RosterSlotPlusOne);
                 // Put it back in the player faction, off the min-1-hp pin — the opposite of the
                 // blanket local_combat hold just below, because THIS companion can now genuinely
                 // fight back.
@@ -553,6 +557,12 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 // movement/facing/animation from here — this only ever queues ONE attack action
                 // through the same engine call the `attack` cheat already uses, and only when
                 // that companion's own queue is empty. See AttackDriveIntervalSeconds' doc.
+                //
+                // Re-armed every pass, not just on the release edge: a respawned/re-resolved
+                // body (Resolve above forgot and re-found the same companion mid-release) must
+                // not silently stop being watched, and re-registering the SAME id is a no-op for
+                // PhantomHitHook's own counters (see WatchCompanion's doc comment).
+                PhantomHitHook.WatchCompanion(slot, objectId, member.RosterSlotPlusOne);
                 LogReleaseDiagIfDue(objectId, creature, now, slot);
                 if (localFightActive && nearestEnemyObjectId != 0)
                 {
@@ -563,6 +573,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
             case CompanionLocalFightAction.ReclaimAndLog:
                 _released[slot] = false;
+                // Stop watching: a reclaimed companion is mirrored again, and its health from
+                // here on is the host's absolute write below, not something this instance's own
+                // engine can still hurt.
+                PhantomHitHook.WatchCompanion(slot, 0, 0);
                 PluginHost.Log(
                     $"party drive: companion 0x{objectId:X} reclaimed — resuming the host mirror");
                 break;
@@ -581,8 +595,13 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // party AI and the queue is cleared every pass) and are not min-1-hp pinned. Turn
         // local_combat on and they become the nearest player-faction bodies to every mirrored
         // enemy: an immortal aggro sink that soaks the whole fight while the local PC is never
-        // touched — and their damage goes nowhere, because there is no client->host channel
-        // for companion health, so the host never sees any of it.
+        // touched. This is the case a MIRRORED companion must never be caught in — a RELEASED
+        // companion (CompanionLocalFightAction.StayReleased, above) is the deliberate exception
+        // and now has a real channel for its damage: docs/research/companion-state-sync.md §13,
+        // PhantomHitHook.WatchCompanion / CompanionDamageController forward what it actually
+        // takes to the host, which spends it on its own authoritative body. Until that channel
+        // shipped, a companion's damage went nowhere at all here — this guard is what kept a
+        // STILL-MIRRORED one from being pulled into that gap in the meantime, and it still does.
         //
         // Held Neutral they stop being targets; pinned min-1-hp they stop being killable here.
         // Applied in BOTH directions, so switching local_combat off puts them back in the
@@ -826,6 +845,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _oneShotPrimed[slot] = false;
         _factionKnown[slot] = false;
         _released[slot] = false;
+        // The body this slot's watch named may be gone (module change, disconnect) — stop
+        // watching it, the same "no dangling id" rule the phantom/dealt tables already follow
+        // on their own Invalidate.
+        PhantomHitHook.WatchCompanion(slot, 0, 0);
         _smoother.Reset(slot);
 
         // A different companion (or the same one, freshly re-resolved) may now occupy this

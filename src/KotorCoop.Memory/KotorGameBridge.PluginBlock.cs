@@ -750,6 +750,27 @@ public sealed partial class KotorGameBridge
             && _memory.TryReadUInt32(_pluginBlock + BlockExeImageDigest, out digest);
     }
 
+    // Companion damage TAKEN (shared block version 63, region 0x4A00..0x4A90). The companion
+    // sibling of the enemy damage ledger above: a companion companion_local_combat has
+    // released takes real hits on the CLIENT's own engine, and without this channel the host's
+    // authoritative body never saw any of it — see docs/research/companion-state-sync.md §13.
+    // Client -> agent: what the plugin's watch (PhantomHitHook's companion slots) has
+    // measured, keyed by presence slot (SharedBlock.PartyPresenceCapacity, 4). Agent -> agent's
+    // own host plugin: the total every peer has dealt to each of the host's own companions,
+    // keyed by NPC ROSTER SLOT (ProtocolConstants.PartyRosterSlots, 9) rather than presence
+    // slot, since that is the identity that survives a module transition and is what
+    // PartyPresenceController.ResolveRosterObjectId resolves against.
+    private const int BlockCompanionDamageCount = 0x4A00;
+    private const int BlockCompanionDamageGeneration = 0x4A04;
+    private const int BlockCompanionDamageSlots = 0x4A08;
+    private const int BlockCompanionDamageSlotStride = 0x0C;
+    private const int BlockCompanionDamageSlotCapacity = 4;
+    private const int BlockCompanionDamageOwedCount = 0x4A40;
+    private const int BlockCompanionDamageOwedSlots = 0x4A44;
+    private const int BlockCompanionDamageOwedStride = 0x08;
+    private const int BlockCompanionDamageOwedCapacity = 9;
+    private const int BlockCompanionDamageApplied = 0x4A8C;
+
     /// <summary>Diagnostics the plugin publishes back to us.</summary>
     public (uint Frames, uint Phantoms, int LastStatus) ReadPluginState()
     {

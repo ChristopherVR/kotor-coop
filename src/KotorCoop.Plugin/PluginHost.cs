@@ -55,6 +55,7 @@ internal static unsafe partial class PluginHost
     private static PeerEffectController? _peerEffects;
 
     private static PeerDamageController? _peerDamage;
+    private static CompanionDamageController? _companionDamage;
     private static TestDriveController? _testDrive;
     private static CheatController? _cheats;
     private static DoorController? _doors;
@@ -294,11 +295,23 @@ internal static unsafe partial class PluginHost
         //      SharedBlock.MinigameLock.cs), new-character join capture handshake (0x4780..
         //      and 0x47C0, SharedBlock.JoinChargen.cs), cheat kinds 53 closegui, 56 followstall,
         //      59 skipkey, 60 quicksave. Live-verified — docs/live-verification.md (2026-08-29).
-        // 61 = N-slot local_combat: the excluded-id array at 0x4800..0x4900 (block grown to
-        //      0x4B00), SharedBlock.OffsetLocalCombatExcludedIds — widens local_combat from one
-        //      locally-fought enemy to up to LocalCombatSlotCapacity (3), coop.ini
-        //      local_combat_slots. See docs/research/combat-participation.md §11. NEEDS-LIVE.
-        _block->Version = 61;
+        // 61 = 2026-09-02 combat wave: N-slot local_combat — the excluded-id array at
+        //      0x4800..0x4900 (block grown to 0x4B00), SharedBlock.OffsetLocalCombatExcludedIds —
+        //      widens local_combat from one locally-fought enemy to up to
+        //      LocalCombatSlotCapacity (3), coop.ini local_combat_slots. See
+        //      docs/research/combat-participation.md §11. NEEDS-LIVE.
+        // 62 = same wave: per-attacker phantom damage attribution at 0x4900..0x4A00
+        //      (SharedBlock.IncomingDamage*, docs/research/incoming-damage.md). NEEDS-LIVE.
+        // 63 = same wave: companion damage TAKEN at 0x4A00..0x4A90. PhantomHitHook's companion
+        //      watch + CompanionDamageController close the gap
+        //      docs/research/companion-state-sync.md §13 names: a companion
+        //      companion_local_combat releases to fight on a client took real hits with no
+        //      channel back to the host, so its authoritative body never saw any of it and the
+        //      next mirror pass overwrote the lower figure — effectively invulnerable, and a
+        //      downed companion popped back up. See SharedBlock.CompanionDamage.cs. NEEDS-LIVE.
+        //      The three regions were developed on parallel branches, each claiming its own
+        //      0x100 range so the merge stayed textually clean; 63 is the union.
+        _block->Version = 63;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

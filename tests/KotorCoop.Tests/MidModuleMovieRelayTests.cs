@@ -209,8 +209,9 @@ public class MidModuleMovieRelayTests
         // the unrelated companion-equipment channel, see SharedBlock.cs's own version-54
         // comment, then to 0x4700 for the item-template-spawn ring (version 58), then to 0x4800
         // for that ring's own per-entry cheat flag (version 59, docs/research/
-        // party-pool-sync.md §20), then to 0x4B00 for N-slot local_combat's excluded-id array
-        // (version 61, docs/research/combat-participation.md §11).
+        // party-pool-sync.md §20), then to 0x4B00 in one pass by the 2026-09-02 combat wave:
+        // N-slot local_combat's excluded-id array (61, 0x4800), per-attacker damage attribution
+        // (62, 0x4900) and the companion-damage channel (63, 0x4A00) — see SharedBlock.TotalSize.
         Assert.Equal(0x4B00, SharedBlock.TotalSize);
     }
 

@@ -180,6 +180,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.JournalOp] = HandleJournalOp,
             [PacketType.JournalSyncRequest] = HandleJournalSyncRequest,
             [PacketType.EnemyDamage] = HandleEnemyDamage,
+            [PacketType.CompanionDamage] = HandleCompanionDamage,
             [PacketType.ProgressionReport] = HandleProgressionReport,
             [PacketType.CompanionXpReport] = HandleCompanionXpReport,
             [PacketType.WorldDigest] = HandleWorldDigest,

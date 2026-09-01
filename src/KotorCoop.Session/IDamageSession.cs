@@ -61,4 +61,27 @@ public interface IDamageSession
     /// discipline <see cref="DrainBarks"/> uses, and for the same reason: these are discrete
     /// events, not a level to be sampled.</summary>
     IReadOnlyList<PeerEffectPacket> DrainPeerEffects() => [];
+
+    /// <summary>
+    /// Client only: report how much damage this instance's engine has DEALT to each companion
+    /// <c>companion_local_combat</c> has released to it, as a running cumulative total per NPC
+    /// roster slot. Without this a client-side companion fight is cosmetic — the host's
+    /// authoritative body never sees it and overwrites the lower figure on its next mirror
+    /// pass, so a released companion is effectively invulnerable and a downed one pops back up.
+    ///
+    /// The companion sibling of <see cref="ReportEnemyDamage"/> — same reasoning, applied to
+    /// the opposite direction (damage TAKEN, not dealt). <paramref name="generation"/> changes
+    /// whenever the sender's own totals restart, which is how the host tells a reset from a
+    /// stale datagram.
+    /// </summary>
+    void ReportCompanionDamage(uint generation, IReadOnlyList<CompanionDamageEntry> damage)
+    {
+    }
+
+    /// <summary>
+    /// Host only: every client's latest companion-damage report, fresh ones only, one row per
+    /// (peer, roster slot). The host turns each increase into real damage on its own
+    /// authoritative copy of that companion.
+    /// </summary>
+    IReadOnlyList<PeerCompanionDamage> GetCompanionDamage() => [];
 }

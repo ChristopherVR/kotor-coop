@@ -107,14 +107,17 @@ internal partial struct SharedBlock
     /// made.
     /// </summary>
     /// <summary>
-    /// Grown from 0x4800 for the N-slot local_combat excluded-id array (version 61, region
-    /// 0x4800..0x4900, docs/research/combat-participation.md §11): version 60's own additions
-    /// (minigame lock, join-chargen handshake, the exe-image digest) filled the 0xFC bytes
-    /// TotalSize 0x4800 left after the item-template-spawn cursor, so this region starts
-    /// cleanly at the old boundary — the same choice every earlier growth in this file made —
-    /// and TotalSize is set to 0x4B00 (shared with other parallel work landing the same pass,
-    /// so the merge stays textually clean; this region only actually uses the first 0xC bytes
-    /// of the 0x300 reserved).
+    /// Grown from 0x4800 to 0x4B00 in one pass by the 2026-09-02 combat wave, three parallel
+    /// branches each claiming its own 0x100 range so the merge stayed textually clean: version
+    /// 60's own additions (minigame lock, join-chargen handshake, the exe-image digest) run to
+    /// 0x47C8 and filled what 0x4800 left after the item-template-spawn cursor, so each region
+    /// starts at a clean boundary — the same choice every earlier growth in this file made.
+    ///   0x4800..0x4900  version 61, N-slot local_combat excluded-id array (uses 0xC bytes),
+    ///                   docs/research/combat-participation.md §11.
+    ///   0x4900..0x4A00  version 62, per-attacker phantom damage attribution,
+    ///                   docs/research/incoming-damage.md.
+    ///   0x4A00..0x4B00  version 63, companion damage TAKEN channel (uses 0x90 bytes),
+    ///                   docs/research/companion-state-sync.md §13.
     /// </summary>
     public const int TotalSize = 0x4B00;
 
@@ -193,7 +196,10 @@ internal partial struct SharedBlock
     /// see SharedBlock.ItemTemplateSpawns.cs and docs/research/item-identity.md §13. Version 59
     /// (2026-08-28) widened each item-template-spawn ring entry with
     /// <see cref="ItemTemplateSpawnIsCheatOffset"/> — see SharedBlock.ItemTemplateSpawns.cs and
-    /// docs/research/party-pool-sync.md §20.
+    /// docs/research/party-pool-sync.md §20. Versions 61/62 are reserved for concurrent work on
+    /// this tree, not yet merged into this branch. Version 63 (2026-09-02) added
+    /// <see cref="OffsetCompanionDamageSlots"/>/<see cref="OffsetCompanionDamageOwedSlots"/> —
+    /// see SharedBlock.CompanionDamage.cs and docs/research/companion-state-sync.md §13.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

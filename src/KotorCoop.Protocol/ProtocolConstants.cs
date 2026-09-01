@@ -142,8 +142,18 @@ public static class ProtocolConstants
     /// timeout (<c>host_loss_release</c>). Also the flag snapshot became paged (same packet
     /// types, but a v46 peer would misread a paged snapshot). See
     /// docs/research/disconnect-reconnect.md §11 and world-adoption.md (2026-08-29).
+    ///
+    /// Version 48: reserved for concurrent work on this tree, not yet merged into this branch.
+    ///
+    /// Version 49: <see cref="PacketType.CompanionDamage"/> (71) — a companion
+    /// <c>companion_local_combat</c> has released to fight on a client's own engine forwards
+    /// its cumulative damage TAKEN to the host, which spends it as real damage on its own
+    /// authoritative body. The companion sibling of <see cref="PacketType.EnemyDamage"/>'s
+    /// damage-DEALT channel, and the same "cumulative total, never a health sample" shape for
+    /// the identical reason (docs/research/peer-damage-ledger.md). <c>companion_damage_sync</c>,
+    /// default ON. See docs/research/companion-state-sync.md §13.
     /// </summary>
-    public const byte Version = 47;
+    public const byte Version = 49;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
