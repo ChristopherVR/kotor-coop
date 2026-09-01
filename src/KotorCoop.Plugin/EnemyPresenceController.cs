@@ -157,80 +157,98 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         Math.Clamp(PluginConfig.ReadFloat("local_combat_engage_range", 11f), 1f, 200f);
 
 
-    // ---- ROUND 39: the actual local_combat mechanism, built from what rounds 9-38 proved
-    // works (excluded from the census entirely, script-fired) rather than what the original
-    // design guessed would work (QueueAttackAction, proven a permanent no-op — see
-    // docs/research/shared-state-audit.md §2). One fight at a time: a second engaged
-    // creature simply waits its turn rather than starting a second concurrent exclusion,
-    // which keeps the id-space this needs (one shared block field) trivial. Frame thread
-    // only, both writes and reads, same as the engagement record above.
+    // ---- ROUND 39 / N-SLOT (docs/research/combat-participation.md §11): the actual
+    // local_combat mechanism, built from what rounds 9-38 proved works (excluded from the
+    // census entirely, script-fired) rather than what the original design guessed would work
+    // (QueueAttackAction, proven a permanent no-op — see docs/research/shared-state-audit.md
+    // §2). Up to LocalCombatSlots simultaneous fights (default 3, clamp 1..
+    // SharedBlock.LocalCombatSlotCapacity): a creature beyond that still simply waits its turn,
+    // exactly as it always did with one slot. Frame thread only, both writes and reads, same as
+    // the engagement record above.
 
-    /// <summary>0 = not currently letting anything fight locally. Non-zero = the OWNER-space
-    /// id of the one mirrored enemy this instance has pulled out of the census so its own AI
-    /// can complete a real combat round.</summary>
-    private uint _locallyFightingId;
+    /// <summary>Per physical slot: 0 = that slot is not currently letting anything fight
+    /// locally. Non-zero = the OWNER-space id of the mirrored enemy this instance has pulled
+    /// out of the census, in that slot, so its own AI can complete a real combat round. Sized
+    /// to <see cref="SharedBlock.LocalCombatSlotCapacity"/> regardless of
+    /// <see cref="LocalCombatSlots"/> — slots at or past that configured count simply never get
+    /// written, which is exactly what makes <c>local_combat_slots=1</c> reproduce the original
+    /// single-fight behaviour bit for bit.</summary>
+    private readonly uint[] _locallyFightingId = new uint[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>When the current local fight started (Stopwatch-relative seconds, same clock
-    /// <see cref="OnFrame"/> already uses), for the timeout safety net.</summary>
-    private double _locallyFightingSince;
+    /// <summary>Per physical slot: when that slot's current local fight started
+    /// (Stopwatch-relative seconds, same clock <see cref="OnFrame"/> already uses), for the
+    /// timeout safety net.</summary>
+    private readonly double[] _locallyFightingSince = new double[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>TEMPORARY DIAGNOSTIC (2026-08-21, "does it close distance") — last time the
-    /// excluded creature's own position was logged against the player's, so a full fight cycle
-    /// produces a position-over-time curve instead of one measurement. Remove once the
-    /// distance-closing question is settled.</summary>
-    private double _lastPositionLogAt;
+    /// <summary>TEMPORARY DIAGNOSTIC (2026-08-21, "does it close distance"), per physical slot —
+    /// last time that slot's excluded creature's own position was logged against the player's,
+    /// so a full fight cycle produces a position-over-time curve instead of one measurement.
+    /// Remove once the distance-closing question is settled.</summary>
+    private readonly double[] _lastPositionLogAt = new double[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>DIAGNOSTIC (docs/research/shared-state-audit.md §2, round 41), edge-triggered:
-    /// the id this leak was last reported for, so a genuinely NEW race (a different excluded
-    /// id, or the same id after a gap) logs immediately while an ONGOING one does not repeat
-    /// every throttled second for a fight's whole duration. 0 when nothing is currently being
-    /// reported. See <see cref="_stillSeeingLoggedAt"/> for the coarse keep-alive that still
-    /// covers a leak stuck open for the whole fight.</summary>
-    private uint _stillSeeingReportedId;
+    /// <summary>DIAGNOSTIC (docs/research/shared-state-audit.md §2, round 41), per physical
+    /// slot, edge-triggered: the id this leak was last reported for in that slot, so a
+    /// genuinely NEW race (a different excluded id, or the same id after a gap) logs
+    /// immediately while an ONGOING one does not repeat every throttled second for a fight's
+    /// whole duration. 0 when nothing is currently being reported for that slot. See
+    /// <see cref="_stillSeeingLoggedAt"/> for the coarse keep-alive that still covers a leak
+    /// stuck open for the whole fight.</summary>
+    private readonly uint[] _stillSeeingReportedId = new uint[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>Once a leak is already being reported (<see cref="_stillSeeingReportedId"/> !=
-    /// 0), a 5s keep-alive so a leak that genuinely never closes for an entire fight still
-    /// shows up in the log instead of going silent after its one edge — round 55's own live
-    /// pass measured this resolving within 1-2 agent pumps almost always, but round 55's
-    /// player-style pass (2026-08-22) found stretches where it did not, and those are exactly
-    /// the case worth keeping visible. 5s, not 1s: an edge-triggered diagnostic's whole point
-    /// is fewer lines, and DriveOne's own skip already makes every one of these frames safe
-    /// regardless of how long the upstream leak persists.</summary>
-    private double _stillSeeingLoggedAt;
+    /// <summary>Once a slot's leak is already being reported
+    /// (<see cref="_stillSeeingReportedId"/>[slot] != 0), a 5s keep-alive so a leak that
+    /// genuinely never closes for an entire fight still shows up in the log instead of going
+    /// silent after its one edge — round 55's own live pass measured this resolving within 1-2
+    /// agent pumps almost always, but round 55's player-style pass (2026-08-22) found stretches
+    /// where it did not, and those are exactly the case worth keeping visible. 5s, not 1s: an
+    /// edge-triggered diagnostic's whole point is fewer lines, and DriveOne's own skip already
+    /// makes every one of these frames safe regardless of how long the upstream leak
+    /// persists.</summary>
+    private readonly double[] _stillSeeingLoggedAt = new double[SharedBlock.LocalCombatSlotCapacity];
 
     /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
     /// fight that never ends any other way (the player walks off without the engine's own
     /// disengage logic catching it, a stuck state this investigation has not observed but has
     /// no way to rule out either) still returns the creature to normal mirroring on its own.
     /// coop.ini `local_combat_timeout_s`. This is now a FALLBACK ceiling, not the trigger: round
-    /// 55's <see cref="SelectImmediateCandidate"/> arms a fresh fight the same frame the slot
+    /// 55's <see cref="SelectImmediateCandidate"/> arms a fresh fight the same frame a slot
     /// frees, so a second nearby hostile no longer has to wait out this whole window for its
-    /// turn — it only bounds how long ONE fight may run once it starts.</summary>
+    /// turn — it only bounds how long ONE fight may run once it starts. Shared by every slot;
+    /// there is no per-slot knob.</summary>
     private static readonly double LocalCombatTimeoutSeconds =
         Math.Clamp(PluginConfig.ReadFloat("local_combat_timeout_s", 25f), 5f, 120f);
 
-    // ---- ROUND 55: the immediate proximity/targeting-us trigger
-    // (docs/research/shared-state-audit.md §2, round 55). Before round 55 the ONLY thing that
-    // ever pulled a creature into local_combat was DriveOne finding it eligible in whatever
-    // order the owner's census happened to enumerate that frame — first found wins, which in
-    // practice meant a creature only got its turn once whatever slot was already fighting timed
-    // out, up to LocalCombatTimeoutSeconds later, looking indistinguishable from a round-robin
-    // timer even though nothing in this file ever scheduled one. SelectImmediateCandidate now
-    // looks at every eligible candidate THIS FRAME before arming anything, so the creature that
-    // starts fighting is the one LocalFightCandidateRule ranks highest (attacking our phantom
-    // right now, else nearest hostile within local_combat_engage_range) rather than an
-    // enumeration-order accident, and a freed slot is refilled the very next frame.
+    // ---- ROUND 55 / N-SLOT: the immediate proximity/targeting-us trigger
+    // (docs/research/shared-state-audit.md §2, round 55; docs/research/combat-participation.md
+    // §11). Before round 55 the ONLY thing that ever pulled a creature into local_combat was
+    // DriveOne finding it eligible in whatever order the owner's census happened to enumerate
+    // that frame — first found wins, which in practice meant a creature only got its turn once
+    // whatever slot was already fighting timed out, up to LocalCombatTimeoutSeconds later,
+    // looking indistinguishable from a round-robin timer even though nothing in this file ever
+    // scheduled one. SelectImmediateCandidate looks at every eligible candidate THIS FRAME
+    // before arming anything, ranks them with LocalFightCandidateRule.Beats, and hands the
+    // ranked list to LocalFightSlotAssignmentRule to fill every FREE physical slot at once
+    // (not just one) — the creature(s) that start fighting are whichever the rule ranks
+    // highest, rather than an enumeration-order accident, and a freed slot is refilled the very
+    // next frame.
 
-    /// <summary>The slot <see cref="SelectImmediateCandidate"/> chose to trigger THIS frame, or
-    /// -1 when nothing qualifies. Computed once per <see cref="OnFrame"/> pass, before the main
-    /// drive loop runs, so <see cref="DriveOne"/> only ever has to ask "am I that slot" instead
-    /// of re-deriving eligibility itself.</summary>
-    private int _immediateTriggerSlot = -1;
+    /// <summary>Per physical slot: the CENSUS index (<c>i</c> into
+    /// <c>block.GetEnemyPresence</c>) <see cref="SelectImmediateCandidate"/> chose to trigger
+    /// into that slot THIS frame, or -1 when that slot stayed occupied or nothing was offered
+    /// to it. Computed once per <see cref="OnFrame"/> pass, before the main drive loop runs, so
+    /// <see cref="DriveOne"/> only ever has to ask "was I chosen for some free slot" instead of
+    /// re-deriving eligibility itself.</summary>
+    private readonly int[] _immediateTriggerCensusIndex = new int[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>Edge-triggered log dedupe: only the OWNER id that most recently won the slot,
-    /// so a creature that keeps winning frame after frame (nothing else nearby yet) does not
-    /// spam a line every single pass.</summary>
-    private uint _lastLoggedImmediateOwnerId;
+    /// <summary>Per physical slot: the <see cref="LocalFightPriority"/> the winner assigned to
+    /// <see cref="_immediateTriggerCensusIndex"/>[slot] was chosen with, for
+    /// <see cref="StartLocalFight"/>'s own arm-reason log line.</summary>
+    private readonly LocalFightPriority[] _immediateTriggerPriority = new LocalFightPriority[SharedBlock.LocalCombatSlotCapacity];
+
+    /// <summary>Edge-triggered log dedupe, per physical slot: only the OWNER id that most
+    /// recently won that slot, so a creature that keeps winning frame after frame (nothing else
+    /// nearby yet) does not spam a line every single pass.</summary>
+    private readonly uint[] _lastLoggedImmediateOwnerId = new uint[SharedBlock.LocalCombatSlotCapacity];
 
     /// <summary>The owner-space cumulative total <see cref="block"/>'s <c>IncomingDamage</c>
     /// read on the most recent frame — mirrors <see cref="IncomingDamageController"/>'s own
@@ -264,8 +282,27 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
 
     /// <summary>Every owner id SelectImmediateCandidate found eligible THIS scan (hostile,
     /// GIT-identical, scripted, in range — cleared every LocalFightCandidateRule.Evaluate gate),
-    /// regardless of whether it won the slot. Rebuilt from scratch each scan.</summary>
+    /// regardless of whether it won a slot. Rebuilt from scratch each scan.</summary>
     private readonly uint[] _eligibleOwnerId = new uint[SharedBlock.EnemyCapacity];
+
+    /// <summary>Parallel to <see cref="_eligibleOwnerId"/>: that candidate's
+    /// <see cref="LocalFightPriority"/>, fed to <see cref="LocalFightSlotAssignmentRule"/>.</summary>
+    private readonly LocalFightPriority[] _eligiblePriority = new LocalFightPriority[SharedBlock.EnemyCapacity];
+
+    /// <summary>Parallel to <see cref="_eligibleOwnerId"/>: that candidate's planar distance to
+    /// the player, fed to <see cref="LocalFightSlotAssignmentRule"/>.</summary>
+    private readonly float[] _eligibleDistance = new float[SharedBlock.EnemyCapacity];
+
+    /// <summary>Parallel to <see cref="_eligibleOwnerId"/>: that candidate's CENSUS index (the
+    /// <c>i</c> <see cref="DriveOne"/> will see it at), so a winner can be threaded back to
+    /// <see cref="_immediateTriggerCensusIndex"/> without a second census scan.</summary>
+    private readonly int[] _eligibleCensusIndex = new int[SharedBlock.EnemyCapacity];
+
+    /// <summary>Scratch space <see cref="LocalFightSlotAssignmentRule.Assign"/> uses to mark an
+    /// eligible candidate already won by an earlier (lower-numbered) physical slot this scan —
+    /// the "a creature can never hold two slots" guarantee. Reset by the rule itself every
+    /// call.</summary>
+    private readonly bool[] _eligibleUsedScratch = new bool[SharedBlock.EnemyCapacity];
 
     /// <summary>The deferred set computed from <see cref="_eligibleOwnerId"/> this scan —
     /// <see cref="LocalCombatDeferralRule.ComputeDeferred"/>'s output.</summary>
@@ -278,10 +315,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     private readonly uint[] _lastDeferredOwnerId = new uint[SharedBlock.EnemyCapacity];
     private int _lastDeferredCount;
 
-    /// <summary>The owner id the deferred count was computed against — whoever is fighting, or
-    /// (the frame a fresh fight is armed) about to be — for the log line and the HUD text's
-    /// framing.</summary>
-    private uint _deferredHolderOwnerId;
+    /// <summary>Per physical slot: the owner id that HOLDS it as of this scan's verdict — either
+    /// still fighting from a previous frame, or this frame's freshly-assigned winner, or 0 if
+    /// the slot stays free. Fed to <see cref="LocalCombatDeferralRule.ComputeDeferred"/> as the
+    /// holder SET (N-wide, not a single id) and to the log line's holder summary.</summary>
+    private readonly uint[] _slotHolderOwnerId = new uint[SharedBlock.LocalCombatSlotCapacity];
 
     /// <summary>How often (frames) the deferred-set scan runs WHILE a fight is already in
     /// progress — a separate throttle from the immediate-trigger scan above, which must stay
@@ -331,19 +369,29 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _engagedCount = 0;
         _engagedAtTicks = 0;
 
-        // ROUND 39: same reason — a fight tracked by an id from the module just left behind
-        // must not keep a completely different creature in the new module excluded from the
-        // census by coincidence of numeric id reuse.
-        _locallyFightingId = 0;
+        // ROUND 39 / N-SLOT: same reason — a fight tracked by an id from the module just left
+        // behind must not keep a completely different creature in the new module excluded from
+        // the census by coincidence of numeric id reuse. Every physical slot, not just one.
+        for (int slot = 0; slot < SharedBlock.LocalCombatSlotCapacity; slot++)
+        {
+            _locallyFightingId[slot] = 0;
+
+            // 2026-08-22 / N-SLOT: an id from the module just left behind must not suppress the
+            // "STILL SEEING" diagnostic's fresh edge for a same-numbered id that turns up
+            // genuinely new in this one.
+            _stillSeeingReportedId[slot] = 0;
+
+            _immediateTriggerCensusIndex[slot] = -1;
+            _lastLoggedImmediateOwnerId[slot] = 0;
+            _slotHolderOwnerId[slot] = 0;
+
+            // ROUND 52: same reason, for the ground-truth diagnostic's own static mirrors.
+            _locallyFightingIdsShared[slot] = 0;
+        }
+
         block.LocalCombatExcludedId = 0;
+        block.SetLocalCombatExcludedIds(_locallyFightingId);
 
-        // 2026-08-22: an id from the module just left behind must not suppress the "STILL
-        // SEEING" diagnostic's fresh edge for a same-numbered id that turns up genuinely new
-        // in this one.
-        _stillSeeingReportedId = 0;
-
-        // ROUND 52: same reason, for the ground-truth diagnostic's own static mirrors.
-        _locallyFightingIdShared = 0;
         _drivenCount = 0;
 
         // ROUND 55: same reason again — the cumulative wire total does NOT reset on a module
@@ -355,15 +403,12 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _lastIncomingDamageSeen = block.IncomingDamage;
         _phantomAttackerId = 0;
         _phantomAttackerAt = double.NegativeInfinity;
-        _immediateTriggerSlot = -1;
-        _lastLoggedImmediateOwnerId = 0;
 
         // ITEM 14: a stale deferred-hostiles line must not keep drawing after the session that
         // produced it is gone — DrawDeferredNotice runs ahead of every early return in OnFrame,
         // so this is the only place that stops it once the session itself has ended.
         _deferredCount = 0;
         _lastDeferredCount = 0;
-        _deferredHolderOwnerId = 0;
         _deferredNoticeText = null;
         _deferredNoticeBytes = [];
         _deferredScanCountdown = 0;
@@ -404,11 +449,15 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // this (same fault class as the EncounterController travel-follow crash).
         nint player = Odyssey.GetPlayerCreaturePointer();
         MaintainLocalFight(now, player);
-        block.LocalCombatExcludedId = _locallyFightingId;
+        block.SetLocalCombatExcludedIds(_locallyFightingId);
 
-        // ROUND 52: mirrored into the static field PhantomHitHook.OnDamage reads to
-        // recognise "the currently locally-fighting creature" for the ground-truth log.
-        _locallyFightingIdShared = _locallyFightingId;
+        // Backward-compat scalar mirror (see SharedBlock.OffsetLocalCombatExcludedId's own
+        // comment): slot 0 only, for one release.
+        block.LocalCombatExcludedId = _locallyFightingId[0];
+
+        // ROUND 52 / N-SLOT: mirrored into the static array PhantomHitHook.OnDamage reads to
+        // recognise "a currently locally-fighting creature" for the ground-truth log.
+        Array.Copy(_locallyFightingId, _locallyFightingIdsShared, SharedBlock.LocalCombatSlotCapacity);
 
         // ITEM 14: ahead of every early return below, same discipline as MaintainLocalFight
         // above — the queued text node fades on its own life countdown (~0.5s) the instant this
@@ -531,32 +580,44 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         && now - _phantomAttackerAt <= PhantomAttackerFreshSeconds;
 
     /// <summary>
-    /// ROUND 55. Chooses which slot, if any, <see cref="DriveOne"/> should arm into a real fight
-    /// THIS frame — every eligible candidate is considered before anything is claimed, so the
-    /// winner is <see cref="LocalFightCandidateRule"/>'s highest-priority pick (attacking our
-    /// phantom right now, else nearest hostile within <see cref="ImmediateEngageRange"/>) rather
-    /// than whichever slot the owner's census happened to enumerate first. Only ever considers
-    /// GIT-identical slots (a materialised stand-in is never eligible — see DriveOne's own
+    /// ROUND 55 / N-SLOT (docs/research/combat-participation.md §11). Chooses which FREE
+    /// physical slot(s), if any, <see cref="DriveOne"/> should arm into a real fight THIS frame
+    /// — every eligible candidate is considered before anything is claimed, ranked by
+    /// <see cref="LocalFightCandidateRule"/> (attacking our phantom right now, else nearest
+    /// hostile within <see cref="ImmediateEngageRange"/>), and handed to
+    /// <see cref="LocalFightSlotAssignmentRule"/> to fill every free slot at once rather than
+    /// whichever slot the owner's census happened to enumerate first. Only ever considers
+    /// GIT-identical creatures (a materialised stand-in is never eligible — see DriveOne's own
     /// "GIT-IDENTICAL CREATURES ONLY" note) and reuses <see cref="Resolve"/>'s own cache, so
     /// calling it here and again from the main loop a few lines later costs nothing extra on the
     /// common cache-hit path.
     /// </summary>
     private void SelectImmediateCandidate(uint count, nint player)
     {
-        _immediateTriggerSlot = -1;
+        for (int slot = 0; slot < SharedBlock.LocalCombatSlotCapacity; slot++)
+        {
+            _immediateTriggerCensusIndex[slot] = -1;
+        }
 
         if (!LocalCombat || player == 0)
         {
             _deferredScanCountdown = 0;
-            UpdateDeferredNotice(eligibleCount: 0, holderOwnerId: 0);
+            UpdateDeferredNotice(eligibleCount: 0);
             return;
         }
 
-        bool slotFree = _locallyFightingId == 0;
-
-        if (!slotFree)
+        int freeSlotCount = 0;
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
         {
-            // ITEM 14: winner selection is moot while the slot is already occupied — only the
+            if (_locallyFightingId[slot] == 0)
+            {
+                freeSlotCount++;
+            }
+        }
+
+        if (freeSlotCount == 0)
+        {
+            // ITEM 14: winner selection is moot while every slot is already occupied — only the
             // deferred-set scan below still needs to run, and it is deliberately throttled (see
             // DeferredScanIntervalFrames's own doc comment) rather than paying an engine call per
             // candidate every single frame for the whole length of a fight.
@@ -570,7 +631,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         }
         else
         {
-            // The instant the slot frees, the very next scan should be fresh — a fight that just
+            // The instant a slot frees, the very next scan should be fresh — a fight that just
             // ended must not wait out whatever was left of the previous countdown.
             _deferredScanCountdown = 0;
         }
@@ -578,14 +639,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         uint playerId = Odyssey.GetPlayerObjectId();
         if (playerId == 0)
         {
-            UpdateDeferredNotice(eligibleCount: 0, holderOwnerId: 0);
+            UpdateDeferredNotice(eligibleCount: 0);
             return;
         }
 
         double now = _clock.Elapsed.TotalSeconds;
-        LocalFightPriority bestPriority = LocalFightPriority.None;
-        float bestDistance = float.MaxValue;
-        uint bestOwnerId = 0;
         int eligibleCount = 0;
 
         for (int i = 0; i < count; i++)
@@ -595,9 +653,12 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             if (enemy.ObjectId == 0 || enemy.ObjectId == Odyssey.ObjectInvalid || enemy.Dead
                 || (LocalCombatBypassId != 0 && enemy.ObjectId == LocalCombatBypassId)
                 || (DiagUndrivenObjectId != 0 && enemy.ObjectId == DiagUndrivenObjectId)
-                || MaterialisedEnemies.ToLocal(enemy.ObjectId) != 0)
+                || MaterialisedEnemies.ToLocal(enemy.ObjectId) != 0
+                || FindLocalCombatSlot(enemy.ObjectId) >= 0)
             {
-                // Dead/absent slots, the two diagnostics, and materialised stand-ins are never
+                // Dead/absent slots, the two diagnostics, materialised stand-ins, and a creature
+                // already holding a slot (defence in depth — the upstream census filter should
+                // already have excluded it, see DriveOne's own "STILL SEEING" note) are never
                 // candidates — StartLocalFight only ever fires a GIT-identical creature's own
                 // script.
                 continue;
@@ -633,53 +694,105 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             }
 
             // ITEM 14: every candidate that clears the gates is a member of this scan's eligible
-            // set, whether or not it goes on to win the slot below.
+            // set, whether or not it goes on to win a slot below.
             if (eligibleCount < _eligibleOwnerId.Length)
             {
-                _eligibleOwnerId[eligibleCount++] = enemy.ObjectId;
-            }
-
-            if (slotFree && LocalFightCandidateRule.Beats(priority, distance, bestPriority, bestDistance))
-            {
-                bestPriority = priority;
-                bestDistance = distance;
-                bestOwnerId = enemy.ObjectId;
-                _immediateTriggerSlot = i;
+                _eligibleOwnerId[eligibleCount] = enemy.ObjectId;
+                _eligiblePriority[eligibleCount] = priority;
+                _eligibleDistance[eligibleCount] = distance;
+                _eligibleCensusIndex[eligibleCount] = i;
+                eligibleCount++;
             }
         }
 
-        if (slotFree && bestOwnerId != _lastLoggedImmediateOwnerId)
+        // N-SLOT: rank the eligible set and fill every free physical slot at once. Occupied
+        // slots start as their own holder; a slot LocalFightSlotAssignmentRule leaves
+        // unassigned (nothing eligible left to offer it) stays free at 0.
+        bool[] slotOccupied = _slotOccupiedScratch;
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
         {
-            _lastLoggedImmediateOwnerId = bestOwnerId;
-            if (bestOwnerId != 0)
+            slotOccupied[slot] = _locallyFightingId[slot] != 0;
+            _slotHolderOwnerId[slot] = _locallyFightingId[slot];
+        }
+
+        LocalFightSlotAssignmentRule.Assign(
+            _eligiblePriority, _eligibleDistance, eligibleCount,
+            slotOccupied, LocalCombatSlots, _eligibleUsedScratch, _immediateTriggerCensusIndexScratch);
+
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
+        {
+            int candidateIndex = _immediateTriggerCensusIndexScratch[slot];
+            if (candidateIndex < 0)
             {
+                _immediateTriggerCensusIndex[slot] = -1;
+
+                if (_lastLoggedImmediateOwnerId[slot] != 0)
+                {
+                    _lastLoggedImmediateOwnerId[slot] = 0;
+                }
+
+                continue;
+            }
+
+            _immediateTriggerCensusIndex[slot] = _eligibleCensusIndex[candidateIndex];
+            _immediateTriggerPriority[slot] = _eligiblePriority[candidateIndex];
+
+            uint winnerOwnerId = _eligibleOwnerId[candidateIndex];
+            _slotHolderOwnerId[slot] = winnerOwnerId;
+
+            if (winnerOwnerId != _lastLoggedImmediateOwnerId[slot])
+            {
+                _lastLoggedImmediateOwnerId[slot] = winnerOwnerId;
                 PluginHost.Log(
-                    $"local combat: 0x{bestOwnerId:X} selected as the immediate local-fight "
-                    + $"candidate (priority={bestPriority}, dist={bestDistance:F2}, "
+                    $"local_combat: slot {slot + 1}/{LocalCombatSlots} selected 0x{winnerOwnerId:X} "
+                    + $"(priority={_eligiblePriority[candidateIndex]}, "
+                    + $"dist={_eligibleDistance[candidateIndex]:F2}, "
                     + $"engageRange={ImmediateEngageRange:F1})");
             }
         }
 
-        // ITEM 14: the id about to hold (or already holding) the one exclusion slot — whichever
-        // this scan just picked when the slot was free, or the creature already fighting when it
-        // was not. Everything else in _eligibleOwnerId is, by definition, deferred.
-        uint holderOwnerId = slotFree ? bestOwnerId : _locallyFightingId;
-        UpdateDeferredNotice(eligibleCount, holderOwnerId);
+        UpdateDeferredNotice(eligibleCount);
     }
 
+    /// <summary>Physical slot index currently holding <paramref name="ownerId"/>, or -1 if none
+    /// of the first <see cref="LocalCombatSlots"/> slots does.</summary>
+    private int FindLocalCombatSlot(uint ownerId)
+    {
+        if (ownerId == 0)
+        {
+            return -1;
+        }
+
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
+        {
+            if (_locallyFightingId[slot] == ownerId)
+            {
+                return slot;
+            }
+        }
+
+        return -1;
+    }
+
+    // Reusable scratch for SelectImmediateCandidate's call into LocalFightSlotAssignmentRule —
+    // sized to capacity, only the first LocalCombatSlots entries are ever touched, avoids a
+    // per-frame allocation.
+    private readonly bool[] _slotOccupiedScratch = new bool[SharedBlock.LocalCombatSlotCapacity];
+    private readonly int[] _immediateTriggerCensusIndexScratch = new int[SharedBlock.LocalCombatSlotCapacity];
+
     /// <summary>
-    /// ITEM 14. Turns this scan's eligible-candidate set into the deferred set
-    /// (<see cref="LocalCombatDeferralRule"/>) and, if it genuinely changed since the last scan,
-    /// logs the edge and refreshes the HUD text <see cref="LocalCombatDeferredNoticeRule"/>
-    /// builds. Called from every path through <see cref="SelectImmediateCandidate"/> that reaches
-    /// a verdict — including "nothing eligible right now" — so the notice clears itself the same
-    /// way it was set, on the edge, with no separate cleanup path needed.
+    /// ITEM 14 / N-SLOT. Turns this scan's eligible-candidate set into the deferred set
+    /// (<see cref="LocalCombatDeferralRule"/>, holder SET this time rather than a single id) and,
+    /// if it genuinely changed since the last scan, logs the edge and refreshes the HUD text
+    /// <see cref="LocalCombatDeferredNoticeRule"/> builds. Called from every path through
+    /// <see cref="SelectImmediateCandidate"/> that reaches a verdict — including "nothing
+    /// eligible right now" — so the notice clears itself the same way it was set, on the edge,
+    /// with no separate cleanup path needed.
     /// </summary>
-    private void UpdateDeferredNotice(int eligibleCount, uint holderOwnerId)
+    private void UpdateDeferredNotice(int eligibleCount)
     {
         _deferredCount = LocalCombatDeferralRule.ComputeDeferred(
-            _eligibleOwnerId, eligibleCount, holderOwnerId, _deferredOwnerId);
-        _deferredHolderOwnerId = holderOwnerId;
+            _eligibleOwnerId, eligibleCount, _slotHolderOwnerId, LocalCombatSlots, _deferredOwnerId);
 
         if (!LocalCombatDeferralRule.HasChanged(
                 _lastDeferredOwnerId, _lastDeferredCount, _deferredOwnerId, _deferredCount))
@@ -691,12 +804,38 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _lastDeferredCount = _deferredCount;
 
         PluginHost.Log(_deferredCount > 0
-            ? $"local_combat: fighting 0x{holderOwnerId:X}, {_deferredCount} other "
+            ? $"local_combat: fighting {FormatSlotHolders()}, {_deferredCount} other "
               + (_deferredCount == 1 ? "hostile" : "hostiles") + " deferred (mirrored)"
             : "local_combat: no hostiles deferred");
 
         _deferredNoticeText = LocalCombatDeferredNoticeRule.Text(_deferredCount);
         _deferredNoticeBytes = _deferredNoticeText is null ? [] : EncodeAscii(_deferredNoticeText);
+    }
+
+    /// <summary>Comma-joined hex ids of every currently-held slot, for the deferred-set log
+    /// line — "none" when every slot is free (only reachable transiently, since a nonzero
+    /// deferred count implies at least one eligible candidate exists to be deferred FROM, but
+    /// kept explicit rather than assuming a holder is always present).</summary>
+    private string FormatSlotHolders()
+    {
+        System.Text.StringBuilder sb = new();
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
+        {
+            uint id = _slotHolderOwnerId[slot];
+            if (id == 0)
+            {
+                continue;
+            }
+
+            if (sb.Length > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append("0x").Append(id.ToString("X"));
+        }
+
+        return sb.Length > 0 ? sb.ToString() : "none";
     }
 
     /// <summary>ITEM 14. Redraws the deferred-hostiles HUD line every frame while one is active —
@@ -754,8 +893,8 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     private bool DriveOne(int slot, EnemyPresenceView enemy, double now, nint player)
     {
         // ROUND 41 DIAGNOSTIC confirmed the gap this guard now closes: the agent-side filter
-        // (CoopAgent.cs, bridge.ReadLocalCombatExcludedId) is the ONLY thing that was ever
-        // supposed to keep the currently-excluded creature out of this instance's own enemy
+        // (CoopAgent.cs, bridge.ReadLocalCombatExcludedIds) is the ONLY thing that was ever
+        // supposed to keep every currently-excluded creature out of this instance's own enemy
         // list, and a live capture caught it failing — "STILL SEEING excluded id 0x6 at slot
         // 0" fired repeatedly while the creature sat frozen at melee range under
         // StartLocalFight, never landing a hit. Relying on a single upstream filter with no
@@ -767,31 +906,34 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // attack on it starves the attack before it can ever land. Skip it here too, so a
         // stale or racy upstream read can never reach the claim/permit/drive calls below —
         // this instance leaves it alone exactly as intended, defence in depth rather than a
-        // single point of failure.
-        if (_locallyFightingId != 0 && enemy.ObjectId == _locallyFightingId)
+        // single point of failure. N-SLOT: checked against every physical slot, not just one.
+        int fightingSlot = FindLocalCombatSlot(enemy.ObjectId);
+        if (fightingSlot >= 0)
         {
-            // EDGE-TRIGGERED (2026-08-22 player-style pass). The 2026-08-21 version logged on
-            // a flat 1s throttle, which was fine for the race window round 41 built this guard
-            // for (measured live, round 55: usually 1-2 lines, the agent catching up within a
-            // pump or two) but turned into genuine spam — thousands of lines an hour — on the
-            // stretches where the same excluded id kept leaking for a whole 7-25s fight, one
-            // line every single second of it. Log once on the EDGE (a leak this method has not
-            // already reported for this id since the fight armed), then only a 5s keep-alive
-            // for as long as the SAME id keeps leaking, so a genuinely stuck leak is still
-            // visible without flooding. _stillSeeingReportedId resets to 0 in Invalidate() and
-            // in MaintainLocalFight's own fight-end path, so the NEXT fight's excluded id — a
-            // different id by construction, see StartLocalFight — always logs its own fresh
-            // edge rather than inheriting this one's keep-alive countdown.
-            bool freshEdge = _stillSeeingReportedId != _locallyFightingId;
-            if (freshEdge || now - _stillSeeingLoggedAt >= 5.0)
+            // EDGE-TRIGGERED (2026-08-22 player-style pass), per physical slot. The 2026-08-21
+            // version logged on a flat 1s throttle, which was fine for the race window round 41
+            // built this guard for (measured live, round 55: usually 1-2 lines, the agent
+            // catching up within a pump or two) but turned into genuine spam — thousands of
+            // lines an hour — on the stretches where the same excluded id kept leaking for a
+            // whole 7-25s fight, one line every single second of it. Log once on the EDGE (a
+            // leak this method has not already reported for this SLOT's id since the fight
+            // armed), then only a 5s keep-alive for as long as the SAME id keeps leaking, so a
+            // genuinely stuck leak is still visible without flooding. _stillSeeingReportedId
+            // resets to 0 per slot in Invalidate() and in MaintainLocalFight's own fight-end
+            // path, so the NEXT fight in that slot's excluded id — a different id by
+            // construction, see StartLocalFight — always logs its own fresh edge rather than
+            // inheriting this one's keep-alive countdown.
+            uint fightingId = _locallyFightingId[fightingSlot];
+            bool freshEdge = _stillSeeingReportedId[fightingSlot] != fightingId;
+            if (freshEdge || now - _stillSeeingLoggedAt[fightingSlot] >= 5.0)
             {
-                _stillSeeingReportedId = _locallyFightingId;
-                _stillSeeingLoggedAt = now;
+                _stillSeeingReportedId[fightingSlot] = fightingId;
+                _stillSeeingLoggedAt[fightingSlot] = now;
                 PluginHost.Log(
-                    $"local combat diag: STILL SEEING excluded id 0x{_locallyFightingId:X} "
-                    + $"at slot {slot} in the upstream feed - skipped here instead of driven, "
+                    $"local combat diag: STILL SEEING excluded id 0x{fightingId:X} "
+                    + $"at census slot {slot} (local_combat slot {fightingSlot + 1}/{LocalCombatSlots}) "
+                    + "in the upstream feed - skipped here instead of driven, "
                     + $"block.EnemyPresenceCount={block.EnemyPresenceCount}, "
-                    + $"block.LocalCombatExcludedId=0x{block.LocalCombatExcludedId:X}, "
                     + $"blockAddress=0x{block.Address:X}"
                     + (freshEdge ? string.Empty : " (still leaking, 5s keep-alive)"));
             }
@@ -884,17 +1026,31 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             return true;
         }
 
-        // ROUND 55: decided by SelectImmediateCandidate BEFORE this loop ever started, not
-        // re-derived per slot. Every gate that used to live here — LocalCombat on, a player to
-        // fight, the slot free, GIT identity, range, a real +0x260 script, AND (round 49) the
-        // engine's own rep==2 hostility check — is exactly what SelectImmediateCandidate already
-        // required of the winner before naming it; re-checking any of it here would only risk
-        // disagreeing with the very decision this IS supposed to carry out. mapped==0 holds by
-        // construction whenever this is true (SelectImmediateCandidate only ever considers
+        // ROUND 55 / N-SLOT: decided by SelectImmediateCandidate BEFORE this loop ever started,
+        // not re-derived per slot. Every gate that used to live here — LocalCombat on, a player
+        // to fight, a free physical slot, GIT identity, range, a real +0x260 script, AND (round
+        // 49) the engine's own rep==2 hostility check — is exactly what SelectImmediateCandidate
+        // already required of the winner before naming it; re-checking any of it here would only
+        // risk disagreeing with the very decision this IS supposed to carry out. mapped==0 holds
+        // by construction whenever this is true (SelectImmediateCandidate only ever considers
         // GIT-identical slots), so nothing downstream that used to gate on `mapped == 0` here
-        // needs to change.
-        bool triggeringLocalFight =
-            LocalCombat && player != 0 && _locallyFightingId == 0 && slot == _immediateTriggerSlot;
+        // needs to change. A census index can be the winner for at most one physical slot this
+        // frame (LocalFightSlotAssignmentRule's own guarantee), so this scan is a plain lookup,
+        // not a race.
+        int triggeringPhysicalSlot = -1;
+        if (LocalCombat && player != 0)
+        {
+            for (int s = 0; s < LocalCombatSlots; s++)
+            {
+                if (_locallyFightingId[s] == 0 && _immediateTriggerCensusIndex[s] == slot)
+                {
+                    triggeringPhysicalSlot = s;
+                    break;
+                }
+            }
+        }
+
+        bool triggeringLocalFight = triggeringPhysicalSlot >= 0;
 
         // Re-claim every pass, not once: the local AI re-queues combat and movement
         // actions between frames, and an armed MoveToPoint at the queue head is the
@@ -1038,7 +1194,9 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
                 }
 
                 Odyssey.PermitAttacking(creature);
-                StartLocalFight(enemy.ObjectId, creature, now, player);
+                StartLocalFight(
+                    triggeringPhysicalSlot, enemy.ObjectId, creature, now, player,
+                    _immediateTriggerPriority[triggeringPhysicalSlot]);
             }
         }
 
@@ -1055,18 +1213,19 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     }
 
     /// <summary>
-    /// ROUND 39: pulls one mirrored enemy out of the census and lets the engine's own AI
-    /// fight it for real, via the exact mechanism 11 rounds (27-38) spent proving actually
-    /// works: firing the creature's own +0x260 event script through the engine's real
-    /// dispatcher, not replicating its native combat calls by hand. See
-    /// docs/research/shared-state-audit.md §2 for the full trail; <c>Odyssey.QueueAttackAction</c>
-    /// (kept, not deleted — its own doc now says why it never worked) is the thing this
-    /// replaces.
+    /// ROUND 39 / N-SLOT: pulls one mirrored enemy out of the census, into physical slot
+    /// <paramref name="slot"/>, and lets the engine's own AI fight it for real, via the exact
+    /// mechanism 11 rounds (27-38) spent proving actually works: firing the creature's own
+    /// +0x260 event script through the engine's real dispatcher, not replicating its native
+    /// combat calls by hand. See docs/research/shared-state-audit.md §2 for the full trail;
+    /// <c>Odyssey.QueueAttackAction</c> (kept, not deleted — its own doc now says why it never
+    /// worked) is the thing this replaces.
     /// </summary>
-    private void StartLocalFight(uint ownerId, nint creature, double now, nint player)
+    private void StartLocalFight(
+        int slot, uint ownerId, nint creature, double now, nint player, LocalFightPriority reason)
     {
-        _locallyFightingId = ownerId;
-        _locallyFightingSince = now;
+        _locallyFightingId[slot] = ownerId;
+        _locallyFightingSince[slot] = now;
 
         // ROUND 48 PROBE, one-shot, at the exact moment this creature is armed for local
         // combat — before the +0x260 script fires. This is the evidence for the round's own
@@ -1087,88 +1246,104 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         ushort maxHp = Odyssey.GetMaxHitPoints(creature);
 
         PluginHost.Log(
-            $"local combat probe: 0x{ownerId:X} creatureFaction={creatureFaction} "
-            + $"playerFaction={playerFaction} rep(creature,player)={repCreatureVsPlayer} "
-            + $"rep(player,creature)={repPlayerVsCreature} (2=hostile,1=friendly,0=neutral) "
+            $"local combat probe: slot {slot + 1}/{LocalCombatSlots} 0x{ownerId:X} "
+            + $"creatureFaction={creatureFaction} playerFaction={playerFaction} "
+            + $"rep(creature,player)={repCreatureVsPlayer} rep(player,creature)={repPlayerVsCreature} "
+            + "(2=hostile,1=friendly,0=neutral) "
             + $"CreMovePermitted=0x{movePermitted:X} plot={plot} min1hp={min1hp} hp={hp}/{maxHp} "
             + $"bisectMask=0x{LocalCombatBisectMask:X}");
 
         Odyssey.FireCreatureScriptSlot0x260(creature);
+
+        string reasonText = reason == LocalFightPriority.TargetingUs ? "targeting-us" : "proximity";
         PluginHost.Log(
-            $"local combat: 0x{ownerId:X} pulled out of the census to fight for real "
-            + $"(timeout {LocalCombatTimeoutSeconds:F0}s)");
+            $"local_combat: slot {slot + 1}/{LocalCombatSlots} armed id=0x{ownerId:X} "
+            + $"reason={reasonText} (timeout {LocalCombatTimeoutSeconds:F0}s)");
         PluginEvents.RaiseLocalCombatEngagementChanged(true, ownerId);
     }
 
     /// <summary>
-    /// ROUND 39: the per-frame heartbeat for whichever creature <see cref="StartLocalFight"/>
-    /// most recently armed. Runs every single frame regardless of every other early return in
-    /// <see cref="OnFrame"/> — see the call site's own comment for why that is load-bearing,
-    /// not incidental.
-    ///
-    /// Three ways a fight ends, checked in the order a player would actually notice them: the
-    /// engine's own creature reads dead (<see cref="Odyssey.IsCreatureDead"/> — genuinely
-    /// dead OR simply no longer resolvable, which are the same "nothing left to fight" case
-    /// from here), the player has moved out of engagement range (the same test
-    /// <see cref="IsEngaged"/> already licenses the absorb with), or the timeout has run out
-    /// (the safety net for anything the first two do not catch). Any of the three clears
-    /// <see cref="_locallyFightingId"/>, which is the ENTIRE re-inclusion mechanism: the
-    /// creature's id simply stops being read out of <see cref="SharedBlock.OffsetLocalCombatExcludedId"/>
-    /// on the very next pump, the agent resumes writing it into the published census, and
-    /// normal mirroring picks it back up exactly like any other tracked enemy — there is
-    /// nothing else to reconcile on rejoin, because nothing outside this controller's own
-    /// per-creature slot cache (<see cref="Forget"/>, already re-run for a fresh id) ever knew
-    /// it had left.
+    /// ROUND 39 / N-SLOT: the per-frame heartbeat for every physical slot
+    /// <see cref="StartLocalFight"/> currently has armed. Runs every single frame regardless of
+    /// every other early return in <see cref="OnFrame"/> — see the call site's own comment for
+    /// why that is load-bearing, not incidental.
     /// </summary>
     private void MaintainLocalFight(double now, nint player)
     {
-        if (_locallyFightingId == 0)
+        for (int slot = 0; slot < LocalCombatSlots; slot++)
+        {
+            MaintainLocalFightSlot(slot, now, player);
+        }
+    }
+
+    /// <summary>
+    /// One physical slot's share of <see cref="MaintainLocalFight"/>. Three ways a fight ends,
+    /// checked in the order a player would actually notice them: the engine's own creature
+    /// reads dead (<see cref="Odyssey.IsCreatureDead"/> — genuinely dead OR simply no longer
+    /// resolvable, which are the same "nothing left to fight" case from here), the player has
+    /// moved out of engagement range (the same test <see cref="IsEngaged"/> already licenses
+    /// the absorb with), or the timeout has run out (the safety net for anything the first two
+    /// do not catch). Any of the three clears <see cref="_locallyFightingId"/>[slot], which is
+    /// the ENTIRE re-inclusion mechanism for that slot: the creature's id simply stops being
+    /// read out of <see cref="SharedBlock.OffsetLocalCombatExcludedIds"/> on the very next pump,
+    /// the agent resumes writing it into the published census, and normal mirroring picks it
+    /// back up exactly like any other tracked enemy — there is nothing else to reconcile on
+    /// rejoin, because nothing outside this controller's own per-creature slot cache
+    /// (<see cref="Forget"/>, already re-run for a fresh id) ever knew it had left.
+    /// </summary>
+    private void MaintainLocalFightSlot(int slot, double now, nint player)
+    {
+        uint fightingId = _locallyFightingId[slot];
+        if (fightingId == 0)
         {
             return;
         }
 
-        // ⚠ _locallyFightingId is the OWNER's id (StartLocalFight stores enemy.ObjectId, not
-        // the resolved local pointer's own id — see its doc comment). For a materialised
-        // stand-in that id is NOT locally resolvable at all; resolving it raw always returns
-        // 0, and IsCreatureDead(0) is true by design, so every tick read "dead or gone"
-        // immediately after the fight started, cleared _locallyFightingId, and the very next
-        // DriveOne pass picked the SAME still-alive, still-engaged owner id right back up —
-        // an infinite same-frame churn (measured live: "fight ended (dead or gone)" /
-        // "pulled out of the census" alternating every ~4ms, hundreds of times a second).
-        // Translate through the same map DriveOne already uses before resolving, exactly like
-        // Resolve's own fallback (mapped local id if this is a stand-in, the raw id itself if
-        // it is GIT-identical).
-        uint mappedId = MaterialisedEnemies.ToLocal(_locallyFightingId);
-        nint creature = Odyssey.ResolveServerObject(mappedId != 0 ? mappedId : _locallyFightingId);
+        // ⚠ fightingId is the OWNER's id (StartLocalFight stores enemy.ObjectId, not the
+        // resolved local pointer's own id — see its doc comment). For a materialised stand-in
+        // that id is NOT locally resolvable at all; resolving it raw always returns 0, and
+        // IsCreatureDead(0) is true by design, so every tick read "dead or gone" immediately
+        // after the fight started, cleared the slot, and the very next DriveOne pass picked the
+        // SAME still-alive, still-engaged owner id right back up — an infinite same-frame churn
+        // (measured live: "fight ended (dead or gone)" / "pulled out of the census" alternating
+        // every ~4ms, hundreds of times a second). Translate through the same map DriveOne
+        // already uses before resolving, exactly like Resolve's own fallback (mapped local id
+        // if this is a stand-in, the raw id itself if it is GIT-identical).
+        uint mappedId = MaterialisedEnemies.ToLocal(fightingId);
+        nint creature = Odyssey.ResolveServerObject(mappedId != 0 ? mappedId : fightingId);
         bool dead = Odyssey.IsCreatureDead(creature);
         bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
-        bool timedOut = now - _locallyFightingSince > LocalCombatTimeoutSeconds;
+        bool timedOut = now - _locallyFightingSince[slot] > LocalCombatTimeoutSeconds;
 
-        // TEMPORARY DIAGNOSTIC: once a second, log the excluded creature's real position
-        // against the player's, so a full fight cycle produces a position-over-time curve
-        // (frozen vs. slow-pathing vs. close-but-not-hitting) instead of one snapshot.
-        if (!dead && creature != 0 && player != 0 && now - _lastPositionLogAt >= 1.0)
+        // TEMPORARY DIAGNOSTIC: once a second per slot, log the excluded creature's real
+        // position against the player's, so a full fight cycle produces a position-over-time
+        // curve (frozen vs. slow-pathing vs. close-but-not-hitting) instead of one snapshot.
+        if (!dead && creature != 0 && player != 0 && now - _lastPositionLogAt[slot] >= 1.0)
         {
-            _lastPositionLogAt = now;
+            _lastPositionLogAt[slot] = now;
             Vec3 body = Odyssey.GetPosition(creature);
             Vec3 them = Odyssey.GetPosition(player);
             float dist = MathF.Sqrt(((body.X - them.X) * (body.X - them.X)) + ((body.Y - them.Y) * (body.Y - them.Y)));
             PluginHost.Log(
-                $"local combat diag: t={now - _locallyFightingSince:F1}s 0x{_locallyFightingId:X} "
+                $"local combat diag: slot {slot + 1}/{LocalCombatSlots} "
+                + $"t={now - _locallyFightingSince[slot]:F1}s 0x{fightingId:X} "
                 + $"at ({body.X:F2},{body.Y:F2}) player at ({them.X:F2},{them.Y:F2}) dist={dist:F2}");
         }
 
         if (dead || disengaged || timedOut)
         {
             string reason = dead ? "dead or gone" : disengaged ? "player disengaged" : "timed out";
-            PluginHost.Log($"local combat: 0x{_locallyFightingId:X} fight ended ({reason}), rejoining the census");
-            PluginEvents.RaiseLocalCombatEngagementChanged(false, _locallyFightingId);
-            _locallyFightingId = 0;
+            PluginHost.Log(
+                $"local_combat: slot {slot + 1}/{LocalCombatSlots} released id=0x{fightingId:X} "
+                + $"reason={reason}");
+            PluginEvents.RaiseLocalCombatEngagementChanged(false, fightingId);
+            _locallyFightingId[slot] = 0;
 
-            // So the NEXT fight's excluded id — always a different id, StartLocalFight only
-            // ever arms a fresh one — gets its own fresh "STILL SEEING" edge in DriveOne
-            // rather than silently inheriting this one's 5s keep-alive countdown.
-            _stillSeeingReportedId = 0;
+            // So the NEXT fight in this slot's excluded id — always a different id,
+            // StartLocalFight only ever arms a fresh one — gets its own fresh "STILL SEEING"
+            // edge in DriveOne rather than silently inheriting this one's 5s keep-alive
+            // countdown.
+            _stillSeeingReportedId[slot] = 0;
             return;
         }
 
@@ -1180,21 +1355,22 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // from under an active local fight, forcing a full re-materialisation mid-round (and
         // burning the one-spawn-per-30-frames budget genuinely NEW encounter spawns were
         // waiting on). A GIT-identical creature (not in the table at all) is a no-op here.
-        MaterialisedEnemies.Seen(_locallyFightingId, now);
+        MaterialisedEnemies.Seen(fightingId, now);
 
         // Same licence RecordEngagement grants a normally-driven creature — this one just
         // earns it here instead, since DriveOne no longer runs for an id the census does not
         // publish any more.
         if (_engagedCount < EngagedOwnerId.Length)
         {
-            EngagedOwnerId[_engagedCount++] = _locallyFightingId;
+            EngagedOwnerId[_engagedCount++] = fightingId;
         }
 
         // Matches the stamp at the bottom of a normal OnFrame pass exactly. Stamped here too
-        // because the count==0 early return (the common case once the one tracked enemy is
-        // the one now excluded) would otherwise never reach that stamp at all, and a stale
-        // engagement record is indistinguishable from a genuinely ended one to
-        // IsLocallyEngaged.
+        // because the count==0 early return (the common case once every tracked enemy is one
+        // now excluded) would otherwise never reach that stamp at all, and a stale engagement
+        // record is indistinguishable from a genuinely ended one to IsLocallyEngaged. Safe to
+        // stamp once per active slot — the same DateTime.UtcNow.Ticks value, or near enough
+        // within the 1s freshness window, regardless of how many slots are active this frame.
         _engagedAtTicks = DateTime.UtcNow.Ticks;
     }
 

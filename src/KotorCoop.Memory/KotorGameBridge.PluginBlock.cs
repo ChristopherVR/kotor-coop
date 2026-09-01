@@ -96,8 +96,16 @@ public sealed partial class KotorGameBridge
     private const int BlockDamageOwedCount = 0x2010;
     private const int BlockDamageDealtEnabled = 0x2118;
 
-    /// <summary>ROUND 39: mirrors <c>SharedBlock.OffsetLocalCombatExcludedId</c> exactly.</summary>
+    /// <summary>ROUND 39: mirrors <c>SharedBlock.OffsetLocalCombatExcludedId</c> exactly. Kept
+    /// as a slot-0 mirror alongside <see cref="BlockLocalCombatExcludedIds"/> below — see that
+    /// region's own comment.</summary>
     private const int BlockLocalCombatExcludedId = 0x1E5C;
+
+    // N-slot local combat (shared block version 61, region 0x4800..0x4900, TotalSize grown to
+    // 0x4B00). Mirrors SharedBlock.OffsetLocalCombatExcludedIds. See
+    // docs/research/combat-participation.md §11.
+    private const int BlockLocalCombatExcludedIds = 0x4800;
+    private const int BlockLocalCombatExcludedIdCapacity = 3;
 
     // NPC barks (block v27): a small ring each way, speaker + three verbatim engine
     // arguments + a serial written last per entry.

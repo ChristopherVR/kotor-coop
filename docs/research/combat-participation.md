@@ -914,3 +914,151 @@ creature was independently located this round to test it against) and is the nat
 
 Build: `dotnet build -warnaserror` clean, native plugin `-WarnAsError` clean, `dotnet test`
 2339/2339.
+
+## §11 — N-slot local combat (2026-09-02)
+
+Widens `local_combat` from ONE locally-fought enemy at a time to up to
+**`SharedBlock.LocalCombatSlotCapacity` (3)**, coop.ini `local_combat_slots` (default 3, clamped
+1..3). `local_combat_slots=1` is required to reproduce the pre-widening behaviour bit for bit —
+verified by test, not just asserted (`LocalFightSlotAssignmentRuleTests
+.OneFreeSlot_ReproducesTheOldSingleWinnerRanking`).
+
+### Design
+
+The single scalar `_locallyFightingId`/`SharedBlock.OffsetLocalCombatExcludedId` becomes a
+per-physical-slot array everywhere it mattered:
+
+- **Shared block**: a new region, `SharedBlock.OffsetLocalCombatExcludedIds` (0x4800..0x4900,
+  `SharedBlock.LocalCombatSlotCapacity` x u32), block version bumped 60 -> 61,
+  `SharedBlock.TotalSize` grown 0x4800 -> 0x4B00. The old scalar
+  (`OffsetLocalCombatExcludedId`, 0x1E5C) stays written too, mirroring slot 0 — kept for one
+  release of backward compatibility, though in practice the agent and plugin always ship
+  together (the block version is embedded byte-exact in `KotorGameBridge.PluginSignature`'s scan
+  pattern, so a version-skewed pair simply never finds each other rather than reading a half-old
+  layout). The agent-side reader is fully replaced: `KotorGameBridge.ReadLocalCombatExcludedIds`
+  (plural) returns every nonzero slot; the old singular `ReadLocalCombatExcludedId`/
+  `IEnemyBridge.ReadLocalCombatExcludedId` are removed rather than kept as dead code, since both
+  halves are always shipped together in this repo. `CombatPump.PumpEnemies` filters every
+  returned id out of the published census, not just one.
+
+- **Plugin (`EnemyPresenceController`)**: `_locallyFightingId`/`_locallyFightingSince` become
+  `uint[]`/`double[]` sized to capacity; so do the "STILL SEEING" leak-diagnostic state and the
+  position-diagnostic timestamp, all indexed by physical slot. `SelectImmediateCandidate` now
+  gathers every eligible candidate this scan into parallel arrays (owner id, priority, distance,
+  census index) exactly as before, then hands the ranking to a new pure class,
+  **`LocalFightSlotAssignmentRule`**: given the candidate list and which physical slots are
+  currently free, it fills every free slot at once — slot 0 gets the single best remaining
+  candidate (`LocalFightCandidateRule.Beats`'s own ordering, unchanged), slot 1 the next best,
+  and so on, and a candidate is removed from contention the instant it wins a slot so the same
+  creature can never be assigned twice in one scan. `StartLocalFight`/`MaintainLocalFight` are
+  now per-slot (`MaintainLocalFightSlot`, called in a loop over `LocalCombatSlots`) but otherwise
+  unchanged: same +0x260 script fire, same ClaimSnapshot restore, same dead/disengaged/timeout
+  release logic, same `PluginEvents.RaiseLocalCombatEngagementChanged` — nothing about *how* one
+  fight is run changed, only how many can run at once. `DriveOne`'s per-creature "is this the
+  triggering slot" check now scans the small (<=3) `_immediateTriggerCensusIndex` array instead
+  of comparing one int.
+
+- **Deferral (`LocalCombatDeferralRule`)**: `ComputeDeferred` widened from a single
+  `holderOwnerId` to a holder SET (`uint[] holderOwnerIds, int holderCount`) — a creature already
+  held by ANY active slot is excluded from the deferred set, not just the one slot the old code
+  knew about. The deferred-count HUD text (`LocalCombatDeferredNoticeRule`) is untouched; it only
+  ever needed a count.
+
+- **Companions (`PartyPresenceController`)**: gathers every currently-fighting enemy's position
+  once per pass (`block.GetLocalCombatExcludedId(slot)` for each of the 3 slots) instead of
+  reading the single scalar. `CompanionLocalFightRule` itself is unchanged — still a plain
+  `nearEnemy` bool — per the minimum-change design: a companion counts as "near an enemy" if it
+  is within `companion_local_combat_range` of ANY currently-fighting enemy, and
+  `DriveAttackIfDue` aims at whichever one is nearest.
+
+- **Logging**: every arm and release now names its physical slot —
+  `local_combat: slot 2/3 armed id=0x.. reason=targeting-us (timeout 25s)` and
+  `local_combat: slot 2/3 released id=0x.. reason=player disengaged` — plus a slot-numbered
+  "selected" pre-arm line and a slot-numbered "STILL SEEING" diagnostic line.
+
+### What changed, file by file
+
+- `src/KotorCoop.Plugin/SharedBlock.cs` — `TotalSize` 0x4800 -> 0x4B00.
+- `src/KotorCoop.Plugin/SharedBlock.Combat.cs` — `LocalCombatSlotCapacity`,
+  `OffsetLocalCombatExcludedIds`.
+- `src/KotorCoop.Plugin/SharedBlockView.Combat.cs` — `SetLocalCombatExcludedIds`,
+  `GetLocalCombatExcludedId`.
+- `src/KotorCoop.Plugin/PluginHost.cs` — `_block->Version = 61`.
+- `src/KotorCoop.Memory/KotorGameBridge.cs` — `PluginSignature` version byte 0x3C -> 0x3D.
+- `src/KotorCoop.Memory/KotorGameBridge.PluginBlock.cs` — `BlockLocalCombatExcludedIds`
+  constants.
+- `src/KotorCoop.Memory/KotorGameBridge.Enemies.cs` — `ReadLocalCombatExcludedIds` replaces
+  `ReadLocalCombatExcludedId`.
+- `src/KotorCoop.Memory/IEnemyBridge.cs` — interface member replaced the same way.
+- `src/KotorCoop.Session/Pumps/CombatPump.Enemies.cs` — filters the whole returned set.
+- `src/KotorCoop.Plugin/EnemyPresenceController.cs` — the N-slot rewrite described above.
+- `src/KotorCoop.Plugin/EnemyPresenceController.LocalCombat.cs` — `LocalCombatSlots` config
+  read; `IsLocallyFightingCreature`/`_locallyFightingIdsShared` widened to arrays.
+- `src/KotorCoop.Plugin/LocalFightSlotAssignmentRule.cs` — new pure top-K assignment rule.
+- `src/KotorCoop.Plugin/LocalCombatDeferralRule.cs` — `ComputeDeferred` holder-set signature.
+- `src/KotorCoop.Plugin/PartyPresenceController.cs` — N-enemy gather, nearest-enemy pick.
+- `profiles/coop.ini.example`, `docs/CONFIG.md` — `local_combat_slots` documented.
+- `tests/KotorCoop.Tests/LocalFightSlotAssignmentRuleTests.cs` — new.
+- `tests/KotorCoop.Tests/LocalCombatDeferralRuleTests.cs` — updated signature, two new
+  multi-holder cases.
+- `tests/KotorCoop.Tests/ItemHarnessTests.cs` (`TheBlockVersionIsTheSameNumberInBothHalves`) and
+  `tests/KotorCoop.Tests/TransitionMovieTests.cs`
+  (`TheBlockVersionMovedInBothHalves`) — both re-assert against 61 automatically/explicitly.
+
+### `local_combat_slots` and the behaviour digest
+
+`local_combat` itself already rides `BehaviourDigest` as a peer-warn (not host-authoritative) key
+— `BehaviourDigestTests.cs` pins it in the "not host-authoritative" set. `local_combat_slots` is
+**not** added to the digest at all: it is a further per-instance tuning of an already
+non-host-authoritative flag, purely plugin-local (how many fights THIS client's own engine can
+run at once has no wire representation — the shared-block array is client-local shared memory,
+never serialised to a peer), so there is nothing for a peer to disagree with in the first place.
+
+### VERIFIED (by test)
+
+- `LocalFightSlotAssignmentRuleTests` — one free slot reproduces the old single-winner ranking
+  exactly (`OneFreeSlot_ReproducesTheOldSingleWinnerRanking`, `OneFreeSlot_TiedPriority_ClosestWins`);
+  a creature can never win two slots in one call, even when free slots outnumber candidates
+  (`FewerCandidatesThanFreeSlots_TheSameIdCannotHoldTwoSlots`); an occupied slot is never assigned
+  regardless of candidates; three free slots with three candidates assigns each a distinct
+  winner, highest priority to the lowest-numbered slot.
+- `LocalCombatDeferralRuleTests` — the widened `ComputeDeferred` correctly excludes a SET of
+  holder ids (`ComputeDeferred_MultipleHolders_ExcludesAllOfThem`,
+  `ComputeDeferred_EveryEligibleIdIsAlreadyHeld_DeferredIsEmpty`), while every pre-existing
+  single-holder case still passes.
+- `LocalFightCandidateRuleTests`, `CompanionLocalFightRuleTests`,
+  `LocalCombatDeferredNoticeRuleTests` — unchanged, still pass (neither rule's own signature
+  needed to change for N slots).
+- `ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves`,
+  `TransitionMovieTests.TheBlockVersionMovedInBothHalves` — both catch a half-bumped 61.
+
+### NEEDS-LIVE (everything below is reasoned, not yet observed running)
+
+- Two or three hostiles genuinely fighting the same client's engine simultaneously — does the
+  engine's own combat state, animation and hit registration hold up with more than one
+  script-fired `+0x260` creature active at once, the way it was proven for exactly one across
+  rounds 27-55. Nothing in this design changes *how* one fight is armed, but N concurrent fights
+  is a new load pattern this codebase has never run.
+- The shared-block array round-trip end to end: plugin writes 3 slots -> agent
+  `ReadLocalCombatExcludedIds` -> `CombatPump` filters all 3 out of the published census -> the
+  OTHER peer's own census genuinely omits all 3 (not just slot 0).
+- The "STILL SEEING" defence-in-depth path with more than one slot active — does a transient
+  upstream-filter race on slot 2 log correctly without disturbing slot 0's own tracking.
+- Companion release against multiple simultaneous fights — does `nearEnemy`'s "nearest of N"
+  pick, and the attack `DriveAttackIfDue` aims from it, actually track a companion standing near
+  a DIFFERENT slot than another companion.
+- Whether three real fights at once meaningfully changes frame cost — `SelectImmediateCandidate`
+  now runs `LocalFightSlotAssignmentRule` (O(candidates x free slots), free slots <= 3) instead
+  of one linear scan; this should be negligible at the hook's own frequency but was not profiled
+  live this pass.
+- The exact slot-numbered log lines (`local_combat: slot 2/3 armed id=0x.. reason=..`) reading
+  correctly against a live multi-slot fight, not just compiling.
+
+### Uncertain engine behaviour, flagged rather than guessed at
+
+Whether the engine's own AI scheduler treats N simultaneous script-fired combat rounds against
+the SAME local player any differently than one — e.g., whether `GN_DetermineCombatRound` or the
+attack-queue dispatcher has any shared per-player state that two concurrently-armed creatures
+could contend over. Every round 9-55 investigation only ever exercised one creature at a time;
+this pass reasoned by analogy (nothing in the fire-the-script mechanism is obviously
+player-singular) but did not — could not, without a live rig — prove it.

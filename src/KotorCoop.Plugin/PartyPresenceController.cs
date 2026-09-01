@@ -20,11 +20,13 @@ namespace KotorCoop.Plugin;
 /// Kill switch: <c>party_drive=0</c> in coop.ini (the agent then keeps only solo mode and
 /// nothing moves the local copies — visibly worse, but safe).
 ///
-/// Roadmap item 4, OFF by default: <c>companion_local_combat=1</c> lets ONE companion — the one
-/// standing close enough to both this instance's own player and the enemy <c>local_combat</c> is
-/// already fighting locally — be handed to its own engine AI instead of mirrored, via
-/// <see cref="CompanionLocalFightRule"/>. See docs/research/party-reconciliation.md, dated entry
-/// 2026-08-21, for why the gate is this tight.
+/// Roadmap item 4, OFF by default: <c>companion_local_combat=1</c> lets a companion — one
+/// standing close enough to both this instance's own player and (N-slot local_combat,
+/// docs/research/combat-participation.md §11) the NEAREST enemy <c>local_combat</c> is currently
+/// fighting locally, of up to <see cref="SharedBlock.LocalCombatSlotCapacity"/> at once — be
+/// handed to its own engine AI instead of mirrored, via <see cref="CompanionLocalFightRule"/>.
+/// See docs/research/party-reconciliation.md, dated entry 2026-08-21, for why the gate is this
+/// tight.
 ///
 /// ROUND 83: released no longer means "handed to a party AI script that solo mode has silenced
 /// and hoped it acts anyway" — round 82 live-confirmed it never does. Instead the released
@@ -97,6 +99,12 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// for <see cref="CompanionLocalFightRule"/> — <see cref="Forget"/> clears it, the same as
     /// every other per-slot cache here.</summary>
     private readonly bool[] _released = new bool[SharedBlock.PartyPresenceCapacity];
+
+    // N-slot local_combat (docs/research/combat-participation.md §11): every currently-fighting
+    // enemy's position/id, gathered once per pass and reused by every companion's own
+    // "nearest fight" test in DriveOne. Reused rather than allocated per pass.
+    private readonly Vec3[] _localEnemyPosition = new Vec3[SharedBlock.LocalCombatSlotCapacity];
+    private readonly uint[] _localEnemyObjectId = new uint[SharedBlock.LocalCombatSlotCapacity];
 
     /// <summary>CSWPartyTable + this = the solo-mode byte. Read-only here — this controller
     /// never writes it (see the "No write to solo mode" note on the release gate below); the
@@ -402,30 +410,47 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         nint player = Odyssey.GetPlayerCreaturePointer();
         int driven = 0;
 
-        // Resolved ONCE per pass, not per companion: local_combat runs at most one fight at a
-        // time (its own design), so every companion this pass shares the same answer to "is
-        // there a fight to join, and where is it." block.LocalCombatExcludedId is the exact
-        // value EnemyPresenceController publishes right where it arms StartLocalFight — see
-        // that field's own doc comment.
-        bool localFightActive = false;
-        Vec3 localEnemyPosition = default;
-        uint localEnemyObjectId = 0;
-        uint locallyFightingOwnerId = block.LocalCombatExcludedId;
-        if (_companionLocalCombatEnabled && locallyFightingOwnerId != 0)
+        // Resolved ONCE per pass, not per companion: N-slot local_combat (docs/research/
+        // combat-participation.md §11) can now run up to SharedBlock.LocalCombatSlotCapacity
+        // simultaneous fights, so this gathers every currently-fighting enemy's position once,
+        // and every companion below picks whichever of them it is actually near (nearest one) —
+        // see DriveOne's own "nearEnemy" comment. block.GetLocalCombatExcludedId(slot) is the
+        // exact per-slot value EnemyPresenceController publishes right where it arms
+        // StartLocalFight — see that method's own doc comment.
+        int localEnemyCount = 0;
+        for (int s = 0; s < SharedBlock.LocalCombatSlotCapacity; s++)
         {
-            uint mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
-            localEnemyObjectId = mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId;
-            nint enemyCreature = Odyssey.ResolveServerObject(localEnemyObjectId);
-            if (enemyCreature != 0)
+            if (!_companionLocalCombatEnabled)
             {
-                localEnemyPosition = Odyssey.GetPosition(enemyCreature);
-                localFightActive = true;
+                break;
             }
+
+            uint locallyFightingOwnerId = block.GetLocalCombatExcludedId(s);
+            if (locallyFightingOwnerId == 0)
+            {
+                continue;
+            }
+
+            uint mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
+            uint localEnemyId = mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId;
+            nint enemyCreature = Odyssey.ResolveServerObject(localEnemyId);
+            if (enemyCreature == 0)
+            {
+                continue;
+            }
+
+            _localEnemyPosition[localEnemyCount] = Odyssey.GetPosition(enemyCreature);
+            _localEnemyObjectId[localEnemyCount] = localEnemyId;
+            localEnemyCount++;
         }
+
+        bool localFightActive = localEnemyCount > 0;
 
         for (int i = 0; i < count; i++)
         {
-            if (DriveOne(i, block.GetPartyPresence(i), now, player, localFightActive, localEnemyPosition, localEnemyObjectId))
+            if (DriveOne(
+                    i, block.GetPartyPresence(i), now, player, localFightActive,
+                    _localEnemyPosition, _localEnemyObjectId, localEnemyCount))
             {
                 driven++;
             }
@@ -440,7 +465,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private bool DriveOne(
         int slot, PartyPresenceView member, double now, nint player,
-        bool localFightActive, Vec3 localEnemyPosition, uint localEnemyObjectId)
+        bool localFightActive, Vec3[] localEnemyPosition, uint[] localEnemyObjectId, int localEnemyCount)
     {
         if (member.RosterSlotPlusOne is 0 or > PartyNpcSlots)
         {
@@ -482,8 +507,25 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // ROUND 46 note: a companion about to be handed its own engine AI must not be claimed
         // or have its queue touched this same frame, or the hand-off disarms the very AI it is
         // being released to.
-        bool nearEnemy = localFightActive
-            && PlanarDistanceSquared(member.Position, localEnemyPosition) <= CompanionLocalCombatRangeSquared;
+        //
+        // N-SLOT (docs/research/combat-participation.md §11): "near an enemy" now means near
+        // ANY of the currently-fighting enemies — the nearest one, which is also the one this
+        // companion's own attack (DriveAttackIfDue, below) gets aimed at. Minimum change from
+        // the original single-enemy gate: CompanionLocalFightRule itself stays a plain bool.
+        bool nearEnemy = false;
+        uint nearestEnemyObjectId = 0;
+        float nearestEnemyDistSq = float.MaxValue;
+        for (int e = 0; e < localEnemyCount; e++)
+        {
+            float distSq = PlanarDistanceSquared(member.Position, localEnemyPosition[e]);
+            if (distSq <= CompanionLocalCombatRangeSquared && distSq < nearestEnemyDistSq)
+            {
+                nearEnemy = true;
+                nearestEnemyDistSq = distSq;
+                nearestEnemyObjectId = localEnemyObjectId[e];
+            }
+        }
+
         bool nearPlayer = player != 0
             && PlanarDistanceSquared(member.Position, Odyssey.GetPosition(player)) <= CompanionLocalCombatRangeSquared;
 
@@ -512,9 +554,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 // through the same engine call the `attack` cheat already uses, and only when
                 // that companion's own queue is empty. See AttackDriveIntervalSeconds' doc.
                 LogReleaseDiagIfDue(objectId, creature, now, slot);
-                if (localFightActive && localEnemyObjectId != 0)
+                if (localFightActive && nearestEnemyObjectId != 0)
                 {
-                    DriveAttackIfDue(objectId, creature, localEnemyObjectId, now, slot);
+                    DriveAttackIfDue(objectId, creature, nearestEnemyObjectId, now, slot);
                 }
 
                 return false;

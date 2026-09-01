@@ -261,21 +261,35 @@ public sealed partial class KotorGameBridge
     }
 
     /// <summary>
-    /// ROUND 39: the owner id of the mirrored enemy the plugin is currently letting fight the
-    /// local player for real under `local_combat`, or 0 for none. The caller's job is to keep
-    /// this id out of whatever it writes into <c>EnemyPresenceCount</c>'s array — genuinely
-    /// absent, not merely un-driven — which is what actually excludes it from the census the
-    /// way round 37/38 proved works. See <c>SharedBlock.OffsetLocalCombatExcludedId</c>.
+    /// Version 61: the owner ids of every mirrored enemy the plugin is currently letting fight
+    /// the local player for real under `local_combat` (up to
+    /// <c>BlockLocalCombatExcludedIdCapacity</c>/3 simultaneous slots), the N-wide sibling of
+    /// the pre-version-61 single-id channel (<c>BlockLocalCombatExcludedId</c>, kept written by
+    /// the plugin as a slot-0 mirror but not read here any more — see that field's own
+    /// comment). The caller's job is to keep every one of these ids out of whatever it writes
+    /// into <c>EnemyPresenceCount</c>'s array — genuinely absent, not merely un-driven — which
+    /// is what actually excludes them from the census the way round 37/38 proved works. See
+    /// <c>SharedBlock.OffsetLocalCombatExcludedIds</c> and
+    /// docs/research/combat-participation.md §11.
     /// </summary>
-    public uint ReadLocalCombatExcludedId()
+    public IReadOnlyList<uint> ReadLocalCombatExcludedIds()
     {
         if (_pluginBlock == 0)
         {
-            return 0;
+            return [];
         }
 
-        _memory.TryReadUInt32(_pluginBlock + BlockLocalCombatExcludedId, out uint id);
-        return id;
+        List<uint> ids = new(BlockLocalCombatExcludedIdCapacity);
+        for (int i = 0; i < BlockLocalCombatExcludedIdCapacity; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockLocalCombatExcludedIds + (i * 4), out uint id)
+                && id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
     }
 
     /// <summary>

@@ -262,12 +262,19 @@ combat_state_sync=0
 # clean re-inclusion - see docs/research/shared-state-audit.md #2, round 39.
 local_combat=1
 
-# While local_combat has pulled one hostile out of the census to fight for real, show a short
+# How many hostiles this instance's own engine may fight simultaneously through local_combat
+# (docs/research/combat-participation.md #11). 1 reproduces the original single-fight behaviour
+# bit for bit. Clamped 1..3 - 3 is the shared-block excluded-id array's own fixed width, not a
+# tuning ceiling. Purely a local tuning knob: peers are never required to run the same value
+# (see the CONFIG.md row for why this does not ride the behaviour digest).
+local_combat_slots=3
+
+# While local_combat has pulled its hostiles out of the census to fight for real, show a short
 # "N more enemies engaged - mirrored" HUD line whenever one or more OTHER hostiles are also
-# eligible right now but waiting their turn for the single exclusion slot (roadmap-seamless.md
-# Tier 2 item 14). The log line this is built from ("local_combat: fighting X, N other hostiles
-# deferred (mirrored)") always fires regardless of this key; this only gates the on-screen text.
-# 1 (default) shows it, 0 disables the HUD line only.
+# eligible right now but waiting their turn for a free exclusion slot (roadmap-seamless.md
+# Tier 2 item 14). The log line this is built from ("local_combat: fighting 0x.., N other
+# hostiles deferred (mirrored)") always fires regardless of this key; this only gates the
+# on-screen text. 1 (default) shows it, 0 disables the HUD line only.
 local_combat_deferred_notice=1
 
 # Activate the render window at launch. Without this an instance draws nothing until it

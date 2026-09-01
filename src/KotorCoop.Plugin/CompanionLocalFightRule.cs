@@ -48,11 +48,13 @@ internal static class CompanionLocalFightRule
     /// <param name="rosterFrozen">Party table +0xF0 != -1 — a script owns one companion directly;
     /// the same guard <see cref="PartyFreezeRule"/> already backs the whole presence mirror off
     /// for.</param>
-    /// <param name="localFightActive"><c>local_combat</c>'s own exclusion is live
-    /// (<c>block.LocalCombatExcludedId != 0</c>) — item 1's proven mechanism has pulled one
-    /// census enemy out to fight this instance's own player for real.</param>
+    /// <param name="localFightActive"><c>local_combat</c>'s own exclusion is live for at least
+    /// one physical slot (N-slot local_combat, docs/research/combat-participation.md §11) —
+    /// item 1's proven mechanism has pulled at least one census enemy out to fight this
+    /// instance's own player for real.</param>
     /// <param name="nearEnemy">This companion's host-driven position is within
-    /// <c>companion_local_combat_range</c> of the locally-fighting enemy's position.</param>
+    /// <c>companion_local_combat_range</c> of ANY currently-fighting enemy's position (the
+    /// nearest one — see <c>PartyPresenceController.DriveOne</c>'s own gather).</param>
     /// <param name="nearPlayer">This companion's host-driven position is within
     /// <c>companion_local_combat_range</c> of this instance's own player.</param>
     /// <param name="releasedBefore">Was this companion released on the previous pass.</param>

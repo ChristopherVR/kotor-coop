@@ -352,6 +352,34 @@ internal partial struct SharedBlock
     /// </summary>
     public const int OffsetLocalCombatExcludedId = 0x1E5C;
 
+    // ---- N-slot local combat (version 61, region 0x4800..0x4900) ------------------
+    //
+    // Widens local_combat from one locally-fought enemy to up to LocalCombatSlotCapacity (3):
+    // an array of excluded ids alongside the single OffsetLocalCombatExcludedId scalar above.
+    // The scalar stays written too — mirroring slot 0 — for one release of backward
+    // compatibility, but every consumer in THIS repo reads the array; the scalar's only reason
+    // to keep existing is a still-attached agent binary older than this pass, which cannot
+    // happen in practice (KotorGameBridge.PluginSignature embeds the block version byte-exact
+    // in the scan pattern, so an agent built against a different version simply never finds
+    // this block at all rather than reading it half-right). See
+    // docs/research/combat-participation.md §11.
+
+    /// <summary>How many simultaneous local-combat exclusion slots the shared block carries.
+    /// Pinned by the array width below, not by coop.ini — <c>local_combat_slots</c> (coop.ini,
+    /// default 3) only decides how many of these THIS instance actually arms, clamped to this
+    /// capacity by <see cref="EnemyPresenceController"/>'s own clamp.</summary>
+    public const int LocalCombatSlotCapacity = 3;
+
+    /// <summary>Plugin -&gt; agent. <see cref="LocalCombatSlotCapacity"/> owner-space ids (u32
+    /// each, slot i at this offset + i*4), the N-wide sibling of
+    /// <see cref="OffsetLocalCombatExcludedId"/> — same meaning per slot, same self-healing
+    /// level semantics, same "the plugin clears its own slot back to 0 once that one fight
+    /// ends" rule. A zero slot licenses nothing. Unused slots (this instance runs fewer than
+    /// <see cref="LocalCombatSlotCapacity"/>) are always zero, never written otherwise, which is
+    /// exactly what makes <c>local_combat_slots=1</c> reproduce the pre-N-slot single-scalar
+    /// behaviour bit for bit — slots 1 and 2 simply never move.</summary>
+    public const int OffsetLocalCombatExcludedIds = 0x4800;
+
 
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //

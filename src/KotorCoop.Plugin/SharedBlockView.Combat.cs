@@ -39,12 +39,31 @@ internal sealed unsafe partial class SharedBlockView
     }
 
     /// <summary>ROUND 39: plugin-written, agent-read. See
-    /// <see cref="SharedBlock.OffsetLocalCombatExcludedId"/>.</summary>
+    /// <see cref="SharedBlock.OffsetLocalCombatExcludedId"/>. Kept as a slot-0 mirror
+    /// alongside <see cref="SetLocalCombatExcludedIds"/> — see that region's own doc
+    /// comment.</summary>
     public uint LocalCombatExcludedId
     {
         get => *U32(SharedBlock.OffsetLocalCombatExcludedId);
         set => *U32(SharedBlock.OffsetLocalCombatExcludedId) = value;
     }
+
+    /// <summary>Plugin -&gt; agent (version 61). Publishes every currently-excluded
+    /// local-combat id, one dword per slot — see
+    /// <see cref="SharedBlock.OffsetLocalCombatExcludedIds"/>. <paramref name="ids"/> must be
+    /// exactly <see cref="SharedBlock.LocalCombatSlotCapacity"/> long; a free slot is 0.</summary>
+    public void SetLocalCombatExcludedIds(ReadOnlySpan<uint> ids)
+    {
+        for (int i = 0; i < SharedBlock.LocalCombatSlotCapacity; i++)
+        {
+            *U32(SharedBlock.OffsetLocalCombatExcludedIds + (i * 4)) = i < ids.Length ? ids[i] : 0;
+        }
+    }
+
+    /// <summary>Reads one slot back — used by <c>PartyPresenceController</c>'s own N-enemy
+    /// gather, which needs every currently-fighting enemy's position, not just slot 0's.</summary>
+    public uint GetLocalCombatExcludedId(int slot) =>
+        *U32(SharedBlock.OffsetLocalCombatExcludedIds + (Clamp(slot, SharedBlock.LocalCombatSlotCapacity) * 4));
 
     public EnemyPresenceView GetEnemyPresence(int index)
     {

@@ -24,11 +24,12 @@ public interface IEnemyBridge
     /// </summary>
     bool TryWriteEnemies(IReadOnlyList<EnemyState> enemies) => false;
 
-    /// <summary>ROUND 39: the owner id of the mirrored enemy this instance is currently
-    /// letting fight the local player for real under `local_combat`, or 0 for none. The
-    /// caller must keep this id out of what it writes back via <see cref="TryWriteEnemies"/> —
-    /// see <c>KotorGameBridge.ReadLocalCombatExcludedId</c> for why.</summary>
-    uint ReadLocalCombatExcludedId() => 0;
+    /// <summary>Version 61: the owner ids of every mirrored enemy this instance is currently
+    /// letting fight the local player for real under `local_combat` (up to
+    /// SharedBlock.LocalCombatSlotCapacity/3 slots). The caller must keep every one of these
+    /// ids out of what it writes back via <see cref="TryWriteEnemies"/> — see
+    /// <c>KotorGameBridge.ReadLocalCombatExcludedIds</c> for why.</summary>
+    IReadOnlyList<uint> ReadLocalCombatExcludedIds() => [];
 
     /// <summary>
     /// Mirroring side: how much damage this instance has DEALT to each enemy since its
