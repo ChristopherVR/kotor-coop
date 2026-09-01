@@ -41,6 +41,8 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `god` | `[on\|off]` | yours only | pins your own character's damage floor at 1 hp |
 | `topup` | `[hitpoints]` | yours only | heals your own character, clamped to max |
 | `standup` / `getup` | `[hitpoints]` | yours only | stands your own downed body back up |
+| `hurt` | `<amount> [slot]` | dev-only, local only | applies REAL damage through the engine's own `EffectDamage`/`DoDamage` path (shields, difficulty scaling and both 1-hp floors apply exactly as they would to a live hit) to yourself or a party-roster companion; blank slot = yourself, `0-8` = the companion slot — see [death-handling.md](research/death-handling.md) |
+| `down` | `[slot]` | dev-only, local only | forces the SAME genuine temp-death state a real lethal hit produces (not a fake flag) on yourself or a party-roster companion: bypasses a `min1hp` pin for one hit, then restores it — a real party member never truly dies from this, it enters exactly the state the downed/revive pipeline already knows how to recover from. Blank slot = yourself, `0-8` = the companion slot — see [death-handling.md](research/death-handling.md) |
 | `slay` | `[tag\|id]` (blank = nearest hostile) | **authority split** — see below | kills an enemy: directly if you own it, forwarded through the damage ledger if a peer owns it |
 | `tp` | `<x> <y> [z]` | yours only | teleports your own character (no walkmesh check) |
 | `goto` | `<player\|#n>` | same module only | teleports you to a peer's last known position |

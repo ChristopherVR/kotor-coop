@@ -39,6 +39,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.God] = "god on",
         [CoopCommandKind.TopUp] = "topup",
         [CoopCommandKind.StandUp] = "standup",
+        [CoopCommandKind.Hurt] = "hurt 50",
+        [CoopCommandKind.Down] = "down",
         [CoopCommandKind.Slay] = "slay",
         [CoopCommandKind.Teleport] = "tp 1 2",
         [CoopCommandKind.GoTo] = "goto Malak",

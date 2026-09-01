@@ -55,7 +55,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [peer-damage-ledger.md](peer-damage-ledger.md) | Carrying a peer's damage as DEALT, not sampled health | Implemented, live-verified |
 | [client-encounters.md](client-encounters.md) | Making a client's own ambush trigger fire for the host | Implemented, live-verified, ON by default |
 | [min-one-hitpoint.md](min-one-hitpoint.md) | Why a player floors at 1 hp and never goes down | Root-caused (KOTOR's own tutorial script); one related stale-GUI bug logged, open |
-| [death-handling.md](death-handling.md) | The death pipeline, control-swap, game-over, revival | RE reference; downed/revive implemented and live-verified elsewhere |
+| [death-handling.md](death-handling.md) | The death pipeline, control-swap, game-over, revival | RE reference; downed/revive implemented, confirmed live once (2026-08-01), NOT re-verified against later builds (roadmap-seamless.md item 29). 2026-09-02: `hurt`/`down` dev verbs and the client `TempDeathUpdate` guard shipped, making the pipeline live-testable — NEEDS-LIVE |
 | [spectate-camera.md](spectate-camera.md) | The camera handoff to a downed player's partner | Implemented, live-verified, ON by default |
 | [creature-liveness.md](creature-liveness.md) | Reconciling a body alive on one screen, dead on the other | Design → live-verified for the first time; OFF by default; one sub-theory open, blocked on a missing `spawncreature` verb |
 | [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented, live-verified both directions; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |

@@ -371,3 +371,177 @@ exactly two things: the swap and the menu-out.
 0x004E4A50  effect handler table init (types: 4=Resurrection, 19=Death, 38=Damage,
             39=Heal, 57=HitPointChangeWhenDying)
 ```
+
+## 6. 2026-09-02 — `hurt`/`down` dev verbs, and the client `TempDeathUpdate` guard §5 item 4 shipped
+
+`playthrough-taris.md` Step 3/4 confirmed, under two different real fights (Vulkars, then
+rakghouls), the same finding the Endar Spire round had already made: **no dev verb could drop
+a party member below 1 hp**, because vanilla ordinary damage cannot — the −10 dying window
+`GetDead` checks is reached only through a Death effect (§1), and nothing in the console
+reached one. This round closes that gap and ships the client-side suppression §5 item 4
+recommended and left unbuilt.
+
+### 6.1 `hurt`/`down` — VERIFIED (code + disasm), NEEDS-LIVE (the exercise itself)
+
+Two new dev-only console verbs, `src/KotorCoop.Plugin/CheatController.Downed.cs`, cheat kinds
+`CheatKindHurt = 63` / `CheatKindDown = 64` (`SharedBlock.cs`, mirrored in
+`IGameBridge.CheatKinds`), wired through the same registry every other staging cheat uses
+(`ConsoleCommand.Cheats.cs` → `CoopCommandDispatcher`'s dispatch table → the plugin's cheat
+channel → `CheatController.Execute`) — no new `SharedBlock` fields; both ride the existing
+`CheatAmount`/`CheatTarget` pair, exactly the shape `leader`/`followstall` already use for a
+party-roster slot.
+
+- **`hurt <amount> [slot]`** calls `Odyssey.ApplyDamageEffect(creatureId, amount, out
+  failure)` — the SAME VM-dispatched `EffectDamage`(type 8)+`ApplyEffectToObject` call
+  `Slay`'s `KillHere` branch and `Odyssey.KillCreature` both already use (Odyssey.Health.cs),
+  which routes through `CSWSCreature::DoDamage`/`CSWSObject::DoDamage` (§1) exactly like a
+  live swing: difficulty scaling, temp-HP (shield) absorption, and **both** of the engine's
+  1-hp floors apply — a `min1hp` pin (a module's own, or `god`'s) and the difficulty `MinHP1`
+  rule (statically dead in retail — `IsDifficultyMinOneHitPointOn`, `min-one-hitpoint.md`).
+  This is deliberate: `hurt` exists to prove the pipeline reacts to a *genuine* hit, not to
+  bypass anything.
+- **`down [slot]`** clears any `min1hp` pin the target currently holds — the same order
+  `Slay`'s `KillHere` branch already uses before a real kill — applies `9999` damage through
+  the identical `ApplyDamageEffect` call (clamped to 10000 by the VM handler, same value
+  `KillCreature` uses), then restores the pin. Because `CSWSCreature::GetDead` hard-returns 0
+  for a client-party member (§1, VERIFIED), this lethal hit can never truly kill a party
+  member — it can only cross zero and produce **exactly** the temp-dead state a real lethal
+  hit produces, the same state `DeathController`/`DeathPump`/the engine's own
+  `TempDeathUpdate` auto-revive already know how to handle. The pin is restored afterward
+  (not left off) because, unlike a slain enemy, the party member keeps playing and a module's
+  own safety net (Endar Spire command deck, the Taris duel ring) should still be there once
+  they are revived.
+- **THE FLOOR EACH RESPECTS/BYPASSES, PRECISELY:** `hurt` respects both 1-hp floors (it is
+  ordinary damage). `down` bypasses only the `min1hp` pin, and only for the one hit it applies
+  — nothing needs to bypass the difficulty floor, since it is statically unreachable in
+  retail. Neither verb touches the −10 dying window itself; that is exactly what makes `down`
+  produce the SAME state a real kill does rather than a synthetic one.
+- Both refuse cleanly with no creature resolved: `TryResolvePartyOrSelf` only ever resolves
+  the local player (`CheatTargetLocalPlayer`, the console's own "blank slot" default) or a
+  live party-roster slot 0-8 (`Odyssey.GetPartyRosterObjectId` + `ResolveServerObject`) — an
+  empty slot, a stale roster entry, or an out-of-range number all answer with the specific
+  reason rather than silently no-opping, the same convention every other staging cheat in this
+  channel follows.
+- Pure-logic pieces are unit-tested: `CoopCheatDispatchTests.HurtAndDownCarryTheDamageAndTheLocalPlayerSentinel`/
+  `HurtAndDownCarryATypedPartySlotVerbatim` exercise `ConsoleCommand`'s parser end to end
+  through the full agent dispatch (amount/slot bounds, the blank-slot default, the local-player
+  sentinel vs. a real slot 0, the exact refusal set in `ARefusedLineNeverReachesThePlugin`), and
+  `CheatKindSyncTests`/`ConsoleCommandVerbTableCoverageTests` now also cover `Hurt`/`Down`.
+- NEEDS-LIVE: everything about actually watching the pipeline react — see the recipe below.
+  Code review and static disassembly cross-check (`Odyssey.ApplyDamageEffect` is exercised
+  today by `slay`/`hurt`'s own dev-verb sibling and by `KillCreature`, so the call shape
+  itself is already exercised on this engine) give this reasonable confidence, but "the
+  handler chain converts a `down` hit into `GetDeadTemp` and the game does not crash" is not
+  yet an observed fact. One specific ordering risk worth naming: `Down` clears `min1hp`,
+  applies the lethal effect, and restores `min1hp` all in the SAME native call sequence
+  (unlike the Resurrection recipe in §4, which defers its hit-point top-up a full tick because
+  `ApplyEffect`'s own handler dispatch may not be synchronous). `Odyssey.ApplyDamageEffect` is
+  a plain in-process native call with no queued/async step of its own — the same shape
+  `KillCreature` already uses synchronously throughout this codebase — so the death DECISION
+  inside `OnApplyDamage` is expected to run and complete before the call returns, making an
+  immediate restore safe. But this has not been independently confirmed the way §4's own
+  caveat was inferred, so if a live round ever finds `down` producing "set hp 1" instead of a
+  genuine downed state on a creature that DID have `min1hp` set, this ordering is the first
+  place to look — the fix would be to defer the restore one tick, the same shape
+  `ApplyPendingHitPoints`/`_pendingHitPoints` already use.
+
+### 6.2 Client `TempDeathUpdate` suppression — VERIFIED (bytes, calling convention), NEEDS-LIVE (behaviour)
+
+§5 item 4 recommended neutralising `TempDeathUpdate` (0x004B6DA0) entirely on a client, since
+all three of its jobs (game-over, auto-revive, gather-teleport) are host-authoritative
+decisions in co-op — and the code never built it; only comments referenced the address. This
+round adds the third guard to `DeathController.cs`, in the exact verified-bytes-or-refuse
+style of the two shipped ones, gated OFF by default behind a new coop.ini key.
+
+- **The bytes patched, and why they are safe.** `TempDeathUpdate`'s first instruction is `mov
+  eax, dword ptr fs:[0]` (`64 A1 00 00 00 00`, 6 bytes) — the opening move of MSVC's SEH
+  exception-frame setup, unrelated to anything the function actually computes before the
+  early return skips the rest of it. VERIFIED against the binary with `tools/disasm.py 0x4B6DA0
+  64`/`0x4BAC30 48`/`0x4B71C0 80`: the prologue bytes match exactly, the function's single
+  caller (server `MainLoop`, `mov ecx, esi; call TempDeathUpdate` at 0x004BAC4A) pushes NO
+  stack arguments, and the function's own epilogue is a bare `ret` (`c3`, no operand) at
+  0x004B71DE — a plain `__thiscall` with zero explicit arguments. The early-return stub
+  therefore needs no stack cleanup at all (unlike the `ChangeCharacter` swap guard's `ret 8`):
+  when suppressed it is a single `ret`; when not, the relocated 6-byte prologue instruction
+  runs and control jumps to `TempDeathUpdate+6`, identical in shape to the two shipped
+  guards. death-handling.md's own risk register already rated this LOW ("function only reads
+  party state and applies effects; skipping it leaves no dangling state") — the combat-clear
+  timers at `+0x100D0/+0x100D4` simply stay wherever they were for as many frames as the
+  client suppresses the function, and nothing else reads them.
+- **What a client loses while this is armed**, precisely: the engine's own auto-revive of its
+  own PC after 5 s with no hostile visible (`DeathPump`'s `RequestRevive` — a standing peer
+  within 3.5 units — is the client's PC's only remaining stand-up path while this guard is
+  on, alongside the existing peer-rescue window that already exists regardless), and the
+  gather-teleport that snaps a member more than 40 m from the leader back to them (party-sync
+  already owns positions on a client, so this was redundant at best). Game-over itself was
+  already swallowed by the second, always-on guard (`RunDeathSequenceCall`) on every instance,
+  client or host — this third guard's marginal effect on game-over is that a client no longer
+  even evaluates the all-dead scan that would have tried to raise it.
+- **Gating.** New coop.ini key `client_temp_death_suppress` (plugin-side, `PluginConfig`),
+  default **OFF** — this is exactly the kind of NEEDS-LIVE lever the project's own convention
+  ships inert until observed. Even with the key on, the guard only actually suppresses while
+  `SharedBlockView.DamageDealtEnabled` is true — the same flag `CheatAuthority`/`IncomingDamageController`
+  already treat as "this instance mirrors somebody else's enemies", i.e. is a connected
+  client, set true only by `KotorGameBridge.ReadDamageDealt` on the client's own pump path
+  (`CombatPump.Enemies.cs`). At the main menu, on a host, or before that flag has been set,
+  the guard is armed-but-inert — `Install()` treats a refusal of this third patch as
+  non-fatal (logged, not fatal) so a bad match here can never take the two already-shipped
+  suppressions down with it.
+- Added to `profiles/coop.ini.example` (shipped `=0`, with the reasoning above) and
+  `docs/CONFIG.md`.
+- NEEDS-LIVE: whether a client actually behaves correctly with `TempDeathUpdate` fully dark —
+  in particular, whether anything else on the client side silently depended on the
+  combat-clear timers advancing even though nothing reads them today.
+
+### 6.3 The live-verification recipe
+
+**Save/module:** any module outside the two known `min1hp`-pinned zones
+(`min-one-hitpoint.md`) — the Endar Spire command deck and the Taris duel ring. `tar_m10aa`
+(Black Vulkar Base), already the Step 3 combat module in `playthrough-taris.md`, is a known-
+clean choice reachable from the same Taris save the last two playthrough rounds used.
+
+**Setup:** `demo.ps1` with both instances loaded into that module, standing within a few
+meters of each other. For (ii)/(iv) below, set `client_temp_death_suppress = 1` in the
+CLIENT's `coop.ini` before launch (default OFF leaves the client on stock `TempDeathUpdate`,
+which is also worth a control run).
+
+1. **A peer sees the phantom down.** On instance A: `~`, `down`. Instance A's own plugin log:
+   `death: the local player is down`. On instance B, `who`: the peer's row now reads `<name>
+   tar_m10aa  [down]` (`CoopCommandDispatcher.Session.cs`'s `WhoCommand`, sourced from
+   `PlayerState.IsDowned` on the wire) — this is the check that the DOWNED STATE ITSELF, not
+   just the console's own answer, crossed to the other instance. `pwsh tools\blockpoke.ps1
+   -ProcId <A's pid> death` on instance A also reads `downed 1 (serial N)`.
+2. **Auto-revive from a standing peer within 3.5 units.** With A still down from step 1, walk
+   B's character within ~3.5 units of A (`DeathPump.ReviveRangeUnits`) and stop. Instance A's
+   plugin log: `death: revive applied; the player stands up`, then `death: revived player
+   topped up to 15 hp` (`DeathPump.ReviveHitPoints`) within about a second. `who` on instance
+   B: the `[down]` flag on A's row clears. Repeat from >3.5 units away first to confirm the
+   rescue does NOT fire prematurely (`DeathPump`'s own distance log line names both positions
+   if it does — see its "found live" comment about a 76-unit false rescue).
+3. **Game-over suppression holds while only one is down.** `down` on instance A again;
+   confirm A does NOT show the "Your entire party has been killed" screen and does NOT swap
+   control to a companion (`SuppressGameOver`/`SuppressControlSwap` both hold while
+   `DeathPump.PumpDeath` sees B still standing) — `blockpoke.ps1 death` on A should read
+   `suppress: gameOver 1 swap <0 or 1, host-vs-client>`. Instance B keeps playing normally the
+   whole time (walk it around, open a container — nothing on B should hitch).
+4. **Both down together → stock game-over on both.** With A already down, `down` on instance
+   B too (same module, or `down` naming B's own PC if B is standing elsewhere — the point is
+   both players' local `IsDowned` reads true at once). Within a few seconds both plugin logs
+   should show `death: game-over suppressed; the session decides` followed by
+   `every player is down; releasing the game-over screen for everyone`
+   (`DeathPump.PumpDeath`'s `allDown` branch), and BOTH screens should then show the real
+   "Your entire party has been killed" flow together — never one instance alone at the menu
+   while the other still plays.
+5. **The client-suppression guard itself (§6.2).** With `client_temp_death_suppress = 1` on
+   the client and the client actually connected (so `DamageDealtEnabled` is true), the plugin
+   startup log line should read `death handling: ...; client temp-death guard at
+   0x4B6DA0 (stub 0x.., configured=True)`. Repeat steps 1-2 once more and confirm the client's
+   own PC still revives via `DeathPump.RequestRevive` (step 2's mechanism, unaffected by this
+   guard) even though the client's own `TempDeathUpdate` is not running at all — the point of
+   this check is that the peer-rescue path does not depend on the function this guard
+   disables.
+
+None of this recipe has been run against a live game as part of this pass (build + unit tests
+only, per this round's own constraints) — every claim in §6.1/§6.2 above is tagged
+accordingly. The recipe is written to be followed verbatim by whichever session next has the
+rig.

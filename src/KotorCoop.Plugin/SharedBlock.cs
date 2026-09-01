@@ -1035,4 +1035,57 @@ internal partial struct SharedBlock
     /// range.
     /// </summary>
     public const uint CheatKindPopModal = 54;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-09-02, docs/research/death-handling.md's dated
+    /// follow-up): applies REAL damage through the same VM path <c>slay</c>'s
+    /// <c>Odyssey.ApplyDamageEffect</c> already uses — <c>EffectDamage</c> +
+    /// <c>ApplyEffectToObject</c>, the pipeline a genuine hit runs — so the co-op down/revive
+    /// pipeline can be reached without waiting for a real fight to drop someone to 0 hp. Runs
+    /// through <c>CSWSCreature::DoDamage</c>/<c>CSWSObject::DoDamage</c> exactly like a live
+    /// swing: difficulty scaling, temp-HP (shield) absorption and BOTH of the engine's own
+    /// 1-hp floors (a <c>min1hp</c> pin — module or <c>god</c> — and the difficulty
+    /// <c>MinHP1</c> rule, statically dead in retail per <c>IsDifficultyMinOneHitPointOn</c>)
+    /// apply exactly as they would to a real hit — this is the floor <see cref="CheatKindDown"/>
+    /// deliberately bypasses.
+    ///
+    /// <see cref="CheatAmount"/> is the damage amount (required, clamped 1..10000 by the VM
+    /// handler itself). <see cref="CheatTarget"/> is <see cref="CheatTargetLocalPlayer"/> for
+    /// yourself (the console default when no slot is typed) or a party-roster slot 0-8 — the
+    /// only two kinds of body the engine's temp-death machinery ever applies to
+    /// (<c>CSWSCreature::GetDead</c> hard-returns 0 only for a client-party member; anyone
+    /// else just dies outright, which is not what this verb is for). Local only, never crosses
+    /// the network.
+    ///
+    /// ⚠ 63, next free after every noted reserved range through 62 as of 2026-09-02. This
+    /// wave owns the whole cheat-kind counter — see docs/CONTRIBUTING.md's parallel-session
+    /// hazards for why that matters.
+    /// </summary>
+    public const uint CheatKindHurt = 63;
+
+    /// <summary>
+    /// DEV-ONLY LIVE-TEST PRIMITIVE (2026-09-02, docs/research/death-handling.md's dated
+    /// follow-up): forces the SAME genuine temp-death state a real lethal hit produces — not a
+    /// fake "downed" flag — by clearing any <c>min1hp</c> pin the target currently holds (the
+    /// same order <c>slay</c> uses before a real kill), applying enough lethal damage through
+    /// <c>Odyssey.ApplyDamageEffect</c> to certainly cross zero, then restoring the pin
+    /// afterward — a party member never truly dies from this
+    /// (<c>CSWSCreature::GetDead</c> hard-returns 0 for a party member); it enters exactly the
+    /// temp-dead state <c>TempDeathUpdate</c>'s own auto-revive already knows how to recover
+    /// from. THIS IS THE FLOOR <c>hurt</c> RESPECTS AND <c>down</c> BYPASSES: a module's
+    /// <c>min1hp</c> pin (Endar Spire command deck, Taris duel ring — min-one-hitpoint.md)
+    /// would otherwise convert the lethal effect into "set hp 1" and no temp-death would ever
+    /// fire, defeating the entire point of a verb built to reach the pipeline on demand. The
+    /// difficulty <c>MinHP1</c> floor is left alone — nothing needs to bypass it, since it is
+    /// statically dead in retail (<c>IsDifficultyMinOneHitPointOn</c>).
+    ///
+    /// <see cref="CheatTarget"/> is <see cref="CheatTargetLocalPlayer"/> for yourself (the
+    /// console default) or a party-roster slot 0-8, the same addressing <see cref="CheatKindHurt"/>
+    /// uses. <see cref="CheatAmount"/> is unused. A target already down is a reported no-op,
+    /// not a re-application. Local only, never crosses the network.
+    ///
+    /// ⚠ 64, next free after every noted reserved range through 62 as of 2026-09-02 (63 taken
+    /// immediately above by <see cref="CheatKindHurt"/>).
+    /// </summary>
+    public const uint CheatKindDown = 64;
 }

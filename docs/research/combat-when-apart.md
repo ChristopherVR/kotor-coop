@@ -330,3 +330,13 @@ written down rather than rushed.
   With the players apart this means an encounter trigger the client walks over does nothing
   until the host walks over it too. NOT FIXED, and not cheaply fixable: client-side spawning
   would shift the object-id counter, which is the identity the entire channel rests on.
+
+  **2026-09-02 note (append-only — the line above is left as written, not corrected in
+  place):** this gap was closed by [client-encounters.md](client-encounters.md), which does
+  not shift the object-id counter at all — instead of spawning on the client, the HOST calls
+  `CSWSEncounter::SpawnIfAppropriate` itself, on its own engine, using the client's PHANTOM
+  (already mirrored on the host) as the object that "walked in" — so every creature the
+  encounter spawns is still created on the host's own counter, and the client just sees the
+  ordinary enemy-mirroring channel bring them into view. Shipped as `client_encounters`, **ON
+  by default**. See that document for the full design, the wire shape, and its own
+  verification status.

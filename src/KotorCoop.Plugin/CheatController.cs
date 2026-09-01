@@ -110,6 +110,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 StandUp(player, playerId);
                 break;
 
+            case SharedBlock.CheatKindHurt:
+                Hurt(player, playerId);
+                break;
+
+            case SharedBlock.CheatKindDown:
+                Down(player, playerId);
+                break;
+
             case SharedBlock.CheatKindSlay:
                 Slay(playerId);
                 break;

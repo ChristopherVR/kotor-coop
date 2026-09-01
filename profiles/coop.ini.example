@@ -956,3 +956,19 @@ solo_segment_any_module=0
 # either side. Every write in all three sessions was accounted for - one per real transaction,
 # none spurious.
 store_sync=2
+
+# On a CLIENT instance only, early-return the engine's own CServerExoAppInternal::TempDeathUpdate
+# (0x004B6DA0) entirely, instead of letting it run and only swallowing its game-over call
+# (DeathController's other, always-on patch). TempDeathUpdate's three jobs - deciding game-over,
+# auto-reviving a temp-dead party member after 5s of no nearby hostile, and teleport-gathering
+# anyone far from the leader - are all host-authoritative decisions in co-op: the host's own
+# swallow already decides a genuine wipe, a client-local auto-revive would stand a companion up
+# while the host's own mirror still shows it down, and party-sync already owns positions. A
+# client's own PC revive still arrives normally, through DeathPump's peer-rescue request.
+#
+# Byte-verified-or-refuse, exactly like the other two death patches, and armed ONLY while this
+# instance is actually a connected client (never at the main menu, never on a host, even with
+# this key on). Defaults OFF - death-handling.md #5 item 4 is reasoned but NEEDS-LIVE, so nobody's
+# behaviour changes until they opt in. See docs/research/death-handling.md's 2026-09-02 section
+# for the live-verification recipe.
+client_temp_death_suppress=0
