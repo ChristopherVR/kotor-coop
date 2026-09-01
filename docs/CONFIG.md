@@ -116,6 +116,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |
 | `mirror_smooth_ms` | `150` | smoothing window for enemy/party mirroring, ms, clamped 0-600 | [lag-audit.md](research/lag-audit.md) |
 | `local_combat` | ON | let a mirrored enemy fight a client through the client's own engine | [combat-participation.md](research/combat-participation.md) |
+| `local_combat_slots` | `3` | how many hostiles a client may fight simultaneously through local_combat, clamped 1-3; 1 reproduces the original single-fight behaviour bit for bit; plugin-local, not required to match between peers (see §11 for why) | [combat-participation.md §11](research/combat-participation.md) |
 | `local_combat_diag_undriven_id` | `0` (off) | debug: force one id undriven, to isolate a bug | — |
 | `local_combat_bypass_id` | `0` (off) | debug: bypass id for local combat | — |
 | `local_combat_bisect_mask` | `0` (off) | debug: bisection mask for isolating a local-combat bug | — |
@@ -123,7 +124,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `local_combat_engage_range` | `11` | engage distance for a released local-combat enemy | — |
 | `local_combat_timeout_s` | `25` | seconds before a released enemy reclaims to the mirror | — |
 | `local_combat_targeting_us_fresh_s` | `2` | freshness window for targeting data, seconds | — |
-| `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on the one local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
+| `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on a free local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
 | `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |

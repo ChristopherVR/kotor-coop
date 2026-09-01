@@ -48,7 +48,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
-| [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE. §10 (2026-08-28) root-caused the "client can't hit an Endar Spire Sith" report with exact `faction`-verb reads: `end_sith2` genuinely starts in a FRIENDLY faction — not a client/host asymmetry, not a co-op bug |
+| [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE. §10 (2026-08-28) root-caused the "client can't hit an Endar Spire Sith" report with exact `faction`-verb reads: `end_sith2` genuinely starts in a FRIENDLY faction — not a client/host asymmetry, not a co-op bug. §11 (2026-09-02) widens `local_combat` to up to 3 simultaneous slots (`local_combat_slots`); built and unit-tested, NEEDS-LIVE |
 | [combat-when-apart.md](combat-when-apart.md) | What happens when the two players are not together | Reviewed; encounters-only-fire-for-host gap intentionally NOT fixed (structural) |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | One visible fight instead of two private ones | Design over verified research; implemented, live-verified |
 | [enemy-materialisation.md](enemy-materialisation.md) | Building a mirror body for an enemy the mirror has none for | Implemented, live-verified |
