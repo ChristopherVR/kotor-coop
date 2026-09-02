@@ -28,7 +28,7 @@ chain loader when another mod already owns that name); everything else attaches 
 | Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
 | Minigames — swoop race | Root-caused 2026-08-29 (the blocker was the test recipe, not the mod); race runs end to end, peers locked out of the single-seat track | [minigames.md](docs/research/minigames.md) |
 | Minigames — Pazaak detection, "waiting" notice | Live-verified 2026-08-28 (a range-guard bug that silenced detection was found and fixed); `pazaak_detect` flipped ON by default | [minigames.md](docs/research/minigames.md) |
-| Creature liveness reconciliation | Off by default, open | [creature-liveness.md](docs/research/creature-liveness.md) |
+| Creature liveness reconciliation | Live-verified 2026-09-03 (destroy/kill dispatch, 49-creature population, zero freshness disagreements), ON by default | [creature-liveness.md](docs/research/creature-liveness.md) |
 | Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) |
 | Host loss (`host_loss_release`) — a client whose host vanishes | Live-verified 2026-08-29 — every plugin-side lock releases within ~6s (`host_loss_timeout_ms` 5000, `PacketType.HostBye`), the client plays solo, and auto-rejoins when the host returns | [disconnect-reconnect.md §11](docs/research/disconnect-reconnect.md) |
 | Persistent connection indicator | Live-verified 2026-08-27 (partial — data path confirmed, on-screen render unconfirmed) | [connect-flow.md](docs/research/connect-flow.md) |

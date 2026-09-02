@@ -892,9 +892,18 @@ map_reveal_sync=1
 # more specific reason the dispatch still cannot be observed: the agent's own external creature
 # scan does not appear to notice a DestroyObject'd body within a session (an ordinary kill on a
 # sibling creature updated the census within seconds in the same test) - which would block this
-# channel's headline case regardless of module population. Stays OFF by default. See
+# channel's headline case regardless of module population. See
 # docs/research/creature-liveness.md's dated live-pass sections.
-liveness_sync=0
+# 2026-09-03: every item of that doc's live checklist the rig could reach is now VERIFIED
+# on both halves - the destroy-to-match dispatch (`destroyobject 0x1F` on the host ->
+# "liveness: 0x1F no longer exists on the owner and still did here - destroying to match"),
+# the out-of-census kill (host census capped at 5 -> "0x3B is a corpse on the owner and was
+# still alive here - killing to match"), the freshness probe at 26 and 49 creatures (zero
+# disagreements; the earlier "the scan does not notice a DestroyObject" theory was a log
+# budget spent on anomaly lines, fixed the same day), the module-epoch reset, and a
+# 49-creature population (ids ARE reused across module loads in one process, so the reset
+# matters). Default ON since.
+liveness_sync=1
 
 # Replicate RemoveJournalQuestEntry (a real, common NWScript operation - 12 scripts across 8
 # modules in the retail game) so a peer's journal entry that vanishes on one instance vanishes on

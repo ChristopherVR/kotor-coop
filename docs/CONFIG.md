@@ -144,7 +144,7 @@ player should set. Each exists to make an otherwise-unreachable code path reacha
 | `dialogue_auto_join` | `off` (mode: off/near/always) | auto-pull the other player into an ORDINARY conversation you start (`near`/`always`); a FORCED conversation — an ambush, a scripted cutscene — always auto-joins regardless of this setting | [dialogue-sync.md](research/dialogue-sync.md) |
 | `dialogue_auto_join_range` | `20` | distance for `near` auto-join mode | [dialogue-sync.md](research/dialogue-sync.md) |
 | `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
-| `liveness_sync` | OFF | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
+| `liveness_sync` | ON (since 2026-09-03; was OFF) | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
 | `map_reveal_sync` | ON¹⁰ | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
 | `enemy_materialise` | ON | build a mirror body for an enemy the mirror has none for yet | [enemy-materialisation.md](research/enemy-materialisation.md) |
 | `movement` | direct placement unless `walk` | phantom movement: direct placement (seamless) or pathfinding walk | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
