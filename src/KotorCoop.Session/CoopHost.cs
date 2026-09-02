@@ -40,6 +40,11 @@ public sealed partial class CoopHost : ICoopSession
         /// own timer, and a peer that reconnects gets a fresh <see cref="PeerConnection"/>
         /// and therefore a fresh one too.</summary>
         public readonly SaveIdentitySettle SaveSettle = new();
+
+        /// <summary>Tells this peer's same-world saves (the engine's own transition autosave)
+        /// apart from a genuinely different save — see <see cref="Protocol.SaveLineage"/>.
+        /// One per peer for the same reason as <see cref="SaveSettle"/>.</summary>
+        public readonly SaveLineage SaveLineage = new();
     }
 
     /// <summary>

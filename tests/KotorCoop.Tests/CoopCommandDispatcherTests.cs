@@ -480,13 +480,38 @@ public class CoopCommandDispatcherTests
         }
     }
 
+    /// <summary>
+    /// A port the host can open BOTH ways: its game channel is UDP and its world-serve
+    /// listener is TCP on the same number. Probing TCP alone (the old helper) handed out ports
+    /// inside Windows' UDP exclusion ranges (`netsh int ipv4 show excludedportrange udp` —
+    /// Hyper-V/WSL reserve 100- and 1000-port blocks in the ephemeral range, and ephemeral
+    /// ports are dealt sequentially), where <c>UdpChannel</c>'s bind fails with WSAEACCES, the
+    /// dispatcher's Host lands on "could not start the session", and every Hosting* test in a
+    /// row failed with `manager.Current` null until the sequence walked out of the block
+    /// (2026-09-03, 3/3 red then 3/3 green with no code change in between).
+    /// </summary>
     private static int FreePort()
     {
-        using TcpListener probe = new(IPAddress.Loopback, 0);
-        probe.Start();
-        int port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            using Socket udp = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            udp.Bind(new IPEndPoint(IPAddress.Any, 0));
+            int port = ((IPEndPoint)udp.LocalEndPoint!).Port;
+
+            try
+            {
+                using TcpListener tcp = new(IPAddress.Loopback, port);
+                tcp.Start();
+                tcp.Stop();
+                return port;
+            }
+            catch (SocketException)
+            {
+                // TCP side taken on that number; ask the UDP stack for another.
+            }
+        }
+
+        throw new InvalidOperationException("no port free for both UDP and TCP after 50 probes");
     }
 
     /// <summary>The world-serve listener starts on the dispatcher's own 150 ms tick, so the

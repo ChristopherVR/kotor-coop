@@ -3394,9 +3394,9 @@ lines). `combat-participation.md` §13's own NEEDS-LIVE mark is closed — see i
 
 **Galaxy map** — already documented in `galaxy-map-and-party-select.md`; no new facts this round.
 
-**Still NEEDS-LIVE**: a real unlocked transition door (`usedoor`) exercising the warp-crash fix,
-and the galaxy-map confirm refusal firing against a real Accept click. (`E_PROTO` was done at
-04:21 the same night — see the section below.)
+**Still NEEDS-LIVE**: the galaxy-map confirm refusal firing against a real Accept click.
+(`E_PROTO` was done at 04:21 the same night, the real door at 05:10–05:33 via `crossdoor` — see
+the sections below.)
 
 ## `E_PROTO` version-mismatch reject, live (2026-09-03, 04:21)
 
@@ -3429,3 +3429,42 @@ docs/research/peer-damage-ledger.md §11. Rerun 04:48–04:51 with the host `tp`
 first (§11.6): the engine's own AI went to the client and stayed — 28 phantom hits in two
 minutes, none on the host PC, no `threat:` order needed — so the channel acts only while both
 players are in the same melee.
+
+## Real door crossing via `crossdoor`, live (2026-09-03, 05:10–05:35): 3/3 transitioned, a false `W_SAVE` rejoin found and fixed
+
+Rig `demo.ps1 -Save 1`, both in end_m01aa. `tp 44.5 120.1 0` (end_door10 is 101.7 m from the
+spawn; `crossdoor` refuses past 40 m), then `crossdoor end_door10` on the host, three times over
+three fresh rigs.
+
+**Every run:** host plugin `door: crossing 0x4A (2.9m) -> 'end_m01ab' (waypoint 'from_01a')
+posted as event 0x1E from the PC (party index 0), not walked` → `area transition pending:
+flushing spawned objects before the module is stored` → `announce: door 0x4A transition beginning
+-> 'end_m01ab' at waypoint 'from_01a'` within 0.6 s; client agent `following Lanik to 'end_m01ab'
+IMMEDIATELY (announced transition serial 1 ...)`; both agents' status lines `module end_m01ab`;
+end_m01ab's module-entry conversation started on both sides (`engine reached StartDialog`, the
+other side `adopting it to follow`, `followed the owner 6 -> 7`). Trask left the party on entry
+(`party roster: local party is now 0x000`) — vanilla OnEnter behaviour, and the client's
+`party_together_fix` clamp line followed it. 0 faults on either plugin log. The warp-crash fix's
+real-door clause (transition-crashes.md) is exercised: no `6B5FEE`, no crash.
+
+**Run 1 (05:10:48) — the bug:** at 05:11:03 the client printed `[W_SAVE] different save`,
+`your world still differs from the host's - rejoining automatically`, `starting rejoin
+(SaveMismatch)`, `adopted 'end_m01ab' (661,457 bytes, identity 0x2EDFDAA3)`, `rejoined
+'end_m01ab'` — and, because the client owned the cutscene, the host logged `dialogue: the owner
+ended the conversation; closing` mid-way. Cause: the engine's transition autosave (both
+`000001 - AUTOSAVE` dirs rewritten at 05:10:49, different bytes) puts each side's own
+`Mod_NextObjId` counters into the digested save, so the identities disagree for good after any
+real door. Fix: `SaveLineage` (session-save.md, 2026-09-03 section) — a mismatch after a recorded
+agreement with no load edge on either side is a same-world save.
+
+**Runs 2 and 3 (05:25:36, 05:33:01), agent rebuilt with the fix:** no `W_SAVE`, no rejoin, the
+cutscene completed on both sides (`the owner ended the conversation` at 05:25:53 / 05:33:18 with
+the owner's own close), both exploring end_m01ab. Run 3 printed the fix's one line — `save
+identity differs after a save on one side, with no load since the two last agreed - same world,
+not rejoining` — at 05:33:04 (and again at 05:33:08: per-call flag flickering on the mid-transition
+module-name mismatch; made a per-episode level afterwards, unit-tested, not re-run live).
+
+Reading the demo agent logs: `agent1.log`/`agent2.log` carry TIMES ONLY and accumulate across
+days, so `^\[05:` also matches yesterday's 05:xx status lines (a `module END_M01AA  malformed 1`
+run from 2026-09-02 sat interleaved with today's `module end_m01ab` lines). Cross-check against
+the plugin logs, which are per launch.

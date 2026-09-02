@@ -781,9 +781,12 @@ copied verbatim from `profiles/coop.ini.example` — all survived, with **zero**
 `tools/verify.ps1` run in the same configuration reported
 `the host still controls its companions PASS  table 1 companion(s), CSWParty 2 (PC+companions)`,
 i.e. the legitimate case (count 2, both members resolvable) still works. The real-door clause
-(`end_door10 -> end_m01ab`) is still **unexercised**: `usedoor`'s walk stalled short of the door
-on both attempts and never started a transition, a staging-verb/pathing limitation unrelated to
-this fix.
+(`end_door10 -> end_m01ab`) was **unexercised** at the time — `usedoor`'s walk stalled short of
+the door on both attempts and never started a transition, a staging-verb/pathing limitation
+unrelated to this fix — and was **exercised 2026-09-03** through `crossdoor end_door10`, which
+posts the door's own 0x1E crossing event to the engine's AI master: 3/3 crossings transitioned
+both players into end_m01ab through the engine's own door path, zero `6B5FEE`, zero faults
+(cinematics.md §8.3c, live-verification.md 2026-09-03 05:10–05:35).
 
 ## The CLIENT vanishing on its first follow after a wipe-recovery rejoin (2026-09-02, open; FIXED 2026-09-03)
 

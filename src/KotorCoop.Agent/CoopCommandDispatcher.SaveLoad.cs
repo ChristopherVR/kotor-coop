@@ -82,6 +82,10 @@ public sealed partial class CoopCommandDispatcher
     /// cooldown timer started against a previous one.</summary>
     private MismatchRejoinWatchState _mismatchRejoinState = MismatchRejoinWatchState.Initial;
 
+    /// <summary>Edge state for the one-line <see cref="CoopClient.SaveLineageAbsorbing"/>
+    /// announcement.</summary>
+    private bool _saveLineageAnnounced;
+
     /// <summary>See <see cref="WipeRecoveryRule"/> — the host's reload from the game-over menu
     /// after a session wipe, which neither classifier can see. Reset with the two above.</summary>
     private WipeRecoveryState _wipeRecoveryState = WipeRecoveryState.Initial;
@@ -142,6 +146,7 @@ public sealed partial class CoopCommandDispatcher
             _sessionSaveWatch.Reset();
             _rejoinState = RejoinDecisionState.Idle;
             _mismatchRejoinState = MismatchRejoinWatchState.Initial;
+            _saveLineageAnnounced = false;
             _wipeRecoveryState = WipeRecoveryState.Initial;
             _hostWorldReplacedState = HostWorldReplacedState.Initial;
             return;
@@ -192,6 +197,18 @@ public sealed partial class CoopCommandDispatcher
             if (outcome is not null)
             {
                 Reply(outcome);
+            }
+
+            // One line per episode: the engine's own transition autosave gives each side its
+            // own counters, so after a real door the raw identities differ for good while the
+            // world is still shared (SaveLineage). Say so once, then stay quiet until it clears.
+            if (client.SaveLineageAbsorbing != _saveLineageAnnounced)
+            {
+                _saveLineageAnnounced = client.SaveLineageAbsorbing;
+                if (_saveLineageAnnounced)
+                {
+                    Reply("save identity differs after a save on one side, with no load since the two last agreed - same world, not rejoining");
+                }
             }
 
             SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);

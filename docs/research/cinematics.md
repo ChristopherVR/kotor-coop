@@ -1370,9 +1370,50 @@ move-to-module calls — runs exactly as it would for a walked crossing, because
 master's own queue onward there is no way to tell the two apart. The only thing `crossdoor`
 skips is the part that has never once worked live: the walk itself.
 
-NEEDS-LIVE: this verb has not yet been run against a real game. The three prior `usedoor` rounds
-established the stall; this section documents the instrument built to route around it, not a
-confirmed result.
+**LIVE (2026-09-03, 05:10 / 05:25 / 05:33) — three crossings, all three transitioned, and the
+first one found a bug the walked crossing had been hiding.** Rig `demo.ps1 -Save 1` (both in
+end_m01aa, host Lanik leading), `tp 44.5 120.1 0` first because `end_door10` (0x4A) sits 101.7 m
+from the spawn and the verb refuses beyond 40 m, then `crossdoor end_door10`. Host plugin, every
+run identical to the millisecond pattern:
+
+    door: crossing 0x4A (2.9m) -> 'end_m01ab' (waypoint 'from_01a') posted as event 0x1E from the PC (party index 0), not walked
+    area transition pending: flushing spawned objects before the module is stored
+    announce: door 0x4A transition beginning -> 'end_m01ab' at waypoint 'from_01a'
+    party roster: local party is now 0x000 (recruited 0x000)
+
+and the client agent: `following Lanik to 'end_m01ab' IMMEDIATELY (announced transition serial
+1, not waiting for the module-change settle)` 0.6 s after the post. So the event path IS the
+real crossing: `CSWSDoor::EventHandler` took the 0x1E, the transition announce hook fired, the
+engine flushed, faded and moved both to `from_01a`, and end_m01ab's own module-entry cutscene
+(the Carth conversation) started on both sides — `dialogue: engine reached StartDialog` on
+each, then the other side `adopting it to follow`, `followed the owner 6 -> 7`, and it played out
+to `the owner ended the conversation` with both players exploring end_m01ab afterwards. Zero
+faults on either plugin, all three runs. (The `party roster: ... 0x000` line is Trask leaving
+— end_m01ab's OnEnter removes him; vanilla, not ours. The client's `party together: CSWParty's
+own member count read 1 against CSWPartyTable's 0 - clamping` right after is `party_together_fix`
+doing its job on the same removal.)
+
+**The bug it surfaced (run 1, 05:11:03).** Fourteen seconds after the crossing, mid-cutscene,
+the client printed `[W_SAVE] different save: enemies, doors, items and party are off — rejoin to
+adopt the host's world` and, `auto_rejoin` being on, `starting rejoin (SaveMismatch)` → `adopted
+'end_m01ab' (661,457 bytes, identity 0x2EDFDAA3)` → `rejoined 'end_m01ab'` two seconds later.
+The client had owned the conversation (it arrived first), so its departure closed it on the host
+too: `dialogue: the owner ended the conversation; closing` at 05:11:03.851, with the cutscene
+half-way. Nothing was wrong with the world: the engine's own transition autosave is what made
+the save identities differ (each engine writes ITS OWN runtime-id counters into `000001 -
+AUTOSAVE`, the directory the digest reads, and the host had dealt more ids than the client), and
+that disagreement is permanent — it would have cost a rejoin after EVERY door. The rule that
+fixes it, `SaveLineage`, is written up in session-save.md ("The transition autosave changes the
+save identity for good"). Runs 2 and 3 (agent rebuilt with it): no `W_SAVE`, no rejoin, the
+cutscene completed on both sides, and in run 3 the one on-screen line the fix leaves behind —
+`save identity differs after a save on one side, with no load since the two last agreed - same
+world, not rejoining` — printed at 05:33:04, 3 s after the crossing. (It printed twice in run 3,
+05:33:04 and 05:33:08, because the flag was still per-call and the module names flicker
+mid-transition; it is a per-episode level now — unit-tested, not yet re-run live.)
+
+`usedoor`'s walk stall is therefore the ONLY thing between a click and a crossing; the transition
+itself, the announce, the follow, the party gate and the cutscene are all clean through the
+engine's own event.
 
 
 ### 8.3a The party gate, and why `usedoor` gathers

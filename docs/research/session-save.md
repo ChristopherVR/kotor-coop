@@ -2175,3 +2175,45 @@ Requests 5/7 also show a second, smaller thing: `TriggerRejoin` fires while the 
 rejoin's engine load is still on the loading screen (`RejoinAfterLoadAsync` cannot block on the
 game; `TryGetAdoptedWorldLoadStatus` acks the request, not the world). With the false trigger
 gone there is nothing to fire, so that is left as is.
+
+## The transition autosave changes the save identity for good (2026-09-03): `SaveLineage`
+
+**Seen.** First real door crossing under co-op (`crossdoor end_door10`, end_m01aa → end_m01ab,
+cinematics.md §8.3c). Both engines autosaved through the transition — `000001 - AUTOSAVE`
+mtime 05:10:49 on BOTH installs, different sizes, different md5 — and 14 s later, with the
+module-entry cutscene half-way on both sides, the client printed `[W_SAVE] different save` and
+took the automatic rejoin (`starting rejoin (SaveMismatch)` → `adopted 'end_m01ab' (661,457
+bytes, identity 0x2EDFDAA3)` → `rejoined`), which closed the host's copy of the cutscene too
+(`the owner ended the conversation; closing`). The module's own objects had the same ids on both
+sides (trigger 0x26 fired natively on each; the GITs agreed, `W_GIT` never printed); the worlds
+had not diverged at all.
+
+**Why.** `TryComputeSaveIdentity` = nested module name + the `Mod_NextObjId` counters + the
+stored GIT id list. The counters are each engine's OWN runtime-id high-water marks, and the two
+engines never deal the same number of ids — the host spawns phantoms, stand-ins and script
+creatures the client does not, and vice versa. Before the first door the identities agree
+because both digest the SAME `-Save 1` bytes; after it, each side has rewritten the autosave with
+its own counters and they disagree until the next Load — i.e. forever, and again after every
+door. `SaveIdentitySettle` (5 s) only covers the timing lag of two sides crossing at different
+moments; it honoured this one correctly, because it IS persistent. Host-only warps had not shown
+it (the 2026-09-02 warp rounds compared equal) — a warp does not exit through the old module's
+door script and, on this rig, left the counters in step; a real door does not.
+
+**Rule (`KotorCoop.Protocol/SaveLineage.cs`, applied before the settle on both the client and,
+per peer, the host).** A save-identity mismatch is honoured when the two identities have NEVER
+agreed (a joining peer on a different save — what the identity exists for), or when either side's
+`WorldDigest.LoadSerial` has moved since they last agreed (someone loaded a save; the plugin's
+`WorldLoadRule` counts those, and treats both real transitions and announced warps as NOT loads).
+A mismatch that appears after agreement with no load edge on either side can only have come from
+a save, and a save does not change which world anyone is playing — so it is reported as
+agreement, and the dispatcher says so once per episode: `save identity differs after a save on
+one side, with no load since the two last agreed - same world, not rejoining`. Agreement is
+re-recorded whenever it is seen, so a later load is judged against the newest checkpoint. Per
+connection: a reconnecting peer starts from "never agreed" again, which is what a rejoin should
+be judged on. Seven facts in `SaveLineageTests`.
+
+**Live after the fix.** Two more crossings (05:25:36, 05:33:01): no `W_SAVE`, no rejoin, the
+cutscene ran to `the owner ended the conversation` on both sides with both players in end_m01ab,
+the announce line at 05:33:04. `PersistentSaveMismatchRule` and `RejoinTrigger.SaveMismatch` are
+unchanged — a genuinely different save (`-Save 2` on one side, or a Load mid-session) still
+rejoins exactly as the 2026-09-02 sections above describe.

@@ -35,6 +35,7 @@ public sealed partial class CoopHost
     private CompatibilityVerdict EffectiveVerdict(PeerConnection peer)
     {
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, peer.World);
+        mismatch = peer.SaveLineage.Apply(mismatch, _localWorld, peer.World);
         mismatch = peer.SaveSettle.Apply(mismatch, SessionClock.NowMs);
 
         return ContentCompatibility.ApplyWorldMismatch(peer.InstallVerdict, mismatch);

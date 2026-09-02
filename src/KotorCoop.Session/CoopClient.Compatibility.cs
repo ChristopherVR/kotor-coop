@@ -35,6 +35,17 @@ public sealed partial class CoopClient
     /// <see cref="SaveIdentitySettle"/>.</summary>
     private readonly SaveIdentitySettle _saveSettle = new();
 
+    /// <summary>Tells a same-world save (the engine's own transition autosave, live 2026-09-03)
+    /// apart from a genuinely different save — see <see cref="SaveLineage"/>. Fresh per
+    /// connection, so a rejoin is judged from "never agreed" again.</summary>
+    private readonly SaveLineage _saveLineage = new();
+
+    /// <summary>True from a raw save-identity disagreement <see cref="SaveLineage"/> read as a
+    /// same-world save until the identities next agree — the dispatcher puts one line on
+    /// screen per episode, so a crossing that used to cost a rejoin is still visible in the
+    /// log as the case it now handles.</summary>
+    public bool SaveLineageAbsorbing => _saveLineage.Absorbing;
+
     public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
 
     public CompatibilityVerdict? Compatibility => _compatibility;
@@ -77,6 +88,7 @@ public sealed partial class CoopClient
         }
 
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, _hostWorld);
+        mismatch = _saveLineage.Apply(mismatch, _localWorld, _hostWorld);
         mismatch = _saveSettle.Apply(mismatch, SessionClock.NowMs);
 
         _compatibility = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
