@@ -281,7 +281,47 @@ public sealed partial class CoopCommandDispatcher
         {
             DescribeId(asked, census);
         }
+
+        // `census ids` — the whole list, hp and dead flag, a few ids per line. Added
+        // 2026-09-03 because staging a live test needs a target id and nothing printed one:
+        // object ids are process-lifetime counters, so a reloaded module's creatures carry
+        // fresh, unguessable ids (the Vulkar pool was 0x24..0x3B on the first load and none of
+        // those resolved after the second).
+        if (string.Equals(token?.Trim(), "ids", StringComparison.OrdinalIgnoreCase))
+        {
+            ListCensusIds(census);
+        }
     }
+
+    /// <summary>Every census id with its health and dead flag, packed four to a line so each
+    /// line stays inside the 96-byte console answer channel; capped at
+    /// <see cref="CensusIdLines"/> lines (a dump nobody reads to the end helps nobody).</summary>
+    private void ListCensusIds(IReadOnlyList<EnemyState> census)
+    {
+        if (census.Count == 0)
+        {
+            Reply("census ids: (none)");
+            return;
+        }
+
+        const int perLine = 4;
+        int lines = 0;
+        for (int start = 0; start < census.Count && lines < CensusIdLines; start += perLine, lines++)
+        {
+            Reply("census ids: " + string.Join(
+                " ",
+                census.Skip(start).Take(perLine).Select(e => $"0x{e.ObjectId:X}:{e.CurrentHealth}/{e.MaxHealth}{(e.Dead ? "D" : "")}{(e.Plot ? "P" : "")}")));
+        }
+
+        if (lines * perLine < census.Count)
+        {
+            Reply($"census ids: ...and {census.Count - (lines * perLine)} more");
+        }
+    }
+
+    /// <summary>Line cap for <c>census ids</c>: 12 lines x 4 ids covers every population this
+    /// game's own content reaches (the 2026-08-24 survey topped out at ~33 objects).</summary>
+    private const int CensusIdLines = 12;
 
     /// <summary>How many per-id lines a dump prints before summarising. A console overlay is
     /// a few lines tall; a log can take more, but an unbounded dump helps nobody.</summary>

@@ -734,7 +734,19 @@ local_combat_range=20
 # ledger.md §8 for the RE this rests on (which VM-stack entry gets poked, and why) and the
 # live-verification recipe (a mirrored enemy should visibly retarget onto the attacking peer's
 # phantom instead of staying locked on the host's own PC).
-damage_creator_attribution=0
+damage_creator_attribution=0
+
+# HOST only. damage_creator_attribution above was measured live (2026-09-02, peer-damage-
+# ledger.md 8.10): the creator write lands, but K1's shipped AI never retargets an already-
+# engaged creature on it. This key does the retarget itself: the host keeps a small per-
+# creature threat table from forwarded peer damage (decaying, ThreatTable) and, when a peer's
+# threat clearly outweighs the creature's current target's (1.5x, at least 15 points, at most
+# once per 4 s per creature, never a plot creature, never onto a downed or absent phantom),
+# orders the creature onto that peer's phantom directly through ActionAttack. The host's OWN
+# damage is not in the table, so a creature fighting the host switches to a peer who has
+# dealt 15+ points - an aggro pull toward the peer, by design. OFF by default - NEEDS-LIVE,
+# docs/research/peer-damage-ledger.md 9; `tools/blockpoke.ps1 threat` dumps the live table.
+threat_retarget=0
 
 # Let ONE mirrored companion fight for real on a client, instead of being frame-by-frame
 # mirrored with its action queue wiped every pass (which is why only the host's own

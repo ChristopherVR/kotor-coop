@@ -49,7 +49,16 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
     private int _countdown;
     private bool _offLogged;
-    private int _logged;
+
+    /// <summary>One log budget PER OUTCOME, not one shared one. Live 2026-09-03 03:18 (client,
+    /// tar_m10aa, liveness_sync=1): the shared 20-line cap had been spent entirely on the
+    /// anomaly line (the counter stood at 148) before the first genuine destroy-to-match ever
+    /// ran, so the checklist's own "exactly ONE destroy line" evidence was silently unloggable —
+    /// the destroy itself worked (the creature resolved to 0x0 within 15 s), the line did not.</summary>
+    private int _killsLogged;
+    private int _destroysLogged;
+    private int _anomaliesLogged;
+    private const int LogBudgetPerOutcome = 20;
 
     /// <summary>Forgets every destroy-request latch on a module change — same reasoning as
     /// <see cref="CombatController.Invalidate"/>: ids are reassigned per module, so a
@@ -159,9 +168,9 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
                 // enforced above via localPlot, exactly like Apply's plot check does for the
                 // ordinary census path — LivenessRule.Decide already folds that in.
                 combat.KillForLivenessReconcile(entry.ObjectId);
-                if (_logged < 20)
+                if (_killsLogged < LogBudgetPerOutcome)
                 {
-                    _logged++;
+                    _killsLogged++;
                     PluginHost.Log($"liveness: 0x{entry.ObjectId:X} is a corpse on the owner and was still "
                         + "alive here - killing to match");
                 }
@@ -177,16 +186,16 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
                     // still be retried, but a request the engine accepted must not be re-issued
                     // while its own delayed removal is still pending.
                     RememberDestroyRequested(entry.ObjectId);
-                    if (_logged < 20)
+                    if (_destroysLogged < LogBudgetPerOutcome)
                     {
-                        _logged++;
+                        _destroysLogged++;
                         PluginHost.Log($"liveness: 0x{entry.ObjectId:X} no longer exists on the owner and "
                             + $"still did here - destroying to match (local 0x{effectiveId:X})");
                     }
                 }
-                else if (_logged < 20)
+                else if (_destroysLogged < LogBudgetPerOutcome)
                 {
-                    _logged++;
+                    _destroysLogged++;
                     PluginHost.Log($"liveness: destroy refused for 0x{entry.ObjectId:X} (failure {failure})");
                 }
 
@@ -194,9 +203,9 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
             case LivenessAction.Anomaly:
                 block.LivenessAnomalyCount++;
-                if (_logged < 20)
+                if (_anomaliesLogged < LogBudgetPerOutcome)
                 {
-                    _logged++;
+                    _anomaliesLogged++;
                     PluginHost.Log($"liveness ANOMALY: owner says 0x{entry.ObjectId:X} is alive, this "
                         + $"instance already has it {(localResolved ? "dead" : "gone")} - not resurrecting "
                         + "(the fix belongs upstream, see docs/research/creature-liveness.md)");

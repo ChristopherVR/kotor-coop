@@ -12,10 +12,24 @@ namespace KotorCoop.Plugin;
 /// actually stops a single glancing hit from redirecting a creature.</param>
 /// <param name="CooldownSeconds">Minimum time between two retargets of the SAME creature —
 /// never more than once per cooldown, regardless of how the threat table moves in between.</param>
+/// <remarks>⚠ Construct this through <see cref="Default"/>, never <c>new()</c>. This is a
+/// STRUCT, and a struct's parameterless <c>new()</c> is the zero-initialiser — it does NOT
+/// run the primary constructor, so the parameter defaults above are never applied and every
+/// tunable reads 0. That is exactly what shipped in the first live round (2026-09-03 02:55,
+/// docs/research/peer-damage-ledger.md §9): <c>threat: 0x24 retargeted 0x7FFFFFFF -> 0x13F
+/// (threat 6 vs 0)</c> — a 6-point hit redirected a Vulkar, straight through a "15-point"
+/// floor that was really 0. ThreatRetargetRuleTests pins the shipped values through
+/// <see cref="Default"/> and PeerDamageControllerThreatTests reads the controller's source to
+/// make sure it never goes back to <c>new()</c>.</remarks>
 internal readonly record struct ThreatRetargetOptions(
     double MarginRatio = 1.5,
     double MinThreatToRetarget = 15.0,
-    double CooldownSeconds = 4.0);
+    double CooldownSeconds = 4.0)
+{
+    /// <summary>The shipped tunables (1.5 / 15 / 4 s) — the ONLY way to get them; see the
+    /// type's remarks for why <c>new()</c> silently hands back zeros instead.</summary>
+    public static ThreatRetargetOptions Default => new(MarginRatio: 1.5, MinThreatToRetarget: 15.0, CooldownSeconds: 4.0);
+}
 
 /// <summary>Every outcome <see cref="ThreatRetargetRule.Decide"/> can reach, named so a caller
 /// (and a test) can tell WHY nothing happened rather than only THAT nothing happened.</summary>

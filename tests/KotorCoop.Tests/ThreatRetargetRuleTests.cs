@@ -14,6 +14,47 @@ public sealed class ThreatRetargetRuleTests
     private static readonly ThreatRetargetOptions Options = new(
         MarginRatio: 1.5, MinThreatToRetarget: 15.0, CooldownSeconds: 4.0);
 
+    // The shipped tunables come from ThreatRetargetOptions.Default, and ONLY from there:
+    // the type is a struct, so `new()` is the zero-initialiser and never runs the primary
+    // constructor's defaults. That is what shipped in the first live round (2026-09-03 02:55,
+    // "threat: 0x24 retargeted ... (threat 6 vs 0)" straight through a 15-point floor that
+    // was really 0). Pin Default's values, show the trap, and keep the controller off `new()`.
+    [Fact]
+    public void TheShippedDefaultsAreTheDocumentedOnes()
+    {
+        Assert.Equal(Options, ThreatRetargetOptions.Default);
+    }
+
+    [Fact]
+    public void AParameterlessNewIsAllZerosWhichIsWhyDefaultExists()
+    {
+        ThreatRetargetOptions zeros = new();
+        Assert.Equal(0.0, zeros.MinThreatToRetarget);
+        Assert.Equal(0.0, zeros.MarginRatio);
+        Assert.Equal(0.0, zeros.CooldownSeconds);
+        Assert.Equal(
+            ThreatRetargetDecision.Retarget,
+            ThreatRetargetRule.Decide(currentTargetId: 0x7FFFFFFF, topAttackerId: 0x13F, topAttackerThreat: 6, currentTargetThreat: 0, secondsSinceLastRetarget: double.PositiveInfinity, zeros));
+        Assert.Equal(
+            ThreatRetargetDecision.BelowMinimum,
+            ThreatRetargetRule.Decide(currentTargetId: 0x7FFFFFFF, topAttackerId: 0x13F, topAttackerThreat: 6, currentTargetThreat: 0, secondsSinceLastRetarget: double.PositiveInfinity, ThreatRetargetOptions.Default));
+    }
+
+    [Fact]
+    public void TheControllerTakesItsOptionsFromDefaultNotFromNew()
+    {
+        DirectoryInfo? root = new(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "KotorCoop.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.True(root is not null, $"no KotorCoop.slnx above {AppContext.BaseDirectory}");
+        string source = File.ReadAllText(Path.Combine(root!.FullName, "src", "KotorCoop.Plugin", "PeerDamageController.cs"));
+        Assert.Contains("ThreatRetargetOptions ThreatOptions = ThreatRetargetOptions.Default;", source);
+        Assert.DoesNotContain("ThreatRetargetOptions ThreatOptions = new()", source);
+    }
+
     [Theory]
     [InlineData(0u)]
     [InlineData(0x7F000000u)] // Odyssey.ObjectInvalid

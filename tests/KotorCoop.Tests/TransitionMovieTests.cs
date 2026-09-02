@@ -244,9 +244,12 @@ public class TransitionMovieTests
         // layout change, docs/research/shared-inventory-v2.md §17.7), 65 the same day's
         // materialised-owner-id table (block grown to 0x4C00, SharedBlock.
         // OffsetMaterialisedOwnerIds, docs/research/enemy-materialisation.md's 2026-09-02
-        // section) — see the changelog comments beside `_block->Version` and `PluginSignature`
-        // for the full history.
-        Assert.Equal(65, int.Parse(version.Groups[1].Value));
+        // section), 66 the 2026-09-03 threat-retarget diagnostics region (0x4B80 inside the
+        // existing 0x4C00, docs/research/peer-damage-ledger.md §9; the branch bumped the plugin
+        // half only and the rig refused to start with "plugin shared block not found" until
+        // the signature byte followed) — see the changelog comments beside `_block->Version`
+        // and `PluginSignature` for the full history.
+        Assert.Equal(66, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

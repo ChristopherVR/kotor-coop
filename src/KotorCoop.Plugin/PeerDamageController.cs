@@ -61,7 +61,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
     /// <summary>Rule-defined tunables for the retarget decision. Not coop.ini keys of their
     /// own — see docs/research/peer-damage-ledger.md §9 for why the defaults were picked.</summary>
-    private static readonly ThreatRetargetOptions ThreatOptions = new();
+    private static readonly ThreatRetargetOptions ThreatOptions = ThreatRetargetOptions.Default;
 
     private int _threatLogged;
 
@@ -441,7 +441,10 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             }
         }
 
-        if (Odyssey.ThreatRetargetEnabled)
+        // Sticky: a pass with no owed damage leaves the last populated table in place rather
+        // than zeroing it, or `tools/blockpoke.ps1 threat` (an external, between-passes read)
+        // would only ever see `count 0` — live 2026-09-03 03:05 it did, through a whole fight.
+        if (Odyssey.ThreatRetargetEnabled && threatDebugRows > 0)
         {
             block.ThreatDebugCount = (uint)threatDebugRows;
             block.ThreatDebugGeneration += 1;
@@ -502,6 +505,19 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
         if (decision != ThreatRetargetDecision.Retarget)
         {
+            // A refusal that had enough threat to matter is worth one line: the live question
+            // "why did 48 points on 0x26 never retarget it?" (2026-09-03 03:05) is only
+            // answerable from the decision itself (AlreadyTarget: the creature was already on
+            // the peer). Below-floor refusals are the ordinary case and stay silent.
+            if (topThreat >= ThreatOptions.MinThreatToRetarget && _threatLogged < 20)
+            {
+                _threatLogged++;
+                PluginHost.Log(
+                    $"threat: 0x{creatureId:X} not retargeted ({decision}) - current 0x{currentTargetId:X} "
+                    + $"threat {currentTargetThreat:F0}, top 0x{topAttackerId:X} threat {topThreat:F0}, "
+                    + $"{(double.IsPositiveInfinity(secondsSinceLastRetarget) ? "never retargeted" : $"{secondsSinceLastRetarget:F1}s since last")}");
+            }
+
             return debugRows;
         }
 
