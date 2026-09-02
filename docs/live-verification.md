@@ -3039,3 +3039,77 @@ The `tp` verb on the client reported `moved from 102.3,114.9 to 148.0,92.0`; the
 `blockpoke.ps1 attack 0x7FFFFFFF 0x4D` engaged within a second (`attack probe: ... head=0x3F
 round(active=1 ...)`). Read `pwsh <scratch>/target.ps1 -ProcId <host> -Ptr <server ptr>` on the
 HOST's server object for `round+0x9CC`/`+0x158`/`+0x160`; the client-side twin never carries them.
+
+## Engagement fallback live, and the first wipe under a real fight with hostiles visible (2026-09-02, night)
+
+Rig: block 64, plugin rebuilt from 191c1b5 (engagement fallback, movenear refusal, implausible-hit
+gates), `local_combat_engage_fallback` at its default ON. Host pid 8904, client 52328, `-Save 1`,
+host `warp tar_m10aa`, one benign follower rejoin (`world: unannounced teardown` twice on the
+client at 22:52:45/50, in tar_m10aa by 22:52:52).
+
+### `local_combat_engage_fallback` — VERIFIED, and it lands real hits
+
+Host `tp 160 88 2.25`, client `tp 161 90 2.25`, host `attack 0x7FFFFFFF 0x24`: the whole Vulkar
+pool jumped the host (`combat ground-truth: local PC took 2/14/8/2/2 damage, attacker=0x38/0x36/
+0x24/0x31/0x2F` within 1.1 s). On the client the two guard droids were the local fight:
+
+    [22:55:42.839] local_combat: slot 1/3 armed id=0x4D reason=targeting-us (timeout 25s)
+    [22:55:42.840] local_combat: slot 2/3 armed id=0x4A reason=proximity (timeout 25s)
+    [22:55:43.591] local_combat: slot 1/3 engaged 0x4D directly (no attack target 752ms after the script fire)
+    [22:55:43.591] local_combat: slot 2/3 engaged 0x4A directly (no attack target 752ms after the script fire)
+
+with NO `attack` order given on the client, and the host applying that client's forwarded hits
+from then on: `combat: applied 5 of a peer's damage to 0x4A (owed 5)` 22:55:52, `... (owed 10)`
+22:55:55, `(owed 16)` 22:55:58, `(owed 22)` 22:56:21; 0x4D `owed 2 → 17` over the same window.
+Zero `REFUSED an implausible` lines on either side across the whole session (the gate is
+silent when nothing is wrong).
+
+Also seen: the 25 s slot timeout releases a LIVE fight (`released id=0x4D reason=timed out`
+22:56:07.839, re-selected 22:56:07.881, re-engaged by the fallback 22:56:08.631) — three times
+in this fight. Handed off as an inactivity-timeout change (combat-participation.md, the dated
+section after §12). The `local_combat WATCHDOG TRIPPED` line at 22:56:19 is the god-mode
+artifact §11 already describes, not a defect.
+
+### `movenear` — the refusal reply is right, the snap destination is still END_M01AA's
+
+`movenear 0x999` → `no target: 0x999 does not resolve to a live creature here` (was a silent
+"near 0xE" before). `movenear 0x46` on a live Vulkar in tar_m10aa → `0x46 snapped to
+(29.0, 143.5, 0.0)` — the verb's hardcoded END_M01AA point, so it teleports a creature out of
+the map in any other module. Diagnostic-only; noted, not changed.
+
+### Wipe with hostiles visible, under a real fight — VERIFIED (first time)
+
+`god off` both, `+0x200` min-1-hp cleared on both PCs and both Trasks (the Endar Spire pin the
+save carries; `min1clear.ps1`), at 23:01:09-11, with the Vulkar pool and both droids alive and
+shooting:
+
+    host   [23:01:10.892] death: the local player is down                       (hp -11/12, real hits, no `down` verb)
+    client [23:01:11.001] phantom 0x125: down (player at 0 hp)
+    client [23:01:24.913] death: the local player is down
+    client [23:01:24.916] death: game-over suppressed; the session decides
+    host   [23:01:25.228] death: game-over suppressed; the session decides
+    both   [23:01:25]     every player is down; releasing the game-over screen for everyone
+    client [23:01:25.333] death: every player is down and the session released the game-over; running the engine's death sequence on this client
+    both   [23:01:38]     world: unannounced teardown  →  away by 23:01:43
+
+Fourteen seconds between the two deaths with the host lying downed under fire and the client
+still fighting; the release came the second the client fell. 0 faults, 0 crashes on either
+side. Host reload from the game-over (`load --pid 8904 --load-save 1`: "plugin load route
+failed: plugin shared block not found", menu route "loaded on attempt 1"): host in END_M01AA
+12/12 at 23:02:56, client rejoined and `Lanik is back` 23:03:01, pool snapshot 3 keys,
+`firstSight ... reconcile=0`.
+
+### The defect the recovery exposed: four rejoins in 21 s
+
+SaveMismatch → OwnLoad → SaveMismatch → OwnLoad (23:02:38 / :40 / :51 / :56), the two OwnLoads
+being the client reacting to its own rejoin loads. Root cause (a 0 read off a not-yet-re-found
+plugin block edging the load serial) and fix in session-save.md, "The rejoin that rejoined
+itself". It converged on its own; the fix removes the false trigger. Not yet re-run live after
+the fix.
+
+### Also: loot relay noise on rejoin
+
+`materialised loot: submitting 'g_w_vbroshort01' for target 0x38 through the giveloot channel`
+→ `refused: 0x38 is not a materialised stand-in here - nothing to give`, six pairs in one
+second at 23:03:05 for the Vulkar corpses. Benign (the corpses are GIT-identical on the
+client, nothing to give), just loud.

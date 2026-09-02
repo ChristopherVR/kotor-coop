@@ -243,6 +243,38 @@ public sealed class SessionSaveWatchTests : IDisposable
     }
 
     [Fact]
+    public void ObserveOwnVerdictSkipsATickWithNoSerialReadingInsteadOfEdgingOnAZero()
+    {
+        // The live 2026-09-02 shape (wipe -> host reload -> the client's own rejoin load):
+        // the bridge re-scans for the plugin block while the load lands, the serial is
+        // unreadable for a few ticks, and the adopted world's digest changes meanwhile.
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 3, nowMs: 0); // baseline both
+
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x1234, loadSerialNow: null, nowMs: 100));
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x5678, loadSerialNow: null, nowMs: 200));
+
+        // The block is back, the serial never actually moved: a save-shaped digest change,
+        // NOT the Load verdict that started the second rejoin live.
+        Assert.NotEqual(SaveOrLoadVerdict.Load, watch.ObserveOwnVerdict(0x5678, loadSerialNow: 3, nowMs: 300));
+
+        // A genuine load edge after the gap still classifies.
+        Assert.Equal(SaveOrLoadVerdict.Load, watch.ObserveOwnVerdict(0x9ABC, loadSerialNow: 4, nowMs: 400));
+    }
+
+    [Fact]
+    public void ObserveOwnVerdictFedAZeroForAMissingBlockWouldHaveReadAsALoad()
+    {
+        // Documents WHY the nullable form exists: the old caller read WorldLoadSerial, which
+        // is 0 with no block, and this is what the watch makes of that.
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 3, nowMs: 0);
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 0, nowMs: 100);
+
+        Assert.Equal(SaveOrLoadVerdict.Load, watch.ObserveOwnVerdict(0x5678, loadSerialNow: 3, nowMs: 200));
+    }
+
+    [Fact]
     public void ObserveRemoteVerdictWatchesAnIndependentPeerStream()
     {
         SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());

@@ -55,6 +55,22 @@ public interface IWorldStateBridge
     uint WorldLoadSerial => 0;
 
     /// <summary>
+    /// <see cref="WorldLoadSerial"/> with "no reading" kept apart from "0 loads so far". A
+    /// bridge without a plugin block attached THIS tick — the ~60 ms while
+    /// <c>TryFindPlugin</c> is re-scanning after a world teardown, or the whole away window
+    /// of a load — returns false rather than 0, because the serial's edge watch cannot tell a
+    /// 0 read off a missing block from a real counter value, and a 0→N or N→0 flicker across
+    /// that gap is exactly the shape of a genuine load edge (live 2026-09-02: a client's own
+    /// rejoin load read as "you loaded a save" and started a second rejoin, four in 21 s). The
+    /// mock harness has no plugin and no such gap: its serial is always a reading.
+    /// </summary>
+    bool TryReadWorldLoadSerial(out uint serial)
+    {
+        serial = WorldLoadSerial;
+        return true;
+    }
+
+    /// <summary>
     /// Bumped every time the bridge concludes the WORLD it reads was replaced — a module
     /// change, or a reload of the same module (a <see cref="WorldLoadSerial"/> edge) — and
     /// dropped its own object-id caches for it. Every object id, every (id -> resref) fact and

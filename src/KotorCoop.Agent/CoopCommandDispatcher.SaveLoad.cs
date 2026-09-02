@@ -148,8 +148,12 @@ public sealed partial class CoopCommandDispatcher
         }
 
         uint digest = bridge.SaveIdentityDigest;
-        uint loadSerial = bridge.WorldLoadSerial;
         long nowMs = SessionClock.NowMs;
+
+        // ⚠ null, not 0, while the bridge has no plugin block to read it from — see
+        // SessionSaveWatch.ObserveOwnVerdict(uint, uint?, long) for the four-rejoin loop a 0
+        // fed through here produced live.
+        uint? loadSerial = bridge.TryReadWorldLoadSerial(out uint serialNow) ? serialNow : null;
 
         if (session is CoopHost)
         {

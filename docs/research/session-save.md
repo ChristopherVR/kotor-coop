@@ -2138,3 +2138,40 @@ on the client: exactly one rejoin — `adopted 'tar_m10aa' (668,109 bytes, ident
 **Left as is, deliberately.** `TryComputeSaveIdentity` still hashes the nested `.sav` name: it is
 an identity, both sides compute it from the same bytes, and changing it would move every
 digest. The module NAME is the only thing that had to come from `LASTMODULE`.
+
+## The rejoin that rejoined itself (2026-09-02, night): a 0 read off a missing plugin block is not a load serial
+
+**Seen.** Wipe under a real fight in tar_m10aa (eight-plus Vulkars visible), host `KotorCoop.Agent.exe
+load --pid <host> --load-save 1` from the game-over. The client then rejoined FOUR times in 21 s
+before settling:
+
+    23:02:38  starting rejoin (SaveMismatch)   load request 4   rejoined 'END_M01AA'
+    23:02:40  "you loaded a save" -> starting rejoin (OwnLoad)   load request 5   (fired into request 4's loading screen; no plugin line at all)
+    23:02:51  starting rejoin (SaveMismatch)   load request 6   plugin: "world: unannounced teardown"
+    23:02:56  "you loaded a save" -> starting rejoin (OwnLoad)   load request 7   rejoined, "Lanik is back" 23:03:01
+
+Requests 5 and 7 were the client reacting to its OWN rejoin loads. The plugin log shows no
+teardown at 23:02:40 (the request-4 load came from the main menu, nothing to tear down), so the
+`WorldLoadSerial` edge that made `SaveOrLoadClassifier` say Load was not a real bump.
+
+**Why.** `KotorGameBridge.WorldLoadSerial` returns 0 whenever `_pluginBlock == 0` — and
+`TryFindPlugin` zeroes `_pluginBlock` for the length of its scan, which the bridge re-runs every
+second while reads fail during a load (`[resolve] TryFindPlugin: scan found 1 candidate(s)` at
+23:02:38.5, 23:02:39.9, 23:02:40.9 in agent2.log). `SerialEdgeWatch` cannot tell that 0 from a
+counter value: baseline 3 → read 0 → read 3 is two edges, and the second one landed in the same
+correlation window as the adopted world's digest change. `ObserveRemoteVerdict` already had the
+"no packet yet is not a reading" guard for the HOST's serial (the earlier 2026-09-02 fix); the
+OWN serial had no way to say "no reading" because 0 is its legitimate starting value.
+
+**Fix.** `IWorldStateBridge.TryReadWorldLoadSerial(out uint)` — false while no block is attached
+or the read fails; the mock harness keeps returning true. `CoopCommandDispatcher.MaintainSessionSave`
+feeds `SessionSaveWatch.ObserveOwnVerdict(uint, uint?, long)` a null on such a tick, and the
+watch skips the tick whole (neither the serial nor the digest watch advances — a real digest
+edge is still there next tick; observing it alone would park a Save the returning serial could
+wrongly upgrade). `SessionSaveWatchTests.ObserveOwnVerdictSkipsATickWithNoSerialReadingInsteadOfEdgingOnAZero`
+pins the live shape; `...FedAZeroForAMissingBlockWouldHaveReadAsALoad` pins why.
+
+Requests 5/7 also show a second, smaller thing: `TriggerRejoin` fires while the previous
+rejoin's engine load is still on the loading screen (`RejoinAfterLoadAsync` cannot block on the
+game; `TryGetAdoptedWorldLoadStatus` acks the request, not the world). With the false trigger
+gone there is nothing to fire, so that is left as is.

@@ -103,10 +103,32 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// <c>session_save_host_refusal</c>, a client for <c>client_load_rejoin</c> — since each
     /// side only ever needs to watch itself for its OWN save/load edge, same as phase 1.
     /// </summary>
-    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint loadSerialNow, long nowMs)
+    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint loadSerialNow, long nowMs) =>
+        ObserveOwnVerdict(digestNow, (uint?)loadSerialNow, nowMs);
+
+    /// <summary>
+    /// The form the dispatcher feeds: <paramref name="loadSerialNow"/> is null on a tick the
+    /// bridge has no plugin block to read the serial from (<c>IWorldStateBridge.TryReadWorldLoadSerial</c>).
+    /// Such a tick is skipped whole — neither watch advances — rather than fed a 0 that
+    /// <see cref="SerialEdgeWatch"/> would baseline on or edge away from. ⚠ Live 2026-09-02
+    /// (wipe → host reload → rejoin): the client's bridge re-scanned for the block while its
+    /// own rejoin load was landing, the serial read 0 for those ticks, and the flicker back to
+    /// the real value coincided with the adopted world's digest change — a textbook Load
+    /// verdict for a load this agent had itself just asked for. That "you loaded a save" fired
+    /// a second rejoin, whose load fired a third, four rejoins in 21 s before it converged.
+    /// The digest is deliberately not observed on the skipped tick either: a real digest edge
+    /// is still there on the next readable tick, and observing it alone would leave a pending
+    /// Save the returning serial could then wrongly upgrade.
+    /// </summary>
+    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint? loadSerialNow, long nowMs)
     {
+        if (loadSerialNow is null)
+        {
+            return SaveOrLoadVerdict.None;
+        }
+
         (_ownClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
-        (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow);
+        (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow.Value);
         return _ownClassifier.Observe(nowMs, loadEdge, digestChanged);
     }
 

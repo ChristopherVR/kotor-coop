@@ -50,15 +50,16 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Item | Status | What you'll see | Source |
 | --- | --- | --- | --- |
 | Mirrored enemies — health/death, real hits | Works | Host-authoritative, live-mirrored; a hit on your partner's phantom lands for real | README status table |
-| Local combat, up to 3 real fights per client at once | Works | Two Sith engaged one client at once in the same scan, both landing real hits, two cross-side kills, an "immortal Sith" bug found and fixed the same round | roadmap Tier 2 #14, live-verification.md "N-slot local combat" 2026-09-02 |
-| Per-attacker damage attribution / AI creator retargeting | Unverified | Built and unit-tested (`damage_creator_attribution`, default OFF); whether a mirrored enemy actually retargets onto the attacker has not been observed | `peer-damage-ledger.md` §7-8 |
+| Local combat, up to 3 real fights per client at once | Works | Two Sith engaged one client at once in the same scan, both landing real hits, two cross-side kills, an "immortal Sith" bug found and fixed the same round; the engage fallback (`local_combat_engage_fallback`) verified 2026-09-02 night: two droids engaged 752 ms after a silent script fire and the host banked their forwarded hits | roadmap Tier 2 #14, live-verification.md "N-slot local combat" and "Engagement fallback live" 2026-09-02 |
+| Per-attacker damage attribution / AI creator retargeting | Live-measured, stays OFF | The write lands (`+0x158` and `+0x160` read the attacker's phantom id after a forwarded hit) but K1's shipped AI does not retarget an already-engaged creature on it; the idle → engaged case is unmeasured. Correct "who last hit me", not an aggro pull; default stays OFF | `peer-damage-ledger.md` §8.10, live-verification.md "Attacker attribution live" 2026-09-02 |
 | Non-damage effect sync (stun, slow, choke, etc.) | Partial | 9 of 12 kinds live-verified both directions; 3 more (heal, temporary hitpoints, confused) built and unit-tested, never observed | README status table, `effect-sync.md` |
 | Companion equipment sync (`companion_gear_sync`) | Works | Body slot and both weapon slots confirmed live, propagation under 3s | roadmap Tier 1 #11 |
 | Companion XP sync (`companion_xp_sync`) | Works | Host- and client-side script XP grants converge to the higher value; cross-side kill XP also confirmed agreeing (150→300 on both sides) with no merge needed | roadmap Tier 1 #12, N-slot round |
 | Companion damage TAKEN while released (`companion_damage_sync`) | Works | A client's hits downed the host's Trask (36→1→-11 hp), the engine revived him, both copies converged; two bugs found and fixed the same night | roadmap Tier 1 #34, live-verification.md 2026-09-02 (night) |
 | Vendor-purchase gold ledger convergence | Unverified | Code complete, never exercised against a real vendor purchase | roadmap Tier 1 #3 |
 | Downed player + revive + rescue | Works | A downed player can be rescued by a peer; full wipe/reload/rejoin cycle confirmed 3x clean | `death-handling.md` §6, live-verification.md 2026-09-02 |
-| Wipe with a hostile still visible | Unverified | Every wipe cycle run so far ended with no hostile visible at the moment of wipe; not yet tried with one | live-verification.md 2026-09-02 "Still open" |
+| Wipe with a hostile still visible | Works | One cycle under a real fight (8+ Vulkars and droids shooting, no `down` verb): host fell first, client 14 s later, both released at once, host reload + client rejoin clean, 0 faults | live-verification.md "Wipe with hostiles visible" 2026-09-02 |
+| Rejoin churn after a wipe reload | Fixed, needs live re-verify | The reload produced four rejoins in 21 s (SaveMismatch/OwnLoad twice): the load serial read 0 while the bridge was re-finding the plugin block and that edged the watch. `TryReadWorldLoadSerial` now skips the tick instead; unit-tested, not yet re-run live | `session-save.md` "The rejoin that rejoined itself" 2026-09-02 |
 | Two companions released to local combat at once | Unverified | Only one companion release was exercised in the damage-taken round | `companion-state-sync.md` §13 |
 | Endar Spire / Taris duel HP floor (`SetMinOneHP`) | Not a mod limitation | KOTOR's own tutorial script floors HP at 1 on those maps — nobody can be downed there, co-op or not, until the pin clears | `min-one-hitpoint.md` |
 | Container-loot race (two clicks, same chest) | Fixed | See "moving through the world" above | roadmap Tier 1 #4 |
@@ -129,8 +130,7 @@ Everything in this list is built and unit-tested; nobody has watched it run on t
 rig yet. Good targets for the next live-test pass:
 
 1. Vendor-purchase gold ledger convergence (progression sync, roadmap #3).
-2. Per-attacker/AI creator damage attribution (`damage_creator_attribution`) — whether a mirrored
-   enemy actually retargets onto the attacking peer's phantom.
+2. *(measured 2026-09-02: the field is written, the AI does not retarget on it — see the table.)*
 3. Three newly-added effect-sync kinds: heal, temporary hitpoints, confused.
 4. `E_PROTO` protocol-version-mismatch reject.
 5. Mid-dialogue partner transition — whether the spectator's copy of the conversation orphans.
@@ -140,7 +140,7 @@ rig yet. Good targets for the next live-test pass:
 8. A real door crossing exercising the host relocating-warp crash fix (only `warp` has been used).
 9. The 3+ peer door-transition soak (needs a cutscene-free warp target).
 10. Internet play against a real router (STUN discovery + UPnP mapping).
-11. A full wipe cycle with a hostile still visible at the moment of wipe.
+11. *(done 2026-09-02, one cycle under a real fight — see the table.)*
 12. Two companions released to local combat at the same time.
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
     the legs themselves have no non-story primitive to drive them.

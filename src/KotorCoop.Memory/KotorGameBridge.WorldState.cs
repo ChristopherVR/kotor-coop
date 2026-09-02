@@ -89,6 +89,17 @@ public sealed partial class KotorGameBridge
             ? serial
             : 0;
 
+    /// <summary>See <see cref="IWorldStateBridge.TryReadWorldLoadSerial"/>: false while no
+    /// block is attached (<c>TryFindPlugin</c> zeroes <c>_pluginBlock</c> for the length of
+    /// its scan) or the read itself fails mid-teardown, so the caller skips the tick instead
+    /// of baselining or edging on a 0 that is not a counter value.</summary>
+    public bool TryReadWorldLoadSerial(out uint serial)
+    {
+        serial = 0;
+        nint block = _pluginBlock;
+        return block != 0 && _memory.TryReadUInt32(block + BlockWorldLoadSerial, out serial);
+    }
+
     /// <summary>
     /// See <see cref="IWorldStateBridge.IsWorldBetweenLives"/>. Three block-backed readings,
     /// each covering a stretch of the load the others cannot (shared-inventory-v2.md §17):
