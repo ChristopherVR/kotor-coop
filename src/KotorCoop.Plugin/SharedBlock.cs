@@ -1196,4 +1196,31 @@ internal partial struct SharedBlock
     /// ⚠ 68, next free after every noted reserved range through 67 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindSpawnCreature = 68;
+
+    /// <summary>
+    /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 `galaxyaccept` addendum): presses Accept on the galaxy map through the
+    /// engine's own input dispatch (<c>CSWGuiInGameGalaxyMap::HandleInputEvent(panel, 0x27,
+    /// 1)</c>, vtable slot 0x3C), the SAME shape <see cref="CheatKindSkipKey"/> already uses for
+    /// the dialogue panel — the only route that reaches <see cref="GalaxyMapConfirmHook"/>'s
+    /// splice, since <see cref="CheatKindGalaxyMapOpen"/>/<see cref="CheatKindGalaxyMapClose"/>
+    /// only ever touch <c>ShowGalaxyMapGui</c>/<c>HideGalaxyMapGui</c> and never enter
+    /// <c>HandleInputEvent</c> at all. Takes no arguments. Local only.
+    ///
+    /// ⚠ 69, next free after every noted reserved range through 68 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyAccept = 69;
+
+    /// <summary>
+    /// <c>galaxymap select &lt;n&gt;</c> — the planet-selection half
+    /// <see cref="CheatKindGalaxyAccept"/> needs to have anything to confirm: writes
+    /// <c>CSWPartyTable::SetSelectedPlanet(n)</c> (0x00563B60, VERIFIED full disasm) directly,
+    /// independent of whether the map screen is open. <see cref="SharedBlock.CheatAmount"/>
+    /// carries the planet index (a `planetary.2da` row, 0-15); out of range or
+    /// unavailable/unselectable is reported as a no-op rather than applied — see
+    /// <c>Odyssey.SetGalaxyMapSelectedPlanet</c>. Local only.
+    ///
+    /// ⚠ 70, next free after every noted reserved range through 69 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapSelect = 70;
 }

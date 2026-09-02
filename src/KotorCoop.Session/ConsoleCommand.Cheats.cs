@@ -330,16 +330,31 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.PartySelectOk)
             : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: partyselect ok");
 
-    // galaxymap open|close|stats  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GalaxyMapOpen/
-    // GalaxyMapClose/GalaxyMapStats. The three-way parse itself is GalaxyMapVerbRule (pure,
-    // unit-tested) so it does not need re-testing through this dispatcher's own plumbing.
-    private static CoopCommand ParseGalaxyMap(string[] rest) => GalaxyMapVerbRule.Parse(rest) switch
+    // galaxymap open|close|stats|select <n>  - LIVE-TEST PRIMITIVE, see
+    // CoopCommandKind.GalaxyMapOpen/GalaxyMapClose/GalaxyMapStats/GalaxyMapSelect. The
+    // multi-way parse itself is GalaxyMapVerbRule (pure, unit-tested) so it does not need
+    // re-testing through this dispatcher's own plumbing.
+    private static CoopCommand ParseGalaxyMap(string[] rest)
     {
-        GalaxyMapVerbRule.Verb.Open => new CoopCommand(CoopCommandKind.GalaxyMapOpen),
-        GalaxyMapVerbRule.Verb.Close => new CoopCommand(CoopCommandKind.GalaxyMapClose),
-        GalaxyMapVerbRule.Verb.Stats => new CoopCommand(CoopCommandKind.GalaxyMapStats),
-        _ => new CoopCommand(CoopCommandKind.Invalid, Error: GalaxyMapVerbRule.Usage),
-    };
+        GalaxyMapVerbRule.Verb verb = GalaxyMapVerbRule.Parse(rest, out int planet);
+        return verb switch
+        {
+            GalaxyMapVerbRule.Verb.Open => new CoopCommand(CoopCommandKind.GalaxyMapOpen),
+            GalaxyMapVerbRule.Verb.Close => new CoopCommand(CoopCommandKind.GalaxyMapClose),
+            GalaxyMapVerbRule.Verb.Stats => new CoopCommand(CoopCommandKind.GalaxyMapStats),
+            GalaxyMapVerbRule.Verb.Select => new CoopCommand(CoopCommandKind.GalaxyMapSelect, Amount: planet),
+            _ => new CoopCommand(CoopCommandKind.Invalid, Error: GalaxyMapVerbRule.Usage),
+        };
+    }
+
+    // galaxyaccept  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GalaxyAccept. A TOP-LEVEL verb,
+    // deliberately not a `galaxymap` subcommand: it drives HandleInputEvent directly (the same
+    // shape skipkey uses), not GalaxyMapVerbRule's ShowGalaxyMapGui/HideGalaxyMapGui/
+    // SetSelectedPlanet trio, so it does not belong in that pure rule.
+    private static CoopCommand ParseGalaxyAccept(string[] rest) =>
+        rest.Length > 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "galaxyaccept takes no arguments")
+            : new CoopCommand(CoopCommandKind.GalaxyAccept);
 
     // selectreply <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SelectReply.
     private static CoopCommand ParseSelectReply(string[] rest)

@@ -40,4 +40,54 @@ public class GalaxyMapVerbRuleTests
     {
         Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["confirm"]));
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    [InlineData(15)]
+    public void SelectParsesThePlanetIndex(int index)
+    {
+        Assert.Equal(
+            GalaxyMapVerbRule.Verb.Select,
+            GalaxyMapVerbRule.Parse(["select", index.ToString()], out int planet));
+        Assert.Equal(index, planet);
+    }
+
+    [Fact]
+    public void SelectIsCaseInsensitive()
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Select, GalaxyMapVerbRule.Parse(["SELECT", "0"], out int planet));
+        Assert.Equal(0, planet);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(16)]
+    public void SelectRefusesAnOutOfRangeIndex(int outOfRange)
+    {
+        GalaxyMapVerbRule.Verb result = GalaxyMapVerbRule.Parse(["select", outOfRange.ToString()], out int planet);
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, result);
+        Assert.Equal(-1, planet);
+    }
+
+    [Fact]
+    public void SelectRefusesANonNumericIndex()
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["select", "danm13"], out _));
+    }
+
+    [Fact]
+    public void SelectWithNoIndexIsInvalid()
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["select"], out _));
+    }
+
+    [Fact]
+    public void TheSingleArgumentOverloadDiscardsThePlanetIndex()
+    {
+        // The pre-existing one-argument Parse must keep working unchanged for callers (and
+        // tests) that never cared about Select's own index - it delegates to the new
+        // two-argument overload and simply discards the out parameter.
+        Assert.Equal(GalaxyMapVerbRule.Verb.Select, GalaxyMapVerbRule.Parse(["select", "3"]));
+    }
 }

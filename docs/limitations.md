@@ -85,7 +85,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | --- | --- | --- | --- |
 | Shared party item pool (`party_pool_sync`, mode 2) | Works | ON by default; three clean host deposits mirrored one-for-one, a client deposit/withdrawal each applied exactly once, a cross-channel echo bug closed | roadmap Tier 1 #1 |
 | Only the host switches active party character | Not supported (by design) | Mirrored to everyone else; control returns to your own character on connect | README "Honest limitations" |
-| Galaxy map / pre-departure party-select GUI | Built, NEEDS-LIVE | Each instance runs the vanilla UI; the client's party-select panel is suppressed, and a client's galaxy-map accept click under follow_lead=host is refused ("only the host can choose a destination") with the host's own confirm untouched; the `galaxymap open/close/stats` console verbs (2026-09-03) drive the map screen and read the refusal's own counters without a human clicking — verified live 2026-09-03 02:53 (open 0→1, close 1→0 on `CGuiInGame+0x30`, idempotent close, second open correctly refused; `+0x80` is NOT a state flag) — but the refusal splice itself still needs a real Accept click and has never fired on a running process; an auto-confirm fallback for party-select is still undone, and the legs themselves still have no non-story primitive | roadmap Tier 2 #18 |
+| Galaxy map / pre-departure party-select GUI | Built, NEEDS-LIVE | Each instance runs the vanilla UI; the client's party-select panel is suppressed, and a client's galaxy-map accept click under follow_lead=host is refused ("only the host can choose a destination") with the host's own confirm untouched; the `galaxymap open/close/stats/select` console verbs (2026-09-03) drive the map screen and read the refusal's own counters without a human clicking — verified live 2026-09-03 02:53 (open 0→1, close 1→0 on `CGuiInGame+0x30`, idempotent close, second open correctly refused; `+0x80` is NOT a state flag) — and the new `galaxyaccept` verb (2026-09-03) sends the ACCEPT input event itself (`HandleInputEvent(panel, 0x27, 1)`, the same shape `skipkey` uses for the dialogue panel), so the refusal splice no longer needs a human click to exercise — but `galaxyaccept` has never itself been run against a live process yet, so the splice's own live-fire status is unchanged; an auto-confirm fallback for party-select is still undone, and the legs themselves still have no non-story primitive | roadmap Tier 2 #18 |
 | `end_m01ab` escape-pod party-select GUI | Not supported (by design) | Only the host can answer it — no console primitive reaches inside; confirmed to gate the corridor's entrance for every start-to-end run | roadmap Tier 2 #31 |
 
 ## Stores, Pazaak, minigames (swoop)
@@ -149,7 +149,9 @@ rig yet. Good targets for the next live-test pass:
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
     the legs themselves have no non-story primitive to drive them; the galaxy-map accept-button
     refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) and can now be driven from
-    the console (`galaxymap open/close/stats`, 2026-09-03 — `warp ebo_m12aa`, `galaxymap open` on
-    a CLIENT, click Accept, `galaxymap stats`), but the splice has still never actually fired on
-    a running process — see docs/research/galaxy-map-and-party-select.md's 2026-09-03 addendum.
+    the console end to end with no human click at all (`galaxymap open` + `galaxymap select <n>` +
+    `galaxyaccept` + `galaxymap stats`, 2026-09-03 — `warp ebo_m12aa`, then on the CLIENT
+    `galaxymap open`, `galaxymap select 5`, `galaxyaccept`, `galaxymap stats`), but the splice has
+    still never actually fired on a running process — see docs/research/
+    galaxy-map-and-party-select.md's 2026-09-03 `galaxyaccept` addendum.
 14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).

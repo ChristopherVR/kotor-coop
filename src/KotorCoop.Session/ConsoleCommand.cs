@@ -764,6 +764,34 @@ public enum CoopCommandKind
     /// arguments. Local only.
     /// </summary>
     GalaxyMapStats,
+
+    /// <summary>
+    /// <c>galaxymap select &lt;n&gt;</c> — writes <c>CSWPartyTable::SetSelectedPlanet(n)</c>
+    /// directly (VERIFIED full disasm, docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 `galaxyaccept` addendum), independent of whether the map screen is open. The
+    /// answer to "what must happen before <see cref="GalaxyAccept"/> does anything" — the
+    /// confirm script reads whatever this last wrote. <see cref="CoopCommand.Amount"/> carries
+    /// the planet index, 0-15; out of range or unavailable/unselectable is reported as a no-op.
+    /// Local only.
+    /// </summary>
+    GalaxyMapSelect,
+
+    /// <summary>
+    /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 `galaxyaccept` addendum). Presses Accept on the galaxy map THROUGH THE
+    /// ENGINE'S OWN INPUT DISPATCH (<c>CSWGuiInGameGalaxyMap::HandleInputEvent(panel, 0x27,
+    /// 1)</c>, vtable slot 0x3C) — the same shape <see cref="SkipKey"/> already uses for the
+    /// dialogue panel, and the only route that reaches <c>GalaxyMapConfirmHook</c>'s splice
+    /// (<see cref="GalaxyMapOpen"/>/<see cref="GalaxyMapClose"/> only ever call
+    /// <c>ShowGalaxyMapGui</c>/<c>HideGalaxyMapGui</c> directly and never enter
+    /// <c>HandleInputEvent</c> at all). A DELIBERATELY DIFFERENT SHAPE from the `galaxymap
+    /// confirm` subcommand that pass investigated and did not ship: that would have jumped into
+    /// the accept-button CASE HANDLER itself, a jump-table target with no return address to
+    /// preserve; this calls <c>HandleInputEvent</c> ITSELF, a genuine callable function, so the
+    /// full vanilla dispatch (including <c>GalaxyMapConfirmHook</c>'s own splice, spliced INSIDE
+    /// that dispatch) runs exactly as a real click's would. Takes no arguments. Local only.
+    /// </summary>
+    GalaxyAccept,
 }
 
 /// <summary>
@@ -980,6 +1008,7 @@ public static partial class ConsoleCommand
         new(["newgame"], ParseNewGame),
         new(["chargen"], ParseChargen),
         new(["galaxymap"], ParseGalaxyMap),
+        new(["galaxyaccept"], ParseGalaxyAccept),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the
