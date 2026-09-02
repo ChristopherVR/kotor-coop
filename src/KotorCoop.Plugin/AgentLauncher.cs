@@ -289,8 +289,9 @@ internal static unsafe class AgentLauncher
     /// <summary>
     /// Rotates the agent's log the same way PluginHost rotates its own (see
     /// PluginHost.RotateLogsIfNeeded and LogRotation): if the previous session's file is over
-    /// coop.ini's <c>log_max_mb</c>, it becomes "kotorcoop-agent.1.log" so that one prior
-    /// session's tail survives instead of being silently discarded.
+    /// coop.ini's <c>log_max_mb</c>, its generations shift up (see
+    /// <see cref="LogRotation.ShiftPlan"/>) through coop.ini's <c>log_keep</c>, so that many
+    /// prior sessions' tails survive instead of being silently discarded down to one.
     ///
     /// CreateFileW below always opens with CREATE_ALWAYS, so without this a launch that
     /// follows a very long agent session (the dashboard runs for hours, logging the whole
@@ -315,10 +316,18 @@ internal static unsafe class AgentLauncher
                 ? parsed
                 : LogRotation.DefaultCapMb;
 
+            string? keepSetting = ReadSetting(gameDirectory, "log_keep");
+            int keepGenerations = keepSetting is not null && int.TryParse(keepSetting,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int parsedKeep)
+                ? parsedKeep
+                : LogRotation.DefaultKeepGenerations;
+
             FileInfo info = new(logPath);
             if (LogRotation.ShouldRotate(info.Length, LogRotation.CapBytes(capMb)))
             {
-                File.Move(logPath, LogRotation.RotatedPath(logPath), overwrite: true);
+                LogRotation.ApplyShiftPlan(
+                    LogRotation.ShiftPlan(logPath, LogRotation.ClampKeepGenerations(keepGenerations)));
             }
         }
         catch

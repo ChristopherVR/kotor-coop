@@ -256,12 +256,16 @@ chain ships OFF by default. See [minigames.md](research/minigames.md) §24.
 
 ## `kotorcoop-*.log` keeps growing / disk usage from logs
 
-`kotorcoop-plugin.log` and every per-channel split (`kotorcoop-combat.log` etc.) rotate to a
-single `*.1.log` sibling once they cross `coop.ini`'s `log_max_mb` (default 8) — both at
-plugin startup and roughly every 30 seconds during play (`PluginHost.RotateLogsIfNeededMidSession`,
-`LogRotation.PeriodicCheckIntervalMs`), so a session that runs long enough to cross the cap on
-its own no longer has to wait for a restart to shrink back down. Only one prior generation is
-kept; a `*.1.log` from before the most recent rotation is gone.
+`kotorcoop-plugin.log` and every per-channel split (`kotorcoop-combat.log` etc.) rotate their
+generations up (`*.log` -> `*.1.log` -> `*.2.log` -> ...) once they cross `coop.ini`'s
+`log_max_mb` (default 8) — both at plugin startup and roughly every 30 seconds during play
+(`PluginHost.RotateLogsIfNeededMidSession`, `LogRotation.PeriodicCheckIntervalMs`), so a
+session that runs long enough to cross the cap on its own no longer has to wait for a restart
+to shrink back down. `coop.ini`'s `log_keep` (default 3, clamped 1-10) prior generations are
+kept, oldest dropped; a rotation older than that is gone. Before 2026-09-02 only one
+generation was ever kept, and a mid-session rotation could overwrite the evidence for a real
+bug (a corrupt damage effect logged, then rotated away) before anyone had a chance to read it
+— see `LogRotation.ShiftPlan`.
 
 `kotorcoop-agent.log` (the log for the agent process the plugin auto-starts) is different: it
 only rotates once, right before that agent process is launched (`AgentLauncher.RotateAgentLogIfNeeded`).

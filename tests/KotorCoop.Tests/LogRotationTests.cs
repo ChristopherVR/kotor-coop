@@ -101,4 +101,129 @@ public class LogRotationTests
         Assert.True(LogRotation.ShouldCheckPeriodically(lastCheckMs: 0, nowMs: LogRotation.PeriodicCheckIntervalMs, LogRotation.PeriodicCheckIntervalMs));
         Assert.False(LogRotation.ShouldCheckPeriodically(lastCheckMs: 0, nowMs: LogRotation.PeriodicCheckIntervalMs - 1, LogRotation.PeriodicCheckIntervalMs));
     }
+
+    // --- log_keep: multi-generation shift (2026-09-02) --------------------------------------
+    //
+    // A mid-session rotation used to overwrite the ONLY prior generation ("*.1.log"). Live on
+    // 2026-09-02 that cost the evidence for a real bug: a client's kotorcoop-plugin.log
+    // rotated at the exact second a corrupt damage effect was read, and the next rotation
+    // overwrote that evidence before anyone could look at it. log_keep (default 3) keeps that
+    // many generations instead of one.
+
+    [Theory]
+    [InlineData(0, "kotorcoop-plugin.log")]
+    [InlineData(1, "kotorcoop-plugin.1.log")]
+    [InlineData(3, "kotorcoop-plugin.3.log")]
+    public void GenerationPathNamesEachGeneration(int generation, string expected)
+    {
+        Assert.Equal(expected, LogRotation.GenerationPath("kotorcoop-plugin.log", generation));
+    }
+
+    [Fact]
+    public void GenerationPathLeavesANonLogPathUnchanged()
+    {
+        Assert.Equal("kotorcoop-plugin.txt", LogRotation.GenerationPath("kotorcoop-plugin.txt", 1));
+    }
+
+    [Fact]
+    public void RotatedPathAgreesWithGenerationPathOne()
+    {
+        Assert.Equal(LogRotation.GenerationPath("kotorcoop-plugin.log", 1), LogRotation.RotatedPath("kotorcoop-plugin.log"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public void ClampKeepGenerationsClampsNonPositiveValuesToOne(int badKeep)
+    {
+        Assert.Equal(1, LogRotation.ClampKeepGenerations(badKeep));
+    }
+
+    [Fact]
+    public void ClampKeepGenerationsClampsAbsurdlyLargeValues()
+    {
+        Assert.Equal(10, LogRotation.ClampKeepGenerations(int.MaxValue));
+    }
+
+    [Fact]
+    public void ClampKeepGenerationsLeavesAnInRangeValueAlone()
+    {
+        Assert.Equal(3, LogRotation.ClampKeepGenerations(3));
+    }
+
+    [Fact]
+    public void ShiftPlanWithKeepOneBehavesExactlyLikeTheOldSingleGenerationRotation()
+    {
+        var plan = LogRotation.ShiftPlan("kotorcoop-plugin.log", keepGenerations: 1);
+
+        Assert.Single(plan);
+        Assert.Equal(("kotorcoop-plugin.log", "kotorcoop-plugin.1.log"), plan[0]);
+    }
+
+    [Fact]
+    public void ShiftPlanOrdersHighestGenerationFirstSoNoMoveClobbersAFileStillToBeMoved()
+    {
+        var plan = LogRotation.ShiftPlan("kotorcoop-plugin.log", keepGenerations: 3);
+
+        Assert.Equal(
+            [
+                ("kotorcoop-plugin.2.log", "kotorcoop-plugin.3.log"),
+                ("kotorcoop-plugin.1.log", "kotorcoop-plugin.2.log"),
+                ("kotorcoop-plugin.log", "kotorcoop-plugin.1.log"),
+            ],
+            plan);
+    }
+
+    [Fact]
+    public void ApplyShiftPlanSkipsAMissingIntermediateGenerationInsteadOfStoppingTheShift()
+    {
+        // .2.log is deliberately absent (e.g. only two rotations have ever happened) while
+        // .log and .1.log both exist. The shift for .1.log -> .2.log has nothing to move, but
+        // the surrounding moves (.log -> .1.log) must still happen.
+        string directory = Directory.CreateTempSubdirectory("kotorcoop-logrotation-").FullName;
+        try
+        {
+            string logPath = Path.Combine(directory, "kotorcoop-plugin.log");
+            string gen1 = Path.Combine(directory, "kotorcoop-plugin.1.log");
+            File.WriteAllText(logPath, "live");
+            File.WriteAllText(gen1, "gen1");
+
+            LogRotation.ApplyShiftPlan(LogRotation.ShiftPlan(logPath, keepGenerations: 3));
+
+            Assert.False(File.Exists(logPath));
+            Assert.Equal("live", File.ReadAllText(Path.Combine(directory, "kotorcoop-plugin.1.log")));
+            Assert.Equal("gen1", File.ReadAllText(Path.Combine(directory, "kotorcoop-plugin.2.log")));
+            Assert.False(File.Exists(Path.Combine(directory, "kotorcoop-plugin.3.log")));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ApplyShiftPlanKeepsExactlyKeepGenerationsDroppingTheOldest()
+    {
+        string directory = Directory.CreateTempSubdirectory("kotorcoop-logrotation-").FullName;
+        try
+        {
+            string logPath = Path.Combine(directory, "kotorcoop-plugin.log");
+            File.WriteAllText(logPath, "live");
+            File.WriteAllText(Path.Combine(directory, "kotorcoop-plugin.1.log"), "gen1");
+            File.WriteAllText(Path.Combine(directory, "kotorcoop-plugin.2.log"), "gen2");
+            File.WriteAllText(Path.Combine(directory, "kotorcoop-plugin.3.log"), "gen3-oldest");
+
+            LogRotation.ApplyShiftPlan(LogRotation.ShiftPlan(logPath, keepGenerations: 3));
+
+            Assert.Equal("live", File.ReadAllText(Path.Combine(directory, "kotorcoop-plugin.1.log")));
+            Assert.Equal("gen1", File.ReadAllText(Path.Combine(directory, "kotorcoop-plugin.2.log")));
+            Assert.Equal("gen2", File.ReadAllText(Path.Combine(directory, "kotorcoop-plugin.3.log")));
+            // gen3-oldest is gone - it was in the last kept slot and nothing shifts it further.
+            Assert.False(File.Exists(Path.Combine(directory, "kotorcoop-plugin.4.log")));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

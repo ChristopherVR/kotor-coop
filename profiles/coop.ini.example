@@ -90,6 +90,20 @@ host_loss_release = 1
 ; for a rig round, not a player setting - it writes a line a second for as long as it is on.
 # perf_trace = 0
 
+; --- plugin/agent log rotation ------------------------------------------------------
+; Both kotorcoop-*.log (the plugin's combined log and every per-subsystem split) and
+; kotorcoop-agent.log (the auto-started agent's log) rotate once they cross log_max_mb, and
+; keep log_keep prior generations (*.1.log .. *.N.log, oldest dropped) instead of the newest
+; rotation simply overwriting the only prior copy. Raised from a single kept generation
+; 2026-09-02: a mid-session plugin-log rotation overwrote the evidence for a real bug (a
+; corrupt damage effect) before anyone had a chance to read it.
+
+; Plugin log rotation cap, MB.
+log_max_mb = 8
+
+; How many rotated generations to keep, clamped 1-10.
+log_keep = 3
+
 ; --- hosting over the internet (roadmap item 24) -----------------------------------
 ; A relay-free approach: STUN tells you your own public address, UPnP tries to forward the
 ; port automatically. Neither replaces port forwarding by hand if your router does not
