@@ -82,6 +82,42 @@ public class GalaxyMapVerbRuleTests
         Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["select"], out _));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    [InlineData(15)]
+    public void UnlockParsesThePlanetIndex(int index)
+    {
+        Assert.Equal(
+            GalaxyMapVerbRule.Verb.Unlock,
+            GalaxyMapVerbRule.Parse(["unlock", index.ToString()], out int planet));
+        Assert.Equal(index, planet);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("16")]
+    [InlineData("tat")]
+    public void UnlockRefusesABadIndex(string bad)
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["unlock", bad], out int planet));
+        Assert.Equal(-1, planet);
+    }
+
+    [Fact]
+    public void UnlockWithNoIndexIsInvalid()
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["unlock"], out _));
+    }
+
+    [Fact]
+    public void AnUnknownTwoTokenSubcommandWithAValidIndexIsStillInvalid()
+    {
+        // The index parse is shared between select and unlock; the verb name must still gate.
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["lock", "3"], out int planet));
+        Assert.Equal(-1, planet);
+    }
+
     [Fact]
     public void TheSingleArgumentOverloadDiscardsThePlanetIndex()
     {

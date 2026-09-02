@@ -1543,3 +1543,47 @@ position snap-back logged on the host, or a spurious `k_trg_transfail`, after th
   live run cited in `cinematics.md §8.3c`)** is already a known, tracked gap — fixed in code to a
   per-episode level rather than a per-call flag, "not yet re-run live" per that section's own
   words. Not re-litigated here; still open exactly as documented there.
+
+## LIVE 2026-09-03 — a client-led real door crossing, and a galaxy-map departure exercising §1's audit fix
+
+Two live results on the rig this pass close NEEDS-LIVE items from the section above and from
+cinematics.md §8.3c.
+
+### Client-led real door crossing (`crossdoor end_door10`, 06:44)
+
+With `follow_lead` at its `any` default (so a client crossing is allowed to lead — see the
+correction in galaxy-map-and-party-select.md), the CLIENT posted a real `end_door10` crossing
+(`end_m01aa → end_m01ab`) and the HOST followed:
+
+* client announced the transition at 06:44:32.301; the host logged `travel: moving to module
+  'end_m01ab'` at 06:44:32.436 — ~135 ms follow latency,
+* both instances landed in `end_m01ab`, phantoms respawned on both (host re-spawned the peer at
+  0x6C then 0x70 near 49.9,120.3), the Carth trigger (0x26) and its dialogue fired on both,
+* `save identity differs after a save on one side, with no load since the two last agreed — same
+  world, not rejoining` printed EXACTLY ONCE on the client (06:44:35), and there was NO `W_SAVE`,
+  NO rejoin, and NO FIRST-CHANCE fault in the window.
+
+This confirms `SaveLineage` absorbs the transition-autosave identity mismatch on a client-led
+crossing (not only a host-led one), and it is the first live evidence of the announced-transition
+follow path running the OTHER direction — the client naming the destination and the host chasing
+it. It also partially addresses item 5 (two peers, same door): here the two crossed the same door
+~135 ms apart with no torn state, though a genuine same-FRAME race is still unproven.
+
+### Galaxy-map departure and the §1 audit fix
+
+The three galaxy-map departures (see galaxy-map-and-party-select.md's 2026-09-03 live addendum for
+the full recipe and the `unlock` verb) each ran a native `StartNewModule` — precisely the
+scripted-transition class §1's `WorldLoadRule.IsUnannouncedTeardown` OR-fix protects. Observed:
+
+* the host was NOT thrown into a Load-Game rejoin on any leg (no `OwnLoad`, no forced rejoin) —
+  the audit fix holds for a real galaxy-map `StartNewModule`, not only the door case it was
+  reasoned from,
+* BUT the whole transition ran inside a ~17–45 s main-thread freeze, so the plugin's frame hook
+  never observed the `move_to_module_pending` rising edge: no scripted announce was published
+  (0 `announce: scripted transition beginning` lines), and the `PartyCountRestoreRule` crash
+  guard never armed. The host did not crash in either peer-connected run regardless — on this
+  save `DoPCAutosave`'s array walk did not reach an unresolvable member. This makes the "the flag
+  may already have been drained by the time this frame sees it" hedge in `PluginHost.Frame.cs`
+  the COMMON case for a galaxy-map departure, and means the scripted-announce follow path cannot
+  be relied on for interplanetary legs — the fallback module-change detection is what carries any
+  follow there (and today the client cannot follow such a leg at all — see limitations.md #15).

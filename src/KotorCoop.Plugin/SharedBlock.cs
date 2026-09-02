@@ -1252,4 +1252,17 @@ internal partial struct SharedBlock
     /// ⚠ 71, next free after every noted reserved range through 70 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindGalaxyMapSelect = 71;
+
+    /// <summary>
+    /// <c>galaxymap unlock &lt;n&gt;</c> — STAGING VERB: writes <c>CSWPartyTable</c>'s
+    /// <c>available_planets[n]</c> (+0x60) and <c>selectable_planets[n]</c> (+0xA0) to 1 — the
+    /// two arrays <c>SetSelectedPlanet</c> (0x00563B60, VERIFIED full disasm) gates on — so a
+    /// following <see cref="CheatKindGalaxyMapSelect"/> succeeds on a save where the story has
+    /// not unlocked that planet. Exists only so the real scripted departure can be exercised on
+    /// the rig's Endar Spire saves; nothing in the shipped flow calls it. <see cref="CheatAmount"/>
+    /// carries the planet index, 0-15. Local only.
+    ///
+    /// ⚠ 72, next free after every noted reserved range through 71 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapUnlock = 72;
 }

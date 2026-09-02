@@ -1,7 +1,7 @@
 namespace KotorCoop.Session;
 
 /// <summary>
-/// Pure parse for the `galaxymap open|close|stats|select &lt;n&gt;` dev-console verb (Tier 2
+/// Pure parse for the `galaxymap open|close|stats|select &lt;n&gt;|unlock &lt;n&gt;` dev-console verb (Tier 2
 /// item 18 task 2's own "Live test plan" follow-up, docs/research/galaxy-map-and-party-select.md's
 /// 2026-09-03 addendum): recognises exactly the subcommands the plugin actually implements
 /// (<c>SharedBlock.CheatKindGalaxyMapOpen</c>/<c>Close</c>/<c>Stats</c>/<c>Select</c>,
@@ -40,9 +40,16 @@ public static class GalaxyMapVerbRule
         /// <summary>`galaxymap select &lt;n&gt;` — see the two-argument <c>Parse</c> overload's
         /// own <c>planet</c> out parameter for the parsed index.</summary>
         Select,
+
+        /// <summary>`galaxymap unlock &lt;n&gt;` — STAGING VERB: marks planet n available AND
+        /// selectable in the party table so a later <see cref="Select"/> succeeds on a save
+        /// where the story has not yet unlocked it (every rig save is Endar Spire, where the
+        /// engine's own <c>SetSelectedPlanet</c> no-ops on every index). Same <c>planet</c> out
+        /// parameter as <see cref="Select"/>.</summary>
+        Unlock,
     }
 
-    public const string Usage = "usage: galaxymap open|close|stats|select <planet 0-15>";
+    public const string Usage = "usage: galaxymap open|close|stats|select <planet 0-15>|unlock <planet 0-15>";
 
     /// <param name="args">The tokens after `galaxymap` (already split by
     /// <c>ConsoleCommand.Parse</c>, no leading/trailing whitespace on any token).</param>
@@ -53,8 +60,8 @@ public static class GalaxyMapVerbRule
 
     /// <param name="args">The tokens after `galaxymap`, as above.</param>
     /// <param name="planet">The parsed planet index (0-15) when the result is
-    /// <see cref="Verb.Select"/>; -1 otherwise, including every non-<see cref="Verb.Select"/>
-    /// result — never meaningful unless the return value says so.</param>
+    /// <see cref="Verb.Select"/> or <see cref="Verb.Unlock"/>; -1 otherwise — never meaningful
+    /// unless the return value says so.</param>
     public static Verb Parse(string[] args, out int planet)
     {
         planet = -1;
@@ -71,12 +78,20 @@ public static class GalaxyMapVerbRule
         }
 
         if (args.Length == 2
-            && string.Equals(args[0], "select", StringComparison.OrdinalIgnoreCase)
             && int.TryParse(args[1], out int n)
             && n is >= 0 and <= 15)
         {
-            planet = n;
-            return Verb.Select;
+            if (string.Equals(args[0], "select", StringComparison.OrdinalIgnoreCase))
+            {
+                planet = n;
+                return Verb.Select;
+            }
+
+            if (string.Equals(args[0], "unlock", StringComparison.OrdinalIgnoreCase))
+            {
+                planet = n;
+                return Verb.Unlock;
+            }
         }
 
         return Verb.Invalid;

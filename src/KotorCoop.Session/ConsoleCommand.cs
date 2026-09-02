@@ -791,6 +791,19 @@ public enum CoopCommandKind
     GalaxyMapSelect,
 
     /// <summary>
+    /// <c>galaxymap unlock &lt;n&gt;</c> — STAGING VERB (2026-09-03): writes
+    /// <c>CSWPartyTable</c>'s <c>available_planets[n]</c> (+0x60) and
+    /// <c>selectable_planets[n]</c> (+0xA0) to 1 so <see cref="GalaxyMapSelect"/> stops
+    /// no-op'ing on a save where the story has not unlocked that planet yet (every rig save is
+    /// Endar Spire: live 2026-09-03 06:48, <c>select 5</c>/<c>select 0</c> both left +0xE0 at
+    /// -1, so <see cref="GalaxyAccept"/> ran the confirm script with no destination and no
+    /// departure happened). Nothing in the shipped flow calls this; it exists so the real
+    /// scripted departure (k_sup_galaxymap → StartNewModule) can be exercised on the rig.
+    /// <see cref="CoopCommand.Amount"/> carries the planet index, 0-15. Local only.
+    /// </summary>
+    GalaxyMapUnlock,
+
+    /// <summary>
     /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
     /// 2026-09-03 `galaxyaccept` addendum). Presses Accept on the galaxy map THROUGH THE
     /// ENGINE'S OWN INPUT DISPATCH (<c>CSWGuiInGameGalaxyMap::HandleInputEvent(panel, 0x27,

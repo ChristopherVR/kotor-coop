@@ -201,6 +201,16 @@ internal static unsafe partial class Odyssey
     /// (<c>mov [ecx+0xe0], eax</c>) — see this file's own section header.</summary>
     private const int SelectedPlanetFieldOffset = 0xE0;
 
+    /// <summary><c>CSWPartyTable</c>'s <c>available_planets[16]</c> int array — the FIRST of
+    /// the two gates <c>SetSelectedPlanet</c> (0x00563B60) reads before writing
+    /// <see cref="SelectedPlanetFieldOffset"/>. VERIFIED, the same full disasm as that write
+    /// (this file's header). Written by the story through <c>SetPlanetAvailable</c>.</summary>
+    private const int AvailablePlanetsFieldOffset = 0x60;
+
+    /// <summary><c>CSWPartyTable</c>'s <c>selectable_planets[16]</c> int array — the SECOND
+    /// gate of the same pair. VERIFIED, same disasm.</summary>
+    private const int SelectablePlanetsFieldOffset = 0xA0;
+
     /// <summary>
     /// `galaxymap select &lt;n&gt;` — the answer to this pass's own "if a planet must be
     /// selected first for the accept to do anything, add the selection step" requirement
@@ -255,6 +265,45 @@ internal static unsafe partial class Odyssey
                 + "(planet not available/selectable — see planetary.2da/K_KOTOR_MASTER gating, "
                 + "docs/research/galaxy-map-and-party-select.md §1.2)";
         return after == nPlanet;
+    }
+
+    /// <summary>
+    /// STAGING VERB: marks planet <paramref name="nPlanet"/> available AND selectable by
+    /// writing 1 into both party-table gate arrays directly — the same two fields the story's
+    /// own <c>SetPlanetAvailable</c>/<c>SetPlanetSelectable</c> script commands write, and the
+    /// exact pair <see cref="SetGalaxyMapSelectedPlanet"/>'s engine call gates on. Live
+    /// 2026-09-03 06:48 (host, ebo_m12aa on the Endar Spire save): <c>select 5</c> and
+    /// <c>select 0</c> both no-op'd because neither array had a nonzero entry, so
+    /// <c>galaxyaccept</c> ran the confirm script with +0xE0 still -1 and nothing departed.
+    /// Two plain int writes, no engine call, no derived state to rebuild (the map panel
+    /// re-reads the arrays when it is shown). Reports the before/after of both entries so a
+    /// caller can tell "already unlocked" from "unlocked now". MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool UnlockGalaxyMapPlanet(int nPlanet, out string detail)
+    {
+        if (nPlanet is < 0 or > 0x0F)
+        {
+            detail = $"{nPlanet} is out of range [0,15] — both gate arrays hold 16 entries";
+            return false;
+        }
+
+        nint table = GetPartyTable();
+        if (table == 0)
+        {
+            detail = "no party table resolved (not in a loaded module)";
+            return false;
+        }
+
+        int* available = (int*)(table + AvailablePlanetsFieldOffset) + nPlanet;
+        int* selectable = (int*)(table + SelectablePlanetsFieldOffset) + nPlanet;
+        int availableBefore = *available;
+        int selectableBefore = *selectable;
+        *available = 1;
+        *selectable = 1;
+
+        detail = $"planet {nPlanet}: available (CSWPartyTable+0x60[{nPlanet}]) {availableBefore} -> 1, "
+            + $"selectable (+0xA0[{nPlanet}]) {selectableBefore} -> 1";
+        return true;
     }
 
     /// <summary>Read-only: reports the same three fields `galaxymap stats` needs to prove

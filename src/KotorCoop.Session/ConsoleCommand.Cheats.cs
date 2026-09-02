@@ -330,8 +330,8 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.PartySelectOk)
             : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: partyselect ok");
 
-    // galaxymap open|close|stats|select <n>  - LIVE-TEST PRIMITIVE, see
-    // CoopCommandKind.GalaxyMapOpen/GalaxyMapClose/GalaxyMapStats/GalaxyMapSelect. The
+    // galaxymap open|close|stats|select <n>|unlock <n>  - LIVE-TEST PRIMITIVE, see
+    // CoopCommandKind.GalaxyMapOpen/GalaxyMapClose/GalaxyMapStats/GalaxyMapSelect/GalaxyMapUnlock. The
     // multi-way parse itself is GalaxyMapVerbRule (pure, unit-tested) so it does not need
     // re-testing through this dispatcher's own plumbing.
     private static CoopCommand ParseGalaxyMap(string[] rest)
@@ -343,6 +343,7 @@ public static partial class ConsoleCommand
             GalaxyMapVerbRule.Verb.Close => new CoopCommand(CoopCommandKind.GalaxyMapClose),
             GalaxyMapVerbRule.Verb.Stats => new CoopCommand(CoopCommandKind.GalaxyMapStats),
             GalaxyMapVerbRule.Verb.Select => new CoopCommand(CoopCommandKind.GalaxyMapSelect, Amount: planet),
+            GalaxyMapVerbRule.Verb.Unlock => new CoopCommand(CoopCommandKind.GalaxyMapUnlock, Amount: planet),
             _ => new CoopCommand(CoopCommandKind.Invalid, Error: GalaxyMapVerbRule.Usage),
         };
     }

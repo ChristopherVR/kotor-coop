@@ -99,6 +99,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.GalaxyMapClose] = "galaxymap close",
         [CoopCommandKind.GalaxyMapStats] = "galaxymap stats",
         [CoopCommandKind.GalaxyMapSelect] = "galaxymap select 3",
+        [CoopCommandKind.GalaxyMapUnlock] = "galaxymap unlock 3",
         [CoopCommandKind.GalaxyAccept] = "galaxyaccept",
     };
 

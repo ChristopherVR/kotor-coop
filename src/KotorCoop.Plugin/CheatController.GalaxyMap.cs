@@ -78,6 +78,23 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
+    /// STAGING VERB: `galaxymap unlock &lt;n&gt;` — marks planet n available and selectable in
+    /// the party table (<see cref="Odyssey.UnlockGalaxyMapPlanet"/>) so
+    /// <see cref="SelectGalaxyMapPlanet"/> can succeed on a save whose story has not unlocked
+    /// it. Rig-only staging; see the 2026-09-03 live note in
+    /// docs/research/galaxy-map-and-party-select.md for why (every rig save is Endar Spire).
+    /// </summary>
+    private void UnlockGalaxyMapPlanet()
+    {
+        int planet = block.CheatAmount;
+        bool applied = Odyssey.UnlockGalaxyMapPlanet(planet, out string detail);
+        PluginHost.Log($"galaxymap unlock {planet}: {detail}");
+        Answer(
+            applied ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"galaxymap unlock {planet}: {detail}");
+    }
+
+    /// <summary>
     /// LIVE-TEST PRIMITIVE: `galaxyaccept` — presses Accept on the galaxy map through the
     /// engine's own input dispatch (<see cref="Odyssey.SendGalaxyMapAcceptKey"/>), so
     /// <see cref="GalaxyMapConfirmHook"/>'s confirm-refusal splice can finally be exercised

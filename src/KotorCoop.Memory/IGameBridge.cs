@@ -601,6 +601,15 @@ public static class CheatKinds
     public const uint GalaxyMapSelect = 71;
 
     /// <summary>
+    /// <c>galaxymap unlock &lt;n&gt;</c> — STAGING VERB: marks planet <c>Amount</c> (0-15)
+    /// available and selectable in the party table so <see cref="GalaxyMapSelect"/> can succeed
+    /// on a save that has not unlocked it. See <c>SharedBlock.CheatKindGalaxyMapUnlock</c>.
+    ///
+    /// ⚠ 72, next free after every noted range through 71 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapUnlock = 72;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

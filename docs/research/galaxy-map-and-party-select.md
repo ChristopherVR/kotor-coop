@@ -1270,7 +1270,7 @@ save, or `warp ebo_m12aa` from the console (`docs/research/console-overlay.md`).
    map, pick a planet, click accept, and see the identical vanilla sequence (click sound, the
    take-off sequence begins) as before this change — proves the hook installs without disturbing
    the ALLOW path when it should never refuse.
-2. **The refusal, `follow_lead=host` (the default)**: with both instances at the galaxy map
+2. **The refusal, `follow_lead=host` (must be set explicitly — the shipped default is `any`; see the 2026-09-03 correction below)**: with both instances at the galaxy map
    console, the CLIENT opens their own map, picks a planet, clicks accept. Expect: no click
    sound change beyond the vanilla one (`PlayGuiSound` still runs — the refusal fires just after
    it in program order, see the disassembly above; if this is jarring live, the stub order can
@@ -1529,7 +1529,8 @@ or the retail engine's own input path) is still required to exercise the refusal
 ### Live recipe for the next session with the rig
 
 1. Host and client both connected, `galaxy_map_host_only=1` (shipped default),
-   `follow_lead=host` (also the shipped default).
+   `follow_lead=host` (⚠ NOT a default — the shipped default is `any`; set it explicitly in
+   the client's `coop.ini` for this recipe, see the 2026-09-03 correction below).
 2. Host: `warp ebo_m12aa` (both instances land in the same Ebon Hawk instance the way every other
    two-instance recipe in this doc does).
 3. Client: `galaxymap open`. Expect `applied`/`opened (CGuiInGame+0x80 0 -> 0x...)` in the
@@ -1823,7 +1824,7 @@ Prerequisite: both instances at the galaxy map console, or `warp ebo_m12aa` on b
 2026-09-02/2026-09-03 sections' own recipes). `galaxy_map_host_only=1` and `follow_lead=host`
 are the shipped defaults — no `coop.ini` edit needed for the baseline case below.
 
-**1. REFUSE case — a CLIENT under `follow_lead=host` (the shipped default):**
+**1. REFUSE case — a CLIENT under `follow_lead=host` (⚠ NOT the shipped default — that is `any`; set it explicitly, see the 2026-09-03 correction addendum):**
 
 ```
 (client) warp ebo_m12aa
@@ -1886,3 +1887,79 @@ back to back with different planet indices, watching for any stuck input, a pane
 stops responding, or a delayed crash a few seconds later — the same class of symptom the
 2026-09-02 section's own live test plan item 4 already asks for, now fully scriptable with no
 human click anywhere in the loop.
+
+## 2026-09-03 — LIVE: `galaxymap unlock`, and `galaxyaccept` drives a REAL interplanetary departure end to end
+
+Three live runs on the rig (host GOG pid, client GOG-p2 pid) this pass, on the only saves the
+rig has — all Endar Spire (`000001 - AUTOSAVE`). Two of the three had the client connected the
+whole time. New this pass: a `galaxymap unlock <n>` STAGING VERB (CheatKind 72; `GalaxyMapVerbRule`,
+`Odyssey.UnlockGalaxyMapPlanet`, `CheatController.GalaxyMap.cs`) that writes `CSWPartyTable`'s
+`available_planets[n]` (+0x60) and `selectable_planets[n]` (+0xA0) to 1 — the two arrays
+`SetSelectedPlanet` (0x00563B60) gates on. Nothing in the shipped flow calls it; it exists purely
+so the real departure can be exercised on a save the story has not unlocked.
+
+**Why it was needed.** The 2026-09-03 `galaxyaccept` addendum's own live pass (06:48) found
+`galaxymap select 5` and `select 0` both NO-OP'd (`CSWPartyTable+0xE0` stayed -1) on the Endar
+Spire save, so `galaxyaccept` ran the confirm script with no destination and nothing departed —
+the ALLOW path was proven to fire the hook but never to run a real transition. `unlock` closes
+that gap: after `galaxymap unlock 5`, `select 5` applied cleanly (`+0xE0 -1 -> 5`), confirming
+both gate offsets from this doc's own §1.2 against the live binary a second way (the write, not
+just the paired accessor names).
+
+**What `galaxyaccept` then actually did — the first end-to-end confirmation.** With planet 5 (and,
+in run 2b, planet 4) selected, `galaxyaccept` on the host reported `allowed` incrementing (1 -> 2
+-> 3 across the three runs, `refused` stayed 0) and the map closed — AND, for the first time, a
+genuine scripted departure followed, exactly the `k_sup_galaxymap -> ST_PlayPlanetToPlanet ->
+StartNewModule` chain §1.3 traced:
+
+* the module transition queued the take-off movie (`08.bik`; run 2b queued `05_4c` + `08`),
+* `StartNewModule` ran into `STUNT_00` — the Ebon Hawk launch cutscene — with a forced
+  `StartDialog` and further movies (`0C`, `05_4a`),
+* and the engine returned to a FRESH `ebo_m12aa`, never straight to a planet surface — precisely
+  §1.3's "Leg 1: confirm -> back into a fresh Ebon Hawk" result. Both host and client ended on
+  `ebo_m12aa` at the same coordinates.
+
+So the accept path is now confirmed to run a real interplanetary departure, not merely to close
+the panel — the last open NEEDS-LIVE from the `galaxyaccept` addendum.
+
+**The transition happens inside a frozen main thread — two consequences.** Each `StartNewModule`
+ran during a ~17–45 s window where the plugin's frame hook did not fire at all (`the main thread
+was gone for 17156 ms` … `44907 ms`). Two things follow, both observed:
+
+1. **No scripted announce was published.** `TransitionAnnounceWatch.OnScriptedTransitionBegan`
+   keys on the rising edge of `Odyssey.IsMoveToModulePending()`; with no frame callback running
+   during the whole transition, that edge is never observed, so no `announce: scripted transition
+   beginning (GalaxyMap)` line appears (0 in the log) even though `transition_announce_scripted`
+   defaults ON. This is the exact "best-effort … the flag may already have been drained by the
+   time this frame sees it" hedge `PluginHost.Frame.cs` already documents — now confirmed to be
+   the common case for a galaxy-map departure, not a rare race. The fallback module-change
+   detection still carries any follow.
+2. **The `PartyCountRestoreRule` crash guard never armed** (no `party count: bounded` line) for
+   the same reason — and the host did NOT crash in either peer-connected run, so on this save the
+   `DoPCAutosave` array walk did not hit an unresolvable member. (Run 1, a solo-then-rapid pass,
+   logged one FIRST-CHANCE `0xC0000005` in the engine's own `CGameObjectArray::Destructor` inside
+   `UnloadModule`/`LoadModule` during a follow-on `warp`, and that process later exited
+   `0xC0000005`; two clean peer-connected repeats followed, so this reads as the retail engine's
+   known rapid-transition teardown fragility, NOT a mod regression — see
+   [[kotor-coop-warp-crash-and-snapshot-lesson]] and the transition-crashes write-up.)
+
+**The client CANNOT follow an interplanetary departure — a real, documented limitation.** The
+destination passes through `STUNT_00`, which the follow logic refuses by design
+(`TransitionPump.Travel.cs`'s `stunt*` gate), and the departure ends on a different save-state
+world. In run 2b the client stayed on `ebo_m12aa` while the host went `ebo -> STUNT_00 ->
+tar_m10aa -> ebo`, and after sitting it diverged with a `W_SAVE` "different save: enemies, doors,
+items and party are off — rejoin" notice. Galaxy-map departure is therefore NOT yet a
+coop-followable transition; it is a host-local staging primitive today. See `docs/limitations.md`.
+
+### 2026-09-03 correction — `follow_lead`'s shipped default is `any`, not `host`
+
+Earlier recipe steps in this doc (the 2026-09-02 plan's step 2, the plugin-side plan's step 1,
+and the `galaxyaccept` addendum's REFUSE recipe) called `follow_lead=host` "the shipped default."
+That is WRONG and has been corrected inline. The code default is `FollowLeadMode.Any`
+(`CoopConfig.cs:783` parses `follow_lead` with default `"any"`; `AgentSettings.cs`), `docs/CONFIG.md`
+lists `any`, and `profiles/coop.ini.example` ships it commented (`# follow_lead = any`). The rig's
+own `coop.ini` files leave it at the `any` default. Consequence for the REFUSE recipe: under the
+TRUE default a client's own galaxy-map confirm is ALLOWED (lead-swap), not refused —
+`GalaxyMapConfirmSuppressionRule` refuses only a client under an EXPLICIT `follow_lead=host` with
+`galaxy_map_host_only=1`. To exercise the refusal live you must set `follow_lead = host` in the
+client's `coop.ini` first.

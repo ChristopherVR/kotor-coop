@@ -147,11 +147,19 @@ rig yet. Good targets for the next live-test pass:
 11. *(done 2026-09-02, one cycle under a real fight — see the table.)*
 12. *(done 2026-09-03: both released, driven at different enemies, reclaimed together — see the table.)*
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
-    the legs themselves have no non-story primitive to drive them; the galaxy-map accept-button
-    refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) and can now be driven from
-    the console end to end with no human click at all (`galaxymap open` + `galaxymap select <n>` +
-    `galaxyaccept` + `galaxymap stats`, 2026-09-03 — `warp ebo_m12aa`, then on the CLIENT
-    `galaxymap open`, `galaxymap select 5`, `galaxyaccept`, `galaxymap stats`), but the splice has
-    still never actually fired on a running process — see docs/research/
-    galaxy-map-and-party-select.md's 2026-09-03 `galaxyaccept` addendum.
+    the accept-button refusal (`galaxy_map_host_only`) is built (2026-09-02) and, as of
+    2026-09-03, has now FIRED LIVE end to end (`galaxyaccept` reported `allowed` 1→2→3 across
+    three host departures) driving a REAL interplanetary departure — `galaxymap unlock <n>` (a
+    new staging verb) → `select <n>` → `open` → `galaxyaccept` runs the take-off movie,
+    `StartNewModule` into `STUNT_00`, and returns to a fresh Ebon Hawk. The remaining gap is
+    the REFUSE case (needs an explicit `follow_lead=host` on the client; the default is `any`)
+    and the fact that **the client cannot follow an interplanetary departure** — it routes
+    through `STUNT_00` (refused by the stunt gate) onto a different save-state world, so the
+    follower stays put and eventually diverges with a `W_SAVE` notice. See
+    docs/research/galaxy-map-and-party-select.md's 2026-09-03 live addendum and item 15 below.
+15. Interplanetary departure via the galaxy map is **host-local only** — not a coop-followable
+    transition (2026-09-03 live). The destination passes through `STUNT_00` and lands on a
+    different save-state world; the follower cannot chase it and diverges. Making departure a
+    shared transition (fade + coordinated `StartNewModule` on both, or a host-drives-both
+    scheme) is unbuilt — a genuine roadmap gap, not a rig artifact.
 14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).
