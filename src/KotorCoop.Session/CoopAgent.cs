@@ -695,8 +695,8 @@ public sealed partial class CoopAgent
             // suspect.
             if (!_settings.PartyFastPump)
             {
-                _partyPump.PumpParty(caps);
-                _partyPump.PumpPartyRoster(caps);
+                _partyPump.PumpParty(caps, local.Module);
+                _partyPump.PumpPartyRoster(caps, local.Module);
             }
 
             // ⚠ DIALOGUE RODE HERE TOO, ONCE. It is the same kind of traffic — small block
@@ -753,8 +753,8 @@ public sealed partial class CoopAgent
         if (_settings.PartyFastPump)
         {
             PerfPhaseStart();
-            _partyPump.PumpParty(caps);
-            _partyPump.PumpPartyRoster(caps);
+            _partyPump.PumpParty(caps, local.Module);
+            _partyPump.PumpPartyRoster(caps, local.Module);
             PerfPhaseEnd(PumpPhase.Party);
         }
 
@@ -840,7 +840,7 @@ public sealed partial class CoopAgent
         // bridge read gracefully on its own, so this is defence in depth, not the only guard.
         if (LastReadSucceeded)
         {
-            _partyPump.PumpProgression(caps);
+            _partyPump.PumpProgression(caps, local.Module);
             _partyPump.PumpCompanionExperience(caps);
             _worldStatePump.PumpJournal(caps);
         }
@@ -865,10 +865,10 @@ public sealed partial class CoopAgent
         switch (_settings.EffectivePartyPoolSyncMode)
         {
             case 1:
-                _partyPoolPump.Pump(caps);
+                _partyPoolPump.Pump(caps, local.Module);
                 break;
             case 2:
-                _partyPoolPumpV2.Pump(caps);
+                _partyPoolPumpV2.Pump(caps, local.Module);
                 break;
         }
 
@@ -879,7 +879,7 @@ public sealed partial class CoopAgent
                 _storePump.Pump(local.Module, caps);
                 break;
             case 2:
-                _storePumpV2.Pump(caps);
+                _storePumpV2.Pump(caps, local.Module);
                 break;
         }
 

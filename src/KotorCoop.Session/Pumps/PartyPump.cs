@@ -17,7 +17,7 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// synchronised set rather than two that drift apart. Host-authoritative, so exactly one
     /// instance's AI is ever in charge.
     /// </summary>
-    public void PumpParty(SessionCapabilities caps)
+    public void PumpParty(SessionCapabilities caps, string localModule)
     {
         // session.Overrides.PartySync: a client that negotiated a different party_sync than
         // the host adopts the host's value at runtime — docs/research/mod-compatibility.md's
@@ -25,6 +25,18 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
         // local coop.ini/CLI setting.
         bool syncParty = session.Overrides.PartySync ?? settings.SyncParty;
         if (!syncParty || !bridge.SupportsPartySync || (caps & SessionCapabilities.Party) == 0)
+        {
+            return;
+        }
+
+        // A stunt module's party table is a cutscene reshuffle, not the real roster — see
+        // StuntModuleRule. Neither publish it as the host (a client would tear its real
+        // companions down to match) nor mirror the host's real companions ONTO it as a client
+        // (that would be writing them into whichever cutscene actors the stunt module actually
+        // holds). Simply hold: the session's last real PublishParty stays exactly as it was,
+        // so a peer still following normally keeps the last genuine positions until this
+        // instance is back in a real module.
+        if (StuntModuleRule.IsStuntModule(localModule))
         {
             return;
         }
@@ -76,7 +88,7 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// roster calls on the frame hook. Runs on the combat pump rather than the 30 Hz tick: a
     /// roster changes a few times per playthrough, and each reconciliation is a VM dispatch.
     /// </summary>
-    public void PumpPartyRoster(SessionCapabilities caps)
+    public void PumpPartyRoster(SessionCapabilities caps, string localModule)
     {
         // ⚠ `settings.SyncParty` and the `Party` capability bit are session-lifetime facts —
         // once either says "off", it stays off until something re-negotiates the session, so
@@ -107,6 +119,15 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
             // Transient: hold whatever is already in the block (host roster, local roster,
             // both) rather than clearing either — the very next pump, once the player object
             // resolves again, picks back up exactly where the last real read left off.
+            return;
+        }
+
+        // Same "hold, don't clear" treatment as the transient case just above, for the same
+        // reason: a stunt module's roster is a cutscene reshuffle (see StuntModuleRule), not a
+        // real recruit/dismiss, and publishing it (or reconciling a client's plugin against it)
+        // would tell every follower the party just changed when nothing really did.
+        if (StuntModuleRule.IsStuntModule(localModule))
+        {
             return;
         }
 
@@ -169,11 +190,24 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// carries the thing that genuinely diverges — script-granted XP, from a conversation or a
     /// stealth award only one instance ran — and leaves the rest alone.
     /// </summary>
-    public void PumpProgression(SessionCapabilities caps)
+    public void PumpProgression(SessionCapabilities caps, string localModule)
     {
         if (!settings.SyncProgression
             || !bridge.SupportsProgressionSync
             || (caps & SessionCapabilities.Progression) == 0)
+        {
+            return;
+        }
+
+        // A stunt module's party table reads gold as 0 (see StuntModuleRule) — not the party
+        // going broke, a cutscene-only world with no real purse. Skip both directions
+        // symmetrically: as the host, publishing that 0 would clamp every peer's purse to
+        // nothing; as a client, REPORTING it would tell the host this instance just spent its
+        // entire balance, and ADOPTING the host's real number back onto this fake world would
+        // be a write with no meaning here anyway. ObserveLocalGold is skipped along with
+        // everything else, so the eventual real reading (once this instance is back in an
+        // ordinary module) is compared against the last genuine baseline, not this 0.
+        if (StuntModuleRule.IsStuntModule(localModule))
         {
             return;
         }
