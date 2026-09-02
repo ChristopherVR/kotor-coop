@@ -2768,3 +2768,104 @@ Same recipe as the entry above. Full detail in death-handling.md §6.7.
 
 Death pipeline with the guard on: 3/3 clean cycles since the vote fix (W4 on the previous
 build, W6, W7), across both rejoin triggers. Still not run with a hostile visible at the wipe.
+
+## N-slot local combat live: two Sith on one client at once, two cross-side kills, and the immortal Sith the exclusion left behind (2026-09-02, evening)
+
+Rig: host `C:\GOG Games\Star Wars KOTOR (GOG)`, client `D:\Games\swkotor-gog-p2`, both on
+END_M01AA save 1, block version 64, `local_combat=1`, `local_combat_slots` at its default 3 (the
+rig inis do not set it). Client PC `god on` for both passes (the same testing artifact the
+2026-08-22 round 55 pass documents — it trips the absorb watchdog, and it is not what is under
+test here). The two hostiles are the pair of `end_gensith` (12 hp, blaster rifles) at
+(43.96,62.92) and (47.56,60.54); the client was `tp 45.5 57 -1.28` between them.
+
+**A wrong first stage, recorded so nobody repeats it.** The first attempt used `end_sith2` 0x14 /
+`end_sith3` 0x17 at (46,33) — both read `rep(creature,player)=2`-hostile in the census and the
+`attack` verb took the order — but the PC's attack ran ONE round and dropped
+(`round(active=0)`, `head=0xFFFFFFFF`), neither Sith moved or fired, and no `local_combat: slot`
+line ever printed. Those two are the cutscene pair the corridor script animates (0x17 sits at
+hp 1 in the save); they are not a fight. The two `end_gensith` further down the corridor are the
+real first encounter and behaved like one.
+
+### Pass 1 (20:29, the shipped build): both slots armed, both Sith firing, one kill — and a zombie
+
+    [20:29:50.352] local_combat: slot 1/3 selected 0x3B (priority=Proximity, dist=4.09, engageRange=11.0)
+    [20:29:50.352] local_combat: slot 2/3 selected 0x38 (priority=Proximity, dist=6.11, engageRange=11.0)
+    [20:29:50.353] local_combat: slot 1/3 armed id=0x3B reason=proximity (timeout 25s)
+    [20:29:50.353] local_combat: slot 2/3 armed id=0x38 reason=proximity (timeout 25s)
+    [20:29:52.079] combat ground-truth: local PC took 2 damage, attacker=0x3B (the currently locally-fighting creature ...)
+    [20:30:05.723] combat ground-truth: local PC took 2 damage, attacker=0x38 (the currently locally-fighting creature ...)
+
+Two script-fired `+0x260` creatures fighting the same client engine at once, both landing real
+local hits, the agent's filter removing both from the mirrored census
+(`excludedIds=[0x3B,0x38] enemies.Count=25 filtered.Count=23 (removed 2)`). §11's first
+NEEDS-LIVE item — N concurrent fights as a load pattern — holds. `blockpoke attack 0x7FFFFFFF
+0x3B` then killed 0x3B on the host from forwarded damage alone (`applied 6 ... owed 6`, `9 ...
+owed 15`, `8 ... owed 23` against 12 hp; `materialised loot: captured 2 item(s) off 0x3B's
+corpse`), and five seconds later the corpse faded (`liveness: 1 creature(s) newly gone this
+pass: 0x3B`; the host's census stopped listing it).
+
+The client never heard any of it. 0x3B was excluded from its feed for the whole window, its
+local copy is min-1-hp pinned and cannot die on its own, so the slot ran out its 25 s
+(`released id=0x3B reason=timed out` at 20:30:40) and was handed back to normal mirroring — which
+had nothing to say about an id the owner no longer publishes. What was left was an immortal Sith
+at 12/12 hp shooting the client's PC forty seconds after the host looted its corpse:
+
+    [20:30:40.675] combat ground-truth: local PC took 2 damage, attacker=0x3B (unrecognized attacker id (not driven, not a phantom, not our own apply))
+    [20:31:10.183] combat ground-truth: local PC took 2 damage, attacker=0x3B (unrecognized attacker id ...)
+
+Round 55 (shared-state-audit.md) had seen the milder shape of this — `0x24` timing out after the
+host had already killed it — and called it benign because "the next normal census pass reads the
+owner's Dead flag". That is true only while the corpse still exists on the host; a Sith whose
+inventory is all undroppable fades in ~5 s, well inside the 25 s window, and then no Dead flag
+ever comes. With `liveness_sync=0` (its default) nothing else retires the body either.
+
+### The fix: the owner's verdict passes through the exclusion
+
+`LocalCombatExclusionRule` (Session, pure, `LocalCombatExclusionRuleTests` x9) replaces the
+plain drop in `CombatPump.PumpEnemies`. An excluded id the owner lists ALIVE is still dropped —
+that is the exclusion. An excluded id the owner lists DEAD passes through
+(`OwnerReportsDead`). An excluded id the owner has STOPPED listing — after the rule saw it in
+the feed at least once while excluded, unlisted for 2 s since that sighting, and only while the
+feed is below its 32-entry cap so a capacity shed is never read as a destroyed body — is
+republished from its last seen entry with `Dead` set (`OwnerNoLongerLists`). The plugin's
+`DriveOne` sees an ordinary Dead entry for an id holding a slot, releases the slot
+(`reason=owner reports dead or gone`) and falls through to the ordinary death path: `Forget`,
+then `CombatController.KillOnce` unpins and kills the local body through the same
+corpse/loot/XP pipeline as any mirrored death. Nothing changes on the wire or in the block.
+
+### Pass 2 (20:41, the fixed build): two kills, both retired within 300 ms of the host's death
+
+    host   [20:41:33.284] combat: applied 7 of a peer's damage to 0x3B (owed 7)
+    host   [20:41:42.717] combat: applied 8 of a peer's damage to 0x3B (owed 15)
+    host   [20:41:42]     materialised loot: captured 2 item(s) off 0x3B's corpse, publishing
+    agent2 [20:41:43]     local combat: excluded 0x3B let through as dead (OwnerReportsDead)
+    client [20:41:43.013] local_combat: slot 1/3 released id=0x3B reason=owner reports dead or gone
+    client [20:41:43.069] combat: killed 0x3B on the owner's authority
+
+    host   [20:41:53.905] combat: applied 6 of a peer's damage to 0x38 (owed 16)
+    client [20:41:54.140] local_combat: slot 1/3 released id=0x38 reason=owner reports dead or gone
+    client [20:41:54.203] combat: killed 0x38 on the owner's authority
+
+In between, 0x38's original slot 2 timed out at 20:41:48.574 and the very next scan re-armed the
+same still-alive creature into slot 1 (`selected 0x38 ... dist=1.80`) — the re-inclusion path
+under N slots, live. No `unrecognized attacker` line after either kill; both `end_gensith` bodies
+gone from both instances' creature lists a few seconds later (only the stale server-side scan
+entries `creatures.ps1` is known to keep remain). **Kill XP on a cross-side kill (roadmap item 3)
+agreed without any merge being needed: the PC read xp 150 before and 300 after on BOTH the host
+and the client** — the host's engine paid the kill to every active party member and the
+client's own engine paid the mirrored death the same way.
+
+`OwnerNoLongerLists` did not fire this pass (the Dead flag arrived first both times, as it
+should); it is the fallback for a death the client was not receiving for — pinned by
+`LocalCombatExclusionRuleTests` rather than observed.
+
+### Still open after this round
+
+- No-god pass: the client PC (12 hp) took 2 per hit from two rifles and read `hp 1/12` afterwards
+  even with the console's god on; a real level-1 client would die to this pair before killing
+  either, which is the game, not the mod — but the death→wipe→revive path under a genuine
+  two-slot fight has not been run.
+- §11's other NEEDS-LIVE items (companion release against multiple slots, frame cost) stay open.
+
+Verify.ps1 after the two passes (same rig, both kills already done): **41 passed, 8 failed** — the
+documented baseline, the same eight checks.

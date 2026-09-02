@@ -1062,3 +1062,36 @@ attack-queue dispatcher has any shared per-player state that two concurrently-ar
 could contend over. Every round 9-55 investigation only ever exercised one creature at a time;
 this pass reasoned by analogy (nothing in the fire-the-script mechanism is obviously
 player-singular) but did not — could not, without a live rig — prove it.
+
+### 11.x Live, 2026-09-02 (the A-slots pass, docs/live-verification.md "N-slot local combat live")
+
+Observed on the rig, END_M01AA save 1, client vs the nd_gensith pair 0x38/0x3B:
+
+- **Two hostiles fighting one client's engine at once** — slot 1/3 armed id=0x3B and
+  slot 2/3 armed id=0x38 in the same scan, both landing real local hits on the PC
+  (combat ground-truth: local PC took 2 damage, attacker=0x3B / ..=0x38, both tagged as the
+  currently locally-fighting creature). The engine's per-player combat state held up under two
+  script-fired +0x260 creatures; the "uncertain engine behaviour" paragraph below is no longer
+  uncertain for N=2.
+- **The array round-trip** — xcludedIds=[0x3B,0x38] ... filtered.Count=23 (removed 2) on the
+  client's agent; both ids absent from the client's presence array while armed.
+- **Slot-numbered log lines** read correctly live (slot 2/3 armed, slot 2/3 released ...
+  reason=timed out, and a re-arm of the same creature into slot 1/3 on the very next scan).
+- **A hole the exclusion had, now closed** — an excluded id whose owner-side body died and faded
+  inside the 25 s window never reached the client as Dead (the drop was unconditional), so the
+  pinned local copy stayed up as an immortal Sith after 	imed out. LocalCombatExclusionRule
+  (Session) passes the owner's Dead entry through the exclusion and republishes an id the owner
+  stopped listing (2 s grace, feed below cap) as dead; DriveOne releases the slot with
+  eason=owner reports dead or gone and runs the ordinary death path. Live: both kills retired
+  on the client within ~300 ms of the host's combat: applied N of a peer's damage
+  (local combat: excluded 0x3B let through as dead (OwnerReportsDead) -> combat: killed 0x3B
+  on the owner's authority). The round-55 "one honest gap" in shared-state-audit.md (0x24 timing
+  out after the host had killed it) was the same hole; it is closed by the same rule.
+- **Kill XP agreed across sides** with no merge needed: PC xp 150 -> 300 on both instances after
+  the two cross-side kills (the host's engine paid its party, the client's engine paid the
+  mirrored death).
+
+Still NEEDS-LIVE from the list above: the STILL-SEEING race under multiple slots (not
+provoked), companion release against multiple simultaneous fights, and frame cost. The
+OwnerNoLongerLists fallback of the new rule was not exercised live (the Dead entry arrived
+first both times); it is pinned by LocalCombatExclusionRuleTests.

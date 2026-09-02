@@ -908,6 +908,26 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // this instance leaves it alone exactly as intended, defence in depth rather than a
         // single point of failure. N-SLOT: checked against every physical slot, not just one.
         int fightingSlot = FindLocalCombatSlot(enemy.ObjectId);
+        if (fightingSlot >= 0 && enemy.Dead)
+        {
+            // OWNER'S VERDICT (2026-09-02, A-slots pass). The agent's exclusion filter lets an
+            // excluded id through ONLY as a Dead entry (LocalCombatExclusionRule: the owner
+            // reported the corpse, or stopped listing the body altogether) — this is the one
+            // way a creature whose local copy is min-1-hp pinned can ever end its fight by
+            // dying. Measured before this: the host looted 0x3B's corpse while the client's
+            // copy fought on for the rest of its 25 s window and then stood there immortal,
+            // shooting the PC, because normal mirroring never got to see an id the owner no
+            // longer published. Release the slot here and fall through to the ordinary Dead
+            // path below (Forget; CombatController's KillOnce unpins and kills the body).
+            PluginHost.Log(
+                $"local_combat: slot {fightingSlot + 1}/{LocalCombatSlots} released id=0x{enemy.ObjectId:X} "
+                + "reason=owner reports dead or gone");
+            PluginEvents.RaiseLocalCombatEngagementChanged(false, enemy.ObjectId);
+            _locallyFightingId[fightingSlot] = 0;
+            _stillSeeingReportedId[fightingSlot] = 0;
+            fightingSlot = -1;
+        }
+
         if (fightingSlot >= 0)
         {
             // EDGE-TRIGGERED (2026-08-22 player-style pass), per physical slot. The 2026-08-21

@@ -25,6 +25,13 @@ internal sealed partial class CombatPump
     /// per enemy for our own engine to spend.</summary>
     private readonly PeerDamageLedger _peerDamage = new();
 
+    /// <summary>Mirror side: local_combat's exclusion filter, with its memory of which excluded
+    /// ids the owner has stopped listing (see <see cref="LocalCombatExclusionRule"/>), the module
+    /// that memory belongs to, and the ids already logged as let through.</summary>
+    private readonly LocalCombatExclusionRule _exclusion = new();
+    private string _exclusionModule = string.Empty;
+    private readonly HashSet<uint> _exclusionLetThrough = [];
+
     /// <summary>
     /// Moves enemy state between the game and the session in whichever direction this peer
     /// is responsible for. The two directions carry deliberately different things. DOWN from
@@ -197,16 +204,22 @@ internal sealed partial class CombatPump
         // round trip.
         IReadOnlyList<EnemyState> enemies = session.GetEnemies(local.Module);
         IReadOnlyList<uint> excludedIds = bridge.ReadLocalCombatExcludedIds();
+        if (!string.Equals(censusModule, _exclusionModule, StringComparison.OrdinalIgnoreCase))
+        {
+            // Ids stop meaning what they meant at a module edge; so does anything this rule
+            // remembered about them.
+            _exclusionModule = censusModule;
+            _exclusion.Reset();
+        }
+
         if (excludedIds.Count > 0)
         {
-            List<EnemyState> filtered = new(enemies.Count);
-            foreach (EnemyState enemy in enemies)
-            {
-                if (!excludedIds.Contains(enemy.ObjectId))
-                {
-                    filtered.Add(enemy);
-                }
-            }
+            // Not a plain drop any more: an excluded id the owner reports DEAD, or has stopped
+            // listing altogether, is let through as a Dead entry so the plugin's ordinary death
+            // path retires the local body — see LocalCombatExclusionRule for the immortal Sith
+            // this closes.
+            List<EnemyState> filtered = _exclusion.Filter(
+                enemies, excludedIds, LocalCombatExclusionRule.FeedCapacity, Environment.TickCount64);
 
             // DIAGNOSTIC (temporary): confirms the exclusion filter is actually removing every
             // excluded id before assuming a bug lies elsewhere. See
@@ -214,6 +227,18 @@ internal sealed partial class CombatPump
             log($"local combat diag (agent): excludedIds=[{string.Join(",", excludedIds.Select(id => $"0x{id:X}"))}] "
                 + $"enemies.Count={enemies.Count} filtered.Count={filtered.Count} "
                 + $"(removed {enemies.Count - filtered.Count})");
+
+            // Once per id, not once per pump: the entry keeps passing until the plugin releases
+            // the slot, which is the edge that drops it from the excluded set.
+            foreach ((uint id, LocalCombatExclusionRule.Verdict verdict) in _exclusion.Verdicts)
+            {
+                if (verdict != LocalCombatExclusionRule.Verdict.Excluded && _exclusionLetThrough.Add(id))
+                {
+                    log($"local combat: excluded 0x{id:X} let through as dead ({verdict})");
+                }
+            }
+
+            _exclusionLetThrough.RemoveWhere(id => !excludedIds.Contains(id));
 
             enemies = filtered;
         }

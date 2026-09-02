@@ -259,7 +259,10 @@ combat_state_sync=0
 # pulling the one creature genuinely fighting the local player out of that census for
 # the fight's duration and firing its own event script through the engine's real
 # dispatcher. Live-verified end to end - trigger, 25s timeout, disengage detection,
-# clean re-inclusion - see docs/research/shared-state-audit.md #2, round 39.
+# clean re-inclusion - see docs/research/shared-state-audit.md #2, round 39. A fight also ends
+# the moment the OWNER reports the creature dead or stops listing it (2026-09-02): the owner's
+# verdict passes through the exclusion, so a creature killed on the host from this instance's
+# forwarded damage dies here within a census pass instead of standing pinned until the timeout.
 local_combat=1
 
 # How many hostiles this instance's own engine may fight simultaneously through local_combat

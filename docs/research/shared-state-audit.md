@@ -5174,6 +5174,17 @@ locally for the rest of its timeout window. Benign: the next normal census pass 
 double-exclusion or stuck state was observed. Not chased further this round — noted here rather
 than hidden, same discipline as round 52's own rejoin-boundary gap.
 
+> **2026-09-02 — this gap was not benign, and it is closed.** "The next normal census pass reads
+> the owner's `Dead` flag" only holds while the owner's corpse still exists; a creature whose
+> corpse fades inside the 25 s window (~5 s on END_M01AA when nothing droppable is on it) drops
+> out of the owner's census before the exclusion ends, and the client's min-1-hp-pinned copy then
+> stands up as an immortal creature that keeps shooting the PC (live-verification.md "N-slot local
+> combat live", pass 1: `attacker=0x3B (unrecognized attacker id)` forty seconds after the host
+> looted 0x3B's corpse). `LocalCombatExclusionRule` (Session) now passes the owner's `Dead`
+> entry THROUGH the exclusion and republishes an id the owner stopped listing as dead after a 2 s
+> grace; `DriveOne` releases the slot with `reason=owner reports dead or gone`. Live: both kills
+> of the pass retired on the client within ~300 ms of the host's death.
+
 **Testing artifact, documented rather than treated as a bug.** `cheat god 1` on the client (used
 to protect it from the seven-creature swarm this round's own P1 measurement produced) pinned its
 HP, which twice tripped the pre-existing invulnerability watchdog
