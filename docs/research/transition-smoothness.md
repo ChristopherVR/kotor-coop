@@ -1247,3 +1247,299 @@ dev verb (mirroring `grantxp`/`grantgold`'s own shape — a bare field write, no
 would very likely be the fastest path to the galaxy-map leg specifically, since
 `k_sup_galaxymap.nss`'s commit path is a single `SetGlobalNumber("K_CURRENT_PLANET", ...)`
 call per `galaxy-map-and-party-select.md` §1.3.
+
+## Real-crossing audit after the SaveLineage finding (2026-09-03)
+
+`SaveLineage` (`src/KotorCoop.Protocol/SaveLineage.cs`, session-save.md's "The transition
+autosave changes the save identity for good") closed one member of a bug class: state that is
+correct for a plugin-initiated warp but wrong for a REAL crossing, because a real door/trigger
+autosaves through the transition and warps (on this rig, at the time) did not exercise that
+path identically. This is the rest of that class, found by code audit — read alongside the
+docs cited per finding — and ranked by likelihood × impact. Four parallel research passes fed
+this list (autosave-as-input, announce/follow, per-module caches, real-door-only mechanics);
+findings are attributed where they came from a specific pass.
+
+### 1. FIXED — a native scripted transition (galaxy map, escape pod, Leviathan, Star Forge) was misclassified as a Load Game action, forcing a real rejoin on every leg
+
+**Likelihood HIGH, impact HIGH.** Found by direct code audit while tracing `SaveLineage`'s own
+dependency, `WorldLoadRule`, into its caller.
+
+**The mechanism.** `WorldLoadRule.IsUnannouncedTeardown` (`src/KotorCoop.Plugin/WorldLoadRule.cs`)
+is fed, at the one call site that matters (`PluginHost.Frame.cs`, inside the
+`!Odyssey.TryGetWorldEpoch` branch), a single OR'd bool meant to mean "was this teardown
+ANNOUNCED, by any channel this instance recognises". Before this fix that bool was
+`_transitionPending || _travelAnnounced` — the door channel and the co-op-commanded-warp
+channel. `galaxy-map-and-party-select.md` §1.4 already established, VERIFIED, that a native
+NWScript `StartNewModule()` call (either galaxy-map leg, the Endar Spire escape pod, a
+Leviathan capture, a Star Forge stage change, and — per that same section's own re-disassembly,
+§11.1 above — a native area- or trigger-driven transition with no NWScript call in between)
+**"neither raises `trans_pending` at all"**. And `_travelAnnounced` is set only by
+`TravelController.Execute` (`PluginHost.Frame.cs`, the `_travel is { HasPendingRequest: true }`
+block) — the mechanism that drives a PEER being pulled along, never the instance whose own
+engine originated the script in the first place.
+
+So the LEADING side of every galaxy-map leg, the escape pod, a Leviathan capture or a Star
+Forge stage change had both flags false at the moment its own world tore down, and
+`IsUnannouncedTeardown` correctly-per-its-inputs, incorrectly-per-reality, returned `true`:
+`PublishWorldLoadObserved()` fired, `WorldLoadSerial` bumped, and the log printed `world:
+unannounced teardown - treating as a load, not a transition` — the identical signal a genuine
+in-game Load Game action produces (`WorldLoadRule.cs`'s own doc comment: this is precisely the
+discontinuity a Load Game action leaves and an ordinary transition does not).
+
+**Why this is worse than the bug `SaveLineage` fixed, not the same one.** `SaveLineage` patches
+the softer path: a `SaveIdentityMismatch` with no matching load edge gets reported as agreement
+(`PersistentSaveMismatchRule`'s level-driven fallback). But a spurious `WorldLoadSerial` bump
+does not go through that path at all — `SaveOrLoadClassifier` (`src/KotorCoop.Session/WorldLoadWatch.cs`)
+correlates it against the transition autosave's own digest change (which follows within its
+5000 ms correlation window on every scripted transition, exactly as it does on a real door) and
+returns `SaveOrLoadVerdict.Load` — a HARD verdict. `CoopCommandDispatcher.SaveLoad.cs` acts on
+that verdict directly: `ownVerdict == Load` calls `TriggerRejoin(RejoinTrigger.OwnLoad)` on
+whichever peer led the transition, and `remoteVerdict == Load` (the OTHER peer, watching the
+leader's wire-reported digest+serial) calls `TriggerRejoin(RejoinTrigger.HostReload)` — both
+gates, `client_load_rejoin` and `host_load_readopt`, default **ON**
+(`src/KotorCoop.Session/CoopConfig.cs:379,394` and the parse block at `:775-778`, despite the
+stale "OFF by default" wording in `CoopCommandDispatcher.SaveLoad.cs:36,43`'s own local doc
+comments — the shipped default is ON, confirmed by reading the actual init value and the
+parser, not the comment). `SaveLineage` never runs on this path at all — it only ever sees a
+`SaveIdentityMismatch`, and this one never produces one; it produces a same-tick Load verdict
+that forces `SessionManager.RejoinAfterLoadAsync` — a genuine world refetch and reconnect, mid
+cutscene, on EVERY scripted transition, for whichever peer did not lead it (and on the LEADER
+itself too, via `OwnLoad`, if its own digest edge lands inside the same correlation window,
+which the shape of a transition autosave makes likely).
+
+**Why this was never caught live.** §11.7 (this document, 2026-08-27) already listed both the
+galaxy-map departure and the Endar Spire escape pod live passes as **NOT attempted**, for
+tooling reasons (no reliable GUI click, no `setglobal` verb) unrelated to this bug — the
+scripted-announce mechanism (`transition_announce_scripted`, default ON) was verified to fire
+correctly for the DE-DUP case (§12, a real door not double-announcing) but the actual
+galaxy-map/escape-pod/Leviathan/Star-Forge transitions this flag exists for have never been
+live-exercised at all. This bug sat underneath that entire gap, present since
+`_moveToModulePendingSeen` was added (2026-08-27, §11.2) to gate the ANNOUNCE and never folded
+into the LOAD classification the announce's own sibling flags feed.
+
+**FIXED.** `src/KotorCoop.Plugin/PluginHost.Frame.cs` — the teardown check now reads
+`WorldLoadRule.IsUnannouncedTeardown(_transitionPending || _travelAnnounced ||
+_moveToModulePendingSeen)`, with the doc comments on `_moveToModulePendingSeen` and the call
+site updated to name the fix and why. This mirrors, for the scripted-funnel flag, the exact
+treatment `_travelAnnounced` already got for the co-op-warp case — same call site, same
+pattern, no new mechanism. `dotnet build KotorCoop.slnx -warnaserror` and a standalone
+`dotnet build src/KotorCoop.Plugin/KotorCoop.Plugin.csproj -warnaserror` both clean;
+`WorldLoadRuleTests` (unchanged, both cases still pass — the pure function's contract did not
+change, only what its caller ORs together) plus the full announce/save-load/party-count
+filtered set (135 tests) green.
+
+**Not independently unit-tested beyond that**, consistent with how `_travelAnnounced` was added
+to this same line previously: the OR-composition lives in `PluginHost.Frame.cs`, unsafe
+engine-pointer code this codebase does not unit test directly (`WorldLoadRule.IsUnannouncedTeardown`
+itself is the pure, tested primitive; the call site is wiring). **NEEDS-LIVE**: whether at least
+one rendered frame reliably separates `move_to_module_pending` going true from the world
+tearing down for EVERY writer in §11.1's table of six, not just the door (which already proves
+the window exists for a door's own later same-field raise, per §11.2's own NEEDS-LIVE note) —
+if any writer's script-to-drain gap collapses to zero frames on some rig, `_moveToModulePendingSeen`
+would never latch before teardown and this fix would degrade to "no regression, no improvement"
+for that one case, never a false positive. Recipe: from an Ebon Hawk save, trigger a galaxy-map
+departure (leg 1) on one instance; confirm the OTHER instance's plugin log shows `announce:
+scripted transition beginning (GalaxyMap)` (already expected per §11.7 item 1) AND — the NEW
+check this fix adds — confirm NEITHER instance's log shows `world: unannounced teardown` nor
+`session-save: starting rejoin` anywhere in the crossing. Repeat for leg 2 (`k_pebn_exithawk`)
+and, separately, for the Endar Spire escape pod (§11.7 item 2, `end_m01ab`'s own trigger, no
+galaxy map involved — the `Script`, not `GalaxyMap`, tag). A `setglobal` dev verb (§11.7's own
+suggestion, mirroring `grantxp`/`grantgold`) remains the fastest path to staging leg 1 without
+the GUI.
+
+### 2. NEEDS-LIVE — the host's world-serve snapshot can be built from a torn read across the autosave's own files during a real crossing
+
+**Likelihood HIGH, impact MEDIUM (tempered from the originating pass's HIGH×HIGH — see the
+mitigation below).** From the autosave-as-input research pass.
+
+`CoopCommandDispatcher.BuildWorldSnapshot` (`CoopCommandDispatcher.SaveLoad.cs:395-406`), called
+fresh on every accepted `WorldTransfer` connection (`MaintainWorldServing`, `:312-367`), does two
+independent, non-atomic disk reads with no stability check between them: `world =
+WorldTransfer.ReadSaveDirectory(currentSave)` (every file in the save directory, sequentially,
+`WorldTransfer.cs:116-131`) and, separately, `identity = SaveDigest.TryComputeSaveIdentity(currentSave,
+...)` (a fresh re-open of `SAVEGAME.sav` specifically). Session-save.md's own 2026-09-02 finding
+(`docs/research/session-save.md`, "The transition autosave names the wrong module") already
+proved the autosave is not one atomic unit: `SAVEGAME.sav`'s nested module `.sav` entry keeps
+naming the module being LEFT while `savenfo.res`'s `LASTMODULE` is the only field naming the one
+being ENTERED. If a peer's join/rejoin fetch lands in the sub-second window while another peer's
+real-door transition is mid-autosave, `ReadSaveDirectory`'s per-file loop can read some files
+from the pre-crossing generation and others from the post-crossing one.
+
+**Partial, already-present mitigation.** `WorldAdoption.FetchStageAndVerifyAsync`
+(`WorldAdoption.cs:279-291`) does not trust the host's reported `identity` blindly: it STAGES the
+received `world` bytes to disk first, then recomputes both the identity AND the module name
+(`PluginMenuLoader.TryReadSaveModuleName`, `:300`) from THAT staged copy — i.e. from the same
+bytes that were actually served, not from a second host-side read. So a tear that changes
+`SAVEGAME.sav`'s own content between the host's two reads (the case `BuildWorldSnapshot` can
+produce) is caught: the client's recomputed identity, from the bytes it actually got, will not
+equal `expected` (what the host separately claimed), and the join is refused with `world
+adoption: the staged world fingerprints 0x..., the host reported 0x... — refusing to play a
+world we did not receive` rather than silently proceeding. This fails SAFE, matching the
+originating pass's own finding #2, not the silent corruption finding #1 first suggested.
+
+**The residual, un-mitigated case.** `SaveDigest.TryComputeSaveIdentity` (`SaveDigest.cs:100-158`)
+hashes the module name from the ERF KEY of the nested `.sav` entry, `Mod_NextObjId0/1`, and the
+stored GIT — never `savenfo.res`/`LASTMODULE`. A tear confined to `savenfo.res` alone (which
+`ReadSaveDirectory`'s multi-file loop can produce independently of any `SAVEGAME.sav` tear) would
+change the MODULE NAME a joiner is told it adopted (`TryReadSaveModuleName` reads the staged
+`savenfo.res`) without moving the identity digest at all — the self-check does not cover this
+combination, because nothing in the digest is sensitive to it.
+
+**Not fixed this pass.** A byte-level fix (compute `identity` from the SAME in-memory bytes
+`ReadSaveDirectory` already captured, via `ErfArchive.TryFindMember`, rather than a second disk
+read) is the correct direction and was scoped but not attempted: it touches the hash function
+every id-keyed channel in the session ultimately trusts, and changing it without a live
+regression pass against the existing digest values risks a worse, silent bug in exchange for
+closing a narrow race. A cheaper stability-retry wrapper (stat `SAVEGAME.sav` and `savenfo.res`
+before and after the read, retry a bounded number of times on a change) was also considered and
+is lower-risk, but every file-reading primitive here (`SaveDigest.FindSessionSave`,
+`WorldTransfer.ReadSaveDirectory`, `SaveDigest.TryComputeSaveIdentity`) is a static method
+against a path with no injectable clock/stat seam, so a unit test could not exercise the actual
+race — only the retry bookkeeping in isolation, which does not prove the fix. Left for a pass
+that can pair the code change with a live confirmation.
+
+**NEEDS-LIVE recipe.** Both instances on `-Save 1` (Endar Spire). Set `client_load_rejoin=1`
+(shipped default) on a THIRD/rejoining peer, or force a `loadgame` on an already-connected peer,
+timed to land in the same second the host runs `crossdoor end_door10`
+(`pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'crossdoor end_door10'` immediately
+followed by the joiner's connect/rejoin attempt on the other process). Watch the joiner's log
+for `world adoption: adopted '<module>'` naming a module that does not match what
+`TryComputeSaveIdentity` would predict for the identity printed on the same line (cross-check
+with `tools/kotorfiles.py`), or a `fingerprints ... the host reported ...` refusal landing where
+a clean join was expected — either is the race manifesting.
+
+### 3. NEEDS-LIVE — the pre-store flush has never raced a real door's fade deadline against live bodies
+
+**Likelihood MEDIUM, impact HIGH.** From the real-door-specifics research pass.
+
+The pre-store flush (`PluginHost.Frame.cs:387-429`, one phantom/item/enemy/marker destroyed per
+frame) is the same helper code on both the warp path and the real-door path, but the two have
+never been exercised under the same conditions. `TravelController`'s own warp flushes BEFORE
+`Odyssey.TravelToModule` is even called (`CheatController.Doors.cs:419-426`'s own doc note), so
+by the time any "transition pending" state exists there is nothing left to flush — every warp
+round to date flushed an empty queue. A real door instead starts a ~0.5 s fade
+(`SharedBlock.Session.cs:200`) the INSTANT `trans_pending` rises, and the flush only then begins
+racing that fixed wall-clock deadline against a FRAME-COUNT-bounded budget (~150 frames, one
+body per frame). Every live `crossdoor`/`usedoor` round to date (§8.2, §8.3, §9.2, §10.5, this
+document's own §12, and the SaveLineage finding's own three runs) also had nothing live to
+flush at the moment of crossing — no phantom, no dropped item, no materialised enemy standing
+near the door. So the flush mechanics are proven; the flush racing a REAL deadline with a REAL
+queue is not.
+
+**Impact if it fails.** A phantom or stand-in not destroyed before `StoreCurrentModule` runs
+becomes a permanent resident of the saved module (`PhantomController.TransitionFlush.cs:9-19`) —
+a silent, permanent id-shift in the very module a rejoin or a later joiner would compare against.
+
+**NEEDS-LIVE recipe.** In `end_m01aa`, with both peers present, spawn something the flush has to
+clear before crossing: have the non-crossing peer stand nearby so a phantom exists (any
+connected session already has one), and additionally `dropitem g_w_blstrrfl001` (per §8.4's own
+recipe) so a ground-item stand-in is live too. Confirm the host log shows `spawned phantom`/
+`dropitem`-driven `spawned` lines with no matching destroy yet, THEN `tp 44.5 120.1 0` and
+`crossdoor end_door10`. Check the plugin log for `area transition pending: flushing spawned
+objects before the module is stored` followed by one or more `flush, before the module is
+stored: destroyed ...` lines completing BEFORE the module actually stores (no leftover phantom
+reported on the agent's post-arrival readout, `phantoms 0`), and confirm a low-framerate run
+(artificially throttled, if the tooling allows) does not shrink the available flush window
+below what a full queue needs.
+
+### 4. NEEDS-LIVE — ground-item stand-ins in the flush window may register as a false pickup
+
+**Likelihood LOW, impact MEDIUM.** Flagged by the per-module-caches pass, handed off to the
+real-door-specifics pass; not conclusively resolved by either.
+
+`GroundItemStore`'s vanish detection (`Pumps/WorldStatePump.cs:242-250`, `CollectVanishedItems`)
+treats anything the bridge can no longer see as "picked up" and calls `session.RemoveItem` — a
+permanent deletion from the shared store. If a real door's pre-store flush destroys a
+materialised ground-item stand-in in the OLD module (finding #3's own mechanism) before the next
+`WorldStatePump` tick reconciles it against the item's actual (unchanged) disposition, the same
+destroy could register as a false pickup rather than "flushed for a transition, will reappear
+after the next module load if still present". This is the SAME flush window finding #3 already
+flags as untested with live bodies present, seen from the item-store side rather than the
+phantom-count side — not a separate mechanism, but a distinct FAILURE MODE of it worth checking
+for specifically, since a lost ground item is silent and permanent where a stray phantom at
+least shows up in a readout.
+
+**NEEDS-LIVE recipe.** Same setup as finding #3's ground-item half: drop a shared item near
+`end_door10` in `end_m01aa`, confirm both peers see it in their ground-item view, cross via
+`crossdoor end_door10`, and confirm the item either correctly persists in `end_m01aa` (visible to
+a peer who did not cross, or on a return trip) or is correctly reported gone by both sides —
+not silently removed from the store while still physically undisturbed.
+
+### 5. NEEDS-LIVE — two peers crossing the same real door within the same frame window
+
+**Likelihood LOW, impact MEDIUM.** From the announce/follow pass.
+
+"Both announce simultaneously → host wins" is unit-tested (`TravelPumpTests.cs`,
+transition-smoothness.md line ~849) and `TravelController.Execute`'s "already there" no-op
+(`TravelController.cs:153-160`) plus `hostMidTransition` holding (§10.4 above) make a race
+harmless BY CONSTRUCTION at the pure-rule level. But every LIVE confirmation of this shape used
+staggered `usedoor` walks (§10.5, 2026-08-22, pre-`SaveLineage`) or the crossdoor-vs-warp
+regression pairs elsewhere in this document — never two `crossdoor` events posted within the
+same frame window on a live rig, and never with `SaveLineage` in the tree. **NEEDS-LIVE
+recipe**: `demo.ps1 -Save 1`, both peers `tp 44.5 120.1 0`, then fire
+`pwsh tools\blockpoke.ps1 -ProcId <host pid> console 'crossdoor end_door10'` and the same against
+the client's pid within about one second of each other (two separate terminal invocations, not
+sequenced). Check both agent logs for exactly one `travel: moving to module` line per side, no
+`[W_SAVE]`, and no duplicate rejoin.
+
+### 6. NOT A BUG — `usedoor`/`crossdoor`'s party-gather is a testing-tool caveat, not a real-gameplay hazard
+
+**Likelihood LOW as a live-gameplay bug; still worth a live check as a testing-tool caveat.**
+From the announce/follow pass, retriaged here.
+
+`cinematics.md §8.3a` documents `usedoor`/`crossdoor`'s `GatherParty` step
+(`CSWPartyTable::PositionParty`) as **"Host-side staging only... Acceptable for a debug verb; it
+would not be for a feature."** The originating pass read this as a risk that a CLIENT-led real
+crossing (lead-swap, §10, shipped `follow_lead=any`) could have its local gather fight the host's
+authoritative companion positions. On reflection this caveat is about the DEBUG VERB's own
+convenience gather, used to stage a test with a deliberately scattered party — not about organic
+gameplay. In ordinary play, a party that is not together is refused by the engine's OWN native
+`IsPartyTogether` gate (`k_trg_transfail`, §8.3a) regardless of which peer approaches the door or
+whether co-op is even installed; a real player simply cannot cross until their companions are
+physically gathered, the same as single-player KOTOR. The hazard only exists when a LIVE TEST
+uses `crossdoor`/`usedoor` to force a client-led crossing with a scattered party specifically —
+worth confirming does not desync companion positions, but not a hazard a real playthrough can hit
+through organic movement. **NEEDS-LIVE, low priority**: on the CLIENT, scatter a companion >4 m
+from `end_door10` in `end_m01aa`, then `crossdoor end_door10` from the CLIENT; watch for a
+position snap-back logged on the host, or a spurious `k_trg_transfail`, after the crossing.
+
+### Confirmed NOT bugs, briefly (full reasoning in each originating pass)
+
+* **Symmetric announce.** `_transitionPending`/`TransitionAnnounceWatch` are per-instance, keyed
+  off each engine's own `trans_pending` byte — a client-led real door is announced exactly like
+  a host-led one, and lead-swap (§10 above) already made the FOLLOW half symmetric too.
+* **Per-module caches.** `DoorController`, the agent-side door shadow, `ContainerCloseHook`,
+  `CheatController` and its door-cross watch state, `EventFlagStore`/`GroundItemStore` (filtered
+  by live `Module` every tick, not reset per-transition by design), and `PeerIdentityRule`/
+  `PeerIdentity` all invalidate off the engine's own world-epoch (`PluginHost.InvalidateAll`) or
+  self-invalidate by re-reading the live module name — none of it is warp-path-specific, so a
+  real crossing resets them exactly as a warp does.
+* **Dialogue ownership on module entry.** Already dynamically assigned to whichever side's
+  engine reaches `StartDialog` first (confirmed live, `cinematics.md §8.3c` — the CLIENT owned
+  the conversation on the real door crossing that exposed the `SaveLineage` bug, and the host
+  correctly adopted-to-follow); the cutscene closing early in that run was the `SaveLineage` bug
+  itself, not a dialogue-ownership defect, and runs 2–3 (post-fix) completed clean on both sides.
+* **`SaveLineage` is not bypassed by the OTHER rejoin rules.** `PersistentSaveMismatchRule` reads
+  `client.Compatibility?.Notes`, built AFTER `_saveLineage.Apply` runs
+  (`CoopClient.Compatibility.cs:83-95`, mirrored per-peer on the host,
+  `CoopHost.Compatibility.cs:35-42`). `WipeRecoveryRule`/`HostWorldReplacedRule` never touch the
+  digest at all — they key off `PlayerState` and the load-serial edge directly, a different
+  signal class.
+* **A rejoining peer gets fresh `SaveLineage`/`SaveIdentitySettle` state.** Both are plain
+  instance fields on `CoopClient` (`CoopClient.Compatibility.cs:36-41`); `manager.Reconnect()`
+  constructs a new `CoopClient`, so a reconnect starts at "never agreed" exactly as the design
+  assumes, and `WorldDigest.Compare`'s Unknown-is-not-mismatch rule means there is no window for
+  a false mismatch before the first real `WorldDigestPacket` lands.
+* **`crossdoor` posts from the party leader only, matching retail** — not a straggling-party-member
+  hazard, because the base engine has no per-follower crossing event to straggle in the first
+  place; `PositionParty` carries followers through the transition itself.
+* **Door `OnOpen`/`OnClick` scripts run independently on each engine, unsuppressed** — each
+  instance's own door-open call (`CheatController.Doors.cs`'s `ResolveOpenAndGatherForDoorTransition`)
+  is a local engine effect, same as two separate single-player games approaching the same door.
+  Whether a script side effect (e.g. a plot flag set in `OnOpen`) needs broader cross-peer script/
+  global synchronisation is a real question but belongs to whatever covers script/global sync in
+  general, not to door-crossing specifically — out of scope here, handed off.
+* **The `SaveLineage.Absorbing` line printing twice in one episode (05:33:04, 05:33:08, per the
+  live run cited in `cinematics.md §8.3c`)** is already a known, tracked gap — fixed in code to a
+  per-episode level rather than a per-call flag, "not yet re-run live" per that section's own
+  words. Not re-litigated here; still open exactly as documented there.

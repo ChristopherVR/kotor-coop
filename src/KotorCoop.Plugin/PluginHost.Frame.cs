@@ -46,8 +46,12 @@ internal static unsafe partial class PluginHost
     private static bool _doorTransitionAnnouncedThisEpoch;
 
     /// <summary>Rising-edge tracker for <c>Odyssey.IsMoveToModulePending()</c> — see the
-    /// scripted-transition-watch call site below for the full gating story. Reset at the same
-    /// two points <see cref="_transitionPending"/> is.</summary>
+    /// scripted-transition-watch call site below for the full gating story. ALSO fed into
+    /// <see cref="WorldLoadRule.IsUnannouncedTeardown"/> alongside <see cref="_transitionPending"/>/
+    /// <see cref="_travelAnnounced"/> (2026-09-03 audit finding: this instance's own native
+    /// StartNewModule() — a galaxy-map leg, the escape pod, a Leviathan/Star Forge stage change —
+    /// raises neither of those two, and was misclassified as an unannounced Load without this).
+    /// Reset at the same two points <see cref="_transitionPending"/> is.</summary>
     private static bool _moveToModulePendingSeen;
 
     /// <summary>Party-table probe window (docs/research/transition-crashes.md, 2026-09-03, the
@@ -287,13 +291,35 @@ internal static unsafe partial class PluginHost
             if (_epoch != 0)
             {
                 // Roadmap item 14 phase 2's load-detection primitive (see WorldLoadRule.cs):
-                // judged HERE, before _transitionPending/_travelAnnounced are reset below,
-                // because that reset is exactly what would otherwise erase the one fact this
-                // decision needs — whether this teardown was ANNOUNCED (a real door/trigger
-                // transition, OR this instance's own TravelController warp — see
-                // _travelAnnounced's own doc comment for why a co-op warp needs the same
-                // treatment as a door) before the world it belonged to went away.
-                if (WorldLoadRule.IsUnannouncedTeardown(_transitionPending || _travelAnnounced))
+                // judged HERE, before _transitionPending/_travelAnnounced/
+                // _moveToModulePendingSeen are reset below, because that reset is exactly what
+                // would otherwise erase the one fact this decision needs — whether this
+                // teardown was ANNOUNCED (a real door/trigger transition, this instance's own
+                // TravelController warp — see _travelAnnounced's own doc comment for why a
+                // co-op warp needs the same treatment as a door — OR a NATIVE scripted
+                // StartNewModule() this instance's own engine originated: a galaxy-map
+                // departure, the Endar Spire escape pod, a Leviathan/Star Forge stage change,
+                // or any other of the six move_to_module_pending writers named in
+                // Odyssey.Travel.cs's own comment) before the world it belonged to went away.
+                //
+                // ⚠ 2026-09-03 audit finding (docs/research/transition-smoothness.md's real-
+                // crossing follow-up): _moveToModulePendingSeen was ADDED (2026-08-27) to gate
+                // the scripted-funnel ANNOUNCE (OnScriptedTransitionBegan, so a peer follows a
+                // galaxy-map/escape-pod/etc. transition immediately) but was never folded into
+                // THIS check. A native scripted transition never raises trans_pending
+                // (galaxy-map-and-party-select.md §1.4: "neither leg raises trans_pending at
+                // all") and never runs through TravelController (that only drives a PEER being
+                // pulled along, not the instance whose own engine originated the script), so
+                // without this flag the LEADING side of every galaxy-map leg, the escape pod,
+                // and every Leviathan/Star Forge stage change misclassified its own teardown as
+                // an unannounced Load Game action — bumping WorldLoadSerial, which
+                // SaveOrLoadClassifier then correlates with the transition autosave's digest
+                // change into a hard SaveOrLoadVerdict.Load, forcing a REAL rejoin
+                // (RejoinTrigger.OwnLoad/HostReload, both gates ON by default) on every such
+                // transition — not the softer, already-fixed SaveIdentityMismatch path
+                // SaveLineage absorbs, but the harder edge-triggered one it does not touch.
+                if (WorldLoadRule.IsUnannouncedTeardown(
+                    _transitionPending || _travelAnnounced || _moveToModulePendingSeen))
                 {
                     _view?.PublishWorldLoadObserved();
                     Log("world: unannounced teardown - treating as a load, not a transition");
