@@ -14,6 +14,18 @@ internal sealed unsafe partial class CheatController
     /// member, never touched by EnemyPresenceController) has a valid, in-range hostile to test
     /// +0x260 firing against. A no-target result from a non-census creature otherwise proves
     /// nothing either way. Remove once settled.
+    ///
+    /// ⚠ ROOT CAUSE FIXED (live 2026-09-02, tar_m10aa): <c>Odyssey.ResolveServerObject</c> is
+    /// the GENERIC untyped getter (see its own doc comment) — it hands back whatever object the
+    /// engine's array holds for that id, creature or not, and object ids are per-module: an id
+    /// that named a companion in one module names something else entirely (or nothing) after a
+    /// transition. This verb used to trust that blind and snap it, and printed the SAME
+    /// hardcoded "near 0xE" regardless of module or outcome, so a snap of the wrong object in a
+    /// different module read back exactly like success. It now refuses — no snap, no
+    /// misleading reply — unless the resolved object is both a live creature (vtable, never the
+    /// flag-bearing +0x08 type field — see the object-type-field-trap lesson) AND already
+    /// somewhere real (<see cref="Vec3.IsOrigin"/> catches the (0,0,0) tell a wrongly-typed or
+    /// never-placed object reads back as).
     /// </summary>
     private void MoveNear()
     {
@@ -25,22 +37,38 @@ internal sealed unsafe partial class CheatController
         }
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0)
+        uint candidateId = creature == 0 ? 0 : *(uint*)(creature + 0x04);
+        nint candidateVtable = creature == 0 ? 0 : *(nint*)creature;
+        if (creature == 0 || !PartyCreatureIdentity.IsLiveMatch(candidateVtable, candidateId, objectId))
         {
-            Answer(SharedBlock.CheatStatusNoTarget, $"0x{objectId:X} does not resolve here");
+            Answer(SharedBlock.CheatStatusNoTarget, $"0x{objectId:X} does not resolve to a live creature here");
+            return;
+        }
+
+        // Read the position straight back (ObjPosition, +0x090 - see Odyssey.cs) BEFORE
+        // touching it: a real creature is never exactly at the world origin, so (0,0,0) here
+        // means the id resolved to something never actually placed - refuse rather than snap it
+        // and produce a second, harder-to-read (0,0,0).
+        Vec3 before = *(Vec3*)(creature + 0x090);
+        if (Vec3.IsOrigin(before))
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"0x{objectId:X} has no real position yet (reads 0,0,0) - refusing");
             return;
         }
 
         Vec3 destination = new() { X = 29.0f, Y = 143.5f, Z = 0.0f };
         Odyssey.SnapTo(creature, destination);
 
-        // Read the position straight back (ObjPosition, +0x090 - see Odyssey.cs) rather than
-        // trust the write blind - creatures.ps1's raw scan is known-unreliable for fresh state.
+        // Read the position straight back again rather than trust the write blind -
+        // creatures.ps1's raw scan is known-unreliable for fresh state.
         Vec3 readBack = *(Vec3*)(creature + 0x090);
         PluginHost.Log(
-            $"movenear: snapped 0x{objectId:X} to ({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}), "
+            $"movenear: snapped 0x{objectId:X} from ({before.X:F1}, {before.Y:F1}, {before.Z:F1}) to "
+            + $"({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}), "
             + $"read back ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
-        Answer(SharedBlock.CheatStatusApplied, $"0x{objectId:X} snapped near 0xE");
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"0x{objectId:X} snapped to ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
     }
 
     /// <summary>

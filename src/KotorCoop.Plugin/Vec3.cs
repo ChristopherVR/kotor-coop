@@ -41,4 +41,16 @@ internal struct Vec3
         float dz = a.Z - b.Z;
         return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
     }
+
+    /// <summary>
+    /// True only for the exact float-zero vector. <see cref="IsWorldPlausible"/> deliberately
+    /// ACCEPTS (0,0,0) — a creature genuinely standing at the area origin is plausible — so it
+    /// cannot catch this: a resolved object that has never actually been placed (the wrong
+    /// object TYPE for the id, a stand-in never given a real position, or an id that resolved
+    /// to nothing meaningful) reads back exactly this. Live 2026-09-02 (`movenear` in
+    /// tar_m10aa, docs/research/shared-state-audit.md §2 round 36): a stale/mistyped id
+    /// resolved through <c>ResolveServerObject</c>'s untyped lookup, got snapped blind, and
+    /// read back (0,0,0) — the tell that nothing real was moved.
+    /// </summary>
+    public static bool IsOrigin(Vec3 p) => p.X == 0f && p.Y == 0f && p.Z == 0f;
 }
