@@ -105,7 +105,7 @@ internal partial struct SharedBlock
     // These two nine-slot arrays let PartyRosterController check, before ever calling
     // AddAvailableNpcByTemplate, whether a live body with the SAME id the peer's own party table
     // already holds for that slot is standing right here too — if so, that body is reused
-    // directly (Odyssey.TrySetSlotAvailable + AddPartyMemberBySlot) and the whole off-stage
+    // directly (Odyssey.AddAvailableNpcByTemplate + AddPartyMemberBySlot) and the whole off-stage
     // recruit + fresh spawn is skipped, so no duplicate is ever created in the first place.
     //
     // Rides in the free tail after the mid-session-load-request region (0x3F24 + 4 = 0x3F28,

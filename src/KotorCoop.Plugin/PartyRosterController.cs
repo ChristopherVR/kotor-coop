@@ -114,6 +114,13 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// so the log records a real state change rather than one line every half second.</summary>
     private uint _unavailableLogged;
 
+    /// <summary>Bit per slot: the spawn-then-add branch has already reported that
+    /// <c>SpawnAvailableNpc</c> refused this slot. Live 2026-09-03 01:31 the line
+    /// <c>could not spawn NPC slot 2 (failure 0)</c> was written 849 times in a row, once per
+    /// pass, for a companion whose body was standing in the module the whole time (see
+    /// <see cref="TryReuseGitPlacedBody"/>). Reset with <see cref="_unavailableLogged"/>.</summary>
+    private uint _spawnRefusedLogged;
+
     private uint _lastLocalParty = uint.MaxValue;
     private bool _lastHostValid;
 
@@ -122,6 +129,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     public void Invalidate()
     {
         _unavailableLogged = 0;
+        _spawnRefusedLogged = 0;
         _lastLocalParty = uint.MaxValue;
         _lastHostValid = false;
         _countdown = 0;
@@ -303,6 +311,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             {
                 _lastHostValid = false;
                 _unavailableLogged = 0;
+                _spawnRefusedLogged = 0;
                 PluginHost.Log("party roster: no peer roster to reconcile against");
             }
 
@@ -344,6 +353,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         if (toRemove == 0 && toAdd == 0)
         {
             _unavailableLogged = 0;
+            _spawnRefusedLogged = 0;
             return;
         }
 
@@ -421,13 +431,17 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
 
             if (PartyRosterBodyReuseRule.ShouldReuse(
                     hostBodyId, gitPlacedBody != 0, IsOurOwnSpawnedBody(hostBodyId))
-                && Odyssey.TrySetSlotAvailable(addSlot))
+                && Odyssey.AddAvailableNpcByTemplate(addSlot))
             {
-                // TrySetSlotAvailable's own doc comment calls it insufficient ON ITS OWN — that
-                // finding is about SpawnAvailableNpc having nothing to spawn FROM afterward. It
-                // does not apply here: this pass never calls SpawnAvailableNpc at all, because a
-                // live body was already found by GIT identity. All the raw poke needs to do here
-                // is clear AddMember's own availability gate (party table +0x30), which it does.
+                // ⚠ The slot is recruited through the engine's own AddNPC even though the body is
+                // reused, NOT flag-poked. Until 2026-09-03 this branch raw-poked +0x30 ("all
+                // AddMember needs is the availability gate") — and that produced a member the
+                // engine could not rebuild after the next module move: CreateParty resolves every
+                // member from GAMEINPROGRESS:AVAILNPC<slot>, the file AddNPC writes at recruit
+                // time, and a member without one came back OBJECT_INVALID and crashed PositionParty
+                // (docs/research/transition-crashes.md 2026-09-03; Odyssey.IsSlotAvailable's doc
+                // comment). AddNPC's temporary template creature is deleted by the engine itself,
+                // so nothing is duplicated here; the placed body found above is what gets added.
                 objectId = hostBodyId;
                 origin = PartyRosterBodyOrigin.LiveInWorld;
                 PluginHost.Log($"party roster: NPC slot {addSlot} recruited - reusing its own "
@@ -436,21 +450,16 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             }
             else
             {
-                // Odyssey.AddAvailableNpcByTemplate — NOT Odyssey.TrySetSlotAvailable's raw poke,
-                // which docs/research/party-reconciliation.md Round 75 live-confirmed insufficient
-                // (SpawnAvailableNpc has nothing to spawn from afterward; see
-                // TrySetSlotAvailable's own doc comment for the disassembled root cause). This goes
-                // through the real per-slot STORY template instead, which does not depend on the
-                // same resource — but its returned object is OFF-STAGE, not a live in-world body
-                // (see PartyRosterRecruitRule's doc comment for the disassembled reason: it is never
-                // AddToArea'd, so it can never pass AddMember's own typed live-body check, not even
-                // on a later pass with the same object id). Live-confirmed 2026-08-23
-                // (docs/research/dialogue-consequences.md): the immediate add used to fail with
-                // failure 9 every time and leave this object behind, unreferenced, while the very
-                // next pass built a SECOND object through the branch below. Do not attempt the add
-                // here — origin below routes it to the rule instead.
-                objectId = Odyssey.AddAvailableNpcByTemplate(addSlot);
-                if (objectId is 0 or Odyssey.ObjectInvalid)
+                // Odyssey.AddAvailableNpcByTemplate: the engine's own AddNPC_2/AddNPC, which sets
+                // the flag AND writes the AVAILNPC<slot> cache SpawnAvailableNpc rebuilds a body
+                // from (docs/research/party-reconciliation.md Round 75 live-confirmed a bare flag
+                // poke leaves nothing to spawn from). It produces NO body — its temporary template
+                // creature is deleted by the engine and it returns a success flag, not an id (see
+                // its doc comment; until 2026-09-03 this code treated that 1 as an object id and
+                // "the add failed with failure 9" was AddMember being handed the number 1). Do not
+                // attempt the add here — origin below routes it to the rule, and the very next pass
+                // spawns a real body through the branch below and adds it.
+                if (!Odyssey.AddAvailableNpcByTemplate(addSlot))
                 {
                     block.PartyRosterStatus = 200;
                     PluginHost.Log($"party roster: could not recruit NPC slot {addSlot} from its own "
@@ -459,9 +468,10 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                     return;
                 }
 
+                objectId = 0;
                 origin = PartyRosterBodyOrigin.RecruitedOffStage;
-                PluginHost.Log($"party roster: recruited NPC slot {addSlot} as 0x{objectId:X} from its "
-                    + $"own template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
+                PluginHost.Log($"party roster: recruited NPC slot {addSlot} from its own template "
+                    + $"(peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
                     + "- dialogue_recruit_sync; a body will be spawned and added on a later pass");
             }
         }
@@ -484,13 +494,39 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                     return;
                 }
 
-                objectId = Odyssey.SpawnAvailableNpc(addSlot, Odyssey.GetPosition(player), out int spawnFailure);
-                if (objectId is 0 or Odyssey.ObjectInvalid)
+                // ⚠ Look for the peer's own body HERE before spawning — live 2026-09-03 01:31
+                // (party-reconciliation.md): the slot was already available on this side (the
+                // adopted host world carried PT_NPC_AVAIL[2]=1 from an older build's raw flag
+                // poke, with no AVAILNPC2.utc behind it), so the branch above never ran, the
+                // cache held nothing, and SpawnAvailableNpc refused with failure 0 (no blueprint
+                // to spawn from) on EVERY pass — while Carth's own placed body (0x2,
+                // GIT-identical to the host's party member) stood at the bridge the whole time.
+                if (TryReuseGitPlacedBody(addSlot, out objectId))
                 {
-                    block.PartyRosterStatus = (uint)(100 + spawnFailure);
-                    PluginHost.Log($"party roster: could not spawn NPC slot {addSlot} "
-                        + $"(failure {spawnFailure}); the add is deferred to the next pass");
-                    return;
+                    _spawnRefusedLogged &= ~(1u << addSlot);
+                    PluginHost.Log($"party roster: NPC slot {addSlot} is already available here - "
+                        + $"reusing its own already-placed body 0x{objectId:X} (GIT-identical to the "
+                        + "peer's party member) instead of spawning a duplicate");
+                }
+                else
+                {
+                    objectId = Odyssey.SpawnAvailableNpc(addSlot, Odyssey.GetPosition(player), out int spawnFailure);
+                    if (objectId is 0 or Odyssey.ObjectInvalid)
+                    {
+                        block.PartyRosterStatus = (uint)(100 + spawnFailure);
+                        if ((_spawnRefusedLogged & (1u << addSlot)) == 0)
+                        {
+                            _spawnRefusedLogged |= 1u << addSlot;
+                            PluginHost.Log($"party roster: could not spawn NPC slot {addSlot} "
+                                + $"(failure {spawnFailure}) and no GIT-identical body is here; "
+                                + "the add is deferred and retried every pass (logged once)");
+                        }
+
+                        return;
+                    }
+
+                    _spawnRefusedLogged &= ~(1u << addSlot);
+                    PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
                 }
 
                 // Deliberately falls through to the add in the SAME pass. A spawned companion that
@@ -504,7 +540,6 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 // it and goes straight to the add. That bounds the damage at one orphaned body per
                 // slot for one pass; destroying it instead would leave the table pointing at a
                 // creature that no longer exists, which is the worse of the two.
-                PluginHost.Log($"party roster: spawned NPC slot {addSlot} as 0x{objectId:X} to add them here");
             }
 
             // Either the cache already held a resolvable body, or SpawnAvailableNpc just placed
@@ -600,6 +635,30 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// independently, so a peer's roster id can collide with one by arithmetic alone, and
     /// reusing it would seat a remote player's avatar in this instance's party.
     /// </summary>
+    /// <summary>The peer's party-table id for <paramref name="slot"/>, if a creature with that
+    /// exact id stands in this instance's world and is not one of our own spawned mirrors.
+    /// Object ids are assigned deterministically in GIT order, so a companion who was ALSO a
+    /// placed NPC (Carth on the Endar Spire bridge, Zaalbar in tar_m05aa) carries the same id
+    /// here as the peer's party member — see the comment above the recruit branch.</summary>
+    private bool TryReuseGitPlacedBody(int slot, out uint objectId)
+    {
+        objectId = 0;
+        uint hostBodyId = block.GetHostPartyRosterObjectId(slot);
+        if (!PartyRosterBodyReuseRule.IsWorthLookingUp(hostBodyId))
+        {
+            return false;
+        }
+
+        bool foundLocally = CreatureFinder.FindByObjectId(hostBodyId) != 0;
+        if (!PartyRosterBodyReuseRule.ShouldReuse(hostBodyId, foundLocally, IsOurOwnSpawnedBody(hostBodyId)))
+        {
+            return false;
+        }
+
+        objectId = hostBodyId;
+        return true;
+    }
+
     private bool IsOurOwnSpawnedBody(uint objectId)
     {
         if (!PartyRosterBodyReuseRule.IsWorthLookingUp(objectId))

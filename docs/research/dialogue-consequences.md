@@ -1853,3 +1853,17 @@ the plugin log's `item slot N: identity applied to 0xID` line together with a `g
 (`g_i_progspike01`), not the tag string — where before this round it would have reported
 `k_computer_spike` and failed with `failure 8`. See `docs/research/item-identity.md` §12's own
 NEEDS-LIVE list for the exact sequence.
+
+## Correction (2026-09-03): `AddAvailableNPCByTemplate` returns a success flag, not an object;
+## the "orphaned off-stage object" and "failure 9 forever" readings above are withdrawn
+
+`CSWPartyTable::AddNPC_2` (`0x5645F0`) loads a TEMPORARY creature from the story blueprint,
+hands it to `AddNPC` (`0x564300`) — which sets the flag, runs faction/inventory bookkeeping
+and writes `GAMEINPROGRESS:AVAILNPC<slot>.utc` from that creature — and then DELETES the
+temporary creature (`0x5646B2`) and returns `AddNPC`'s result. The `1` the 2026-08-23 round
+read as "object 0x1" was `true`; the `0x1` that "still resolved" afterwards was the module's
+GIT object #1. There is no orphan. The same-pass `AddPartyMemberBySlot` after a recruit was
+always going to fail (there is no body yet); the controller now treats a recruit as
+`RecruitedOffStage` = "flag set, cache written, no body", and spawns from the cache (or reuses
+the GIT-placed body) on the next pass. Full disassembly and the crash this reading was hiding:
+transition-crashes.md, "The two-companion host warp crash (2026-09-03)".

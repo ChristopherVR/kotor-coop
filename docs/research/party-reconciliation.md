@@ -5554,3 +5554,43 @@ rule against round 97's captured numbers and against the shipped default method.
   `README.md`, `docs/roadmap-seamless.md` — the two new keys, the new verb, and the status lines
   that no longer say "off by decision" for this stall.
 - `docs/research/party-reconciliation.md` — this entry.
+
+## Recruit-mirror reuse of the GIT-placed body, the 849-line spam, and why the slot was already
+## "available" on the client (2026-09-03, 01:31–02:25)
+
+**The spam.** Live 01:31, the client's `PartyRosterController` wrote `party roster: could not
+spawn NPC slot 2 (failure 0); the add is deferred to the next pass` 849 times in a row, once per
+pass, for a companion whose body (Carth, `0x2`) was standing on the Endar Spire bridge the whole
+time. The slot was already available on the client, so the recruit branch never ran; the
+spawn-then-add branch called `SpawnAvailableNpc`, which has nothing to rebuild from (no
+`AVAILNPC2.utc`) and refused with failure 0 forever.
+
+**Why it was already available.** Not because save 1 carries Carth's bit — it does not
+(`PARTYTABLE.res` has only slot 0 available; the earlier comment saying otherwise is
+corrected). The client had adopted the host's autosaved world, and the host's slot 2 had been
+set by the `recruit` verb's raw flag poke: the autosave persisted `PT_NPC_AVAIL[2]=1` with no
+`AVAILNPC2.utc` behind it. An adopted world can therefore carry available-but-unrebuildable
+slots — the same defect that crashed the host's own warps (transition-crashes.md, same date).
+
+**Changes.**
+1. `TryReuseGitPlacedBody(slot)` (`PartyRosterBodyReuseRule` decides): if the peer's
+   party-table id for the slot is a creature standing in THIS world and is not one of our own
+   spawned mirrors, reuse it instead of spawning a duplicate. Object ids are assigned in GIT
+   order, so a companion who was also a placed NPC (Carth on the bridge, Zaalbar in tar_m05aa)
+   carries the same id on both sides.
+2. The not-yet-available branch recruits through the engine FIRST
+   (`Odyssey.AddAvailableNpcByTemplate`, = `CSWPartyTable::AddNPC_2`, writes the cache) and
+   then reuses or spawns a body — the raw poke `TrySetSlotAvailable` no longer exists.
+3. The spawn refusal is logged once per slot (`_spawnRefusedLogged`, reset with
+   `Invalidate()`), and the retry stays silent.
+
+**Live, 02:19:32 (client mirror of the host's `recruit 2 carth`):**
+
+```
+[02:19:32.804] party roster: NPC slot 2 recruited - reusing its own already-placed body 0x2 here (GIT-identical to the peer's pre-recruit body) instead of spawning a duplicate - dialogue_recruit_sync
+[02:19:32.805] party roster: added NPC slot 2 (object 0x2) to the party
+```
+
+One line, one body, and the client then followed the host through four module moves with both
+companions rebuilt each time (`avail 0x005 members [0:slot 0 id 0x13D creature, 1:slot 2 id
+0x140 creature]` in tar_m10aa at 02:25).

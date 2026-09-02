@@ -55,7 +55,7 @@ scenario. Parsed in `ConsoleCommand`, dispatched by `CoopCommandDispatcher`, exe
 | `applyeffect` | `<kind> [target] [durationMs] [magnitude]` | staging only | applies a non-damage effect locally; aimed at a phantom, it also forwards for real |
 | `effects` | — | read-only, local | last 8 captured/applied peer-effect records |
 | `leader` | `<slot\|pc>` | dev-only, local | switches YOUR control to a party-roster companion 0-8, or back to your PC |
-| `recruit` | `<slot> [tag]` | dev-only, local | forces a party-roster slot's NPC into your party (live-test primitive) |
+| `recruit` | `<slot> [tag]` | dev-only, local | recruits a party-roster slot through the engine's own `AddAvailableNPCByTemplate` (so the `AVAILNPC` cache exists for later module moves) and adds a body: the creature tagged `tag` if it stands here, else one spawned from the cache (live-test primitive) |
 | `skipline` | — | yours to stage, local | finishes the current dialogue line/VO immediately (conversation owner only) |
 | `skipkey` | — | yours to stage, local | sends a skip KEYPRESS into the dialogue panel's own input dispatch (`CSWGuiDialog::HandleInputEvent(panel, 0x27, 1)`, vtable slot 0x3C, shared by both dialogue panel classes) — the only route that passes through `DialogueSkipHook`, the spectator skip gag. `skipline` cannot test that hook: it pokes the owner's object flag directly, never entering the input path, and refuses outright on a spectator. The answer line reports the gag's swallow count before → after, which is the oracle (blockpoke-only, see docs/research/dialogue-skip-desync.md) |
 | `selectreply` | `<slot>` | yours to stage, local | commits a reply on your own conversation, like a real click |

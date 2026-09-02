@@ -3298,3 +3298,38 @@ host buy → `gold 290` on both sides. Vendor-purchase ledger convergence: Works
 → 'tar_m02af', the walk never reached it (`600 frames after the walk the player is 5.9m from
 0x23`), `opendoor` replied `REFUSED to open (still state 2)` — a locked apartment door, not a
 transition. Needs a module whose transition door is unlocked from the warp-in side.
+
+## Two companions released at once, the two-companion warp crash found and fixed, and a warp mid-dialogue (2026-09-03, 01:31–02:25)
+
+Rig: `demo.ps1 -Save 1`, host GOG + client p2, shipped defaults.
+
+**Two companions released to local combat at the same time (row "Two companions released")** —
+01:38, client fighting `0x3B` + `0x38` (Endar Spire soldiers) with Trask `0x127` and Carth `0x2`
+in the party. Both companions were released in the same pass (`party drive: companion 0x127
+released to fight locally`, `companion 0x2 released to fight locally`, `mirroring 0 of the
+host's companions`), each was driven at a different enemy (`drove companion 0x127's attack on
+0x38`, `drove companion 0x2's attack on 0x3B`), both enemies died (host `materialised loot:
+captured 2 item(s) off 0x3B's corpse` 01:38:14, `0x38` 01:38:32) and both companions were
+reclaimed together at 01:38:32 (`companion 0x127 reclaimed — resuming the host mirror`,
+`companion 0x2 reclaimed`, `mirroring 2 of the host's companions`). Works.
+
+**Two-companion host warp crash** — 01:40 and 01:45 the host died on its first `warp` after
+`recruit 2 carth` (client attached), and again at 02:01 with no client at all. Root cause and
+fix in transition-crashes.md (same date): a slot recruited by a raw availability-flag poke has no
+`AVAILNPC<slot>.utc` for the engine to rebuild the companion from after the move, so
+`PositionParty` calls `SetPosition(NULL)`. After the fix (every recruit goes through the
+engine's `AddNPC`): host `recruit 2 carth` 02:19:32, warps `tar_m10aa`, `tar_m02aa`,
+`tar_m03aa` at 02:19:45 / 02:20:07 / 02:20:22 and `tar_m10aa` again at 02:25:09 — 4/4 clean,
+both companions rebuilt each time, client followed with both, 0 faults both sides.
+
+**Mid-dialogue partner transition (row "Mid-dialogue partner transition")** — 02:21:45 host
+`startdialog end_trask` (Trask, `0x139`, node 29). The client does NOT auto-join
+(`dialogue_auto_join=off`, shipped default) — it joined by starting the same conversation
+(02:24:57 `the engine started the same conversation here; adopting it to follow`, `followed the
+owner 19 -> 29`, agent `dialogue-gate: client ... False -> True (followingPeer=True,
+tokenActive=True)`). Host `warp tar_m10aa` with the conversation open: client 02:25:13 `the
+owner ended the conversation; closing`, 02:25:14 gate `True -> False`, `following Lanik to
+'tar_m10aa' IMMEDIATELY`, arrived 02:25:18 with hp 12/12 and both companions. No orphaned
+dialogue GUI, no crash on either side. (The `W_SAVE` "different save" auto-rejoin that followed
+at 02:25:24 is the ordinary world-adoption path every host warp triggers on this rig — 24 today —
+not part of this row.) Works.

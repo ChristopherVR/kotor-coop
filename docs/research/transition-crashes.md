@@ -956,3 +956,115 @@ dereferenced the NULL node lookup (`[vtbl+0x98](0xff, 1)`) on the phantom's clie
 drawing the "+N" floaty for `CSWSEffectListHandler::OnApplyHeal`; eip 0x688F54. Three further
 tries in every combination (fresh, post-rejoin, post-rejoin + warps) ran clean, and the sync's
 receive side never targets a phantom. Full chain in effect-sync.md §11.4.
+
+## The two-companion host warp crash (2026-09-03, 01:40–02:20): a member recruited by a raw
+## availability-flag poke cannot be rebuilt after a module move — `PositionParty` →
+## `SetPosition(NULL)`; fixed by recruiting through the engine's own `AddNPC`, 3/3 warps clean
+
+**Symptom.** With Trask (slot 0) AND Carth (slot 2) in the host's party, the host's very next
+relocating `warp` killed the host process, 3/3 (01:40, 01:45 with a client attached; 02:01 with
+NO peer at all, so this is not a sync race). Trask alone had been warping clean all night, and
+the POOL4 fix above (`PartyCountRestoreRule`) is intact — this is a different crash with the
+same neighbourhood.
+
+**Crash record** (`tools/crashbin.ps1`, host): access violation at eip `0x4AA984`, which is
+`CSWSObject::SetPosition` (`0x4CD1A0`) being called on a NULL creature from
+`CSWPartyTable::PositionParty` (`0x565B00`), itself called from `MovePlayerToArea` when the
+client's area message arrives after the move. `PositionParty` loops `[table+0x00]` members,
+reads the NPC slot from `[table+0x04+4*i]`, resolves it through `GetNPCObject` (`0x564700`) and
+`CServerExoApp::GetCreatureByGameObjectID` (`0x4AE770`), and calls `SetPosition` on the result
+WITHOUT a null test.
+
+**Instrumentation that named it** (kept in the build): `Odyssey.DescribeServerPartyTable()`
+(`Odyssey.PartyProbe.cs`) prints the party table exactly as `PositionParty` walks it, using the
+engine's own typed getter; `TravelController` logs it once at the move request and
+`PluginHost.Frame` logs it every 200 ms for 6 s after every epoch change (`party table probe:`).
+The no-peer crash run at 02:01, verbatim:
+
+```
+[02:01:47.735] party table at the move request: count 2 ctrl -1 members [0:slot 0 id 0x127 creature, 1:slot 2 id 0x2 creature] slots [0=0x127:creature 2=0x2:creature]
+[02:01:47.835] party table probe: count 2 ctrl -1 members [0:slot 0 id 0x7F000000 none, 1:slot 2 id 0x7F000000 none] slots []
+[02:01:48.027] party table probe: count 2 ctrl -1 members [0:slot 0 id 0x11E creature, 1:slot 2 id 0x7F000000 none] slots [0=0x11E:creature]
+```
+
+The engine's own module-change path clears every slot id to `OBJECT_INVALID` and rebuilds the
+party from the saved roster (`CreateParty`, `0x565A4F` region, which brackets the rebuild with
+`AddGameInProgress`/`RemoveGameInProgress`). Slot 0 (Trask) came back as a fresh creature
+`0x11E`; slot 2 (Carth) stayed `0x7F000000`, and `PositionParty` then dereferenced NULL for
+member 1. So the question was why `GetNPCObject` could not rebuild slot 2.
+
+**How `GetNPCObject` rebuilds a slot** (`tools/disasm.py` against `tools/kotor1_0_3.db`):
+slot must be 0..8 and `+0x30[slot]` (available) non-zero; if `+0x0C[slot]` is not
+`0x7F000000` it is returned as-is; otherwise a new `CSWSCreature` is allocated,
+`AddGameInProgress` (`0x5638D0`: refcount `+0xF4`, first user registers the
+`GAMEINPROGRESS:` directory through `CExoResMan::AddResourceDirectory` `0x408800`) is taken,
+`GetFilename` (`0x563620`) formats `AVAILNPC%d`, `LoadFromTemplate` (`0x5026D0`) opens
+`GAMEINPROGRESS:AVAILNPC<slot>.utc`; on failure the creature is deleted and `0x7F000000`
+returned; on success `RemoveGameInProgress` (`0x563950`) and the add-to-area path run.
+
+**Where the cache comes from — and the misreading this corrects.** `CSWPartyTable::AddNPC`
+(`0x564300`) is the recruit: it refuses a bad slot or an already-set `+0x30[slot]`, sets the
+flag (`0x564350`), runs `TransferInventory` (`0x5641E0`), the 2DA level lookup,
+`CSWSFaction::AddMember` (`0x5BFA70`) and `SetMovementRate`, then — the part every earlier
+write-up missed — builds the `AVAILNPC<slot>` filename, `CResGFF::CreateGFFFile` (`0x411260`,
+"V2.0"/"UTC "), `CSWSCreature::SaveCreature` (`0x500610`) and `CResGFF::WriteGFFFile`
+(`0x413030`, restype `0x7EB`): **the recruit itself writes `GAMEINPROGRESS:AVAILNPC<slot>.utc`
+and returns the write's result** (esi→eax at `0x5645B7`). `AddNPC_2` (`0x5645F0`, what
+NWScript `AddAvailableNPCByTemplate` calls) allocates a temporary creature
+(`0x7F000000`, 0), `LoadFromTemplate`s it from the story blueprint, calls `AddNPC`, then
+**deletes the temporary creature** (`call [vtbl+0]`(1) at `0x5646B2`) and returns `AddNPC`'s
+value. It returns a SUCCESS FLAG, not an object id. dialogue-consequences.md's 2026-08-23 reading
+("the object it returns sits off-stage and fails to add with failure 9 forever") was a
+misreading of that `1` as an object id; the "orphaned object 0x1" it worried about was the
+Endar Spire's GIT object #1, not a leak.
+
+**Root cause.** Both of our recruit paths set `+0x30[slot]` with a raw write and never went
+through `AddNPC`: the `recruit` verb's fallback (`TrySetSlotAvailable` + the tagged body) and
+`PartyRosterController`'s GIT-body reuse branch. The slot was "available" with a live body, so
+the party looked fine — until the first module move cleared the ids and `GetNPCObject` had no
+`AVAILNPC2.utc` to rebuild from. Worse, the flag is persisted: the host's autosave carried
+`PT_NPC_AVAIL[2]=1` with no `AVAILNPC2.utc` inside `SAVEGAME.sav`, so every client that
+adopted that world inherited an available-but-unrebuildable slot too (the 01:31 spam in
+party-reconciliation.md is that inheritance). (Save 1's own `PARTYTABLE.res` has only slot 0
+available and its `.sav` only `AVAILNPC0.utc` — the earlier note that "save 1 has Carth's bit
+set from the start" was wrong, and is corrected in the code comment.)
+
+**Fix** (this commit): the raw poke is gone — `Odyssey.TrySetSlotAvailable` is deleted and
+replaced by the read-only `Odyssey.IsSlotAvailable`. Every recruit goes through
+`Odyssey.AddAvailableNpcByTemplate(slot)` (= `AddNPC_2`, now returning `bool`) BEFORE anything
+adds or looks up a body: the `recruit` verb recruits first and then uses the tagged body (or
+spawns one from the cache just written); `PartyRosterController`'s not-yet-available reuse
+branch does the same. `RecruitedOffStage` in `PartyRosterRecruitRule` now means "flag set and
+cache written, no body yet" and still defers the add to the next pass, which spawns from the
+cache.
+
+**Live, 02:19–02:25, host + client.** `recruit 2 carth` on the host:
+
+```
+[02:19:32.557] recruit: recruited NPC slot 2 through the engine's own AddAvailableNPCByTemplate (AVAILNPC cache written) (dev-only test primitive)
+[02:19:32.558] recruit: using the already-placed 'carth' (0x2) as NPC slot 2's body
+[02:19:32.558] recruit: added NPC slot 2 (object 0x2) to the party (dev-only test primitive)
+```
+
+`gameinprogress/AVAILNPC2.utc` appeared on disk at the recruit (later 9113 B in the autosave's
+`SAVEGAME.sav` next to `AVAILNPC0.utc`, with `PT_NPC_AVAIL[2]=1`). The client mirror reused its
+own body through the engine recruit (`party roster: NPC slot 2 recruited - reusing its own
+already-placed body 0x2 here (GIT-identical to the peer's pre-recruit body)`). Then host warps
+`tar_m10aa` → `tar_m02aa` → `tar_m03aa`, and a fourth back to `tar_m10aa` mid-dialogue at 02:25:
+
+```
+[02:19:45.770] party table at the move request: count 2 ctrl -1 avail 0x005 members [0:slot 0 id 0x127 creature, 1:slot 2 id 0x2 creature] ...
+[02:20:07.970] party table at the move request: count 2 ctrl -1 avail 0x005 members [0:slot 0 id 0x11C creature, 1:slot 2 id 0x11F creature] ...
+[02:20:22.965] party table at the move request: count 2 ctrl -1 avail 0x005 members [0:slot 0 id 0x98 creature, 1:slot 2 id 0x9B creature] ...
+[02:25:09.772] party table at the move request: count 2 ctrl -1 avail 0x005 members [0:slot 0 id 0x139 creature, 1:slot 2 id 0x13C creature] ...
+```
+
+Both slots rebuilt as creatures after every move (`0x11C/0x11F`, `0x98/0x9B`, `0xA2/0xA5`,
+`0x139/0x13C`), the client followed each time with both companions (`count 2 ... avail 0x005
+members [0:slot 0 id 0x13D creature, 1:slot 2 id 0x140 creature]` after the last), 0 faults on
+either side. 3/3 crash → 4/4 clean on the same save and the same recruit.
+
+**Rule, added to the engine-write rules:** never set a party-table availability flag directly.
+The flag is one third of a recruit; the other two thirds (`AVAILNPC<slot>.utc` and the faction
+membership) are what the next module move needs, and the flag alone is persisted into saves
+and adopted worlds as a slot that can never be rebuilt.

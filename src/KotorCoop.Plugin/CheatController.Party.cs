@@ -127,11 +127,20 @@ internal sealed unsafe partial class CheatController
 
     /// <summary>
     /// DEV-ONLY TEST PRIMITIVE (see <see cref="SharedBlock.CheatKindRecruit"/>): forces NPC
-    /// roster slot <see cref="SharedBlockView.CheatAmount"/> into the local active party,
-    /// running the same poke-available / spawn / add sequence
-    /// <c>PartyRosterController.Reconcile</c> already runs for a peer's roster (party-
-    /// reconciliation.md's "roster sync" section), on demand for a slot named directly rather
-    /// than one read off a peer's mask.
+    /// roster slot <see cref="SharedBlockView.CheatAmount"/> into the local active party the way
+    /// the game's own recruit scripts do — <c>AddAvailableNPCByTemplate</c> first (the engine's
+    /// <c>AddNPC</c>: flag, faction, inventory AND the <c>AVAILNPC&lt;slot&gt;</c> cache), then
+    /// <c>AddPartyMember</c> on a body: the creature tagged <see cref="SharedBlockView.CheatText"/>
+    /// if one stands in the module (<c>recruit 2 carth</c> on the Endar Spire bridge), otherwise
+    /// one spawned from the cache just written.
+    ///
+    /// ⚠ ORDER MATTERS (docs/research/transition-crashes.md 2026-09-03, "the two-companion host
+    /// warp crash"). Until then this verb raw-poked the availability flag, TRIED to spawn (which
+    /// failed — there was no cache to spawn from) and fell back to the tagged body. The member
+    /// that produced looked fine in the party (it was Carth's own placed body) but the engine
+    /// could not rebuild it after a module move: <c>CreateParty</c> came back OBJECT_INVALID for
+    /// the slot and <c>PositionParty</c> crashed on <c>SetPosition(NULL)</c>, 3/3 warps. Recruit
+    /// through the engine BEFORE anything looks the slot up, and the same warp is clean.
     /// </summary>
     private void Recruit(nint player)
     {
@@ -153,55 +162,54 @@ internal sealed unsafe partial class CheatController
 
         if (!hadLiveBody)
         {
-            if (!Odyssey.TrySetSlotAvailable(slot))
+            byte* text = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
             {
-                Answer(SharedBlock.CheatStatusRefused, $"recruit: could not mark NPC slot {slot} available (no party table?)");
+                length++;
+            }
+
+            string tag = length == 0 ? string.Empty : Encoding.ASCII.GetString(text, length);
+            nint placed = length == 0 ? 0 : CreatureFinder.FindByTag(new ReadOnlySpan<byte>(text, length));
+            if (length != 0 && placed == 0)
+            {
+                Answer(SharedBlock.CheatStatusRefused, $"recruit: no creature tagged '{tag}' is here to recruit as NPC slot {slot}");
                 return;
             }
 
-            objectId = Odyssey.SpawnAvailableNpc(slot, Odyssey.GetPosition(player), out int spawnFailure);
-            if (objectId is 0 or Odyssey.ObjectInvalid)
+            if (Odyssey.IsSlotAvailable(slot))
             {
-                // A bare availability poke does not carry the blueprint association
-                // AddAvailableNPCByTemplate also records — Odyssey.TrySetSlotAvailable's own
-                // NEEDS-LIVE note, now confirmed live: SpawnAvailableNPC has nothing to spawn
-                // FROM. Fall back to a tag lookup against a body already placed in the module
-                // (the module's own static creature list, before any recruitment ever ran),
-                // if the caller named one.
-                byte* text = block.CheatText;
-                int length = 0;
-                while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
-                {
-                    length++;
-                }
-
-                if (length == 0)
-                {
-                    Answer(
-                        SharedBlock.CheatStatusRefused,
-                        $"recruit: spawn failed for NPC slot {slot} (failure {spawnFailure}; "
-                        + "no blueprint on a raw availability poke) - retry as 'recruit "
-                        + $"{slot} <tag>' to fall back to an already-placed body");
-                    return;
-                }
-
-                string tag = Encoding.ASCII.GetString(text, length);
-                nint found = CreatureFinder.FindByTag(new ReadOnlySpan<byte>(text, length));
-                if (found == 0)
-                {
-                    Answer(
-                        SharedBlock.CheatStatusRefused,
-                        $"recruit: spawn failed for NPC slot {slot} (failure {spawnFailure}), "
-                        + $"and no creature tagged '{tag}' is here either");
-                    return;
-                }
-
-                objectId = *(uint*)(found + 0x04); // CSWSObject + 4 = the object's id
-                PluginHost.Log($"recruit: NPC slot {slot} has no blueprint to spawn from "
-                    + $"(failure {spawnFailure}); using already-placed '{tag}' (0x{objectId:X}) instead");
+                PluginHost.Log($"recruit: NPC slot {slot} was already recruited here (dev-only test primitive)");
+            }
+            else if (Odyssey.AddAvailableNpcByTemplate(slot))
+            {
+                PluginHost.Log($"recruit: recruited NPC slot {slot} through the engine's own "
+                    + "AddAvailableNPCByTemplate (AVAILNPC cache written) (dev-only test primitive)");
             }
             else
             {
+                Answer(SharedBlock.CheatStatusRefused, $"recruit: the engine refused to recruit NPC slot {slot} (no template for that slot, or no party table)");
+                return;
+            }
+
+            if (placed != 0)
+            {
+                objectId = *(uint*)(placed + 0x04); // CSWSObject + 4 = the object's id
+                PluginHost.Log($"recruit: using the already-placed '{tag}' (0x{objectId:X}) as NPC slot {slot}'s body");
+            }
+            else
+            {
+                objectId = Odyssey.SpawnAvailableNpc(slot, Odyssey.GetPosition(player), out int spawnFailure);
+                if (objectId is 0 or Odyssey.ObjectInvalid)
+                {
+                    Answer(
+                        SharedBlock.CheatStatusRefused,
+                        $"recruit: spawn failed for NPC slot {slot} (failure {spawnFailure}) - a slot that was "
+                        + "recruited without its AVAILNPC cache (an older build's raw flag poke?) has nothing to "
+                        + $"spawn from; retry as 'recruit {slot} <tag>' to use an already-placed body");
+                    return;
+                }
+
                 PluginHost.Log($"recruit: spawned NPC slot {slot} as 0x{objectId:X} (dev-only test primitive)");
             }
         }

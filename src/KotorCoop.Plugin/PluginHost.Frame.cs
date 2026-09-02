@@ -50,6 +50,16 @@ internal static unsafe partial class PluginHost
     /// two points <see cref="_transitionPending"/> is.</summary>
     private static bool _moveToModulePendingSeen;
 
+    /// <summary>Party-table probe window (docs/research/transition-crashes.md, 2026-09-03, the
+    /// two-companion host warp crash): for the first few seconds after every world change the
+    /// frame logs <see cref="Odyssey.DescribeServerPartyTable"/> at 5 Hz, so the state
+    /// <c>CSWPartyTable::PositionParty</c> is about to dereference (it runs when the client's
+    /// area message lands, seconds after the epoch flips) is in the log BEFORE any fault.</summary>
+    private static long _partyProbeUntilMs;
+    private static long _partyProbeNextMs;
+    private const int PartyProbeWindowMs = 6000;
+    private const int PartyProbeIntervalMs = 200;
+
     /// <summary>
     /// coop.ini <c>transition_announce_scripted</c> (docs/research/transition-smoothness.md,
     /// 2026-08-27) — gates ONLY whether the plugin ever calls
@@ -339,6 +349,26 @@ internal static unsafe partial class PluginHost
             _doorTransitionAnnouncedThisEpoch = false;
             _moveToModulePendingSeen = false;
             _travel?.ClearOwnWarpPending();
+            _partyProbeUntilMs = Environment.TickCount64 + PartyProbeWindowMs;
+            _partyProbeNextMs = 0;
+        }
+
+        if (_partyProbeUntilMs != 0)
+        {
+            long probeNow = Environment.TickCount64;
+            if (probeNow >= _partyProbeUntilMs)
+            {
+                _partyProbeUntilMs = 0;
+            }
+            else if (probeNow >= _partyProbeNextMs)
+            {
+                _partyProbeNextMs = probeNow + PartyProbeIntervalMs;
+                string table = Odyssey.DescribeServerPartyTable();
+                if (table.Length != 0)
+                {
+                    Log($"party table probe: {table}");
+                }
+            }
         }
 
         // Focus first: the others do nothing useful in a paused world.

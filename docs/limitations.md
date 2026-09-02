@@ -36,7 +36,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Traveling together, either player leading | Works | The engine's own transition path; loading screens overlap; `follow_lead`/`--no-follow` configurable | roadmap closed #13 |
 | Companion follow-AI "stuck at the last waypoint" stall | Fixed | A runtime detector spots the wedge and relocates the companion to the party (same call a transition itself uses); 5/5 reps recovered first try | roadmap Tier 1 #10, round 105 |
 | Mirrored companion follow-AI while mirroring holds | Not supported (by design) | A companion controlled by the OTHER player doesn't run its own follow-AI at all while mirrored — structural, not a bug | roadmap Tier 1 #10 |
-| Host relocating-warp crash | Fixed | Was 6/6 fatal to the host; root-caused to a party-count restore bug and fixed; 5/5 warps clean afterward on shipped defaults | live-verification.md "POOL4" round, `transition-crashes.md` |
+| Host relocating-warp crash | Fixed | Was 6/6 fatal to the host; root-caused to a party-count restore bug and fixed; 5/5 warps clean afterward on shipped defaults. A SECOND one with two companions (3/3 fatal, no peer needed) was root-caused 2026-09-03 to companions recruited by a raw availability-flag poke (no `AVAILNPC` cache to rebuild from after the move); every recruit now goes through the engine's own `AddNPC`, 4/4 clean | live-verification.md "POOL4" round and 2026-09-03 01:31–02:25, `transition-crashes.md` |
 | Real door crossing under the same fix | Unverified | The warp-crash fix was exercised via the `warp` console verb, not a real door — every real-door attempt in that round stalled short on a staging/pathing issue, not a transition failure | live-verification.md "POOL4" round |
 | Repeatedly chaining the `warp` console verb | Not supported (pre-existing engine bug) | Can crash the retail engine outright; unrelated to co-op, not gated by any setting | README "Honest limitations" |
 | Fog-of-war map reveal (`map_reveal_sync`) | Partial | The engine call fires correctly and survives a transition; only the on-screen M-key appearance is unconfirmed (screenshot tooling was broken) | roadmap Tier 1 #8 |
@@ -63,7 +63,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Rejoin churn after a wipe reload | Works | Re-run after the `TryReadWorldLoadSerial` fix: exactly one `WipeRecovery` rejoin (plugin route), no SaveMismatch/OwnLoad follow-ups, both at 12/12 in 6 s | live-verification.md "Wipe reload re-run" 2026-09-02 |
 | Host reload duplicates the host PC's saved equipment | Works (verified 2026-09-03) | The "settled" item resweep ran while the engine was still finishing the loaded PC, so the save's clothes + short sword were diffed in as a script grant. Fix 1 (`ItemSweepProvenanceRule.Settling`, two spaced sweeps must agree) closed at +3 s because the engine mints the bodies first and assigns them to the PC a beat later; fix 2 compares `Fingerprint(id, possessor, tagKnown)` so the holder is part of what must stand still. Live 2026-09-03 00:17 and 00:30: no `script item grant` after the plugin-route host reload, pool stayed at 3 keys, exactly one `WipeRecovery` rejoin | `shared-inventory-v2.md` §18, live-verification.md 2026-09-03 |
 | Client vanishes on the first follow after a plugin-route wipe-recovery rejoin | Fixed (verified 2/2, 2026-09-03) | The persisted crash record named it: `CServerExoAppInternal::DoPCAutosave` (run by every `StartNewModule`) walks CSWParty's member array under `CSWParty+0x00` and `GetServerCreature` dereferences the NULL `GetCharacter(i)` returns for a slot the new world cannot resolve — the mirrored companion's PRE-WIPE id, which the plugin-route rejoin keeps alive in the client half. `PartyCountRestoreRule.SafeTravelCount` bounds the count by the leading resolvable run before the move (in `TravelToModule` and on the engine flag's rising edge); the same recipe that killed the client 3/3 now logs `party count: bounded 2 -> 1 (entries 0x80000129 0x80000127!)` and follows cleanly | `transition-crashes.md` 2026-09-03, live-verification.md 2026-09-03 |
-| Two companions released to local combat at once | Unverified | Only one companion release was exercised in the damage-taken round | `companion-state-sync.md` §13 |
+| Two companions released to local combat at once | Works | Trask and Carth released in the same pass, driven at two different enemies, both enemies died, both companions reclaimed together (2026-09-03 01:38) | live-verification.md 2026-09-03 01:31–02:25 |
 | Endar Spire / Taris duel HP floor (`SetMinOneHP`) | Not a mod limitation | KOTOR's own tutorial script floors HP at 1 on those maps — nobody can be downed there, co-op or not, until the pin clears | `min-one-hitpoint.md` |
 | Container-loot race (two clicks, same chest) | Fixed | See "moving through the world" above | roadmap Tier 1 #4 |
 | Creature liveness reconciliation (body alive on one screen, dead on the other) | Not supported (off by default) | `liveness_sync` ships OFF; correction mechanism exists but not enabled | roadmap Tier 3 #22 |
@@ -73,8 +73,8 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Item | Status | What you'll see | Source |
 | --- | --- | --- | --- |
 | One conversation at a time, spectator mode | Works | Whoever starts a conversation drives it; the other player spectates live, clicks and skips both swallowed, late-joiners catch up instantly | README status table, `dialogue-sync.md` |
-| Companion recruitment sync (`dialogue_recruit_sync`) | Partial | Live-confirmed for two companions; one fix for a stale pre-recruit body isn't yet confirmed live | README "Honest limitations" |
-| Mid-dialogue partner transition (spectator's copy left orphaned?) | Unverified | Machinery exists (`DialogueSpectateController`); never observed live | roadmap Tier 1 #13 |
+| Companion recruitment sync (`dialogue_recruit_sync`) | Works | Live-confirmed for two companions; the mirror now recruits through the engine's own `AddNPC` and reuses the companion's GIT-placed body instead of spawning a twin (confirmed 2026-09-03 02:19, one line, one body, survived four module moves) | README "Honest limitations", `party-reconciliation.md` 2026-09-03 |
+| Mid-dialogue partner transition (spectator's copy left orphaned?) | Works | Host warped out of a Trask conversation the client was following: the client's copy closed ("the owner ended the conversation"), it followed and arrived with both companions; no orphaned GUI, no crash (2026-09-03 02:25) | live-verification.md 2026-09-03 01:31–02:25 |
 | Star Forge finale — Bastila/Malak duel spectate | Works | Roster empties, peer's phantom hides, spectator's input parks and camera follows, a real refill ends the segment — 6 reps, no crash | roadmap Tier 1 #26, `star-forge-finale.md` |
 | Input lock stopping a real physical WASD press (duel spectate) | Unverified | Only the lock's own mechanism (commandable flag, `HoldCreatureStill`) is confirmed to engage; injected keystrokes can't reach the game to test the real press | roadmap Tier 1 #26 |
 
@@ -136,7 +136,7 @@ rig yet. Good targets for the next live-test pass:
 2. *(measured 2026-09-02: the field is written, the AI does not retarget on it — see the table.)*
 3. *(done 2026-09-03: all three observed both directions — see the table.)*
 4. `E_PROTO` protocol-version-mismatch reject.
-5. Mid-dialogue partner transition — whether the spectator's copy of the conversation orphans.
+5. *(done 2026-09-03: the spectator's copy closes cleanly and follows — see the table.)*
 6. *(done 2026-08-28 via `pazaak end` — see the table; this list entry was stale.)*
 7. The keyboard half of the input lock (swoop peer-lock and Star Forge duel spectate) actually
    stopping a real physical key press — injected keystrokes can't reach this game to test it.
@@ -144,7 +144,7 @@ rig yet. Good targets for the next live-test pass:
 9. The 3+ peer door-transition soak (needs a cutscene-free warp target).
 10. Internet play against a real router (STUN discovery + UPnP mapping).
 11. *(done 2026-09-02, one cycle under a real fight — see the table.)*
-12. Two companions released to local combat at the same time.
+12. *(done 2026-09-03: both released, driven at different enemies, reclaimed together — see the table.)*
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
     the legs themselves have no non-story primitive to drive them; the galaxy-map accept-button
     refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) but has never been spliced

@@ -197,6 +197,10 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         PluginHost.Log(ok
             ? $"travel: moving to module '{name}' on the session's authority"
             : $"travel: move to '{name}' refused (failure {failure})");
+        if (ok)
+        {
+            PluginHost.Log($"party table at the move request: {Odyssey.DescribeServerPartyTable()}");
+        }
     }
 
     /// <summary>

@@ -180,37 +180,23 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
-    /// Raw-pokes this instance's own availability flag for one NPC slot — the write half of
-    /// <see cref="TryReadPartyRoster"/>'s read.
+    /// Whether this instance's own party table marks NPC slot <paramref name="slot"/> as
+    /// recruited (<c>table+0x30+slot*4</c>, the flag <see cref="AddAvailableNpcByTemplate"/>
+    /// sets). False when there is no table or the slot is out of range.
     ///
-    /// Mirrors the literal store <c>AddAvailableNPCByTemplate</c> performs at the same offset
-    /// (<c>*(int*)(table + PartyAvailable + slot*4) = 1</c> at <c>0x00564350</c> — VERIFIED, the
-    /// same evidence <see cref="PartyAvailable"/>'s own doc comment already cites:
-    /// <c>AddMember</c>/<c>RemoveMember</c> testing this exact array for a zero entry). **The
-    /// flag ALONE is NOT enough for <see cref="SpawnAvailableNpc"/> to resolve a template
-    /// afterward — LIVE-CONFIRMED, not just NEEDS-LIVE**, via the <c>CheatKindRecruit</c> dev
-    /// primitive: it runs exactly this poke, then <see cref="SpawnAvailableNpc"/>, and the spawn
-    /// refuses every time ("spawn failed, failure 0" — a genuine engine refusal, not a plumbing
-    /// bug; full test story in docs/research/party-reconciliation.md). Root cause, from
-    /// disassembly of <c>CSWPartyTable::GetNPCObject</c> (0x00564700, <see cref="SpawnAvailableNpc"/>'s
-    /// own resolver): when the cached object-id slot (<see cref="PartyObjectIds"/>) still holds
-    /// its default sentinel (0x7F000000, OBJECT_INVALID), it rebuilds from a resource literally
-    /// named <c>"AVAILNPC%d"</c> (the format string at 0x007490B4, read via
-    /// <c>CSWPartyTable::GetFilename</c> 0x00563620) — a per-slot SAVE-GAME CACHE of that
-    /// companion's off-stage character sheet, only ever populated as a side effect of a real
-    /// <c>AddNPC_2</c>/<c>AddNPC</c> call (see <see cref="AddAvailableNpcByTemplate"/>), never by
-    /// this raw poke. A slot this raw poke marks available therefore has no "AVAILNPC&lt;N&gt;"
-    /// resource to rebuild from and <see cref="SpawnAvailableNpc"/> has nothing to spawn.
-    /// <see cref="AddAvailableNpcByTemplate"/> is the fix used by the dialogue recruitment-sync
-    /// path now (docs/research/dialogue-consequences.md §4.2, coop.ini
-    /// <c>dialogue_recruit_sync</c>): it goes through the real STORY template resref instead
-    /// (which does not depend on that cache at all), the same way the engine's own recruitment
-    /// conversations do. This raw poke is kept only for
-    /// <see cref="CheatController.Recruit"/>'s dev-only test primitive, where the documented
-    /// engine refusal — and its own tag-lookup fallback against an already-placed body — is the
-    /// point.
+    /// ⚠ There is deliberately NO raw write for this flag any more. Until 2026-09-03 a
+    /// <c>TrySetSlotAvailable</c> poke existed for the <c>recruit</c> dev verb and for
+    /// <c>PartyRosterController</c>'s GIT-body reuse, on the theory that "all AddMember needs is
+    /// the +0x30 gate". docs/research/transition-crashes.md (2026-09-03, "the two-companion host
+    /// warp crash") shows why that is not enough: <c>CSWPartyTable::CreateParty</c> rebuilds every
+    /// party member after a module move from the per-slot <c>AVAILNPC&lt;slot&gt;</c> resource in
+    /// <c>GAMEINPROGRESS:</c>, and a member whose slot was only ever flag-poked came back as
+    /// OBJECT_INVALID from <c>GetNPCObject</c> after the move, so <c>PositionParty</c> called
+    /// <c>CSWSObject::SetPosition</c> on NULL — a reliable access violation on the first module
+    /// move with that companion in the party. The only way to mark a slot recruited is the
+    /// engine's own <c>AddNPC</c>, which writes that cache itself.
     /// </summary>
-    public static bool TrySetSlotAvailable(int slot)
+    public static bool IsSlotAvailable(int slot)
     {
         nint table = GetPartyTable();
         if (table == 0 || slot is < 0 or >= PartyRosterSlots)
@@ -218,8 +204,7 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        *(int*)(table + PartyAvailable + (slot * 4)) = 1;
-        return true;
+        return *(int*)(table + PartyAvailable + (slot * 4)) != 0;
     }
 
     // CSWPartyTable::AddNPC_2(int nNPC, CExoString* sTemplate) -> object oCreature. VERIFIED by
@@ -228,7 +213,7 @@ internal static unsafe partial class Odyssey
     // (StackPopInteger 0x005D1000, StackPopString 0x005D1080), resolves the party table via
     // CServerExoApp::GetPartyTable (0x004AEE70), and calls exactly this function
     // (0x0052DD65 -> 0x005645F0) with (nNPC, &sTemplate). Internally: refuses if the slot is
-    // already available (same +0x30 guard TrySetSlotAvailable's own poke sets); otherwise
+    // already available (the +0x30 guard IsSlotAvailable reads); otherwise
     // allocates sizeof(CSWSCreature)=0xAC8 (Global::operator_new_2 0x006FA7E6), constructs it
     // (CSWSCreature::Constructor-equivalent 0x004F7A10), builds a CResRef from the template
     // string (0x00406D60) and loads the blueprint via CSWSCreature::LoadFromTemplate (0x005026D0
@@ -240,19 +225,26 @@ internal static unsafe partial class Odyssey
     // FactionID=2=Friendly_1 baked into the blueprint) and CSWPartyTable::TransferInventory
     // (0x005641E0, merges starting inventory into the shared party pool — also run a second time
     // by AddMember itself when the caller adds the body to the active party, so redundant, not
-    // missing, if this function is skipped). Returns the new object id, or 0/OBJECT_INVALID on
-    // refusal (bad slot, already available, or the template failed to resolve).
+    // missing, if this function is skipped) — and, last, GetFilename ("AVAILNPC%d") +
+    // CResGFF::CreateGFFFile / CSWSCreature::SaveCreature / CResGFF::WriteGFFFile
+    // (0x00564502-0x00564590): the companion's character sheet is written to
+    // GAMEINPROGRESS:AVAILNPC<slot>.utc RIGHT THERE. AddNPC returns that WriteGFFFile result
+    // (esi -> eax at 0x005645B7), and AddNPC_2 then DELETES its temporary creature (vtable slot 0
+    // with flag 1 at 0x005646B2) and returns AddNPC's value — so the function returns a success
+    // flag (live logs show "0x1"), NOT an object id, and leaves no engine object behind. Its
+    // durable products are the +0x30 flag, the faction membership, the inventory transfer, and
+    // the AVAILNPC<slot> cache file CreateParty rebuilds the member from after every module move.
     private static readonly delegate* unmanaged[Thiscall]<nint, int, byte*, uint> AddNpcByTemplateFn =
         (delegate* unmanaged[Thiscall]<nint, int, byte*, uint>)0x005645F0;
 
     /// <summary>
     /// Recruits NPC slot <paramref name="slot"/> the way the engine's own
     /// <c>AddAvailableNPCByTemplate</c> does — <see cref="AddNpcByTemplateFn"/>'s own doc comment
-    /// has exactly what this buys over <see cref="TrySetSlotAvailable"/>'s raw poke it replaces
-    /// in <c>PartyRosterController</c> (that poke is LIVE-CONFIRMED insufficient — see
-    /// <see cref="TrySetSlotAvailable"/>'s own doc comment). Used by the dialogue
-    /// recruitment-sync path (docs/research/dialogue-consequences.md §4.2, coop.ini
-    /// <c>dialogue_recruit_sync</c>).
+    /// has the disassembly. This is the ONLY way this plugin marks a slot recruited (see
+    /// <see cref="IsSlotAvailable"/> for why the raw flag poke that used to sit beside it was
+    /// removed). Used by the dialogue recruitment-sync path
+    /// (docs/research/dialogue-consequences.md §4.2, coop.ini <c>dialogue_recruit_sync</c>) and
+    /// by the <c>recruit</c> dev verb.
     ///
     /// Builds the CExoString with the engine's own constructor
     /// (<see cref="CExoStringCtorFn"/>/<see cref="CExoStringDtorFn"/>, the same live-verified
@@ -260,31 +252,29 @@ internal static unsafe partial class Odyssey
     /// hand-laying the struct out, for the same reason those two do: getting the length
     /// convention right by hand is a standing hazard this codebase avoids everywhere else.
     ///
-    /// Returns the new object id, or 0/<see cref="ObjectInvalid"/> if the slot was out of range,
-    /// already available, or the template failed to resolve. MAIN THREAD ONLY.
+    /// Returns true when the engine recruited the slot (flag set, faction joined, starting
+    /// inventory transferred, <c>AVAILNPC&lt;slot&gt;.utc</c> written); false if the slot was out
+    /// of range, ALREADY recruited, or the template failed to resolve. MAIN THREAD ONLY.
     ///
-    /// ⚠ THE RETURNED OBJECT IS OFF-STAGE, NOT A LIVE IN-WORLD BODY. <c>AddNpcByTemplateFn</c>'s
-    /// own doc comment traces the call chain (<c>AddNPC_2</c> -&gt; <c>AddNPC</c>) and it never
-    /// calls <c>CSWSCreature::AddToArea</c> — unlike <c>CreateObject</c>'s own trace
-    /// (docs/re/spawn.md §3.6 step 9), which does. NWScript's own <c>AddAvailableNPCByTemplate</c>
-    /// is declared <c>void</c> for exactly this reason: no script is meant to treat this id as an
-    /// addable body either. Do NOT pass this id to <see cref="AddPartyMemberBySlot"/> — it will
-    /// refuse with failure 9 forever, not just this pass (see
-    /// <see cref="PartyRosterRecruitRule"/>'s doc comment for the disassembled reason: the object
-    /// never gains the in-world flag bit <c>AddMember</c>'s own typed live-body check requires).
-    /// Only <see cref="SpawnAvailableNpc"/> — which reads the off-stage cache this call populates
-    /// — produces a body that check will accept.
+    /// ⚠ THIS PRODUCES NO BODY. AddNPC_2 deletes the creature it built from the template as soon
+    /// as AddNPC has saved it. (Until 2026-09-03 this doc claimed an off-stage object was left
+    /// behind and that the returned value was its id — it is AddNPC's success flag; the "failure
+    /// 9 forever" the old text described was <see cref="AddPartyMemberBySlot"/> being handed the
+    /// number 1 as an object id.) To put the companion in the world afterwards, either
+    /// <see cref="SpawnAvailableNpc"/> (which rebuilds a body from the cache this call just
+    /// wrote) or hand <see cref="AddPartyMemberBySlot"/> a body that is already standing in the
+    /// module (the companion's own GIT-placed creature — what the game's own recruit scripts do).
     ///
     /// The slot -&gt; resref mapping itself lives in <see cref="PartyRosterTemplateTable"/> (split
     /// out so it can be unit-tested); all nine entries are independently re-derived and confirmed
     /// by disassembly there.
     /// </summary>
-    public static uint AddAvailableNpcByTemplate(int slot)
+    public static bool AddAvailableNpcByTemplate(int slot)
     {
         nint table = GetPartyTable();
         if (table == 0 || !PartyRosterTemplateTable.TryGetTemplate(slot, out string resref))
         {
-            return 0;
+            return false;
         }
 
         byte* exoString = stackalloc byte[16];
@@ -303,9 +293,9 @@ internal static unsafe partial class Odyssey
         templateName[count] = 0;
 
         CExoStringCtorFn(exoString, templateName);
-        uint objectId = AddNpcByTemplateFn(table, slot, exoString);
+        uint recruited = AddNpcByTemplateFn(table, slot, exoString);
         CExoStringDtorFn(exoString);
-        return objectId;
+        return recruited != 0;
     }
 
     /// <summary>This instance's spawned object id for an NPC slot, or 0 / OBJECT_INVALID when
