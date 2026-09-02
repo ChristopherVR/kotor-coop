@@ -93,6 +93,9 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.SetGold] = "setgold 5000",
         [CoopCommandKind.FollowKick] = "followkick 0",
         [CoopCommandKind.FollowStall] = "followstall 0 1",
+        [CoopCommandKind.GalaxyMapOpen] = "galaxymap open",
+        [CoopCommandKind.GalaxyMapClose] = "galaxymap close",
+        [CoopCommandKind.GalaxyMapStats] = "galaxymap stats",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

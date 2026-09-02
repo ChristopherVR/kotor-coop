@@ -715,6 +715,35 @@ public enum CoopCommandKind
     /// character is captured. Local only.
     /// </summary>
     ChargenAccept,
+
+    /// <summary>
+    /// <c>galaxymap open</c> — LIVE-TEST PRIMITIVE (Tier 2 item 18 task 2's own "Live test plan"
+    /// follow-up, docs/research/galaxy-map-and-party-select.md's 2026-09-03 addendum). Opens
+    /// this instance's own galaxy-map GUI through <c>CGuiInGame::ShowGalaxyMapGui</c>, called
+    /// directly (fresh disasm this pass, see the research doc) — the same entry point
+    /// <c>k_pebn_galaxy.nss</c>'s <c>infoterm001</c> console reaches, so the accept-button
+    /// confirm refusal (<c>galaxy_map_host_only</c>, <c>GalaxyMapConfirmHook</c>) can finally be
+    /// exercised live without a human clicking. Takes no arguments. Local only.
+    /// </summary>
+    GalaxyMapOpen,
+
+    /// <summary>
+    /// <c>galaxymap close</c> — the counterpart to <see cref="GalaxyMapOpen"/>, through
+    /// <c>CGuiInGame::HideGalaxyMapGui</c> (fresh disasm this pass, bare <c>this</c>-only
+    /// thiscall, no gate on the GUI manager's modal stack, unlike <c>HideSWInGameGui</c>).
+    /// Already-closed answers APPLIED, same reasoning <see cref="CloseGui"/>'s own doc comment
+    /// gives. Takes no arguments. Local only.
+    /// </summary>
+    GalaxyMapClose,
+
+    /// <summary>
+    /// <c>galaxymap stats</c> — reports <c>GalaxyMapConfirmHook</c>'s own
+    /// <c>RefusedCount</c>/<c>AllowedCount</c> counters and whether the splice installed — a
+    /// pure read, no engine call. The research doc's own "Live test plan" named these counters
+    /// as existing but unreadable from any console verb; this is that missing read. Takes no
+    /// arguments. Local only.
+    /// </summary>
+    GalaxyMapStats,
 }
 
 /// <summary>
@@ -929,6 +958,7 @@ public static partial class ConsoleCommand
         new(["cheats"], ParseCheats),
         new(["newgame"], ParseNewGame),
         new(["chargen"], ParseChargen),
+        new(["galaxymap"], ParseGalaxyMap),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

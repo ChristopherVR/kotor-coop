@@ -522,6 +522,34 @@ public static class CheatKinds
     public const uint Down = 64;
 
     /// <summary>
+    /// LIVE-TEST PRIMITIVE (Tier 2 item 18 task 2's own "Live test plan" follow-up,
+    /// docs/research/galaxy-map-and-party-select.md's 2026-09-03 addendum): opens this
+    /// instance's own galaxy-map GUI through <c>CGuiInGame::ShowGalaxyMapGui</c>, called
+    /// directly — so the confirm-refusal splice (<c>galaxy_map_host_only</c>) can finally be
+    /// exercised live without a human clicking. Takes no arguments. See
+    /// <c>SharedBlock.CheatKindGalaxyMapOpen</c>.
+    ///
+    /// ⚠ 65, next free after every noted range through 64 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapOpen = 65;
+
+    /// <summary>The counterpart to <see cref="GalaxyMapOpen"/>, through
+    /// <c>CGuiInGame::HideGalaxyMapGui</c>. Takes no arguments. See
+    /// <c>SharedBlock.CheatKindGalaxyMapClose</c>.
+    ///
+    /// ⚠ 66, next free after every noted range through 65 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapClose = 66;
+
+    /// <summary>Reports the galaxy-map confirm hook's own <c>RefusedCount</c>/<c>AllowedCount</c>
+    /// counters and whether the splice installed — a pure read, no engine call. See
+    /// <c>SharedBlock.CheatKindGalaxyMapStats</c>.
+    ///
+    /// ⚠ 67, next free after every noted range through 66 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapStats = 67;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it
