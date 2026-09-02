@@ -1250,3 +1250,101 @@ printed at all when the script fire alone was enough, e.g. the `end_gensith` cas
   enough that a genuinely idle hostile does not sit frozen for long. A live pass should watch
   whether that balance actually holds — a `local_combat_engage_fallback=0` control run stands in
   for "was the timing about right" if the fallback line fires but doesn't help, or fires too late.
+
+---
+
+## §13 — `local_combat_timeout_s` measures inactivity, not fight length (2026-09-02, third pass)
+
+### The churn
+
+Live symptom, measured this pass (`tar_m10aa`, the same Vulkar pool room §12 fixed the engage
+side of), the client's own plugin log:
+
+    [22:55:42.839] local_combat: slot 1/3 armed id=0x4D reason=targeting-us (timeout 25s)
+    [22:55:43.591] local_combat: slot 1/3 engaged 0x4D directly (no attack target 752ms after the script fire)
+    [22:56:07.839] local_combat: slot 1/3 released id=0x4D reason=timed out
+    [22:56:07.881] local_combat: slot 2/3 selected 0x4D (priority=Proximity, dist=2.05, engageRange=11.0)
+    [22:56:08.631] local_combat: slot 2/3 engaged 0x4D directly (no attack target 750ms after the script fire)
+
+— `22:56:07.839 - 22:55:42.839 = 25.0s`, exactly `local_combat_timeout_s`'s default. Meanwhile the
+host's own log showed `combat: applied 5 of a peer's damage to 0x4D (owed 13)` and further applies
+of the same shape landing throughout that whole 25s window: the fight was genuinely still going the
+entire time — the client kept swinging, the host kept crediting it — and got released anyway,
+purely because `MaintainLocalFightSlot`'s timeout check (§11) measured elapsed time since
+`StartLocalFight` **armed** the slot (`_locallyFightingSince[slot]`), not since anything last
+happened. The creature went back to the census for one pump (long enough for mirroring to
+potentially overwrite it — see `docs/research/warp-crash-and-snapshot-lesson.md` for why a body
+left briefly unowned is not free of risk), then `SelectImmediateCandidate` (§11) re-armed the same
+id into whichever slot next opened and the engage fallback (§12) re-engaged it roughly 0.8s later.
+Every `local_combat_timeout_s` window, indefinitely, for as long as the fight actually lasted.
+
+### The fix: an activity clock, not a fight-start clock
+
+`local_combat_timeout_s` is now a measure of **no evidence**, not **elapsed fight time**. Every
+`MaintainLocalFightSlot` pass (for a slot not already ending for a dead or disengaged reason)
+checks two independent pieces of evidence that the fight is still real, either one enough on its
+own:
+
+1. **Damage dealt rose.** `PhantomHitHook.Dealt` (`DamageDealtTable`, the same cumulative
+   per-owner-id ledger `PeerDamageController.PublishDealt` already forwards to the fight's owner
+   every pass — see that class's own doc comment on why a SUM of damage dealt, never health, is
+   the channel that cannot be raced) now has a `TotalFor(objectId)` read accessor. A new per-slot
+   baseline, `_lastDealtSeen[slot]`, is compared against it: a rise means the local player actually
+   landed a hit on this creature since the last pass.
+2. **The creature currently targets the local player.** Read directly off the creature's OWN live
+   combat round — `creature+0x9C8` → round, `round+0x9CC` = the round's current target (§1.2,
+   VERIFIED disassembly) — via a new `Odyssey.GetCurrentAttackTargetId(creature)` accessor. This is
+   the SAME field `LocalFightCandidateRule`'s `TargetingUs` priority (§11) cares about
+   conceptually, but a different read: candidate SELECTION (before a fight exists to inspect) has
+   only the owner's own damage report to go on (`block.IncomingDamageAttacker`, §11's
+   `IsAttackingOurPhantom`), while an ALREADY-ARMED fight's creature is genuinely local and driven,
+   so its own round struct can be read directly rather than inferred from the wire.
+
+Pure decision: `src/KotorCoop.Plugin/LocalFightActivityRule.cs`
+(`LocalFightActivityRule.Decide`, tested in
+`tests/KotorCoop.Tests/LocalFightActivityRuleTests.cs`, same source-sharing arrangement as every
+other plugin pure-rule file — see `KotorCoop.Tests.csproj`'s own comment). Either piece of evidence
+returns `Refresh` unconditionally — evidence always wins over the clock, even a pass found right at
+what would otherwise be the timeout boundary. With neither, the rule falls back to the same
+strict-greater-than clock arithmetic the old fight-start check used
+(`now - lastActivityAtSeconds > timeoutSeconds`), just measured against the new activity stamp
+instead of the arming stamp, returning `TimedOut` once it elapses and `Continue` otherwise.
+
+Plugin side: `EnemyPresenceController.MaintainLocalFightSlot` gathers both signals and calls the
+rule through a small helper, `UpdateActivity`, only when the slot is not already ending for a dead
+or disengaged reason this pass (the DamageDealtTable scan and the round-target read are both cheap
+but not free, and a fight that is ending anyway does not need them). `StartLocalFight` seeds
+`_lastActivityAt[slot] = now` (the same grace an idle fight gets before ever showing evidence) and
+`_lastDealtSeen[slot] = PhantomHitHook.Dealt.TotalFor(ownerId)` — the table's CURRENT total, not
+zero, since this exact creature may have been fought (and released) earlier this module load, and
+that old total must not read as a fresh rise the instant a new fight on it starts. Both, plus the
+new log throttle stamp `_lastActivityLogAt[slot]`, are reset in both release paths (the timeout
+block in `MaintainLocalFightSlot` and `Invalidate()`) with the same discipline every other per-slot
+fight-scoped array in this file already follows (`_engageFallbackIssued` et al., §12).
+
+`_locallyFightingSince[slot]` itself is untouched and keeps its original meaning (the fight's
+START) — the "t=…s" position diagnostic and the engage fallback's own grace window (§12) both still
+key off it, unchanged, on purpose: the fallback's "has the script had long enough to find a target"
+question is about time since ARMING, not time since last evidence, and conflating the two would
+have broken it.
+
+Log lines a live tester should look for — a refresh (rate-limited to once per 5s per slot, since a
+real fight can refresh every single pass):
+
+    local_combat: slot N/M still active (dealt +X to 0x.. / it targets us), timeout extended
+
+and the release reason, now explicit about which kind of timeout fired:
+
+    local_combat: slot N/M released id=0x.. reason=timed out (no activity for 25s)
+
+### VERIFIED vs NEEDS-LIVE, summary
+
+- **VERIFIED (live, this pass):** the churn itself — the quoted log excerpt above, cross-referenced
+  against the host's own `combat: applied … of a peer's damage` lines landing throughout the same
+  window the client's timeout fired in.
+- **VERIFIED (disassembly, §1.2, unchanged from §11/§12):** `round+0x9CC` is the combat round's own
+  live target field.
+- **NEEDS-LIVE (this fix itself):** built and unit-tested this pass, not yet rig-verified against
+  the actual churn above. A live pass should confirm the same `tar_m10aa` fight now runs past 25s
+  without a release/re-arm cycle while the client keeps landing hits, and that a genuinely idle
+  slot (nothing hit, nothing targeting back) still releases at the configured timeout as before.

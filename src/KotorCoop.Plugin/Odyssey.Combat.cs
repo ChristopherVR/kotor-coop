@@ -115,6 +115,34 @@ internal static unsafe partial class Odyssey
     /// <c>0x004FDE7C</c>, inside the engine's own <c>CSWSCreature::AddAttackActions</c>).</summary>
     private const int CreCombatRound = 0x9C8;
 
+    /// <summary>CSWSCombatRound + this = the round's own live target id — VERIFIED,
+    /// docs/research/combat-participation.md §1.2: <c>CreateNewAttackActions</c> re-validates
+    /// this field every round boundary, and <c>EndCombatRound</c> writes
+    /// <c>OBJECT_INVALID</c> (<see cref="ObjectInvalid"/>) over it on release.</summary>
+    private const int RoundCurrentTarget = 0x9CC;
+
+    /// <summary>
+    /// The creature's OWN live combat-round target, straight off the engine's own state — the
+    /// same field §1.2 documents, read directly rather than inferred from anything on the wire.
+    /// Only meaningful for a creature this instance actually resolves and drives locally
+    /// (local_combat's whole point once a fight is armed): a mirrored body never gets a real
+    /// round of its own. 0 when the round pointer itself is null (no round has ever started) or
+    /// the round has no live target right now (<see cref="ObjectInvalid"/> reads back as a real
+    /// id, but never resolves to anything, so a caller comparing against one specific id — e.g.
+    /// the local player's — never needs to special-case it separately). MAIN THREAD ONLY, no
+    /// engine calls, just field reads — safe every frame.
+    /// </summary>
+    public static uint GetCurrentAttackTargetId(nint creature)
+    {
+        if (creature == 0)
+        {
+            return 0;
+        }
+
+        nint round = *(nint*)(creature + CreCombatRound);
+        return round == 0 ? 0 : *(uint*)(round + RoundCurrentTarget);
+    }
+
     /// <summary>
     /// CSWSCombatRound::AddAttackAction(uint targetId, int, int, int nDelayMs, int) —
     /// queues one swing at <c>targetId</c> on the round's pending-action list. VERIFIED by

@@ -188,6 +188,38 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// module change, same discipline as every other per-slot fight-scoped array here.</summary>
     private readonly bool[] _engageFallbackIssued = new bool[SharedBlock.LocalCombatSlotCapacity];
 
+    /// <summary>Per physical slot: when that slot last had evidence its fight is still real —
+    /// <see cref="LocalFightActivityRule"/>'s own clock, docs/research/combat-participation.md
+    /// §13. Distinct from <see cref="_locallyFightingSince"/> (the fight's START, which the
+    /// diagnostic log and the engage fallback's grace window both still key off) — this is what
+    /// <see cref="LocalCombatTimeoutSeconds"/> actually measures against now: seconds since the
+    /// last damage-dealt rise or "targeting us" read, not seconds since the fight armed.
+    /// Initialised to the arming timestamp by <see cref="StartLocalFight"/>, same as
+    /// <see cref="_locallyFightingSince"/>, so a brand-new fight gets the same grace an idle one
+    /// would have gotten before ever showing evidence.</summary>
+    private readonly double[] _lastActivityAt = new double[SharedBlock.LocalCombatSlotCapacity];
+
+    /// <summary>Per physical slot: <see cref="DamageDealtTable"/>'s cumulative total for that
+    /// slot's creature as of the last pass, so <see cref="LocalFightActivityRule"/> can be told
+    /// whether it ROSE rather than re-deriving the comparison itself — see
+    /// <see cref="MaintainLocalFightSlot"/>. Seeded from the table's own current total when
+    /// <see cref="StartLocalFight"/> arms a slot (not zero — a creature already fought earlier
+    /// this module load, then re-armed after a release, must not have its OLD total read back
+    /// as a fresh rise the instant the new fight starts).</summary>
+    private readonly uint[] _lastDealtSeen = new uint[SharedBlock.LocalCombatSlotCapacity];
+
+    /// <summary>Per physical slot: rate limit for the "still active, timeout extended" log line
+    /// — <see cref="ActivityRefreshLogIntervalSeconds"/>, not every pass, since a real fight
+    /// refreshes constantly. <see cref="double.NegativeInfinity"/> (never logged) whenever
+    /// <see cref="StartLocalFight"/> arms a slot, so the very first refresh of a fresh fight
+    /// always logs immediately rather than inheriting a stale slot's throttle.</summary>
+    private readonly double[] _lastActivityLogAt = new double[SharedBlock.LocalCombatSlotCapacity];
+
+    /// <summary>How often the "still active" refresh log may repeat for one slot. A real fight
+    /// can refresh every single pass; logging that would drown everything else this file
+    /// prints.</summary>
+    private const double ActivityRefreshLogIntervalSeconds = 5.0;
+
     /// <summary>TEMPORARY DIAGNOSTIC (2026-08-21, "does it close distance"), per physical slot —
     /// last time that slot's excluded creature's own position was logged against the player's,
     /// so a full fight cycle produces a position-over-time curve instead of one measurement.
@@ -214,14 +246,21 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// persists.</summary>
     private readonly double[] _stillSeeingLoggedAt = new double[SharedBlock.LocalCombatSlotCapacity];
 
-    /// <summary>Hard ceiling on how long one creature may sit excluded from the census. A
-    /// fight that never ends any other way (the player walks off without the engine's own
-    /// disengage logic catching it, a stuck state this investigation has not observed but has
-    /// no way to rule out either) still returns the creature to normal mirroring on its own.
-    /// coop.ini `local_combat_timeout_s`. This is now a FALLBACK ceiling, not the trigger: round
-    /// 55's <see cref="SelectImmediateCandidate"/> arms a fresh fight the same frame a slot
-    /// frees, so a second nearby hostile no longer has to wait out this whole window for its
-    /// turn — it only bounds how long ONE fight may run once it starts. Shared by every slot;
+    /// <summary>Hard ceiling on how long one creature may sit excluded from the census WITH NO
+    /// EVIDENCE the fight is still real. A fight that never ends any other way (the player walks
+    /// off without the engine's own disengage logic catching it, a stuck state this investigation
+    /// has not observed but has no way to rule out either) still returns the creature to normal
+    /// mirroring on its own. coop.ini `local_combat_timeout_s`. This is a FALLBACK ceiling, not
+    /// the trigger: round 55's <see cref="SelectImmediateCandidate"/> arms a fresh fight the same
+    /// frame a slot frees, so a second nearby hostile no longer has to wait out this whole window
+    /// for its turn.
+    ///
+    /// ⚠ §13 (2026-09-02): measured against <see cref="_lastActivityAt"/>, NOT
+    /// <see cref="_locallyFightingSince"/> — this bounds how long ONE fight may run with no
+    /// <see cref="LocalFightActivityRule"/> evidence, not how long it may run at all. Before this,
+    /// the clock was the fight's own START, so a genuinely ongoing fight (the host was applying
+    /// the client's forwarded hits on the excluded creature the whole time — tar_m10aa, live) got
+    /// released and immediately re-armed every single window regardless. Shared by every slot;
     /// there is no per-slot knob.</summary>
     private static readonly double LocalCombatTimeoutSeconds =
         Math.Clamp(PluginConfig.ReadFloat("local_combat_timeout_s", 25f), 5f, 120f);
@@ -393,6 +432,13 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             // fallback's one-shot guard latched against a completely different creature that
             // happens to arm this same physical slot next.
             _engageFallbackIssued[slot] = false;
+
+            // §13: same reason again — an id from the module just left behind must not leave
+            // this slot's inactivity clock, dealt-damage baseline or log throttle latched
+            // against a completely different creature next.
+            _lastActivityAt[slot] = 0;
+            _lastDealtSeen[slot] = 0;
+            _lastActivityLogAt[slot] = double.NegativeInfinity;
 
             _immediateTriggerCensusIndex[slot] = -1;
             _lastLoggedImmediateOwnerId[slot] = 0;
@@ -1262,6 +1308,16 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _locallyFightingSince[slot] = now;
         _engageFallbackIssued[slot] = false;
 
+        // §13: the inactivity clock starts here too — a fresh fight gets the same grace an
+        // idle one would have gotten before ever showing evidence, exactly like the engage
+        // fallback's own grace window keys off this same arming moment. Seeded from the
+        // table's CURRENT total, not zero: this creature may have been fought (and its slot
+        // released) earlier this module load, and that old total must not read as a fresh rise
+        // the instant this new fight starts.
+        _lastActivityAt[slot] = now;
+        _lastDealtSeen[slot] = PhantomHitHook.Dealt.TotalFor(ownerId);
+        _lastActivityLogAt[slot] = double.NegativeInfinity;
+
         // ROUND 48 PROBE, one-shot, at the exact moment this creature is armed for local
         // combat — before the +0x260 script fires. This is the evidence for the round's own
         // prime hypothesis: if hostility already reads wrong here (a bad faction, a reputation
@@ -1305,9 +1361,13 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// </summary>
     private void MaintainLocalFight(double now, nint player)
     {
+        // §13: read once per pass, not once per slot — cheap, but there is no reason to pay
+        // for it N times when it cannot change between slots in the same frame.
+        uint playerId = player != 0 ? Odyssey.GetPlayerObjectId() : 0;
+
         for (int slot = 0; slot < LocalCombatSlots; slot++)
         {
-            MaintainLocalFightSlot(slot, now, player);
+            MaintainLocalFightSlot(slot, now, player, playerId);
         }
     }
 
@@ -1317,16 +1377,20 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// reads dead (<see cref="Odyssey.IsCreatureDead"/> — genuinely dead OR simply no longer
     /// resolvable, which are the same "nothing left to fight" case from here), the player has
     /// moved out of engagement range (the same test <see cref="IsEngaged"/> already licenses
-    /// the absorb with), or the timeout has run out (the safety net for anything the first two
-    /// do not catch). Any of the three clears <see cref="_locallyFightingId"/>[slot], which is
-    /// the ENTIRE re-inclusion mechanism for that slot: the creature's id simply stops being
-    /// read out of <see cref="SharedBlock.OffsetLocalCombatExcludedIds"/> on the very next pump,
-    /// the agent resumes writing it into the published census, and normal mirroring picks it
-    /// back up exactly like any other tracked enemy — there is nothing else to reconcile on
-    /// rejoin, because nothing outside this controller's own per-creature slot cache
+    /// the absorb with), or the INACTIVITY timeout has run out (§13 — the safety net for
+    /// anything the first two do not catch, and, since 2026-09-02, a measure of "no evidence
+    /// for this long," not "this fight has run this long": see <see cref="LocalFightActivityRule"/>
+    /// and <see cref="_lastActivityAt"/> for why a fight with fresh evidence never hits this no
+    /// matter how long it has actually been running). Any of the three clears
+    /// <see cref="_locallyFightingId"/>[slot], which is the ENTIRE re-inclusion mechanism for
+    /// that slot: the creature's id simply stops being read out of
+    /// <see cref="SharedBlock.OffsetLocalCombatExcludedIds"/> on the very next pump, the agent
+    /// resumes writing it into the published census, and normal mirroring picks it back up
+    /// exactly like any other tracked enemy — there is nothing else to reconcile on rejoin,
+    /// because nothing outside this controller's own per-creature slot cache
     /// (<see cref="Forget"/>, already re-run for a fresh id) ever knew it had left.
     /// </summary>
-    private void MaintainLocalFightSlot(int slot, double now, nint player)
+    private void MaintainLocalFightSlot(int slot, double now, nint player, uint playerId)
     {
         uint fightingId = _locallyFightingId[slot];
         if (fightingId == 0)
@@ -1348,7 +1412,12 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         nint creature = Odyssey.ResolveServerObject(mappedId != 0 ? mappedId : fightingId);
         bool dead = Odyssey.IsCreatureDead(creature);
         bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
-        bool timedOut = now - _locallyFightingSince[slot] > LocalCombatTimeoutSeconds;
+
+        // §13: only worth reading this pass's evidence for a fight that is not already ending
+        // for one of the other two reasons — a dead or disengaged creature's activity does not
+        // matter, and every read here (a DamageDealtTable scan, one engine field chase) is cost
+        // worth skipping on the hot per-slot path once the fight is over anyway.
+        bool timedOut = !dead && !disengaged && UpdateActivity(slot, fightingId, creature, playerId, now);
 
         // TEMPORARY DIAGNOSTIC: once a second per slot, log the excluded creature's real
         // position against the player's, so a full fight cycle produces a position-over-time
@@ -1367,7 +1436,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
 
         if (dead || disengaged || timedOut)
         {
-            string reason = dead ? "dead or gone" : disengaged ? "player disengaged" : "timed out";
+            string reason = dead
+                ? "dead or gone"
+                : disengaged
+                    ? "player disengaged"
+                    : $"timed out (no activity for {LocalCombatTimeoutSeconds:F0}s)";
             PluginHost.Log(
                 $"local_combat: slot {slot + 1}/{LocalCombatSlots} released id=0x{fightingId:X} "
                 + $"reason={reason}");
@@ -1384,6 +1457,14 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             // one-shot fallback guard must not carry over to whatever creature next arms this
             // physical slot.
             _engageFallbackIssued[slot] = false;
+
+            // §13: same reason again — this slot's inactivity clock, dealt-damage baseline and
+            // log throttle are all scoped to THIS fight; StartLocalFight re-seeds every one of
+            // them fresh the next time this slot arms, same discipline as the fallback guard
+            // above.
+            _lastActivityAt[slot] = 0;
+            _lastDealtSeen[slot] = 0;
+            _lastActivityLogAt[slot] = double.NegativeInfinity;
             return;
         }
 
@@ -1420,6 +1501,56 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // stamp once per active slot — the same DateTime.UtcNow.Ticks value, or near enough
         // within the 1s freshness window, regardless of how many slots are active this frame.
         _engagedAtTicks = DateTime.UtcNow.Ticks;
+    }
+
+    /// <summary>
+    /// §13 (docs/research/combat-participation.md): this pass's share of one slot's inactivity
+    /// clock. Gathers the two pieces of evidence <see cref="LocalFightActivityRule"/> looks at —
+    /// whether <see cref="DamageDealtTable"/>'s cumulative total for <paramref name="fightingId"/>
+    /// rose since the last pass (<see cref="_lastDealtSeen"/>), and whether <paramref
+    /// name="creature"/>'s own live combat round currently names the local player as its target
+    /// (<see cref="Odyssey.GetCurrentAttackTargetId"/>) — feeds them to the rule, and applies the
+    /// verdict: bumps <see cref="_lastActivityAt"/>[slot] and logs a rate-limited line on a
+    /// refresh, or reports the timeout back to the caller. Returns true only when the rule says
+    /// <see cref="LocalFightActivityAction.TimedOut"/> — the caller's own <c>dead</c>/<c>disengaged</c>
+    /// checks already cover the other two release reasons, so this is never called once either of
+    /// those is already true (see the call site).
+    /// </summary>
+    private bool UpdateActivity(int slot, uint fightingId, nint creature, uint playerId, double now)
+    {
+        uint dealtNow = PhantomHitHook.Dealt.TotalFor(fightingId);
+        uint dealtBefore = _lastDealtSeen[slot];
+        bool damageDealtRose = dealtNow > dealtBefore;
+        _lastDealtSeen[slot] = dealtNow;
+
+        bool targetingUs = playerId != 0 && Odyssey.GetCurrentAttackTargetId(creature) == playerId;
+
+        LocalFightActivityAction action = LocalFightActivityRule.Decide(
+            damageDealtRose, targetingUs, _lastActivityAt[slot], now, LocalCombatTimeoutSeconds);
+
+        if (action != LocalFightActivityAction.Refresh)
+        {
+            return action == LocalFightActivityAction.TimedOut;
+        }
+
+        _lastActivityAt[slot] = now;
+
+        if (now - _lastActivityLogAt[slot] >= ActivityRefreshLogIntervalSeconds)
+        {
+            _lastActivityLogAt[slot] = now;
+
+            string reasonText = damageDealtRose && targetingUs
+                ? $"dealt +{dealtNow - dealtBefore} to 0x{fightingId:X} / it targets us"
+                : damageDealtRose
+                    ? $"dealt +{dealtNow - dealtBefore} to 0x{fightingId:X}"
+                    : "it targets us";
+
+            PluginHost.Log(
+                $"local_combat: slot {slot + 1}/{LocalCombatSlots} still active "
+                + $"({reasonText}), timeout extended");
+        }
+
+        return false;
     }
 
     /// <summary>

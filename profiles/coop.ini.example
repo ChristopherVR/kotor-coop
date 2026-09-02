@@ -263,6 +263,11 @@ combat_state_sync=0
 # the moment the OWNER reports the creature dead or stops listing it (2026-09-02): the owner's
 # verdict passes through the exclusion, so a creature killed on the host from this instance's
 # forwarded damage dies here within a census pass instead of standing pinned until the timeout.
+# local_combat_timeout_s itself measures INACTIVITY, not fight length (2026-09-02, see
+# docs/research/combat-participation.md #13): a fight with fresh evidence it is still real
+# (damage landing on the creature, or the creature currently targeting the local player) keeps
+# refreshing this clock indefinitely, rather than being released and re-armed every window
+# regardless of whether it was still genuinely going.
 local_combat=1
 
 # How many hostiles this instance's own engine may fight simultaneously through local_combat
