@@ -180,6 +180,14 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// timeout safety net.</summary>
     private readonly double[] _locallyFightingSince = new double[SharedBlock.LocalCombatSlotCapacity];
 
+    /// <summary>Per physical slot: whether <see cref="LocalFightEngageFallbackRule"/>'s direct-drive
+    /// fallback has already fired once for the CURRENTLY-armed fight in that slot — the one-shot
+    /// guard (docs/research/combat-participation.md §12). Reset to false whenever a slot's fight
+    /// ends (either release path in <see cref="MaintainLocalFightSlot"/>/<see cref="DriveOne"/>)
+    /// or a fresh one arms (<see cref="StartLocalFight"/>), and by <see cref="Invalidate"/> on a
+    /// module change, same discipline as every other per-slot fight-scoped array here.</summary>
+    private readonly bool[] _engageFallbackIssued = new bool[SharedBlock.LocalCombatSlotCapacity];
+
     /// <summary>TEMPORARY DIAGNOSTIC (2026-08-21, "does it close distance"), per physical slot —
     /// last time that slot's excluded creature's own position was logged against the player's,
     /// so a full fight cycle produces a position-over-time curve instead of one measurement.
@@ -380,6 +388,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             // "STILL SEEING" diagnostic's fresh edge for a same-numbered id that turns up
             // genuinely new in this one.
             _stillSeeingReportedId[slot] = 0;
+
+            // §12: same reason — an id from the module just left behind must not leave the
+            // fallback's one-shot guard latched against a completely different creature that
+            // happens to arm this same physical slot next.
+            _engageFallbackIssued[slot] = false;
 
             _immediateTriggerCensusIndex[slot] = -1;
             _lastLoggedImmediateOwnerId[slot] = 0;
@@ -925,6 +938,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             PluginEvents.RaiseLocalCombatEngagementChanged(false, enemy.ObjectId);
             _locallyFightingId[fightingSlot] = 0;
             _stillSeeingReportedId[fightingSlot] = 0;
+            _engageFallbackIssued[fightingSlot] = false;
             fightingSlot = -1;
         }
 
@@ -1246,6 +1260,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     {
         _locallyFightingId[slot] = ownerId;
         _locallyFightingSince[slot] = now;
+        _engageFallbackIssued[slot] = false;
 
         // ROUND 48 PROBE, one-shot, at the exact moment this creature is armed for local
         // combat — before the +0x260 script fires. This is the evidence for the round's own
@@ -1364,8 +1379,21 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             // edge in DriveOne rather than silently inheriting this one's 5s keep-alive
             // countdown.
             _stillSeeingReportedId[slot] = 0;
+
+            // §12: same reason as the "STILL SEEING" reset above — this fight is over, so its
+            // one-shot fallback guard must not carry over to whatever creature next arms this
+            // physical slot.
+            _engageFallbackIssued[slot] = false;
             return;
         }
+
+        // §12: the script fire alone does nothing for a creature with no combat round already
+        // running (docs/research/combat-participation.md §12) — before this existed, an idle
+        // hostile like the tar_m10aa Vulkars simply sat frozen for the whole
+        // LocalCombatTimeoutSeconds window with nobody re-checking whether it ever got a target.
+        // Runs every pass, same as everything else in this method — the one-shot guard inside
+        // the rule itself is what keeps it from firing more than once per fight.
+        MaybeEngageFallback(slot, fightingId, creature, now);
 
         // ⚠ The excluded id is missing from block.EnemyPresenceCount for the whole fight (the
         // entire point of the exclusion), so DriveOne's own MaterialisedEnemies.Seen call
@@ -1392,6 +1420,53 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // stamp once per active slot — the same DateTime.UtcNow.Ticks value, or near enough
         // within the 1s freshness window, regardless of how many slots are active this frame.
         _engagedAtTicks = DateTime.UtcNow.Ticks;
+    }
+
+    /// <summary>
+    /// §12 (docs/research/combat-participation.md): consults <see cref="LocalFightEngageFallbackRule"/>
+    /// for slot <paramref name="slot"/> and, on <see cref="LocalFightEngageFallbackAction.EngageDirectly"/>,
+    /// drives <paramref name="creature"/>'s attack on the local player directly through
+    /// <see cref="Odyssey.AttackTarget"/> — never queues anything on top of a target the
+    /// creature already has (the rule itself gates on an empty action-queue head), and only ever
+    /// once per fight (the rule's own one-shot guard, backed by
+    /// <see cref="_engageFallbackIssued"/>). <paramref name="attackerObjectId"/> is
+    /// <c>fightingId</c>, the creature's OWNER-space id — safe to pass straight through as the
+    /// attacker id to <see cref="Odyssey.AttackTarget"/> because <see cref="StartLocalFight"/>
+    /// only ever arms GIT-identical creatures (mapped == 0 by construction), so owner id and
+    /// local resolvable id are the same number here.
+    /// </summary>
+    private void MaybeEngageFallback(int slot, uint attackerObjectId, nint creature, double now)
+    {
+        if (_engageFallbackIssued[slot] || creature == 0)
+        {
+            return;
+        }
+
+        int headActionType = Odyssey.GetHeadActionType(creature);
+        LocalFightEngageFallbackAction action = LocalFightEngageFallbackRule.Decide(
+            LocalCombatEngageFallback, _engageFallbackIssued[slot], headActionType,
+            _locallyFightingSince[slot], now, LocalCombatEngageFallbackGraceSeconds);
+
+        if (action != LocalFightEngageFallbackAction.EngageDirectly)
+        {
+            return;
+        }
+
+        _engageFallbackIssued[slot] = true;
+
+        uint playerId = Odyssey.GetPlayerObjectId();
+        if (playerId == 0)
+        {
+            return;
+        }
+
+        double sinceArmedMs = (now - _locallyFightingSince[slot]) * 1000.0;
+        bool ok = Odyssey.AttackTarget(attackerObjectId, playerId, out int failure);
+        PluginHost.Log(ok
+            ? $"local_combat: slot {slot + 1}/{LocalCombatSlots} engaged 0x{attackerObjectId:X} "
+              + $"directly (no attack target {sinceArmedMs:F0}ms after the script fire)"
+            : $"local_combat: slot {slot + 1}/{LocalCombatSlots} could not engage 0x{attackerObjectId:X} "
+              + $"directly (failure {failure}, no attack target {sinceArmedMs:F0}ms after the script fire)");
     }
 
     /// <summary>Planar distance test shared by <see cref="MaintainLocalFight"/> (licenses

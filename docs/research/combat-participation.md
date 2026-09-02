@@ -1095,3 +1095,158 @@ Still NEEDS-LIVE from the list above: the STILL-SEEING race under multiple slots
 provoked), companion release against multiple simultaneous fights, and frame cost. The
 OwnerNoLongerLists fallback of the new rule was not exercised live (the Dead entry arrived
 first both times); it is pinned by LocalCombatExclusionRuleTests.
+
+## §12 — Idle hostiles never engage: the script-fire's own gap, and a direct-drive fallback (2026-09-02, second pass)
+
+Live symptom (`docs/live-verification.md`, "Companion damage TAKEN live", "Staging caveats in
+tar_m10aa"): the eight pool-room `tar10_vulkar*` GIT hostiles in `tar_m10aa` — hostile in the
+census, a real (non-empty) `k_def_combend01` at `+0x260`, the client's PC standing 3-6 m away —
+sat completely still for minutes under `local_combat`'s own script-fire arm
+(`EnemyPresenceController.StartLocalFight` → `Odyssey.FireCreatureScriptSlot0x260`). Only
+`blockpoke.ps1 attack 0x7FFFFFFF <id>` (`Odyssey.AttackTarget`, `ExecuteCommandAttack`) got the
+first one moving; every other slot then armed and turned over normally for the rest of the fight.
+Contrast: the Endar Spire `end_gensith` pair (§11.x) engaged instantly off the identical script
+fire, no ordered attack needed.
+
+### Why the script fire alone does nothing for an idle creature
+
+**VERIFIED, live, this repo's own evidence (§10's "Live pass 2026-08-28" section above, same
+file):** `k_def_combend01` fired directly (`firescript <id> fire`) on a creature with no combat
+round already running produced no state change at all — `round+0x9CC target` stayed the
+`OBJECT_INVALID` sentinel, `round+0x958 timer` stayed 0, `resolvedTarget=0x0` — and the quoted
+verdict from that pass: **"`k_def_combend01` is what runs at the END of a combat round already
+in progress (perception, targeting, retreat logic) — it is not the trigger that ARMS hostility on
+a creature that starts friendly, and this pass confirms it directly rather than assuming it from
+the name."** That test used a friendly-faction creature, but the mechanism it demonstrated —
+`k_def_combend01` acting on an *existing* round/target rather than creating one — is exactly what
+the `tar_m10aa` Vulkars (genuinely hostile, per the census) also show: real script, real
+hostility, zero effect, because there was no round already running for it to act on.
+
+**VERIFIED, disassembly (`peer-damage-ledger.md` §8.5):** the engine's own native retargeting
+logic (`CreateNewAttackActions`/`EndCombatRound`, fully decoded in §1 of this document) reads a
+creature's *current* round target (`round+0x9CC`) and its perception list — never the
+`+0x158` "last hostile actor" field on its own initiative. `+0x158` is native-**write**,
+script-**read** only: the engine populates it on every real damage application
+(`CSWSObject::SetLastHostileActor`, `0x004CC0C0`, called from `OnApplyDamage`) and exposes it to
+NWScript via `GetLastHostileActor()` (`0x0053AF40`).
+
+**INFERRED, not verified this pass (same as §8.5's own caveat) — the one genuine gap in this
+picture:** whether the *compiled bytecode* inside `k_def_combend01` itself calls
+`GetLastHostileActor()` (or a nearest-enemy scan of its own) to pick a target when none exists yet.
+This project has decoded the engine's native combat machinery exhaustively but has never
+disassembled `k_def_combend01`'s own `.ncs` bytecode — only its *effect*, which the two rounds
+above establish is "no-op when nothing was already fighting." Whether that no-op happens because
+the script checks `GetLastHostileActor()`, finds nothing, and gives up, or because the script
+does something else entirely that also happens to require a pre-existing round, is not
+distinguished by any evidence gathered so far. **Practically this distinction does not matter for
+the fix below** — either way, an idle creature with a fresh `+0x158` (nobody has hit it, nothing
+has been reported to `SetLastHostileActor` yet) and no perception event fired has nothing to act
+on, and the script fire alone cannot manufacture one.
+
+The stock, single-player explanation this reasoning is consistent with: KOTOR normally arms a
+GIT-placed hostile's first round through **perception** (`UpdateVisibleList`/
+`DoPerceptionUpdateOnCreature`, §3 of this document, dispatching through the separate `+0x270`
+slot on a `[esi+0xa24]==OBJECT_INVALID` / `[esi+0xa88]==0` gate — see
+`Odyssey.Combat.ScriptFire.cs`'s own block comment) or a **story trigger** (heartbeat script,
+area trigger, `OnNotice`), not through `+0x260` at all. `local_combat`'s script fire only ever
+attempts `+0x260` because rounds 27-55 proved *that* one reliably starts a real fight once
+something already made the creature hostile-and-targeting — it was never meant to be the thing
+that manufactures hostility from cold, and the `end_gensith` pair happening to already be mid-round
+(story-triggered ambush) is why they were never a counterexample until the Vulkars were tried.
+
+### Fix options considered
+
+1. **Direct-drive fallback (chosen).** After the script fire, if the creature still has no attack
+   target after a grace window, drive its attack on the local player directly through
+   `Odyssey.AttackTarget` — the exact same engine call (`ExecuteCommandAttack`) the
+   `companion_local_combat` release path (`PartyPresenceController.DriveAttackIfDue`) and the
+   `attack` console verb already use, and the same one that live-verified un-froze the Vulkars by
+   hand. Lowest risk: it reuses a call already proven live in this codebase for the identical
+   "creature has an empty action queue, give it a real target" problem, just triggered
+   automatically instead of by an operator.
+2. **Pre-set `+0x158` (`SetLastHostileActor`) before firing the script.** Would only help if the
+   INFERRED gap above resolves "yes, the script reads it" — unverified, and even if true this
+   still depends on undecoded script bytecode behaving as hoped. Also writes a field this
+   investigation has only ever seen the engine itself write (§8.5), not a plugin — a
+   less-proven, more speculative path than calling an already-live-verified engine entry point.
+3. **Fire `+0x270` (the perception/heartbeat slot) instead of `+0x260`.** §'s own doc comment on
+   that slot: gated on `[esi+0xa24]==OBJECT_INVALID` and `[esi+0xa88]==0`, then **latched** via
+   `[esi+0x34c]=1` so it never re-fires — a one-shot per creature for its whole lifetime. Firing
+   it out of turn on a creature the real perception system has not yet reached is exactly the
+   class of engine-state graft rounds 9-38 spent this document proving is fragile (a materialised
+   stand-in's body vanishing within 5 ms of an unproven +0x260 fire is the closest precedent for
+   what an unproven +0x270 fire could do). Never fired live; no evidence either way.
+
+(1) wins on evidence: it is the only option built entirely from calls this codebase has already
+watched work, live, against a real fight (`AttackTarget` downing companions' targets in
+`docs/live-verification.md`; the same primitive un-freezing the actual Vulkars by hand in this
+very session). (2) and (3) both require the INFERRED gap to resolve favorably and neither has ever
+been tried live.
+
+### What shipped
+
+New coop.ini key **`local_combat_engage_fallback`** (default **ON**, plugin-only —
+`docs/CONFIG.md`, `profiles/coop.ini.example` — a further tuning of the already
+non-host-authoritative `local_combat` flag, same "plugin-local, no wire representation" reasoning
+`local_combat_slots` already carries in §11 above). The script fire in `StartLocalFight` runs
+first, unchanged — this is a fallback, not a replacement.
+
+Pure decision: `src/KotorCoop.Plugin/LocalFightEngageFallbackRule.cs`
+(`LocalFightEngageFallbackRule.Decide`, tested in
+`tests/KotorCoop.Tests/LocalFightEngageFallbackRuleTests.cs`, linked into the test project the
+same source-sharing way every other plugin pure-rule file already is — see
+`KotorCoop.Tests.csproj`'s own comment on why arithmetic-only plugin files are compiled directly
+into the test host). Inputs: the flag, whether this fight (this slot's currently-armed id) already
+had the fallback fire once, the creature's action-queue head type
+(`Odyssey.GetHeadActionType` — the identical "has this creature got nothing queued" signal
+`CompanionLocalFightRule.ShouldDriveAttack` already uses for the companion path, headType == -1
+means empty), and how long it has been since `StartLocalFight` armed the slot versus a grace
+window. One-shot per fight (not a retry loop, unlike the companion path's own periodic re-attempt)
+— a creature that still shows no target after one direct drive is not going to gain one from
+issuing the identical call again every frame, and the direct drive itself queues a real attack
+action that the very next pass reads back as non-empty, which would otherwise look like grounds to
+fire again.
+
+Plugin side: `EnemyPresenceController.MaintainLocalFightSlot` calls the rule once per active slot,
+every pass, right after the existing dead/disengaged/timed-out release checks (so a slot already
+being released this pass is never also handed a fallback attack). On `EngageDirectly` it resolves
+the local player id fresh (`Odyssey.GetPlayerObjectId()`, never cached — same discipline as every
+other per-frame id lookup in this controller) and calls `Odyssey.AttackTarget(fightingId, playerId,
+out failure)`, `fightingId` being the creature's own OWNER-space id — safe to use directly as the
+attacker id here because `StartLocalFight` only ever arms GIT-identical creatures (mapped == 0 by
+construction, per `DriveOne`'s own "GIT-IDENTICAL CREATURES ONLY" note), so the owner id and the
+local resolvable id are the same number. The one-shot flag
+(`_engageFallbackIssued[slot]`) is cleared everywhere a slot's fight ends or a new one arms —
+`StartLocalFight` (new fight), both release paths in `DriveOne` (owner-reports-dead) and
+`MaintainLocalFightSlot` (dead/disengaged/timed-out), and `Invalidate()` (module change) — the
+same reset discipline every other per-slot fight-scoped array in this file already follows.
+
+Log line a live tester should look for:
+
+    local_combat: slot N/M engaged 0x.. directly (no attack target Kms after the script fire)
+
+— printed once per fight, from `MaintainLocalFightSlot`, the moment the fallback fires (never
+printed at all when the script fire alone was enough, e.g. the `end_gensith` case).
+
+### VERIFIED vs INFERRED, summary
+
+- **VERIFIED (live, this pass and §10 above):** the script fire alone does not arm a round on a
+  creature with no round already running, regardless of whether that creature is genuinely
+  hostile; `Odyssey.AttackTarget`/`ExecuteCommandAttack` does arm one and land real, credited
+  damage on an otherwise-idle creature (the Vulkars, driven by hand this session; companions,
+  driven automatically by the existing `companion_local_combat` path).
+- **VERIFIED (disassembly, `peer-damage-ledger.md` §8.5):** `+0x158`
+  (`SetLastHostileActor`/`GetLastHostileActor`) is native-write, script-read only — the engine's
+  own native retargeting path never reads it.
+- **INFERRED, still open:** whether `k_def_combend01`'s own NWScript bytecode consults
+  `GetLastHostileActor()` (option 2 above) or anything else that a plugin write could usefully
+  prime — genuinely unknown, since the compiled script body has never been decompiled by this
+  project. Does not block the shipped fix, since option 1 does not depend on the answer.
+- **NEEDS-LIVE (this fix itself):** never run against the actual `tar_m10aa` Vulkars or any other
+  real idle-hostile fight yet — built and unit-tested this pass, not yet rig-verified. The grace
+  window chosen (a fixed constant, not exposed as its own ini key — see the class's own doc
+  comment) is a judgment call, not a measured value: long enough that a script fire which DOES
+  work (the `end_gensith` case) is never contested mid-arm by a redundant direct drive, short
+  enough that a genuinely idle hostile does not sit frozen for long. A live pass should watch
+  whether that balance actually holds — a `local_combat_engage_fallback=0` control run stands in
+  for "was the timing about right" if the fallback line fires but doesn't help, or fires too late.
