@@ -48,4 +48,23 @@ public class WorldPlausibilityTests
         PlayerState state = new(new Vector3f(-4.15e34f, 0f, -1.06e37f), 0f, "end_m01aa", 20, 0);
         Assert.False(state.IsPlausible);
     }
+
+    /// <summary>
+    /// <see cref="Vec3.IsOrigin"/> is a NARROWER, deliberately different question than
+    /// <see cref="Vec3.IsWorldPlausible"/> — the exact-zero vector passes plausibility (a
+    /// creature can genuinely stand at an area's origin) but is exactly what a resolved object
+    /// that was never really placed reads back as. Regression for the live 2026-09-02
+    /// `movenear` bug (docs/research/shared-state-audit.md §2 round 36's fix): the verb used to
+    /// snap whatever <c>ResolveServerObject</c> handed back with no type check, and a wrongly
+    /// resolved object read back (0,0,0) — indistinguishable from a real snap unless something
+    /// specifically calls that out.
+    /// </summary>
+    [Fact]
+    public void OnlyTheExactZeroVectorIsTheOrigin()
+    {
+        Assert.True(Vec3.IsOrigin(new Vec3 { X = 0f, Y = 0f, Z = 0f }));
+        Assert.False(Vec3.IsOrigin(new Vec3 { X = 0.001f, Y = 0f, Z = 0f }));
+        Assert.False(Vec3.IsOrigin(new Vec3 { X = 29.0f, Y = 143.5f, Z = 0f }));
+        Assert.False(Vec3.IsOrigin(new Vec3 { X = -0.5f, Y = 0f, Z = 0f }));
+    }
 }

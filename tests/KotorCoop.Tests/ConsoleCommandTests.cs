@@ -418,6 +418,23 @@ public class ConsoleCommandTests
     }
 
     /// <summary>
+    /// Regression for the live 2026-09-02 `movenear 0x11C` report (tar_m10aa): the reply named
+    /// a completely different id (0xE) than what was typed, which briefly looked like an id
+    /// truncated to a byte or a decimal/hex mixup. It was not — this pins that a 3-digit hex id
+    /// above 0xFF parses to its full value in every spelling, with no truncation anywhere in
+    /// this layer. The actual bug was downstream, in the plugin's target resolution (see
+    /// CheatController.Party.cs's MoveNear).
+    /// </summary>
+    [Theory]
+    [InlineData("0x11C", 0x11Cu)]
+    [InlineData("#11C", 0x11Cu)]
+    public void ObjectIdsAbove0xFFParseInFull(string token, uint expected)
+    {
+        Assert.True(ConsoleCommand.TryParseObjectId(token, out uint id));
+        Assert.Equal(expected, id);
+    }
+
+    /// <summary>
     /// The other half of that rule: a BARE token competes with tags, and plenty of real tags
     /// are valid hex. `slay beef` must aim at the creature tagged "beef", not at object
     /// 0xBEEF — so hex letters need `0x` or `#` to say they are a number.
@@ -461,6 +478,22 @@ public class ConsoleCommandTests
         Assert.Equal(CoopCommandKind.ResolveObject, ConsoleCommand.Parse("resolve 0x35").Kind);
         Assert.Equal("0x35", ConsoleCommand.Parse("resolve 0x35").Address);
         Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse("resolve").Kind);
+    }
+
+    /// <summary>
+    /// `movenear` follows the exact same shape as `resolve`: the parser only checks an
+    /// argument was typed and carries the raw token through unvalidated (the actual
+    /// <c>TryParseObjectId</c> call, and the id's fate, live one layer down in the agent's
+    /// dispatcher) — so a multi-digit hex id like the live 2026-09-02 report's `0x11C` survives
+    /// this layer completely unmangled.
+    /// </summary>
+    [Fact]
+    public void MoveNearNeedsAnId()
+    {
+        CoopCommand c = ConsoleCommand.Parse("movenear 0x11C");
+        Assert.Equal(CoopCommandKind.MoveNear, c.Kind);
+        Assert.Equal("0x11C", c.Address);
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse("movenear").Kind);
     }
 
     /// <summary>The census dump has to be reachable from an unattended console line — it is
