@@ -136,11 +136,20 @@ public class CompanionDamageLedgerTests
     [Fact]
     public void ATotalSaturatesRatherThanWrapping()
     {
+        // A single report near uint.MaxValue is refused as implausible since 2026-09-02, so
+        // the only way to the ceiling is the honest one: the largest believable rise, tick
+        // after tick, from two peers whose totals both count against the same slot.
         CompanionDamageLedger ledger = new();
-        ledger.Merge([Report(2, 1, uint.MaxValue - 1, generation: 1)]);
-        ledger.Merge([Report(2, 1, uint.MaxValue - 1, generation: 2)]);
+        uint step = PeerDamageLedger.MaxPlausibleRise;
+        uint perPeer = uint.MaxValue / 2 + step;
+
+        for (uint total = step; total <= perPeer; total += step)
+        {
+            ledger.Merge([Report(2, 1, total), Report(3, 1, total)]);
+        }
 
         Assert.Equal(uint.MaxValue, ledger.OwedFor(1));
+        Assert.Equal(0u, ledger.RefusedRises);
     }
 
     // ---- end to end: one hit is one hit, through the same plugin-side DamageOwedLedger ------

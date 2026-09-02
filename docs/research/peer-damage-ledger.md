@@ -744,10 +744,11 @@ slot's id or 0. Nothing new crosses the wire; nothing new is written into the bl
 1. **§8.5's core question**: does a mirrored enemy visibly retarget onto the attacking peer's
    phantom when `damage_creator_attribution=1`, per §8.7's recipe? This is the one measurement
    that turns "the write reaches a real script surface" into "the feature does what it is for."
+   *2026-09-02: measured, NO retarget for an already-engaged creature — §8.10.*
 2. **The stack-poke itself, live.** Nothing in §8.1-8.3 has been run against the real game;
    confirm `TrySetEffectCreator` never logs a refusal in ordinary play (an unexpected tag or a
    null pointer would mean this pass's disassembly missed a code path a live run would expose
-   immediately).
+   immediately). *2026-09-02: VERIFIED live, no refusal in four launches — §8.10.*
 3. **The companion and legacy-scalar paths specifically** — §8.7's recipe exercises
    `PeerDamageController` only; `CompanionDamageController` (companion released under
    `companion_local_combat`) and `IncomingDamageController`'s `RunPerAttackerPass`/
@@ -761,7 +762,7 @@ slot's id or 0. Nothing new crosses the wire; nothing new is written into the bl
 5. **Whether `GetLastAttacker()`/`GetLastDamager()` (target+0x15C/+0x160, §8.5) matter for
    anything K1's own content does** — out of scope for this feature (only `+0x158` is written),
    named so a later investigation into a script that reads one of those two does not start from
-   zero.
+   zero. *2026-09-02: `+0x160` IS written by the same path (read back live); `+0x15C` is not — §8.10.*
 
 ### 8.9 2026-09-02: re-checked whether `ApplyOwed` can do better than `SoleRemotePhantomId()` with 3+ peers — it cannot, without a protocol change
 
@@ -801,3 +802,65 @@ didn't already account for." It does not, and the reason is structural, not an o
   (the scan counts occupied slots, not slot-0-specifically, so a peer reconnecting into a
   different slot index is still unambiguous alone). This closes item 4 above at the unit level;
   a real 3-peer rig run remains **NEEDS-LIVE**, unchanged.
+
+### 8.10 2026-09-02 (night): the live pass — the write lands, the engine does NOT retarget on it, and the round found a poisoned ledger row
+
+Rig: block 64, `damage_creator_attribution=1` on both inis for the whole F and C rounds. Full
+excerpts in live-verification.md ("Attacker attribution live", 2026-09-02, night).
+
+**§8.8 item 2 — the stack-poke, live: VERIFIED.** Not one `combat: damage_creator_attribution
+could not set a creator this pass` line in any session with the key ON (four launches, both
+sides, every `ApplyOwed`/`CompanionDamageController.ApplyOwed`/`IncomingDamageController` pass).
+The disassembly in §8.1-8.3 matched the shipped binary.
+
+**§8.5's field-level claim — VERIFIED, and wider than §8.5 said.** After the host applied a
+client's forwarded hits, the target's SERVER object read `lastHostile (+0x158)` = the client's
+phantom id **and** `lastDamager (+0x160)` = the same id — on `end_gensith` 0x3B (both fields
+0x12D, the phantom of that launch) and again on guard droid 0x4D in tar_m10aa (both 0x12F, the
+phantom after a rejoin had reassigned it). So `+0x160` (`GetLastDamager()`) IS written on this
+path too; §8.5's "no writer found" was a gap in the walk, not in the engine. `+0x15C`
+(`GetLastAttacker()`) stayed `OBJECT_INVALID` throughout — that one really is a different event.
+
+**§8.8 item 1 — does the engine retarget onto the phantom? NO, measured.** Guard droid 0x4D
+(server object `0x17C07418` on the host) was shooting the host's PC: `round+0x9CC` (the current
+attack target, `combat-participation.md` §1) read `0x7FFFFFFF`. The client walked up
+(`tp 148 92 2.25`, 1.5 m from it), `attack 0x7FFFFFFF 0x4D`; the host applied the client's
+first hit at 22:23:32.5 (`combat: applied 4 of a peer's damage to 0x4D (owed 4)`), and from the
+next sample on `lastHostile`/`lastDamager` read `0x12F`. Sampled every 2.5 s for the next 27 s:
+`round+0x9CC` stayed `0x7FFFFFFF` on every read and the host's `combat ground-truth: local PC
+took N damage, attacker=0x4D` lines kept coming (10, 3, 1, 3, 1, 4, 7, 8 hp) until the round
+ended (`0x7F000000`) when the client walked off. **The field is written; nothing in K1's shipped
+AI acts on it for an already-engaged creature.** That matches §8.5's own reading of the native
+code (`CreateNewAttackActions`/`EndCombatRound` never read `+0x158`) and is the honest status
+of this feature: a correct, script-visible "who last hit me", not an aggro pull. A hostile that
+is NOT already fighting anyone was not measured (the tar_m10aa Vulkars need an ordered attack
+to move at all — `combat-participation.md` §12), so the idle → engaged case stays open;
+`default OFF` stands, and the roadmap row says what the key does and does not do.
+
+**What the round found instead: a poisoned ledger row (fixed the same night).** At 22:23:34.4
+the host had applied the client's real 3 damage to `tar10_vulkarpt02` 0x46 (`owed 3`). One tick
+later the row read **`owed 1634994435`** (0x61747103): `DamageOwedLedger`'s per-pass clamp
+turned that into `combat: applied 200 of a peer's damage to 0x46` nine times in 0.9 s, the
+Vulkar died of a hit nobody had landed, and the debt sat at 1.6 billion for the rest of the
+module (`blockpoke.ps1 ledger`, new this pass, showed `owed[1]: id 0x46 total 1634994435`
+minutes later). The client's plugin log had rotated over that exact second (8.4 MB cap), so
+the effect that carried the number is unnamed. Every layer between the hook and the apply is
+straight arithmetic (`DamageDealtTable.Add` saturates, `PeerDamageLedger.Merge` banks the rise,
+`Pending` clamps), so the number came out of `PhantomHitHook.ReadTotal` on the client — an
+effect whose int list this hook does not understand, or an int list shorter than its count.
+Shipped:
+
+* `PhantomHitHook.OnDamage` refuses any total above `MaxPlausibleHit` (2000) for all three
+  cumulative totals — enemy dealt, phantom taken, companion taken — and dumps the first five
+  such effects (vtable, header dwords, creator, int count and values) so the next occurrence
+  names itself. The engine's own apply is untouched.
+* `PeerDamageLedger.Merge` and `CompanionDamageLedger.Merge` refuse a per-tick rise above
+  `MaxPlausibleRise` (10,000). The baseline still moves to the reported total, so the next real
+  hit is credited from there; `RefusedRises`/`LastRefused` feed one `combat: REFUSED an
+  implausible damage rise ...` line per refusal in the combat pump.
+* Tests: `ARiseNoFightCouldProduceIsRefusedAndTheNextRealHitStillCounts`,
+  `TheLargestBelievableRiseIsStillBanked`, `ACorruptFirstReportOfANewGenerationIsRefusedToo`,
+  `CompanionDamageLedgerTests.ARiseNoFightCouldProduceIsRefused`.
+
+Open: which effect it was. The hook's dump will say; until then a mirrored fight can no longer
+be ended by it.

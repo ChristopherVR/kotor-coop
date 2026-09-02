@@ -2984,3 +2984,58 @@ tutorial pin (END_M01AA sets it on Trask at OnEnter), which is what the mirror t
 - Full suite 3016/3016 after the three fixes.
 - Still open: two companions released at once (§13 item 4 — one companion on this rig), the
   no-god client death under a real fight, C-attribution's own pass (the flag was merely ON here).
+
+## Attacker attribution live: the field is written, the engine does not retarget on it, and a 1.6-billion-point "hit" killed a Vulkar (2026-09-02, night)
+
+Same rig and inis as the companion-damage round above (`damage_creator_attribution=1` both
+sides throughout). peer-damage-ledger.md §8.10 has the analysis; this is the evidence.
+
+### The write, at the field level
+
+Reading the SERVER object of the creature the host applied a client's forwarded damage to
+(`resolve <id>` on the host prints the pointer chain in its plugin log; `+0x158/+0x15C/+0x160`):
+
+    end_gensith 0x3B (END_M01AA, after the client's hits):  lastHostile 0x12D  lastAttacker 0x7F000000  lastDamager 0x12D
+    guard droid 0x4D (tar_m10aa, before any client hit):    round+0x9CC 0x7FFFFFFF  lastHostile 0x7F000000  lastDamager 0x7F000000
+    guard droid 0x4D (after "combat: applied 4 ... to 0x4D"): round+0x9CC 0x7FFFFFFF  lastHostile 0x12F  lastDamager 0x12F
+
+0x12D/0x12F is the client's phantom on the host (it changed at the one rejoin below). No
+`damage_creator_attribution could not set a creator` line in any session.
+
+### The behaviour: no retarget
+
+0x4D was shooting the host's PC before the client arrived and kept shooting it after — 27 s of
+2.5 s samples, `round+0x9CC` = `0x7FFFFFFF` on every one, `combat ground-truth: local PC took
+{10,3,1,3,1,4,7,8} damage, attacker=0x4D` in the host log in between — until its round ended
+(`0x7F000000`) when the client walked away. The key does what §8.5 proved and nothing more: it
+fills `GetLastHostileActor()`/`GetLastDamager()`; K1's shipped AI does not consult them to
+change an existing target. Idle → engaged was not measured (see the Vulkar caveat above).
+
+### The defect: a poisoned ledger row
+
+    host  [22:23:34.366] combat: applied 3 of a peer's damage to 0x46 (owed 3)
+    host  [22:23:35.647] combat: applied 200 of a peer's damage to 0x46 (owed 1634994435)
+          ... nine of those in 0.9 s ...
+    host  [22:23:38.794] combat: a peer owes 200 damage to 0x46, which does not resolve here ANY MORE - it did earlier this epoch, so the body was destroyed; holding the debt in case it comes back
+    client[22:23:35.834] local_combat: slot 2/3 released id=0x46 reason=owner reports dead or gone
+
+`tar10_vulkarpt02` had taken 3 real points from the client's released Trask and then died of a
+number no weapon deals. The client's plugin log rotated over that second (8.4 MB cap; the
+`.1.log` ends at 22:25:59 and the fresh one starts there), so the effect is unnamed. Fix and
+diagnostics in §8.10: a plausibility gate at the hook (with a dump of the effect for the next
+time) and at both owner-side merges, `blockpoke.ps1 ledger` to read both directions live.
+
+### Also seen: one benign SaveMismatch rejoin after a host-only warp
+
+With the LASTMODULE fix in, a host `warp tar_m10aa` still produced ONE `SaveMismatch` rejoin on
+the follower this launch (22:21:01: `adopted 'tar_m10aa' (644,785 bytes, identity 0xE46E8264)`,
+rejoined in ~1 s) and then nothing — the loop is gone; the single rejoin is the client's own
+transition autosave being judged against the host's newer one, and it converges. Noted, not
+chased.
+
+### Staging note
+
+The `tp` verb on the client reported `moved from 102.3,114.9 to 148.0,92.0`; the attack order
+`blockpoke.ps1 attack 0x7FFFFFFF 0x4D` engaged within a second (`attack probe: ... head=0x3F
+round(active=1 ...)`). Read `pwsh <scratch>/target.ps1 -ProcId <host> -Ptr <server ptr>` on the
+HOST's server object for `round+0x9CC`/`+0x158`/`+0x160`; the client-side twin never carries them.
