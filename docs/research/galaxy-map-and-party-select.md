@@ -1601,3 +1601,288 @@ panel the client suppresses), `closegui`/`galaxymap close` clears it. Not chased
 Step 7 above should read: expect `applied`, `"HideGalaxyMapGui called — CGuiInGame+0x30 1 ->
 0 ..."`; a second `galaxymap close` answers `applied`, `"no full-screen GUI is up, so the
 galaxy map is already closed"`. Never read `+0x80` for state.
+
+## `galaxyaccept` (2026-09-03): the ACCEPT input event, sent without a mouse, plus `galaxymap
+## select <n>` — closing the one gap the 2026-09-03 `galaxymap open/close/stats` pass left open
+
+Task: the two sections directly above both end on the same unresolved point. The 2026-09-02
+pass's own "Live test plan" step 2 needs a CLIENT to "click Accept" on the galaxy map to
+exercise `GalaxyMapConfirmHook`'s splice; the 2026-09-03 `galaxymap open/close/stats` pass
+investigated driving that click synthetically (`galaxymap confirm`) and deliberately did NOT
+ship it, because it could not tell, from static analysis alone, whether the two raw GUI event
+codes its own byte-lookup-table decode found for the accept case (`0x27`/`0x2D`) were a safe,
+faithful stand-in for a real click. This pass closes that gap with a DIFFERENT primitive shape
+— `galaxyaccept`, calling `HandleInputEvent` itself rather than jumping into its accept-case
+body — using the exact precedent `skipkey` already sets for the dialogue panel, and adds
+`galaxymap select <n>` so there is a real planet selected for it to confirm.
+
+### Why `galaxyaccept` is a different, safer shape than the `galaxymap confirm` that was rejected
+
+The 2026-09-03 `galaxymap open/close/stats` pass's own class remarks (`GalaxyMapVerbRule.cs`)
+give the precise reason `galaxymap confirm` was not shipped: the accept CASE HANDLER
+(`0x006959D0`) is reached only through a computed `jmp` from a jump table — it is a JUMP-TABLE
+TARGET, not a callable function, so it has no return address on the stack for a synthesised
+`call` to preserve. Calling it directly (`call 0x6959D0` from managed code, expecting it to
+`ret 8` back) would pop whatever garbage sits where a return address should be and crash or
+corrupt the stack. `GalaxyMapConfirmHook`'s own splice (docs section above, "the splice") gets
+away with reaching that address only because it arrives via `jmp`, not `call`, exactly
+replicating the jump table's own dispatch shape — which is a valid technique for a HOOK
+installed once at load time, but not for a live-fired VERB that would need its own `call`.
+
+`HandleInputEvent` itself (`0x00695980`) is a completely different kind of target: a genuine
+`__thiscall` function with its own prologue/epilogue and a real `ret 8`, callable safely any
+number of times — the exact shape `Odyssey.Dialogue.SkipKey.cs`'s `SendDialogueSkipKey` already
+calls live for the dialogue panel's own `HandleInputEvent`, through the panel's OWN vtable slot
+rather than a hardcoded address (this repo's own "vtable slots, not addresses" rule). Calling
+`HandleInputEvent(panel, eventCode, 1)` runs the SAME dispatch a real click does — including
+`GalaxyMapConfirmHook`'s splice, which sits INSIDE that dispatch (spliced onto the accept case's
+own body) and therefore still fires exactly as it would for a mouse click. This is why
+`galaxyaccept` can ship what `galaxymap confirm` correctly declined to.
+
+### The event-code derivation — independently re-run this pass, not just cited
+
+The 2026-09-03 pass's own byte-lookup-table decode (`0x695B0C`, 185 entries, `eax = ebx - 0x27`,
+range `[0,0xB8]`) was re-run from scratch this pass — `tools/disasm.py`'s own `load`/`to_offset`
+helpers, reused directly against the same sha256-matched GOG v1.0.3 `swkotor.exe` this repo's
+tools already point at (`tools/disasm.py`'s `DEFAULT_EXE`) — rather than trusted from the prior
+write-up, per this task's own instruction to derive it fresh:
+
+```python
+import struct, sys
+sys.path.insert(0, "tools")
+import disasm
+
+data, base, sections = disasm.load(disasm.DEFAULT_EXE)
+
+jt_off = disasm.to_offset(base, sections, 0x695AF8)
+jt = [struct.unpack_from("<I", data, jt_off + i*4)[0] for i in range(5)]
+
+lut_off = disasm.to_offset(base, sections, 0x695B0C)
+lut = data[lut_off:lut_off+0xB9]
+
+accept_ebx = [eax + 0x27 for eax, case in enumerate(lut) if case == 0]
+```
+
+Result, VERIFIED this pass:
+
+* Jump table at `0x695AF8` (5 dwords): index 0 `0x006959D0` (accept), index 1 `0x00695A79`
+  (back), index 2 `0x00695AAC` (prev planet), index 3 `0x00695AD1` (next planet), index 4
+  `0x00695AE2` (`NoOpExit`/not-handled) — byte-for-byte identical to the 2026-09-03 pass's own
+  hand-decoded table, confirming that decode was correct.
+* Byte-lookup table (`0x695B0C`, 185 entries): **exactly two** raw `ebx` (GUI event code) values
+  decode to case index 0 (accept) — **`0x27`** and **`0x2D`**. A histogram of the whole table
+  (`case-index histogram: {0: 2, 1: 3, 2: 4, 3: 4, 4: 172}`) also turned up one discrepancy worth
+  recording: this pass counted **three** raw values for case index 1 (back) — `0x28`, `0x2E`,
+  AND `0xDF` (the table's own last entry, `eax = 0xB8`, the upper boundary of the `[0,0xB8]`
+  range) — where the 2026-09-03 pass's write-up says "two". This does not change anything about
+  the ACCEPT derivation (still unambiguously `{0x27, 0x2D}`, matching exactly), so it is recorded
+  here as a minor correction to the earlier pass's own count rather than chased further; back is
+  not this pass's concern.
+* Independently re-derived vtable evidence, not present in the 2026-09-02/2026-09-03 sections
+  above: `CSWGuiInGameGalaxyMap`'s own vtable (`0x00754910`, symbol database) was dumped directly
+  out of `.rdata` this pass. Slot 15 (`+0x3C`) holds `0x00695980` — `HandleInputEvent`'s own
+  address, matching the symbol database exactly — and slots 0-26 are real code pointers (slot 27
+  onward decodes as ASCII garbage, i.e. past the real vtable, consistent with the class's own
+  function count). `+0x3C` is the SAME slot index `Odyssey.Dialogue.SkipKey.cs`'s own
+  `PanelHandleInputEventSlot` already uses for both dialogue-panel classes — direct confirmation
+  that `CSWGuiPanel`'s virtual layout is one shared shape across every subclass this plugin calls
+  through a vtable slot for, not something that has to be re-derived per class.
+
+**Which of the two codes `galaxyaccept` sends, and why**: `0x27`. This is the SAME raw value
+`Odyssey.Dialogue.SkipKey.cs`'s own `DialogueSkipEvent` constant already uses for the dialogue
+panel's own Enter/click-equivalent case — a second, independent panel class whose accept-shaped
+case is ALSO reached by `0x27`. That two unrelated panels both treat `0x27` as their "advance/
+confirm" case is the strongest evidence available without a live capture that `0x27` is this
+engine's general-purpose Enter/confirm GUI event code, not something galaxy-map-specific — so
+`galaxyaccept` sends `0x27`, not `0x2D`. **Still NEEDS-LIVE** (see below): which of the two a
+REAL mouse click on the Accept button actually fires has never been captured on a running
+process; `0x27` is the best-evidenced choice, not a confirmed one.
+
+### What `galaxymap open`/`nPlanet` requires before an accept can do anything
+
+Re-read this pass, from `Odyssey.GalaxyMap.cs`'s own already-shipped code (2026-09-03,
+`OpenGalaxyMap`): `galaxymap open` always calls `ShowGalaxyMapGuiFn(gui, SelectedPlanetNone)`
+with `nPlanet = -1` — a deliberate "leave the selection alone" sentinel, not "select nothing".
+So after a bare `galaxymap open` on a fresh session, `CSWPartyTable+0xE0`
+(`galaxy_map_selected_planet`) holds whatever it last held (0, on a save that has never opened
+the map) — not necessarily a planet the story has actually unlocked. `k_sup_galaxymap.nss`'s own
+confirm handler (§1.3 above) reads `GetSelectedPlanet()` unconditionally and dispatches
+regardless — the accept branch's own disassembly (§ "2026-09-02" above, `0x006959D0`'s full
+trace) never checks selection state either; it plays the click sound and runs the script no
+matter what is selected. **So `galaxyaccept` alone is already sufficient to exercise
+`GalaxyMapConfirmHook`'s REFUSAL** (the hook fires before any of that planet-specific logic
+runs) — but a meaningful ALLOW-path test (the host's own accept genuinely starting a departure)
+wants a real, story-unlocked planet selected first, which is what `galaxymap select <n>` is for.
+
+`galaxymap select <n>` (new this pass, `Odyssey.GalaxyMap.cs`'s `SetGalaxyMapSelectedPlanet`)
+calls `CSWPartyTable::SetSelectedPlanet` (`0x00563B60`, already VERIFIED full disasm in the
+2026-09-03 section above) directly through this plugin's own already-proven `GetPartyTable()`
+resolve (`Odyssey.Party.cs` — the SAME table `ShowGalaxyMapGuiFn` itself reaches via a different,
+also-already-verified this-resolve chain; see that section's "two-call sequence" note), rather
+than adding a second address for the same call. It is independent of whether the map screen is
+open — `SetSelectedPlanet` touches only the table field, no GUI state — and reports whether the
+engine's own bounds/availability check (`available_planets[n]`/`selectable_planets[n]` both
+nonzero, `0 <= n < 16`) actually accepted the write, by reading `+0xE0` back rather than trusting
+`SetSelectedPlanet`'s own `void` return.
+
+### What shipped
+
+* `src/KotorCoop.Plugin/Odyssey.GalaxyMapAccept.cs` (new) — `SendGalaxyMapAcceptKey`: resolves
+  the galaxy-map panel off `CGuiInGame+0x80`, guards its vtable against `CSWGuiInGameGalaxyMap`'s
+  own address (`0x00754910`) and that the full-screen GUI is actually up (`CGuiInGame+0x30`,
+  NOT `+0x80` — this file inherits the 2026-09-03 pass's own live-pass correction), then calls
+  `HandleInputEvent(panel, 0x27, 1)` through the panel's own vtable slot `+0x3C`.
+* `src/KotorCoop.Plugin/Odyssey.GalaxyMap.cs` — added `SetSelectedPlanetFn` (0x00563B60),
+  `GalaxyMapVtableAddress` (0x00754910, independently re-dumped this pass), `SetGalaxyMapSelectedPlanet`
+  (`galaxymap select`), and `TryReadGalaxyMapState` (the read-only open/selected-planet/panel-vtable
+  triple `galaxymap stats` now reports).
+* `src/KotorCoop.Plugin/CheatController.GalaxyMap.cs` — `GalaxyMapAccept()`, `SelectGalaxyMapPlanet()`,
+  and `GalaxyMapStats()` extended to print `open=`/`selectedPlanet=`/`panelIsGalaxyMap=` alongside
+  the existing `installed=`/`refused=`/`allowed=` counters (Tier 2 item 18 task 3's own "read the
+  panel's state ... only if cheap" ask — three extra reads on an already-firing verb).
+* `src/KotorCoop.Plugin/CheatController.cs` — two new switch cases (`CheatKindGalaxyAccept`,
+  `CheatKindGalaxyMapSelect`).
+* `src/KotorCoop.Plugin/SharedBlock.cs` — `CheatKindGalaxyAccept` = 69 (next free after
+  `CheatKindSpawnCreature` = 68), `CheatKindGalaxyMapSelect` = 70.
+* `src/KotorCoop.Memory/IGameBridge.cs` — mirrored `CheatKinds.GalaxyAccept`/`GalaxyMapSelect`.
+* `src/KotorCoop.Session/GalaxyMapVerbRule.cs` — added `Verb.Select` and a `Parse(args, out int
+  planet)` overload (the existing single-argument `Parse` now delegates to it, unchanged for
+  every existing caller/test); `galaxymap confirm`'s own rejection note updated to point at
+  `galaxyaccept` as the shipped alternative and explain why the two are different shapes.
+  `galaxyaccept` itself is registered as its OWN top-level verb (`ConsoleCommand.cs`'s verb
+  table), not a `galaxymap` subcommand — it drives `HandleInputEvent` directly, the same
+  category of primitive as `skipkey`, not `GalaxyMapVerbRule`'s `ShowGalaxyMapGui`/
+  `HideGalaxyMapGui`/`SetSelectedPlanet` trio.
+* `src/KotorCoop.Session/ConsoleCommand.cs`/`ConsoleCommand.Cheats.cs` — `CoopCommandKind.GalaxyMapSelect`/
+  `GalaxyAccept`, the `galaxyaccept` verb-table row, `ParseGalaxyMap` extended for `select`,
+  `ParseGalaxyAccept` (zero-argument, same shape as `ParseSkipKey`).
+* `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the two new dispatch entries (`SendCheat`,
+  same one-liner shape as `galaxymap open/close/stats`).
+* `tests/KotorCoop.Tests/GalaxyMapVerbRuleTests.cs` — 9 new tests for `Select`'s parse (index
+  round-trip, case-insensitivity, out-of-range refusal at both bounds, non-numeric refusal,
+  missing-index refusal, and the single-argument overload still discarding the planet correctly).
+* `tests/KotorCoop.Tests/ConsoleCommandVerbTableCoverageTests.cs` — sample lines for the two new
+  kinds (`galaxymap select 3`, `galaxyaccept`) — the existing `DispatchTableHasARowForEveryCoopCommandKind`
+  test (`CoopCommandDispatcherTableCoverageTests.cs`) already covers the dispatcher side via
+  reflection over the full enum, so no separate entry was needed there.
+* `docs/CONSOLE.md` — `galaxymap select`/`galaxyaccept` rows, `galaxymap stats` row updated for
+  the new fields.
+* `docs/limitations.md` — the galaxy-map row and item 13 in the NEEDS-LIVE list updated: the
+  refusal can now be exercised end to end with zero human clicks (`galaxymap open` + `galaxymap
+  select <n>` + `galaxyaccept` + `galaxymap stats`), though it has not yet actually been RUN
+  against a live process.
+
+Build: `pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean (0 warnings). `dotnet build
+src/KotorCoop.Agent/KotorCoop.Agent.csproj -warnaserror` clean (0 warnings). `dotnet test
+tests/KotorCoop.Tests --filter "FullyQualifiedName~ConsoleCommand|FullyQualifiedName~CoopCommandDispatcher"`
+195/195. `dotnet test tests/KotorCoop.Tests --filter "FullyQualifiedName~GalaxyMap"` 31/31 (was
+22 before this pass's own 9 new `Select` tests).
+
+### VERIFIED vs INFERRED / NEEDS-LIVE, this pass
+
+**VERIFIED this pass**, against the sha256-matched GOG v1.0.3 `swkotor.exe`:
+* The jump table (5 entries) and the FULL 185-entry byte-lookup table at `0x695B0C`, decoded
+  programmatically (not by hand, unlike the 2026-09-03 pass) and cross-checked byte-for-byte
+  against that pass's own hand-decode — identical results for the accept case, one count
+  correction for the back case (see above).
+* `CSWGuiInGameGalaxyMap`'s vtable (`0x00754910`), independently re-dumped: slot 15 (`+0x3C`)
+  holds `HandleInputEvent`'s own address (`0x00695980`), matching the symbol database and the
+  SAME slot index the dialogue panel classes use.
+* `CSWPartyTable::SetSelectedPlanet`'s full ABI (`__thiscall(this, int nPlanet)`, `ret 4`) —
+  this pass independently re-disassembled it (`tools/disasm.py 0x563B60 60`) rather than only
+  citing the 2026-09-03 pass's own transcript, confirming the `ret 4` tail that pass's own
+  excerpt did not show.
+
+**NEEDS-LIVE** (never exercised on a running process this pass):
+* Everything the 2026-09-02/2026-09-03 sections above already list as NEEDS-LIVE for the splice
+  itself is unchanged — this pass only adds a way to FIRE the accept click without a mouse, it
+  does not touch the splice's own install/refuse/allow logic.
+* Whether a REAL mouse click on the Accept button fires raw event `0x27`, `0x2D`, or something
+  this analysis has not considered (a mouse-down/mouse-up pair producing two different codes,
+  neither of which is the one a synthesised call sends) — the dialogue-panel cross-check above is
+  the best available evidence short of a live capture, not a substitute for one.
+* Whether `HandleInputEvent(panel, 0x27, 1)` reproduces every side effect a real click has on the
+  `CSWGuiButton` control itself (hover/pressed visual state, any per-button click bookkeeping) —
+  this primitive enters the SAME dispatch a real click does, but does not simulate the mouse-down/
+  mouse-up sequence that would normally precede it; this is the reason `Odyssey.Dialogue.SkipKey.cs`
+  itself already flags for `skipkey`; the same caveat is inherited here rather than re-litigated.
+* `galaxymap select <n>`'s own live behaviour: whether `SetSelectedPlanet` genuinely accepts a
+  story-unlocked planet index and rejects a locked one exactly as this pass's disassembly-based
+  bounds-check reasoning predicts, on a real save with real `K_KOTOR_MASTER`/availability state.
+* `galaxymap stats`'s three new fields (`open=`, `selectedPlanet=`, `panelIsGalaxyMap=`) —
+  reads only, never exercised live.
+* Whether "the panel stays usable" after a REFUSE actually holds under `galaxyaccept` specifically
+  — the 2026-09-02 section's own reasoning (jumping to `HandleInputEvent`'s own `NoOpExit` leaves
+  the panel exactly as a non-matching event would) should apply identically whether the event was
+  sent by a real click or by this primitive, since the splice cannot distinguish the two, but this
+  has never been confirmed by actually trying to interact with the panel again afterward.
+
+### Exact live recipe for the next session with the rig
+
+Prerequisite: both instances at the galaxy map console, or `warp ebo_m12aa` on both (the
+2026-09-02/2026-09-03 sections' own recipes). `galaxy_map_host_only=1` and `follow_lead=host`
+are the shipped defaults — no `coop.ini` edit needed for the baseline case below.
+
+**1. REFUSE case — a CLIENT under `follow_lead=host` (the shipped default):**
+
+```
+(client) warp ebo_m12aa
+(client) galaxymap open
+(client) galaxymap select 5
+(client) galaxyaccept
+(client) galaxymap stats
+```
+
+Expected console/log lines, in order:
+
+* `galaxymap open` → `applied`, `"ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> 1, ... panel
+  0x... (open)"` (per the 2026-09-03 section's own live-confirmed shape; if the very first open
+  after a `warp` reports refused with `+0x30 = 1` already set, run `galaxymap close` once first —
+  the same stale-flag note that section already records).
+* `galaxymap select 5` → `applied`, `"SetSelectedPlanet(5) applied — CSWPartyTable+0xE0 <old> ->
+  5"` — **IF** planet index 5 is one this save has unlocked; otherwise expect the no-op detail
+  naming `available_planets`/`selectable_planets` (try a different index, or a save further into
+  the story, or use `galaxymap stats` to read back whatever the map already had selected and
+  proceed with that instead — the accept path does not require this step to succeed to exercise
+  the REFUSAL, only to prove an ALLOW-path departure for real).
+* `galaxyaccept` → `applied`, `"HandleInputEvent(panel, 0x27, 1) sent — CGuiInGame+0x30 1 -> 1,
+  GalaxyMapConfirmHook refused 0 -> 1, allowed 0 -> 0"` (busy stays 1: refused, so
+  `HideGalaxyMapGui` never ran; the click sound still plays, per the 2026-09-02 section's own
+  disassembly, since the refusal fires just after `PlayGuiSound` in program order).
+* Plugin log (this instance): `galaxy-map: confirm refused - only the host can choose a
+  destination (follow_lead=host)`.
+* Chat (both instances, `PostLocalChatLine`): `only the host can choose a destination`.
+* `galaxymap stats` → `installed=True, refused=1, allowed=0, open=True, selectedPlanet=5 (or
+  whatever select left it at), panelIsGalaxyMap=True`.
+* **Key correctness checks**: the CLIENT's own module does NOT change; `k_sup_galaxymap` never
+  ran on the client; the map stays open on the client's screen (`open=True` in the stats above);
+  a second `galaxyaccept` right after the first should refuse AGAIN identically (`refused 1 -> 2`)
+  — proving "the panel stays usable" rather than wedging after one refusal.
+
+**2. ALLOW case — the HOST, same console, same session:**
+
+```
+(host) warp ebo_m12aa
+(host) galaxymap open
+(host) galaxymap select 5
+(host) galaxyaccept
+(host) galaxymap stats
+```
+
+Expected: `galaxyaccept` → `applied`, `"... GalaxyMapConfirmHook refused 0 -> 0, allowed 0 -> 1"`,
+busy flips `1 -> 0` (accept closes the map — `HideGalaxyMapGui` runs on this path, per the
+2026-09-02 section's own disassembly of `0x00695A50`-`0x00695A60`), the vanilla take-off sequence
+begins (movies queue, per §1.4's `CinematicWatch` coverage), and `K_FUTURE_PLANET` gets set to
+whatever `galaxymap select` chose. `galaxymap stats` afterward: `allowed` incremented, `refused`
+unchanged, `open=False`.
+
+**3. `follow_lead=any` control:** repeat recipe 1 on the client with `coop.ini`'s `follow_lead`
+set to `any` (or absent). Expect NO refusal — `galaxyaccept` reports `allowed` incrementing
+instead of `refused`, and the client's own confirm proceeds normally (mirroring the 2026-09-02
+section's own step 3).
+
+**4. Stability check:** repeat recipe 1's `galaxymap select <n>` / `galaxyaccept` several times
+back to back with different planet indices, watching for any stuck input, a panel that silently
+stops responding, or a delayed crash a few seconds later — the same class of symptom the
+2026-09-02 section's own live test plan item 4 already asks for, now fully scriptable with no
+human click anywhere in the loop.

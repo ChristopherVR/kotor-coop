@@ -340,6 +340,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 SpawnCreature(player);
                 break;
 
+            case SharedBlock.CheatKindGalaxyAccept:
+                GalaxyMapAccept();
+                break;
+
+            case SharedBlock.CheatKindGalaxyMapSelect:
+                SelectGalaxyMapPlanet();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

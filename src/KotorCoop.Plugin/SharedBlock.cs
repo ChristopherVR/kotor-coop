@@ -1196,7 +1196,9 @@ internal partial struct SharedBlock
     /// ⚠ 68, next free after every noted reserved range through 67 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindSpawnCreature = 68;
-    /// STAGING VERB (docs/research/cinematics.md's 2026-09-03 addendum): posts the SAME
+
+    /// <summary>
+    /// <c>crossdoor</c> — STAGING VERB (docs/research/cinematics.md's 2026-09-03 addendum): posts the SAME
     /// door-crossing event (type <c>0x1E</c>) the engine's own movement code posts when a
     /// creature's WalkUpdateLocation/AIActionMoveToPoint notices it has crossed into a door's
     /// sub-area — built exactly the way <c>CSWSCreature::AIActionMoveToPoint</c> builds it
@@ -1223,4 +1225,31 @@ internal partial struct SharedBlock
     /// ⚠ 69, next free after every noted reserved range through 68 (CheatKindSpawnCreature) as of 2026-09-03 — the branch had claimed 65, which the galaxy-map verbs took first.
     /// </summary>
     public const uint CheatKindCrossDoor = 69;
+
+    /// <summary>
+    /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 `galaxyaccept` addendum): presses Accept on the galaxy map through the
+    /// engine's own input dispatch (<c>CSWGuiInGameGalaxyMap::HandleInputEvent(panel, 0x27,
+    /// 1)</c>, vtable slot 0x3C), the SAME shape <see cref="CheatKindSkipKey"/> already uses for
+    /// the dialogue panel — the only route that reaches <see cref="GalaxyMapConfirmHook"/>'s
+    /// splice, since <see cref="CheatKindGalaxyMapOpen"/>/<see cref="CheatKindGalaxyMapClose"/>
+    /// only ever touch <c>ShowGalaxyMapGui</c>/<c>HideGalaxyMapGui</c> and never enter
+    /// <c>HandleInputEvent</c> at all. Takes no arguments. Local only.
+    ///
+    /// ⚠ 70, next free after every noted reserved range through 69 (CheatKindCrossDoor) as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyAccept = 70;
+
+    /// <summary>
+    /// <c>galaxymap select &lt;n&gt;</c> — the planet-selection half
+    /// <see cref="CheatKindGalaxyAccept"/> needs to have anything to confirm: writes
+    /// <c>CSWPartyTable::SetSelectedPlanet(n)</c> (0x00563B60, VERIFIED full disasm) directly,
+    /// independent of whether the map screen is open. <see cref="SharedBlock.CheatAmount"/>
+    /// carries the planet index (a `planetary.2da` row, 0-15); out of range or
+    /// unavailable/unselectable is reported as a no-op rather than applied — see
+    /// <c>Odyssey.SetGalaxyMapSelectedPlanet</c>. Local only.
+    ///
+    /// ⚠ 71, next free after every noted reserved range through 70 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapSelect = 71;
 }

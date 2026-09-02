@@ -98,6 +98,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.GalaxyMapOpen] = "galaxymap open",
         [CoopCommandKind.GalaxyMapClose] = "galaxymap close",
         [CoopCommandKind.GalaxyMapStats] = "galaxymap stats",
+        [CoopCommandKind.GalaxyMapSelect] = "galaxymap select 3",
+        [CoopCommandKind.GalaxyAccept] = "galaxyaccept",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

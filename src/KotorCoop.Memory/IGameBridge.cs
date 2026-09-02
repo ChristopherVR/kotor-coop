@@ -580,6 +580,27 @@ public static class CheatKinds
     public const uint CrossDoor = 69;
 
     /// <summary>
+    /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 `galaxyaccept` addendum): presses Accept on the galaxy map through the
+    /// engine's own input dispatch, the SAME shape <see cref="SkipKey"/> already uses for the
+    /// dialogue panel — the only route that reaches the confirm-refusal splice
+    /// (<c>galaxy_map_host_only</c>). Takes no arguments. See
+    /// <c>SharedBlock.CheatKindGalaxyAccept</c>.
+    ///
+    /// ⚠ 70, next free after every noted range through 69 (CrossDoor) as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyAccept = 70;
+
+    /// <summary>
+    /// <c>galaxymap select &lt;n&gt;</c> — writes the galaxy map's selected-planet field
+    /// directly (<c>Amount</c> carries the planet index, 0-15), independent of whether the map
+    /// screen is open. See <c>SharedBlock.CheatKindGalaxyMapSelect</c>.
+    ///
+    /// ⚠ 71, next free after every noted range through 70 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapSelect = 71;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

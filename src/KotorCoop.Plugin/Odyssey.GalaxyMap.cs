@@ -72,6 +72,29 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, void> HideGalaxyMapGuiFn =
         (delegate* unmanaged[Thiscall]<nint, void>)0x0062D1D0;
 
+    /// <summary>CSWPartyTable::SetSelectedPlanet(this, int nPlanet) 0x00563B60, `ret 4` —
+    /// VERIFIED, full disasm this pass (this file's own section header transcribes it in full).
+    /// Used directly by <see cref="SetGalaxyMapSelectedPlanet"/> for `galaxymap select`, and
+    /// indirectly by <see cref="ShowGalaxyMapGuiFn"/> itself (which calls the same address
+    /// through a different this-resolve — see the section header's own two-call-sequence
+    /// note).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> SetSelectedPlanetFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x00563B60;
+
+    /// <summary><c>CSWGuiInGameGalaxyMap</c>'s vtable address (symbol database, docs/research/
+    /// galaxy-map-and-party-select.md §1.1: size 0x2550, vtable 0x754910) — independently
+    /// re-read this pass by dumping the vtable's own dwords out of <c>swkotor.exe</c>'s
+    /// <c>.rdata</c> and confirming slot 15 (+0x3C) holds <c>0x00695980</c>
+    /// (<c>HandleInputEvent</c>, matching the symbol DB's own function-address row exactly), the
+    /// SAME slot index <c>Odyssey.Dialogue.SkipKey.cs</c>'s own <c>PanelHandleInputEventSlot</c>
+    /// already uses for the two dialogue-panel classes — confirming <c>CSWGuiPanel</c>'s virtual
+    /// layout is shared across every panel subclass this plugin calls through, not something
+    /// re-derived per class. Used only as a read-only compare (a guard that <c>CGuiInGame+0x80</c>
+    /// really points at this class), never dereferenced past the vtable slot itself — the same
+    /// discipline docs/research/galaxy-map-and-party-select.md's party-select suppression
+    /// section describes for <c>CSWGuiPartySelection</c> vtable <c>0x00756D28</c>.</summary>
+    private const nint GalaxyMapVtableAddress = 0x00754910;
+
     /// <summary>
     /// Opens the galaxy-map GUI for the local player through the real engine entry point — the
     /// `galaxymap open` live-test primitive built to finally exercise
@@ -171,5 +194,99 @@ internal static unsafe partial class Odyssey
             + $"modal stack {modalsBefore} -> {ReadModalStackCount(gui)}, panel "
             + $"0x{*(nint*)(gui + InGameGuiGalaxyMapOffset):X} (the panel pointer persists by design)";
         return busyAfter == 0;
+    }
+
+    /// <summary><c>CSWPartyTable + this</c> = <c>galaxy_map_selected_planet</c> (int). VERIFIED,
+    /// full disasm of <c>SetSelectedPlanetFn</c>'s own write at <c>0x00563B80</c>
+    /// (<c>mov [ecx+0xe0], eax</c>) — see this file's own section header.</summary>
+    private const int SelectedPlanetFieldOffset = 0xE0;
+
+    /// <summary>
+    /// `galaxymap select &lt;n&gt;` — the answer to this pass's own "if a planet must be
+    /// selected first for the accept to do anything, add the selection step" requirement
+    /// (docs/research/galaxy-map-and-party-select.md's 2026-09-03 `galaxyaccept` addendum).
+    /// Calls <c>CSWPartyTable::SetSelectedPlanet</c> (0x00563B60, VERIFIED full disasm, this
+    /// file's own section header) directly through the SAME <see cref="GetPartyTable"/> resolve
+    /// every other roster routine in this plugin already uses — not the raw
+    /// <c>CServerExoApp::GetPartyTable</c> function pointer <c>ShowGalaxyMapGuiFn</c> itself
+    /// calls, which <c>Odyssey.Party.cs</c>'s own remarks already establish resolves the
+    /// identical table (<c>[server+4] + 0x1B770</c>, confirmed against the same accessor).
+    /// Independent of whether the map screen is even open: <c>SetSelectedPlanet</c> itself does
+    /// not touch any GUI state, only the table field the confirm script reads.
+    ///
+    /// Deliberately does NOT require the map to be open first — the write is harmless either
+    /// way (a later <c>galaxymap open</c> or <c>galaxyaccept</c> reads whatever is already
+    /// selected) — but DOES report whether the engine's own bounds/availability check actually
+    /// accepted it, by reading the field back, since <c>SetSelectedPlanet</c>'s own return value
+    /// is <c>void</c> (its caller, <c>ShowGalaxyMapGui</c>, never checks it either — see this
+    /// file's own section header for why passing an unavailable index is a safe, silent no-op
+    /// rather than a crash).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    /// <param name="nPlanet">A `planetary.2da` row index, 0-15 (bounds-checked by the engine
+    /// itself; this wrapper additionally refuses a value the engine's own `jl`/`jge` bounds
+    /// check would silently reject, so the caller sees WHY nothing changed rather than a
+    /// false "applied").</param>
+    internal static bool SetGalaxyMapSelectedPlanet(int nPlanet, out string detail)
+    {
+        if (nPlanet is < 0 or > 0x0F)
+        {
+            detail = $"{nPlanet} is out of range [0,15] — CSWPartyTable::SetSelectedPlanet's own "
+                + "bounds check (0x00563B60) would silently reject it, so this refuses instead of "
+                + "sending a write nothing will apply";
+            return false;
+        }
+
+        nint table = GetPartyTable();
+        if (table == 0)
+        {
+            detail = "no party table resolved (not in a loaded module)";
+            return false;
+        }
+
+        int before = *(int*)(table + SelectedPlanetFieldOffset);
+        SetSelectedPlanetFn(table, nPlanet);
+        int after = *(int*)(table + SelectedPlanetFieldOffset);
+
+        detail = after == nPlanet
+            ? $"SetSelectedPlanet({nPlanet}) applied — CSWPartyTable+0xE0 {before} -> {after}"
+            : $"SetSelectedPlanet({nPlanet}) was a no-op — CSWPartyTable+0xE0 stayed {after} "
+                + "(planet not available/selectable — see planetary.2da/K_KOTOR_MASTER gating, "
+                + "docs/research/galaxy-map-and-party-select.md §1.2)";
+        return after == nPlanet;
+    }
+
+    /// <summary>Read-only: reports the same three fields `galaxymap stats` needs to prove
+    /// `galaxyaccept`'s outcome without a screenshot — whether the full-screen GUI is up
+    /// (<c>CGuiInGame+0x30</c>, the live-confirmed "is the map actually open" signal, NOT
+    /// <c>+0x80</c> — see this file's own 2026-09-03 live-pass note), the galaxy-map panel
+    /// pointer's own vtable (so a caller can tell "no panel yet" from "some other full-screen
+    /// GUI is up"), and the currently selected planet. No engine call, three reads. MAIN THREAD
+    /// ONLY.</summary>
+    internal static bool TryReadGalaxyMapState(out bool guiOpen, out int selectedPlanet, out bool panelLooksRight)
+    {
+        guiOpen = false;
+        selectedPlanet = -1;
+        panelLooksRight = false;
+
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            return false;
+        }
+
+        guiOpen = *(int*)(gui + InGameGuiBusyOffset) != 0;
+
+        nint panel = *(nint*)(gui + InGameGuiGalaxyMapOffset);
+        panelLooksRight = panel != 0 && *(nint*)panel == GalaxyMapVtableAddress;
+
+        nint table = GetPartyTable();
+        if (table != 0)
+        {
+            selectedPlanet = *(int*)(table + SelectedPlanetFieldOffset);
+        }
+
+        return true;
     }
 }

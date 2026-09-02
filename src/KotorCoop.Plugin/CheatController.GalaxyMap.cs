@@ -37,17 +37,59 @@ internal sealed unsafe partial class CheatController
     }
 
     /// <summary>
-    /// Reports <see cref="GalaxyMapConfirmHook"/>'s own live counters — no engine call, just the
-    /// two static counters and the install flag. This is the piece the research doc's own
-    /// "Live test plan" flagged as missing: <c>RefusedCount</c>/<c>AllowedCount</c> were not
-    /// exposed by any verb, so a refusal could only be confirmed by grepping the plugin log for
-    /// its one log line, not by a scripted rig.
+    /// Reports <see cref="GalaxyMapConfirmHook"/>'s own live counters, plus — added the same
+    /// pass as <see cref="GalaxyMapAccept"/> — whether the full-screen GUI is currently up and
+    /// which planet is selected, so a live rig can confirm <c>galaxyaccept</c>'s outcome without
+    /// a screenshot (Tier 2 item 18's own "read the panel's state" ask). No engine call: three
+    /// reads (<see cref="Odyssey.TryReadGalaxyMapState"/>) plus the two static counters and the
+    /// install flag. The counters were the piece the research doc's own "Live test plan"
+    /// flagged as missing: <c>RefusedCount</c>/<c>AllowedCount</c> were not exposed by any verb,
+    /// so a refusal could only be confirmed by grepping the plugin log for its one log line, not
+    /// by a scripted rig.
     /// </summary>
     private void GalaxyMapStats()
     {
+        bool hasState = Odyssey.TryReadGalaxyMapState(out bool open, out int selectedPlanet, out bool panelLooksRight);
+        string state = hasState
+            ? $"open={open}, selectedPlanet={selectedPlanet}, panelIsGalaxyMap={panelLooksRight}"
+            : "open=?, selectedPlanet=?, panelIsGalaxyMap=? (no in-game GUI resolved)";
+
         string detail = $"installed={GalaxyMapConfirmHook.IsInstalled}, "
             + $"refused={GalaxyMapConfirmHook.RefusedCount}, "
-            + $"allowed={GalaxyMapConfirmHook.AllowedCount}";
+            + $"allowed={GalaxyMapConfirmHook.AllowedCount}, {state}";
         Answer(SharedBlock.CheatStatusApplied, $"galaxymap stats: {detail}");
+    }
+
+    /// <summary>
+    /// `galaxymap select &lt;n&gt;` — the planet-selection half of the `galaxyaccept` addendum
+    /// (docs/research/galaxy-map-and-party-select.md's 2026-09-03 section): writes
+    /// <c>CSWPartyTable::SetSelectedPlanet</c> directly through
+    /// <see cref="Odyssey.SetGalaxyMapSelectedPlanet"/>, independent of whether the map screen
+    /// is open, so <see cref="GalaxyMapAccept"/> has something real to confirm.
+    /// </summary>
+    private void SelectGalaxyMapPlanet()
+    {
+        int planet = block.CheatAmount;
+        bool applied = Odyssey.SetGalaxyMapSelectedPlanet(planet, out string detail);
+        PluginHost.Log($"galaxymap select {planet}: {detail}");
+        Answer(
+            applied ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"galaxymap select {planet}: {detail}");
+    }
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE: `galaxyaccept` — presses Accept on the galaxy map through the
+    /// engine's own input dispatch (<see cref="Odyssey.SendGalaxyMapAcceptKey"/>), so
+    /// <see cref="GalaxyMapConfirmHook"/>'s confirm-refusal splice can finally be exercised
+    /// without a human clicking. See docs/research/galaxy-map-and-party-select.md's 2026-09-03
+    /// `galaxyaccept` addendum for the full derivation of the event code and the live recipe.
+    /// </summary>
+    private void GalaxyMapAccept()
+    {
+        bool applied = Odyssey.SendGalaxyMapAcceptKey(out string detail);
+        PluginHost.Log($"galaxyaccept: {detail}");
+        Answer(
+            applied ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"galaxyaccept: {detail}");
     }
 }
