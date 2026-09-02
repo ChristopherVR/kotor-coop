@@ -755,10 +755,49 @@ slot's id or 0. Nothing new crosses the wire; nothing new is written into the bl
    `Odyssey.ApplyDamageEffect(uint,int,uint,out int)` overload has no plugin-side test of its own
    — the whole VM/native surface it drives is compile-included but engine-dependent, same as
    every other `Odyssey.*` VM call) and need their own live pass.
-4. **A 3+-peer session** falling back to 0 (no attribution) rather than guessing — unexercised
-   even in the loopback sense, since nothing in this codebase's test rig runs three real peers
-   against one enemy today.
+4. **A 3+-peer session** falling back to 0 (no attribution) rather than guessing — still
+   unexercised against a real 3-peer rig (no such rig exists in this codebase's test harness),
+   but now pinned at the loopback/unit level — see the 2026-09-02 addendum immediately below.
 5. **Whether `GetLastAttacker()`/`GetLastDamager()` (target+0x15C/+0x160, §8.5) matter for
    anything K1's own content does** — out of scope for this feature (only `+0x158` is written),
    named so a later investigation into a script that reads one of those two does not start from
    zero.
+
+### 8.9 2026-09-02: re-checked whether `ApplyOwed` can do better than `SoleRemotePhantomId()` with 3+ peers — it cannot, without a protocol change
+
+Re-read `PeerDamageController.ApplyOwed` (src/KotorCoop.Plugin/PeerDamageController.cs:281-410)
+against the question "does the per-attacker table `IncomingDamageController.RunPerAttackerPass`
+uses (§7, `PhantomAttackerAppliedLedger`) give the ENEMY-damage path anything §8.6's table
+didn't already account for." It does not, and the reason is structural, not an oversight:
+
+- `RunPerAttackerPass`'s per-attacker table exists because that direction has exactly ONE
+  victim (the local player) and MANY attackers, so keeping attacker ids distinct costs nothing
+  — nobody is merged together on that side. `ApplyOwed`'s direction is the reverse shape: MANY
+  attackers (every peer's phantom) hitting ONE victim (the shared enemy), and the wire already
+  banks each peer's rise into a single per-enemy total before this instance ever reads a row
+  (§3.1 "bank each peer's rise per enemy") — confirmed again at
+  `PeerDamageController.cs:313-320`'s own comment, unchanged since §8.6 shipped. There is no
+  buffer anywhere on the receiving side — plugin or session — that still carries "peer 2 dealt
+  40, peer 3 dealt 15" for a given enemy by the time `ApplyOwed` runs; `DamageOwedLedger`
+  (`src/KotorCoop.Plugin/PeerDamageController.cs:55`, backing `_owed`) is keyed by enemy object
+  id alone, one running total per id, and the host-side merge that produces the number
+  `block.GetDamageOwed` hands back is `PeerDamageLedger` in `src/KotorCoop.Session` (the
+  session-side ledger §3.1 describes), which sums every peer's reported rise per enemy before
+  it is ever written into the shared block. Peer identity is discarded upstream of the plugin
+  entirely.
+- Recovering it would mean carrying a per-(enemy, peer) breakdown across the wire and through
+  the host merge instead of one per-enemy total — exactly the protocol change §8.6 already
+  concluded was unnecessary for the two-peer case and that this task was explicit should not be
+  invented speculatively for the 3+ case. So this remains **documentation-only**: no plugin
+  change, no protocol change, no `SharedBlock` field, no `Version` bump.
+- What changed this round: the current fallback (`SoleRemotePhantomId()` returns the id of the
+  one occupied phantom slot, or 0 for zero or two-or-more occupied slots) is now pinned by a
+  pure unit test directly against `SharedBlockView` — no plugin runtime, no session, a scratch
+  pinned block the same shape `MidModuleMovieRelayTests.NewScratchBlock` already uses —
+  `tests/KotorCoop.Tests/SoleRemotePhantomIdTests.cs`:
+  `NoOccupiedSlotsMeansNoAttribution`, `ExactlyOneOccupiedSlotIsUnambiguous`,
+  `TwoRemotePeersFallsBackToZeroRatherThanGuess` (the task's own "2 remote peers → 0" case),
+  `ThreeRemotePeersAlsoFallsBackToZero`, and `ANonAdjacentSingleOccupiedSlotIsStillUnambiguous`
+  (the scan counts occupied slots, not slot-0-specifically, so a peer reconnecting into a
+  different slot index is still unambiguous alone). This closes item 4 above at the unit level;
+  a real 3-peer rig run remains **NEEDS-LIVE**, unchanged.
