@@ -81,6 +81,11 @@ internal static unsafe partial class CrashProbe
     private static uint _ownBase;
     private static uint _ownSize;
 
+    /// <summary>This DLL's load range once <see cref="Install"/> has resolved it (both 0
+    /// before that, or if the PE walk failed). <see cref="ExitProbe"/> uses it to tag a
+    /// return address that is ours.</summary>
+    internal static (uint Base, uint Size) OwnImage => (_ownBase, _ownSize);
+
     /// <summary>Resolves the range of the image containing this code, from the PE header
     /// (<c>SizeOfImage</c> at <c>e_lfanew + 0x50</c>). Silent on any failure: a probe that
     /// cannot name its own image still records faults.</summary>

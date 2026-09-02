@@ -14,6 +14,11 @@ internal static unsafe partial class PluginHost
         // exactly as fatal as one during play, and the probe is what turns "the game
         // vanished" into a line naming the exception.
         CrashProbe.Install();
+
+        // Second, and also before any hook: the clean-exit twin of the probe above. A
+        // process that leaves through ExitProcess writes no fault and no Application-log
+        // entry, and this is the only place that names that path.
+        ExitProbe.Install();
     }
 
     private static void InstallHooks()

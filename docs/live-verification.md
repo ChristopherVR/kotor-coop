@@ -3113,3 +3113,89 @@ the fix.
 → `refused: 0x38 is not a materialised stand-in here - nothing to give`, six pairs in one
 second at 23:03:05 for the Vulkar corpses. Benign (the corpses are GIT-identical on the
 client, nothing to give), just loud.
+
+## Wipe reload re-run: one rejoin, then two new defects (2026-09-02, late night)
+
+Rig: plugin rebuilt from ca49f63 (the `TryReadWorldLoadSerial` rejoin fix), block 64, `-Save 1`,
+host pid 8904 / client 52328 kept from the previous section. Purpose: re-run the wipe reload
+that produced four rejoins and confirm the fix.
+
+### Wipe recipe outside combat (what it actually takes)
+
+`down` alone does not wipe a party that is standing together, and does not keep a host down:
+
+- Co-located: the client `down` was rescued by the 3.5 u auto-rescue within a second. Separate
+  first (`tp`).
+- Separated, host `down`: the engine revived the host PC at 1 hp after ~5 s — with the min-1-hp
+  floor (`+0x200`) set AND with it cleared (`min1clear.ps1`). The revive is the engine's own
+  "a companion is up and nobody is fighting" rule, not the floor.
+- What works: host `down 0` (Trask) THEN host `down`; client `down` (the client's temp-death
+  guard keeps its own PC down). Both PCs down with no companion up → the session releases the
+  game-over on both.
+
+### `TryReadWorldLoadSerial` fix — VERIFIED: exactly one rejoin
+
+Host reload from the game-over (`load --pid 8904 --load-save 1`, menu route). Client:
+
+    [23:31:01] * Lanik is back
+    [23:31:01] * the host is back in the world after the wipe - rejoining their world
+    [23:31:01] * session-save: starting rejoin (WipeRecovery)
+    [23:31:03] * rejoin: load request 2 sent to the plugin (module END_M01AA, carried character, mid-session)
+    [23:31:03] * rejoined 'END_M01AA'
+    [23:31:07] connected ... module END_M01AA  hp 12/12  peers-here 1
+
+and NOTHING after it — no `SaveMismatch`, no `OwnLoad` (the 23:02 run had four in 21 s). The
+plugin route worked this time (`load request 2 sent to the plugin`; the 23:02 run had fallen
+back to the menu route). Rejoin churn after a wipe reload: **Works**.
+
+### Defect 1: the reload duplicated the host PC's saved equipment
+
+Fifteen seconds after the host's world was up (the `ItemTagRebuildMs` rebuild), the host's
+script-grant pump diffed the save's own equipped clothes and short sword in as a grant:
+
+    host   [23:31:05] * party pool trace: host snapshot 3 key(s): g_i_adrnaline003 ..., g_i_medeqpmnt01 ..., g_w_blstrrfl001 ...
+    host   [23:31:19] * script item grant: 2 new item(s) in the local PC's inventory outside dialogue: g_a_clothes01, g_w_shortswrd01
+    client [23:31:19] * dialogue grant: received 2 item(s) from peer 1 (''), queueing
+    client [23:31:19] * gave 'g_a_clothes01' to 0x7FFFFFFF
+    client [23:31:19] * gave 'g_w_shortswrd01' to 0x7FFFFFFF
+    client [23:31:24] * party pool: local add of 1x 'g_w_shortswrd01' detected, requesting (serial 184535419)
+    host   [23:31:34] * party pool trace: host snapshot 5 key(s): g_a_clothes01 ..., g_i_adrnaline003 ..., g_i_medeqpmnt01 ..., g_w_blstrrfl001 ..., g_w_shortswrd01 ...
+
+The client ended up with a second set of clothes and sword, and the pool grew 3 → 5 keys. Cause:
+the "settled" resweep the provisional rule grants ran while the engine was still finishing the
+loaded PC (status read `hp 8/8` before `12/12`), so the equipped items were not in the baseline
+and the next rebuild saw them as new. Fix: `ItemSweepProvenanceRule.Settling` (two spaced sweeps
+must agree after a world edge; `ScriptItemGrantPump` rebaselines silently until then) —
+shared-inventory-v2.md §18. NEEDS-LIVE.
+
+### Defect 2: the client vanished on the first follow after the wipe-recovery rejoin
+
+Host `warp tar_m10aa` at 23:34:39, three minutes after the rejoin. Client agent:
+
+    [23:34:39] * host announced transition to 'tar_m10aa'
+    [23:34:39] * following Lanik to 'tar_m10aa' IMMEDIATELY (announced transition serial 1, ...)
+    [23:34:39.988] [resolve] player 0x1C562C18: vtable unreadable          ← last line
+
+Client plugin:
+
+    [23:34:39.852] flush, before the module is stored: destroyed phantom 0x131 (slot 0)
+    [23:34:39.855] travel: moving to module 'tar_m10aa' on the session's authority
+    [23:34:39.866] epoch: world unloading; clearing phantom, item, combat and door state   ← last line
+
+The successful follow at 22:52:33 logged `transition: closed the client world ahead of the map
+init` 50 ms after the travel line; this one never reached it. No `FIRST-CHANCE` line, no
+`FATAL (managed)` line, no Windows Application-log entry (`tools/crashlog.ps1`: none), and
+agent2 went with it (its "the agent dies with its game" watchdog). The host was unaffected
+(`Malak left the game` 23:34:45, in tar_m10aa 12/12).
+
+A process leaving with nothing in any log is what `ExitProcess` looks like from outside, so the
+plugin now hooks swkotor.exe's `KERNEL32!ExitProcess` IAT slot (`ExitProbe.cs`) and writes one
+`EXITPROCESS(code) called from 0x... ; image-range stack values: ...` line on the way out. Next
+reproduction attempt: wipe → host reload → client WipeRecovery rejoin (plugin route) → host
+`warp`. Tracked in transition-crashes.md and limitations.md.
+
+### Also confirmed this launch
+
+- `log_keep` rotation: `kotorcoop-plugin.1.log` etc. exist beside the live files on both sides.
+- The loot-relay noise on rejoin (six `not a materialised stand-in` refusals in one second) is
+  what the client-side pre-filter (block 65, `MaterialisedLootFilterRule`) removes; NEEDS-LIVE.

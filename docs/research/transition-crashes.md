@@ -784,3 +784,50 @@ i.e. the legitimate case (count 2, both members resolvable) still works. The rea
 (`end_door10 -> end_m01ab`) is still **unexercised**: `usedoor`'s walk stalled short of the door
 on both attempts and never started a transition, a staging-verb/pathing limitation unrelated to
 this fix.
+
+## The CLIENT vanishing on its first follow after a wipe-recovery rejoin (2026-09-02, open)
+
+One occurrence, not yet reproduced. Sequence: both players wiped outside combat (`down 0` +
+`down` on the host, `down` on the client), host reloaded save 1 from the game-over, the client
+took exactly one `WipeRecovery` rejoin through the PLUGIN route (`rejoin: load request 2 sent to
+the plugin`, 23:31:03), played three minutes in END_M01AA at 12/12, and then the host `warp
+tar_m10aa` at 23:34:39. The client's plugin log ends 11 ms into the follow:
+
+    [23:34:39.852] flush, before the module is stored: destroyed phantom 0x131 (slot 0)
+    [23:34:39.855] travel: moving to module 'tar_m10aa' on the session's authority
+    [23:34:39.866] epoch: world unloading; clearing phantom, item, combat and door state
+
+The follow that succeeded at 22:52:33 on the same launch wrote `transition: closed the client
+world ahead of the map init` 50 ms after its travel line; this one never got there. What is
+NOT in evidence: no `FIRST-CHANCE` fault (the vectored stub never fired), no `FATAL (managed)`
+line, no Windows Application-log entry (`tools/crashlog.ps1` found none; the only entries were
+RestartManager 10000/10001 from a parallel build four minutes earlier), no fail-fast. The
+host was unaffected (`Malak left the game` 23:34:45, in tar_m10aa 12/12).
+
+Two candidate explanations, neither confirmed:
+
+1. **A clean `ExitProcess`** — the CRT's `exit()`, or an engine fatal path that terminates
+   without a dialog — is the one ending that leaves every one of those channels empty. The
+   plugin now hooks swkotor.exe's `KERNEL32!ExitProcess` IAT slot (`ExitProbe.cs`, installed
+   right after the crash probe) and writes `EXITPROCESS(code) called from 0x... ; image-range
+   stack values: ...` on the way out, synchronously, before jumping to the real export. If the
+   next occurrence carries that line, the return addresses name the path.
+2. **A fault the process died on before the worker thread drained the probe record.** The
+   crash probe formats its line on the worker thread; a fault followed by an immediate
+   termination (WER disabled, or a `TerminateProcess` from the engine's own filter) can lose
+   it. If the next occurrence shows neither an `EXITPROCESS` nor a `FIRST-CHANCE` line, this is
+   the remaining suspect and the probe's drain needs to move onto the faulting thread's own
+   machine-code path (a fixed-format line it can write without a managed frame).
+
+Distinguishing feature versus the two wipe-recovery follows that worked (22:52 and 23:02): this
+client had loaded its rejoin save through the plugin route from the GAME-OVER screen
+(`RunDeathSequence` had run on it at 23:30:15), where the other two had gone through the menu
+route. The one-process-two-halves rule (client-server-halves) makes "the client half was left
+in the death sequence's state and the next area unload freed something twice" the leading
+hypothesis, but it is a hypothesis: reproduce first.
+
+Reproduction recipe (rig): `demo.ps1 -Save 1`, separate (`tp`), host `down 0` then `down`,
+client `down`, host `load --pid <host> --load-save 1`, wait for the client's single
+`WipeRecovery` rejoin via the plugin route, then host `warp tar_m10aa`. Check the client's
+plugin log for `EXITPROCESS` / `FIRST-CHANCE` and whether `transition: closed the client
+world` appears.
