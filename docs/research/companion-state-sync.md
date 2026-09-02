@@ -1506,3 +1506,46 @@ truncation, datagram-budget), `CompanionDamageLoopbackTests` (+2: wire round tri
 not-report-to-itself). `dotnet build KotorCoop.slnx` and `src/KotorCoop.Plugin/build.ps1
 -WarnAsError`: both clean. `dotnet test KotorCoop.slnx`: see the session's own final report for
 the exact before/after count.
+
+### 13.7 Live (2026-09-02, night): items 1 and 2 VERIFIED, two defects found and fixed on the way
+
+Full log excerpts and the staging in live-verification.md ("Companion damage TAKEN live",
+2026-09-02, night). The short form:
+
+* **Item 1 — the host's health genuinely falls.** tar_m10aa, Trask released on the client against
+  `tar10_vulkarpt02`: the host applied `5, 3, 4, 1, 6, 6, 5, 12, 4` (owed 5→46) and its SERVER
+  Trask read `cur 1` (floored — see below), its client-side twin still 36. Ask the server
+  object, never the twin, when reading what the host's engine thinks.
+* **Item 2 — downed on the host, revived by the host's own `TempDeathUpdate`.** With the floor
+  cleared, one more client-side `hurt 5 0` took the host's Trask to `-11`; both copies read `-11`
+  until the host's engine resurrected him (`cur 1`, `listening +0x19C` = 1) and the mirror
+  followed. The revive waited on the LAST hostile that could still perceive the party — one at
+  15.7 m held it, well past death-handling.md §3's 10 m figure; slaying it stood him up within
+  5 s.
+* **Rig caveat, not the channel:** the host's Trask carries the Endar Spire `SetMinOneHP` pin
+  (`+0x200` = 1 on the server object) into every later module on this save, so nothing downs him
+  on the host until it is cleared. The client's released copy reads 0 there — the pin is the
+  host's, and a released copy is unpinned by design.
+
+**Defect A — the watch under-credited a reclaim/re-release cycle (fixed before the pass).**
+`PhantomHitHook`'s companion watch was keyed by object id and reset on every release, so the
+second release of the same companion within a module published a cumulative total that
+restarted at 0; `DamageOwedLedger` on the host, rise-only by design, saw a total it had already
+banked and applied nothing. Keyed by roster slot (`_companionCumulative`/`_companionSerial`
+sized `PartyRosterSlots + 1`, never reset within a module), every one of the three release
+cycles in the pass applied on the host.
+
+**Defect B — a reclaimed copy that had been downed never stood up.** §13's own reasoning about
+the revive ("write what the host says, then repair the state that implies") was right; the code
+asked `Odyssey.IsDowned` AFTER writing the host's positive hp, and `IsDowned` is
+`GetDeadTemp || hp <= 0` where `GetDeadTemp` computes `hp <= 0` on the spot (min-one-hitpoint.md
+§1: there is no stored flag). So the Resurrection repair was unreachable: the client's copy kept
+the prone body and the death writes (`listening +0x19C` = 0) under a 1-hp bar. Fixed by reading
+`wasDown` before the write; verified on the next launch (`party drive: stood companion 0x127 back
+up — it was down here while the host has it on 1 hp` at the 25 s reclaim, both copies
+`listening` = 1 afterwards).
+
+Still NEEDS-LIVE from §13.4: item 3 (a mirrored companion's region stays at count 0 — not
+contradicted, the host applied nothing outside release windows, but not isolated), item 4 (two
+companions released at once — one companion on this rig), item 5 (a module transition
+mid-release — the warp in this round happened while Trask was mirrored, not released).

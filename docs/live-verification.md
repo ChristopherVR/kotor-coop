@@ -2869,3 +2869,118 @@ should); it is the fallback for a death the client was not receiving for — pin
 
 Verify.ps1 after the two passes (same rig, both kills already done): **41 passed, 8 failed** — the
 documented baseline, the same eight checks.
+
+## Companion damage TAKEN live: a client's hits down the host's Trask, the engine revives him, and the client's copy now stands back up (2026-09-02, night)
+
+Rig: the same two installs, block version 64, save 1 (END_M01AA), then a host-only `warp
+tar_m10aa` the client followed. Both inis: `local_combat=1`, `companion_local_combat=1`,
+`companion_local_combat_range=80`, `liveness_sync=0`, `damage_creator_attribution=1` (ON on both
+sides for this whole round — the C-attribution pass has not run yet, but nothing here depended on
+it); the client also `client_temp_death_suppress=1`. Client PC `god on` throughout. The
+`PhantomHitHook` build under test keys the companion watch by ROSTER SLOT (the earlier
+object-id keying under-credited a reclaim/re-release cycle within one module — the cumulative
+total restarted at 0 on every re-release, so the host's `DamageOwedLedger` saw the SAME total
+twice and applied nothing the second time).
+
+### What the round found first: a rejoin loop, not a combat bug
+
+Host `warp tar_m10aa`, client followed cleanly — then 9 s later a W_SAVE mismatch, a
+`SaveMismatch` rejoin that adopted **`END_M01AA`** (675,837 bytes, identity 0xC42CAB44), a
+follow-warp back to tar_m10aa, the client's OWN transition autosave read as an `OwnLoad`, another
+rejoin into END_M01AA, forever (~7 s per lap). Root cause, verified on the save files with
+`grep -a -o`: the engine's transition autosave nests the module being **left** as its inner
+`.sav` while `savenfo.res LASTMODULE` names the one being **entered**. `PluginMenuLoader
+.TryReadSaveModuleName` read the ERF key, so the world the host served was tar_m10aa but the name
+the client loaded under was END_M01AA. It now reads `LASTMODULE` first and falls back to the ERF
+key only when savenfo.res is missing/empty/placeholder (unit test
+`ATransitionAutosaveLoadsTheModuleBeingEnteredNotTheOneLeft`). Relaunched with the fix: the same
+host-only warp produced no mismatch and no rejoin, and a forced `loadgame 0` on the client produced
+exactly one:
+
+    world adoption: adopted 'tar_m10aa' (668,109 bytes, identity 0x251335DA)
+    rejoin: load request 3 sent to the plugin (module tar_m10aa ...)
+    rejoined 'tar_m10aa'
+
+session-save.md carries the write-up.
+
+### Staging caveats in tar_m10aa (recorded so nobody repeats them)
+
+- The eight pool-room Vulkars (0x24/0x26/0x2F/0x31/0x33/0x36/0x38/0x3B) never engaged the
+  client's PC on their own — hostile in the census, `k_def_combend01` on `+0x260`, no movement for
+  minutes. `blockpoke.ps1 attack 0x7FFFFFFF 0x33` got the first one moving and from there the
+  slots armed and turned over normally; all eight died on the host's authority
+  (`combat: killed 0x.. on the owner's authority`), Trask's XP 3081→5281 on both sides.
+- `movenear 0x11C` on the client snapped Trask "near 0xE" → (0,0,0): the verb resolves a stale
+  id here. The next 25 s reclaim put him back at the host's position. Move the HOST's PC (Trask
+  follows) and `tp` the client next to it instead.
+- The host's Trask carries **`SetMinOneHP` from the Endar Spire script** (min1hp `+0x200` = 1 on
+  the host's server object, 0 on the client's released copy): on this rig he cannot be downed on
+  the host until the pin is cleared (a 4-byte write of 0 at `+0x200` — a script flag with no
+  derived state). That is the game's own tutorial rule (min-one-hitpoint.md), not the channel.
+
+### The channel itself: 36 → 1 (pinned) → -11 (downed) on the host from client-side hits
+
+Host PC `tp 148 90 2.25` (Trask follows), client `tp 151 92 2.25`, next to the guard droids
+0x4A/0x4D and `tar10_vulkarpt02` 0x46. The client released Trask (`companion 0x11C released to
+fight locally — within range of both you and the enemy you are fighting`), drove his attack on
+0x46, and the HOST applied what the client's copy took:
+
+    [21:38:36.053] companion damage: applied 5 of a peer's damage to companion 0x11C (roster slot 0, owed 5)
+    [21:38:38.610] companion damage: applied 3 ... (owed 8)
+    ...
+    [21:39:02.117] companion damage: applied 12 ... (owed 42)
+    [21:39:02.331] companion damage: applied 4 ... (owed 46)
+
+The host's server Trask (`0x18DFCB58`) read `cur 1 max 30` — 46 owed against 36 hp, floored at 1
+by the tutorial pin above. The host's CLIENT-side copy (`0x14187B94`, the other list
+creatures.ps1 prints) still read 36: read the server object when asking what the host's engine
+thinks. With the pin cleared and Trask released again, one more `hurt 5 0` on the client:
+
+    client  [21:43:28.851] cheat: party slot 0 (0x11C) hit for 5: 1 -> -11 hp (downed) (status 1)
+    host    [21:43:29.065] companion damage: applied 5 of a peer's damage to companion 0x11C (roster slot 0, owed 51)
+
+Host server Trask `cur -11`, client copy `cur -11`: **downed on the host from a client-side hit,
+both copies converged** (§13 NEEDS-LIVE items 1 and 2).
+
+### The engine's own revive, and what "no hostile visible" means in practice
+
+He stayed at -11 for four minutes. `TempDeathUpdate`'s 5 s safe-timer kept resetting: the pool
+droid 0x44 (listed in the census, 6 m from Trask) — slain; the guard droids 0x4A/0x4D 3-5 m from
+the host's PC — slain; still -11. `slay 0x46` — `tar10_vulkarpt02` at (163.5,87.3), **15.7 m**
+from the host's PC — and within ~5 s the host's engine resurrected him (`cur 1`, `listening
++0x19C` back to 1) and the client's mirror followed to 1. So the gate is the hostile's
+PERCEPTION of the party (death-handling.md §3's `IsPartyVisible`), not the 10 m figure: a hostile
+that still sees the party from 15 m holds every downed companion down. Correct engine behaviour,
+worth knowing when a fight "ends" and nobody gets up.
+
+### The defect the revive exposed: the client's copy never stood up
+
+No `party drive: stood companion` line in the whole session's client log, and the client's
+Trask copies read `listening +0x19C = 0` (the death write) against the host's 1.
+`PartyPresenceController` wrote the host's positive hp onto the body FIRST and only then asked
+`Odyssey.IsDowned` — which is `GetDeadTemp || hp <= 0`, and `GetDeadTemp` computes `hp <= 0` on
+the spot (there is no stored flag). After the write both halves are false, so the Resurrection
+repair was dead code and a reclaimed copy kept the prone body and the zeroed AI flags under a
+1-hp bar — the very symptom that comment was written to prevent. Fix: read `wasDown` before the
+write. Rebuilt, relaunched on save 1, the `end_gensith` pair at (43.96,62.92)/(47.56,60.54), host
+`tp 45.5 57 -1.28`, client `tp 45 59 -1.28`; Trask (0x127 here) released at 22:03:05; `hurt 40 0`
+on the client (`36 -> -11 hp (downed)`); the 25 s turnover:
+
+    host    [22:03:30.171] companion damage: applied 40 of a peer's damage to companion 0x127 (roster slot 0, owed 40)
+    client  [22:03:30.326] party drive: companion 0x127 held neutral and pinned — the host owns its health
+    client  [22:03:30.326] party drive: stood companion 0x127 back up — it was down here while the host has it on 1 hp
+    client  [22:03:30.433] party drive: companion 0x127 released to fight locally — ...
+
+Both client copies `listening +0x19C = 1` afterwards. The host's 40 was floored at 1 by the same
+tutorial pin (END_M01AA sets it on Trask at OnEnter), which is what the mirror then wrote.
+
+### Status after this round
+
+- §13 NEEDS-LIVE 1 (host health genuinely falls) and 2 (downed on the host, revived by the host's
+  own `TempDeathUpdate`, every copy converging) — VERIFIED.
+- The reclaim/re-release under-credit (object-id keying) — fixed by the roster-slot keying;
+  every re-release in this round applied on the host (owed 5→46 across three release cycles).
+- The reclaimed-copy stand-up — fixed, verified above.
+- Full suite 3016/3016 after the three fixes.
+- Still open: two companions released at once (§13 item 4 — one companion on this rig), the
+  no-god client death under a real fight, C-attribution's own pass (the flag was merely ON here).

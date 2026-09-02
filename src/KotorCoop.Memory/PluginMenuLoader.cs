@@ -1,3 +1,5 @@
+using KotorCoop.Memory.GameFiles;
+
 namespace KotorCoop.Memory;
 
 /// <summary>
@@ -61,13 +63,28 @@ public static class PluginMenuLoader
     private const int BlockChargenDriveStatus = 0x479C;
 
     /// <summary>
-    /// Reads which module a save is standing in, from SAVEGAME.sav's ERF key list: the
-    /// entry typed 2055 (.sav) IS the module (e.g. END_M01AA). The engine's LoadModule
-    /// takes this name as its argument — an empty name is the silent stall.
+    /// Reads which module a save is standing in. The engine's LoadModule takes this name as
+    /// its argument — an empty name is the silent stall.
+    ///
+    /// savenfo.res's <c>LASTMODULE</c> is the answer when it is readable: it is the field
+    /// retail's own save list shows and loads from. The SAVEGAME.sav ERF key list (the first
+    /// entry typed 2055/2057 IS a module, e.g. END_M01AA) is only the fallback, and it is
+    /// wrong for exactly one class of save — one the engine wrote AT a module transition
+    /// (the autosave a <c>warp</c> triggers, live 2026-09-02): the nested module .sav there
+    /// is still the module being LEFT (END_M01AA), while LASTMODULE already names the one
+    /// being entered (tar_m10aa). Loading that save through the ERF answer put the client in
+    /// END_M01AA against a host in tar_m10aa, whose follow-warp autosaved, which read as an
+    /// own load, which rejoined into END_M01AA again — a rejoin loop with no exit.
     /// </summary>
     public static bool TryReadSaveModuleName(string saveDirectory, out string moduleName)
     {
         moduleName = string.Empty;
+
+        if (TryReadLastModule(saveDirectory, out moduleName))
+        {
+            return true;
+        }
+
         string erfPath = Path.Combine(saveDirectory, "SAVEGAME.sav");
 
         try
@@ -111,6 +128,33 @@ public static class PluginMenuLoader
         }
 
         return false;
+    }
+
+    /// <summary>savenfo.res's <c>LASTMODULE</c> (a "NFO " GFF), or false when the file is
+    /// missing, not a GFF (the test fixtures write a placeholder byte), or has no such
+    /// field — never throws, so the ERF fallback above always gets its turn.</summary>
+    private static bool TryReadLastModule(string saveDirectory, out string moduleName)
+    {
+        moduleName = string.Empty;
+        string nfoPath = Path.Combine(saveDirectory, "savenfo.res");
+
+        try
+        {
+            if (!File.Exists(nfoPath))
+            {
+                return false;
+            }
+
+            Gff nfo = Gff.Parse(File.ReadAllBytes(nfoPath));
+            return nfo.Root.TryGetString("LASTMODULE", out moduleName)
+                && moduleName.Length > 0
+                && moduleName.Length < BlockMenuLoadModuleLength;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            moduleName = string.Empty;
+            return false;
+        }
     }
 
     /// <summary>

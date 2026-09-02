@@ -625,6 +625,15 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // host never saw — which the agent then arbitrates across the whole session.
         //
         // So write what the host says, whatever it says, then repair the state that implies.
+        //
+        // ⚠ Read "was it down" BEFORE the write. A party member's temp-death IS "current hit
+        // points <= 0" (Odyssey.IsDowned, GetDeadTemp computes it on the spot — there is no
+        // stored flag), so once the host's positive figure is on the body the test below can
+        // never be true and the repair is dead code: live 2026-09-02 (companion-state-sync.md
+        // §13.4), a companion released to a local fight, downed here at -11 and reclaimed after
+        // the host's own auto-revive was written to 1 hp and never stood up — no "stood
+        // companion" line in the whole session's log, exactly this ordering.
+        bool wasDown = Odyssey.IsDowned(creature);
         if (Odyssey.GetCurrentHitPoints(creature) != member.Health)
         {
             Odyssey.SetCurrentHitPoints(creature, member.Health);
@@ -635,7 +644,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // flags. Hit points are already correct from the write above, and deliberately not set
         // in the same call — a heal landing while the body still reads dead is dropped by the
         // engine's own rule.
-        if (member.Health > 0 && Odyssey.IsDowned(creature))
+        if (member.Health > 0 && wasDown)
         {
             Odyssey.SetRaiseable(creature);
 

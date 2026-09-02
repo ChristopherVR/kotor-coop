@@ -103,6 +103,34 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public void ATransitionAutosaveLoadsTheModuleBeingEnteredNotTheOneLeft()
+    {
+        // Live 2026-09-02: the autosave a `warp tar_m10aa` writes still nests END_M01AA's
+        // module .sav (the module being LEFT) while savenfo.res's LASTMODULE already says
+        // tar_m10aa. The ERF answer sent a rejoining client into END_M01AA against a host in
+        // tar_m10aa, whose follow-warp autosaved and re-triggered the rejoin — forever.
+        string save = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+        GffWriter nfo = new("NFO ");
+        nfo.Root.SetString("LASTMODULE", "tar_m10aa").SetString("SAVEGAMENAME", "");
+        File.WriteAllBytes(Path.Combine(save, "savenfo.res"), nfo.ToBytes());
+
+        Assert.True(PluginMenuLoader.TryReadSaveModuleName(save, out string module));
+        Assert.Equal("tar_m10aa", module);
+
+        // Without a readable savenfo.res (a placeholder byte, an empty LASTMODULE) the ERF
+        // key list still answers, so nothing that only has the archive to go on regresses.
+        File.WriteAllBytes(Path.Combine(save, "savenfo.res"), [9]);
+        Assert.True(PluginMenuLoader.TryReadSaveModuleName(save, out module));
+        Assert.Equal("end_m01aa", module);
+
+        nfo = new("NFO ");
+        nfo.Root.SetString("LASTMODULE", "");
+        File.WriteAllBytes(Path.Combine(save, "savenfo.res"), nfo.ToBytes());
+        Assert.True(PluginMenuLoader.TryReadSaveModuleName(save, out module));
+        Assert.Equal("end_m01aa", module);
+    }
+
+    [Fact]
     public async Task TheJoinerKeepsTheirOwnCharacter()
     {
         // The whole point of carrying a pifo: the world is the host's, the body is not.

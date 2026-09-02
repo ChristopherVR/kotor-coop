@@ -2106,3 +2106,35 @@ call had just nulled (`pump tick failed: Object reference … at KotorGameBridge
 it now works on locals and publishes them.
 
 VERIFIED on the version-64 build: see shared-inventory-v2.md §17.9 for the cycle table.
+
+## The transition autosave names the wrong module (2026-09-02): a rejoin loop, and why `LASTMODULE` wins over the nested `.sav`
+
+**Symptom.** Host-only `warp tar_m10aa` from END_M01AA; the client followed cleanly; 9 s later
+`W_SAVE mismatch` → `SaveMismatch` rejoin → `world adoption: adopted 'END_M01AA' (675,837 bytes,
+identity 0xC42CAB44)` → the follow-warp sent the client back to tar_m10aa → the client's own
+transition autosave read as an `OwnLoad` → rejoin into END_M01AA again, every ~7 s, forever.
+
+**Cause — VERIFIED on the save files.** At a module transition the engine autosaves while the
+OLD module is still the one nested in `SAVEGAME.sav` (the inner `<module>.sav` ERF entry names
+the module being LEFT), and only `savenfo.res` `LASTMODULE` names the one being ENTERED.
+`PluginMenuLoader.TryReadSaveModuleName` took the module name from the ERF key list
+(resType 2057/2055), so `WorldAdoption` adopted the host's tar_m10aa save under the name
+END_M01AA, wrote that name into the shared block (`MenuLoadController.MidSessionPhase`'s
+save-list entry), and the engine loaded END_M01AA. `SaveDigest.TryComputeSaveIdentity` hashes the
+same first nested `.sav` name — consistent with itself on both sides, so the identity matched
+while the module did not, which is exactly why the level-driven `PersistentSaveMismatchRule`
+kept firing rather than the digest gate catching it.
+
+**Fix.** `TryReadSaveModuleName` reads `savenfo.res` `LASTMODULE` first (`Gff.Parse` +
+`TryGetString`, bounded by `BlockMenuLoadModuleLength`), and falls back to the ERF key only when
+savenfo.res is missing, unreadable, or carries no/empty `LASTMODULE` (the `[9]` placeholder
+saves the tests build). `WorldAdoptionTests.ATransitionAutosaveLoadsTheModuleBeingEnteredNotTheOneLeft`
+covers all three branches.
+
+**Live after the fix.** The same host-only warp: no mismatch, no rejoin. A forced `loadgame 0`
+on the client: exactly one rejoin — `adopted 'tar_m10aa' (668,109 bytes, identity 0x251335DA)`,
+`load request 3 sent to the plugin (module tar_m10aa ...)`, `rejoined 'tar_m10aa'`.
+
+**Left as is, deliberately.** `TryComputeSaveIdentity` still hashes the nested `.sav` name: it is
+an identity, both sides compute it from the same bytes, and changing it would move every
+digest. The module NAME is the only thing that had to come from `LASTMODULE`.

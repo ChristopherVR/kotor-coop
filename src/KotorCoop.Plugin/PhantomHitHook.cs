@@ -127,8 +127,20 @@ internal static unsafe class PhantomHitHook
     /// publisher never has to ask <see cref="PartyPresenceController"/> for it again.</summary>
     private static readonly uint[] _companionRosterSlotPlusOne = new uint[SharedBlock.CompanionDamageSlotCapacity];
 
-    private static readonly uint[] _companionCumulative = new uint[SharedBlock.CompanionDamageSlotCapacity];
-    private static readonly uint[] _companionSerial = new uint[SharedBlock.CompanionDamageSlotCapacity];
+    /// <summary>
+    /// Damage taken per NPC ROSTER slot (indexed by roster slot plus one), not per presence
+    /// slot — and kept across a reclaim. The 2026-09-02 F-companion pass found why: a
+    /// companion is reclaimed and re-released every time its local fight's 25 s slot turns
+    /// over, and a total that restarted at 0 on each release met a host ledger that only ever
+    /// banks the RISE within one generation (<c>CompanionDamageLedger</c> rule 2): the second
+    /// release's first 15 points were read as an 8-point rise over the first release's 7, and
+    /// a restart that stayed below the old total would have been read as nothing at all. The
+    /// generation is bumped only at a module edge (<c>CompanionDamageController.Invalidate</c>,
+    /// next to <see cref="Invalidate"/> here), so within a module this total has to be what the
+    /// ledger assumes it is: monotonic per roster slot for as long as the bodies live.
+    /// </summary>
+    private static readonly uint[] _companionCumulative = new uint[SharedBlock.PartyRosterSlots + 1];
+    private static readonly uint[] _companionSerial = new uint[SharedBlock.PartyRosterSlots + 1];
 
     /// <summary>
     /// Object ids whose damage counts as OURS: the local player and its party.
@@ -318,10 +330,11 @@ internal static unsafe class PhantomHitHook
     /// <summary>
     /// Starts (or stops, with id 0) watching a released companion's damage taken. Called every
     /// pass from <see cref="PartyPresenceController"/> — only ever with a nonzero id while that
-    /// presence slot is actually released to its own engine AI. Counters are kept across a
-    /// re-register of the SAME id (the companion stays released across consecutive passes) so
-    /// an ordinary frame-to-frame call does not replay damage already taken; a DIFFERENT id (or
-    /// a reclaim, 0) resets the slot, because the companion identity behind it has changed.
+    /// presence slot is actually released to its own engine AI. The watch (which id counts,
+    /// and under which roster slot) is per presence slot; the TOTAL is per roster slot and is
+    /// never reset here — a reclaim only stops counting, and the same companion released
+    /// again (this slot or another) carries on from where it was, see
+    /// <see cref="_companionCumulative"/>. Only <see cref="Invalidate"/> zeroes the totals.
     /// </summary>
     public static void WatchCompanion(int slot, uint objectId, uint rosterSlotPlusOne)
     {
@@ -330,13 +343,15 @@ internal static unsafe class PhantomHitHook
             return;
         }
 
-        if (_companionId[slot] != objectId)
+        if (objectId != 0 && rosterSlotPlusOne is 0 or > SharedBlock.PartyRosterSlots)
         {
-            _companionId[slot] = objectId;
-            _companionRosterSlotPlusOne[slot] = objectId == 0 ? 0 : rosterSlotPlusOne;
-            _companionCumulative[slot] = 0;
-            _companionSerial[slot] = 0;
+            // Not a companion this hook can bank against: nothing survives a transition for
+            // it, so nothing is reported for it either.
+            objectId = 0;
         }
+
+        _companionId[slot] = objectId;
+        _companionRosterSlotPlusOne[slot] = objectId == 0 ? 0 : rosterSlotPlusOne;
     }
 
     public static void ReadCompanionSlot(
@@ -351,8 +366,8 @@ internal static unsafe class PhantomHitHook
         }
 
         rosterSlotPlusOne = _companionRosterSlotPlusOne[slot];
-        cumulative = _companionCumulative[slot];
-        serial = _companionSerial[slot];
+        cumulative = _companionCumulative[rosterSlotPlusOne];
+        serial = _companionSerial[rosterSlotPlusOne];
     }
 
     /// <summary>Drops every watch and its totals — a module change frees the bodies and the
@@ -516,8 +531,9 @@ internal static unsafe class PhantomHitHook
 
             if (companionSlot >= 0)
             {
-                _companionCumulative[companionSlot] += (uint)total;
-                _companionSerial[companionSlot]++;
+                uint rosterSlotPlusOne = _companionRosterSlotPlusOne[companionSlot];
+                _companionCumulative[rosterSlotPlusOne] += (uint)total;
+                _companionSerial[rosterSlotPlusOne]++;
                 return;
             }
 
