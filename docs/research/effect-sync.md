@@ -1204,3 +1204,86 @@ directly, the same way §6's damage-regression check did (`"the client's real he
 constant `ConsoleCommand.Effects.cs`'s own `me`/`self` resolution already uses). A successful
 live pass reads a HIGHER number after than before, bounded by the character's max HP (healing
 past full should clamp, not overflow — worth confirming as part of the same pass).
+
+## 11. Live 2026-09-03 00:37–00:58: all 12 kinds both directions, then a replay-on-arrival defect found and closed
+
+### 11.1 The three §10 kinds, live, both directions (§10.6 item 1 closed)
+
+Rig: `tools/demo.ps1 -Save 1`, host and client in end_m01aa, `applyeffect <kind>` with a blank
+target (= the nearest phantom, i.e. the peer's real body on the other instance).
+
+- **Host → client** (00:37–00:38): host ran `applyeffect heal`, `applyeffect temporaryhitpoints`,
+  `applyeffect confused`; client plugin logged `effect: applied kind 10 from peer 0x1 (duration
+  6000ms, magnitude 20)`, then kind 11, then kind 12.
+- **Client → host** (00:43–00:44, fresh session): the same three the other way; host plugin logged
+  kind 10, 11, 12 `from peer 0x2`.
+- Repeated 00:56 (the fix build, see 11.3): `[00:56:16.222] kind 10`, `[00:56:21.376] kind 11`,
+  `[00:56:26.485] kind 12` on the client; `[00:56:31.737] kind 10` on the host.
+
+So every kind the mod forwards (12/12) has now been observed landing on the peer's real body in
+both directions. Heal's HP rise was not read with `sethp.ps1` this pass (the confused stagger and
+the floaty text on the receiving screen were the visible evidence); §10.7's HP read stays a
+worthwhile follow-up but the constructor path is no longer in question.
+
+### 11.2 DEFECT: the IN ring was replayed onto the fresh character at every module arrival
+
+Found while warping after the smoke test. The old `PeerEffectController.Invalidate()` (called on
+every world-epoch change from `PluginHost.SessionLifecycle`) did `Array.Clear(_appliedSerial)`,
+but nothing clears the shared block's IN ring — the agent's `TryWritePeerEffectIn` is round-robin
+and an entry stays readable until its slot is reused. So on arrival in each new module
+`ApplyIncoming` saw every slot as "serial != 0 and != applied" and re-ran the whole ring:
+
+```
+client  [00:48:02.359] effect: applied kind 10/11/12 from peer 0x1   ← arrival in tar_m10aa
+client  [00:48:36.859] effect: applied kind 10/11/12 from peer 0x1   ← arrival back in end_m01aa
+host    [00:48:35.653] effect: applied kind 11, 12, 10, 10 from peer 0x2 (+ kind 10 at 35.654)
+```
+
+Minutes-old heals, a temporary-hp buff and a 6 s *confused* re-applied to a character that had
+just loaded, once per transition, forever. In a real game that is a stagger on every door after
+someone was ever confused near you.
+
+A second, latent defect in the same latch: it compared the SERIAL only. Serials are per-sender
+counters (`++_peerEffectSequence` in `CoopClient.Effects.cs` / `CoopHost.Effects.cs`), so with
+three players slot *i* can legitimately hold peer A's #5 and later peer B's #5, and the old
+latch would have swallowed the second.
+
+### 11.3 Fix — adopt at the edge, key by (origin, serial); verified 2/2 arrivals clean
+
+`PeerEffectReplayRule` (new, pure, `tests/.../PeerEffectReplayRuleTests.cs`, 5 tests):
+
+- `Key(origin, serial)` = `origin << 32 | serial`; the per-slot latch is now a `ulong[] _appliedKey`.
+- `Adopt(origin, serial)`: what the latch becomes at a world edge — whatever the slot holds. It
+  was captured for the world being torn down; it is marked applied without being run. Only an
+  entry written AFTER the edge is new.
+- `IsNew(latch, origin, serial)`: `serial != 0 && Key != latch`.
+
+`Invalidate()` now walks `block.GetPeerEffectIn(i)` and adopts each slot instead of clearing.
+
+Live 00:56–00:58 (fix build in both installs, byte-identical): three effects host→client and one
+client→host at 00:56:16–00:56:31, then host `warp tar_m10aa` (client epoch edges 00:56:47 and
+00:56:57, arrival with `party count` untouched) and host `warp end_m01aa` (edge 00:57:33). **No
+`effect: applied` line on either side after 00:56:31** — where the previous build logged three
+on each client arrival and five on the host's.
+
+### 11.4 One-off client crash: a heal on a phantom drew a floaty for a node the phantom does not have (1/4, staging verb only)
+
+00:38:44, the client (post-plugin-route-rejoin, after two warps, having just received the three
+effects above) ran `applyeffect heal` on the nearest phantom and died. Persisted crash record
+(`tools/crashbin.ps1 -GameDir 'D:\Games\swkotor-gog-p2'`): `access violation at 0x688F54`.
+
+Symbolicated chain: `CSWSEffectListHandler::OnApplyHeal` (0x4E0750, return 0x4E08FB) →
+`CClientExoApp::AddFloatyText` (0x5EDEA0) → `CSWGuiMainInterface::AddFloatyText` (0x68B7C0,
+return 0x68B82B) → `CSWGuiFloatyText::CreateEntry` (0x688E10), which does
+`edi = [vtbl+0x98](0xff, 1)` on the healed object's client object (a node lookup for where to
+hang the floaty) and then `mov edx,[edi]` with edi = NULL. `OnApplyHeal` draws the floaty when the
+healed object is `CClientExoApp::GetLastTarget` (0x5EDD80) or has a `CSWParty::GetIndex`
+(0x6349C0) != -1 — so this is the engine trying to put a "+N" over a phantom whose client-side
+model has no head node to anchor to.
+
+Not reproduced: the same step ran clean in a fresh session, post-rejoin, and post-rejoin plus
+two warps (3/3 after). The receive side of the sync never targets a phantom (`ApplyIncoming`
+applies to the local player only), so this is reachable only through the staging verb, or by an
+engine heal landing on a phantom that is the local last-target. Left open as a staging hazard;
+if it recurs the cheap guard is to refuse `applyeffect heal` on a phantom whose model lacks the
+node (or to apply the staging heal with the floaty suppressed).

@@ -32,19 +32,36 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
     /// with one shared counter, not per-slot.</summary>
     private uint _publishedSequence;
 
-    /// <summary>Highest serial applied per IN ring slot, so a re-read of the same entry
-    /// (nothing new written yet) is never replayed twice.</summary>
-    private readonly uint[] _appliedSerial = new uint[SharedBlock.PeerEffectCapacity];
+    /// <summary>The (origin, serial) key last applied per IN ring slot
+    /// (<see cref="PeerEffectReplayRule.Key"/>), so a re-read of the same entry (nothing new
+    /// written yet) is never replayed twice. Keyed on the ORIGIN too: serials are per-sender
+    /// counters, so with three players slot <c>i</c> can legitimately hold peer A's #5 and
+    /// later peer B's #5, and a serial-only latch would swallow the second.</summary>
+    private readonly ulong[] _appliedKey = new ulong[SharedBlock.PeerEffectCapacity];
 
     private int _logged;
 
-    /// <summary>A module change reassigns every object id, so a remembered capture or apply
-    /// watermark would name a different creature (or replay stale state onto a fresh one).</summary>
+    /// <summary>A module change reassigns every object id, so a remembered capture watermark
+    /// would name a different creature.
+    ///
+    /// ⚠ THE APPLY LATCH IS ADOPTED, NOT CLEARED. Live 2026-09-03 00:48 (effect-sync.md): this
+    /// used to <c>Array.Clear</c> the applied serials at every world edge, and the IN ring the
+    /// agent writes is not cleared by anything — so on arrival in EVERY new module the fresh
+    /// character was handed the whole ring again: the client re-ran a heal, a temporary-hp
+    /// buff and a 6 s <em>confused</em> from a peer's minutes-old smoke test twice (once per
+    /// warp), and the host replayed five. Whatever the ring holds at the edge was captured for
+    /// the world just torn down; <see cref="PeerEffectReplayRule.Adopt"/> marks it applied
+    /// without running it, and only an entry written AFTER the edge is new.</summary>
     public void Invalidate()
     {
         PhantomEffectHook.Invalidate();
         _publishedSequence = 0;
-        Array.Clear(_appliedSerial);
+
+        for (int i = 0; i < SharedBlock.PeerEffectCapacity; i++)
+        {
+            (uint originPeerId, _, _, _, uint serial) = block.GetPeerEffectIn(i);
+            _appliedKey[i] = PeerEffectReplayRule.Adopt(originPeerId, serial);
+        }
 
         for (int i = 0; i < SharedBlock.PeerEffectCapacity; i++)
         {
@@ -112,12 +129,12 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
         {
             (uint originPeerId, uint kind, uint durationMs, uint magnitude, uint serial) = block.GetPeerEffectIn(i);
 
-            if (serial == 0 || serial == _appliedSerial[i])
+            if (!PeerEffectReplayRule.IsNew(_appliedKey[i], originPeerId, serial))
             {
                 continue;
             }
 
-            _appliedSerial[i] = serial;
+            _appliedKey[i] = PeerEffectReplayRule.Key(originPeerId, serial);
 
             if (originPeerId == 0)
             {

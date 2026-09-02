@@ -903,7 +903,7 @@ Menu-route rejoins do not arm it because the menu load rebuilds `CClientExoApp` 
 with it); the plugin route deliberately keeps the client half alive across the swap — which is
 what makes it fast, and what leaves the old world's member ids in the array.
 
-#### Fixed 2026-09-03 00:26 — bound the count by the resolvable run before the move; verified 1/1
+#### Fixed 2026-09-03 00:26 — bound the count by the resolvable run before the move; verified 2/2
 
 `PartyCountRestoreRule.SafeTravelCount(currentCount, resolvableMembers, capacity)` — the
 2026-08-29 rule's invariant enforced DOWNWARD: write `min(count, leading resolvable run)` when
@@ -938,3 +938,21 @@ stale across a plugin-route swap.
 Tests: `PartyCountRestoreRuleTests.ATravelBoundsTheCountByTheResolvableRun`,
 `AWhollyStaleArrayIsBoundedAtZero`, `ACountWithinTheRunIsNotWritten`,
 `NonsenseTravelInputsWriteNothing`.
+
+#### 2026-09-03 00:47 — second verification, 2/2
+
+Same recipe (wipe, plugin-route host reload, one WipeRecovery rejoin, host `warp tar_m10aa`):
+the client logged `[00:47:49] party count: bounded 2 -> 1 before the module move (entries
+0x80000129 0x80000127! ...)` — the same stale Trask id — and arrived. Two warps later
+(end_m01aa) it was still up. The bound has now fired 2/2 on the recipe that killed the client
+3/3 before it.
+
+#### Adjacent, NOT this crash: a floaty-text NULL on a phantom-targeted heal (2026-09-03 00:38, 1/4)
+
+Recorded here because it also ended the client mid-session and the first read of the crash
+record could be mistaken for a transition fault; it is not one. The client ran the staging verb
+`applyeffect heal` on the nearest phantom and `CSWGuiFloatyText::CreateEntry` (0x688E10)
+dereferenced the NULL node lookup (`[vtbl+0x98](0xff, 1)`) on the phantom's client object while
+drawing the "+N" floaty for `CSWSEffectListHandler::OnApplyHeal`; eip 0x688F54. Three further
+tries in every combination (fresh, post-rejoin, post-rejoin + warps) ran clean, and the sync's
+receive side never targets a phantom. Full chain in effect-sync.md §11.4.

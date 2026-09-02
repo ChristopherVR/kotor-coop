@@ -3238,3 +3238,38 @@ followed cleanly with no bound needed. 0 faults either side across the whole str
 - Loot-relay noise on rejoin: zero `not a materialised stand-in` refusals on the 00:30 rejoin
   (the pre-filter round had six in one second) — `MaterialisedLootFilterRule` verified as far as
   this recipe exercises it.
+
+## Effects both ways, the count bound fired a second time, and effects were replaying on every arrival (2026-09-03, 00:37–00:58)
+
+Rig `demo.ps1 -Save 1`; three sessions (00:37 fresh, 00:43 fresh, 00:56 fix build). Plugin
+build: 2b93f80 for the first two, the `PeerEffectReplayRule` build for the third.
+
+**Effect sync, the last three kinds, both directions — verified.** Host `applyeffect heal` /
+`temporaryhitpoints` / `confused` on the nearest phantom: client logged `effect: applied kind
+10`, `11`, `12 from peer 0x1` (00:37–00:38). Client → host the same at 00:43–00:44 and again at
+00:56:16–00:56:31. That is 12/12 kinds observed live in both directions (effect-sync.md §11.1).
+
+**The CSWParty count bound fired a second time and the client followed cleanly (2/2).**
+`[00:47:49] party count: bounded 2 -> 1 before the module move (entries 0x80000129 0x80000127!;
+DoPCAutosave walks the array without a null check)` on the post-rejoin client, host `warp
+tar_m10aa`, client arrived (transition-crashes.md updated to 2/2).
+
+**Defect found: peer effects replayed at every module arrival.** After the warps the client
+logged the whole IN ring again — `[00:48:02.359] kind 10/11/12 from peer 0x1` arriving in
+tar_m10aa and `[00:48:36.859]` the same three arriving back in end_m01aa — and the host
+re-applied five (`[00:48:35.653] kind 11, 12, 10, 10, 10 from peer 0x2`). Root cause: the
+controller cleared its applied-serial latch at each epoch change while the ring itself is never
+cleared. Fixed by adopting the ring at the edge and keying the latch by (origin, serial)
+(`PeerEffectReplayRule`, effect-sync.md §11.2–11.3).
+
+**Fix verified (00:56–00:58).** Four effects applied (three on the client, one on the host),
+host `warp tar_m10aa` then `warp end_m01aa`, client followed both (epoch edges 00:56:47,
+00:56:57, 00:57:33): **zero** `effect: applied` lines on either side after 00:56:31. Both
+processes alive at the end.
+
+**One-off client crash, 1/4, staging verb only.** 00:38:44, client `applyeffect heal` on the
+nearest phantom, post-rejoin + two warps: `CSWGuiFloatyText::CreateEntry` dereferenced the NULL
+node the phantom's client model returned for the "+N" floaty (chain from
+`CSWSEffectListHandler::OnApplyHeal` via `AddFloatyText`; eip 0x688F54). Not reproduced in three
+further tries; not reachable through the sync's receive side. Written up in effect-sync.md §11.4
+and a limitations row.
