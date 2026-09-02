@@ -310,6 +310,16 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             return;
         }
 
+        // ⚠ ATTRIBUTION (coop.ini damage_creator_attribution, docs/research/peer-damage-ledger.md
+        // §8). This ledger is keyed by ENEMY, merged across every contributing peer's rise
+        // before it ever reaches this instance (§3.1 "bank each peer's rise") — so there is no
+        // per-row peer identity left to pick from once more than one peer is connected. Correct
+        // (and unambiguous) for the two-player topology this codebase tests against: with
+        // exactly one remote peer, ITS phantom is the only body that could have dealt this. A
+        // 3+-peer session simply falls back to no attribution (0) rather than guess wrong.
+        // Computed once per pass, not per row: it does not vary within a pass.
+        uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? block.SoleRemotePhantomId() : 0;
+
         for (int i = 0; i < count; i++)
         {
             block.GetDamageOwed(i, out uint objectId, out uint owed);
@@ -378,7 +388,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             // itself is refused: the two failures are different and must not be conflated.
             RememberResolvable(objectId);
 
-            if (Odyssey.ApplyDamageEffect(objectId, amount, out int failure))
+            if (Odyssey.ApplyDamageEffect(objectId, amount, creatorId, out int failure))
             {
                 _owed.Commit(objectId, amount);
                 block.DamageOwedApplied += 1;

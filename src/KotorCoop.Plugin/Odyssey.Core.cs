@@ -16,6 +16,33 @@ internal static unsafe partial class Odyssey
     private const int StackPointerOffset = 0x1AC;
     private const int CallStackSizeOffset = 0x1C4;
 
+    /// <summary>
+    /// The VM argument STACK's own struct, embedded at <c>internalVm+StackPointerOffset</c>:
+    /// <c>+0x00</c> count (== <see cref="StackPointerOffset"/> itself) · <c>+0x08</c> capacity ·
+    /// <c>+0x0C</c> TAG array pointer (one byte per entry) · <c>+0x10</c> VALUE array pointer
+    /// (one dword per entry — an int/float/object bit pattern, or an engine-structure pointer)
+    /// · <c>+0x14</c> a "structure array allocated" flag that gates tags 0x10..0x19 only.
+    ///
+    /// VERIFIED by fresh disassembly of the shared grow/tag-push helper every
+    /// <c>StackPush*</c> wrapper calls (<c>0x005D15A0</c>) and of
+    /// <c>StackPushEngineStructure</c> (thunk <c>0x005D10B0</c> -&gt; body <c>0x005D19C0</c>):
+    /// the tag byte for an <c>effect</c> stack entry is <c>0x10</c>
+    /// (<see cref="EffectStackTag"/>), and the VALUE array slot for that entry holds a pointer
+    /// to a VM-owned <c>CGameEffect</c> copy — the SAME pointer <c>ExecuteCommandApplyEffectToObject</c>
+    /// (<c>0x0052E570</c>) reads back out via the symmetric <c>StackPopEngineStructure</c>
+    /// (thunk <c>0x005D10A0</c>) and hands to <c>CSWSObject::ApplyEffect</c> (<c>0x004D14F0</c>)
+    /// with no further cloning in between. See docs/research/peer-damage-ledger.md §8.
+    /// </summary>
+    private const int StackTagArrayOffset = 0x1B8;    // internalVm + this
+    private const int StackValueArrayOffset = 0x1BC;  // internalVm + this
+
+    /// <summary>The VM stack tag byte for an <c>effect</c> engine-structure entry — VERIFIED
+    /// (see <see cref="StackTagArrayOffset"/>'s remarks): <c>StackPushEngineStructure</c> is
+    /// called with its own internal "structure type" argument 0 for Effect, and adds the
+    /// stack's <c>0x10</c> tag-space base to it before pushing (<c>0x005D19EB</c>: <c>add ebx,
+    /// 0x10</c>) — 0x10 + 0 = 0x10.</summary>
+    private const byte EffectStackTag = 0x10;
+
     // CSWVirtualMachineCommands
     private const int CommandsTableOffset = 0x0C;
 

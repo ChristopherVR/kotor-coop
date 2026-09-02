@@ -679,6 +679,22 @@ pause_button_hook=1
 # its owner's damage report may be absorbed. Only read when local_combat=1.
 local_combat_range=20
 
+# Every forwarded-damage apply (a peer's hit landing on your enemy, an enemy's hit landing on
+# your phantom, damage taken by a companion released under companion_local_combat) is re-run
+# through the RECEIVING engine's own instant EffectDamage - but until now with no meaningful
+# creator, so that engine's own aggro/last-attacker bookkeeping saw nobody swing (or, worse,
+# whatever object the VM's script context happened to be pointed at - measured live as
+# unrelated ids 0x2C/0x20/0x7/0x109, never the real attacker). ON, each apply passes a real
+# creator id where one can be named: the peer's own phantom for a hit YOUR engine applies on
+# their behalf (owner-side enemy damage, and a companion's damage taken - both ambiguous with
+# more than one remote peer connected, so they fall back to no creator then), or the specific
+# attacker id for a hit landing on YOUR phantom (already tracked per-attacker since
+# local_combat_slots shipped). OFF by default - NEEDS-LIVE, see docs/research/peer-damage-
+# ledger.md §8 for the RE this rests on (which VM-stack entry gets poked, and why) and the
+# live-verification recipe (a mirrored enemy should visibly retarget onto the attacking peer's
+# phantom instead of staying locked on the host's own PC).
+damage_creator_attribution=0
+
 # Let ONE mirrored companion fight for real on a client, instead of being frame-by-frame
 # mirrored with its action queue wiped every pass (which is why only the host's own
 # companions could ever swing). Roadmap item 4 - see

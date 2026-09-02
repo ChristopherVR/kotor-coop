@@ -123,6 +123,15 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
             return;
         }
 
+        // ⚠ ATTRIBUTION (coop.ini damage_creator_attribution, docs/research/peer-damage-ledger.md
+        // §8). Same reasoning as PeerDamageController.ApplyOwed's own remarks: this table is
+        // merged across every contributing peer's rise per roster slot
+        // (CompanionDamageLedger.Merge drops the reporting peer id at that point, by design —
+        // see that class's own doc comment), so the only case this can name a real attacker is
+        // exactly one remote peer connected. Otherwise it falls back to no attribution (0),
+        // today's behaviour.
+        uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? block.SoleRemotePhantomId() : 0;
+
         for (int i = 0; i < count; i++)
         {
             block.GetCompanionDamageOwed(i, out uint rosterSlotPlusOne, out uint owed);
@@ -156,7 +165,7 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
                 continue;
             }
 
-            if (Odyssey.ApplyDamageEffect(objectId, amount, out int failure))
+            if (Odyssey.ApplyDamageEffect(objectId, amount, creatorId, out int failure))
             {
                 _owed.Commit(rosterSlotPlusOne, amount);
                 block.CompanionDamageApplied += 1;

@@ -41,8 +41,11 @@ namespace KotorCoop.Plugin;
 /// data, not for wire compatibility.
 ///
 /// Aggro/creator attribution (peer-damage-ledger.md §6 item 4, "does the engine see WHO hit
-/// this player") is NOT implemented here — investigated and found to need fresh RE this pass
-/// could not do statically. See the remarks on <see cref="RunPerAttackerPass"/>'s apply step.
+/// this player") is IMPLEMENTED behind coop.ini <c>damage_creator_attribution</c> (default OFF,
+/// NEEDS-LIVE) — see <see cref="Odyssey.DamageCreatorAttributionEnabled"/>,
+/// <see cref="Odyssey.TrySetEffectCreator"/> and docs/research/peer-damage-ledger.md §8 for the
+/// RE this rests on and the remarks on <see cref="RunPerAttackerPass"/>'s apply step for which
+/// id each pass passes.
 /// </summary>
 internal sealed class IncomingDamageController(SharedBlockView block)
 {
@@ -284,19 +287,19 @@ internal sealed class IncomingDamageController(SharedBlockView block)
         int amount = (int)Math.Min(applyTotal, MaxPerApplication);
         short before = Odyssey.GetCurrentHitPoints(player);
 
-        // ⚠ AGGRO/CREATOR ATTRIBUTION, INVESTIGATED AND SKIPPED THIS PASS. ApplyDamageEffect
-        // dispatches EffectDamage/ApplyEffectToObject through the VM's own script-command
-        // routines (Odyssey.ApplyDamageEffectCore): the constructed CGameEffect lives on the
-        // VM's argument stack between the two calls, and nothing in this codebase has a
-        // verified layout for a VM stack ENTRY (its type tag vs. its engine-structure pointer)
-        // to safely read that pointer back out and poke its creator_id (CGameEffect+0x18,
-        // PhantomHitHook.EffectCreator) to the local resolution of `attackerId` before
-        // ApplyEffectToObject consumes it — unlike PhantomHitHook's OWN read of that same field,
-        // which only ever reads an effect the ENGINE already built and handed to the hook.
-        // Doing this would need fresh disassembly of EffectDamage's return-to-stack convention
-        // and ApplyEffectToObject's argument-popping order (docs/re/ has neither today) before it
-        // could be attempted live. See docs/research/peer-damage-ledger.md §7's NEEDS-LIVE list.
-        if (Odyssey.ApplyDamageEffect(playerId, amount, out int failure))
+        // ⚠ AGGRO/CREATOR ATTRIBUTION (coop.ini damage_creator_attribution,
+        // docs/research/peer-damage-ledger.md §8). This pass already resolves a real,
+        // per-attacker creature id (unlike the legacy scalar pass's single "last attacker"),
+        // which is exactly the id worth naming — but the one capped apply below is for the
+        // SUM across every candidate this pass (never per attacker, see the remarks above), so
+        // there is only one creator slot to fill for potentially several attackers' combined
+        // delta. `lastApplyAttacker` (the same id the log line already quotes) is used: set,
+        // and nonzero, whenever `applyTotal > 0` reached this point, because every entry that
+        // contributes to it comes from `_owedAttackers`, which `ReadOwedAttackers` never
+        // populates with a zero id.
+        uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? lastApplyAttacker : 0;
+
+        if (Odyssey.ApplyDamageEffect(playerId, amount, creatorId, out int failure))
         {
             int remaining = amount;
             for (int i = 0; i < PhantomAttackerAppliedLedger.Capacity && remaining > 0; i++)
@@ -450,7 +453,14 @@ internal sealed class IncomingDamageController(SharedBlockView block)
         // blow actually did; the verdict itself comes off the flags, not this number.
         short before = Odyssey.GetCurrentHitPoints(player);
 
-        if (Odyssey.ApplyDamageEffect(playerId, amount, out int failure))
+        // ⚠ ATTRIBUTION (coop.ini damage_creator_attribution, docs/research/peer-damage-ledger.md
+        // §8). The legacy wire shape carries exactly one attacker id for the whole window
+        // (block.IncomingDamageAttacker — the same one this method's own log line below already
+        // quotes), which may be 0 before the first report resolves. 0 here reproduces today's
+        // behaviour exactly.
+        uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? block.IncomingDamageAttacker : 0;
+
+        if (Odyssey.ApplyDamageEffect(playerId, amount, creatorId, out int failure))
         {
             block.IncomingDamageApplied = applied + (uint)amount;
 

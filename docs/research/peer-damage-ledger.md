@@ -500,3 +500,265 @@ game this pass — everything above is unit-tested arithmetic and codec round-tr
 5. A single `combat: took N ... (attacker 0x<id>)` line naming ONLY the locally-fought
    hostile's id (double-count) or the absorbed line's total silently swallowing the second
    hostile's contribution (drop) are both regressions of the bug this section fixes.
+
+## 8. 2026-09-02: attacker attribution for forwarded damage — the RE, the design, and why no protocol change was needed
+
+§6 item 4 and §7's own NEEDS-LIVE item 5 named the same open question: every forwarded-damage
+apply (`Odyssey.ApplyDamageEffectCore`, the one native path `PeerDamageController`,
+`IncomingDamageController` and `CompanionDamageController` all call through) re-runs the
+RECEIVING engine's own `EffectDamage`/`ApplyEffectToObject` VM routines, but with no meaningful
+creator — so that engine's own "who hit me" bookkeeping sees nobody, or (measured live,
+`shared-state-audit.md` line ~4531) an arbitrary stale id left over from whatever script last
+touched the VM (`0x2C`, `0x20`, `0x7`, `0x109` — never the real attacker). §7 flagged this as
+needing fresh disassembly of `EffectDamage`'s return-to-stack convention and
+`ApplyEffectToObject`'s argument-popping order before it could be attempted at all. This section
+is that disassembly, done statically against `tools/kotor1_0_3.db`'s GOG retail 1.0.3 image with
+`tools/disasm.py`/`tools/xrefs.py`, plus a live SQL query against the symbol DB
+(`sqlite3 tools/kotor1_0_3.db`) for the `GetLast*` NWScript routine family. **Nothing in this
+section was measured in a running game.** Tag key unchanged from the rest of this document.
+
+### 8.1 The VM argument stack's real layout — VERIFIED
+
+`Odyssey.ApplyDamageEffectCore` already pushes `EffectDamage`'s three int args with
+`StackPushInteger`/`StackPushFloat`/`StackPushObject` (`0x005D1010`/`0x005D1030`/`0x005D10D0`).
+Every one of those is a 16-byte-aligned adjustor thunk (`mov ecx,[ecx]; jmp <body>` — the same
+"vtable slot, not a raw address" shape `docs/re/` already documents for animation dispatch) that
+resolves to a body sharing ONE helper, disassembled in full this pass:
+
+```
+0x005D15A0  CVirtualMachineStack::PushDefault(this, tag)   [determined by structure, not named in the DB]
+```
+
+Called as `push <tag>; mov ecx,<stack struct>; call 0x5D15A0`, where `<stack struct>` is
+`internalVm + 0x1AC` — the SAME address `StackPointerOffset` already reads as "the stack
+pointer" (it IS the struct's own leading `count` field). Full struct, VERIFIED by tracing every
+read/write in `0x005D15A0` and its callers:
+
+```
+internalVm + 0x1AC (struct base, "the VM argument stack")
+  +0x00  count        int32   (== StackPointerOffset itself)
+  +0x08  capacity      int32   (grows by +0x100 entries when count == capacity)
+  +0x0C  tag array     byte*   (one byte per entry — the type tag: 3 int, 4 float, 5 string,
+                                 6 object, 0x10..0x19 engine-structure family)
+  +0x10  value array   dword*  (one dword per entry — the int/float bit pattern, object id, OR
+                                 an engine-structure pointer, all stored in the SAME array)
+  +0x14  struct-array-allocated flag (gates tags 0x10..0x19 only; unrelated to where the
+                                 pointer itself lives, which is still the +0x10 array)
+```
+
+`0x005D15A0` grows `+0x0C`/`+0x10` together (two `operator new` calls, sizes `newCapacity` and
+`newCapacity*4` respectively — `0x005D15B8`/`0x005D15C3`), writes the tag byte unconditionally at
+`tagArray[count]` (`0x005D1634`), then for tag 3/4/6 writes a DEFAULT value (0, 0.0,
+`OBJECT_INVALID`) into `valueArray[count]` and increments `count` — the wrapper
+(`StackPushInteger` etc.) then overwrites that default with the real value one instruction later,
+exactly matching what `ApplyDamageEffectCore` already does. For tag 0x10..0x19 the default write
+is `valueArray[count] = 0` (a null engine-structure pointer), gated on `+0x14` being allocated —
+this is `StackPushEngineStructure`'s own entry point into the shared helper, not a separate one.
+
+### 8.2 How the effect itself gets onto the stack — VERIFIED
+
+`ExecuteCommandEffectDamage` (`0x00531AE0`, the same handler `ApplyDamageEffectCore` already
+calls) builds its `CGameEffect` on the HEAP (`operator_new(0x8C)` — `0x00531BEE` — then
+`CGameEffect::Constructor(1)` — `0x00503E40`, called at `0x00531C0A`), zeroes all 15 damage
+integer slots to `-1` via `CGameEffect::SetInteger(effect, i, -1)` (`0x005036A0`, called in a
+loop `0x00531C46`-`C54` — this is the source of "unset slots read -1" §1.1 already documents),
+then writes the actual amount **into slot 14** (`SetInteger(effect, 14, nDamageAmount)` —
+`0x00531C88`-`91`, independently reconfirming §1.1's "slot 14 IS the number the engine applies").
+
+Only then does it call `StackPushEngineStructure(internalVm, structType=0, effect)` — the site is
+`0x00531D01`-`0A`, thunk `0x005D10B0` → body `0x005D19C0`. That body:
+
+1. Reads the active command implementer (`internalVm+0x3D4` — the SAME
+   `CommandImplementerOffset` `Odyssey.GetImplementer` already uses); refuses (returns 0, no
+   throw) if none.
+2. Calls `implementer_vtable[0x20](implementer, structType, effect)`. Its return value (`ebp`) is
+   a DIFFERENT pointer from `effect` — this is a clone/registration call, not a passthrough.
+3. Pushes tag `0x10 + structType` (`0x005D19EB`: `add ebx, 0x10` — structType 0 for Effect, so
+   tag `0x10`, i.e. `EffectStackTag`) via the shared helper from §8.1.
+4. Overwrites `valueArray[count-1] = ebp` (`0x005D1A01`) — **the cloned pointer, not the original
+   heap `effect`.**
+
+Back in `ExecuteCommandEffectDamage`, immediately after this push succeeds
+(`0x00531D2A`-`37`): `call 0x503590(effect)` then `call 0x6FA390(effect)` — a plain MSVC
+`delete effect;` (destructor, then `operator delete`) on the ORIGINAL heap object. **The
+temporary is destroyed the instant it is pushed — the VM stack's own clone (`ebp` above) is
+the only surviving copy from this point on.**
+
+`ExecuteCommandApplyEffectToObject` (`0x0052E570`) is symmetric: it pops the effect back with
+`StackPopEngineStructure` (thunk `0x005D10A0` → body `0x005D2630`, called at `0x0052E5A6`
+alongside the `nDurationType`/target/duration pops using the ordinary `StackPop*` family) into a
+local (`esi`), then — after resolving the target object id and running the (feedback-only,
+irrelevant here) creator/area check that reads `esi+0x18` — calls
+**`CSWSObject::ApplyEffect(targetPtr, esi)` at `0x0052E6D6` → `0x004D14F0`**, the SAME address
+`death-handling.md` and `spawn.md` already document for the non-VM effect-apply path. No further
+clone happens between the pop and this call. **The pointer `StackPopEngineStructure` hands back
+is the exact same VM-owned clone `StackPushEngineStructure` created — never the original,
+already-destroyed heap object, and never re-cloned before use.**
+
+### 8.3 The write, and why it must be OURS, not the engine's own attempt — VERIFIED
+
+`CGameEffect::SetCreator(uint creatorId)` — `0x00503A00` — is already independently documented
+(`combat-participation.md` §8, `effect-sync.md` §2.3) and re-disassembled here to confirm the
+write order: `mov [edi+0x18], ebx` at `0x00503A1B` happens BEFORE the function's own (best-effort,
+irrelevant to the write itself) id-to-pointer resolve-and-cache logic that follows it. So calling
+this on the VM's own cloned effect pointer between §8.2's push and pop, with our own resolved
+creator id, is a single, unconditional, already-independently-verified field write — no new
+engine surface, no guesswork about `CGameEffect`'s layout.
+
+`ExecuteCommandEffectDamage` ALREADY calls this same function internally, conditionally
+(`0x00531CFC`, gated by `0x00531CC0`-`E1`: resolve some object via `GetObjectArray`
+(`0x004AED70`, per `spawn.md`) + `0x4D8230`, compare a returned byte against global `0x74666C`,
+and require a non-null "current script" pointer). This is the VM's own OBJECT_SELF-of-the-
+currently-running-script convention — and it is exactly why letting the engine's own logic set
+creator is unsafe for a call our C# code dispatches directly, outside any real running NWScript:
+there is no "currently running script" in the sense that gate means, so whatever it resolves to
+is leftover VM state, not our caller's intended attacker. This is the SAME empirical finding
+`shared-state-audit.md` already recorded (creator ids `0x2C`/`0x20`/`0x7`/`0x109`, never the real
+attacker) — that measurement is now explained by an actual mechanism rather than left as an
+observed oddity. **`TrySetEffectCreator` (`Odyssey.Health.cs`) therefore always OVERWRITES
+whatever the internal call already wrote**, immediately afterward, with the caller's own resolved
+id — it does not try to make the internal call behave differently.
+
+### 8.4 The approach chosen, and why not (a) or (c)
+
+**Chosen: a refined (b).** Reuse `ExecuteCommandEffectDamage` exactly as `ApplyDamageEffectCore`
+already does (clamping, slot population, the duration-power log2 computation, all of it, for
+free), then patch `creator_id` on the resulting VM-stack clone via the now-fully-mapped layout
+from §8.1/§8.2, using the already-verified `SetCreator` from §8.3 — a single well-understood
+native call at a well-defined point, additive to the existing, shipped, live-verified damage
+path (§6 item 1's "materialised loot" / "applied N of a peer's damage" measurements).
+
+**Not (a).** Constructing a `CGameEffect` directly (bypassing the VM stack) would mean
+re-implementing `ExecuteCommandEffectDamage`'s own field population by hand — the 15-slot `-1`
+initialization loop, the duration-power `log2`/`frndint` computation (`0x00531C56`-`73`), the
+`0x8327E0` global it writes through, whatever the `0x15`-argument call at `0x00531C1E` does — all
+to save exactly one function call this refined version of (b) already reuses. Nothing about (a)
+is safer; it is strictly more surface for the same result.
+
+**Not (c).** There is no `SetEffectCreator`-and-apply combined helper — `SetCreator` (§8.3) IS
+the primitive (b) already uses; a hunt for a separate "helper that also applies" would have
+turned up the same function.
+
+### 8.5 What the engine DOES with creator on damage — VERIFIED (the write), INFERRED (the AI consequence)
+
+**VERIFIED, fresh disassembly this pass:** `CSWSEffectListHandler::OnApplyDamage` itself — the
+SAME choke point §1/§4 of `combat-participation.md` already fully decoded — reads
+`effect->creator_id` (`edi+0x18`, `0x004DFBA5`) and calls
+**`CSWSObject::SetLastHostileActor(target, creator_id, 0)`** (`0x004CC0C0`, called at
+`0x004DFCFE`-`01`) on every damage application that reaches that far, writing `target+0x158`.
+This is the SAME field `combat-participation.md` §2.5 already names as one of `PacifyCreature`'s
+release tests (`+0x158` — matched against the releasing creature's id, cleared to
+`OBJECT_INVALID` on release).
+
+**VERIFIED, fresh SQL query against `tools/kotor1_0_3.db`'s `functions` table** (the
+`ExecuteCommandGetLast*` family, `CSWVirtualMachineCommands`) plus disassembly of three of them:
+the NWScript function **`GetLastHostileActor()`** (`ExecuteCommandGetLastHostileActor`,
+`0x0053AF40`) reads the identical field — `mov esi, [edi+0x158]` at `0x0053AFC3` (guarded by a
+plot check at `+0xF8` first, same pattern `OnApplyDamage` itself uses). **This closes the loop:
+our `SetCreator` write reaches a real, script-visible "who last attacked me" surface, through the
+exact same field the engine's own damage handler populates for a real swing.**
+
+`GetLastAttacker()` and `GetLastDamager()` read ADJACENT but DIFFERENT fields — `target+0x15C`
+and `target+0x160` respectively (`0x0053A8D5`, `0x0053AD7E`) — and this pass found no writer for
+either one anywhere in the disassembly touched so far (not `OnApplyDamage`, not
+`ResolvePostMeleeDamage`); they may be written from a code path this investigation did not walk,
+or (per standard Aurora-engine convention) exist for combat sub-events this build's K1 content
+does not exercise. **`GetLastHostileActor()` is the one this feature's write demonstrably feeds
+— the other two are out of scope for this pass, named here only so a future investigation does
+not re-derive the offsets.**
+
+**INFERRED, not verified this pass:** whether K1's own stock AI (heartbeat / `OnDamaged` event
+scripts — `.ncs` bytecode, not disassembled here) actually CALLS `GetLastHostileActor()` to pick
+or change a combat target, and under what conditions (idle → engaged only, or an override of an
+already-engaged target too). The already-VERIFIED native retargeting logic
+(`CreateNewAttackActions`/`EndCombatRound`, fully decoded in `combat-participation.md` §1) does
+**not** itself read `+0x158` — the field is native-write, script-read only, as far as this
+investigation walked. So the mechanism this section ships is proven to reach the standard
+BioWare "who hit me" script surface; whether K1's shipped AI scripts act on it is exactly what
+§8.6's live recipe measures, and is why the feature ships default OFF, tagged NEEDS-LIVE, rather
+than assumed to work end to end.
+
+### 8.6 The design actually shipped
+
+Behind a NEW plugin-only coop.ini key, **`damage_creator_attribution`** (default **OFF**,
+NEEDS-LIVE): `Odyssey.DamageCreatorAttributionEnabled`, assigned once in
+`PluginHost.Startup.cs` alongside a startup log line naming which path is active for the whole
+session (not per controller — one flag, one line). `Odyssey.ApplyDamageEffect` gained a
+`uint creatorId` overload; the existing zero-arg-creator overload is unchanged (still used by
+`KillCreature`, `PhantomController.Drive.cs`'s test-hit staging, and the dev `hurt`/`down`
+cheats in `CheatController.Downed.cs` — none of those three forward a peer's damage, so none of
+them changed). `ApplyDamageEffectCore` calls `TrySetEffectCreator` (§8.1-8.3's mechanism) between
+`EffectDamage` and `ApplyEffectToObject` only when `creatorId != 0`; every refusal path (empty
+stack, wrong tag, null pointer — none observed in the disassembly, all defensive) is logged ONCE
+per session and the damage still applies with no creator, exactly as if the key were off —
+attribution never blocks the underlying hit.
+
+**No SharedBlock field, no protocol change, no version bump.** The task that opened this
+investigation provisioned block space (`0x4AC0..0x4B00`) and a `Version` 63→64 bump in case one
+was needed; it was not. Every id each controller passes is already reachable from data already
+in the block:
+
+| Controller | Creator passed | Why this id, and its limit |
+| --- | --- | --- |
+| `IncomingDamageController` — `RunPerAttackerPass` | the SAME `lastApplyAttacker` id its own log line already quotes — a real, specific enemy/attacker creature id, already per-attacker since §7 shipped | Clean: this pass's per-attacker table (`PhantomAttackerAppliedLedger`) keeps DISTINCT attacker ids because there is only ONE victim (the local player); nothing is merged away. The one capped apply call is for the SUM of every apply-candidate this pass, so only one creator slot exists for potentially several attackers' combined delta — the last one is used, same as the existing log line already does. |
+| `IncomingDamageController` — `RunLegacyScalarPass` | `block.IncomingDamageAttacker` (the pre-§7 single "last attacker" id) | The wire shape this fallback reads was never per-attacker; this is the best it can do, and matches the log line it already prints. |
+| `PeerDamageController` — `ApplyOwed` | `SharedBlockView.SoleRemotePhantomId()` — the sole occupied phantom-id slot, 0 otherwise | The owed-per-enemy table is MERGED across every contributing peer's rise before this instance ever sees a row (§3.1 "bank each peer's rise per enemy") — peer identity is deliberately discarded at that step, by design, for reasons unrelated to this feature. With exactly one remote peer this is unambiguous (their phantom is the only body that could have dealt it); a 3+-peer session falls back to 0 rather than guess which peer's phantom actually swung. |
+| `CompanionDamageController` — `ApplyOwed` | `SharedBlockView.SoleRemotePhantomId()`, same helper | `CompanionDamageLedger.Merge` drops the reporting peer id at the identical merge step, for the identical reason (a companion's owed total is per ROSTER SLOT, not per (peer, slot)) — same limitation, same fallback. |
+
+`SharedBlockView.SoleRemotePhantomId()` is a new METHOD, not a new FIELD — it reads the existing
+`OffsetPhantomIdTable` (`0x1F80..`, `SharedBlock.SlotCapacity` entries) that `PhantomController`
+already publishes every pass for map markers and drive bookkeeping, and returns the one occupied
+slot's id or 0. Nothing new crosses the wire; nothing new is written into the block.
+
+### 8.7 Live-verification recipe (verbatim, once a rig is available)
+
+1. `damage_creator_attribution=1` in `coop.ini` on BOTH instances (the host applies with a
+   creator; the write only matters on whichever instance's engine actually runs
+   `EffectDamage`/`ApplyEffectToObject` for the hit in question — set it on both to cover every
+   direction while testing).
+2. Load a 2-instance rig (host + one client — the topology `SoleRemotePhantomId()` is
+   unambiguous for) on `tar_m10aa` (§6 item 1's own module, a Black Vulkar reachable at once).
+   Both instances' `kotorcoop-plugin.log` should show `combat: damage_creator_attribution=ON -
+   ...` once, near startup.
+3. Client attacks the Vulkar from a distance while the HOST's PC is also nearby, already fighting
+   it (or about to). Expect the HOST's log to show its ordinary `combat: applied N of a peer's
+   damage to 0x<id> (owed N)` lines (§6 item 1, unchanged) — this is `PeerDamageController`
+   passing the client's phantom id as creator now.
+4. **The actual test:** watch the Vulkar ON THE HOST'S OWN SCREEN. Prediction: within roughly one
+   combat round of the client's damage landing, the Vulkar turns to face and swing at the
+   CLIENT'S PHANTOM instead of staying locked on the host's own PC — the visible consequence of
+   `GetLastHostileActor()` (if K1's stock AI scripts consult it, per §8.5's INFERRED gap) now
+   resolving to a real, targetable, resolvable creature (the phantom) instead of nobody or a
+   stale id. Compare against `damage_creator_attribution=0`: the same fight, same positions,
+   where the Vulkar's target choice should show no such pull toward the phantom.
+5. Cross-check with the console: `GetLastHostileActor` has no console verb today, but the
+   Vulkar's `round+0x9CC` current-attack-target (already read by existing dev tooling per
+   `combat-participation.md` §8) turning to the phantom's id is the same observation from a
+   different angle.
+6. No regression check: with the key OFF (default), confirm the existing §6/§7 log lines and
+   behaviour are byte-for-byte unchanged — `TrySetEffectCreator` is never called at all when
+   `creatorId == 0`, so this should require no explanation beyond "the code path is not entered."
+
+### 8.8 NEEDS-LIVE checklist
+
+1. **§8.5's core question**: does a mirrored enemy visibly retarget onto the attacking peer's
+   phantom when `damage_creator_attribution=1`, per §8.7's recipe? This is the one measurement
+   that turns "the write reaches a real script surface" into "the feature does what it is for."
+2. **The stack-poke itself, live.** Nothing in §8.1-8.3 has been run against the real game;
+   confirm `TrySetEffectCreator` never logs a refusal in ordinary play (an unexpected tag or a
+   null pointer would mean this pass's disassembly missed a code path a live run would expose
+   immediately).
+3. **The companion and legacy-scalar paths specifically** — §8.7's recipe exercises
+   `PeerDamageController` only; `CompanionDamageController` (companion released under
+   `companion_local_combat`) and `IncomingDamageController`'s `RunPerAttackerPass`/
+   `RunLegacyScalarPass` creator passes are unit-tested arithmetic only (the new
+   `Odyssey.ApplyDamageEffect(uint,int,uint,out int)` overload has no plugin-side test of its own
+   — the whole VM/native surface it drives is compile-included but engine-dependent, same as
+   every other `Odyssey.*` VM call) and need their own live pass.
+4. **A 3+-peer session** falling back to 0 (no attribution) rather than guessing — unexercised
+   even in the loopback sense, since nothing in this codebase's test rig runs three real peers
+   against one enemy today.
+5. **Whether `GetLastAttacker()`/`GetLastDamager()` (target+0x15C/+0x160, §8.5) matter for
+   anything K1's own content does** — out of scope for this feature (only `+0x158` is written),
+   named so a later investigation into a script that reads one of those two does not start from
+   zero.

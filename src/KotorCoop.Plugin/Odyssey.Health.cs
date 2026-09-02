@@ -10,6 +10,35 @@ internal static unsafe partial class Odyssey
         (delegate* unmanaged[Thiscall]<nint, int, void>)0x004CC280;
 
     /// <summary>
+    /// <c>CGameEffect::SetCreator(uint creatorId)</c> — writes <c>CGameEffect+0x18</c>
+    /// (<c>creator_id</c>) unconditionally, before anything else in the function runs.
+    /// VERIFIED by fresh disassembly: <c>0x00503A1B</c> is <c>mov [edi+0x18], ebx</c> with
+    /// <c>edi</c> = the effect and <c>ebx</c> = the pushed argument, ahead of the (best-effort,
+    /// irrelevant to us) id-to-pointer cache write that follows. Independently reconfirmed as
+    /// the SAME function <c>ExecuteCommandEffectDamage</c> itself calls internally
+    /// (<c>0x00531CFC</c>) when a real script's OBJECT_SELF is available — see
+    /// <see cref="TrySetEffectCreator"/>'s remarks on why that internal call is not relied on
+    /// here. Already independently verified (address and field) in
+    /// docs/research/combat-participation.md §8 and docs/research/effect-sync.md §2.3.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> SetEffectCreatorFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00503A00;
+
+    /// <summary>coop.ini <c>damage_creator_attribution</c> (default OFF; assigned once from
+    /// <c>PluginHost.Startup.cs</c>, same pattern as <see cref="DialogueJoinTeleportEnabled"/>).
+    /// When ON, every forwarded-damage apply that can name
+    /// a real creator passes it through so the RECEIVING engine's own aggro/last-attacker
+    /// bookkeeping sees who really swung — see docs/research/peer-damage-ledger.md §8 for the
+    /// RE this rests on and which caller passes what. NEEDS-LIVE: nothing about this flag has
+    /// been run against a live game.</summary>
+    public static bool DamageCreatorAttributionEnabled;
+
+    /// <summary>Set (and logged) the first time <see cref="TrySetEffectCreator"/> cannot find a
+    /// usable effect pointer on the VM stack — see that method's remarks. One line is the whole
+    /// story; a flood would only restate it every pass of every fight.</summary>
+    private static bool _creatorAttributionFailureLogged;
+
+    /// <summary>
     /// Current hit points, SIGNED.
     ///
     /// ⚠ This used to read a ushort and that was wrong in exactly the state that matters
@@ -218,6 +247,16 @@ internal static unsafe partial class Odyssey
 
     /// <summary>
     /// Applies a plain instant damage effect to an object through the engine's own VM
+    /// routines — the same pipeline a real swing uses. No creator attribution; equivalent to
+    /// <see cref="ApplyDamageEffect(uint,int,uint,out int)"/> with <c>creatorId</c> 0.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ApplyDamageEffect(uint objectId, int amount, out int failure) =>
+        ApplyDamageEffect(objectId, amount, creatorId: 0, out failure);
+
+    /// <summary>
+    /// Applies a plain instant damage effect to an object through the engine's own VM
     /// routines — the same pipeline a real swing uses.
     ///
     /// This is how a hit that landed on a peer's phantom in THEIR game becomes real damage
@@ -226,9 +265,17 @@ internal static unsafe partial class Odyssey
     /// number, and — at zero — enters the engine's own party temp-death, with no derived
     /// state for us to rebuild by hand.
     ///
+    /// <paramref name="creatorId"/>: when nonzero (and only ever passed nonzero when
+    /// <see cref="DamageCreatorAttributionEnabled"/> is on — every call site is responsible for
+    /// that gate, not this method), the constructed effect's <c>creator_id</c> is set to it
+    /// between <c>EffectDamage</c> and <c>ApplyEffectToObject</c> so the RECEIVING engine's own
+    /// aggro/last-attacker bookkeeping sees a real attacker instead of nobody. 0 preserves the
+    /// exact behaviour this method always had. See <see cref="TrySetEffectCreator"/> and
+    /// docs/research/peer-damage-ledger.md §8.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool ApplyDamageEffect(uint objectId, int amount, out int failure)
+    public static bool ApplyDamageEffect(uint objectId, int amount, uint creatorId, out int failure)
     {
         // ⚠ Our own damage must not come back to us as a peer's contribution. The damage
         // hook credits any hit whose creator is the local player, and every synthetic hit
@@ -242,7 +289,7 @@ internal static unsafe partial class Odyssey
         PhantomHitHook.SuppressDealt = true;
         try
         {
-            return ApplyDamageEffectCore(objectId, amount, out failure);
+            return ApplyDamageEffectCore(objectId, amount, creatorId, out failure);
         }
         finally
         {
@@ -250,7 +297,7 @@ internal static unsafe partial class Odyssey
         }
     }
 
-    private static bool ApplyDamageEffectCore(uint objectId, int amount, out int failure)
+    private static bool ApplyDamageEffectCore(uint objectId, int amount, uint creatorId, out int failure)
     {
         failure = 0;
 
@@ -314,6 +361,14 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // The constructed effect sits at the top of the VM's own argument stack right now,
+        // between this call and ApplyEffectToObject's pop below — see TrySetEffectCreator's
+        // remarks for the verified layout this reads.
+        if (creatorId != 0)
+        {
+            TrySetEffectCreator(internalVm, creatorId);
+        }
+
         if (StackPushInteger(vm, 0) == 0)
         {
             failure = 8;
@@ -335,4 +390,96 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    /// <summary>
+    /// Sets the effect <c>ExecuteCommandEffectDamage</c> just constructed's <c>creator_id</c>
+    /// (<c>CGameEffect+0x18</c>) directly, by locating it on the VM's own argument stack rather
+    /// than going through any NWScript-level surface — there is no VM stack argument for
+    /// "creator" to push, and the ordinary declared-parameter push/pop convention
+    /// <see cref="ApplyDamageEffectCore"/> already uses for <c>nDamageAmount</c> etc. has no
+    /// slot for it either.
+    ///
+    /// ⚠ WHY NOT LET <c>ExecuteCommandEffectDamage</c>'S OWN INTERNAL CREATOR LOGIC DO THIS.
+    /// The handler already conditionally calls this SAME <see cref="SetEffectCreatorFn"/> itself
+    /// (VERIFIED, <c>0x00531CFC</c>), gated on whatever object the VM's "current script" context
+    /// resolves to at the moment of the call (<c>0x00531CC0</c>-<c>0x00531CE1</c>) — i.e.
+    /// OBJECT_SELF of whichever script last ran on this VM, not the id our caller actually wants.
+    /// This is exactly the failure <c>docs/research/shared-state-audit.md</c> line ~4531 measured
+    /// live and rejected: a forwarded apply's resulting <c>creator_id</c> read <c>0x2C</c>,
+    /// <c>0x20</c>, <c>0x7</c>, <c>0x109</c> — never the real attacker. So this method OVERWRITES
+    /// whatever that internal logic already wrote, deliberately, with the caller's own resolved
+    /// id, immediately afterward and before the effect is applied.
+    ///
+    /// ⚠ WHY THIS IS SAFE AGAINST THE VM STACK, NOT A GUESS AT ITS LAYOUT. Fresh disassembly
+    /// this pass (docs/research/peer-damage-ledger.md §8) of the shared tag/grow helper every
+    /// <c>StackPush*</c> wrapper calls (<c>0x005D15A0</c>) and of <c>StackPushEngineStructure</c>
+    /// (<c>0x005D10B0</c> -&gt; <c>0x005D19C0</c>) shows: the just-pushed effect is the stack's
+    /// OWN top entry (index <c>count-1</c>, tag byte <see cref="EffectStackTag"/>) and the value
+    /// array holds a pointer to a VM-OWNED COPY of the effect (the temporary heap object
+    /// <c>ExecuteCommandEffectDamage</c> built is destroyed right after the push —
+    /// <c>0x00531D2A</c>-<c>0x00531D37</c> is a plain <c>delete</c> pattern, dtor then
+    /// <c>operator delete</c>). <c>ExecuteCommandApplyEffectToObject</c> (<c>0x0052E570</c>) pops
+    /// that SAME pointer straight back out (<c>StackPopEngineStructure</c>, <c>0x005D10A0</c>)
+    /// and hands it to <c>CSWSObject::ApplyEffect</c> (<c>0x004D14F0</c>) with no further copy in
+    /// between — so a write to <c>+0x18</c> on the pointer this method reads is exactly the write
+    /// the eventual apply will see, and there is no other write anywhere on the VM's argument
+    /// stack to corrupt: only ONE entry carries this tag right now, because
+    /// <see cref="ApplyDamageEffectCore"/>'s own <c>CallStackSizeOffset</c> guard already refused
+    /// unless the VM stack was otherwise idle before this call sequence began.
+    ///
+    /// Fails OPEN: any refusal here (empty stack, unexpected tag, null pointer — none observed
+    /// in the disassembly, all defensive) leaves the effect exactly as
+    /// <c>ExecuteCommandEffectDamage</c> built it and the damage still applies with no creator,
+    /// which is this method's caller's existing behaviour. Logged once per session
+    /// (<see cref="_creatorAttributionFailureLogged"/>) rather than never, so a wrong build or a
+    /// future engine patch invalidating this layout is discoverable rather than silently inert.
+    /// NEEDS-LIVE: this has not been run against the real game.
+    /// </summary>
+    private static void TrySetEffectCreator(nint internalVm, uint creatorId)
+    {
+        int count = *(int*)(internalVm + StackPointerOffset);
+        if (count <= 0)
+        {
+            LogCreatorAttributionFailure("the VM argument stack was empty after EffectDamage");
+            return;
+        }
+
+        nint tagArray = *(nint*)(internalVm + StackTagArrayOffset);
+        nint valueArray = *(nint*)(internalVm + StackValueArrayOffset);
+        if (tagArray == 0 || valueArray == 0)
+        {
+            LogCreatorAttributionFailure("the VM stack's tag/value arrays were not allocated");
+            return;
+        }
+
+        int topIndex = count - 1;
+        byte tag = *(byte*)(tagArray + topIndex);
+        if (tag != EffectStackTag)
+        {
+            LogCreatorAttributionFailure(
+                $"the VM stack's top entry was tag 0x{tag:X2}, not 0x{EffectStackTag:X2} (effect)");
+            return;
+        }
+
+        nint effect = *(nint*)(valueArray + (topIndex * 4));
+        if (effect == 0)
+        {
+            LogCreatorAttributionFailure("the VM stack's top effect entry was a null pointer");
+            return;
+        }
+
+        SetEffectCreatorFn(effect, creatorId);
+    }
+
+    private static void LogCreatorAttributionFailure(string reason)
+    {
+        if (_creatorAttributionFailureLogged)
+        {
+            return;
+        }
+
+        _creatorAttributionFailureLogged = true;
+        PluginHost.Log(
+            $"combat: damage_creator_attribution could not set a creator this pass ({reason}); "
+            + "the damage still applied, with no attribution, exactly as if the key were off");
+    }
 }
