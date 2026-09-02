@@ -72,9 +72,29 @@ internal static class LivenessRule
     /// <see cref="LivenessHostState.Gone"/> verdict still applies — the module itself removed
     /// the actor (a script's own <c>DestroyObject</c>), and un-killable is not the same claim
     /// as un-destroyable.
+    ///
+    /// <paramref name="destroyAlreadyRequested"/> is true when this instance has already asked
+    /// the engine to destroy this SAME object id once and it has not yet actually disappeared
+    /// (<paramref name="localResolved"/> is still true). This matters because
+    /// <c>Odyssey.DestroyObjectById</c> is not synchronous — the 2026-08-24 disassembly round
+    /// in docs/research/creature-liveness.md found the engine schedules a delayed removal
+    /// (<c>CServerAIMaster::AddEventDeltaTime</c>) rather than unlinking the object array entry
+    /// immediately, so a body can keep resolving here for a pass or several after the destroy
+    /// was already asked for. Asking again every throttled pass while the engine's own removal
+    /// is still pending would not make it happen any sooner — it would only pile up redundant
+    /// delayed events on the engine's own AI Master queue, which is exactly the load the design
+    /// doc's own third theory (a real-time budget starving that same queue's drain under load)
+    /// worried about. A body genuinely still standing here for a NEW reason after a prior
+    /// destroy request is not this channel's problem to keep hammering at every 40 frames; the
+    /// owner's own liveness scan republishes every cycle regardless, so nothing is lost by
+    /// asking once.
     /// </summary>
     public static LivenessAction Decide(
-        LivenessHostState hostState, bool localResolved, bool localDead, bool localPlot)
+        LivenessHostState hostState,
+        bool localResolved,
+        bool localDead,
+        bool localPlot,
+        bool destroyAlreadyRequested = false)
     {
         switch (hostState)
         {
@@ -90,7 +110,12 @@ internal static class LivenessRule
                 return LivenessAction.Kill;
 
             case LivenessHostState.Gone:
-                return localResolved ? LivenessAction.Destroy : LivenessAction.Nothing;
+                if (!localResolved)
+                {
+                    return LivenessAction.Nothing;
+                }
+
+                return destroyAlreadyRequested ? LivenessAction.Nothing : LivenessAction.Destroy;
 
             default:
                 return LivenessAction.Nothing;

@@ -37,9 +37,29 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
     private readonly EffectiveBehaviourFlag _livenessSync = new(
         "liveness_sync", SharedBlock.OverrideBitLivenessSync, PluginConfig.ReadBool("liveness_sync", false));
 
+    /// <summary>Owner ids this instance has already asked the engine to destroy once, so a
+    /// pending-but-not-yet-completed destroy (see <see cref="LivenessRule.Decide"/>'s own doc
+    /// comment on why <c>DestroyObjectById</c> is not synchronous) is not re-dispatched every
+    /// throttled pass. Sized like <see cref="CombatController"/>'s own <c>_killed</c> array —
+    /// bounded by <see cref="SharedBlock.LivenessCapacity"/>, which this document's own module
+    /// survey (docs/research/creature-liveness.md) never found a reachable population to
+    /// exceed by more than a factor of three.</summary>
+    private readonly uint[] _destroyRequested = new uint[SharedBlock.LivenessCapacity];
+    private int _destroyRequestedCount;
+
     private int _countdown;
     private bool _offLogged;
     private int _logged;
+
+    /// <summary>Forgets every destroy-request latch on a module change — same reasoning as
+    /// <see cref="CombatController.Invalidate"/>: ids are reassigned per module, so a
+    /// remembered request would silently suppress a legitimate destroy for a completely
+    /// different creature that happens to reuse the id.</summary>
+    public void Invalidate()
+    {
+        Array.Clear(_destroyRequested);
+        _destroyRequestedCount = 0;
+    }
 
     public void OnFrame()
     {
@@ -127,8 +147,10 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
         bool localResolved = creature != 0;
         bool localDead = localResolved && Odyssey.IsCreatureDead(creature);
         bool localPlot = localResolved && Odyssey.IsPlot(creature);
+        bool destroyAlreadyRequested = AlreadyRequestedDestroy(entry.ObjectId);
 
-        LivenessAction action = LivenessRule.Decide(hostState, localResolved, localDead, localPlot);
+        LivenessAction action = LivenessRule.Decide(
+            hostState, localResolved, localDead, localPlot, destroyAlreadyRequested);
 
         switch (action)
         {
@@ -149,6 +171,12 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
             case LivenessAction.Destroy:
                 if (Odyssey.DestroyObjectById(effectiveId, out int failure))
                 {
+                    // Remember it on SUCCESS only, mirroring CombatController.KillOnce's own
+                    // failure-retries-next-pass symmetry: a transient refusal (the VM mid-call,
+                    // failure 4 — see PhantomController.Lifecycle.cs's own note on this) should
+                    // still be retried, but a request the engine accepted must not be re-issued
+                    // while its own delayed removal is still pending.
+                    RememberDestroyRequested(entry.ObjectId);
                     if (_logged < 20)
                     {
                         _logged++;
@@ -178,6 +206,27 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
             default:
                 return false;
+        }
+    }
+
+    private bool AlreadyRequestedDestroy(uint ownerObjectId)
+    {
+        for (int i = 0; i < _destroyRequestedCount; i++)
+        {
+            if (_destroyRequested[i] == ownerObjectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void RememberDestroyRequested(uint ownerObjectId)
+    {
+        if (_destroyRequestedCount < _destroyRequested.Length)
+        {
+            _destroyRequested[_destroyRequestedCount++] = ownerObjectId;
         }
     }
 }

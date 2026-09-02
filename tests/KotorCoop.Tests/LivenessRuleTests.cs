@@ -109,4 +109,71 @@ public class LivenessRuleTests
             LivenessAction.Anomaly,
             LivenessRule.Decide(LivenessHostState.Alive, localResolved: false, localDead: false, localPlot: false));
     }
+
+    // DestroyObjectById is not synchronous (docs/research/creature-liveness.md's 2026-08-24
+    // disassembly round: the engine schedules a delayed removal rather than unlinking the
+    // object array entry immediately), so a body asked to be destroyed can keep resolving here
+    // for a pass or several afterwards. destroyAlreadyRequested is how the controller tells
+    // Decide "I already asked once" so it is not asked again every throttled pass while the
+    // engine's own removal is still pending — see LivenessReconcileController's own
+    // _destroyRequested latch.
+
+    [Fact]
+    public void OwnerGoneLocalStillStandingWithNoPriorRequestIsStillADestroy()
+    {
+        Assert.Equal(
+            LivenessAction.Destroy,
+            LivenessRule.Decide(
+                LivenessHostState.Gone, localResolved: true, localDead: false, localPlot: false,
+                destroyAlreadyRequested: false));
+    }
+
+    [Fact]
+    public void OwnerGoneLocalStillStandingButAlreadyRequestedIsNothing()
+    {
+        // The pending-removal window: do not pile up a second delayed destroy on top of one
+        // already accepted by the engine.
+        Assert.Equal(
+            LivenessAction.Nothing,
+            LivenessRule.Decide(
+                LivenessHostState.Gone, localResolved: true, localDead: false, localPlot: false,
+                destroyAlreadyRequested: true));
+    }
+
+    [Fact]
+    public void OwnerGoneLocalDeadButAlreadyRequestedIsAlsoNothing()
+    {
+        // Same latch applies to the corpse-still-standing Gone case, not just the live one.
+        Assert.Equal(
+            LivenessAction.Nothing,
+            LivenessRule.Decide(
+                LivenessHostState.Gone, localResolved: true, localDead: true, localPlot: false,
+                destroyAlreadyRequested: true));
+    }
+
+    [Fact]
+    public void OwnerGonePlotAlreadyRequestedIsAlsoNothing()
+    {
+        // The latch is keyed on "did we already ask", independent of the plot exemption that
+        // governs whether Destroy applied in the first place.
+        Assert.Equal(
+            LivenessAction.Nothing,
+            LivenessRule.Decide(
+                LivenessHostState.Gone, localResolved: true, localDead: false, localPlot: true,
+                destroyAlreadyRequested: true));
+    }
+
+    [Fact]
+    public void OwnerGoneLocalAlreadyUnresolvedIsNothingRegardlessOfThePriorRequestFlag()
+    {
+        // Already gone here too — the latch is irrelevant once there is nothing left to
+        // destroy, and a stale "already requested" flag must not matter once the body has
+        // genuinely disappeared (this is also what lets the flag be forgotten safely: once
+        // localResolved goes false, this branch is reached instead of the latch check).
+        Assert.Equal(
+            LivenessAction.Nothing,
+            LivenessRule.Decide(
+                LivenessHostState.Gone, localResolved: false, localDead: false, localPlot: false,
+                destroyAlreadyRequested: true));
+    }
 }
