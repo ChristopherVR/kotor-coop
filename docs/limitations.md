@@ -66,7 +66,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Two companions released to local combat at once | Works | Trask and Carth released in the same pass, driven at two different enemies, both enemies died, both companions reclaimed together (2026-09-03 01:38) | live-verification.md 2026-09-03 01:31–02:25 |
 | Endar Spire / Taris duel HP floor (`SetMinOneHP`) | Not a mod limitation | KOTOR's own tutorial script floors HP at 1 on those maps — nobody can be downed there, co-op or not, until the pin clears | `min-one-hitpoint.md` |
 | Container-loot race (two clicks, same chest) | Fixed | See "moving through the world" above | roadmap Tier 1 #4 |
-| Creature liveness reconciliation (body alive on one screen, dead on the other) | Not supported (off by default) | `liveness_sync` ships OFF; correction mechanism exists but not enabled | roadmap Tier 3 #22 |
+| Creature liveness reconciliation (body alive on one screen, dead on the other) | Not supported (off by default) | `liveness_sync` ships OFF; the Kill/Destroy reconcile dispatch is live-verified end to end (2026-08-23), but a `DestroyObject` scan-freshness theory is still open (three live probes found zero staleness at every population this game's own content reaches, ~14-33 objects/module, but the theory needs a higher population than that content offers to fully rule out) and this project's own bar wants one more clean live pass — see creature-liveness.md's 2026-09-03 entry for the full blocker list and the live checklist to flip it | roadmap Tier 3 #22 |
 
 ## Dialogue and cutscenes
 

@@ -1390,3 +1390,222 @@ surveying content for a module that this round's evidence suggests probably does
 No production code changed for this half (a live-verification survey plus a re-run of the
 already-built probe). `tools/liveness-freshness-unk_m44aa-33pop-tight-20260824-200732.csv` is this
 round's own CSV (untracked, like the two prior rounds' CSVs already in this checkout).
+
+## 2026-09-03 — ship-readiness review: what still keeps `liveness_sync` OFF
+
+Task: settle precisely why `liveness_sync` ships OFF given a full re-read of this document
+(every round above), `docs/live-verification.md`, `docs/research/transition-crashes.md` and
+`docs/research/party-reconciliation.md`'s own mentions, and the code
+(`src/KotorCoop.Plugin/LivenessRule.cs`, `LivenessReconcileController.cs`,
+`src/KotorCoop.Plugin/CombatController.cs`, `PluginHost.SessionLifecycle.cs`), then close what
+can be closed without the live rig (no rig access this round) and state precisely what cannot.
+
+### Blocker 1 — a real, fixable gap found in this pass: the Destroy dispatch had no per-object
+latch — **CLOSED this pass**
+
+Re-reading `LivenessReconcileController.Apply` against `CombatController`'s own `KillOnce`
+(which `LivenessAction.Kill` already reuses verbatim, per §5 above) found an asymmetry: the
+**Kill** path dedups per owner id (`CombatController`'s `_killed` array — a kill is executed
+once and never re-dispatched), but the **Destroy** path called `Odyssey.DestroyObjectById` again
+on *every* throttled pass (`IntervalFrames = 40`, ~0.67 s) for as long as the owner kept
+re-reporting `Gone` for that id — which, per §4's own `LivenessGoneRetentionMs` (15 s), is up to
+~22 redundant calls for a single genuine divergence.
+
+This matters because of what the 2026-08-24 disassembly round (above) already established:
+`Odyssey.DestroyObjectById` (the NWScript `DestroyObject` command) is **not synchronous** — it
+schedules a delayed removal via `CServerAIMaster::AddEventDeltaTime` rather than unlinking the
+object array entry immediately, so a body can keep resolving here for a pass or several after the
+first request. Calling it again on the SAME id while that first request is still pending does not
+make the removal happen any sooner; disassembly of the command handler (§ "Round (2026-08-24)"
+above) shows no dedup or coalescing on the engine's own side, so each redundant call schedules
+*another* delayed event on `CServerAIMaster`'s own queue. That queue is exactly the resource the
+2026-08-24 "THIRD theory" round spent two full rounds investigating for a real-time-budget-under-
+load staleness effect (see Blocker 2 below) — a channel that keeps re-arming its own dependency
+under load, every ~0.67 s, for up to 15 s per divergence, was never ruled out as a contributor to
+that theory's own load, and is a bug regardless of whether that theory turns out to be real.
+
+**Fixed**: `LivenessRule.Decide` (`src/KotorCoop.Plugin/LivenessRule.cs`) gained a
+`destroyAlreadyRequested` parameter (default `false`, so every existing call site and test is
+unaffected) — when `hostState == Gone`, `localResolved` is true, and this is true, `Decide`
+returns `Nothing` instead of `Destroy`. `LivenessReconcileController`
+(`src/KotorCoop.Plugin/LivenessReconcileController.cs`) gained a `_destroyRequested` latch — a
+fixed `uint[SharedBlock.LivenessCapacity]` array, the same shape as `CombatController`'s own
+`_killed` — set only on a *successful* `DestroyObjectById` call (a transient refusal, e.g.
+failure 4 while the VM is mid-call, is NOT remembered, so it still retries next pass — the same
+failure-retries symmetry `KillOnce` already has), and consulted before `Decide` is called. A new
+`Invalidate()` clears the latch and is now wired into `PluginHost.SessionLifecycle.cs`'s
+per-module reset list (`_combat?.Invalidate(); _liveness?.Invalidate();`) — **this was previously
+missing entirely**: `LivenessReconcileController` was not in the module-transition reset list at
+all, so without adding both the latch AND its invalidation together, a remembered destroy request
+could otherwise survive a module change and wrongly suppress a legitimate destroy for an unrelated
+creature that happens to reuse the same id number in the new module (the exact hazard
+`CombatController.Invalidate`'s own doc comment already names for `_killed`).
+
+Five new pure-rule tests (`tests/KotorCoop.Tests/LivenessRuleTests.cs`) cover the new parameter
+directly: no-prior-request still destroys; already-requested suppresses it for both the
+still-alive and still-a-corpse Gone sub-cases and for a plot id; already-unresolved is `Nothing`
+regardless of the flag. `LivenessReconcileController` and `CombatController` themselves are not
+independently unit-tested (they call `Odyssey`'s static P/Invoke surface directly and have no
+existing test harness in this codebase — the tested boundary for both is their own pure `*Rule`
+class, matching this document's own "same split `ControlReturnRule`/`MirrorHealthRule` already
+use" note in §5), so this pass's own test coverage is exactly as deep as `LivenessRule`'s own
+prior coverage was.
+
+**This is a real fix, not a guess dressed as one** — it is directly inferable from the 2026-08-24
+disassembly's own finding (a real engine call this codebase controls, re-dispatched in a loop, is
+categorically different from the "no code fix available" verdict that round reached for the
+external-scan question itself). It closes an asymmetry the design brief's own model (§5's decision
+table) never actually specified either way — nothing in the original design says the Destroy
+action should be retried every pass, and the Kill action right next to it already wasn't. It has
+**not** been live-verified: this pass had no rig access, and a timing change to an already-built
+dispatch path is exactly the kind of change this project's own rules want live-checked before
+trusting, even though the failure mode it fixes (redundant calls, not a wrong call) is low-risk.
+See the checklist below.
+
+### Blocker 2 — the `DestroyObject` scan-freshness question: **NOT closed, genuine NEEDS-LIVE /
+NEEDS-RE, cannot be resolved from this pass**
+
+The third 2026-08-22 pass's original three-minute-staleness observation was, on the balance of
+everything recorded above, most likely a methodology artifact (aggregate `census`-count arithmetic
+rather than a direct per-id `census 0x<id>` read — see the 2026-08-24 disassembly round's own
+"the real gap" section) rather than a reproducible defect: the object-array lookup algorithm
+itself was disassembly-confirmed byte-identical between the plugin's in-process path and the
+agent's external path (`CGameObjectArray::GetGameObject` 0x4D8230, no generation counter, no extra
+validity flag), and the layout-check theory was disassembly-ruled-out (nothing between a
+`DestroyObject` call and the object's own destructor running touches the array entry's identity
+fields). Three follow-up live passes, each with direct per-id `census 0x<id>`/`resolve 0x<id>`
+paired sampling (the exact diagnostic the earlier pass's own critique said was missing), found
+**zero disagreements** across three different modules (24-25, 28-29, and 29-33 registered
+objects), at both a 10 s and a tightened 3 s sampling grid — convergence was immediate (`t=0s`) in
+every trial.
+
+What remains open is precisely the "THIRD theory" the 2026-08-24 rounds themselves could not rule
+out: `CServerAIMaster::UpdateState` (0x4B0B70) gates its own event-queue drain (the loop that
+actually lets a `DestroyObject`ed body's destructor run and the array entry unlink) behind a
+real-time wall-clock budget shared with a per-call object-state scan and an unconditional
+five-bucket "AI level" scan, both of whose cost scales with the module's *total* registered object
+count, not just its hostile count. **What is specifically unknown, and cannot be resolved without
+either a bigger live rig test or more disassembly**:
+
+- The exact numeric value and unit of that budget. The disassembly identified the structure (two
+  `CExoTimers::GetHighResolutionTimer` samples, subtracted and compared) and a default scaling
+  input of `0x2710` (10000), but the two 64-bit multiply/divide helpers that turn it into the
+  actual compared limit (`0x6FC710`/`0x6FB030`) are unnamed in `tools/kotor1_0_3.db`'s symbol
+  table and were not further disassembled — so it is not known whether that budget is ever
+  actually reachable by any population this codebase's own creature scan could produce.
+- Whether unmodified KOTOR1 content ever hosts a population large enough to test it. A systematic
+  survey of fourteen modules across five planets and two space stations (both 2026-08-24 rounds
+  combined) found none above ~33 registered objects — every module tested, regardless of era or
+  encounter design, capped in the same ~14-33 range. This is itself the honest finding: "many
+  dozens" (40+) concurrent creatures may not be a reachable state in this game's own placed
+  content at all, which means the live rig alone — without a way to spawn creatures synthetically
+  — may never be able to settle this theory definitively, only continue to fail to falsify it.
+
+This is a genuine RE gap, named precisely rather than guessed around: the unnamed function
+`0x6FC710`/`0x6FB030` pair's exact semantics, and whether `CServerAIMaster::UpdateState`'s budget
+is reachable in vanilla content, are both unknown and cannot be verified without disassembling
+those two helpers against `swkotor.exe` (no live rig needed for that half) and/or building a way
+to synthesize a much larger population and re-running `tools/liveness-freshness-probe.ps1` against
+it (rig needed for that half — no `spawncreature`-style console verb exists yet; the 2026-08-24
+round's own closing note already identifies this as the concrete next step for whoever wants to
+keep chasing it). Neither was attempted this pass — both are out of scope for "close what is
+closeable without the rig," since the population-side half specifically NEEDS the rig and the
+disassembly-side half is exploratory RE with no actionable code change identified to make from it.
+
+### Blocker 3 — this project's own stated bar, not a technical blocker
+
+The 2026-08-23 verdict already named this explicitly: *"a flag this document itself has left off
+across four live passes for four different reasons is not flipped on the strength of a fifth pass
+closing only one of them."* That is a process bar, not a code gap — it matches the precedent this
+document itself cites for `effect_sync`/`map_reveal_sync`: a new, previously-unenabled plugin-side
+mechanism gets one clean, dedicated live pass with nothing new left to explain before its default
+flips, even after every individual technical question closes. Blocker 1's fix is new since the
+last live round and has never been observed live at all; per this same bar, it needs its own live
+confirmation before contributing to that clean pass, not just a passing unit-test suite.
+
+### Verdict: still OFF, unchanged this pass — one technical blocker closed, one explicitly left
+open with precise reasoning, the flag itself untouched
+
+`liveness_sync` remains `0` in `profiles/coop.ini.example` and every existing default. Nothing in
+this pass makes the case to flip it — quite the opposite: fixing a real dispatch bug means the
+NEXT live pass is measuring genuinely different behaviour than every prior pass measured, which is
+itself a reason to re-verify rather than to trust the accumulated history of clean passes at face
+value. The two headline questions from every round above are unchanged: the reconcile mechanism's
+own Kill/Destroy dispatch is live-proven end to end (2026-08-23, `--enemy-census-cap`), and the
+`DestroyObject`-scan-freshness theory is weakly disfavoured by three clean live probes but not
+disproven, for a reason (this game's own content ceiling) this pass cannot lift without either a
+bigger disassembly session or a new spawn-testing tool. See below for exactly what the next live
+session needs to observe to close the loop this pass opened.
+
+### The live checklist to flip `liveness_sync` — console verbs from `docs/CONSOLE.md`
+
+All of this needs the two-instance rig (`liveness_sync=1` on both `coop.ini`s for the session,
+per every prior round's own convention — still `0` by default). Console verbs used below:
+`status`, `census [id]`, `resolve <id>`, `slay [tag|id]`, `destroyobject <id>` (see
+`docs/CONSOLE.md` §"The `slay`/`destroyobject` authority split" for exactly who may run which).
+
+1. **Re-verify Blocker 1's own fix does what it claims, and does not regress anything.** Stage a
+   `destroyobject <id>` on the HOST for a creature outside the mirroring client's own current
+   view (an ordinary connected pair is enough — `destroyobject` is population-independent, per
+   the third 2026-08-22 pass). On the CLIENT's plugin log, confirm **exactly one**
+   `liveness: 0x... no longer exists on the owner and still did here - destroying to match` line
+   for that id across the whole `LivenessGoneRetentionMs` (15 s) window the owner keeps
+   re-reporting it — not the up-to-~22-line storm the un-patched code could have produced. If the
+   removal is not instant, watching `resolve <id>` on the client tick from resolving to `0x0`
+   confirms the SINGLE dispatch was still enough; a body that never disappears despite one clean
+   dispatch is a different, new finding to record, not evidence the latch itself is wrong.
+2. **Re-run the out-of-census Kill scenario** (2026-08-23's own recipe: HOST launched with
+   `--enemy-census-cap 5` or similar, both instances warped to a populated module such as
+   `tat_m20aa`, `slay` a creature outside the host's own shrunk `ReadEnemies` result) to reconfirm
+   the Kill half is unaffected by this pass's changes (it should be — the Kill path was not
+   touched) and still produces the single `liveness: 0x... is a corpse on the owner and was still
+   alive here - killing to match` line it did before.
+3. **Re-run `tools/liveness-freshness-probe.ps1`** once more (any of the three previously-tested
+   modules is fine — `tat_m20aa`, `unk_m44aa`, `END_M01AA`) to confirm the latch does not change
+   the *positive* result the three prior rounds already found: convergence should still read
+   `t=0s` on both `census`/`resolve` sides, zero `DISAGREE` samples.
+4. **New check specific to this pass's own `Invalidate()` wiring**: stage a `destroyobject <id>`
+   on the host, then — before its removal would ordinarily complete — warp both instances to a
+   DIFFERENT module where the same numeric id is reused by an unrelated creature (or, if no such
+   collision is reachable on demand, at minimum confirm via the agent/plugin logs that
+   `LivenessReconcileController.Invalidate()` runs at the transition, the same way
+   `CombatController.Invalidate()` already logs at `epoch: ... clearing phantom, item, combat and
+   door state`). Confirm a genuinely NEW `Gone` report for the reused id in the new module is not
+   silently suppressed by a stale latch entry from the old module.
+5. **Reconfirm the never-resurrect guarantee and the plot exemption still hold**, since both are
+   cheap smoke tests and every prior round has run them: force a local kill on the mirroring
+   client faster than the owner's ledger catches up, confirm `status` shows `liveness anomalies: N`
+   climbing and no body un-dies; confirm a known plot id (e.g. `end_trask`) still `resolve`s
+   normally after a session of liveness activity.
+6. **Optional, not a hard gate**: if a way to synthesize a much larger creature population becomes
+   available before this checklist is run (a `spawncreature`-style debug verb, following
+   `Odyssey.SpawnCreature`'s existing call path per `MaterialisedEnemies.cs`/
+   `PhantomController.cs`), re-run `tools/liveness-freshness-probe.ps1` against it specifically to
+   finally stress-test Blocker 2's own load theory at a population this game's own content cannot
+   reach. Not required to flip the flag — three clean rounds at the reachable ceiling is already
+   the strongest evidence this document has — but it is the one experiment that could turn
+   Blocker 2 from "weakly disfavoured" into "closed" outright.
+7. `dotnet test tests/KotorCoop.Tests` full green (both before staging the rig session, as a
+   baseline, and unchanged after — no production code should need touching to run this checklist).
+
+If items 1-5 all come back clean, the honest position is: every technical blocker this document
+has ever named is either closed or has three-plus clean live rounds behind it, and the one
+remaining open theory (Blocker 2) is bounded by this game's own content, not by anything this
+codebase controls. That is the point at which flipping `liveness_sync`'s own default stops being
+premature — but that call belongs to whoever runs this checklist, against this project's own
+"flip on if clean" bar, not to this document written without rig access.
+
+### Files touched this pass
+
+- `src/KotorCoop.Plugin/LivenessRule.cs` — `destroyAlreadyRequested` parameter on `Decide`
+  (default `false`), with an updated doc comment.
+- `src/KotorCoop.Plugin/LivenessReconcileController.cs` — `_destroyRequested` latch, `Invalidate()`,
+  wired into the `Apply`/`Destroy` path.
+- `src/KotorCoop.Plugin/PluginHost.SessionLifecycle.cs` — `_liveness?.Invalidate()` added to the
+  per-module `InvalidateAll` reset list, next to `_combat?.Invalidate()`.
+- `tests/KotorCoop.Tests/LivenessRuleTests.cs` — five new cases for the latch parameter.
+- `docs/limitations.md`, `docs/research/creature-liveness.md` (this section) — status text refreshed.
+
+Build: `src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean. `dotnet test tests/KotorCoop.Tests -c
+Debug --filter "FullyQualifiedName~Liveness"`: 52/52 passed. Full suite run alongside this pass —
+see the commit for the result.
