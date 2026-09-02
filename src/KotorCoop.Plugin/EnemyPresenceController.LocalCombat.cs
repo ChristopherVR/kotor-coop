@@ -50,6 +50,33 @@ internal sealed unsafe partial class EnemyPresenceController
     public static readonly bool LocalCombat = PluginConfig.ReadBool("local_combat", true);
 
     /// <summary>
+    /// coop.ini <c>local_combat_engage_fallback</c> (default ON). Whether
+    /// <see cref="MaintainLocalFightSlot"/> may drive an armed creature's attack on the local
+    /// player directly, once, through <see cref="Odyssey.AttackTarget"/> when the +0x260 script
+    /// fire alone leaves it with no attack-queue target after a grace window — see
+    /// docs/research/combat-participation.md §12 ("Idle hostiles never engage") for why the
+    /// script fire alone does nothing for a creature with no combat round already running (a
+    /// genuinely idle GIT hostile, e.g. the tar_m10aa Vulkars, versus an already-mid-round one
+    /// like the Endar Spire `end_gensith` pair, which the script fire alone was always enough
+    /// for). <see cref="LocalFightEngageFallbackRule"/> is the pure one-shot-per-fight decision;
+    /// this only gates whether it is ever consulted at all.
+    /// </summary>
+    private static readonly bool LocalCombatEngageFallback =
+        PluginConfig.ReadBool("local_combat_engage_fallback", true);
+
+    /// <summary>
+    /// How long <see cref="MaintainLocalFightSlot"/> waits, after a slot's fight was armed, for
+    /// the script fire (or the creature's own AI, independently) to give the creature a real
+    /// attack-queue target before concluding neither did and driving the fallback — see
+    /// <see cref="LocalFightEngageFallbackRule"/>'s own doc comment. Not exposed as its own
+    /// coop.ini key (unlike <see cref="LocalCombatEngageFallback"/> itself): a judgment call, not
+    /// a measured value — long enough that a script fire which DOES work is never contested
+    /// mid-arm by a redundant direct drive, short enough that a genuinely idle hostile does not
+    /// sit frozen for long. NEEDS-LIVE: never timed against a real fight yet.
+    /// </summary>
+    private const double LocalCombatEngageFallbackGraceSeconds = 0.75;
+
+    /// <summary>
     /// How many mirrored enemies this instance's own engine may fight simultaneously via
     /// local_combat, coop.ini <c>local_combat_slots</c> (default 3, clamped 1..
     /// <see cref="SharedBlock.LocalCombatSlotCapacity"/> — the shared-block excluded-id array's

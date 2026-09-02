@@ -280,6 +280,17 @@ local_combat_slots=3
 # on-screen text. 1 (default) shows it, 0 disables the HUD line only.
 local_combat_deferred_notice=1
 
+# When local_combat's own +0x260 script fire leaves an armed creature with no attack-queue
+# target after a short grace window - the case a genuinely idle GIT hostile hits (hostile in
+# the census, a real script, but no combat round already running for the script to act on; the
+# tar_m10aa Vulkars are the live example, see docs/research/combat-participation.md #12) rather
+# than one already mid-round the script fire alone was always enough for (the Endar Spire
+# end_gensith pair) - drive its attack on the local player directly, once, through the same
+# engine call (ExecuteCommandAttack) the attack console verb and companion_local_combat's own
+# release path already use. 1 (default) enables the fallback; 0 leaves an idle hostile frozen
+# for the rest of its local_combat_timeout_s window, matching pre-fallback behaviour.
+local_combat_engage_fallback=1
+
 # Activate the render window at launch. Without this an instance draws nothing until it
 # is clicked into - with two windows that means clicking both, every launch.
 activate_render_on_start=1
