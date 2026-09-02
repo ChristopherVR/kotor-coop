@@ -359,6 +359,14 @@ party_roster_sync=1
 # "am I a client with a live host roster" is always false, so its own screen is left alone).
 party_select_host_only=1
 
+# Galaxy-map gating, plugin side: on a CLIENT under follow_lead=host, refuse this
+# instance's own accept-button click on the galaxy map (CSWGuiInGameGalaxyMap) and post
+# "only the host can choose a destination" instead of running the confirm script - the
+# host's own confirm is always let through untouched, and under follow_lead=any (the
+# default) this never refuses either. See docs/research/galaxy-map-and-party-select.md's
+# dated 2026-09-02 section for the RE and the live test plan. NEEDS-LIVE.
+galaxy_map_host_only=1
+
 # --- companion follow-AI fix candidates (unverified) --------------------------------
 # Two candidate fixes for the companion follow-AI's terminal-stall shape
 # (docs/research/party-reconciliation.md). Both default OFF; neither has cleared this

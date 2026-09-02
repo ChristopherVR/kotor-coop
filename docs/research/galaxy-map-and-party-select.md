@@ -1064,3 +1064,235 @@ touches most directly — is ruled out as a precondition.
 No code change this round; see `docs/research/transition-crashes.md` for the full five-round
 soak, the tooling gaps found (no crash-dump admin rights, no debugger available, WER's own
 apparent dedup of repeat crashes), and the ranked follow-up list.
+
+## 2026-09-02 — galaxy-map gating, the plugin side (`galaxy_map_host_only`)
+
+Task: wire the "only the host can choose a destination" refusal into the plugin — the follow-up
+this doc's own "Galaxy-map gating" section left open ("wiring the plugin side... is left as
+follow-up work"). `GalaxyMapConfirmRefusalRule` (§ above) already had the pure decision and its
+own tests; what was missing was which native function to splice and how to refuse safely.
+
+### The choke point, RE'd this pass
+
+§2.1 traced the party-select equivalent (`CSWGuiPartySelection::ConfirmPartySelection` →
+`AcceptParty`) but this doc never traced the galaxy map's own accept-button dispatch — §2.1's own
+table names the FIELD offset (`accept_button 0x1F24`) but not the function its click reaches.
+Unlike party-select, `CSWGuiInGameGalaxyMap` has no separate named "confirm"/"accept" method in
+the symbol database at all: `tools/q.py func '' CSWGuiInGameGalaxyMap` lists only `Constructor`,
+`Destructor`/`Destructor_2`, `DisplayPlanet`, `Draw`, `HandleInputEvent`, `NextPlanet`,
+`OnPanelAdded`, `OnPanelRemoved`, `OnPlanetClicked`, `PrevPlanet` — matching §1.1's own function
+list exactly. Every button on this panel, accept included, is dispatched from inside
+`HandleInputEvent 0x00695980` itself:
+
+```
+0x006959AC  test edi, edi
+0x006959AE  je 0x695ae2                  ; edi (2nd stack arg) == 0 -> not-handled exit
+0x006959B4  lea eax, [ebx - 0x27]        ; ebx = raw GUI event code
+0x006959B7  cmp eax, 0xb8
+0x006959BC  ja 0x695ae2                  ; out of [0x27,0xDF] -> not-handled exit
+0x006959C2  movzx eax, byte ptr [eax + 0x695b0c]   ; byte lookup table -> case index
+0x006959C9  jmp dword ptr [eax*4 + 0x695af8]        ; jump table, 4 known targets
+```
+
+`tools/disasm.py 0x695980 500` disassembled every case body reachable from the table.
+`0x695AAC`/`0x695AD1` call `PrevPlanet 0x694CA0`/`NextPlanet 0x694BF0` (VERIFIED against the same
+addresses §1.1 already names) — the arrow buttons. The other two, `0x6959D0` and a sibling at
+`0x695A79`, both end by calling `CGuiInGame::HideGalaxyMapGui 0x0062D1D0` (§1.1's own "show/hide
+entry points" name) — the two buttons that CLOSE the panel: accept and back.
+
+**`0x6959D0` is the accept branch specifically, confirmed two independent ways:**
+
+1. Only this branch pushes the literal `0x0075497C` before constructing a `CExoString` and
+   calling `CVirtualMachine::RunScript 0x005D0FC0` (all four names — `CSWGuiManager::PlayGuiSound
+   0x0040A140`, `CExoString::Constructor_2 0x005E5A90`/`Destructor_2 0x005E5C20`,
+   `CClientExoApp::GetInGameGui 0x005ED690`, `CVirtualMachine::RunScript 0x005D0FC0`,
+   `CGuiInGame::HideGalaxyMapGui 0x0062D1D0` — VERIFIED this pass via `tools/q.py sql "SELECT
+   address,class_name,function_name FROM functions WHERE address IN (...)"`). Reading
+   `0x0075497C` out of the executable's own `.rdata` (a standalone reuse of `tools/disasm.py`'s
+   own PE-section walk) returns the ASCII string `"k_sup_galaxymap\0"` — VERIFIED, byte for byte,
+   the exact confirm-handler script name §1.3 already traced end to end from the NWScript side
+   ("`k_sup_galaxymap.nss` ... this is the Accept confirm handler"). No other function in this
+   class's `HandleInputEvent` reads that string.
+2. `tools/xrefs.py 0x6959D0` reports **zero** direct call/jmp instruction sites and **exactly
+   one** address-literal occurrence — the jump-table entry at `0x695AF8` itself. The only way
+   execution ever reaches `0x6959D0` is through that one computed jump, for whichever raw GUI
+   event code(s) the lookup table at `0x695B0C` maps to case index 0. Same "single funnel,
+   cross-referenced" argument §1.4 makes for `StartNewModule`.
+
+Full disassembly of the accept case body (`tools/disasm.py 0x6959D0 130`):
+
+```
+0x006959D0  8b4e18               mov ecx, dword ptr [esi + 0x18]      ; this (CSWGuiInGameGalaxyMap*)
+0x006959D3  6a00                 push 0
+0x006959D5  e86647d7ff           call 0x40a140                        ; CSWGuiManager::PlayGuiSound
+0x006959DA  a1003a7a00           mov eax, dword ptr [0x7a3a00]
+0x006959DF  85c0                 test eax, eax
+0x006959E1  746d                 je 0x695a50
+0x006959E3  8b0dfc397a00         mov ecx, dword ptr [0x7a39fc]
+0x006959E9  8b4904               mov ecx, dword ptr [ecx + 4]
+0x006959EC  e89f7cf5ff           call 0x5ed690                        ; CClientExoApp::GetInGameGui
+0x006959F1  687c497500           push 0x75497c                        ; "k_sup_galaxymap"
+0x006959F6  8d4c2410             lea ecx, [esp + 0x10]
+0x006959FA  c780040c000001000000 mov dword ptr [eax + 0xc04], 1
+0x00695A04  e88700f5ff           call 0x5e5a90                        ; CExoString::Constructor_2
+0x00695A09  8b0d003a7a00         mov ecx, dword ptr [0x7a3a00]
+0x00695A0F  6a00                 push 0
+0x00695A11  680000007f           push 0x7f000000
+0x00695A16  8d542414             lea edx, [esp + 0x14]
+0x00695A1A  52                   push edx
+0x00695A1B  c744242800000000     mov dword ptr [esp + 0x28], 0
+0x00695A23  e898b5f3ff           call 0x5d0fc0                        ; CVirtualMachine::RunScript
+0x00695A28  a1fc397a00           mov eax, dword ptr [0x7a39fc]
+0x00695A2D  8b4804               mov ecx, dword ptr [eax + 4]
+0x00695A30  e85b7cf5ff           call 0x5ed690
+0x00695A35  8d4c240c             lea ecx, [esp + 0xc]
+0x00695A39  c780040c000000000000 mov dword ptr [eax + 0xc04], 0
+0x00695A43  c744241cffffffff     mov dword ptr [esp + 0x1c], 0xffffffff
+0x00695A4B  e8d001f5ff           call 0x5e5c20                        ; CExoString::Destructor_2
+0x00695A50  8b0dfc397a00         mov ecx, dword ptr [0x7a39fc]
+0x00695A56  8b4904               mov ecx, dword ptr [ecx + 4]
+0x00695A59  e8327cf5ff           call 0x5ed690
+0x00695A5E  8bc8                 mov ecx, eax
+0x00695A60  e86b77f9ff           call 0x62d1d0                        ; CGuiInGame::HideGalaxyMapGui
+0x00695A65  5f                   pop edi
+0x00695A66  5e                   pop esi
+0x00695A67  5b                   pop ebx
+0x00695A68  8b4c2408             mov ecx, dword ptr [esp + 8]
+0x00695A6C  64890d00000000       mov dword ptr fs:[0], ecx
+0x00695A73  83c414               add esp, 0x14
+0x00695A76  c20800               ret 8
+```
+
+And the dispatcher's own shared "not handled" tail, reached both by the pre-jump-table exits
+(`edi==0`, out-of-range event code) and by this hook's own refusal:
+
+```
+0x00695AE2  8b4c2414             mov ecx, dword ptr [esp + 0x14]
+0x00695AE6  5f                   pop edi
+0x00695AE7  5e                   pop esi
+0x00695AE8  5b                   pop ebx
+0x00695AE9  64890d00000000       mov dword ptr fs:[0], ecx
+0x00695AF0  83c414               add esp, 0x14
+0x00695AF3  c20800               ret 8
+```
+
+### The splice
+
+The case handler's own first two instructions are position-independent and exactly 5 bytes —
+`mov ecx,[esi+0x18]` (3) / `push 0` (2), the `this` pointer and the argument to the immediately
+following `PlayGuiSound` call — so only those 5 bytes are relocated; nothing past them (the sound
+call, the string construction, the script dispatch, the hide call) needs touching on the ALLOW
+path, which resumes at `0x006959D5` (the untouched original `call 0x40a140`) and runs bit-for-bit
+as vanilla from there.
+
+Reached by a `jmp` splice (this is itself a jump-table TARGET, not a callable function — there is
+no return address to preserve), so `esi` (`this`), `ebx` (the raw event code) and `edi` (the
+caller's second argument, already tested non-zero by `HandleInputEvent`'s own dispatch before the
+jump table is even reached) are all live exactly as the vanilla case body expects them, and the
+real x86 call stack is untouched — the stub's own `pushad`/`popad` pair is the only thing that
+ever moves `esp`, and it is back to its entry value before either the ALLOW or the REFUSE path
+runs.
+
+**The refuse path is the function's own no-op exit, not a synthesised one** — the same principle
+`ContainerUseHook`'s own remarks establish for its `ret 8`, adapted for a JUMP-TABLE target
+instead of a CALLABLE function (there is no return address here to pop; a synthesised `ret` would
+corrupt the caller). `0x00695AE2` is `HandleInputEvent`'s own shared "this event was not handled"
+tail: it restores the saved SEH handler from `[esp+0x14]`, pops `edi`/`esi`/`ebx` off the real
+stack (the SAME values pushed at the function's own entry, untouched by anything this hook does),
+and `ret 8`s. Jumping there from the stub is therefore exactly equivalent to the accept click
+never having matched a case at all — no galaxy-map/panel state changes, the confirm script never
+runs, and the panel is left exactly as it was (still open) for the notice to explain.
+
+### ABI
+
+`HandleInputEvent` itself is `__thiscall(ecx=this, [esp+4]=eventCode, [esp+8]=secondArg), ret 8`
+— matches the symbol database's own `CSWGuiPanel::HandleInputEvent` row for the base-class call
+this function makes at its own entry (`0x00409E60`, `tools/q.py func '' CSWGuiPanel`). Nothing
+about the splice depends on that ABI directly (it neither calls nor returns from the function
+itself), only on the two jump targets (`0x006959D5`, `0x00695AE2`) being reached with the same
+register/stack state the vanilla dispatch would have left, which the analysis above establishes.
+
+### VERIFIED vs INFERRED
+
+**VERIFIED this pass**, against the sha256-matched GOG v1.0.3 `swkotor.exe`:
+* `CSWGuiInGameGalaxyMap::HandleInputEvent 0x00695980`'s full disassembly and jump-table shape.
+* `0x006959D0` is the accept-case handler: the `"k_sup_galaxymap"` string match, and
+  `tools/xrefs.py`'s "one jump-table literal, zero call/jmp sites" result.
+* All six named function addresses (`PlayGuiSound`, `CExoString::Constructor_2`/`Destructor_2`,
+  `GetInGameGui`, `RunScript`, `HideGalaxyMapGui`), cross-checked against `tools/q.py`.
+* `0x00695AE2`'s own bytes and its two pre-existing callers inside `HandleInputEvent`.
+* The 5-byte relocatable prologue (`8B 4E 18 6A 00`) and its resume point (`0x006959D5`).
+
+**NEEDS-LIVE** (never exercised on a running process this pass — see the live test plan below):
+* Whether the splice installs cleanly and the ALLOW path truly reproduces vanilla behaviour
+  (host confirms a planet, sees the same click sound / script dispatch / panel close as before).
+* Whether the REFUSE path (jump to `0x00695AE2`) is actually safe in practice — the byte-level
+  argument above is sound, but this is the plugin's first jump-table-target splice (every other
+  hook splices a callable function's entry or a mid-function point with a real return address);
+  a live pass should confirm no crash, no stuck panel state, no leaked SEH frame.
+* Whether the notice text reads correctly and the client's map genuinely stays usable afterward
+  (can the player click accept again once the host actually leads the transition, e.g. under
+  `follow_lead=any` after the host frees up, or does the panel need to be re-opened).
+* The `follow_lead` read itself: the plugin's own direct `PluginConfig.Read("follow_lead")`
+  duplicates `CoopConfig.cs`'s parse rather than sharing it (NativeAOT assembly boundary — see
+  `GalaxyMapConfirmSuppressionRule`'s own doc comment) — worth confirming live that both sides
+  agree on the same session's actual `coop.ini`, since they are two independent readers of the
+  same file rather than one value propagated over the wire.
+
+### What shipped
+
+* `src/KotorCoop.Plugin/GalaxyMapConfirmHook.cs` (new) — the detour: verify-bytes-or-refuse
+  install, jump-table-target splice, ALLOW/REFUSE stub, the managed callback.
+* `src/KotorCoop.Plugin/GalaxyMapConfirmSuppressionRule.cs` (new) — the plugin-side pure
+  decision, mirroring `KotorCoop.Session.GalaxyMapConfirmRefusalRule.ShouldRefuse(isClient, mode)`
+  exactly in shape (own doc comment explains why it cannot literally reuse that class).
+* `src/KotorCoop.Plugin/PluginHost.Controllers.cs` — `GalaxyMapConfirmHook.Bind(_view)`, next to
+  `MinimapPeerHook.Bind`.
+* `src/KotorCoop.Plugin/PluginHost.Startup.cs` (`InstallHooks`) — installs the hook
+  unconditionally (verify-bytes-or-refuse; the coop.ini gate lives inside the hook's own
+  callback, same shape as `PartySelectSuppressionController`'s `_enabled`).
+* `tests/KotorCoop.Tests/GalaxyMapConfirmSuppressionRuleTests.cs` (new, 4 tests),
+  `KotorCoop.Tests.csproj` linked-source entry for `GalaxyMapConfirmSuppressionRule.cs`.
+* `docs/CONFIG.md`, `profiles/coop.ini.example` — new key `galaxy_map_host_only`, default ON.
+* `docs/limitations.md` — galaxy-map row updated to "Built, NEEDS-LIVE".
+
+Build: `pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean (0 warnings), `dotnet build
+src/KotorCoop.Agent` clean, `dotnet test tests/KotorCoop.Tests --filter
+"FullyQualifiedName~GalaxyMap"` 13/13 (the 3 pre-existing `KotorCoop.Session` rule tests plus the
+4 new plugin rule tests, plus other matches already in the suite).
+
+### Live test plan (needs a two-instance rig)
+
+Prerequisite: reach the galaxy map console (`infoterm001`, `Tag = "GalaxyMap"`) — an Ebon Hawk
+save, or `warp ebo_m12aa` from the console (`docs/research/console-overlay.md`).
+
+1. **Baseline, `galaxy_map_host_only=0` (or single-player)**: confirm the HOST can still open the
+   map, pick a planet, click accept, and see the identical vanilla sequence (click sound, the
+   take-off sequence begins) as before this change — proves the hook installs without disturbing
+   the ALLOW path when it should never refuse.
+2. **The refusal, `follow_lead=host` (the default)**: with both instances at the galaxy map
+   console, the CLIENT opens their own map, picks a planet, clicks accept. Expect: no click
+   sound change beyond the vanilla one (`PlayGuiSound` still runs — the refusal fires just after
+   it in program order, see the disassembly above; if this is jarring live, the stub order can
+   be revisited), the chat line "only the host can choose a destination" posts once, the plugin
+   log shows `galaxy-map: confirm refused - only the host can choose a destination
+   (follow_lead=host)`, and — the key correctness check — the HOST's own module does NOT change,
+   `k_sup_galaxymap` never ran on the client, and the map stays open on the client's screen.
+   Separately, confirm the HOST's own accept click on the SAME console proceeds exactly as
+   vanilla (the take-off sequence begins, `K_FUTURE_PLANET` gets set, etc.) — this is the "let
+   the host's own confirm go through untouched" requirement.
+3. **`follow_lead=any`**: repeat step 2 on the client. Expect no refusal — the client's own
+   confirm proceeds normally and (per §1.4) becomes an announce (if `transition_announce_scripted`
+   is on) the host's own follow-AI can pick up through the existing chain.
+4. **Crash/stability check specific to this splice**: since this is the plugin's first
+   jump-table-target detour (see NEEDS-LIVE above), repeat step 2 several times back to back
+   (open map, pick different planets, accept, repeat) watching for any stuck input, a panel that
+   silently stops responding, or a delayed crash a few seconds later — the same class of
+   delayed-crash symptom `docs/research/transition-crashes.md` has already found elsewhere in
+   this codebase from other causes, so a clean multi-rep run here is worth recording explicitly
+   rather than assuming a mid-function/jump-table splice is automatically as safe as this doc's
+   reasoning claims.
+5. **`RefusedCount`/`AllowedCount` sanity**: these two counters
+   (`GalaxyMapConfirmHook.RefusedCount`/`AllowedCount`) are not currently exposed through any dev
+   verb — if this live pass adds one (mirroring `partyselect ok`'s own precedent), record it here;
+   otherwise cross-check via the plugin log line counts instead.
