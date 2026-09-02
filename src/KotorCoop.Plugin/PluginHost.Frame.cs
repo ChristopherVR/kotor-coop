@@ -245,6 +245,11 @@ internal static unsafe partial class PluginHost
         // records on the game's thread inside four engine splices and must be turned into log
         // lines from somewhere file I/O is safe. Inert — and free — unless the probe installed.
         DelayEventProbeHook.Drain();
+        if (ShowInGameGuiProbeHook.IsInstalled)
+        {
+            ShowInGameGuiProbeHook.Drain();
+            FieldWriteWatch.KeepArmedOnGuiBusy();
+        }
 
         // Before the epoch gate, deliberately: these run at the main menu too, which is exactly
         // where the gate returns early (no server) — the Enter chat prompt and the chat

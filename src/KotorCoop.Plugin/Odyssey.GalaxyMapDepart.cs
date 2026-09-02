@@ -18,9 +18,15 @@ internal static unsafe partial class Odyssey
     ///
     /// Composition, in order, each step's own refusal reported verbatim:
     /// <list type="number">
-    /// <item>Take down whatever full-screen GUI is up (<see cref="CloseFullScreenGui"/>): a
-    /// peer's departure outranks this player's own inventory screen, and
-    /// <c>ShowGalaxyMapGui</c> refuses while <c>CGuiInGame+0x30</c> is nonzero.</item>
+    /// <item>Take down whatever full-screen GUI is up (<see cref="CloseFullScreenGuiForcibly"/>):
+    /// a peer's departure outranks this player's own inventory screen, and
+    /// <c>ShowGalaxyMapGui</c> refuses while <c>CGuiInGame+0x30</c> is nonzero — which on an
+    /// unattended client that joined by save it always is: the engine's own post-load Status
+    /// Summary box (<see cref="DismissStatusSummary"/>) is still up, nobody having clicked
+    /// OK. The forcible close dismisses it the way its OK button does and then puts the
+    /// input class back to "game" (<see cref="RestoreGameInputClass"/>) — without that,
+    /// <c>ShowGalaxyMapGui</c>'s own <c>SetInputClass(2, 1)</c> is a no-op and the map never
+    /// opens (live 2026-09-03, both directions).</item>
     /// <item><see cref="UnlockGalaxyMapPlanet"/>: the party-table planet flags are per-save and
     /// not synced, so the follower's own save may not have unlocked what the leader's has.</item>
     /// <item><see cref="SetGalaxyMapSelectedPlanet"/>, then <see cref="OpenGalaxyMap"/> (the
@@ -61,7 +67,10 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        if (*(int*)(gui + InGameGuiBusyOffset) != 0 && !CloseFullScreenGui(out string closeDetail))
+        // Forcibly: an unattended client that joined by save still has the engine's post-load
+        // Status Summary box up (CGuiInGame+0xA8, nobody clicked OK), which the plain close
+        // cannot get past — see CloseFullScreenGuiForcibly / DismissStatusSummary.
+        if (*(int*)(gui + InGameGuiBusyOffset) != 0 && !CloseFullScreenGuiForcibly(out string closeDetail))
         {
             detail = $"could not take down the open full-screen GUI first: {closeDetail}";
             return false;

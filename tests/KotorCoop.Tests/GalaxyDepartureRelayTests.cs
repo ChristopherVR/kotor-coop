@@ -175,7 +175,9 @@ public class GalaxyDepartureRelayTests
 
         public bool TryReadGalaxyDeparture(out uint serial, out int planet)
         {
-            if (OwnDeparture is { } own)
+            // Like the real bridge: a zero serial (a fresh block, nothing ever clicked) is
+            // "nothing to read", not a readable departure #0.
+            if (OwnDeparture is { } own && own.Serial != 0)
             {
                 (serial, planet) = own;
                 return true;
@@ -407,11 +409,31 @@ public class GalaxyDepartureRelayTests
     }
 
     [Fact]
+    public void TheFirstClickOfASessionOnAFreshBlockIsAnnounced()
+    {
+        // 2026-09-03 run 1: the block held serial 0 at attach (unreadable), the baseline was
+        // only taken from a successful read, so the first real click BECAME the baseline and
+        // the host's departure went out as plain transition movies. The baseline is the
+        // first pump's read, readable or not.
+        (CoopAgent agent, DepartureBridge bridge, DepartureSession session) = Build();
+        bridge.OwnDeparture = null;
+        agent.PumpOnce();
+        agent.PumpOnce();
+        Assert.Empty(session.Published);
+
+        bridge.OwnDeparture = (1, 4);
+        agent.PumpOnce();
+
+        Assert.Single(session.Published);
+        Assert.Equal((Ship, 1u, 4), session.Published[0]);
+    }
+
+    [Fact]
     public void AClickAfterTheBaselineIsAnnouncedWithTheModuleAndRepeated()
     {
         (CoopAgent agent, DepartureBridge bridge, DepartureSession session) = Build();
         bridge.OwnDeparture = (0, -1);
-        agent.PumpOnce(); // baseline (serial 0)
+        agent.PumpOnce(); // baseline (serial 0, unreadable)
 
         bridge.OwnDeparture = (1, 4);
         for (int i = 0; i < 8; i++)

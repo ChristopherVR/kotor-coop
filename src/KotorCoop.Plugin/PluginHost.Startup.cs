@@ -376,6 +376,22 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // A default-OFF diagnostic (coop.ini gui_probe=1): a splice on Show/HideSWInGameGui
+        // plus, from the frame hook, a hardware watchpoint on CGuiInGame+0x30 (FieldWriteWatch).
+        // Answered the galaxy-map relay's "who writes +0x30" question on 2026-09-03; kept for
+        // the next one. See ShowInGameGuiProbeHook.
+        if (PluginConfig.ReadBool("gui_probe", false))
+        {
+            if (ShowInGameGuiProbeHook.Install(out string guiProbeDiagnostic))
+            {
+                Log($"gui-probe: {guiProbeDiagnostic}");
+            }
+            else
+            {
+                Log($"gui-probe: NOT installed: {guiProbeDiagnostic}");
+            }
+        }
+
         // The engine reverts any pause that lacks a valid "PausedBy" record within one
         // tick, which in a loopback session is every pause there is — space bar, HUD
         // button and mirror alike. See PauseSanityPatch.

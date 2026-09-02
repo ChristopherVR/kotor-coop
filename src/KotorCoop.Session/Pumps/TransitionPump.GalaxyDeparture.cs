@@ -91,15 +91,20 @@ internal sealed partial class TransitionPump
 
     private void PublishOwnGalaxyDeparture(in PlayerState local)
     {
-        if (!bridge.TryReadGalaxyDeparture(out uint serial, out int planet))
-        {
-            return;
-        }
-
+        // ⚠ The bridge reports "nothing" for a serial of zero, and zero is what a fresh block
+        // holds — so the baseline is taken from the FIRST read whatever it says. Baselining
+        // only on a successful read made the first real click the baseline, and the first
+        // live departure went unannounced (2026-09-03 run 1).
+        bool readable = bridge.TryReadGalaxyDeparture(out uint serial, out int planet);
         if (!_galaxyDepartureBaselined)
         {
             _galaxyDepartureBaselined = true;
-            _announcedGalaxyDepartureSerial = serial;
+            _announcedGalaxyDepartureSerial = readable ? serial : 0;
+            return;
+        }
+
+        if (!readable)
+        {
             return;
         }
 

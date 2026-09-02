@@ -367,6 +367,13 @@ party_select_host_only=1
 # dated 2026-09-02 section for the RE and the live test plan. NEEDS-LIVE.
 galaxy_map_host_only=1
 
+# Diagnostics, default OFF, not features: delay_probe=1 splices the delayed-script-situation
+# path (DelayEventProbeHook); gui_probe=1 splices Show/HideSWInGameGui and arms a hardware
+# watchpoint (DR0, main thread) on CGuiInGame+0x30 (ShowInGameGuiProbeHook, FieldWriteWatch).
+# Both only write to kotorcoop-plugin.log. Leave them off unless a research doc asks.
+# delay_probe = 0
+# gui_probe = 0
+
 # --- companion follow-AI fix candidates (unverified) --------------------------------
 # Two candidate fixes for the companion follow-AI's terminal-stall shape
 # (docs/research/party-reconciliation.md). Both default OFF; neither has cleared this

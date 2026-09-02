@@ -1963,3 +1963,135 @@ TRUE default a client's own galaxy-map confirm is ALLOWED (lead-swap), not refus
 `GalaxyMapConfirmSuppressionRule` refuses only a client under an EXPLICIT `follow_lead=host` with
 `galaxy_map_host_only=1`. To exercise the refusal live you must set `follow_lead = host` in the
 client's `coop.ini` first.
+
+## 2026-09-03 — LIVE, both directions: the departure relay works; what stood in its way was the input class, not the loader
+
+Commit 2a1545e built the relay (a peer's accept click published at the click, replayed on every
+follower's own engine through `Odyssey.DepartToPlanet`). Its first live run on the rig did nothing
+visible on the client, and the "CANNOT follow" paragraph above stayed true for another six hours.
+This section records what the run showed, the tool that named the cause, the cause itself, the
+fix, and the two clean runs that closed the item. Everything here is VERIFIED live unless marked.
+
+### What the first relay run looked like
+
+Host (`galaxymap unlock 4` → `select 4` → `open` → `galaxyaccept`): `confirm allowed - departing
+to planet 4 (published as departure #1 for the session to follow)`, and the leg ran. Client:
+`galaxy-departure: replayed a peer's departure #1 … CloseFullScreenGuiForcibly: popmodal 1 →
+0, HideSWInGameGui +0x30 1 → 0 … ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> 0`. The map
+never opened, so the accept dispatch had nothing to hit, and the client stayed in the old ship.
+Nothing refused, nothing faulted: a SILENT no-op inside `ShowGalaxyMapGui`, which is a function
+that contains no store to `+0x30` at all — and on the host that same call leaves `+0x30` at 1.
+
+### Two probes, one answer
+
+`ShowInGameGuiProbeHook` (`gui_probe=1`, a read-only splice on `ShowSWInGameGui`/`HideSWInGameGui`,
+the only two runtime writers of `+0x30` a capstone sweep of every function in
+tools/kotor1_0_3.db could find) recorded NOTHING around a host `galaxymap open` that flipped the
+field 0 → 1. So the static sweep was blind to the real writer, and the next tool was the CPU's:
+`FieldWriteWatch` arms debug register DR0 (4-byte write) on `CGuiInGame+0x30` from a helper
+thread (`SuspendThread`/`GetThreadContext(CONTEXT_DEBUG_REGISTERS)`/`SetThreadContext`), and a
+vectored exception handler records `eip`, the stored value and twelve stack dwords into a ring
+the frame hook drains. First trap on the host, at `galaxymap open`:
+
+```
+field-watch: 0x… <- 1 by the instruction before eip 0x006202C4 … exe frames: [esp+…]=0x005EDA7B …
+```
+
+The instruction before `0x006202C4` is `mov [eax+0x30], 1` at **`0x006202BE`**, inside
+**`CClientExoAppInternal::SetInputClass` 0x006200E0** (`__thiscall(this, int class, int flag)`,
+`ret 8`; `CClientExoApp` wrapper 0x005EDA60 forwards to it — that is the `0x005EDA7B` return
+address in the capture). Fresh disasm of the whole function, VERIFIED:
+
+- first act: `cmp [this+0x9C], class; je ret` — **setting the class it already holds is a no-op**;
+- `+0x9C` is the current input class: 0 = game, 1 = game with a minigame check, 2 = GUI,
+  3 = cutscene-ish (`IndicateObject(0, 0)` only);
+- class 2: `CGuiInGame+0x30 = 1` at 0x006202BE, and if `gui+0x34 == 1` also `SetSWGuiStatus(3, 1)`
+  and `ShowMouse(1)`;
+- class 0: `SetSWGuiStatus(4, 1)`, re-resolve the player, reset the follow camera,
+  `CGuiInGame+0x30 = 0` at 0x00620272.
+
+A byte scan for `E8 rel32` targets of 0x5EDA60 (a linear capstone sweep desyncs; the byte scan
+does not) then showed the shape of the whole GUI layer: **every `Show*Gui` calls
+`SetInputClass(2, 1)` and every retail close path calls `SetInputClass(0, 1)`** —
+`HideGalaxyMapGui` 0x0062D21E, `HideStoreGui` 0x0062E4EE, the inventory/equip/character/map/
+journal/options panels' Escape handlers. `CGuiInGame+0x30` is, in effect, "the input class is
+GUI". `Show/HideSWInGameGui`'s own stores — the only ones the class-range scan ever saw — are the
+menu-key screens only.
+
+`HideSWInGameGui` clears `+0x30` directly but **never resets the input class**. So this plugin's
+own `closegui`/`CloseFullScreenGui` left a client in class 2 with `+0x30 = 0`; the next
+`ShowGalaxyMapGui`'s `SetInputClass(2, 1)` returned at its first compare, `+0x30` stayed 0, and the
+map never opened. That is run 1's silent no-op, exactly.
+
+### The "loader leftover" was the Status Summary box — a correction to two earlier docs
+
+The watchpoint's stack capture on the client's first trap after the load carried frame
+**`0x0062F01F`, inside `CGuiInGame::ShowStatusSummary` 0x0062EF90**: after a game load the engine
+runs `SetPausedByCombat(1, 6, 0)`, `AddPanel(gui+0xA8, 1, 1)` and `SetInputClass(2, 0)` — the
+retail journal/XP/credits recap box over a paused world. A human clicks OK. An unattended
+save-joined client never does, so the world stays paused-by-GUI, the modal stack keeps the box,
+`+0x30` stays 1 and the input class stays 2 for the rest of the session. **That, not the
+`CSWGuiSaveLoad` panel `MenuLoadController` constructs, is what shared-inventory-v2.md §14/§15
+measured as "modal stack 1, +0x30 = 1" on every plugin-loaded client** (the loader's panel is
+never `AddPanel`ed; the box is). Corrected in place in that doc's new §20 and in
+`Odyssey.Store.cs`'s doc comments.
+
+Its OK handler is `CSWGuiStatusSummary::HandleInputEvent` 0x00625AC0 (vtable 0x0074FF68, slot
+`+0x3C`; events 0x27/0x28/0x2D/0x2E → the case at 0x00625AE7): mark the panel to destroy
+(0x00624A00), `SetInputClass(0, 1)`, `PlayGuiSound(0)`, and unless the panel's `+0x7C` bit 0 says
+otherwise, `SetPausedByCombat(0, 0, 0)` to unpause. `popmodal` only ever did the first of those.
+
+### What shipped
+
+- `Odyssey.RestoreGameInputClass` (`Odyssey.Store.cs`): if the input class is 2 and no full-screen
+  GUI is up (`+0x30 == 0`), call `SetInputClass(0, 1)` — the state a retail close leaves behind.
+  Refuses to touch class 1 or 3. `CloseFullScreenGui` calls it after a successful
+  `HideSWInGameGui`; `OpenGalaxyMap` calls it BEFORE `ShowGalaxyMapGui` and refuses if it fails.
+- `Odyssey.DismissStatusSummary` (`Odyssey.StatusSummary.cs`): if `CGuiInGame+0xA8` carries the
+  Status Summary's vtable and the GUI manager still has it registered, send its own OK
+  (`HandleInputEvent(panel, 0x27, 1)`) so the modal stack, `+0x30`, the input class and the pause
+  all come back together. `CloseFullScreenGuiForcibly` tries this first and falls back to
+  `popmodal`×8 + close only if the stack is still occupied.
+- `DescribeGuiPanels` (`galaxymap stats`) now prints the input class.
+- `gui_probe` stays a default-OFF diagnostic (`ShowInGameGuiProbeHook` + `FieldWriteWatch`),
+  documented in `profiles/coop.ini.example`. The rig's own `coop.ini` files had it on for this
+  investigation and have it removed again.
+
+### The two clean runs (rig, 2026-09-03 09:42–09:50, `-Save 1`, shipped defaults + `follow_lead=any`)
+
+**Run A — host leads, Tatooine (planet 4).** Host `09:43:52 galaxy-map: confirm allowed -
+departing to planet 4 (published as departure #1)`. Client, same second: `galaxy-departure:
+replayed a peer's departure #1 … status summary dismissed with its own OK … SetInputClass(0, 1)
+called - input class 2 -> 0 … ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> 1 …
+HandleInputEvent(panel, 0x27, 1) sent — +0x30 1 -> 0, GalaxyMapConfirmHook refused 0 -> 0,
+allowed 0 -> 1`. Both instances played `08.bik`, then `0A.bik` + `05_3a.bik`; both agents
+reported `module ebo_m12aa  peers-here 1`; 0 faults, 0 "dropping pending movies".
+
+**Run B — client leads, Kashyyyk (planet 5), from that fresh `ebo_m12aa`.** Client `galaxymap
+open` now opens first try (`+0x30 0 -> 1`, input class 0 → 2), `galaxyaccept`: `confirm allowed -
+departing to planet 5 (published as departure #1)`; agent2 `announcing galaxy-map departure #1
+to Kashyyyk`. Host `09:46:42 galaxy-departure: replayed a peer's departure #1 - planet 5:
+available 0 -> 1, selectable 0 -> 1; SetSelectedPlanet(5) applied — CSWPartyTable+0xE0 4 -> 5;
+HandleInputEvent(panel, 0x27, 1) sent — CGuiInGame+0x30 1 -> 0, refused 0 -> 0, allowed 1 -> 2`;
+agent1 `client 2 set course for Kashyyyk from 'ebo_m12aa' (departure #1)` → `replaying Malak's
+galaxy-map departure #1 to Kashyyyk (attempt 1/10)` → `following Malak to Kashyyyk: the engine
+accepted the galaxy-map departure`; the peer's `0C, 05_4a` movies were correctly judged
+"belong to the interplanetary leg under way here - not queued for a follow". Both ended in
+`ebo_m12aa`, `peers-here 1`, 0 faults on either plugin log.
+
+Note the per-peer serial: the client's first departure is ITS #1 even though the host's #1 had
+already run — `_seenGalaxyDepartureSerials` is keyed by peer, as designed.
+
+**The "CANNOT follow" paragraph above is therefore history.** Galaxy-map departure is a
+coop-followable transition in both directions. `docs/limitations.md` (transitions table, and
+unverified items 13/15) and `docs/CONSOLE.md` (`galaxymap depart <n>`, `popmodal`) are updated.
+
+### Still open
+
+- The REFUSE case under an explicit `follow_lead=host` on the client (unchanged; needs that ini
+  line and one human-free `galaxyaccept`).
+- The follower's planet flags are unlocked as a side effect; a leader whose story has unlocked
+  MORE planets than the follower's save would let the follower's own map show fewer — cosmetic,
+  since a follower never needs to choose.
+- A departure fired while the follower is mid-dialogue is retried by the agent for the 90 s leg
+  window; a longer conversation on the follower's side would lose the follow (a `W_SAVE` later).

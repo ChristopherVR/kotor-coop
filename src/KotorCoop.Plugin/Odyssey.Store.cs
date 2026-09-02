@@ -394,8 +394,86 @@ internal static unsafe partial class Odyssey
     /// that one screen, and the same <c>HideSWInGameGui</c> 0x0062CBA0 this plugin already calls
     /// from <c>MenuLoadController</c> is what takes it back down. Four consecutive live store
     /// rounds lost the client half to this refusal (§8.2, §10.2, §13.1).
+    ///
+    /// CORRECTION 2026-09-03 (hardware watchpoint, <c>FieldWriteWatch</c>): the byte scan
+    /// missed the writer that matters in play. <c>CClientExoAppInternal::SetInputClass</c>
+    /// 0x006200E0 sets this field to 1 at <c>0x006202BE</c> (input class 2 = GUI) and to 0 at
+    /// <c>0x00620272</c> (class 0 = game) — it lives outside the GUI class, so the class-range
+    /// scan never saw it. Every <c>Show*Gui</c> (galaxy map, store, party selection, the menu
+    /// button) sets the field THROUGH <c>SetInputClass(2, 1)</c>, and every retail close path
+    /// clears it through <c>SetInputClass(0, 1)</c>; <c>Show/HideSWInGameGui</c>'s own stores
+    /// are the menu-key screens only. The field is, in effect, "the input class is GUI".
+    /// See <see cref="ClientInternalInputClassOffset"/> for the consequence.
     /// </summary>
     private const int InGameGuiBusyOffset = 0x30;
+
+    /// <summary>
+    /// CClientExoAppInternal + this = the current input class (VERIFIED, fresh disasm of
+    /// <c>SetInputClass</c> 0x006200E0, 2026-09-03): 0 = game, 1 = game with a minigame check,
+    /// 2 = GUI, 3 = cutscene-ish (<c>IndicateObject(0,0)</c> only). <c>SetInputClass</c>'s first
+    /// act is <c>cmp [this+0x9C], class; je ret</c> — setting the class it already holds is a
+    /// NO-OP, and that no-op is the whole reason a save-joined client could never open the
+    /// galaxy map: <c>CGuiInGame::ShowStatusSummary</c> 0x0062EF90 (the retail "status summary"
+    /// box after a load — the "loader leftover" this codebase kept blaming on the save/load
+    /// panel) set the class to 2, this plugin's <c>closegui</c> then cleared <c>+0x30</c>
+    /// directly via <c>HideSWInGameGui</c> without touching the class, so the next
+    /// <c>ShowGalaxyMapGui</c>'s <c>SetInputClass(2, 1)</c> returned at once and
+    /// <c>+0x30</c> stayed 0 — the "silent no-op" of run 4. <see cref="RestoreGameInputClass"/>
+    /// is the fix: leave a closed GUI in the state a retail close leaves it.
+    /// </summary>
+    private const int ClientInternalInputClassOffset = 0x9C;
+
+    private const int InputClassGame = 0;
+    private const int InputClassGui = 2;
+
+    /// <summary>
+    /// <c>CClientExoAppInternal::SetInputClass(this, int class, int flag)</c> 0x006200E0,
+    /// <c>__thiscall</c>, <c>ret 8</c> (the <c>CClientExoApp</c> wrapper 0x005EDA60 just
+    /// forwards to it). Class 0 with flag 1 is what every retail GUI close calls
+    /// (<c>HideGalaxyMapGui</c> 0x0062D21E, <c>HideStoreGui</c> 0x0062E4EE, the inventory /
+    /// equip / character / map / journal / options panels' Escape handlers): it re-resolves the
+    /// player, resets the follow camera, <c>ShowMouse(1)</c>, <c>SetSWGuiStatus(4, 1)</c> and
+    /// clears <c>CGuiInGame+0x30</c>. Class 2 with flag 1 is what every <c>Show*Gui</c> calls.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetInputClassFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x006200E0;
+
+    /// <summary>
+    /// Puts the client's input class back to "game" (0) if it is still "GUI" (2) while no
+    /// full-screen GUI is up — the state a retail close leaves behind and the state this
+    /// plugin's direct <c>HideSWInGameGui</c> close does NOT (see
+    /// <see cref="ClientInternalInputClassOffset"/>). Idempotent: <c>SetInputClass</c> itself
+    /// returns immediately when the class is already 0. Refuses to touch a class of 1 or 3
+    /// (minigame / cutscene input — not ours to override). MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool RestoreGameInputClass(out string detail)
+    {
+        nint client = GetClientInternal();
+        if (client == 0)
+        {
+            detail = "no client internal resolved";
+            return false;
+        }
+
+        int before = *(int*)(client + ClientInternalInputClassOffset);
+        if (before != InputClassGui)
+        {
+            detail = $"input class is {before} (not GUI) - left alone";
+            return true;
+        }
+
+        nint gui = GetInGameGui();
+        if (gui != 0 && *(int*)(gui + InGameGuiBusyOffset) != 0)
+        {
+            detail = "input class is GUI and a full-screen GUI is up - left alone";
+            return true;
+        }
+
+        SetInputClassFn(client, InputClassGame, 1);
+        int after = *(int*)(client + ClientInternalInputClassOffset);
+        detail = $"SetInputClass(0, 1) called - input class {before} -> {after}";
+        return after == InputClassGame;
+    }
 
     /// <summary>CGuiInGame + this = CSWGuiStore* while a store panel is open, 0 otherwise.
     /// VERIFIED, docs/research/store-sync.md §1.3 (fresh disasm of HideStoreGui 0x0062E4A0).</summary>
@@ -613,12 +691,23 @@ internal static unsafe partial class Odyssey
         HideSWInGameGuiFn(gui, 0);
 
         int after = *(int*)(gui + InGameGuiBusyOffset);
+        string inputClass = string.Empty;
+        if (after == 0)
+        {
+            // HideSWInGameGui clears +0x30 itself but leaves the input class at GUI; a retail
+            // close always follows with SetInputClass(0, 1), and so must this one, or the next
+            // Show*Gui's own SetInputClass(2, 1) is a no-op (ClientInternalInputClassOffset).
+            RestoreGameInputClass(out string restoreDetail);
+            inputClass = $"; {restoreDetail}";
+        }
+
         detail = $"HideSWInGameGui called — CGuiInGame+0x30 {before} -> {after}, "
             + $"GUI-manager modal stack {modalsBefore} -> {ReadModalStackCount(gui)}"
             + (after == 0
                 ? string.Empty
                 : " (the engine refused its own teardown — it bails at 0x0062CBD1 while the "
-                    + "GUI manager's modal stack is not empty; that stack has to be popped first)");
+                    + "GUI manager's modal stack is not empty; that stack has to be popped first)")
+            + inputClass;
         return after == 0;
     }
 
@@ -697,6 +786,65 @@ internal static unsafe partial class Odyssey
         detail = $"popped {popped} modal panel(s) — GUI-manager modal stack {before} -> {after}, "
             + $"CGuiInGame+0x30 = {*(int*)(gui + InGameGuiBusyOffset)}";
         return after < before;
+    }
+
+    /// <summary>
+    /// <see cref="CloseFullScreenGui"/>, and when the engine refuses because the GUI manager's
+    /// modal stack is not empty, the live-proven `popmodal` → `closegui` recipe
+    /// (docs/research/shared-inventory-v2.md §15.4/§16.3): pop the stack, then hide again.
+    ///
+    /// Why a caller wants this rather than the plain close: an unattended client that joined
+    /// by save sits under the engine's own post-load Status Summary box for the rest of the
+    /// session (CORRECTED 2026-09-03 — not the loader's <c>CSWGuiSaveLoad</c> panel, as this
+    /// comment and <c>MenuLoadController</c> used to say; <c>Odyssey.StatusSummary.cs</c> has
+    /// the watchpoint evidence), which keeps the modal stack non-empty, <c>CGuiInGame+0x30</c>
+    /// at 1 and the input class at GUI, so every "is a full-screen GUI up?" gate in the engine
+    /// answers yes. The galaxy-map departure replay hit exactly that on the client, ten
+    /// refusals in a row (2026-09-03 run 2).
+    ///
+    /// Order: first the box's own OK (<see cref="DismissStatusSummary"/> — the retail path,
+    /// which also unpauses the world and resets the input class), then the plain close again;
+    /// only if something ELSE is still on the modal stack, the bounded pop. Popping never frees
+    /// a panel. MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool CloseFullScreenGuiForcibly(out string detail)
+    {
+        if (CloseFullScreenGui(out detail))
+        {
+            return true;
+        }
+
+        nint gui = GetInGameGui();
+        if (gui == 0 || ReadModalStackCount(gui) <= 0)
+        {
+            return false;
+        }
+
+        string firstAttempt = detail;
+        if (DismissStatusSummary(out string dismissDetail) && ReadModalStackCount(gui) <= 0)
+        {
+            bool closedNow = *(int*)(gui + InGameGuiBusyOffset) == 0 || CloseFullScreenGui(out _);
+            RestoreGameInputClass(out string restoreDetail);
+            detail = $"{firstAttempt}; {dismissDetail}; {restoreDetail}";
+            if (closedNow)
+            {
+                return true;
+            }
+        }
+        else
+        {
+            firstAttempt = $"{firstAttempt}; {dismissDetail}";
+        }
+
+        if (!PopModalPanels(8, out string popDetail))
+        {
+            detail = $"{firstAttempt}; then {popDetail}";
+            return false;
+        }
+
+        bool closed = CloseFullScreenGui(out string secondAttempt);
+        detail = $"{firstAttempt}; {popDetail}; then {secondAttempt}";
+        return closed;
     }
 
     // ---- buy/sell: drive the real GUI button handlers directly (2026-08-28 addendum) -------

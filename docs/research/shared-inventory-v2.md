@@ -2846,3 +2846,24 @@ and returns), so a stall there costs at most the one boundary gap.
 The same run also produced one `StoreLoopbackTests.ReconnectResyncLeavesUntransactedStoresAlone`
 failure inside the store-filtered rerun (green on the immediate retry and in the full run): a
 real-UDP loopback rig with a 6 s blackout, load-sensitive, no code change.
+
+## 20. 2026-09-03 — CORRECTION to §14/§15: the client's leftover modal panel is the engine's post-load Status Summary box, not the loader's `CSWGuiSaveLoad`
+
+§15.4 above says *"what puts the panel there is this project's own menu-load path"* — the
+`CSWGuiSaveLoad` panel `MenuLoadController.MainMenuPhase` constructs and never pops. A hardware
+watchpoint on `CGuiInGame+0x30` (`FieldWriteWatch`, run for the galaxy-map relay) showed the stack
+of the write that leaves a save-joined client at `+0x30 = 1` / modal stack 1, and the frame is
+`0x0062F01F` inside **`CGuiInGame::ShowStatusSummary` 0x0062EF90**: after every load the engine
+`AddPanel`s the journal/XP/credits recap box (`CGuiInGame+0xA8`, `CSWGuiStatusSummary`, vtable
+0x0074FF68), pauses the world (`SetPausedByCombat(1, 6, 0)`) and sets the input class to GUI
+(`CClientExoAppInternal::SetInputClass(2, 0)`). A human clicks OK; the rig's unattended client
+never does. The loader's `CSWGuiSaveLoad` is constructed but never `AddPanel`ed, so it was never on
+that stack at all — the diagnosis in §15.4 was wrong and the fix (`popmodal` + `closegui`) worked
+for the wrong reason, leaving the input class at 2 (which is why `ShowStoreGui`/`ShowGalaxyMapGui`
+could later no-op silently: `SetInputClass` returns at once for a class it already holds).
+
+The shipped replacement is `Odyssey.DismissStatusSummary` (the box's own OK handler, which also
+unpauses and resets the input class) plus `Odyssey.RestoreGameInputClass` after every
+plugin-forced close; `CloseFullScreenGuiForcibly` uses both. Full write-up, disassembly and the
+two live runs: docs/research/galaxy-map-and-party-select.md, the 2026-09-03 "LIVE, both
+directions" section. `popmodal`/`closegui` remain as the fallback and as staging verbs.

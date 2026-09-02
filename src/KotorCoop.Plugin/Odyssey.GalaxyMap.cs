@@ -138,7 +138,19 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // A client whose last full-screen GUI came down through this plugin's own close (or
+        // never came down at all - the post-load status summary nobody clicked away) still holds
+        // input class 2, and ShowGalaxyMapGui's SetInputClass(2, 1) returns without doing
+        // anything for a class it already has - +0x30 stays 0 and the map never opens. Restore
+        // the retail post-close state first; a no-op when the class is already 0.
+        if (!RestoreGameInputClass(out string restoreDetail))
+        {
+            detail = $"could not restore the game input class first: {restoreDetail}";
+            return false;
+        }
+
         int modalsBefore = ReadModalStackCount(gui);
+        string before = DescribeGuiPanels(gui);
 
         ShowGalaxyMapGuiFn(gui, SelectedPlanetNone);
 
@@ -147,8 +159,52 @@ internal static unsafe partial class Odyssey
         int modalsAfter = ReadModalStackCount(gui);
         detail = $"ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> {busyAfter}, GUI-manager modal "
             + $"stack {modalsBefore} -> {modalsAfter}, panel 0x{panel:X}"
-            + (busyAfter == 0 ? " (the engine did not open it)" : " (open)");
+            + (busyAfter == 0 ? " (the engine did not open it)" : " (open)")
+            + $" [before: {before}; after: {DescribeGuiPanels(gui)}]";
         return busyAfter != 0;
+    }
+
+    /// <summary>CSWGuiManager::PanelExists(panel) 0x0040BD70 — pointer compare over the
+    /// registered array (the same delegate <c>PartySelectSuppressionController</c> uses).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int> GuiPanelExistsFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int>)0x0040BD70;
+
+    /// <summary>
+    /// The state the galaxy-map open actually depends on, for the log: the client's input
+    /// class (<c>CClientExoAppInternal+0x9C</c>; 1 = game, 2 = GUI — see
+    /// <see cref="RestoreGameInputClass"/>), <c>CGuiInGame+0x34</c> (the SW GUI status
+    /// <c>SetSWGuiStatus</c> drives), and for each of the map panel (<c>+0x80</c>), the pause
+    /// panel (<c>+0x7C</c>, CSWGuiInGamePause) and the main interface (<c>+0x90</c>) whether
+    /// the GUI manager has it registered and its <c>+0x44</c> state bits. Added 2026-09-03 when
+    /// a client that had just run <c>popmodal</c>/<c>closegui</c> got a silent no-op from
+    /// <c>ShowGalaxyMapGui</c> with every documented gate passing; the input class was the
+    /// answer (a hardware watchpoint on <c>+0x30</c> found its writer).
+    /// </summary>
+    private static string DescribeGuiPanels(nint gui)
+    {
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        if (manager == 0)
+        {
+            return "no GUI manager";
+        }
+
+        string One(string name, nint panel)
+        {
+            if (panel == 0)
+            {
+                return $"{name}=null";
+            }
+
+            int exists = GuiPanelExistsFn(manager, panel);
+            return $"{name}=0x{panel:X}{(exists != 0 ? " registered" : " unregistered")} bits 0x{*(uint*)(panel + 0x44):X}";
+        }
+
+        nint client = GetClientInternal();
+        string inputClass = client == 0 ? "?" : (*(int*)(client + ClientInternalInputClassOffset)).ToString();
+        return $"input class {inputClass}, status {*(int*)(gui + 0x34)}, "
+            + One("map", *(nint*)(gui + InGameGuiGalaxyMapOffset)) + ", "
+            + One("pause", *(nint*)(gui + 0x7C)) + ", "
+            + One("maininterface", *(nint*)(gui + 0x90));
     }
 
     /// <summary>

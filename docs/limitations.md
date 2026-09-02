@@ -38,6 +38,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Mirrored companion follow-AI while mirroring holds | Not supported (by design) | A companion controlled by the OTHER player doesn't run its own follow-AI at all while mirrored — structural, not a bug | roadmap Tier 1 #10 |
 | Host relocating-warp crash | Fixed | Was 6/6 fatal to the host; root-caused to a party-count restore bug and fixed; 5/5 warps clean afterward on shipped defaults. A SECOND one with two companions (3/3 fatal, no peer needed) was root-caused 2026-09-03 to companions recruited by a raw availability-flag poke (no `AVAILNPC` cache to rebuild from after the move); every recruit now goes through the engine's own `AddNPC`, 4/4 clean | live-verification.md "POOL4" round and 2026-09-03 01:31–02:25, `transition-crashes.md` |
 | Real door crossing under the same fix | Works (verified 2026-09-03) | Three `crossdoor end_door10` crossings (end_m01aa → end_m01ab) through the engine's own door event: transition, announce, follow, party gate and the module-entry cutscene all clean, 0 faults. The first one exposed a false `W_SAVE` rejoin from the engine's transition autosave — fixed the same night (`SaveLineage`) | cinematics.md §8.3c; session-save.md "transition autosave changes the save identity" |
+| Interplanetary departure via the galaxy map, either player leading | Works (verified 2026-09-03, both directions) | The leader's accept click is published at the click (`GalaxyDeparturePacket`); the follower runs the SAME scripted leg on its own engine (`galaxymap depart <n>`: dismiss the post-load Status Summary box, restore the game input class, unlock/select/open/accept with the confirm hook's replay marker) — take-off movie, `STUNT_00`, fresh Ebon Hawk on both, and both agents report the same `ebo_m12aa`. Host→Tatooine and client→Kashyyyk both clean, 0 faults. The follower's own planet flags are unlocked as a side effect (they are per-save and not synced) | `galaxy-map-and-party-select.md` 2026-09-03 relay addendum; `TransitionPump.GalaxyDeparture` |
 | Repeatedly chaining the `warp` console verb | Not supported (pre-existing engine bug) | Can crash the retail engine outright; unrelated to co-op, not gated by any setting | README "Honest limitations" |
 | Fog-of-war map reveal (`map_reveal_sync`) | Partial | The engine call fires correctly and survives a transition; only the on-screen M-key appearance is unconfirmed (screenshot tooling was broken) | roadmap Tier 1 #8 |
 | Peer rendering as the wrong character after a warp | Fixed | Two root causes (undressed twin, census leak reading a companion as a hostile) both closed 2026-08-29 | roadmap `name-plates.md` |
@@ -152,14 +153,12 @@ rig yet. Good targets for the next live-test pass:
     three host departures) driving a REAL interplanetary departure — `galaxymap unlock <n>` (a
     new staging verb) → `select <n>` → `open` → `galaxyaccept` runs the take-off movie,
     `StartNewModule` into `STUNT_00`, and returns to a fresh Ebon Hawk. The remaining gap is
-    the REFUSE case (needs an explicit `follow_lead=host` on the client; the default is `any`)
-    and the fact that **the client cannot follow an interplanetary departure** — it routes
-    through `STUNT_00` (refused by the stunt gate) onto a different save-state world, so the
-    follower stays put and eventually diverges with a `W_SAVE` notice. See
-    docs/research/galaxy-map-and-party-select.md's 2026-09-03 live addendum and item 15 below.
-15. Interplanetary departure via the galaxy map is **host-local only** — not a coop-followable
-    transition (2026-09-03 live). The destination passes through `STUNT_00` and lands on a
-    different save-state world; the follower cannot chase it and diverges. Making departure a
-    shared transition (fade + coordinated `StartNewModule` on both, or a host-drives-both
-    scheme) is unbuilt — a genuine roadmap gap, not a rig artifact.
+    the REFUSE case (needs an explicit `follow_lead=host` on the client; the default is `any`).
+    The follow itself is DONE — see item 15.
+15. *(done 2026-09-03: interplanetary departure is now a followable transition in both
+    directions — the leader's accept is relayed and the follower replays the same scripted leg
+    on its own engine (`galaxymap depart <n>`), landing in the same fresh Ebon Hawk. What
+    unblocked it was a hardware watchpoint finding that a save-joined client's `ShowGalaxyMapGui`
+    silently no-ops because the engine's post-load Status Summary box left the input class at
+    "GUI" — see the table above and the research doc's 2026-09-03 relay addendum.)*
 14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).
