@@ -1083,7 +1083,7 @@ read by the agent, no wire/protocol implication.
    OWN consumption of it (`threatAttackerId` in `PeerDamageController.ApplyOwed`) has not been
    exercised against a real 3-peer rig, which does not exist in this codebase's test harness.
 
-## 10. 2026-09-03: live pass — the `new()` zero-defaults bug found and fixed, two rounds of genuine retargeting, verdict stays OFF by default
+## 10. 2026-09-03: live pass — the `new()` zero-defaults bug found and fixed, two rounds of genuine retargeting, verdict stays OFF by default *(superseded by §11 the same day: ships ON)*
 
 Rig: `pwsh tools/demo.ps1 -Save 1`, `coop.ini` has `threat_retarget=1` on the HOST only, per §9.5
 step 1; shipped `profiles/coop.ini.example` keeps it `0`.
@@ -1128,3 +1128,109 @@ round.
 targeting already handles correctly (round 3) needs no help from this channel. Live-verified
 2026-09-03; ships OFF by default (`profiles/coop.ini.example` keeps `threat_retarget=0`) — see
 `docs/limitations.md`'s combat table.
+
+## 11. 2026-09-03 (04:35–04:45): round 4 — the "host first" case measured for 98 s, the retarget SHARES aggro rather than moving it, and the default flips ON
+
+Rig: host pid 4964 (`C:\GOG Games\Star Wars KOTOR (GOG)`), client pid 51068 (`swkotor-gog-p2`),
+both `warp tar_m10aa`, `god on` on both, host `tp 160 88 2.25`, client `tp 161 90 2.25`, host
+`spawncreature tar10_vulkpoo002 1` → `0x141` (client stand-in `0x138`, phantom of the client on
+the host `0x139`), host `applyeffect temporaryhitpoints 0x141 120000 400` so the fight lasts
+longer than one party round, then client `attack 0x7FFFFFFF 0x138`. §10's rounds 1–3 had settled
+the mechanism but never held a fight long enough to see what the engine does AFTER our order.
+
+### 11.1 What the creature did, second by second
+
+Host log (`combat ground-truth: local PC took N damage, attacker=0x141` is the Vulkar hitting
+the host's PC; `threat:` lines are the host-side rule; `attacktarget diag` is the order landing)
+against the client log (`combat: took N damage from a hit on our phantom (attacker 0x141)` is
+the Vulkar hitting the CLIENT):
+
+```
+04:39:00.756  host PC hit (16)
+04:39:02.317  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 19 vs 0)    attacktarget diag: round+0x958 0->1, +0x960 0->5DC
+04:39:05.253  host PC hit (6)          <- back on the host 3 s after the order
+04:39:05.275  threat: not retargeted (OnCooldown) - current 0x7FFFFFFF ... 3.0s since last
+04:39:08.849                                                                   client phantom hit (2)
+04:39:11.255  host PC hit (8)
+04:39:11.384  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 16 vs 0)
+04:39:17.285  threat: not retargeted (AlreadyTarget) - current 0x139            <- it STAYED this time
+04:39:19.763                                                                   client phantom hit (11)
+04:39:21.761  host PC hit (10)
+04:39:25.253                                                                   client phantom hit (4)
+04:39:27.768  host PC hit (11)
+04:39:29.308  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 19 vs 0)
+04:39:32.687                                                                   client phantom hit (7)
+04:39:35.818                                                                   client phantom hit (8)
+04:39:38.269  host PC hit (7)
+04:39:38.376  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 25 vs 0)
+04:39:43.695                                                                   client phantom hit (6)
+04:39:44.481  threat: not retargeted (AlreadyTarget) - current 0x139
+04:39:45.770  host PC hit (13)
+04:39:49.462                                                                   client phantom hit (5)
+04:39:50.452  threat: not retargeted (AlreadyTarget) - current 0x139 ... 12.1s since last
+04:39:54.779  host PC hit (5)
+04:40:00.780  host PC hit (5)
+04:40:02.325  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 20 vs 0)
+04:40:08.319  threat: not retargeted (AlreadyTarget) - current 0x139
+04:40:11.288  host PC hit (4)
+04:40:14.568  threat: not retargeted (AlreadyTarget) - current 0x139 ... 12.2s since last
+04:40:15.353                                                                   client phantom hit (6)
+04:40:17.295  host PC hit (6)
+04:40:17.337  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 15 vs 0)
+04:40:22.445                                                                   client phantom hit (10)
+04:40:25.250                                                                   client phantom hit (3)
+04:40:27.802  host PC hit (11)
+04:40:29.220  threat: 0x141 retargeted 0x7FFFFFFF -> 0x139 (threat 19 vs 0)
+04:40:38.833                                                                   combat: killed 0x141 (owner id, local stand-in 0x138) on the owner's authority
+```
+
+Totals over the 98 s the Vulkar lived: 12 hits on the host's PC, 10 hits on the client's
+phantom, 7 retarget orders (every one against `current 0x7FFFFFFF threat 0` — the host PC,
+whose own damage the table deliberately does not track, §9.2). Compare §8.10, the same
+staging with only the passive creator write: the phantom took NOTHING while the host was
+engaged.
+
+### 11.2 Reading it
+
+- The order works every time (`round+0x958 0->1, +0x960 0->5DC` on a fresh round, the phantom
+  hit follows 3–7 s later) — but it is not sticky. The engine's own AI re-picks the host PC
+  within one or two of its rounds whenever the host PC is also swinging at it (the host's
+  `OnAttacked`/last-attacker path, the same one §8.10 showed ignores the creator write). Seven
+  times in 98 s the creature went host → phantom → host, and the 4 s cooldown is what
+  turned that into a steady alternation rather than a fight over the target every frame.
+- Sometimes it does stick for a while — 04:39:11 → 04:39:21 and 04:39:44 → 04:39:54 are ten
+  seconds each of `AlreadyTarget` with the host PC still in melee. What breaks it is the host
+  PC's next landed hit, not time.
+- Net effect in play: with the host's party and the client both fighting one enemy, the
+  enemy splits its attacks roughly evenly instead of ignoring the second player. That is the
+  "second player can pull aggro" behaviour co-op needs, achieved without the engine's own AI
+  cooperating.
+
+### 11.3 What was NOT measured: the host walking away
+
+The follow-up (host `tp 130 60 2.25` at 04:40:3x with the client still attacking) was meant
+to show whether the retarget sticks when the host stops hitting. It is inconclusive: the
+temporary hit points expired at 04:40:29 (120 s after the apply) and the host's companions
+killed the Vulkar at 04:40:38, before the host had cleared melee range. The frozen `threat
+19.32 / currentTarget 0x7F000000` read afterwards was a dead creature, not a disengaged one.
+Rerun recipe if it matters: apply `temporaryhitpoints` for 300000 ms, `tp` the host away
+BEFORE the client's first `attack`, and expect zero `attacker=0x141` ground-truth lines on the
+host with the phantom hits continuing.
+
+### 11.4 Side observation: the `liveness ANOMALY` transient on the kill
+
+Each kill on the owner's authority produced up to 20 client lines of `liveness ANOMALY: owner
+says 0x141 is alive, this instance already has it dead - not resurrecting` for ~1.5 s, until
+the host census dropped the id. The kill channel and the liveness snapshot are not ordered
+against each other; the reconcile's own rule is to never resurrect, so the only cost is the
+budgeted log noise. Recorded in creature-liveness.md's terms as expected, not a defect.
+
+### 11.5 Verdict — ships ON
+
+Four rounds, two Vulkars held for 98 s, 7 orders, 0 faults, and a measurable change from
+"the second player is ignored" to "the enemy splits between them". Costs: one `ActionAttack`
+per creature per ≥4 s (each resets that creature's round, visible as `+0x960 0->5DC`), only
+with exactly one remote peer (3+ peers → inert, §9.2), never a plot creature, never onto a
+downed or absent phantom. `profiles/coop.ini.example` now ships `threat_retarget=1`; the code
+fallback when the key is absent stays OFF, same as `liveness_sync`. §10.4's "stays OFF"
+is superseded by this section.

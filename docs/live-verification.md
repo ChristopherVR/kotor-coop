@@ -3415,3 +3415,16 @@ silence is the one known gap (a host cannot tell an old-build peer was turned aw
 
 Row moved to Works in docs/limitations.md and README.md. Full write-up:
 docs/research/disconnect-reconnect.md §12 "Live result".
+
+## `threat_retarget` round 4, live (2026-09-03, 04:35–04:45): aggro SHARES, default flipped ON
+
+Same tar_m10aa staging as the 00:30–04:15 section, plus `applyeffect temporaryhitpoints 0x141
+120000 400` so the Vulkar outlived a party round. 98 s of fight, 7 retarget orders, 12 hits
+on the host's PC vs 10 on the client's phantom (§8.10's passive creator write alone: 0 on the
+phantom). Every order landed (`attacktarget diag: 0x141 round+0x958 0->1`) and every one was
+undone by the host PC's next landed hit within ~3–10 s, so the 4 s cooldown turns it into an
+alternation — the enemy splits between the two players rather than following one. 0 faults.
+`profiles/coop.ini.example` now ships `threat_retarget=1`; full timeline and the verdict in
+docs/research/peer-damage-ledger.md §11. Not measured (temp-HP expiry killed the creature
+mid-experiment): whether the retarget sticks once the host stops hitting — §11.3 has the rerun
+recipe.

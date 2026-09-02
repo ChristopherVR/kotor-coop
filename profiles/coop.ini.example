@@ -744,9 +744,15 @@ damage_creator_attribution=0
 # once per 4 s per creature, never a plot creature, never onto a downed or absent phantom),
 # orders the creature onto that peer's phantom directly through ActionAttack. The host's OWN
 # damage is not in the table, so a creature fighting the host switches to a peer who has
-# dealt 15+ points - an aggro pull toward the peer, by design. OFF by default - NEEDS-LIVE,
+# dealt 15+ points - an aggro pull toward the peer, by design.
 # docs/research/peer-damage-ledger.md 9; `tools/blockpoke.ps1 threat` dumps the live table.
-threat_retarget=0
+# 2026-09-03: live, four rounds (peer-damage-ledger.md 10-11). The order lands every time
+# but is NOT sticky - the host PC's next landed hit pulls the engine's AI back, so in a
+# fight both players share the enemy alternates between them (measured 12 hits on the
+# host's PC vs 10 on the client's phantom over 98 s; with this OFF the client's phantom
+# took none while the host was engaged). That is the aggro split co-op needs, at the cost
+# of one ActionAttack per creature per 4 s. ON by default since.
+threat_retarget=1
 
 # Let ONE mirrored companion fight for real on a client, instead of being frame-by-frame
 # mirrored with its action queue wiped every pass (which is why only the host's own

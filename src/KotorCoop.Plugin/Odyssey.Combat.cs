@@ -152,8 +152,11 @@ internal static unsafe partial class Odyssey
     /// directly through <see cref="AttackTarget"/> — because §8.10 of
     /// docs/research/peer-damage-ledger.md measured live that <c>damage_creator_attribution</c>'s
     /// passive <c>+0x158</c>/<c>+0x160</c> write reaches no native retargeting logic for an
-    /// already-engaged creature. See docs/research/peer-damage-ledger.md §9. NEEDS-LIVE: nothing
-    /// about this flag has been run against a live game.</summary>
+    /// already-engaged creature. See docs/research/peer-damage-ledger.md §9. Live 2026-09-03
+    /// (§10–§11): the order lands every time but the host PC's next landed hit pulls the AI
+    /// back, so a shared fight alternates (12 host-PC vs 10 phantom hits in 98 s; 0 phantom hits
+    /// without it) — the shipped profile turns it ON on that evidence; this code fallback for
+    /// an absent key stays OFF, same as <c>liveness_sync</c>.</summary>
     public static bool ThreatRetargetEnabled;
 
     /// <summary>
