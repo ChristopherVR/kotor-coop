@@ -84,7 +84,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | --- | --- | --- | --- |
 | Shared party item pool (`party_pool_sync`, mode 2) | Works | ON by default; three clean host deposits mirrored one-for-one, a client deposit/withdrawal each applied exactly once, a cross-channel echo bug closed | roadmap Tier 1 #1 |
 | Only the host switches active party character | Not supported (by design) | Mirrored to everyone else; control returns to your own character on connect | README "Honest limitations" |
-| Galaxy map / pre-departure party-select GUI | Built, NEEDS-LIVE | Each instance runs the vanilla UI; the client's party-select panel is suppressed, and a client's galaxy-map accept click under follow_lead=host is refused ("only the host can choose a destination") with the host's own confirm untouched; an auto-confirm fallback for party-select is still undone, and neither the refusal splice nor the legs themselves have ever been driven live | roadmap Tier 2 #18 |
+| Galaxy map / pre-departure party-select GUI | Built, NEEDS-LIVE | Each instance runs the vanilla UI; the client's party-select panel is suppressed, and a client's galaxy-map accept click under follow_lead=host is refused ("only the host can choose a destination") with the host's own confirm untouched; the `galaxymap open/close/stats` console verbs (2026-09-03) can now drive the map screen and read the refusal's own counters without a human clicking, but the refusal splice itself has still never actually fired on a running process; an auto-confirm fallback for party-select is still undone, and the legs themselves still have no non-story primitive | roadmap Tier 2 #18 |
 | `end_m01ab` escape-pod party-select GUI | Not supported (by design) | Only the host can answer it — no console primitive reaches inside; confirmed to gate the corridor's entrance for every start-to-end run | roadmap Tier 2 #31 |
 
 ## Stores, Pazaak, minigames (swoop)
@@ -147,6 +147,8 @@ rig yet. Good targets for the next live-test pass:
 12. *(done 2026-09-03: both released, driven at different enemies, reclaimed together — see the table.)*
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
     the legs themselves have no non-story primitive to drive them; the galaxy-map accept-button
-    refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) but has never been spliced
-    on a running process.
+    refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) and can now be driven from
+    the console (`galaxymap open/close/stats`, 2026-09-03 — `warp ebo_m12aa`, `galaxymap open` on
+    a CLIENT, click Accept, `galaxymap stats`), but the splice has still never actually fired on
+    a running process — see docs/research/galaxy-map-and-party-select.md's 2026-09-03 addendum.
 14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).

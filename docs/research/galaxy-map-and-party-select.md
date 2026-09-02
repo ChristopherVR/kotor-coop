@@ -1296,3 +1296,261 @@ save, or `warp ebo_m12aa` from the console (`docs/research/console-overlay.md`).
    (`GalaxyMapConfirmHook.RefusedCount`/`AllowedCount`) are not currently exposed through any dev
    verb — if this live pass adds one (mirroring `partyselect ok`'s own precedent), record it here;
    otherwise cross-check via the plugin log line counts instead.
+
+## 2026-09-03 — `galaxymap open/close/stats`: the console verb the 2026-09-02 pass's own live
+## test plan needed, plus fresh disasm of `ShowGalaxyMapGui`/`HideGalaxyMapGui`
+
+Task: the 2026-09-02 section directly above ends with "Baseline"/"the refusal" steps that both
+require opening the galaxy map, and item 5's own "not currently exposed through any dev verb"
+note for `RefusedCount`/`AllowedCount`. Nothing on the console could open the map at all — the
+only route was `k_pebn_galaxy.nss`'s `infoterm001` placeable, walked to in person. This pass adds
+`galaxymap open`/`galaxymap close`/`galaxymap stats` so a rig can drive the whole test plan above
+without a human clicking, and investigates (but does not ship) a fourth `galaxymap confirm`.
+
+### `ShowGalaxyMapGui`/`HideGalaxyMapGui` — fresh full disassembly this pass, VERIFIED
+
+§1.1 named both addresses from the symbol database only (name + address, no argument count or
+calling-convention detail — the same state `ShowStoreGui` was in before the 2026-08-28 store
+pass's own correction). Neither had been independently disassembled for its own ABI. Full
+`tools/disasm.py 0x62D040 320` / continuation to `0x62D2AD` this pass:
+
+```
+0x0062D040  64a100000000  mov eax, fs:[0]              ; SEH prologue (this function has one,
+0x0062D046  6aff          push -1                       ; HideGalaxyMapGui below does not)
+0x0062D048  6853937200    push 0x729353
+0x0062D04D  50            push eax
+0x0062D04E  64892500000000 mov fs:[0], esp
+0x0062D055  83ec1c        sub esp, 0x1c
+0x0062D058  56            push esi
+0x0062D059  8bf1          mov esi, ecx                  ; this
+0x0062D05B  8b8608010000  mov eax, [esi+0x108]           ; InGameGuiInitializedOffset
+0x0062D061  85c0          test eax, eax
+0x0062D063  0f8452010000  je 0x62d1bb                    ; not initialised -> shared exit
+0x0062D069  8b4630        mov eax, [esi+0x30]             ; InGameGuiBusyOffset
+0x0062D06C  85c0          test eax, eax
+0x0062D06E  0f8547010000  jne 0x62d1bb                    ; full-screen GUI busy -> shared exit
+0x0062D074  a1fc397a00    mov eax, [0x7a39fc]             ; app manager
+0x0062D079  8b4804        mov ecx, [eax+4]
+0x0062D07C  e80f06fcff    call 0x5ed690                   ; -> gui (CGuiInGame*), same resolve
+0x0062D081  8b88b4000000  mov ecx, [eax+0xb4]             ; gui+0xB4 = GuiConversationActive
+0x0062D087  85c9          test ecx, ecx
+0x0062D089  0f852c010000  jne 0x62d1bb                    ; conversation active -> shared exit
+   ... (message-box-adjacent housekeeping calls, unconditional, no further gate) ...
+0x0062D185  a1fc397a00    mov eax, [0x7a39fc]
+0x0062D18A  8b542430      mov edx, [esp+0x30]             ; the ONE caller stack arg (nPlanet)
+0x0062D18E  8b4808        mov ecx, [eax+8]
+0x0062D191  52            push edx
+0x0062D192  e8d91ce8ff    call 0x4aee70                   ; CServerExoApp::GetPartyTable
+0x0062D197  8bc8          mov ecx, eax
+0x0062D199  e8c269f3ff    call 0x563b60                   ; CSWPartyTable::SetSelectedPlanet
+   ... (construct/AddPanel the CSWGuiInGameGalaxyMap panel at [esi+0x80] if not already present,
+        PlayGuiSound) ...
+0x0062D1BB  8b4c2420      mov ecx, [esp+0x20]              ; shared exit: SEH epilogue
+0x0062D1C7  83c428        add esp, 0x28
+0x0062D1CA  c20400        ret 4
+```
+
+`0x004AEE70` (`CServerExoApp::GetPartyTable`) is itself a bare 3-instruction accessor —
+`mov eax,[ecx+4]; add eax,0x1b770; ret` (no stack args, no cleanup) — so the `push edx` at
+`0x0062D191` is never consumed by it; the value sits on the stack across the call and becomes
+`SetSelectedPlanet`'s OWN first stack arg instead (confirmed by disassembling `0x563b60`
+directly: `mov eax,[esp+4]` is its first instruction). This two-call sequence is exactly the
+kind of "argument reused across an intervening call whose own signature makes it look like there
+is no argument" shape worth spelling out explicitly, since a naive read of `GetPartyTable`'s own
+signature would miss it.
+
+`CSWPartyTable::SetSelectedPlanet 0x00563b60`, full disasm:
+
+```
+0x00563B60  8b442404  mov eax, [esp+4]        ; nPlanet
+0x00563B64  85c0      test eax, eax
+0x00563B66  7c1e      jl 0x563b86              ; nPlanet < 0 -> no-op return
+0x00563B68  83f810    cmp eax, 0x10
+0x00563B6B  7d19      jge 0x563b86             ; nPlanet >= 16 -> no-op return
+0x00563B6D  8b548160  mov edx, [ecx+eax*4+0x60] ; available_planets[nPlanet]
+0x00563B71  85d2      test edx, edx
+0x00563B73  7411      je 0x563b86              ; not available -> no-op return
+0x00563B75  8b9481a0000000 mov edx, [ecx+eax*4+0xa0] ; selectable_planets[nPlanet]
+0x00563B7C  85d2      test edx, edx
+0x00563B7E  7406      je 0x563b86              ; not selectable -> no-op return
+0x00563B80  8981e0000000 mov [ecx+0xe0], eax   ; galaxy_map_selected_planet = nPlanet
+```
+
+This is a full VERIFIED disassembly of the bounds check §1.1 could previously only call
+"VERIFIED-by-paired-accessor-name" (a generic `+0xE0` byte scan returned 57 hits across the
+whole binary, too many to disambiguate without this). All three offsets (`+0x60`, `+0xA0`,
+`+0xE0`) read exactly as §1.1 already guessed. **Practical consequence for this verb**: passing
+`nPlanet = -1` is a safe, deliberate "leave the current selection alone" sentinel — the `jl`
+bounds check rejects it on its very first comparison, before either array read, so it can never
+read out of bounds and never writes `galaxy_map_selected_planet`; the map still opens normally
+either way, since `SetSelectedPlanet`'s own result is never checked by its caller.
+
+`CGuiInGame::HideGalaxyMapGui 0x0062D1D0`, full disasm — much simpler, no SEH frame at all:
+
+```
+0x0062D1D0  56        push esi
+0x0062D1D1  8bf1      mov esi, ecx
+0x0062D1D3  8b8608010000 mov eax, [esi+0x108]   ; InGameGuiInitializedOffset
+0x0062D1D9  85c0      test eax, eax
+0x0062D1DB  0f848f000000 je 0x62d270            ; not initialised -> pop esi; ret (no cleanup)
+   ... (message-box-adjacent housekeeping calls, unconditional) ...
+0x0062D223  8b8680000000 mov eax, [esi+0x80]     ; the panel pointer
+0x0062D229  8b4e38    mov ecx, [esi+0x38]
+0x0062D22C  50        push eax
+0x0062D22D  e8fef5ddff call 0x40c830             ; remove-from-manager-style call
+0x0062D232  a170237a00 mov eax, [0x7a2370]
+0x0062D237  85c0      test eax, eax
+0x0062D239  751a      jne 0x62d255
+0x0062D23B  8b8e80000000 mov ecx, [esi+0x80]
+0x0062D241  85c9      test ecx, ecx
+0x0062D243  7406      je 0x62d24b
+0x0062D245  8b11      mov edx, [ecx]
+0x0062D247  6a01      push 1
+0x0062D249  ff12      call [edx]                 ; vtable slot 0 (destructor(1))
+0x0062D24B  c7868000000000000000 mov [esi+0x80], 0   ; the panel pointer cleared
+   ... (SetSWGuiStatus(this, 4, 1)-shaped housekeeping) ...
+0x0062D270  5e        pop esi
+0x0062D271  c3        ret                        ; bare ret - NO stack args, unlike ShowGalaxyMapGui
+```
+
+Confirms: `ShowGalaxyMapGui(this, int nPlanet)` — `__thiscall`, ONE stack arg, `ret 4`.
+`HideGalaxyMapGui(this)` — `__thiscall`, NO stack args, bare `ret`. Both gate only on
+`InGameGuiInitializedOffset` (`+0x108`); only `ShowGalaxyMapGui` additionally gates on
+`InGameGuiBusyOffset` (`+0x30`) and `GuiConversationActive` (`gui+0xB4`) — the SAME two extra
+gates `Odyssey.Store.cs`'s `OpenStore` already reports by name for `ShowStoreGui`, now confirmed
+to apply identically to the galaxy map (`InGameGuiBusyOffset`'s own doc comment already noted
+"fresh disasm of ShowStoreGui (0x0062E339) and ShowGalaxyMapGui (0x0062D069)" from the store
+pass — this pass traced the REST of the function around that one already-known instruction).
+`HideGalaxyMapGui` does **not** gate on the GUI manager's modal-stack count the way
+`HideSWInGameGui` does — so unlike `openstore`/`closegui`, no `popmodal`-style companion
+primitive is needed for `galaxymap close`.
+
+### `galaxymap open`/`galaxymap close` — what shipped
+
+* `src/KotorCoop.Plugin/Odyssey.GalaxyMap.cs` (new) — `ShowGalaxyMapGuiFn`/`HideGalaxyMapGuiFn`
+  declared with the ABI above, `OpenGalaxyMap(out string)`/`CloseGalaxyMap(out string)` following
+  `Odyssey.Store.cs`'s `OpenStore`/`CloseFullScreenGui` shape exactly: report each gate by name
+  on refusal, verify the panel pointer (`CGuiInGame+0x80`) actually changed rather than trusting
+  the call's return (`void`), and treat an already-closed map as APPLIED not refused.
+* `src/KotorCoop.Plugin/CheatController.GalaxyMap.cs` (new) — `OpenGalaxyMap`/`CloseGalaxyMap`/
+  `GalaxyMapStats` cheat handlers.
+* `src/KotorCoop.Plugin/GalaxyMapConfirmHook.cs` — added `IsInstalled` (reads the existing
+  private `_installed` field; no behaviour change to the splice itself).
+* `src/KotorCoop.Plugin/SharedBlock.cs` — `CheatKindGalaxyMapOpen`/`Close`/`Stats` = 65/66/67
+  (next free after `CheatKindDown` = 64).
+* `src/KotorCoop.Memory/IGameBridge.cs` — mirrored `CheatKinds.GalaxyMapOpen`/`Close`/`Stats`.
+* `src/KotorCoop.Session/GalaxyMapVerbRule.cs` (new) — pure parse for the three subcommands, 10
+  tests (`tests/KotorCoop.Tests/GalaxyMapVerbRuleTests.cs`).
+* `src/KotorCoop.Session/ConsoleCommand.cs`/`ConsoleCommand.Cheats.cs` — `CoopCommandKind.GalaxyMapOpen`/
+  `GalaxyMapClose`/`GalaxyMapStats`, the `galaxymap` verb-table row, `ParseGalaxyMap`.
+* `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — the three dispatch entries (`SendCheat`, same
+  one-liner shape as `closegui`/`popmodal`).
+* `tests/KotorCoop.Tests/ConsoleCommandVerbTableCoverageTests.cs` — sample lines for the three
+  new kinds.
+* `docs/CONSOLE.md`, `docs/limitations.md` — verb rows / status text (status stays NEEDS-LIVE).
+
+Build: `pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean (0 warnings). `dotnet build
+tests/KotorCoop.Tests -c Debug` clean. `dotnet test tests/KotorCoop.Tests -c Debug --no-build
+--filter "FullyQualifiedName~GalaxyMap"` 22/22 (10 new `GalaxyMapVerbRuleTests` plus the
+pre-existing `GalaxyMapConfirmRefusalRuleTests`/`GalaxyMapConfirmSuppressionRuleTests`).
+`ConsoleCommandVerbTableCoverageTests` 81/81 (was 78 before the three new sample lines).
+
+### `galaxymap confirm` — investigated, deliberately NOT shipped
+
+The task considered a fourth subcommand that would drive the accept-button case handler directly
+(`0x006959D0`, the choke point the 2026-09-02 section above already RE'd in full), the way
+`partyselect ok` drives `ConfirmPartySelection`. That hook's own class remarks already establish
+why calling `0x006959D0` itself is wrong: it is a jump-table TARGET reached only via a computed
+`jmp`, not a callable function — there is no return address to preserve, so a synthesised `call`
+into it would corrupt the real stack the instant it tries to `ret 8` back through
+`HandleInputEvent`'s own shared tail.
+
+The alternative considered — call `CSWGuiInGameGalaxyMap::HandleInputEvent(panel, eventCode,
+secondArg)` itself (a genuine callable function, `__thiscall`, `ret 8`, per the 2026-08-28
+party-select pass's own precedent for `ConfirmPartySelectionFn`) with an `eventCode` that reaches
+case index 0 — is mechanically sound and this pass did the byte-level RE for it. The jump table
+at `0x695AF8` and its byte-lookup table at `0x695B0C` (185 entries, `0x695B0C`..`0x695BC4`,
+indexed by `eax = ebx - 0x27`, range `[0, 0xB8]`) decode cleanly by reading the raw bytes:
+
+* Jump table (5 entries, `tools/disasm.py`'s own mis-disassembly of this data region as garbage
+  x86 was decoded by hand as little-endian dwords): index 0 = `0x006959D0` (accept, matches),
+  index 1 = `0x00695A79` (back), index 2 = `0x00695AAC` (prev planet), index 3 = `0x00695AD1`
+  (next planet), index 4 = `0x00695AE2` (`NoOpExit`).
+* Byte-lookup table: **two** raw `ebx` values map to case index 0 (accept) — `0x27` (table
+  index 0) and `0x2D` (table index 6). Two raw values also map to case index 1 (back) — `0x28`
+  and `0x2E`. Everything else in range maps to index 4 (`NoOpExit`, i.e. not specially handled).
+
+That two raw event codes reach the SAME case (accept and back each have two) is itself new
+information not in the 2026-09-02 section, and is recorded here for whoever picks this up next.
+**What stops this pass from shipping `galaxymap confirm`**: nothing in this codebase documents
+what these raw GUI event codes actually MEAN (`docs/research/engine-api.md` has no event-code
+enum), so it is not established whether `0x27` and `0x2D` are genuinely equivalent for a real
+click (mouse-down/mouse-up pair vs. a single click event, a keyboard-equivalent, etc.), nor
+whether calling `HandleInputEvent` directly with either one reproduces every side effect a real
+click has on the button's own internal state (`CSWGuiButton` is not otherwise touched by this
+splice or by anything already verified in this doc) — the RE done for the store/party-select
+verbs always had either a named, single-purpose function to call (`ConfirmPartySelectionFn`,
+`ShowStoreGuiFn`) or, here, a genuinely ambiguous dispatch table with no documented meaning
+behind its raw codes. This is new RE this pass could not verify without either a running process
+to trace a real click's event code, or a wider audit of the GUI event-code space this task's
+scope did not cover. Per this project's own engine-write rules, this stays a documented gap
+rather than a shipped guess: **`galaxymap confirm` does not exist.** A real accept click (mouse,
+or the retail engine's own input path) is still required to exercise the refusal end to end.
+
+### VERIFIED vs INFERRED, this pass
+
+**VERIFIED** (fresh disasm this pass, sha256-matched GOG v1.0.3 `swkotor.exe`):
+* `ShowGalaxyMapGui(this, int nPlanet)`, `__thiscall`, `ret 4` — full trace, all three gates
+  (`+0x108`, `+0x30`, `gui+0xB4`), the panel-pointer write at `+0x80`.
+* `HideGalaxyMapGui(this)`, `__thiscall`, bare `ret`, no stack args, no modal-stack gate.
+* `CSWPartyTable::SetSelectedPlanet`'s full bounds check and all three field offsets
+  (`+0x60`/`+0xA0`/`+0xE0`) — upgrades §1.1's own "-by-paired-accessor-name" caveat to a genuine
+  disassembly verification.
+* `CServerExoApp::GetPartyTable` is a bare 3-instruction accessor with no stack args of its own
+  (explains why `ShowGalaxyMapGui`'s pushed `nPlanet` survives across the call unconsumed).
+* The accept/back jump-table's 5 entries and the byte-lookup table's full 185-entry contents
+  (decoded by hand from raw bytes, `tools/disasm.py`'s own instruction-level view of this region
+  being data, not code).
+
+**INFERRED / NEEDS-LIVE**:
+* Everything the 2026-09-02 section above already lists as NEEDS-LIVE for the confirm-refusal
+  splice itself is unchanged by this pass — this pass only adds a way to REACH the map and read
+  the hook's counters, it does not touch the splice.
+* `-1` as `ShowGalaxyMapGui`'s `nPlanet` argument is INFERRED-safe from the disassembly (the
+  bounds check rejects it before either array read) but has never been passed to the real
+  function on a running process.
+* Which raw GUI event code(s) a REAL accept click actually fires, and whether `HandleInputEvent`
+  called directly reproduces every side effect of a real click — explicitly NOT verified (see
+  "`galaxymap confirm`" above); this is why that subcommand does not exist.
+* `OpenGalaxyMap`/`CloseGalaxyMap`'s own gate reporting (the three named refusal reasons) has
+  never been exercised live — only the underlying gates it reads were independently confirmed by
+  disassembly.
+
+### Live recipe for the next session with the rig
+
+1. Host and client both connected, `galaxy_map_host_only=1` (shipped default),
+   `follow_lead=host` (also the shipped default).
+2. Host: `warp ebo_m12aa` (both instances land in the same Ebon Hawk instance the way every other
+   two-instance recipe in this doc does).
+3. Client: `galaxymap open`. Expect `applied`/`opened (CGuiInGame+0x80 0 -> 0x...)` in the
+   console reply and the plugin log; the galaxy map screen appears on the CLIENT's own display.
+4. Client (a human, or the rig operator): click a planet, then click Accept on the client's own
+   screen — there is no `galaxymap confirm`, this step still needs a real click (see above).
+   Expect: the chat line `"only the host can choose a destination"` posts once, the plugin log
+   shows `galaxy-map: confirm refused - only the host can choose a destination
+   (follow_lead=host)`, the CLIENT's own module does NOT change, and the map stays open on the
+   client's screen (the ALLOW/vanilla click sound still plays either way — the refusal fires
+   after `PlayGuiSound` in program order, per the 2026-09-02 section's own disassembly).
+5. Client: `galaxymap stats`. Expect `installed=True, refused=1, allowed=0` (or `allowed` > 0 if
+   any earlier accept clicks on this instance were legitimately allowed, e.g. before this test
+   under `follow_lead=any`, or on the host).
+6. Host: `galaxymap open`, pick a planet, click Accept on the HOST's own screen. Expect: normal
+   vanilla behaviour (the take-off sequence begins), and `galaxymap stats` on the HOST shows
+   `allowed` incrementing, `refused` staying at whatever it already was (the hook never refuses a
+   host under either `follow_lead` mode).
+7. Client: `galaxymap close` if the map is still open (e.g. after a refusal) — expect `applied`,
+   `"HideGalaxyMapGui called — CGuiInGame+0x80 0x... -> 0x0"`. A second `galaxymap close` in a
+   row should answer `applied`, `"the galaxy map is already closed"` rather than refusing.
+8. Repeat step 3-4 several times back to back on the client (open, pick different planets,
+   accept) — the crash/stability check the 2026-09-02 section's own live test plan item 4 already
+   asks for, now driveable without walking to `infoterm001` each time.

@@ -159,6 +159,14 @@ internal static unsafe class GalaxyMapConfirmHook
     /// <c>follow_lead=any</c>, or the feature off/unbound).</summary>
     public static uint AllowedCount => _allowedCount;
 
+    /// <summary>Whether <see cref="Install"/> spliced the accept-button jump-table target
+    /// successfully — false means either it has not run yet (no module loaded), or the prologue
+    /// byte check refused (see the diagnostic <see cref="PluginHost.Startup"/> logs at startup).
+    /// Read by the <c>galaxymap stats</c> console verb (<see cref="CheatController"/>) so a live
+    /// session can confirm the hook is armed before trusting <see cref="RefusedCount"/>/
+    /// <see cref="AllowedCount"/> as anything more than "never fired".</summary>
+    public static bool IsInstalled => _installed;
+
     /// <summary>Set once the block exists; the hook fires from the GUI event dispatch and has no
     /// other route to the shared view. Same idiom <see cref="MinimapPeerHook.Bind"/> uses.</summary>
     public static void Bind(SharedBlockView view) => _view = view;

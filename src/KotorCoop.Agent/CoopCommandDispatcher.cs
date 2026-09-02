@@ -336,6 +336,10 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.NewGame] = _ => DriveChargen(ChargenDriveKinds.NewGame, 0),
         [CoopCommandKind.ChargenQuick] = c => DriveChargen(ChargenDriveKinds.Quick, c.Amount),
         [CoopCommandKind.ChargenAccept] = _ => DriveChargen(ChargenDriveKinds.Accept, 0),
+
+        [CoopCommandKind.GalaxyMapOpen] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyMapOpen)),
+        [CoopCommandKind.GalaxyMapClose] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyMapClose)),
+        [CoopCommandKind.GalaxyMapStats] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyMapStats)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
 
         // ⚠ Deliberately does NOT call NoteLocalItemGiven, unlike CoopCommandKind.GiveLoot's own

@@ -1134,4 +1134,36 @@ internal partial struct SharedBlock
     /// immediately above by <see cref="CheatKindHurt"/>).
     /// </summary>
     public const uint CheatKindDown = 64;
+
+    /// <summary>
+    /// LIVE-TEST PRIMITIVE (Tier 2 item 18 task 2's own "Live test plan" follow-up,
+    /// docs/research/galaxy-map-and-party-select.md's 2026-09-03 addendum): opens this
+    /// instance's own galaxy-map GUI through <c>CGuiInGame::ShowGalaxyMapGui</c>, called
+    /// directly (see <c>Odyssey.GalaxyMap.cs</c>) — the same entry point
+    /// <c>k_pebn_galaxy.nss</c>'s <c>infoterm001</c> console reaches, so
+    /// <see cref="GalaxyMapConfirmHook"/>'s refusal can finally be exercised without a human
+    /// clicking. Takes no arguments. Local only.
+    ///
+    /// ⚠ 65, next free after every noted reserved range through 64 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapOpen = 65;
+
+    /// <summary>The counterpart to <see cref="CheatKindGalaxyMapOpen"/>, through
+    /// <c>CGuiInGame::HideGalaxyMapGui</c>. Takes no arguments; already-closed answers APPLIED,
+    /// same reasoning <see cref="CheatKindCloseGui"/>'s own doc comment gives. Local only.
+    ///
+    /// ⚠ 66, next free after every noted reserved range through 65 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapClose = 66;
+
+    /// <summary>
+    /// Reports <see cref="GalaxyMapConfirmHook"/>'s own <c>RefusedCount</c>/<c>AllowedCount</c>
+    /// counters and whether the splice installed — no engine call, a pure read of two static
+    /// counters and one static bool. This is what the research doc's own "Live test plan" named
+    /// as the missing piece: the counters existed but nothing on the console could read them.
+    /// Takes no arguments. Local only.
+    ///
+    /// ⚠ 67, next free after every noted reserved range through 66 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapStats = 67;
 }
