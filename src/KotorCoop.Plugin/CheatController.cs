@@ -352,6 +352,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 UnlockGalaxyMapPlanet();
                 break;
 
+            case SharedBlock.CheatKindGalaxyMapDepart:
+                DepartGalaxyMap();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

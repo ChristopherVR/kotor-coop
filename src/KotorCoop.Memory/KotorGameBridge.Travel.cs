@@ -180,4 +180,48 @@ public sealed partial class KotorGameBridge
             && _memory.TryReadUInt32(_pluginBlock + BlockMidModulePlayStatus, out status);
     }
 
+    // ---- galaxy-map departure relay ---------------------------------------------
+
+    /// <inheritdoc />
+    public bool TryReadGalaxyDeparture(out uint serial, out int planet)
+    {
+        serial = 0;
+        planet = -1;
+
+        // Serial first, planet second - the reverse of the plugin's write order - so a torn
+        // read pairs a serial with the planet written before it, never a newer one.
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockGalaxyDepartureSerial, out serial)
+            && serial != 0
+            && _memory.TryReadInt32(_pluginBlock + BlockGalaxyDeparturePlanet, out planet);
+    }
+
+    /// <inheritdoc />
+    public bool TryRequestGalaxyDepart(int planet)
+    {
+        if (_pluginBlock == 0 || planet is < 0 or > 15)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockGalaxyDepartRequestPlanet, planet);
+
+        // Serial last, so the plugin never observes a half-written request. Continue from
+        // whatever the block already holds, the same convention TryRequestMidModulePlay uses.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockGalaxyDepartRequestSerial, out uint serial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockGalaxyDepartRequestSerial, serial + 1);
+        return ok;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadGalaxyDepartStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockGalaxyDepartApplied, out applied)
+            && _memory.TryReadUInt32(_pluginBlock + BlockGalaxyDepartStatus, out status);
+    }
+
 }

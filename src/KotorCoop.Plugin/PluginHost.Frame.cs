@@ -668,6 +668,10 @@ internal static unsafe partial class PluginHost
         _triggerRelay?.OnFrame();
         _movieRelay?.OnFrame();
 
+        // A peer's interplanetary departure to replay here - same schedule the `galaxyaccept`
+        // verb (CheatController) ran the identical accept dispatch from, three times live.
+        _galaxyDeparture?.OnFrame();
+
         // After the combat pass, so the enemy the owner has just killed is already off the
         // dealt ledger before this publishes it — and so a peer's damage lands on a copy
         // whose health the mirror has already brought up to date this frame.

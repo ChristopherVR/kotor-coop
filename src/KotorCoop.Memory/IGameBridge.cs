@@ -610,6 +610,17 @@ public static class CheatKinds
     public const uint GalaxyMapUnlock = 72;
 
     /// <summary>
+    /// <c>galaxymap depart &lt;n&gt;</c> — the whole interplanetary leg to planet <c>Amount</c>
+    /// (0-15) on this instance in one frame: unlock + select + open + accept, with the plugin's
+    /// confirm hook told the accept is a replay (let through under any <c>follow_lead</c>,
+    /// never republished). The same call the follower path of the galaxy-map departure relay
+    /// makes. See <c>SharedBlock.CheatKindGalaxyMapDepart</c>.
+    ///
+    /// ⚠ 73, next free after every noted range through 72 as of 2026-09-03.
+    /// </summary>
+    public const uint GalaxyMapDepart = 73;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

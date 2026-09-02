@@ -617,6 +617,11 @@ public sealed partial class CoopAgent
         // tick's announce, not last tick's.
         _transitionPump.PumpTransitionAnnounce(local);
 
+        // And once more: a peer's galaxy-map departure taken this tick is a "the host is
+        // transitioning" signal PumpTravel's door-refusal arm must see this tick, and its
+        // replay must beat the slow path's reading of the leader's mid-leg STUNT_* module.
+        _transitionPump.PumpGalaxyDeparture(local, peers, _changedModule, _moduleSettledAtMs);
+
         // Pause and travel are cheap flag checks and must feel immediate.
         _transitionPump.PumpTravel(local, peers, _changedModule, _moduleSettledAtMs);
         _pausePump.PumpPause(local, visible);

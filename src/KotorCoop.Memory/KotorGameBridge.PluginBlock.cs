@@ -824,6 +824,19 @@ public sealed partial class KotorGameBridge
     private const int BlockExeImageDigest = 0x4720;
     private const int BlockExeImageDigestKnown = 0x4724;
 
+    // Galaxy-map departure relay (shared block version 67, region 0x4C00..0x4C18, TotalSize
+    // grown to 0x4D00). Mirrors SharedBlock.OffsetGalaxyDeparture*/OffsetGalaxyDepart*. Plugin
+    // -> agent: the planet this instance's own accept click just confirmed (published at the
+    // click, the one moment of an interplanetary leg the frozen main thread leaves
+    // observable). Agent -> plugin: a peer's departure to replay natively here. See
+    // docs/research/galaxy-map-and-party-select.md's 2026-09-03 relay addendum.
+    private const int BlockGalaxyDepartureSerial = 0x4C00;
+    private const int BlockGalaxyDeparturePlanet = 0x4C04;
+    private const int BlockGalaxyDepartRequestSerial = 0x4C08;
+    private const int BlockGalaxyDepartRequestPlanet = 0x4C0C;
+    private const int BlockGalaxyDepartApplied = 0x4C10;
+    private const int BlockGalaxyDepartStatus = 0x4C14;
+
     /// <summary>
     /// The plugin's hash of the loaded executable image, or false if it has not published one
     /// (no plugin, an older plugin, or a read that failed inside the game). False means the

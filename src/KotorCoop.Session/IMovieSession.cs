@@ -55,4 +55,18 @@ public interface IMovieSession
     /// is still IN (there is no transition to make it ambiguous), so the caller filters by
     /// module before acting — see <c>CoopAgent.PumpMidModuleMovies</c>.</summary>
     IReadOnlyList<MidModuleMoviePacket> DrainMidModuleMovies() => [];
+
+    /// <summary>
+    /// "My player just confirmed <paramref name="planet"/> on the galaxy map, standing in
+    /// <paramref name="module"/>" — the galaxy-map departure relay
+    /// (<see cref="PacketType.GalaxyDeparture"/>). Published by <c>TransitionPump</c> on the
+    /// plugin's own per-click serial edge; repeat calls with the same <paramref name="serial"/>
+    /// are the sender's own redundancy, de-duplicated by the receiver.
+    /// </summary>
+    void PublishGalaxyDeparture(string module, uint serial, int planet) { }
+
+    /// <summary>Galaxy-map departures announced by other peers since the last call, oldest
+    /// first. Like <see cref="DrainMidModuleMovies"/>, the module named is where the announcer
+    /// STOOD when it clicked; the caller replays only from the same module.</summary>
+    IReadOnlyList<GalaxyDeparturePacket> DrainGalaxyDepartures() => [];
 }

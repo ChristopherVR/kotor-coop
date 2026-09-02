@@ -65,3 +65,20 @@ public sealed record MidModuleMoviePacket(uint PeerId, string Module, uint Seria
     /// <summary>An Odyssey resref is 16 characters.</summary>
     public const int MaxMovieLength = 16;
 }
+
+/// <summary>
+/// any -&gt; all (relayed by the host): "my player just confirmed <paramref name="Planet"/> on
+/// the galaxy map" — see <see cref="PacketType.GalaxyDeparture"/> for why this is its own
+/// channel rather than a <see cref="TransitionAnnouncePacket"/>.
+///
+/// <paramref name="Module"/> is where the announcer was standing when it clicked (an Ebon
+/// Hawk module, in vanilla) — a receiver replays the leg only from the SAME module, since the
+/// departure script assumes the ship. <paramref name="Planet"/> is the <c>planetary.2da</c>
+/// row the party table had selected (<c>CSWPartyTable+0xE0</c>), 0-15.
+/// <paramref name="Serial"/> is the announcer's own per-click counter, for de-duplication
+/// across the pump's repeated sends.
+/// </summary>
+public sealed record GalaxyDeparturePacket(uint PeerId, string Module, uint Serial, int Planet)
+{
+    public const int MaxPlanet = 15;
+}

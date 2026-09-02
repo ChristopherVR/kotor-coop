@@ -248,8 +248,10 @@ public class TransitionMovieTests
         // existing 0x4C00, docs/research/peer-damage-ledger.md §9; the branch bumped the plugin
         // half only and the rig refused to start with "plugin shared block not found" until
         // the signature byte followed) — see the changelog comments beside `_block->Version`
-        // and `PluginSignature` for the full history.
-        Assert.Equal(66, int.Parse(version.Groups[1].Value));
+        // and `PluginSignature` for the full history. 67 = the 2026-09-03 galaxy-map departure
+        // relay (block grown to 0x4D00, SharedBlock.OffsetGalaxyDeparture*, docs/research/
+        // galaxy-map-and-party-select.md's 2026-09-03 relay addendum).
+        Assert.Equal(67, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

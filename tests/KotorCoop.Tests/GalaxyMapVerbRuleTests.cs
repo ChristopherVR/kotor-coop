@@ -110,6 +110,28 @@ public class GalaxyMapVerbRuleTests
         Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["unlock"], out _));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(15)]
+    public void DepartParsesThePlanetIndex(int index)
+    {
+        Assert.Equal(
+            GalaxyMapVerbRule.Verb.Depart,
+            GalaxyMapVerbRule.Parse(["depart", index.ToString()], out int planet));
+        Assert.Equal(index, planet);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("16")]
+    [InlineData("tatooine")]
+    public void DepartRefusesABadIndex(string bad)
+    {
+        Assert.Equal(GalaxyMapVerbRule.Verb.Invalid, GalaxyMapVerbRule.Parse(["DEPART", bad], out int planet));
+        Assert.Equal(-1, planet);
+    }
+
     [Fact]
     public void AnUnknownTwoTokenSubcommandWithAValidIndexIsStillInvalid()
     {

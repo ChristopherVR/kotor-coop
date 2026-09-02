@@ -194,6 +194,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.EncounterTrigger] = HandleEncounterTrigger,
             [PacketType.TriggerRelay] = HandleTriggerRelay,
             [PacketType.MidModuleMovie] = HandleMidModuleMovie,
+            [PacketType.GalaxyDeparture] = HandleGalaxyDeparture,
             [PacketType.DialogueRequest] = HandleDialogueRequest,
             [PacketType.Chat] = HandleChat,
             [PacketType.Bark] = HandleBark,
@@ -461,6 +462,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastTransitionMovies(recipients);
         BroadcastTransitionAnnounce(recipients);
         BroadcastMidModuleMovies(recipients);
+        BroadcastGalaxyDepartures(recipients);
         BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);

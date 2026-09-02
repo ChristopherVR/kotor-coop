@@ -165,6 +165,17 @@ internal sealed partial class TransitionPump
             }
 
             _seenCinematicSerials[packet.PeerId] = packet.Serial;
+
+            // An interplanetary leg's take-off/landing films are announced by the leader like
+            // any transition's — but this engine is running (or about to run) the same leg
+            // itself and will play them natively; see _galaxyLegUntilMs.
+            if (InGalaxyLeg)
+            {
+                log($"peer's transition movie(s) {string.Join(", ", packet.Movies)} belong to the "
+                    + "interplanetary leg under way here - not queued for a follow");
+                continue;
+            }
+
             AccumulateFollowMovies(packet.Movies);
         }
     }

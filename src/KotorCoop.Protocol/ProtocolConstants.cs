@@ -163,8 +163,15 @@ public static class ProtocolConstants
     /// PARTY is down, not merely every player character. A v49 peer never publishes the bit,
     /// so a mixed session would hold the suppression forever. See
     /// docs/research/death-handling.md §6.4.
+    ///
+    /// Version 51: <see cref="PacketType.GalaxyDeparture"/> (72) — the galaxy-map departure
+    /// relay. A leader's accept click on the galaxy map is published at the click (the one
+    /// moment the frozen interplanetary leg leaves observable) and the follower replays the
+    /// same scripted leg on its own engine, arriving in the same fresh Ebon Hawk natively.
+    /// Closes docs/limitations.md #15. See docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 relay addendum.
     /// </summary>
-    public const byte Version = 50;
+    public const byte Version = 51;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

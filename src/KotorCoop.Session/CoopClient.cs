@@ -169,6 +169,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.TransitionMovies] = HandleTransitionMovies,
             [PacketType.TransitionAnnounce] = HandleTransitionAnnounce,
             [PacketType.MidModuleMovie] = HandleMidModuleMovie,
+            [PacketType.GalaxyDeparture] = HandleGalaxyDeparture,
             [PacketType.InteractionLock] = HandleInteractionLock,
             [PacketType.LockResponse] = HandleLockResponse,
             [PacketType.Chat] = HandleChat,
@@ -350,6 +351,7 @@ public sealed partial class CoopClient : ICoopSession
         FlushTransitionMovies();
         FlushTransitionAnnounce();
         FlushMidModuleMovies();
+        FlushGalaxyDepartures();
 
         if (now - _lastPingMs >= PingIntervalMs)
         {

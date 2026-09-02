@@ -100,6 +100,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.GalaxyMapStats] = "galaxymap stats",
         [CoopCommandKind.GalaxyMapSelect] = "galaxymap select 3",
         [CoopCommandKind.GalaxyMapUnlock] = "galaxymap unlock 3",
+        [CoopCommandKind.GalaxyMapDepart] = "galaxymap depart 3",
         [CoopCommandKind.GalaxyAccept] = "galaxyaccept",
     };
 

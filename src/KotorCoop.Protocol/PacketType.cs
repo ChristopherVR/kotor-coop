@@ -627,6 +627,19 @@ public enum PacketType : byte
     /// </summary>
     CompanionDamage = 71,
 
+    /// <summary>
+    /// any -&gt; all (relayed by the host): "my player just confirmed an interplanetary
+    /// destination on the galaxy map" — <see cref="GalaxyDeparturePacket"/>. A galaxy-map
+    /// accept runs the whole leg (confirm script, take-off movie, <c>StartNewModule</c> into
+    /// the launch cutscene, a fresh Ebon Hawk) inside a frozen main thread, so neither
+    /// <see cref="TransitionAnnounce"/> nor the module-change fallback ever fires for it; the
+    /// follower was left silently in a stale Ebon Hawk (live 2026-09-03). The plugin publishes
+    /// the click itself, and the receiver REPLAYS the same scripted leg natively rather than
+    /// warping after the leader. See docs/research/galaxy-map-and-party-select.md's 2026-09-03
+    /// relay addendum.
+    /// </summary>
+    GalaxyDeparture = 72,
+
     // 72 remains reserved for concurrent work on this tree (the same numbering discipline as
     // the 39/47/48 skips above) — see the HOSTLOSS wave note on HostBye's own block: 70 and 71
     // are both now used (HostBye, CompanionDamage), 72 alone is still open.

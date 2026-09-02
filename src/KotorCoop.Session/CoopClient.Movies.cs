@@ -219,4 +219,73 @@ public sealed partial class CoopClient
             }
         }
     }
+
+    // ---- galaxy-map departures ----------------------------------------------------
+    //
+    // Same shape as the mid-module movies above: our own accept clicks go up to the host,
+    // every other peer's come down relayed. See CoopHost.Movies.cs's own section comment.
+
+    private readonly Queue<GalaxyDeparturePacket> _galaxyDepartureOutbox = new();
+    private readonly Queue<GalaxyDeparturePacket> _galaxyDepartureInbox = new();
+
+    public void PublishGalaxyDeparture(string module, uint serial, int planet)
+    {
+        lock (_gate)
+        {
+            _galaxyDepartureOutbox.Enqueue(new GalaxyDeparturePacket(_localPeerId, module, serial, planet));
+        }
+    }
+
+    public IReadOnlyList<GalaxyDeparturePacket> DrainGalaxyDepartures()
+    {
+        lock (_gate)
+        {
+            if (_galaxyDepartureInbox.Count == 0)
+            {
+                return [];
+            }
+
+            List<GalaxyDeparturePacket> ready = [];
+            while (_galaxyDepartureInbox.Count > 0)
+            {
+                ready.Add(_galaxyDepartureInbox.Dequeue());
+            }
+
+            return ready;
+        }
+    }
+
+    private void FlushGalaxyDepartures()
+    {
+        while (true)
+        {
+            GalaxyDeparturePacket departure;
+            lock (_gate)
+            {
+                if (_galaxyDepartureOutbox.Count == 0)
+                {
+                    return;
+                }
+
+                departure = _galaxyDepartureOutbox.Dequeue();
+            }
+
+            int length = PacketCodec.Write(_sendBuffer, departure);
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
+    private void HandleGalaxyDeparture(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadGalaxyDeparture(span) is { } departure)
+        {
+            lock (_gate)
+            {
+                _galaxyDepartureInbox.Enqueue(departure);
+            }
+        }
+    }
 }

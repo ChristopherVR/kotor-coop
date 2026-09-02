@@ -150,14 +150,34 @@ internal static unsafe class GalaxyMapConfirmHook
 
     private static uint _refusedCount;
     private static uint _allowedCount;
+    private static uint _replayedCount;
+
+    /// <summary>Nonzero while <see cref="Odyssey.DepartToPlanet"/> is inside its own accept
+    /// dispatch — the accept about to reach <see cref="OnConfirmClicked"/> is a REPLAY of a
+    /// peer's departure (docs/research/galaxy-map-and-party-select.md, the 2026-09-03 relay
+    /// addendum), not this player's own choice: it is let through under any
+    /// <c>follow_lead</c> and NOT published as a departure of our own, or the two peers would
+    /// replay the same leg at each other forever. A plain static rather than a block field
+    /// because it is only ever set and cleared around ONE synchronous call on the main thread.</summary>
+    private static int _replayArmed;
 
     /// <summary>Every accept click this hook refused, for the live test plan's own verification
     /// (a log-line count that survives beyond the plugin log's own rotation).</summary>
     public static uint RefusedCount => _refusedCount;
 
     /// <summary>Every accept click this hook saw and let through (host, or client under
-    /// <c>follow_lead=any</c>, or the feature off/unbound).</summary>
+    /// <c>follow_lead=any</c>, or the feature off/unbound). Replays count here too.</summary>
     public static uint AllowedCount => _allowedCount;
+
+    /// <summary>Of <see cref="AllowedCount"/>, the accepts that were replays of a peer's
+    /// departure (<see cref="Odyssey.DepartToPlanet"/>) rather than this player's own.</summary>
+    public static uint ReplayedCount => _replayedCount;
+
+    /// <summary>See <see cref="_replayArmed"/>. Paired with <see cref="DisarmReplay"/> in a
+    /// <c>try</c>/<c>finally</c> around the one accept dispatch it covers.</summary>
+    public static void ArmReplay() => _replayArmed = 1;
+
+    public static void DisarmReplay() => _replayArmed = 0;
 
     /// <summary>Whether <see cref="Install"/> spliced the accept-button jump-table target
     /// successfully — false means either it has not run yet (no module loaded), or the prologue
@@ -264,10 +284,20 @@ internal static unsafe class GalaxyMapConfirmHook
                 return 0;
             }
 
+            if (_replayArmed != 0)
+            {
+                // A peer's departure being replayed here (Odyssey.DepartToPlanet): always
+                // through, never republished - see _replayArmed.
+                _allowedCount++;
+                _replayedCount++;
+                return 0;
+            }
+
             bool isClient = view.TryGetHostPartyRoster(out _, out _);
             if (!GalaxyMapConfirmSuppressionRule.ShouldRefuse(_enabled, isClient, _followLeadHost))
             {
                 _allowedCount++;
+                PublishDeparture(view);
                 return 0;
             }
 
@@ -283,5 +313,26 @@ internal static unsafe class GalaxyMapConfirmHook
             // block a confirm on one either: fail open, exactly vanilla.
             return 0;
         }
+    }
+
+    /// <summary>
+    /// The one observable moment of an interplanetary leg (SharedBlock.GalaxyDeparture.cs):
+    /// this player's own accept is about to run the confirm script, and the main thread will
+    /// be frozen for the next 17-45 s of movie + <c>StartNewModule</c>. Publish the planet the
+    /// party table currently has selected — the same <c>CSWPartyTable+0xE0</c> field the
+    /// confirm script itself reads — so the session can relay it while the engine is away.
+    /// A planet of -1 (nothing selected) is the vanilla "accept with no destination" no-op
+    /// and is not published at all: nothing departs, so there is nothing to follow.
+    /// </summary>
+    private static void PublishDeparture(SharedBlockView view)
+    {
+        if (!Odyssey.TryReadGalaxyMapState(out _, out int planet, out _) || planet < 0)
+        {
+            return;
+        }
+
+        view.PublishGalaxyDeparture(planet);
+        PluginHost.Log($"galaxy-map: confirm allowed - departing to planet {planet} "
+            + $"(published as departure #{view.GalaxyDepartureSerial} for the session to follow)");
     }
 }

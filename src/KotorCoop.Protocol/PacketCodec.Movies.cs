@@ -107,4 +107,36 @@ public static partial class PacketCodec
 
         return r.Failed ? null : new MidModuleMoviePacket(peerId, module, serial, movie);
     }
+
+    public static int Write(Span<byte> buffer, GalaxyDeparturePacket packet)
+    {
+        PacketWriter w = new(buffer);
+        w.WriteHeader(PacketType.GalaxyDeparture);
+        w.WriteUInt32(packet.PeerId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteUInt32(packet.Serial);
+        w.WriteInt32(packet.Planet);
+        return w.Failed ? 0 : w.Position;
+    }
+
+    public static GalaxyDeparturePacket? ReadGalaxyDeparture(ReadOnlySpan<byte> buffer)
+    {
+        PacketReader r = new(buffer);
+        if (r.ReadHeader() != PacketType.GalaxyDeparture)
+        {
+            return null;
+        }
+
+        uint peerId = r.ReadUInt32();
+        string module = r.ReadString();
+        uint serial = r.ReadUInt32();
+        int planet = r.ReadInt32();
+
+        if (r.Failed || planet < 0 || planet > GalaxyDeparturePacket.MaxPlanet)
+        {
+            return null;
+        }
+
+        return new GalaxyDeparturePacket(peerId, module, serial, planet);
+    }
 }

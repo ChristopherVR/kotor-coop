@@ -214,6 +214,7 @@ internal static unsafe partial class PluginHost
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();
         _movieRelay?.Invalidate();
+        _galaxyDeparture?.Invalidate();
         PendingMoviePlay.Cancel();
         _barks?.Invalidate();
         _itemTemplateSpawns?.Invalidate();

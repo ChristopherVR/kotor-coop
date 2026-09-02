@@ -56,7 +56,9 @@ internal sealed unsafe partial class CheatController
 
         string detail = $"installed={GalaxyMapConfirmHook.IsInstalled}, "
             + $"refused={GalaxyMapConfirmHook.RefusedCount}, "
-            + $"allowed={GalaxyMapConfirmHook.AllowedCount}, {state}";
+            + $"allowed={GalaxyMapConfirmHook.AllowedCount}, "
+            + $"replayed={GalaxyMapConfirmHook.ReplayedCount}, "
+            + $"departures={block.GalaxyDepartureSerial}, {state}";
         Answer(SharedBlock.CheatStatusApplied, $"galaxymap stats: {detail}");
     }
 
@@ -92,6 +94,22 @@ internal sealed unsafe partial class CheatController
         Answer(
             applied ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
             $"galaxymap unlock {planet}: {detail}");
+    }
+
+    /// <summary>
+    /// `galaxymap depart &lt;n&gt;` — the whole interplanetary leg on this instance in one
+    /// frame (<see cref="Odyssey.DepartToPlanet"/>): the same call the session's follower path
+    /// (<see cref="GalaxyDepartureController"/>) makes when a peer's departure arrives, exposed
+    /// as a verb so the replay can be proven on one instance before trusting the relay.
+    /// </summary>
+    private void DepartGalaxyMap()
+    {
+        int planet = block.CheatAmount;
+        bool applied = Odyssey.DepartToPlanet(planet, out string detail);
+        PluginHost.Log($"galaxymap depart {planet}: {detail}");
+        Answer(
+            applied ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            $"galaxymap depart {planet}: {detail}");
     }
 
     /// <summary>

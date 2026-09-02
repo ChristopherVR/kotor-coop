@@ -136,8 +136,13 @@ internal partial struct SharedBlock
     /// <see cref="OffsetThreatDebugRows"/>'s 6-row table plus its count/generation dwords fits
     /// that gap precisely (4 + 4 + 6*0x14 = 0x80) — the first growth in this file's history that
     /// did not need a new 0x100 boundary.
+    ///
+    /// Grown from 0x4C00 to 0x4D00 for the galaxy-map departure relay (version 67,
+    /// <see cref="OffsetGalaxyDepartureSerial"/>, docs/research/galaxy-map-and-party-select.md's
+    /// 2026-09-03 relay addendum): version 66 left no free bytes before 0x4C00 at all, so the
+    /// region starts cleanly at the old boundary and uses 0x18 of the new 0x100.
     /// </summary>
-    public const int TotalSize = 0x4C00;
+    public const int TotalSize = 0x4D00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1265,4 +1270,19 @@ internal partial struct SharedBlock
     /// ⚠ 72, next free after every noted reserved range through 71 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindGalaxyMapUnlock = 72;
+
+    /// <summary>
+    /// <c>galaxymap depart &lt;n&gt;</c> — runs the whole interplanetary leg to planet n on THIS
+    /// instance in one frame: <see cref="CheatKindGalaxyMapUnlock"/> +
+    /// <see cref="CheatKindGalaxyMapSelect"/> + <see cref="CheatKindGalaxyMapOpen"/> +
+    /// <see cref="CheatKindGalaxyAccept"/> composed (<c>Odyssey.DepartToPlanet</c>), with
+    /// <c>GalaxyMapConfirmHook</c>'s replay marker armed so the accept is neither refused under
+    /// <c>follow_lead=host</c> nor republished as this player's own departure. The same call the
+    /// session's follower path (<c>GalaxyDepartureController</c>) makes when a peer's departure
+    /// arrives; exposed as a verb so the replay can be exercised on a single instance before
+    /// trusting the relay. <see cref="CheatAmount"/> carries the planet index, 0-15. Local only.
+    ///
+    /// ⚠ 73, next free after every noted reserved range through 72 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGalaxyMapDepart = 73;
 }

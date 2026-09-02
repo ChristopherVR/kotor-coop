@@ -350,6 +350,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.GalaxyMapStats] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyMapStats)),
         [CoopCommandKind.GalaxyMapSelect] = c => SendCheat(new CheatRequest(CheatKinds.GalaxyMapSelect, Amount: c.Amount)),
         [CoopCommandKind.GalaxyMapUnlock] = c => SendCheat(new CheatRequest(CheatKinds.GalaxyMapUnlock, Amount: c.Amount)),
+        [CoopCommandKind.GalaxyMapDepart] = c => SendCheat(new CheatRequest(CheatKinds.GalaxyMapDepart, Amount: c.Amount)),
         [CoopCommandKind.GalaxyAccept] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyAccept)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
 

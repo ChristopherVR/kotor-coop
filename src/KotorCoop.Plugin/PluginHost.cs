@@ -97,6 +97,7 @@ internal static unsafe partial class PluginHost
     private static EncounterController? _encounters;
     private static TriggerRelayController? _triggerRelay;
     private static MidModuleMovieController? _movieRelay;
+    private static GalaxyDepartureController? _galaxyDeparture;
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
@@ -341,7 +342,15 @@ internal static unsafe partial class PluginHost
         //      threat`; the agent never reads this region. coop.ini `threat_retarget` itself
         //      (default OFF, NEEDS-LIVE) needs no wire/protocol change — see
         //      docs/research/peer-damage-ledger.md §9.
-        _block->Version = 66;
+        // 67 = 2026-09-03: the galaxy-map departure relay at 0x4C00..0x4C18 (TotalSize grown
+        //      to 0x4D00), SharedBlock.OffsetGalaxyDeparture*/OffsetGalaxyDepart*. The leader's
+        //      accept click publishes the planet (GalaxyMapConfirmHook, the one moment of an
+        //      interplanetary leg the frozen main thread leaves observable); the follower
+        //      replays the same scripted leg natively (GalaxyDepartureController ->
+        //      Odyssey.DepartToPlanet). Closes docs/limitations.md #15's "the client cannot
+        //      follow a galaxy-map departure". NEEDS-LIVE at the time of the bump. See
+        //      docs/research/galaxy-map-and-party-select.md's 2026-09-03 relay addendum.
+        _block->Version = 67;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

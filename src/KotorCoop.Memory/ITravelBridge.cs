@@ -114,4 +114,43 @@ public interface ITravelBridge
         status = 0;
         return false;
     }
+
+    // ---- galaxy-map departure relay ----------------------------------------------
+
+    /// <summary>
+    /// The interplanetary departure THIS instance's own player most recently confirmed on the
+    /// galaxy map: <paramref name="serial"/> bumps once per accept click (0 = never), and
+    /// <paramref name="planet"/> is the <c>planetary.2da</c> row it chose. Published by the
+    /// plugin at the click itself — the confirm script, take-off movie and
+    /// <c>StartNewModule</c> that follow run inside a frozen main thread, so nothing else
+    /// about the leg is observable from the frame hook. De-duplicate on the serial. Default
+    /// false when this bridge has no plugin.
+    /// </summary>
+    bool TryReadGalaxyDeparture(out uint serial, out int planet)
+    {
+        serial = 0;
+        planet = -1;
+        return false;
+    }
+
+    /// <summary>
+    /// Asks the plugin to replay a PEER's galaxy-map departure to <paramref name="planet"/> on
+    /// this instance — unlock + select + open + accept, the same scripted leg the leader ran,
+    /// so both arrive in the same fresh Ebon Hawk natively. The plugin acks through
+    /// <see cref="TryReadGalaxyDepartStatus"/>. Default false when there is no plugin.
+    /// </summary>
+    bool TryRequestGalaxyDepart(int planet) => false;
+
+    /// <summary>
+    /// What the plugin did with the last <see cref="TryRequestGalaxyDepart"/> request:
+    /// <paramref name="applied"/> echoes the request's own serial once handled, and
+    /// <paramref name="status"/> is the plugin's <c>GalaxyDepartStatusCode</c> (1 departed,
+    /// 2 engine refused, 3 bad planet). False when there is no plugin.
+    /// </summary>
+    bool TryReadGalaxyDepartStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+        return false;
+    }
 }

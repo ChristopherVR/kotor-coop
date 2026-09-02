@@ -47,9 +47,15 @@ public static class GalaxyMapVerbRule
         /// engine's own <c>SetSelectedPlanet</c> no-ops on every index). Same <c>planet</c> out
         /// parameter as <see cref="Select"/>.</summary>
         Unlock,
+
+        /// <summary>`galaxymap depart &lt;n&gt;` — the whole interplanetary leg on this instance
+        /// in one frame (unlock + select + open + accept with the confirm hook's replay marker
+        /// armed); the same call the galaxy-map departure relay's follower path makes. Same
+        /// <c>planet</c> out parameter as <see cref="Select"/>.</summary>
+        Depart,
     }
 
-    public const string Usage = "usage: galaxymap open|close|stats|select <planet 0-15>|unlock <planet 0-15>";
+    public const string Usage = "usage: galaxymap open|close|stats|select <planet 0-15>|unlock <planet 0-15>|depart <planet 0-15>";
 
     /// <param name="args">The tokens after `galaxymap` (already split by
     /// <c>ConsoleCommand.Parse</c>, no leading/trailing whitespace on any token).</param>
@@ -91,6 +97,12 @@ public static class GalaxyMapVerbRule
             {
                 planet = n;
                 return Verb.Unlock;
+            }
+
+            if (string.Equals(args[0], "depart", StringComparison.OrdinalIgnoreCase))
+            {
+                planet = n;
+                return Verb.Depart;
             }
         }
 

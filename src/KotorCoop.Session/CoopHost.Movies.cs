@@ -245,4 +245,82 @@ public sealed partial class CoopHost
             }
         }
     }
+
+    // ---- galaxy-map departures ----------------------------------------------------
+    //
+    // Same any-to-all relay shape as the mid-module movies above, for the same reason: the
+    // leader is whichever player clicked accept (follow_lead decides on the RECEIVING side
+    // whether that click is one to follow), and the host's own departure has to reach every
+    // client while the host's game thread is frozen inside the leg - which it does, because
+    // the plugin published it at the click and this agent process never froze.
+
+    private readonly RelayQueue<GalaxyDeparturePacket> _galaxyDepartures = new();
+
+    public void PublishGalaxyDeparture(string module, uint serial, int planet)
+    {
+        GalaxyDeparturePacket packet = new(LocalPeerId, module, serial, planet);
+        lock (_gate)
+        {
+            _galaxyDepartures.EnqueueOutbox(packet, LocalPeerId);
+        }
+    }
+
+    public IReadOnlyList<GalaxyDeparturePacket> DrainGalaxyDepartures()
+    {
+        lock (_gate)
+        {
+            return _galaxyDepartures.DrainInbox();
+        }
+    }
+
+    private void HandleGalaxyDeparture(IPEndPoint from, ReadOnlySpan<byte> span, long now)
+    {
+        if (PacketCodec.ReadGalaxyDeparture(span) is not { } departure)
+        {
+            _channel.NoteMalformed();
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_peers.ContainsKey(departure.PeerId))
+            {
+                return; // only a known peer, and it cannot announce for another
+            }
+
+            _galaxyDepartures.EnqueueInbox(departure);
+            _galaxyDepartures.EnqueueOutbox(departure, departure.PeerId); // everyone but the sender
+        }
+    }
+
+    private void BroadcastGalaxyDepartures(List<PeerConnection> recipients)
+    {
+        List<(GalaxyDeparturePacket Packet, uint ExceptPeerId)> pending;
+        lock (_gate)
+        {
+            pending = _galaxyDepartures.DrainOutbox();
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach ((GalaxyDeparturePacket packet, uint except) in pending)
+        {
+            int length = PacketCodec.Write(_sendBuffer, packet);
+            if (length <= 0)
+            {
+                continue;
+            }
+
+            foreach (PeerConnection peer in recipients)
+            {
+                if (peer.Id != except)
+                {
+                    _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+                }
+            }
+        }
+    }
 }

@@ -804,6 +804,19 @@ public enum CoopCommandKind
     GalaxyMapUnlock,
 
     /// <summary>
+    /// <c>galaxymap depart &lt;n&gt;</c> — the whole interplanetary leg to planet n on THIS
+    /// instance in one frame (<see cref="GalaxyMapUnlock"/> + <see cref="GalaxyMapSelect"/> +
+    /// <see cref="GalaxyMapOpen"/> + <see cref="GalaxyAccept"/> composed on the plugin side,
+    /// <c>Odyssey.DepartToPlanet</c>), with the confirm hook's replay marker armed so the accept
+    /// is neither refused under <c>follow_lead=host</c> nor republished as this player's own
+    /// departure. The same call the galaxy-map departure relay's follower path makes when a
+    /// peer's departure arrives (<c>TransitionPump</c>); exposed as a verb so the replay can be
+    /// proven on one instance before trusting the relay. <see cref="CoopCommand.Amount"/>
+    /// carries the planet index, 0-15. Local only.
+    /// </summary>
+    GalaxyMapDepart,
+
+    /// <summary>
     /// <c>galaxyaccept</c> — LIVE-TEST PRIMITIVE (docs/research/galaxy-map-and-party-select.md's
     /// 2026-09-03 `galaxyaccept` addendum). Presses Accept on the galaxy map THROUGH THE
     /// ENGINE'S OWN INPUT DISPATCH (<c>CSWGuiInGameGalaxyMap::HandleInputEvent(panel, 0x27,
