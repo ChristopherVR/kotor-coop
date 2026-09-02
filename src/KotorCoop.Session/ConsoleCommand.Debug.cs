@@ -38,11 +38,45 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.FireScript, Address: rest[0], Amount: slotAmount);
     }
 
-    // movenear <id>  - TEMPORARY DIAGNOSTIC, snaps <id> near a known hostile.
-    private static CoopCommand ParseMoveNear(string[] rest) =>
-        rest.Length == 0
-            ? new CoopCommand(CoopCommandKind.Invalid, Error: "movenear <id>  (e.g. movenear 0x127)")
-            : new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0]);
+    // movenear <id> [x y [z]]  - snaps <id> next to the local player by default (a fixed +X
+    // offset, no facing math); an explicit x y [z] overrides the destination. Same optional-z
+    // shape as `tp`/`walkto` (ParseTeleport/ParseWalkTo) - reused rather than reinvented.
+    // 2026-09-02: used to snap to a hardcoded END_M01AA point regardless of module - see
+    // CheatController.MoveNear's own doc comment for the live fault that caught it.
+    private static CoopCommand ParseMoveNear(string[] rest)
+    {
+        const string usage = "movenear <id> [x y [z]]  (e.g. movenear 0x127, or "
+            + "movenear 0x127 12.5 -30.0 for an explicit destination)";
+
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (rest.Length == 1)
+        {
+            return new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0]);
+        }
+
+        if (rest.Length is < 3 or > 4)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!TryParseCoordinate(rest[1], out float x) || !TryParseCoordinate(rest[2], out float y))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid, Error: $"'{rest[1]} {rest[2]}' is not a coordinate pair");
+        }
+
+        float z = 0f;
+        if (rest.Length == 4 && !TryParseCoordinate(rest[3], out z))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: $"'{rest[3]}' is not a height");
+        }
+
+        return new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0], X: x, Y: y, Z: z);
+    }
 
     // faction <id|me> [vsId|me]  - LIVE-TEST/DIAGNOSTIC PRIMITIVE, see CoopCommandKind.Faction.
     // Read-only: reports GetAIStateReputation (both directions) plus each side's raw

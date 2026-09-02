@@ -8,26 +8,33 @@ namespace KotorCoop.Plugin;
 internal sealed unsafe partial class CheatController
 {
     /// <summary>
-    /// TEMPORARY DIAGNOSTIC (docs/research/shared-state-audit.md §2, round 36). Snaps the
-    /// target creature ~1.3m from END_M01AA's `sithsoldier 0xE` (29.74, 144.46), inside the
-    /// ~2.6m attack range measured that round — so a genuinely non-census creature (a party
-    /// member, never touched by EnemyPresenceController) has a valid, in-range hostile to test
-    /// +0x260 firing against. A no-target result from a non-census creature otherwise proves
-    /// nothing either way. Remove once settled.
+    /// LIVE-TEST/DIAGNOSTIC PRIMITIVE (docs/research/shared-state-audit.md §2, round 36):
+    /// snaps the target creature next to the LOCAL PLAYER by default, or to an explicit point
+    /// when <c>movenear &lt;id&gt; &lt;x&gt; &lt;y&gt; [z]</c> named one — so a genuinely
+    /// non-census creature (a party member, never touched by EnemyPresenceController) can be
+    /// put somewhere useful to test against (e.g. in range of a hostile) without depending on
+    /// what that module happens to contain. <see cref="MoveNearDestinationRule.Resolve"/> is
+    /// the pure "which destination, and was it named explicitly" arithmetic; everything here is
+    /// the engine read/write it cannot do.
     ///
-    /// ⚠ ROOT CAUSE FIXED (live 2026-09-02, tar_m10aa): <c>Odyssey.ResolveServerObject</c> is
-    /// the GENERIC untyped getter (see its own doc comment) — it hands back whatever object the
-    /// engine's array holds for that id, creature or not, and object ids are per-module: an id
-    /// that named a companion in one module names something else entirely (or nothing) after a
-    /// transition. This verb used to trust that blind and snap it, and printed the SAME
-    /// hardcoded "near 0xE" regardless of module or outcome, so a snap of the wrong object in a
-    /// different module read back exactly like success. It now refuses — no snap, no
-    /// misleading reply — unless the resolved object is both a live creature (vtable, never the
-    /// flag-bearing +0x08 type field — see the object-type-field-trap lesson) AND already
+    /// 2026-09-02: originally snapped to a hardcoded END_M01AA point (29, 143.5) regardless of
+    /// module — measured live in tar_m10aa, <c>movenear 0x46</c> teleported a live Vulkar to
+    /// (29.0, 143.5, 0.0), off the map. Module-agnostic now: the default is the player's own
+    /// position (published to every peer every tick, so it always names somewhere real in
+    /// whatever module is actually loaded).
+    ///
+    /// ⚠ ROOT CAUSE (separately) FIXED (live 2026-09-02, tar_m10aa): <c>Odyssey.ResolveServerObject</c>
+    /// is the GENERIC untyped getter (see its own doc comment) — it hands back whatever object
+    /// the engine's array holds for that id, creature or not, and object ids are per-module: an
+    /// id that named a companion in one module names something else entirely (or nothing) after
+    /// a transition. This verb used to trust that blind and snap it, so a snap of the wrong
+    /// object in a different module read back exactly like success. It now refuses — no snap,
+    /// no misleading reply — unless the resolved object is both a live creature (vtable, never
+    /// the flag-bearing +0x08 type field — see the object-type-field-trap lesson) AND already
     /// somewhere real (<see cref="Vec3.IsOrigin"/> catches the (0,0,0) tell a wrongly-typed or
     /// never-placed object reads back as).
     /// </summary>
-    private void MoveNear()
+    private void MoveNear(nint player)
     {
         uint objectId = block.CheatTarget;
         if (objectId == 0)
@@ -56,19 +63,20 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
-        Vec3 destination = new() { X = 29.0f, Y = 143.5f, Z = 0.0f };
+        Vec3 destination = MoveNearDestinationRule.Resolve(Odyssey.GetPosition(player), block.CheatPosition, out bool isExplicit);
         Odyssey.SnapTo(creature, destination);
 
         // Read the position straight back again rather than trust the write blind -
         // creatures.ps1's raw scan is known-unreliable for fresh state.
         Vec3 readBack = *(Vec3*)(creature + 0x090);
+        string how = isExplicit ? "explicit" : "near the player";
         PluginHost.Log(
             $"movenear: snapped 0x{objectId:X} from ({before.X:F1}, {before.Y:F1}, {before.Z:F1}) to "
-            + $"({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}), "
+            + $"({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}) ({how}), "
             + $"read back ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
         Answer(
             SharedBlock.CheatStatusApplied,
-            $"0x{objectId:X} snapped to ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1})");
+            $"0x{objectId:X} snapped to ({readBack.X:F1}, {readBack.Y:F1}, {readBack.Z:F1}) ({how})");
     }
 
     /// <summary>

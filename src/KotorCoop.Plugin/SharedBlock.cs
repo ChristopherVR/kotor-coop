@@ -373,14 +373,19 @@ internal partial struct SharedBlock
     public const uint CheatKindFireScript = 12;
 
     /// <summary>
-    /// TEMPORARY DIAGNOSTIC (docs/research/shared-state-audit.md §2, round 36): snaps <see cref="SharedBlock.CheatTarget"/>
-    /// to a hardcoded position near END_M01AA's `sithsoldier 0xE` (29.74, 144.46), so a
-    /// genuinely non-census creature (a party member, never touched by
-    /// EnemyPresenceController at all) can have a valid, in-range hostile to test
-    /// <c>+0x260</c> firing against — the census-membership question needs a real target, not
-    /// just "no target found." Uses <c>CheatTarget</c> for the creature id; no new fields, no
-    /// version bump. See docs/research/shared-state-audit.md §2, round 36. Remove once this
-    /// question is settled.
+    /// LIVE-TEST/DIAGNOSTIC PRIMITIVE (docs/research/shared-state-audit.md §2, round 36): snaps
+    /// <see cref="SharedBlock.CheatTarget"/> next to the LOCAL PLAYER by default (a fixed +X
+    /// offset — see <c>MoveNearDestinationRule</c>), so a genuinely non-census creature (a party
+    /// member, never touched by EnemyPresenceController at all) can be put somewhere useful to
+    /// test against without depending on what the current module happens to contain. Uses
+    /// <c>CheatTarget</c> for the creature id and <see cref="OffsetCheatX"/>/
+    /// <see cref="OffsetCheatY"/>/<see cref="OffsetCheatZ"/> for an optional explicit
+    /// destination override; no new fields, no version bump.
+    ///
+    /// Round 36's original build snapped to a hardcoded position near END_M01AA's
+    /// `sithsoldier 0xE` (29.74, 144.46) regardless of module. 2026-09-02: measured live in
+    /// `tar_m10aa`, that same hardcoded point sent a live Vulkar off the map — see
+    /// docs/research/shared-state-audit.md §2, round 36's dated addendum.
     /// </summary>
     public const uint CheatKindMoveNear = 13;
 
