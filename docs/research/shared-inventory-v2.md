@@ -2816,3 +2816,33 @@ the plugin`) produced NO `script item grant` line on the host, the host snapshot
 three keys (`g_i_adrnaline003`, `g_i_medeqpmnt01`, `g_w_blstrrfl001`) through the reload, and
 the client took exactly one `WipeRecovery` rejoin. The 00:30 run then followed two host warps
 (tar_m10aa and back) with the pool unchanged. Row closed: **Works**.
+
+## 19. 2026-09-03 — §12.1's slide had a one-tick hole: a stall longer than the timeout expired the entry it had just parked
+
+Found by the third full-suite run of the day (rig down, two subagent builds sharing the box):
+`SharedInventoryV2PumpTests.AReconcileForAStoreNobodyCanScanIsNeverQueuedTwice` re-queued 5 of
+10 blind ticks and `AClosedStoreStillMirrorsAFurtherHostSideChange` 1 — both green in isolation
+and in the two earlier full runs. Not the §10.2 loop coming back; the tests run with a 50 ms
+timeout and 30 ms sleeps, and under load a single tick gap crossed 50 ms.
+
+`PumpClient` pruned expired expected-movement entries at the TOP of the tick, then slid a
+closed store's clocks in the per-key loop BELOW it. The slide therefore only ever protected an
+entry until the next tick began: whenever `now - (previous tick's now) > expectedTimeoutMs`,
+the prune saw a stale clock and expired the entry before the slide could touch it, and
+`projected` collapsed back to `belief` for one re-insert. Live the timeout is 10 s and a tick is
+a few hundred ms, so this needed a 10 s stall between two client ticks — a loading screen, a
+long alt-tab, or the agent process itself descheduled — and it would re-insert once per stall,
+not forever; still a wrong apply on the host.
+
+Fix (`StorePumpV2.PumpClient`, `PruneExpiredExpected(now, scannableStoreId)`): the prune now
+runs AFTER `TryScanOpenStore` and only judges the entries of the store that is scannable this
+tick (0 = none). A closed store's entries are not looked at, which is the rule §12.1 stated
+("nothing can consume the entry while nothing can scan the store, so nothing may expire it
+either") with no dependency on tick cadence. The slide stays: it is what keeps the clock from
+having accrued the whole closed period the moment the store opens again. `PartyPoolPumpV2` has
+no equivalent hole — its prune already runs only on an observed tick (the blind branch slides
+and returns), so a stall there costs at most the one boundary gap.
+
+The same run also produced one `StoreLoopbackTests.ReconnectResyncLeavesUntransactedStoresAlone`
+failure inside the store-filtered rerun (green on the immediate retry and in the full run): a
+real-UDP loopback rig with a 6 s blackout, load-sensitive, no code change.

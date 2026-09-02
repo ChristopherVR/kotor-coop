@@ -181,7 +181,6 @@ internal sealed class StorePumpV2(
         }
 
         PruneOutstanding(now);
-        PruneExpiredExpected(now);
 
         if (!session.TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> snapshot))
         {
@@ -195,6 +194,14 @@ internal sealed class StorePumpV2(
         // only detecting a fresh local change against a live scan does.
         bool storeOpen = bridge.TryScanOpenStore(
             out uint openStoreObjectId, out IReadOnlyDictionary<StoreStackKey, int> openScan);
+
+        // Expiry is judged only for the store that can be scanned this tick (2026-09-03). The
+        // per-key slide below already keeps a closed store's clocks parked, but it runs AFTER
+        // the prune, so a single slow tick (a loaded box, a long frame) longer than the timeout
+        // used to expire an entry the previous tick had just slid — the §10.2 re-insertion,
+        // once per stall instead of once per 10s. Nothing can land while nothing can be seen,
+        // so a closed store's entries are not even looked at.
+        PruneExpiredExpected(now, storeOpen ? openStoreObjectId : 0);
 
         HashSet<StoreStackKey> keys = new(snapshot.Keys);
         keys.UnionWith(_belief.Keys);
@@ -464,12 +471,19 @@ internal sealed class StorePumpV2(
         return net;
     }
 
-    /// <summary>See <see cref="PartyPoolPumpV2.PruneExpiredExpected"/>'s identical remarks.</summary>
-    private void PruneExpiredExpected(long nowMs)
+    /// <summary>See <see cref="PartyPoolPumpV2.PruneExpiredExpected"/>'s identical remarks.
+    /// Only the entries of <paramref name="scannableStoreId"/> (0: none) are judged — see the
+    /// call site.</summary>
+    private void PruneExpiredExpected(long nowMs, uint scannableStoreId)
     {
         List<StoreStackKey>? emptied = null;
         foreach ((StoreStackKey key, List<ExpectedReconcileMovement> entries) in _expectedFromReconcile)
         {
+            if (key.StoreObjectId != scannableStoreId)
+            {
+                continue;
+            }
+
             int removed;
             lock (_pendingGate)
             {
