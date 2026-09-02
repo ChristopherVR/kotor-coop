@@ -612,6 +612,39 @@ public class CoopCheatDispatchTests
         }
     }
 
+    /// <summary>
+    /// crossdoor (docs/research/cinematics.md §8.3c): posts the door's own crossing event
+    /// directly, with the SAME target resolution as usedoor — a tag, an object id, or (bare)
+    /// the nearest transition door, resolved inside the plugin either way.
+    /// </summary>
+    [Fact]
+    public async Task CrossingADoorByTagSendsTheTagAndByIdSendsTheId()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            CheatRequest byTag = await TypeAndAnswer(dispatcher, bridge, "crossdoor end_door10");
+            Assert.Equal(CheatKinds.CrossDoor, byTag.Kind);
+            Assert.Equal("end_door10", byTag.Text);
+            Assert.Equal(0u, byTag.Target);
+
+            CheatRequest byId = await TypeAndAnswer(dispatcher, bridge, "crossdoor 0x4A");
+            Assert.Equal(0x4Au, byId.Target);
+            Assert.Equal(string.Empty, byId.Text);
+
+            // Bare: neither, and the plugin sweeps for the nearest transition door.
+            CheatRequest bare = await TypeAndAnswer(dispatcher, bridge, "crossdoor");
+            Assert.Equal(0u, bare.Target);
+            Assert.Equal(string.Empty, bare.Text);
+
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
     /// <summary>A staging line the parser refuses must not become an engine call — the same
     /// demand every other cheat is held to, and more so for this one.</summary>
     [Theory]
@@ -620,6 +653,8 @@ public class CoopCheatDispatchTests
     [InlineData("moviewarp tar_m02af 01c 01c")]
     [InlineData("usedoor end door 10")]
     [InlineData("usedoor end-door-10")]
+    [InlineData("crossdoor a b")]
+    [InlineData("crossdoor end-door-10")]
     public void ARefusedStagingLineNeverReachesThePlugin(string line)
     {
         (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();

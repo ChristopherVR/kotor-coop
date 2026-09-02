@@ -3,10 +3,10 @@ using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
 
-/// <summary>The door/placeable staging verbs: usedoor, opendoor, useplaceable, closeplaceable.
-/// All four resolve their token the same way: an object id if the parser recognises one,
-/// otherwise the raw text (a tag), resolved inside the game because the agent's own census may
-/// be a frame or two stale.</summary>
+/// <summary>The door/placeable staging verbs: usedoor, crossdoor, opendoor, useplaceable,
+/// closeplaceable. All five resolve their token the same way: an object id if the parser
+/// recognises one, otherwise the raw text (a tag), resolved inside the game because the agent's
+/// own census may be a frame or two stale.</summary>
 public sealed partial class CoopCommandDispatcher
 {
     /// <summary>
@@ -27,6 +27,23 @@ public sealed partial class CoopCommandDispatcher
         }
 
         SendCheat(new CheatRequest(CheatKinds.UseDoor, Text: token));
+    }
+
+    /// <summary>
+    /// The same dispatch shape as <see cref="UseDoor"/>, for <c>crossdoor</c>: posts the
+    /// door-crossing event directly rather than queuing a walk, so a real crossing can be
+    /// exercised without depending on the pathfinder ever reaching the threshold — see
+    /// <c>CoopCommandKind.CrossDoor</c> and docs/research/cinematics.md's 2026-09-03 addendum.
+    /// </summary>
+    private void CrossDoor(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.CrossDoor, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.CrossDoor, Text: token));
     }
 
     /// <summary>The same dispatch shape as <see cref="UseDoor"/>, for an ordinary door — see

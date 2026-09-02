@@ -280,6 +280,7 @@ public sealed partial class CoopCommandDispatcher(
 
         [CoopCommandKind.StageMovie] = StageMovie,
         [CoopCommandKind.UseDoor] = c => UseDoor(c.Address ?? string.Empty),
+        [CoopCommandKind.CrossDoor] = c => CrossDoor(c.Address ?? string.Empty),
         [CoopCommandKind.OpenDoor] = c => OpenDoor(c.Address ?? string.Empty),
         [CoopCommandKind.UsePlaceable] = c => UsePlaceable(c.Address ?? string.Empty),
         [CoopCommandKind.ClosePlaceable] = c => ClosePlaceable(c.Address ?? string.Empty),

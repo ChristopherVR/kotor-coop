@@ -54,6 +54,13 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
         _walkFramesLeft = 0;
         _walkWatchFrames = 0;
         _walkDoorId = 0;
+
+        // Same reasoning for a crossdoor watch: if the module changed because the posted event
+        // actually worked, this zeroing is exactly what makes WatchDoorCrossing print nothing
+        // on success (see its own doc comment).
+        _crossWatchFramesLeft = 0;
+        _crossDoorId = 0;
+        _crossTransitionSeenPending = false;
     }
 
     public void OnFrame()
@@ -62,6 +69,7 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
         ApplyPendingMinOneHpRestore();
         RetryPendingDoorWalk();
         WatchDoorWalk();
+        WatchDoorCrossing();
 
         uint serial = block.CheatSerial;
         if (serial == _appliedSerial)
@@ -150,6 +158,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
 
             case SharedBlock.CheatKindUseDoor:
                 UseDoor(player, playerId);
+                break;
+
+            case SharedBlock.CheatKindCrossDoor:
+                CrossDoor(player, playerId);
                 break;
 
             case SharedBlock.CheatKindOpenDoor:

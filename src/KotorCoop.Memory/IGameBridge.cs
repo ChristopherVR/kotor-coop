@@ -522,6 +522,24 @@ public static class CheatKinds
     public const uint Down = 64;
 
     /// <summary>
+    /// Posts the SAME door-crossing event (type <c>0x1E</c>) the engine's own movement update
+    /// posts when a creature walks THROUGH a door's sub-area — built exactly the way
+    /// <c>CSWSCreature::AIActionMoveToPoint</c> builds it (0x005200C5-0x005201A7), instead of
+    /// queuing a walk and hoping the pathfinder actually reaches the threshold. <c>usedoor</c>'s
+    /// own walk has stalled 1.8-5.9 m short of the door on every live attempt to date
+    /// (docs/research/cinematics.md §8.3b), so the "a real crossing opens the transition arm"
+    /// half of the warp-crash fix has never actually been exercised — this is the instrument
+    /// that exercises it directly. <c>Text</c> is the door tag, <c>Target</c> its object id;
+    /// both empty means "the nearest module transition door", the exact same resolution
+    /// <see cref="UseDoor"/> uses (opening the door first if it is shut — a real crossing needs
+    /// an open door exactly as much as a walk does). See SharedBlock.CheatKindCrossDoor and
+    /// docs/research/cinematics.md's 2026-09-03 addendum.
+    ///
+    /// ⚠ 65, next free after every noted range through 64 as of 2026-09-03.
+    /// </summary>
+    public const uint CrossDoor = 65;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

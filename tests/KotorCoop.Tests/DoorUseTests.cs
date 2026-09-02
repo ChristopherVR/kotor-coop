@@ -52,6 +52,43 @@ public class DoorUseTests
         Assert.NotEqual(string.Empty, command.Error);
     }
 
+    // ---- crossdoor: the same grammar as usedoor, a different kind ------------------
+    //
+    // crossdoor shares its parse shape with usedoor deliberately (docs/research/cinematics.md
+    // §8.3c) - the two verbs diverge only inside the plugin, at the very last step.
+
+    [Fact]
+    public void ABareCrossDoorMeansTheNearestTransitionDoor()
+    {
+        CoopCommand command = ConsoleCommand.Parse("crossdoor");
+
+        Assert.Equal(CoopCommandKind.CrossDoor, command.Kind);
+        Assert.Null(command.Address);
+    }
+
+    [Theory]
+    [InlineData("crossdoor end_door10", "end_door10")]
+    [InlineData("crossdoor 0x4A", "0x4A")]
+    [InlineData("crossdoor #31", "#31")]
+    public void ACrossDoorNamedDoorTravelsAsTypedAndIsResolvedInTheGame(string line, string token)
+    {
+        CoopCommand command = ConsoleCommand.Parse(line);
+
+        Assert.Equal(CoopCommandKind.CrossDoor, command.Kind);
+        Assert.Equal(token, command.Address);
+    }
+
+    [Theory]
+    [InlineData("crossdoor a b")]                  // more than one door
+    [InlineData("crossdoor end-door-10")]           // not a tag and not an id
+    public void AMalformedCrossDoorLineIsRefusedWithAReason(string line)
+    {
+        CoopCommand command = ConsoleCommand.Parse(line);
+
+        Assert.Equal(CoopCommandKind.Invalid, command.Kind);
+        Assert.NotEqual(string.Empty, command.Error);
+    }
+
     // ---- the guard -----------------------------------------------------------------
 
     private static DoorUseVerdict Decide(

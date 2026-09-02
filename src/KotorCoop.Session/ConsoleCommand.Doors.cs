@@ -1,6 +1,7 @@
 namespace KotorCoop.Session;
 
-/// <summary>The door/placeable staging verbs: usedoor, opendoor, useplaceable, closeplaceable.</summary>
+/// <summary>The door/placeable staging verbs: usedoor, crossdoor, opendoor, useplaceable,
+/// closeplaceable.</summary>
 public static partial class ConsoleCommand
 {
     // The other half of the movie-staging instrument, and spelled in full for the same
@@ -32,6 +33,34 @@ public static partial class ConsoleCommand
         }
 
         return new CoopCommand(CoopCommandKind.UseDoor, Address: rest[0]);
+    }
+
+    // The event-posting instrument, same target shape as usedoor: posts the door-crossing
+    // event directly rather than queuing a walk — see CoopCommandKind.CrossDoor.
+    private static CoopCommand ParseCrossDoor(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            // Same "nearest transition door" default as usedoor, and safe for the same
+            // reason: the nearest-door search refuses every door that is not a transition.
+            return new CoopCommand(CoopCommandKind.CrossDoor);
+        }
+
+        if (rest.Length > 1)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "crossdoor takes one door, e.g. crossdoor end_door10 (or bare, for the nearest)");
+        }
+
+        if (!TryParseObjectId(rest[0], out _) && !IsResRef(rest[0], maxLength: 31))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a door tag or object id");
+        }
+
+        return new CoopCommand(CoopCommandKind.CrossDoor, Address: rest[0]);
     }
 
     // An ordinary door, deliberately not gated to LinkedToModule the way usedoor is — see

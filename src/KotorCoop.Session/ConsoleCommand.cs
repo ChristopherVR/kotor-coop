@@ -216,6 +216,20 @@ public enum CoopCommandKind
     /// </summary>
     UseDoor,
 
+    /// <summary>
+    /// Posts the SAME door-crossing event (type <c>0x1E</c>) the engine's own movement code
+    /// posts when a creature walks through a door's sub-area — built the way
+    /// <c>CSWSCreature::AIActionMoveToPoint</c> builds it, instead of queuing a walk and hoping
+    /// the pathfinder actually reaches the threshold. <see cref="UseDoor"/>'s own walk has
+    /// stalled short of the door on every live attempt to date (docs/research/cinematics.md
+    /// §8.3b), leaving the door's own transition arm unexercised by a real crossing; this verb
+    /// exercises it directly. Same target resolution as <see cref="UseDoor"/>:
+    /// <see cref="CoopCommand.Address"/> carries the door's tag, or an object id in the three
+    /// spellings <see cref="ConsoleCommand.TryParseObjectId"/> accepts; empty means "the
+    /// nearest module transition door".
+    /// </summary>
+    CrossDoor,
+
     /// <summary>Give a materialised enemy's local stand-in one item of its real corpse's
     /// actual loot. The owner's enemy id is in <see cref="CoopCommand.Address"/>, the resref
     /// in <see cref="CoopCommand.Password"/>, and the stack count in
@@ -886,6 +900,7 @@ public static partial class ConsoleCommand
         new(["dropitem"], ParseDropItem),
         new(["moviewarp"], ParseStageMovie),
         new(["usedoor"], ParseUseDoor),
+        new(["crossdoor"], ParseCrossDoor),
         new(["opendoor"], ParseOpenDoor),
         new(["useplaceable"], ParseUsePlaceable),
         new(["closeplaceable"], ParseClosePlaceable),

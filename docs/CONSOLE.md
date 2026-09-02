@@ -116,6 +116,7 @@ Lower-level probes used to stage or observe a live test; not day-to-day player c
 | `walkto` | `<x> <y> [z]` | drives your own character toward coordinates via synthetic input (unlike `tp`'s instant snap; there is no native "walk player here" server message to borrow, so this drives local input instead) |
 | `moviewarp` | `<module> <movie...> \| queue <movie...> \| clear \| show` | stages a movie for the next transition |
 | `usedoor` | `[tag\|id]` (blank = nearest transition door) | uses a door through the engine's own input, like a click |
+| `crossdoor` | `[tag\|id]` (blank = nearest transition door) | posts the door's own crossing event (0x1E) directly, with no walk — for when `usedoor`'s walk stalls short |
 | `opendoor` | `[tag\|id]` (blank = nearest door) | opens a door with no transition needed |
 | `useplaceable` | `[tag\|id]` (blank = nearest container) | uses a chest/corpse/switch through the engine's own input |
 | `closeplaceable` | `[tag\|id]` (blank = nearest container) | closes what `useplaceable` opened |

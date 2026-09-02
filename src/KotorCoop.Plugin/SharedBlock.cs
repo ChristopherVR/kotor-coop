@@ -1134,4 +1134,33 @@ internal partial struct SharedBlock
     /// immediately above by <see cref="CheatKindHurt"/>).
     /// </summary>
     public const uint CheatKindDown = 64;
+
+    /// <summary>
+    /// STAGING VERB (docs/research/cinematics.md's 2026-09-03 addendum): posts the SAME
+    /// door-crossing event (type <c>0x1E</c>) the engine's own movement code posts when a
+    /// creature's WalkUpdateLocation/AIActionMoveToPoint notices it has crossed into a door's
+    /// sub-area — built exactly the way <c>CSWSCreature::AIActionMoveToPoint</c> builds it
+    /// (0x005200C5-0x005201A7, see <c>Odyssey.PostDoorCrossingEvent</c>'s own header for the
+    /// full disassembly), instead of queuing a walk and hoping the pathfinder reaches the
+    /// threshold. Resolves and opens the door exactly like <see cref="CheatKindUseDoor"/> does
+    /// (same tag/id/nearest-transition-door search, same "open it first if shut" step — a real
+    /// crossing needs an open door exactly as much as a walk does, and gathers the party the
+    /// same way, since <c>CSWSDoor::EventHandler</c>'s own <c>IsPartyTogether</c> gate at
+    /// 0x0058C228 applies to this event exactly as it does to a walked one), then instead of
+    /// queuing <c>ActionMoveToLocation</c> it constructs the <c>CScriptEvent</c> and hands it
+    /// straight to <c>CServerAIMaster::AddEventDeltaTime</c> (0x004B08D0) itself.
+    ///
+    /// Built because <see cref="CheatKindUseDoor"/>'s walk has stalled 1.8-5.9 m short of the
+    /// door on every live attempt across three separate rounds (docs/research/cinematics.md
+    /// §8.3b), so the "a real crossing reaches the door's own transition arm" half of the
+    /// warp-crash fix (docs/research/warp-crash-and-snapshot-lesson.md) has never actually been
+    /// observed — this verb removes the pathfinder as a dependency entirely, exercising
+    /// <c>CSWSDoor::EventHandler</c>'s transition arm (0x0058C0BE) the same way a real crossing
+    /// would, without needing the walk to ever land. <see cref="OffsetCheatText"/> carries the
+    /// door's tag, or <see cref="OffsetCheatTarget"/> its object id; both empty means "the
+    /// nearest module transition door", identical to <see cref="CheatKindUseDoor"/>.
+    ///
+    /// ⚠ 65, next free after every noted reserved range through 64 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindCrossDoor = 65;
 }
