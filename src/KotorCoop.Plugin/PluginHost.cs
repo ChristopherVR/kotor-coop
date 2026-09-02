@@ -325,7 +325,15 @@ internal static unsafe partial class PluginHost
         //      that count instead of the whole stack, and an older plugin's 0 there would
         //      read as "unknown"; severing the pair is the honest outcome. LIVE-VERIFIED the
         //      same day. See docs/research/shared-inventory-v2.md §17.
-        _block->Version = 64;
+        // 65 = 2026-09-02: the materialised-owner-id table at 0x4B00..0x4B80 (TotalSize grown
+        //      to 0x4C00), SharedBlock.OffsetMaterialisedOwnerIds — MaterialisedEnemies' own
+        //      owner-id table, published verbatim, so the agent can tell BEFORE spending a
+        //      giveloot round trip whether an owner id names one of our own stand-ins or (the
+        //      overwhelmingly common case) a peer holding the real, GIT-identical creature.
+        //      Closes the wasted-round-trip noise measured live the same day: six refused
+        //      gives in one second on a client rejoining after a wipe reload. NEEDS-LIVE. See
+        //      docs/research/enemy-materialisation.md's 2026-09-02 section.
+        _block->Version = 65;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

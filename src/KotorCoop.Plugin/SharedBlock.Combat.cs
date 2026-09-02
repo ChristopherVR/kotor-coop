@@ -419,6 +419,29 @@ internal partial struct SharedBlock
     public const int OffsetLocalCombatExcludedIds = 0x4800;
 
 
+    // ---- materialised-enemy local stand-ins (version 65, region 0x4B00..0x4B80) ---
+    //
+    // The set of OWNER enemy ids MaterialisedEnemies currently has a local stand-in BODY for —
+    // published so the agent can tell, BEFORE spending a giveloot round trip on the single-slot
+    // cheat channel, whether an arriving materialised-loot item's owner id names one of our own
+    // stand-ins or (the overwhelmingly common case) a peer holding the real, GIT-identical
+    // creature, which already rolled its own equivalent loot. Measured live 2026-09-02: six
+    // wasted round trips in one second on a client rejoining after a wipe reload, each one
+    // occupying the channel and costing two log lines for a refusal the client could have
+    // skipped entirely. See docs/research/enemy-materialisation.md's 2026-09-02 section.
+    //
+    // Same shape as OffsetLocalCombatExcludedIds just above: a fixed EnemyCapacity-wide array
+    // of owner ids, 0 marking an unused slot, no separate count field —
+    // MaterialisedEnemies.OwnerIdsSnapshot already IS this table (unpacked, in place), so
+    // publishing it is a straight copy of the existing array rather than a rebuild.
+
+    /// <summary>Plugin -&gt; agent. EnemyCapacity owner-space ids (u32 each, slot i at this
+    /// offset + i*4) — every owner id <c>MaterialisedEnemies</c> currently maps to a local
+    /// stand-in body. 0 marks an unused slot, the same convention
+    /// <see cref="OffsetLocalCombatExcludedIds"/> uses. Occupies 0x4B00..0x4B80.</summary>
+    public const int OffsetMaterialisedOwnerIds = 0x4B00;
+
+
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //
     // Non-damage effects that land on a peer's phantom (stun, paralyze, knockdown, slow,

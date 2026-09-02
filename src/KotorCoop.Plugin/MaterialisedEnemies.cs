@@ -137,6 +137,18 @@ internal static unsafe class MaterialisedEnemies
         return 0;
     }
 
+    /// <summary>
+    /// Every currently-mapped owner id, in fixed slot order (0 = unused) — the SAME array
+    /// <see cref="ToLocal"/> walks, exposed read-only so <see cref="EnemyPresenceController"/>
+    /// can publish it verbatim into the shared block
+    /// (<c>SharedBlockView.SetMaterialisedOwnerIds</c>, version 65) every pass it sweeps this
+    /// table. Lets the agent tell, BEFORE spending a giveloot round trip on the single-slot
+    /// cheat channel, whether an owner id names one of our own stand-ins or (the overwhelmingly
+    /// common case) a peer holding the real, GIT-identical creature. See
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
+    /// </summary>
+    public static ReadOnlySpan<uint> OwnerIdsSnapshot => OwnerIds;
+
     /// <summary>Records that the census still lists this owner id, keeping its entry (and
     /// body) alive. Called for every published slot every frame.</summary>
     public static void Seen(uint ownerId, double now)
