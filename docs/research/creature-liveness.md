@@ -1609,3 +1609,55 @@ premature — but that call belongs to whoever runs this checklist, against this
 Build: `src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean. `dotnet test tests/KotorCoop.Tests -c
 Debug --filter "FullyQualifiedName~Liveness"`: 52/52 passed. Full suite run alongside this pass —
 see the commit for the result.
+
+## 2026-09-03 — `spawncreature` debug verb shipped: checklist item 6 is now runnable
+
+The `spawncreature <template> [count] [x y [z]]` (alias `spawn`) console verb this document's own
+checklist item 6 asked for now exists, following `Odyssey.SpawnCreature`'s existing call path
+exactly as proposed above — the same CreateObject route `MaterialisedEnemies.cs`/
+`PhantomController.cs` already use for their own stand-ins, just reachable from a console line.
+See `docs/CONSOLE.md`'s own row and `SpawnCreatureVerbRule`/`CheatController.SpawnCreature.cs` for
+the implementation; `SpawnCreatureVerbRule` and `SpawnCreatureGridRule` are pure and unit-tested
+(`tests/KotorCoop.Tests/SpawnCreatureVerbRuleTests.cs`, `SpawnCreatureGridRuleTests.cs`).
+
+It spawns up to 32 ordinary hostile creatures from a .utc template resref, spread in a small grid
+next to the local player by default (or anchored on an explicit position), with faction and every
+other property left entirely to the template — nothing about the spawned population is
+special-cased. **Local only, always**: on a CLIENT the spawned bodies are ordinary local objects
+this instance's own engine created, not registered with any peer-sync channel, so a peer never
+learns they exist — the intended use is on the HOST, where a spawned creature is population like
+any other the host's own module already owns.
+
+**Status: NEEDS-LIVE.** This pass did not run the rig — no live confirmation that a 40+ creature
+`spawncreature` population actually stresses `tools/liveness-freshness-probe.ps1` any differently
+from the ~33-creature natural ceiling the 2026-08-24 rounds already surveyed cleanly. Checklist
+item 6 (§7, "The live checklist to flip `liveness_sync`") is now genuinely runnable rather than
+blocked on "no way to synthesize a bigger population" — whoever next has rig access can finally
+run it as originally proposed.
+
+Also usable for staging a fight anywhere a Vulkar or similar is needed for a combat round (e.g.
+`docs/research/peer-damage-ledger.md` §9.5) without depending on what a given module happens to
+contain.
+
+### Files touched this pass
+
+- `src/KotorCoop.Session/SpawnCreatureVerbRule.cs` — pure parse of the console grammar
+  (template/count/position).
+- `src/KotorCoop.Session/ConsoleCommand.cs`, `ConsoleCommand.Debug.cs` — the `SpawnCreature` verb
+  kind, its `VerbSpecs` row, and `ParseSpawnCreature`.
+- `src/KotorCoop.Agent/CoopCommandDispatcher.cs` — forwards the parsed request as a
+  `CheatKinds.SpawnCreature` cheat.
+- `src/KotorCoop.Memory/IGameBridge.cs` — `CheatKinds.SpawnCreature = 68`.
+- `src/KotorCoop.Plugin/SharedBlock.cs` — `CheatKindSpawnCreature = 68`.
+- `src/KotorCoop.Plugin/CheatController.cs`, `CheatController.SpawnCreature.cs` — the engine-side
+  handler: reads the template/count/position off the cheat channel, spawns through
+  `Odyssey.SpawnCreature` in a loop, reports `spawned N/count <template>: <ids>` (full ledger to
+  the plugin log, a bounded summary on the 64-byte answer channel).
+- `src/KotorCoop.Plugin/SpawnCreatureGridRule.cs` — the pure per-creature spread arithmetic.
+- `tests/KotorCoop.Tests/SpawnCreatureVerbRuleTests.cs`,
+  `tests/KotorCoop.Tests/SpawnCreatureGridRuleTests.cs` — 27 + 6 new unit tests, all green.
+- `docs/CONSOLE.md` — new `spawncreature` row.
+
+Build: `src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean. `dotnet test tests/KotorCoop.Tests -c
+Debug --filter "FullyQualifiedName~SpawnCreature"`: 27/27 passed. No rig access this pass —
+everything above the plugin/test build is NEEDS-LIVE.

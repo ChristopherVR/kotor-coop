@@ -100,6 +100,26 @@ public enum CoopCommandKind
     MoveNear,
 
     /// <summary>
+    /// <c>spawncreature &lt;template&gt; [count] [x y [z]]</c> (alias <c>spawn</c>) — DEV-ONLY
+    /// TEST PRIMITIVE (docs/research/creature-liveness.md's 2026-09-03 checklist item 6; also
+    /// used to stage a fight anywhere, e.g. docs/research/peer-damage-ledger.md §9.5). Spawns
+    /// <see cref="CoopCommand.Amount"/> hostile creatures (default 1, max 32) from the .utc
+    /// template resref in <see cref="CoopCommand.Address"/>, through the engine's own
+    /// CreateObject path (<c>Odyssey.SpawnCreature</c> — the same call
+    /// <c>MaterialisedEnemies</c>/<c>PhantomController</c> already make for their own stand-ins).
+    /// Spread in a small grid next to the LOCAL PLAYER by default (see
+    /// <c>KotorCoop.Plugin.SpawnCreatureGridRule</c>), or anchored on an explicit
+    /// <see cref="CoopCommand.X"/>/<see cref="CoopCommand.Y"/>/<see cref="CoopCommand.Z"/> when
+    /// the line named one — same origin-sentinel convention <see cref="MoveNear"/> already uses.
+    /// Faction and every other field comes from the template itself; nothing is forced.
+    ///
+    /// Local only, and ONLY the local instance spawns: on a CLIENT the spawned creatures are
+    /// local-only bodies this instance owns, not the host's, so peer sync will not carry them to
+    /// anyone else — the intended use is on the HOST.
+    /// </summary>
+    SpawnCreature,
+
+    /// <summary>
     /// Inject a transport fault on the live session so a disconnect can be reproduced with
     /// nobody touching a cable. The sub-verb is in <see cref="CoopCommand.Address"/> and its
     /// argument (percentage, milliseconds, seconds, direction) in
@@ -903,6 +923,7 @@ public static partial class ConsoleCommand
         new(["resolve"], ParseResolve),
         new(["firescript"], ParseFireScript),
         new(["movenear"], ParseMoveNear),
+        new(["spawncreature", "spawn"], ParseSpawnCreature),
         new(["god"], ParseGod),
         new(["topup"], ParseTopUp),
         new(["standup", "getup"], ParseStandUp),

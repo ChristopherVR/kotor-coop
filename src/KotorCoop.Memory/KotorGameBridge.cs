@@ -36,7 +36,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     private int _consecutiveFailures;
     private nint _pluginBlock;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 43 + guard 0xC0FFEE01. The version is
+    /// <summary>16-byte signature: "KOCOOP01" + version 66 + guard 0xC0FFEE01. The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
@@ -48,8 +48,14 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// fails the build if they disagree</b> — added with 42, because nothing had ever
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
-    /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 41 00 00 00 01 EE FF C0";
+    /// THIS file's text, by its literal path — keep it declared here, not in a partial.
+    ///
+    /// ⚠ 2026-09-03: found and fixed a real half-bump while adding the spawncreature verb (an
+    /// unrelated pass) — the THREAT merge (commit 0c2d13e) moved PluginHost's `_block->Version`
+    /// to 66 but left this byte at the OLD version's hex (0x41 = 65), exactly the failure mode
+    /// the warning above describes. Both of the tests named above were red on `main` before this
+    /// one-byte fix; no block layout changed.</summary>
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 42 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead

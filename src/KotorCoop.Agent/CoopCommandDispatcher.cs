@@ -296,6 +296,13 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.MoveNear] = MoveNearCommand,
         [CoopCommandKind.FireScript] = FireScriptCommand,
 
+        // spawncreature: every field the plugin needs is already in CoopCommand as-is
+        // (template resref in Address, count in Amount, X/Y/Z the same origin-sentinel
+        // convention MoveNear/Teleport/WalkTo already use) - no agent-side resolution needed,
+        // same reasoning the GalaxyMap* rows below have.
+        [CoopCommandKind.SpawnCreature] = c => SendCheat(new CheatRequest(
+            CheatKinds.SpawnCreature, Text: c.Address ?? string.Empty, Amount: c.Amount, X: c.X, Y: c.Y, Z: c.Z)),
+
         // ---- staging cheats ---------------------------------------------
         [CoopCommandKind.God] = c => SendCheat(new CheatRequest(CheatKinds.God, Amount: c.Amount)),
         [CoopCommandKind.TopUp] = c => SendCheat(new CheatRequest(CheatKinds.TopUp, Amount: c.Amount)),

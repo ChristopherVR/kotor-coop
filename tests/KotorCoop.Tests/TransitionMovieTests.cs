@@ -244,9 +244,18 @@ public class TransitionMovieTests
         // layout change, docs/research/shared-inventory-v2.md §17.7), 65 the same day's
         // materialised-owner-id table (block grown to 0x4C00, SharedBlock.
         // OffsetMaterialisedOwnerIds, docs/research/enemy-materialisation.md's 2026-09-02
-        // section) — see the changelog comments beside `_block->Version` and `PluginSignature`
-        // for the full history.
-        Assert.Equal(65, int.Parse(version.Groups[1].Value));
+        // section), 66 the threat-retarget diagnostics region (0x4B80..0x4C00, SharedBlock.
+        // OffsetThreatDebugCount/OffsetThreatDebugGeneration/OffsetThreatDebugRows,
+        // docs/research/peer-damage-ledger.md §9 — diagnostics only, no wire/protocol change)
+        // — see the changelog comments beside `_block->Version` and `PluginSignature` for the
+        // full history.
+        //
+        // ⚠ 2026-09-03: this literal and PluginSignature's own version byte were BOTH still 65
+        // when this fact-check was next run (added while shipping the unrelated `spawncreature`
+        // verb) — the THREAT merge (commit 0c2d13e) moved `_block->Version` to 66 in PluginHost.cs
+        // but left both of this test's own anchors at the prior number, exactly the "half-bump"
+        // failure mode this test exists to catch. Fixed here; no block layout changed.
+        Assert.Equal(66, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()
