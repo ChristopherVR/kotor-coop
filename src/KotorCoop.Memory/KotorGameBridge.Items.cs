@@ -66,6 +66,15 @@ public sealed partial class KotorGameBridge
     /// <summary>Minimum gap between item-tag scans, however many lookups miss.</summary>
     private const int ItemTagRebuildMs = 15_000;
 
+    /// <summary>Minimum gap between item-tag scans while <see cref="IsItemViewSettled"/> is
+    /// false — much shorter than <see cref="ItemTagRebuildMs"/> because the whole point of
+    /// settling is to catch the engine finishing what it was still creating at the world edge
+    /// (docs/research/shared-inventory-v2.md's 2026-09-02 evening round: the clothes and short
+    /// sword a game-over reload creates were not on the heap yet when the "settled" world's
+    /// first sweep ran, and nothing looked again for fifteen seconds) as soon as it can rather
+    /// than waiting out the ordinary interval a stable world does not need.</summary>
+    private const int ItemSettleRebuildMs = 2_000;
+
     /// <summary>Which module the address caches were built for.</summary>
     private string _cachedForModule = string.Empty;
 
@@ -85,6 +94,9 @@ public sealed partial class KotorGameBridge
     /// <summary>Whether the sweep the caches hold was taken between lives — see the rule's
     /// own doc for the rejoin that published the client's own sword as a script grant.</summary>
     private readonly ItemSweepProvenanceRule _itemSweepProvenance = new();
+
+    /// <inheritdoc/>
+    public bool IsItemViewSettled => !_itemSweepProvenance.Settling;
 
     /// <summary>
     /// Trims a tag down to a usable blueprint resref: lowercase, and cut at the first
@@ -165,6 +177,17 @@ public sealed partial class KotorGameBridge
     /// trusting it for a rebuild interval. <see cref="ItemSweepProvenanceRule"/> carries the
     /// live round: a client's own short sword, missed by the load-time sweep and found by the
     /// next, published as a script grant.
+    ///
+    /// ⚠ A fifth state rides alongside all four of the above: even a sweep taken AFTER the world
+    /// settled can be incomplete, because "the plugin says the world is up" and "the engine has
+    /// finished creating everything the save describes" are different moments — the equipped
+    /// items a reload creates are minted after the player object resolves. <see
+    /// cref="ItemSweepProvenanceRule.Settling"/> covers that window on its own clock: while it is
+    /// true, this method asks for a background sweep on <see cref="ItemSettleRebuildMs"/>'s
+    /// short cadence instead of waiting out <see cref="ItemTagRebuildMs"/>, so the rule gets a
+    /// real chance to see two sweeps agree before <see cref="IWorldStateBridge.IsItemViewSettled"/>
+    /// callers stop being told to hold back. See <see cref="IsItemViewSettled"/> and
+    /// <c>ScriptItemGrantPump</c>'s use of it for the 2026-09-02 evening round this closes.
     /// </summary>
     private bool ServiceItemTagCache()
     {
@@ -192,12 +215,13 @@ public sealed partial class KotorGameBridge
             }
 
             ApplyItemScanHits(hits);
-            _itemSweepProvenance.Swept(betweenLives);
+            _itemSweepProvenance.Swept(betweenLives, _itemAddresses.Keys, Environment.TickCount64);
             _itemTagsBuiltAtMs = Environment.TickCount64;
             return true;
         }
 
-        if (Environment.TickCount64 - _itemTagsBuiltAtMs >= ItemTagRebuildMs)
+        long rebuildIntervalMs = _itemSweepProvenance.Settling ? ItemSettleRebuildMs : ItemTagRebuildMs;
+        if (Environment.TickCount64 - _itemTagsBuiltAtMs >= rebuildIntervalMs)
         {
             _itemScanRequestedEpoch = WorldEpoch;
             ItemScanWorker.Request(ItemVtable, ItemScanLimit);
@@ -215,7 +239,7 @@ public sealed partial class KotorGameBridge
         PatternScanner scanner = new(_memory);
 
         ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit));
-        _itemSweepProvenance.Swept(IsWorldBetweenLives);
+        _itemSweepProvenance.Swept(IsWorldBetweenLives, _itemAddresses.Keys, Environment.TickCount64);
     }
 
     /// <summary>

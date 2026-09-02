@@ -94,6 +94,24 @@ public interface IWorldStateBridge
     bool IsWorldBetweenLives => false;
 
     /// <summary>
+    /// True once the item view has stood still after a world edge: two consecutive sweeps, a
+    /// beat apart, named the same set of item bodies (or a settling cap gave up waiting). False
+    /// in the window right after <see cref="IsWorldBetweenLives"/> clears — the plugin says the
+    /// world is up, but the engine can still be creating what the save describes (a reload's
+    /// equipped clothes and short sword are minted AFTER the player object resolves). Live
+    /// 2026-09-02, 23:31 (docs/research/shared-inventory-v2.md's 2026-09-02 evening round): a
+    /// host's game-over reload settled with those two items still absent from the heap, the
+    /// "settled" sweep that built the script-grant baseline missed them just as a between-lives
+    /// sweep would have, and the next ordinary rebuild — fifteen seconds later — diffed them in
+    /// as a fresh script grant published to the peer. Consumers that diff a sampled view against
+    /// a baseline (<c>ScriptItemGrantPump</c>) must rebaseline silently rather than publish while
+    /// this is false, the same discipline <see cref="IsWorldBetweenLives"/> already gets, one
+    /// door earlier. True by default: a bridge with no notion of settling (the mock harness, or
+    /// one that never sees a world edge) never holds a caller back.
+    /// </summary>
+    bool IsItemViewSettled => true;
+
+    /// <summary>
     /// Roadmap item 14 phase 2's rejoin action: requests the plugin replay the same adopted-
     /// world load <c>agent adopt</c> uses for the first join. False (with a reason) for
     /// bridges that cannot drive the plugin at all (the mock harness).

@@ -76,6 +76,22 @@ internal sealed class ScriptItemGrantPump(
     /// world's player had not resolved), and the reloaded inventory then diffed as seven fresh
     /// grants that the host pooled and the client reconciled back in. The pump simply waits;
     /// the epoch edge that follows the load reseeds it properly.
+    ///
+    /// Even once <see cref="IWorldStateBridge.IsWorldBetweenLives"/> clears, one more window has
+    /// to be respected: <see cref="IWorldStateBridge.IsItemViewSettled"/>. Live 2026-09-02, 23:31
+    /// (a game-over reload of END_M01AA): the host's player resolved and the world was acked on
+    /// screen while the PC was still being finished (hp read 8/8, then 12/12 a moment later) —
+    /// the save's equipped clothes and short sword are created by the engine AFTER the player
+    /// resolves, so the FIRST "settled" item sweep missed them exactly the way a between-lives
+    /// sweep would have, except this one was not provisional and nothing looked again for the
+    /// ordinary 15 s rebuild interval. By the time it did, the two items diffed in as a fresh
+    /// script grant (`script item grant: … g_a_clothes01, g_w_shortswrd01`) and the party pool
+    /// grew from three keys to five reconciling them into the peer's own inventory. While the
+    /// bridge's item view is not yet settled this pump takes a silent rebaseline every sample —
+    /// the same path a first-ever sample or a just-released dialogue window takes — instead of
+    /// diffing, so an item that merely finishes appearing during that window is folded into the
+    /// baseline rather than reported as granted; a genuine grant that lands AFTER settling is
+    /// still seen normally.
     /// </summary>
     public void PumpScriptItemGrants(string module, bool ownedByDialoguePump, bool localReadable = true)
     {
@@ -120,11 +136,13 @@ internal sealed class ScriptItemGrantPump(
             suppression.Clear();
         }
 
-        // Three cases force a silent rebaseline instead of a diff: no baseline has ever been
-        // taken (first sample since attach or since a module change just cleared it), or the
+        // Four cases force a silent rebaseline instead of a diff: no baseline has ever been
+        // taken (first sample since attach or since a module change just cleared it), the
         // dialogue pump owned the PREVIOUS tick and just released it (the edge described in
-        // this method's own doc).
-        bool rebaselineOnly = !_hasBaseline || _wasOwnedByDialoguePump;
+        // this method's own doc), or the bridge's item view has not settled since the last world
+        // edge (this method's own doc, the 2026-09-02 23:31 round) — an item that only just
+        // finished being created belongs in the baseline, not in a diff.
+        bool rebaselineOnly = !_hasBaseline || _wasOwnedByDialoguePump || !bridge.IsItemViewSettled;
         _wasOwnedByDialoguePump = false;
 
         if (rebaselineOnly)
