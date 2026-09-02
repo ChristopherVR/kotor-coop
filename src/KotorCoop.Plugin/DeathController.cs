@@ -148,6 +148,11 @@ internal sealed unsafe class DeathController(SharedBlockView block)
     private bool _gameOverReported;
     private int _gameOverQuietFrames;
 
+    /// <summary>Whether this client has already run the engine's death sequence for the
+    /// current downed episode (see <see cref="MaintainClientTempDeathGuard"/>) — the call is
+    /// idempotent in the engine but it is logged, and one line per wipe is the record.</summary>
+    private bool _clientDeathSequenceRun;
+
     /// <summary>Frames without a game-over attempt after which the next one counts as a new
     /// episode. ~1 s at 60 fps: a downed body's per-frame re-asks never leave a gap that
     /// long, and a second knock-down after a revive always does.</summary>
@@ -184,6 +189,7 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         _handBackAssertsLeft = 0;
         _gameOverReported = false;
         _gameOverQuietFrames = 0;
+        _clientDeathSequenceRun = false;
 
         if (_flags != null)
         {
@@ -237,9 +243,14 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         // set true ONLY on the instance mirroring somebody else's enemies — the same flag
         // CheatAuthority already treats as the client discriminator — so this is armed only
         // once this instance is actually a connected client, never at the main menu or on a
-        // host, even if the ini key is on.
-        _flags[FlagSuppressClientTempDeath] =
-            ClientTempDeathSuppressConfigured && block.DamageDealtEnabled ? 1 : 0;
+        // host, even if the ini key is on. Whether it actually suppresses THIS frame is decided
+        // below, once the local party's state is known (see the wipe clause after the downed
+        // read) — until then the previous frame's answer stands.
+        bool clientTempDeathGuardArmed = ClientTempDeathSuppressConfigured && block.DamageDealtEnabled;
+        if (!clientTempDeathGuardArmed)
+        {
+            _flags[FlagSuppressClientTempDeath] = 0;
+        }
 
         // The engine asked for game-over and the stub swallowed it: tell the agent once per
         // EPISODE, not per attempt. It decides whether this is a genuine session-wide wipe
@@ -278,6 +289,11 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         // current state and count individual knock-downs.
         bool downed = Odyssey.IsDowned(player);
 
+        if (clientTempDeathGuardArmed)
+        {
+            MaintainClientTempDeathGuard(downed);
+        }
+
         if (downed != _wasDowned)
         {
             _wasDowned = downed;
@@ -299,6 +315,75 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         TrackControlWhileUp(player, downed);
         ApplyPendingHitPoints();
         ApplyReviveRequest(player);
+    }
+
+    /// <summary>
+    /// The client temp-death guard, per frame, once the local player's state is known.
+    ///
+    /// ⚠ LIVE 2026-09-02 (death-handling.md §6.6, the recipe's step 5): with
+    /// <c>client_temp_death_suppress=1</c> a full session wipe was IMPOSSIBLE. The client's
+    /// "my party is down" fact on the wire (<c>PlayerState.FlagPartyWiped</c>) is derived from
+    /// <c>GameOverSerial</c>, which only moves when the engine's all-dead scan asks for
+    /// game-over — and that scan lives inside the very function this guard darkens. The client
+    /// lay there downed, never reported a wipe, the host's <c>DeathPump</c> kept holding the
+    /// game-over for it, and the host's OWN <c>TempDeathUpdate</c> (still running, ~5 s
+    /// auto-revive) stood the host's party back up. Two things fix that, both here:
+    ///
+    ///   1. While the guard is suppressing and the local PC is down, the same ask the darkened
+    ///      call site would have made is raised by hand (<see cref="FlagGameOverWanted"/> —
+    ///      processed at the top of the next frame exactly like an engine ask: one serial bump
+    ///      per episode, the "game-over suppressed; the session decides" line, the agent's
+    ///      wiped flag). The vote is the PC ALONE, deliberately: on a client every companion
+    ///      in the party is the host's body — its health is mirrored from the host and pinned
+    ///      at 1 hp here (PartyPresenceController) — so the host's own vote already covers it,
+    ///      and the engine's CSWParty view is NOT a usable roster on a rejoined client (live:
+    ///      count 2 with the mirrored companion at [0], a stale id that now names an item at
+    ///      [1], and the PC at [2] BEYOND the count — a walk over it, tried first, never saw
+    ///      the PC at all; the engine's own scan over the same view would not have fired the
+    ///      game-over either).
+    ///   2. Once the session has released the game-over (<c>SuppressGameOver</c> cleared: every
+    ///      player is down), this client runs the engine's own death sequence itself, once
+    ///      (<see cref="Odyssey.RunDeathSequence"/> — the exact call the guarded site at
+    ///      <see cref="RunDeathSequenceCall"/> would have made: the stock "Your entire party
+    ///      has been killed" screen, fade, and menu-out). Not by lifting the guard and hoping
+    ///      the engine's scan agrees: over the view above it never would (§6.7, W5). The guard
+    ///      stays dark throughout; <c>TempDeathUpdate</c> early-outs on the game-over state
+    ///      from then on anyway.
+    ///
+    /// Everything the guard was for is untouched: with the PC not down (or down but the
+    /// session still deciding) the function stays dark, so the client's PC does not
+    /// auto-revive on its own and only a peer within reach stands it up — live, the client lay
+    /// downed for seven minutes untouched and stood up the moment the host walked within 3.2
+    /// units.
+    /// </summary>
+    private void MaintainClientTempDeathGuard(bool downed)
+    {
+        _flags[FlagSuppressClientTempDeath] = 1;
+
+        if (!downed)
+        {
+            _clientDeathSequenceRun = false;
+            return;
+        }
+
+        if (block.SuppressGameOver)
+        {
+            _flags[FlagGameOverWanted] = 1; // the ask the darkened scan would have made
+            return;
+        }
+
+        if (_clientDeathSequenceRun)
+        {
+            return;
+        }
+
+        _clientDeathSequenceRun = true;
+        bool ran = Odyssey.RunDeathSequence();
+        PluginHost.Log(ran
+            ? "death: every player is down and the session released the game-over; "
+                + "running the engine's death sequence on this client"
+            : "death: every player is down and the session released the game-over, "
+                + "but the client app pointer is 0 - no death sequence to run");
     }
 
     /// <summary>

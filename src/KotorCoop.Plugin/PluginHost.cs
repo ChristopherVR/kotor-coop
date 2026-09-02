@@ -318,7 +318,14 @@ internal static unsafe partial class PluginHost
         //      downed companion popped back up. See SharedBlock.CompanionDamage.cs. NEEDS-LIVE.
         //      The three regions were developed on parallel branches, each claiming its own
         //      0x100 range so the merge stayed textually clean; 63 is the union.
-        _block->Version = 63;
+        // 64 = 2026-09-02: the item-template-spawn ring's flags dword now also carries the
+        //      stack count each CreateItemOnObject call asked for (bits 8..23,
+        //      SharedBlock.ItemTemplateSpawnStackCountShift). No layout change — same stride,
+        //      same offsets — but the agent's party-pool ambient suppression now subtracts
+        //      that count instead of the whole stack, and an older plugin's 0 there would
+        //      read as "unknown"; severing the pair is the honest outcome. LIVE-VERIFIED the
+        //      same day. See docs/research/shared-inventory-v2.md §17.
+        _block->Version = 64;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

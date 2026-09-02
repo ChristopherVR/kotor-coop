@@ -278,10 +278,7 @@ internal static unsafe partial class Odyssey
             // phantom spawner has always screened positions this way (IsPlausiblePosition);
             // this path was published without the same screen, and it is the one path where
             // the consequence lands inside the renderer.
-            if (!float.IsFinite(remote.Position.X)
-                || !float.IsFinite(remote.Position.Y)
-                || !float.IsFinite(remote.Position.Z)
-                || !float.IsFinite(remote.Facing))
+            if (!Vec3.IsWorldPlausible(remote.Position) || !float.IsFinite(remote.Facing))
             {
                 continue;
             }

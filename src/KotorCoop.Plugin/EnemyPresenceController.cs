@@ -1444,6 +1444,5 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     }
 
     private static bool IsPlausiblePosition(Vec3 p) =>
-        float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
-        && (p.X != 0f || p.Y != 0f);
+        Vec3.IsWorldPlausible(p) && (p.X != 0f || p.Y != 0f);
 }

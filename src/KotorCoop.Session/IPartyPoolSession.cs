@@ -53,6 +53,15 @@ public interface IPartyPoolSession
     /// asserts state).</summary>
     void PublishPartyPoolSnapshotV2(IReadOnlyDictionary<PartyPoolStackKey, int> totals) { }
 
+    /// <summary>Host only: stop broadcasting the last published totals until the next
+    /// <see cref="PublishPartyPoolSnapshotV2"/>. The host's own world was just replaced (a
+    /// reload — <c>IWorldStateBridge.WorldEpoch</c>) and the pool it last scanned no longer
+    /// exists; a client rejoining into the NEW world must not first be handed the OLD world's
+    /// totals as the truth to reconcile toward. Live 2026-09-02 (shared-inventory-v2.md §17): a
+    /// rejoined client saw <c>snap=0</c> for five keys both worlds visibly held and deposited
+    /// all five to the host again. Default no-op (a client never broadcasts).</summary>
+    void WithdrawPartyPoolSnapshotV2() { }
+
     /// <summary>The latest FULLY-gathered publish cycle's absolute totals; false until the first
     /// complete cycle has arrived — mirrors <see cref="IPartySession.TryGetPartyRoster"/>'s own
     /// "unheard-of vs. empty" distinction (an empty pool and a not-yet-heard-from host must never

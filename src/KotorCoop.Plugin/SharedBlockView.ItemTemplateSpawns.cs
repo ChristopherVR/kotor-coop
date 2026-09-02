@@ -15,13 +15,17 @@ internal sealed unsafe partial class SharedBlockView
     /// <c>ItemTemplateSpawnHook.NextSpawnIsCheat</c>'s doc comment), false for a vanilla
     /// script's own heartbeat/plot logic.
     ///
+    /// <paramref name="stackCount"/> is version 64's addition
+    /// (<see cref="SharedBlock.ItemTemplateSpawnStackCountShift"/>): the stack count the call
+    /// asked for, packed into the same flags dword; 0 when the hook could not read it.
+    ///
     /// Payload written BEFORE the cursor — the same "counter last" discipline
     /// <see cref="SetLocalBark"/>'s serial and <see cref="TryWriteCreatureLiveness"/>'s id
     /// already follow — so a reader that reads the cursor first and then only trusts entries
     /// covered by the value it read can never observe a half-written slot, even though this
     /// runs from inside an engine call rather than from an ordinary per-frame controller pass.
     /// </summary>
-    public void PublishItemTemplateSpawn(uint objectId, ReadOnlySpan<byte> resref, bool isCheat)
+    public void PublishItemTemplateSpawn(uint objectId, ReadOnlySpan<byte> resref, bool isCheat, ushort stackCount)
     {
         uint cursor = *U32(SharedBlock.OffsetItemTemplateSpawnCursor);
         int slot = (int)(cursor % SharedBlock.ItemTemplateSpawnRingCapacity);
@@ -37,7 +41,8 @@ internal sealed unsafe partial class SharedBlockView
         }
 
         *(uint*)(entry + SharedBlock.ItemTemplateSpawnIsCheatOffset) =
-            isCheat ? SharedBlock.ItemTemplateSpawnIsCheatBit : 0;
+            (isCheat ? SharedBlock.ItemTemplateSpawnIsCheatBit : 0)
+            | ((uint)stackCount << SharedBlock.ItemTemplateSpawnStackCountShift);
 
         // Cursor last: the agent only trusts entries the cursor value it just read covers.
         *U32(SharedBlock.OffsetItemTemplateSpawnCursor) = cursor + 1;

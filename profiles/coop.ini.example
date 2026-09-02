@@ -1008,7 +1008,10 @@ store_sync=2
 #
 # Byte-verified-or-refuse, exactly like the other two death patches, and armed ONLY while this
 # instance is actually a connected client (never at the main menu, never on a host, even with
-# this key on). Defaults OFF - death-handling.md #5 item 4 is reasoned but NEEDS-LIVE, so nobody's
-# behaviour changes until they opt in. See docs/research/death-handling.md's 2026-09-02 section
-# for the live-verification recipe.
+# this key on). Defaults OFF - verified live on the rig 2026-09-02 (no auto-revive, peer rescue at
+# 3.2 units, and a full wipe -> release -> host reload -> rejoin cycle, 3/3 clean; death-handling.md #6.6-#6.7) but
+# not yet in real combat with a hostile still visible at the wipe, so nobody's behaviour changes
+# until they opt in. While this is on the plugin has to synthesise the wipe vote itself (the
+# engine's all-dead scan lives inside the darkened function) and run the engine's own
+# death sequence once the session releases the wipe - #6.7 explains how.
 client_temp_death_suppress=0

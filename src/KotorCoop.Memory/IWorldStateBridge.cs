@@ -65,6 +65,19 @@ public interface IWorldStateBridge
     int WorldEpoch => 0;
 
     /// <summary>
+    /// True while the world this bridge reads is being torn down or loaded and nothing read
+    /// from it is an observation: the plugin's world-load serial has moved past the one the
+    /// bridge's caches were built under, the plugin reports no engine player, or a load this
+    /// agent asked for has not been acked as on screen yet. Live 2026-09-02
+    /// (docs/research/shared-inventory-v2.md §17): a client's own rejoin load emptied the
+    /// engine's repositories seconds before the new world's player resolved, and every diff
+    /// pump that sampled in that window (the party pool, then the script-item grant pump)
+    /// baselined on "0 of everything" and published the reloaded inventory as new. False
+    /// forever on a bridge without a plugin — nothing can tell, and the old behaviour stands.
+    /// </summary>
+    bool IsWorldBetweenLives => false;
+
+    /// <summary>
     /// Roadmap item 14 phase 2's rejoin action: requests the plugin replay the same adopted-
     /// world load <c>agent adopt</c> uses for the first join. False (with a reason) for
     /// bridges that cannot drive the plugin at all (the mock harness).

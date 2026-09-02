@@ -2466,3 +2466,237 @@ restore is supposed to allow, and did.
   `_baselinedStores` (the first snapshot naming a store IS that store's baseline); the pool has no
   equivalent. Worth closing next.
 - **A real-door confirmation of §16.4's fix**, since `usedoor` could not produce a transition.
+
+## 17. 2026-09-02, the host-reload / post-wipe rounds — seven distinct ways a RELOAD (the
+## host's, the client's rejoin, or both) fabricated pool content, all found live in the same
+## END_M01AA save, all closed; block version 64 (the spawn ring now says how many units a
+## creation contributed); the §16.6 connect-time first-sight publish explained and closed by the
+## same mechanism
+
+Context: the death/wipe rounds (death-handling.md §6.4, session-save.md's `WipeRecovery` entry)
+made the client rejoin a host that had just reloaded a save — first out of the game-over screen,
+then in-world (`loadgame 0` on a standing host, the `RejoinTrigger.HostReload` path that had
+never been run with `party_pool_sync=2` on). Every cycle was a full `demo.ps1 -Save 1` rig with
+`party_pool_trace=1` on both agents, the host's own trace line added this round
+(`party pool trace: host snapshot N key(s): …`, logged on change only), and a new `items` verb
+prefix that dumps the pool repository's raw id array (`items: party pool repository lists N
+id(s)`) with a `[pool]` marker on each body, so a client's `snap=0` for a key the host visibly
+holds can be read against what the host is actually broadcasting instead of guessed at. The
+clean state to converge on is the save's own pool: `g_i_adrnaline003=1, g_i_medeqpmnt01=2,
+g_w_blstrrfl001=1` (three keys, in the shipped `party_pool_trace` key format
+`resref/c/m/u/f=n`).
+
+Each defect below is one mechanism, one fix, one test. They were found in this order and each
+one was masked by the previous.
+
+### 17.1 The rejoining client scanned a pool the engine had already emptied
+
+The client's own rejoin load tears its world down; for the ~5 s until the new world's player
+resolves (which is where `TryReadLocalState` runs the `WorldLoadSerial` reset that clears the
+bridge caches and bumps `WorldEpoch`), `TryScanPartyPoolTotals` kept reading the party table
+directly. The engine had already emptied the repository, so the read was a **fresh, non-stale
+"0 of everything"**: the pump reconciled all three stacks back in, the loaded save then brought
+the originals, and the surplus went to the host as local deposits — both pools doubled.
+
+Fix: `IWorldStateBridge.IsWorldBetweenLives` (default false, so a plugin-less bridge is
+unchanged) = the plugin's `WorldLoadSerial` has moved past the one the caches were built under
+**or** the plugin's republished engine-player pointer is 0 **or** a load this agent requested has
+not been acked (`PluginMenuLoader.TryReadLoadInFlight`: request serial ≠ applied serial — the ack
+comes only when "the world is up and on screen", so the whole teardown → load → present window
+counts, from the moment of asking). The pool scan returns "no observation" while it holds. The
+third clause exists because of the rejoin-hang round in session-save.md: the client's reconcile
+add went out ONE second after its own load request, before the plugin had torn anything down,
+so the serial and the pointer both still described the old world.
+
+### 17.2 The host handed the rejoining client the OLD world's totals as truth
+
+After the host's own reload its pump kept broadcasting the last snapshot it had published — a
+description of a pool that no longer existed — and a client rejoining into the new world took
+it as the target to reconcile toward (`snap=0` for five keys both worlds visibly held → five
+deposits to the host). Three parts:
+
+- `IPartyPoolSession.WithdrawPartyPoolSnapshotV2()` (host: `_partyPoolBeliefV2Valid=false`,
+  nothing broadcast until the next `PublishPartyPoolSnapshotV2`; a client holds its last
+  snapshot, a rejoining client waits for a real one). Called by the pump on a
+  `PartyPoolScanEpoch` edge. Withdrawn is distinct from EMPTY on purpose: an empty snapshot is
+  a statement, a withdrawn one is silence.
+- A stale scan (`LastPartyPoolScanWasStale`) is no longer published as a snapshot at all — it
+  is an honest answer for the client's delta step, not a fresh statement of truth. Intents
+  still drain on a stale tick so an accepted deposit does not wait out the 15 s tag rebuild.
+- `ClearPartyPoolSuppressionCache` (module change or `WorldLoadSerial` edge) also forgets
+  `_partyPoolLastScan` / `_partyPoolEverScanned`: the "stale but honest" paths used to hand the
+  old world's pool back as the new one's for as long as its ids stayed unresolved.
+
+### 17.3 The host's FIRST sweep of a reloaded world was wrong
+
+The very first sweep after the host's in-world reload — the same second its plugin logged
+"the world is up and on screen" — resolved FIVE pool entries, two of them grenade stacks no
+pool on either side ever held; the next sweep and every reload before and after showed three.
+That reading went out as the snapshot and the client reconciled a phantom ion grenade into its
+own pool. Mechanism unproven (a load-time pass of saved items through the repository is the
+obvious candidate); the fix is deliberately mechanism-free: `PartyPoolSettleRule` — a new
+world's first complete sweep is held until a second sweep a full `PartyPoolScanIntervalMs`
+later reproduces it exactly (`party pool: first sweep of a new world - holding it until a
+second sweep agrees` / `… still changing between sweeps`). The confirming sweep is kept a full
+interval away on purpose: two reads a few ms apart would "agree" on the same transient.
+
+### 17.4 A companion's mirrored gear lived in the party pool
+
+Every rejoin, the client deposited the host companion's clothes+pistol to the host. The
+plugin's `EquipItemFromTemplateDirect` creates the body with `GiveItemToInventory`, which files
+it wherever `CSWSCreature::GetItemRepository(1)` points — for a live party member that is the
+**shared party pool** — and `EquipItem` itself never touches the repository, so the worn body
+stayed linked into the stash and every pool scan counted it as a surplus. The engine's own
+`ForceEquipClothing` does `SetPossessor` → `CItemRepository::RemoveItem` → `EquipItem`
+(0x00501D43 / 0x00501D59 / 0x00501D69, VERIFIED by disassembly); the plugin now does the same
+two steps first (`equip: unlinked 0x… from 0x…'s repository … before wearing it`). The
+possessor step matters on its own: filed into the pool, the body carried the pool's parent —
+the PC — as its possessor, so the companion's gear read as the PC's in every possessor-keyed
+view.
+
+### 17.5 A leader switch flipped every pool item's possessor — and the script-grant pump granted the pool
+
+The pool's items carry the PARTY LEADER as their possessor and the engine re-points that
+whenever leadership moves. The host's `down` handed control to the companion and took it back
+two seconds later; the next `ReadPossessedItems` diff saw the whole pool as "3 new items in the
+PC's inventory" and `ScriptItemGrantPump` granted them to the peer. `TryReadPartyPoolItemIds`
+(the cheap membership read behind the new `items` prefix) is now consulted by the possessed-
+items view: pool membership is possession, whoever leads right now.
+
+### 17.6 The script-grant pump baselined between lives too
+
+After 17.1–17.5 one cycle was still dirty in the other channel: the client's rejoin load emptied
+the repositories, the grant pump baselined on that, and the reloaded inventory came back as
+**7 script grants** the host gave itself. `PumpScriptItemGrants(module, ownedByDialoguePump,
+localReadable)` now returns before touching the baseline or the dialogue-edge latch while the
+local read failed OR `IsWorldBetweenLives` holds (three new facts in `ScriptItemGrantPumpTests`:
+nothing published across a failed read, nothing across between-lives, a transient blip keeps
+its baseline and still reports a grant made during it once).
+
+### 17.7 Ambient suppression hid the whole stack — the §16.6 mechanism
+
+With everything above in place, 4 of 6 reload cycles were still dirty the OTHER way: the
+host's snapshot came up **short** (2 keys, missing `medeqpmnt01`; then 1 key, missing
+`medeqpmnt01` and `adrnaline003`), the client saw `snap=0` for keys it held, deposited them,
+and the host `items` showed the physical pool at medpac ×5 / adrenaline ×3 while the sync
+layer said 2 / 1 — duplication invisible to the sync.
+
+The host's spawn ring told the story (`spawnring.ps1`, cursor 36, `worldLoadSerial 6`):
+non-cheat `CreateItemOnObject` entries for `g_i_medeqpmnt01` id **0x12B**, `g_i_adrnaline003`
+id **0x12A** in exactly the dirty cycles — and those ids are the live pool stacks that the
+save loaded, not temporaries. END_M01AA's own world-up scripting deposits a random consumable
+into the party pool (`CreateItemOnObject(consumable, GetFirstPC())`), and **the id the hook
+captures is the surviving stack**: the engine merges the loaded stack INTO the new item, frees
+the loaded one, and the new item then takes the freed (lowest free) id. So "0x12B was
+created, non-cheat" is true of a stack that is 2 loaded + 1 ambient. Version 63's per-id
+suppression baselined the entire stack (3), the key netted to zero, vanished from the host's
+snapshot, and the client — correctly, given the snapshot — put its own 2 back.
+
+This is also §16.6's connect-time first-sight publish: the two instances' ambient scripts
+merge into different stacks (or none), so the same key is fully hidden on one side and counted
+on the other.
+
+Fix, block version **64** (`PluginSignature` byte 0x40): the hook stub at 0x0052F748 also
+reads the call's own `nStackSize` — `[esp+8]` at the hook site (0x0052F5C6 `mov [esp+4],1`
+default → 0x0052F5DB pops the 3rd VM arg → `push esi` at 0x0052F617 shifts it to `[esp+8]` →
+0x0052F6CC stores the clamped value back → 0x0052F6E0 writes it into item+0x28C; no later
+write before the hook site; `ecx` is reloaded from `[0x7a3a00]` at the resume address so
+clobbering it in the stub is free) — and publishes it in bits 8..23 of the entry's flags dword
+(`SharedBlock.ItemTemplateSpawnStackCountShift`; no layout change, same stride). The agent's
+`ItemCreationObservation` carries it, and the ambient baseline subtracts
+`min(createdCount, stackSize)` (`AmbientUnitsOf`), the whole stack only when the count is 0
+(unknown). Loaded 2 + ambient 1 → baseline 1 → net 2, which is what the save holds. Six new
+facts in `PartyPoolAmbientSuppressionTests`.
+
+Accepted residue: an ambient extra that merges into a stack whose id was already decided is
+under-suppressed and leaks as a genuine +1 deposit — convergent (both sides end equal), and
+the only remaining fabrication is one unit of a random consumable per world-up, not a hidden
+key. Over-suppression, the direction that duplicates, is closed.
+
+### 17.8 Smaller things the same rounds fixed
+
+- **Client hang on rejoin** (session-save.md, same date): the host's own-state read during its
+  in-world reload copied `(-4.15e34, 0, -1.06e37)` — three FINITE floats — out of the creature
+  being torn down, published it, and the client's phantom spawner handed it to `CreateObject`;
+  `CSWSArea::ComputeSafeLocation` searched outward from it forever on the game thread.
+  `Vector3f.IsWorldPlausible` / `Vec3.IsWorldPlausible` (finite AND |coord| < 10,000) now gate
+  `PlayerState.IsPlausible`, every plugin consumer that hands a peer or player position to the
+  engine, and the phantom spawner's own fallback anchor (`phantom spawn deferred: the player is
+  not placed yet`).
+- **Double rejoin after the host's in-world reload**: a fresh `CoopClient` reports
+  `WorldDigest.Empty` until the host's first digest packet; `SessionSaveWatch` baselined its
+  serial watch on that 0 and the real serial a tick later read as a load edge. Digest 0 is now
+  "no reading" (`SessionSaveWatchTests`).
+- **The in-world `HostReload` that no classifier saw**: a reload of the staged save leaves the
+  host's digest unchanged, so the serial edge never became a verdict. `HostWorldReplacedRule`
+  (Session, pure) arms on the raw serial edge and fires once the host stands in a named module
+  — the same lifecycle as the wipe watch — feeding the same `RejoinTrigger.HostReload` gate.
+- `KotorGameBridge.TryResolve` raced itself (pump re-resolve vs `SaveLoader.WaitFor(InWorld)`
+  from the command thread) and NREd on a field it had just written; it now works on locals.
+
+### 17.9 Live result on the version-64 build (2026-09-02, rig `demo.ps1 -Save 1`, END_M01AA)
+
+Both agents on the version-64 build (plugin installed into both game dirs, `party_pool_sync=2`,
+`store_sync=2`, `party_pool_trace=1`), the host standing in END_M01AA, the client beside it, six
+consecutive in-world reloads on the host (`blockpoke.ps1 -ProcId <host> console 'loadgame 0'`,
+~55 s apart, `spawnring.ps1` and `items 80` between cycles). Every line below is from
+`agent1.log` (host) / `agent2.log` (client) after the 18:32 launch marker.
+
+| cycle | host `loadgame: the world is up` | client rejoin | host spawn ring (non-cheat entries this world) | host snapshot after withdraw | client first sight | traffic |
+| --- | --- | --- | --- | --- | --- | --- |
+| connect | — | joined 18:32:24 | — | `adrnaline003=1, medeqpmnt01=2, blstrrfl001=1` at 18:32:23 | `snap=1/2/1 … published=0 reconcile=0` | none |
+| 1 | 18:33:39 | one `HostReload` rejoin, `rejoined 'END_M01AA'` 18:33:44 | none | withdrawn 18:33:43, republished unchanged | `snap=1/2/1 reconcile=0` 18:33:51 | none |
+| 2 | 18:34:35 | one, 18:34:38 | `#6 id 0x12B g_i_medeqpmnt01 cheat 0 count 1` | withdrawn 18:34:40, `medeqpmnt01=2` at 18:34:41 | `snap=1/2/1 reconcile=0` 18:34:43 | none |
+| 3 | 18:35:29 | one, 18:35:32 | `id 0x12B g_i_medeqpmnt01 cheat 0 count 1` | withdrawn 18:35:34, `medeqpmnt01=2` at 18:35:35 | `snap=1/2/1 reconcile=0` 18:35:37 | none |
+| 4 | 18:36:28 | one, 18:36:32 | none | withdrawn 18:36:32, republished 18:36:36 | `snap=1/2/1 reconcile=0` 18:36:41 | none |
+| 5 | 18:37:25 | one, 18:37:30 | none | withdrawn 18:37:30, republished unchanged | `snap=1/2/1 reconcile=0` 18:37:36 | none |
+| 6 | 18:38:21 | one, 18:38:25 | none | withdrawn 18:38:25, republished unchanged | `snap=1/2/1 reconcile=0` 18:38:31 | none |
+
+("republished unchanged" = the host's trace logs the snapshot on change only, and the client's
+`snap=` column proves it arrived. The `stale 3 key(s)` lines two seconds after each "world is up"
+are the §17.2 stale scans, labelled and NOT published.)
+
+- **6/6 clean.** Exactly one rejoin per host reload (the `HostWorldReplacedRule` path — the
+  staged save reloaded, digest unchanged), `Responding = True` on the client throughout, no
+  double rejoin, no hang.
+- **Cycles 2 and 3 are the exact case that was dirty on version 63** — the ambient
+  `CreateItemOnObject` merged into the loaded medpac stack, the ring reporting the surviving id
+  `0x12B` with `count 1`. The host's snapshot still said `medeqpmnt01=2` (baseline 1 of a
+  3-stack, net 2), the client's first sight matched, nothing moved. On version 63 this cycle
+  hid the key and the client re-deposited its two.
+- **Zero traffic lines on either agent for the whole run**: no `added` / `removed` / `local
+  add` / `script item grant` / `dialogue grant: received`, no `Exception`, no `pump tick
+  failed`, no `never answered`. Plugin logs: only the benign `0x406D1388` first-chance entries.
+- **The physical pool at the end is the save's pool**: host `items` →
+  `0x12A g_i_adrnaline003 stack 1, 0x12B g_i_medeqpmnt01 stack 2, 0x12C g_w_blstrrfl001 stack 1`,
+  all `[pool]`; client identical by key.
+- **§16.6's connect-time first-sight publish did not occur** on this launch: the host's snapshot
+  was up at 18:32:23, the client's first sight at 18:32:28 read `published=0 reconcile=0` for
+  all three keys.
+
+Test suite at this state: 3000/3000 (`dotnet test tests/KotorCoop.Tests`), including the
+version-64 pin in `TransitionMovieTests.TheBlockVersionMovedInBothHalves` and the six new
+`PartyPoolAmbientSuppressionTests` facts.
+
+### 17.10 The item sweep between lives was trusted for fifteen seconds — the client's own sword became a grant (2026-09-02, evening)
+
+§17.6 stopped the grant pump from BASELINING between lives; the baseline it then took in the
+settled world was still read through a sweep taken between lives. Wipe cycle W6
+(death-handling.md §6.7): the client's rejoin resolved its new player at 19:41:36.5 (the
+WorldEpoch edge dropped the item caches), the plugin acked the world on screen at 19:41:40.0,
+and a lookup in that window ran `ServiceItemTagCache`'s one-time inline sweep against a heap
+still being filled — it recorded the carried character's clothes (0x127) and missed its short
+sword (0x128). The grant pump waited correctly for `IsWorldBetweenLives` to clear, then read its
+baseline through that view (a sweep is good for `ItemTagRebuildMs` = 15 s). The next background
+sweep (19:41:52) found the sword; the resref-count diff published `script item grant: …
+g_w_shortswrd01` at 19:41:53, the host pooled it (`host snapshot 4 key(s)`), and the client
+reconciled a second sword (0x137) into its pool next to its own 0x128. W4 (the `HostReload`
+path) had been clean on timing alone.
+
+Fix — `ItemSweepProvenanceRule` (Memory, pure state, `ItemSweepProvenanceRuleTests`): every
+sweep records whether the world was between lives when it ran. A between-lives sweep is still
+served (§17.6's point stands: an empty inventory is the worse answer) but is PROVISIONAL, and
+the first lookup after `IsWorldBetweenLives` clears rebuilds inline before answering — one more
+one-time stall per load, the same one the attach already accepts. Reset with the other caches
+at the epoch edge. W7 on this build: firstSight `snap=1/2/1 reconcile=0`, 0 grant lines, both
+pools = the save's three stacks after the rejoin.

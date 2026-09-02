@@ -33,14 +33,15 @@ internal sealed unsafe class ItemTemplateSpawnController(SharedBlockView block)
         // costs nothing worth avoiding here.
         for (int i = 0; i < ItemTemplateSpawnHook.Capacity; i++)
         {
-            ItemTemplateSpawnHook.Read(i, out uint objectId, out uint serial, out bool isCheat, resRef);
+            ItemTemplateSpawnHook.Read(
+                i, out uint objectId, out uint serial, out bool isCheat, out ushort stackCount, resRef);
 
             if (serial == 0 || serial <= _lastPublishedSerial || objectId == 0)
             {
                 continue;
             }
 
-            block.PublishItemTemplateSpawn(objectId, resRef, isCheat);
+            block.PublishItemTemplateSpawn(objectId, resRef, isCheat, stackCount);
 
             if (serial > highest)
             {

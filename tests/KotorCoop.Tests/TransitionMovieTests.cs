@@ -239,9 +239,11 @@ public class TransitionMovieTests
         // docs/research/party-pool-sync.md §20), 60 the 2026-08-29 seamless wave (minigame peer
         // lock, new-character join handshake, cheat kinds 53/56/59/60), 61..63 the 2026-09-02
         // combat wave (block grown to 0x4B00: N-slot local_combat at 0x4800, per-attacker
-        // damage attribution at 0x4900, the companion-damage channel at 0x4A00) — see the
+        // damage attribution at 0x4900, the companion-damage channel at 0x4A00), 64 the
+        // item-template-spawn ring's per-entry created stack count (flags bits 8..23, no
+        // layout change, docs/research/shared-inventory-v2.md §17.7) — see the
         // changelog comments beside `_block->Version` and `PluginSignature` for the full history.
-        Assert.Equal(63, int.Parse(version.Groups[1].Value));
+        Assert.Equal(64, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

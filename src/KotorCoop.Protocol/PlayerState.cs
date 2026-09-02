@@ -131,8 +131,9 @@ public readonly record struct PlayerState(
 
     public static PlayerState Empty { get; } = new(Vector3f.Zero, 0f, string.Empty, 0, 0);
 
-    /// <summary>Rejects NaN/infinite reads, which is what a bad offset profile produces.</summary>
-    public bool IsPlausible => Position.IsFinite && float.IsFinite(Facing);
+    /// <summary>Rejects NaN/infinite reads (a bad offset profile) AND finite out-of-world ones
+    /// (a creature read mid-teardown) — see Vector3f.IsWorldPlausible for the live hang.</summary>
+    public bool IsPlausible => Position.IsWorldPlausible && float.IsFinite(Facing);
 
     public bool IsInDialogue => (Flags & FlagInDialogue) != 0;
 

@@ -123,6 +123,19 @@ public class SnapshotBufferTests
     }
 
     [Fact]
+    public void FiniteButOutOfWorldStatesAreIgnored()
+    {
+        SnapshotBuffer buffer = NewBuffer();
+
+        // Live 2026-09-02: the host read this out of a creature mid-teardown during its own
+        // reload. Finite, so the old screen passed it; the client's phantom spawner then hung
+        // the game inside ComputeSafeLocation. It must never enter the buffer.
+        buffer.Push(2, "Malak", new PlayerState(new Vector3f(-4.15e34f, 0f, -1.06e37f), 0f, "m", 1, 0), 1000);
+
+        Assert.Equal(0, buffer.PeerCount);
+    }
+
+    [Fact]
     public void StalePeersArePruned()
     {
         SnapshotBuffer buffer = NewBuffer();

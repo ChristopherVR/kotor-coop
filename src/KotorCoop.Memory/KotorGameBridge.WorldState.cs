@@ -89,6 +89,23 @@ public sealed partial class KotorGameBridge
             ? serial
             : 0;
 
+    /// <summary>
+    /// See <see cref="IWorldStateBridge.IsWorldBetweenLives"/>. Three block-backed readings,
+    /// each covering a stretch of the load the others cannot (shared-inventory-v2.md §17):
+    /// the serial moves at teardown and stays ahead of the caches until the new world's player
+    /// resolves (<c>TryReadLocalState</c>'s reset); the engine-player pointer is 0 while no
+    /// world is up at all; and a load THIS agent asked for is in flight from the moment of
+    /// asking until the plugin acks the new world on screen — the first second, when the old
+    /// world still looks perfectly loaded and neither of the other two has anything to say.
+    /// 0/0/idle without a plugin: never true.
+    /// </summary>
+    public bool IsWorldBetweenLives =>
+        WorldLoadSerial != _cachedForWorldSerial
+        || (_pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockEnginePlayerPointer, out uint enginePlayer)
+            && enginePlayer == 0)
+        || PluginMenuLoader.TryReadLoadInFlight(_memory, _pluginBlock);
+
     /// <summary>The block address <see cref="TryRequestAdoptedWorldLoad"/> last requested a
     /// load against, for <see cref="TryGetAdoptedWorldLoadStatus"/> to poll. 0 until a request
     /// has been made this process.</summary>

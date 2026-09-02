@@ -37,6 +37,10 @@ internal static unsafe partial class Odyssey
     private static int _routineCreateItemOnObject = -1;
     private static int _routineActionEquipItem = -1;
 
+    /// <summary>How many repository unlinks <see cref="EquipItemFromTemplateDirect"/> has
+    /// logged — bounded, the same way PartyPresenceController bounds its own equip lines.</summary>
+    private static int _equipUnlinksLogged;
+
     /// <summary>nwscript inventory slots for the visible gear.</summary>
     public const int InventorySlotBody = 1;
     public const int InventorySlotRightWeapon = 4;
@@ -406,6 +410,35 @@ internal static unsafe partial class Odyssey
         {
             failure = 23;
             return false;
+        }
+
+        // Unlink the freshly created body from the creature's item repository FIRST — exactly
+        // what the engine's own ForceEquipClothing does right before its EquipItem call
+        // (0x00501D4D `Contains(item)` -> 0x00501D59 `CItemRepository::RemoveItem(item)` ->
+        // 0x00501D69 EquipItem, VERIFIED by disassembly 2026-09-02). EquipItem itself never
+        // touches the repository, and GiveItemToInventory files the body wherever
+        // CSWSCreature::GetItemRepository(1) points — for a live party member (every mirrored
+        // companion a client dresses) that is the SHARED PARTY POOL. Without this step the
+        // equipped body stays linked into the stash: every pool scan counted the companion's
+        // clothes+pistol as a surplus and the client deposited copies to the host after every
+        // rejoin (live 2026-09-01, shared-inventory-v2.md §17), and a later pool reconcile could
+        // "remove" the body from under the slot it is worn in. RemoveItem is a documented no-op
+        // when the item is not linked (see Odyssey.PartyPool.cs's RepositoryRemoveItemFn).
+        //
+        // The possessor too, in the engine's own order (0x00501D43 SetPossessor(item,
+        // creatureId, 0, 0, OBJECT_INVALID) comes first): filing into the pool stamped the
+        // body with the pool's parent — the PC — so without this the wearer's gear reads as
+        // the PC's in every possessor-keyed view (ReadPossessedItems, the `items` listing).
+        SetPossessorFn(item, creatureObjectId, 0, 0, ObjectInvalid);
+        nint repo = ResolveCreatureItemRepo(creature);
+        int unlinked = repo != 0 ? RepositoryRemoveItemFn(repo, item) : 0;
+        if (unlinked != 0 && _equipUnlinksLogged < 8)
+        {
+            _equipUnlinksLogged++;
+            PluginHost.Log(
+                $"equip: unlinked 0x{itemId:X} from 0x{creatureObjectId:X}'s repository "
+                + "0x" + repo.ToString("X") + " before wearing it (repo count now "
+                + $"{*(int*)(repo + RepositoryItemCount)})");
         }
 
         // p3/p4/p5 read as (1, 0, 0) at every clean call site this round's disassembly found

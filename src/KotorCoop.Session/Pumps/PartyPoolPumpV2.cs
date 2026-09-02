@@ -209,13 +209,42 @@ internal sealed class PartyPoolPumpV2(
 
     private void PumpHost()
     {
+        // The bridge dropped its scan bookkeeping (the host's own world was replaced — a reload
+        // of the same or another module, IWorldStateBridge.WorldEpoch). Whatever this host last
+        // published described the OLD world's pool; stop broadcasting it until a fresh sweep of
+        // the new one lands below. Live 2026-09-02 (shared-inventory-v2.md §17): a client that
+        // rejoined after the host's in-world reload was handed the old totals as truth.
+        int epoch = bridge.PartyPoolScanEpoch;
+        if (_everPumped && epoch != _lastScanEpoch)
+        {
+            session.WithdrawPartyPoolSnapshotV2();
+            log("party pool: the bridge reset its own scan bookkeeping (module change) — "
+                + "withdrawing the published snapshot until the new world has been scanned");
+        }
+
+        _lastScanEpoch = epoch;
+        _everPumped = true;
+
+        // A stale scan hands back the last GOOD totals — an honest answer for a client's delta
+        // step, but not a fresh statement of truth to broadcast: after a reload it is the old
+        // world's pool until the bridge has swept the new one.
         if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> totals))
         {
             return;
         }
 
-        session.PublishPartyPoolSnapshotV2(totals);
+        if (!bridge.LastPartyPoolScanWasStale)
+        {
+            session.PublishPartyPoolSnapshotV2(totals);
+        }
 
+        if (trace)
+        {
+            TraceHostSnapshot(totals);
+        }
+
+        // Intents still drain on a stale tick: an accepted deposit must not wait out a 15 s
+        // item-tag rebuild window on the host before it is even attempted.
         bool queuedAny = false;
         foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
         {
@@ -230,6 +259,27 @@ internal sealed class PartyPoolPumpV2(
             // outstanding ledger drifts against it.
             bridge.InvalidatePartyPoolScanCache();
         }
+    }
+
+    /// <summary>Rig-only (<c>party_pool_trace</c>): the HOST's side of the same trace the client
+    /// prints per key — what it is actually broadcasting, logged only when it changes, so a
+    /// client's "snap=0" for a key the host visibly holds can be read against the host's own
+    /// scan (stale, suppressed as ambient, or unresolved) instead of guessed at.</summary>
+    private string _lastTracedSnapshot = string.Empty;
+
+    private void TraceHostSnapshot(IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+    {
+        string rendered = string.Join(", ", totals
+            .OrderBy(kv => kv.Key.Resref, StringComparer.Ordinal)
+            .Select(kv => $"{kv.Key.Resref}/c{kv.Key.Charges}/m{kv.Key.MaxCharges}/u{kv.Key.Upgrades}/f{kv.Key.Flags}={kv.Value}"));
+        string line = $"{(bridge.LastPartyPoolScanWasStale ? "stale " : string.Empty)}{totals.Count} key(s): {rendered}";
+        if (line == _lastTracedSnapshot)
+        {
+            return;
+        }
+
+        _lastTracedSnapshot = line;
+        log($"party pool trace: host snapshot {line}");
     }
 
     private void PumpClient()

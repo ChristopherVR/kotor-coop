@@ -65,8 +65,19 @@ internal sealed class ScriptItemGrantPump(
     /// conversation baseline would just report it a second time. This needs no reference to
     /// the dialogue pump's own baseline field, and cannot drift from it even if a call is
     /// missed, because both are reading the SAME live game state, not exchanging a value.
+    ///
+    /// <paramref name="localReadable"/> is whether the caller's own local-state read succeeded
+    /// this tick. While it did not — or while the bridge itself says the world is between lives
+    /// (<see cref="IWorldStateBridge.IsWorldBetweenLives"/>) — NOTHING here is an observation:
+    /// the engine's repositories are empty or half-built, and neither a baseline nor a diff may
+    /// be taken from them. Live 2026-09-02 (docs/research/shared-inventory-v2.md §17): a client's
+    /// own rejoin load emptied its inventory, this pump baselined on that emptiness (the read
+    /// was failing, the module was still "-", the WorldEpoch had not moved yet because the new
+    /// world's player had not resolved), and the reloaded inventory then diffed as seven fresh
+    /// grants that the host pooled and the client reconciled back in. The pump simply waits;
+    /// the epoch edge that follows the load reseeds it properly.
     /// </summary>
-    public void PumpScriptItemGrants(string module, bool ownedByDialoguePump)
+    public void PumpScriptItemGrants(string module, bool ownedByDialoguePump, bool localReadable = true)
     {
         // A client adopts the host's script_item_sync at runtime when they differ —
         // docs/research/mod-compatibility.md's "Behaviour-flag negotiation".
@@ -78,6 +89,14 @@ internal sealed class ScriptItemGrantPump(
         if (ownedByDialoguePump)
         {
             _wasOwnedByDialoguePump = true;
+            return;
+        }
+
+        // Between lives: not an observation. Leave the baseline AND the dialogue-edge latch
+        // untouched — whatever was true before the load is still the right thing to resume
+        // from once the epoch edge reseeds (or, if no edge follows, once the read recovers).
+        if (!localReadable || bridge.IsWorldBetweenLives)
+        {
             return;
         }
 

@@ -82,6 +82,10 @@ public sealed partial class KotorGameBridge
     private int _itemScanRequestedEpoch;
     private long _itemTagsBuiltAtMs;
 
+    /// <summary>Whether the sweep the caches hold was taken between lives — see the rule's
+    /// own doc for the rejoin that published the client's own sword as a script grant.</summary>
+    private readonly ItemSweepProvenanceRule _itemSweepProvenance = new();
+
     /// <summary>
     /// Trims a tag down to a usable blueprint resref: lowercase, and cut at the first
     /// character a resref cannot contain. A CExoString's length can include the
@@ -152,10 +156,21 @@ public sealed partial class KotorGameBridge
     /// background sweep is waiting: apply it, which is a few thousand small reads and costs
     /// tens of milliseconds rather than hundreds. Otherwise: ask for a sweep if the view has
     /// gone stale, and carry on with what we have.
+    ///
+    /// A fourth state sits across the first: the inline sweep ran while the world was still
+    /// between lives (the new world's player resolves seconds before the plugin acks it on
+    /// screen, and any lookup in that window builds the caches from a heap still being
+    /// filled). That sweep is served — an empty inventory would be worse — but it is
+    /// provisional, and the first lookup in the settled world sweeps inline again rather than
+    /// trusting it for a rebuild interval. <see cref="ItemSweepProvenanceRule"/> carries the
+    /// live round: a client's own short sword, missed by the load-time sweep and found by the
+    /// next, published as a script grant.
     /// </summary>
     private bool ServiceItemTagCache()
     {
-        if (_itemTagsBuiltAtMs == 0)
+        bool betweenLives = IsWorldBetweenLives;
+
+        if (_itemTagsBuiltAtMs == 0 || _itemSweepProvenance.MustRebuildNow(betweenLives))
         {
             _itemTagsBuiltAtMs = Environment.TickCount64;
             RebuildItemTagCacheNow();
@@ -177,6 +192,7 @@ public sealed partial class KotorGameBridge
             }
 
             ApplyItemScanHits(hits);
+            _itemSweepProvenance.Swept(betweenLives);
             _itemTagsBuiltAtMs = Environment.TickCount64;
             return true;
         }
@@ -199,6 +215,7 @@ public sealed partial class KotorGameBridge
         PatternScanner scanner = new(_memory);
 
         ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit));
+        _itemSweepProvenance.Swept(IsWorldBetweenLives);
     }
 
     /// <summary>
@@ -627,6 +644,14 @@ public sealed partial class KotorGameBridge
 
         List<(uint, string, ItemIdentity)> result = [];
 
+        // The shared party pool IS the PC's inventory (CSWSCreature::GetItemRepository(1) on
+        // a party member is the pool), but its items' possessor field names whoever LEADS —
+        // and the engine re-points it on every leadership change, including the two-second
+        // hand-off to a companion while the PC is down. Membership in the pool is the stable
+        // answer to "does the PC hold this"; the possessor field alone made a downed-and-back
+        // host re-grant its whole pool to the peer (see TryReadPartyPoolItemIds' remarks).
+        HashSet<uint>? poolIds = possessorIds.Contains(CheatKinds.LocalPlayerTarget) ? TryReadPartyPoolItemIds() : null;
+
         // force: false — this runs on the agent's pump thread, between two position writes.
         // See ListItems(bool)'s own remarks for the measured cost of the sweep this declines
         // to trigger.
@@ -635,6 +660,10 @@ public sealed partial class KotorGameBridge
             if (possessorIds.Contains(item.Possessor))
             {
                 result.Add((item.Possessor, item.Resref, item.Identity));
+            }
+            else if (poolIds is not null && poolIds.Contains(item.ObjectId))
+            {
+                result.Add((CheatKinds.LocalPlayerTarget, item.Resref, item.Identity));
             }
         }
 

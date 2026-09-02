@@ -473,8 +473,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             return false;
         }
 
-        if (!float.IsFinite(member.Position.X) || !float.IsFinite(member.Position.Y)
-            || !float.IsFinite(member.Position.Z)
+        if (!Vec3.IsWorldPlausible(member.Position)
             || (member.Position.X == 0f && member.Position.Y == 0f))
         {
             return false;

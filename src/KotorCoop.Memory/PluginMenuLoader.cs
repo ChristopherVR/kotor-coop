@@ -284,6 +284,25 @@ public static class PluginMenuLoader
     public static bool TryReadLoginFlavour(ProcessMemory memory, nint block, out uint flavour) =>
         memory.TryReadUInt32(block + BlockAdoptWorldApplied, out flavour);
 
+    /// <summary>
+    /// True while a load this agent requested has not been acked by the plugin — for a
+    /// successful load the ack comes only when "the world is up and on screen", so the whole
+    /// teardown → load → present window reads as in flight. False without a block, so a
+    /// plugin-less attach is never held.
+    /// </summary>
+    public static bool TryReadLoadInFlight(ProcessMemory memory, nint block)
+    {
+        return block != 0
+            && memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint serial)
+            && memory.TryReadUInt32(block + BlockMenuLoadApplied, out uint applied)
+            && IsLoadInFlight(serial, applied);
+    }
+
+    /// <summary>The rule behind <see cref="TryReadLoadInFlight"/>: the plugin's ack lags the
+    /// request for as long as the load is being serviced; equal means idle (or never asked).</summary>
+    public static bool IsLoadInFlight(uint requestedSerial, uint appliedSerial) =>
+        requestedSerial != appliedSerial;
+
     /// <summary>Reads back the plugin's ack and failure code for the last request.</summary>
     public static bool TryReadStatus(ProcessMemory memory, nint block, out uint applied, out int status)
     {

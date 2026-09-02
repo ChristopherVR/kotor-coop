@@ -72,9 +72,92 @@ public class PartyPoolAmbientSuppressionTests : IDisposable
     [Fact]
     public void ANonCheatCreationOutsideTheWindowIsNotSuppressed()
     {
+        _bridge.NotePartyPoolWorldSwept();
         _bridge.RememberItemCreation(0x403, isCheat: false, nowMs: 10_000);
 
         Assert.False(_bridge.IsAmbientPartyPoolNoise(0x403, nowMs: 12_000));
+    }
+
+    /// <summary>
+    /// The 2026-09-02 load-time case (docs/research/shared-inventory-v2.md §17): END_M01AA's
+    /// own ambient scripting pooled a random consumable at world-up, the ring recorded it as
+    /// non-cheat, and the world's FIRST sweep — held back by the load ack, the player resolve
+    /// and the settle interval — met the id many seconds later, outside the window. Nothing but
+    /// a script can create and pool an item before a world's first sweep, so while the world is
+    /// opening the creation fact alone is the answer.
+    /// </summary>
+    [Fact]
+    public void WhileTheWorldIsOpeningANonCheatCreationIsSuppressedHoweverOldItIs()
+    {
+        Assert.True(_bridge.PartyPoolWorldOpening);
+        _bridge.RememberItemCreation(0x409, isCheat: false, nowMs: 10_000);
+
+        Assert.True(_bridge.IsAmbientPartyPoolNoise(0x409, nowMs: 25_000));
+    }
+
+    /// <summary>Our own reconcile applies land during the opening too (the pump's first sweep
+    /// after a rejoin) — the cheat flag still wins, opening or not.</summary>
+    [Fact]
+    public void WhileTheWorldIsOpeningACheatCreationIsStillCounted()
+    {
+        _bridge.RememberItemCreation(0x40A, isCheat: true, nowMs: 10_000);
+
+        Assert.False(_bridge.IsAmbientPartyPoolNoise(0x40A, nowMs: 25_000));
+    }
+
+    /// <summary>Once the first full sweep has run, the ordinary window is back in force for
+    /// anything that appears later — the "much older item dragged in by hand" case.</summary>
+    [Fact]
+    public void OnceTheWorldHasBeenSweptTheWindowAppliesAgain()
+    {
+        _bridge.NotePartyPoolWorldSwept();
+        Assert.False(_bridge.PartyPoolWorldOpening);
+
+        _bridge.RememberItemCreation(0x40B, isCheat: false, nowMs: 10_000);
+        Assert.False(_bridge.IsAmbientPartyPoolNoise(0x40B, nowMs: 25_000));
+
+        _bridge.RememberItemCreation(0x40C, isCheat: false, nowMs: 30_000);
+        Assert.True(_bridge.IsAmbientPartyPoolNoise(0x40C, nowMs: 30_500));
+    }
+
+    /// <summary>
+    /// The other half of the same live round: the world reset that runs when the NEW world's
+    /// player resolves used to clear every creation fact — including the ones the drain had
+    /// already recorded for the new world's own ambient deposits. Facts tagged with the world
+    /// being entered survive; the old world's are dropped (its ids are reused).
+    /// </summary>
+    [Fact]
+    public void AWorldResetKeepsTheCreationFactsOfTheWorldBeingEntered()
+    {
+        _bridge.RememberItemCreation(0x410, isCheat: false, nowMs: 10_000, worldSerial: 5);
+        _bridge.RememberItemCreation(0x411, isCheat: false, nowMs: 20_000, worldSerial: 6);
+        _bridge.RememberItemCreation(0x412, isCheat: true, nowMs: 20_000, worldSerial: 6);
+
+        _bridge.ForgetItemCreationsFromOtherWorlds(keepWorldSerial: 6);
+
+        Assert.False(_bridge.TryGetItemCreationObservation(0x410, out _, out _));
+        Assert.True(_bridge.TryGetItemCreationObservation(0x411, out bool cheat411, out long at411));
+        Assert.False(cheat411);
+        Assert.Equal(20_000, at411);
+        Assert.True(_bridge.TryGetItemCreationObservation(0x412, out bool cheat412, out _));
+        Assert.True(cheat412);
+    }
+
+    /// <summary>A kept fact is still a first-class entry afterwards: a repeat report overwrites
+    /// it and it still ages out of the FIFO normally (no orphaned order entry, no ghost).</summary>
+    [Fact]
+    public void AKeptCreationFactStillOverwritesAndForgetsNormally()
+    {
+        _bridge.RememberItemCreation(0x420, isCheat: false, nowMs: 20_000, worldSerial: 6);
+        _bridge.ForgetItemCreationsFromOtherWorlds(keepWorldSerial: 6);
+
+        _bridge.RememberItemCreation(0x420, isCheat: true, nowMs: 21_000, worldSerial: 6);
+        Assert.True(_bridge.TryGetItemCreationObservation(0x420, out bool cheat, out long at));
+        Assert.True(cheat);
+        Assert.Equal(21_000, at);
+
+        _bridge.ForgetItemCreationsFromOtherWorlds(keepWorldSerial: 7);
+        Assert.False(_bridge.TryGetItemCreationObservation(0x420, out _, out _));
     }
 
     /// <summary>
@@ -130,8 +213,81 @@ public class PartyPoolAmbientSuppressionTests : IDisposable
     [Fact]
     public void ExactlyAtTheWindowBoundaryIsNotSuppressed()
     {
+        _bridge.NotePartyPoolWorldSwept();
         _bridge.RememberItemCreation(0x408, isCheat: false, nowMs: 10_000);
 
         Assert.False(_bridge.IsAmbientPartyPoolNoise(0x408, nowMs: 11_000));
+    }
+
+    // ---- How MUCH of a suppressed stack is ambient (version 64, shared-inventory-v2.md §17) ----
+    //
+    // Live 2026-09-02: the id the ring reports is the SURVIVING stack the ambient item was
+    // merged into (the engine merges the loaded stack into the new item, frees the loaded one,
+    // and the new item takes its id). A save-loaded medpac stack of 2 that END_M01AA's world-up
+    // script topped up by 1 therefore shows as "0x12B created, count 1" with a stack of 3.
+    // Baselining all 3 (version 63) hid the loaded 2 as well, the key vanished from the host's
+    // snapshot, and the client re-deposited its own copy — physical duplication the sync could
+    // not see. The baseline may hide exactly what the creation call contributed, no more.
+
+    /// <summary>The case that duplicated live: loaded 2 + ambient 1 → only 1 is ambient.</summary>
+    [Fact]
+    public void AMergedAmbientStackIsBaselinedByTheCreatedCountNotTheStackSize()
+    {
+        _bridge.RememberItemCreation(0x12B, isCheat: false, nowMs: 10_000, worldSerial: 6, stackCount: 1);
+
+        Assert.Equal(1, _bridge.AmbientUnitsOf(0x12B, stackSize: 3));
+    }
+
+    /// <summary>A stack that is entirely ambient (nothing loaded to merge into) still comes off
+    /// in full — the created count IS the stack.</summary>
+    [Fact]
+    public void AWhollyAmbientStackIsStillBaselinedInFull()
+    {
+        _bridge.RememberItemCreation(0x12C, isCheat: false, nowMs: 10_000, worldSerial: 6, stackCount: 6);
+
+        Assert.Equal(6, _bridge.AmbientUnitsOf(0x12C, stackSize: 6));
+    }
+
+    /// <summary>A merge can never leave fewer units than the call created, so a created count
+    /// above the observed stack (part of it consumed between creation and this scan) is bounded
+    /// by what is actually there — the same "offset never exceeds raw" rule
+    /// <see cref="PartyPoolAmbientBaseline"/>'s Net applies per key.</summary>
+    [Fact]
+    public void TheCreatedCountIsBoundedByTheStackActuallyThere()
+    {
+        _bridge.RememberItemCreation(0x12D, isCheat: false, nowMs: 10_000, worldSerial: 6, stackCount: 6);
+
+        Assert.Equal(4, _bridge.AmbientUnitsOf(0x12D, stackSize: 4));
+    }
+
+    /// <summary>The pre-64 rule survives only for a fact with no count at all (0 = the plugin
+    /// could not read it): the whole stack, as before.</summary>
+    [Fact]
+    public void AnUnknownCreatedCountFallsBackToTheWholeStack()
+    {
+        _bridge.RememberItemCreation(0x12E, isCheat: false, nowMs: 10_000, worldSerial: 6);
+
+        Assert.Equal(3, _bridge.AmbientUnitsOf(0x12E, stackSize: 3));
+    }
+
+    /// <summary>The seam a caller without any creation fact would hit (it never does — only a
+    /// suppressed id is asked — but the answer is the safe one regardless).</summary>
+    [Fact]
+    public void NoCreationFactMeansTheWholeStack()
+    {
+        Assert.Equal(2, _bridge.AmbientUnitsOf(0x12F, stackSize: 2));
+    }
+
+    /// <summary>The count travels with the fact through a world reset the same way the cheat
+    /// flag and the serial do.</summary>
+    [Fact]
+    public void TheCreatedCountSurvivesAWorldResetThatKeepsTheFact()
+    {
+        _bridge.RememberItemCreation(0x130, isCheat: false, nowMs: 10_000, worldSerial: 6, stackCount: 1);
+        _bridge.ForgetItemCreationsFromOtherWorlds(keepWorldSerial: 6);
+
+        Assert.True(_bridge.TryGetItemCreationObservation(0x130, out _, out _, out int stackCount));
+        Assert.Equal(1, stackCount);
+        Assert.Equal(1, _bridge.AmbientUnitsOf(0x130, stackSize: 3));
     }
 }

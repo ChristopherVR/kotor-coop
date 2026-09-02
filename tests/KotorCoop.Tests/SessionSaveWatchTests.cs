@@ -250,11 +250,46 @@ public sealed class SessionSaveWatchTests : IDisposable
         // The local (own) watch and the remote (host) watch are independent: establishing
         // one's baseline must not affect the other, and each classifies its own edges.
         watch.ObserveOwnVerdict(0xAAAA, loadSerialNow: 1, nowMs: 0);
-        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 1, nowMs: 0);
+        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 1, nowMs: 0, out _);
 
         Assert.Equal(SaveOrLoadVerdict.Save, watch.ObserveOwnVerdict(0xAAAB, loadSerialNow: 1, nowMs: 100));
         Assert.Equal(
-            SaveOrLoadVerdict.Load, watch.ObserveRemoteVerdict(0xBBBC, remoteLoadSerialNow: 2, nowMs: 100));
+            SaveOrLoadVerdict.Load, watch.ObserveRemoteVerdict(0xBBBC, remoteLoadSerialNow: 2, nowMs: 100, out _));
+    }
+
+    [Fact]
+    public void ObserveRemoteVerdictExposesTheRawSerialEdgeEvenWithoutAVerdict()
+    {
+        // The live 2026-09-02 shape: the host's serial ticks, its digest never changes. The
+        // classifier says None (nothing to correlate) but HostWorldReplacedRule needs the edge.
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 1, nowMs: 0, out bool edge);
+        Assert.False(edge); // the baseline is never an edge
+
+        Assert.Equal(
+            SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 2, nowMs: 100, out edge));
+        Assert.True(edge);
+
+        Assert.Equal(
+            SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 2, nowMs: 200, out edge));
+        Assert.False(edge);
+    }
+
+    [Fact]
+    public void AnUnresolvedRemoteDigestIsNotAReadingForTheSerialEither()
+    {
+        // A fresh CoopClient reports WorldDigest.Empty until the host's first packet lands.
+        // Baselining the serial on that 0 made the host's real serial (here 7) an edge one
+        // tick later — live 2026-09-02, a just-rejoined client rejoined a second time.
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveRemoteVerdict(0, remoteLoadSerialNow: 0, nowMs: 0, out bool edge);
+        Assert.False(edge);
+
+        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 7, nowMs: 100, out edge);
+        Assert.False(edge);
+
+        watch.ObserveRemoteVerdict(0xBBBB, remoteLoadSerialNow: 8, nowMs: 200, out edge);
+        Assert.True(edge);
     }
 
     [Fact]
@@ -262,7 +297,7 @@ public sealed class SessionSaveWatchTests : IDisposable
     {
         SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
         watch.ObserveOwnVerdict(0x1234, loadSerialNow: 1, nowMs: 0);
-        watch.ObserveRemoteVerdict(0x5678, remoteLoadSerialNow: 1, nowMs: 0);
+        watch.ObserveRemoteVerdict(0x5678, remoteLoadSerialNow: 1, nowMs: 0, out _);
 
         watch.Reset();
 
@@ -270,7 +305,7 @@ public sealed class SessionSaveWatchTests : IDisposable
         // next readings are a fresh connection's first — never a verdict.
         Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x9999, loadSerialNow: 9, nowMs: 200));
         Assert.Equal(
-            SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0x8888, remoteLoadSerialNow: 8, nowMs: 200));
+            SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0x8888, remoteLoadSerialNow: 8, nowMs: 200, out _));
     }
 
     // ---- helpers --------------------------------------------------------------

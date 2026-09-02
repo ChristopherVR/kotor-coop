@@ -28,6 +28,14 @@ public sealed partial class CoopHost
     /// the real engine apply has actually landed and the next scan reads it back.</summary>
     private Dictionary<PartyPoolStackKey, int> _partyPoolBeliefV2 = [];
 
+    /// <summary>False until the first <see cref="PublishPartyPoolSnapshotV2"/>, and again after
+    /// <see cref="WithdrawPartyPoolSnapshotV2"/> — the host's world was replaced and the belief
+    /// above describes a pool that no longer exists. While false nothing is broadcast: a client
+    /// holds its last snapshot (never expires) and a rejoining client waits for a real one.
+    /// Distinct from an EMPTY belief on purpose — an empty snapshot is a statement ("the pool is
+    /// empty") and a withdrawn one is silence.</summary>
+    private bool _partyPoolBeliefV2Valid;
+
     private uint _partyPoolGenerationV2;
 
     private const int PartyPoolV2BroadcastIntervalMs = 1000;
@@ -58,6 +66,16 @@ public sealed partial class CoopHost
         lock (_gate)
         {
             _partyPoolBeliefV2 = new Dictionary<PartyPoolStackKey, int>(totals);
+            _partyPoolBeliefV2Valid = true;
+        }
+    }
+
+    /// <summary>See <see cref="IPartyPoolSession.WithdrawPartyPoolSnapshotV2"/>.</summary>
+    public void WithdrawPartyPoolSnapshotV2()
+    {
+        lock (_gate)
+        {
+            _partyPoolBeliefV2Valid = false;
         }
     }
 
@@ -176,6 +194,11 @@ public sealed partial class CoopHost
         Dictionary<PartyPoolStackKey, int> belief;
         lock (_gate)
         {
+            if (!_partyPoolBeliefV2Valid)
+            {
+                return;
+            }
+
             belief = new Dictionary<PartyPoolStackKey, int>(_partyPoolBeliefV2);
         }
 

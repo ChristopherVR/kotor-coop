@@ -121,10 +121,12 @@ internal sealed unsafe partial class PhantomController
     };
 
     /// <summary>Rejects the all-zero position a slot carries before its first update, and any
-    /// NaN/infinity a bad read would produce.</summary>
+    /// NaN/infinity/out-of-world value a bad read would produce (Vec3.IsWorldPlausible has
+    /// the live hang that added the magnitude bound).</summary>
     private static bool IsPlausiblePosition(Vec3 p) =>
-        float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
-        && (p.X != 0f || p.Y != 0f);
+        Vec3.IsWorldPlausible(p) && (p.X != 0f || p.Y != 0f);
+
+    private bool _unplacedPlayerLogged;
 
     private void TrySpawnOne(int slot, nint player)
     {
@@ -146,9 +148,30 @@ internal sealed unsafe partial class PhantomController
         RemoteView remote = block.GetRemote(slot);
         Vec3 peerPosition = remote.Position;
 
+        // The fallback anchor must be screened too: during a mid-session load the player
+        // creature exists before it is placed (gait-name logged animBase=0 in the same
+        // window as the hang), and an unplaced anchor sends ComputeSafeLocation on the
+        // same endless search. No anchor this frame → no spawn this frame; the next sweep
+        // (30 frames on) retries once the world has actually placed the player.
+        Vec3 playerPosition = Odyssey.GetPosition(player);
+        if (!Vec3.IsWorldPlausible(playerPosition))
+        {
+            if (!_unplacedPlayerLogged)
+            {
+                _unplacedPlayerLogged = true;
+                PluginHost.Log(
+                    $"phantom spawn deferred: the player is not placed yet "
+                    + $"({playerPosition.X:G3}, {playerPosition.Y:G3}, {playerPosition.Z:G3})");
+            }
+
+            return;
+        }
+
+        _unplacedPlayerLogged = false;
+
         Vec3 spawnPosition = IsPlausiblePosition(peerPosition)
             ? peerPosition
-            : Offset(Odyssey.GetPosition(player), slot);
+            : Offset(playerPosition, slot);
 
         Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f };
 
@@ -173,7 +196,7 @@ internal sealed unsafe partial class PhantomController
             // The peer's own position refused a body (a door frame, a lift, mid-transition
             // geometry). Fall back to the old offset-from-the-player spot rather than losing
             // the phantom entirely — a phantom in the wrong place beats no phantom.
-            Vec3 fallback = Offset(Odyssey.GetPosition(player), slot);
+            Vec3 fallback = Offset(playerPosition, slot);
             foreach (string template in Templates)
             {
                 objectId = Odyssey.SpawnCreature(template, fallback, facing, out failure);

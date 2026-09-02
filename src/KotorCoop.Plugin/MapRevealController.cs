@@ -95,7 +95,7 @@ internal sealed unsafe class MapRevealController(SharedBlockView block)
     /// </summary>
     private static bool TryRevealWorldPoint(Vec3 position)
     {
-        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z))
+        if (!Vec3.IsWorldPlausible(position))
         {
             return false;
         }
@@ -166,9 +166,7 @@ internal sealed unsafe class MapRevealController(SharedBlockView block)
                 continue;
             }
 
-            if (!float.IsFinite(remote.Position.X)
-                || !float.IsFinite(remote.Position.Y)
-                || !float.IsFinite(remote.Position.Z))
+            if (!Vec3.IsWorldPlausible(remote.Position))
             {
                 continue;
             }

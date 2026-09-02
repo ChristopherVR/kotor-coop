@@ -271,7 +271,11 @@ public sealed partial class CoopAgent
                 {
                     if (++consecutiveFailures == 1 || consecutiveFailures % _settings.PollRate == 0)
                     {
-                        Log?.Invoke($"pump tick failed ({consecutiveFailures} in a row): {ex.Message}");
+                        // Name the frame: a transient read failure and a null-reference bug
+                        // print the same one-line message otherwise (live 2026-09-02, a host's
+                        // in-world reload logged an NRE with nowhere to look).
+                        Log?.Invoke($"pump tick failed ({consecutiveFailures} in a row): {ex.Message}"
+                            + $" [{ex.GetType().Name} at {TopFrame(ex)}]");
                     }
 
                     if (consecutiveFailures >= maxConsecutiveFailures)
@@ -784,7 +788,8 @@ public sealed partial class CoopAgent
         if ((caps & SessionCapabilities.Dialogue) != 0)
         {
             PerfPhaseStart();
-            _scriptItemGrantPump.PumpScriptItemGrants(local.Module, _dialoguePump.IsOwningConversation);
+            _scriptItemGrantPump.PumpScriptItemGrants(
+                local.Module, _dialoguePump.IsOwningConversation, localReadable: LastReadSucceeded);
             PerfPhaseEnd(PumpPhase.ScriptItemGrant);
         }
 
@@ -1091,6 +1096,25 @@ public sealed partial class CoopAgent
         }
 
         _recentlySyncedItems.Record(resref, 1, Environment.TickCount64);
+    }
+
+    /// <summary>The innermost frame of an exception's stack, one line, for the pump's failure
+    /// log — "Type.Method in file:line N" when symbols are present, the method alone otherwise.</summary>
+    internal static string TopFrame(Exception ex)
+    {
+        var frame = new System.Diagnostics.StackTrace(ex, fNeedFileInfo: true).GetFrame(0);
+        if (frame is null)
+        {
+            return "?";
+        }
+
+        string method = frame.GetMethod() is { } m
+            ? $"{m.DeclaringType?.Name}.{m.Name}"
+            : "?";
+        string? file = frame.GetFileName();
+        return file is null
+            ? method
+            : $"{method} in {Path.GetFileName(file)}:line {frame.GetFileLineNumber()}";
     }
 
     /// <summary>

@@ -746,6 +746,18 @@ public sealed partial class KotorGameBridge
 
     private const uint BlockItemTemplateSpawnIsCheatBit = 1u << 0;
 
+    /// <summary>Version 64 (2026-09-02). Bits 8..23 of the same flags dword: the stack count
+    /// the <c>CreateItemOnObject</c> call asked for (1 when the script omitted it, engine-clamped
+    /// to the template's max), 0 when the plugin could not read it. The entry's id is the
+    /// SURVIVING stack the call merged into, so this — never the stack's whole size — is how
+    /// much the call contributed. Mirrors
+    /// <see cref="KotorCoop.Plugin.SharedBlock.ItemTemplateSpawnStackCountShift"/>; consumed by
+    /// <see cref="TryScanPartyPoolTotals"/>'s ambient baseline
+    /// (docs/research/shared-inventory-v2.md §17).</summary>
+    private const int BlockItemTemplateSpawnStackCountShift = 8;
+
+    private const uint BlockItemTemplateSpawnStackCountMask = 0xFFFFu;
+
     private const int BlockItemTemplateSpawnCursor =
         BlockItemTemplateSpawnRing + (BlockItemTemplateSpawnRingCapacity * BlockItemTemplateSpawnEntryStride);
 

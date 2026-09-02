@@ -114,11 +114,28 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// Roadmap item 14 phase 2, client-only: classifies the HOST's reported digest+load-edge
     /// (<see cref="KotorCoop.Session.CoopClient.RemoteWorldDigest"/>) for <c>host_load_readopt</c>.
     /// </summary>
-    public SaveOrLoadVerdict ObserveRemoteVerdict(uint remoteDigestNow, uint remoteLoadSerialNow, long nowMs)
+    /// <param name="remoteLoadEdge">The raw serial edge this tick, before correlation — what
+    /// <see cref="KotorCoop.Session.HostWorldReplacedRule"/> watches, because a host load that
+    /// leaves the digest unchanged (a reload of the staged save, a Load of an older save) never
+    /// becomes a verdict here at all.</param>
+    public SaveOrLoadVerdict ObserveRemoteVerdict(
+        uint remoteDigestNow, uint remoteLoadSerialNow, long nowMs, out bool remoteLoadEdge)
     {
+        // ⚠ No packet yet is not a reading. A fresh CoopClient reports WorldDigest.Empty until
+        // the host's first WorldDigestPacket lands; SerialEdgeWatch must not baseline on that
+        // 0 — the host's real serial arriving a tick later then reads as a load edge. Live
+        // 2026-09-02: a client that had just rejoined after the host's in-world reload saw
+        // exactly that edge and rejoined a second time. (SaveIdentityWatch already skips 0 on
+        // its own; the serial legitimately starts at 0 on the HOST, so it cannot.)
+        if (remoteDigestNow == 0)
+        {
+            remoteLoadEdge = false;
+            return SaveOrLoadVerdict.None;
+        }
+
         (_remoteClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_remoteClassifyWatch, remoteDigestNow);
-        (_remoteLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_remoteLoadWatch, remoteLoadSerialNow);
-        return _remoteClassifier.Observe(nowMs, loadEdge, digestChanged);
+        (_remoteLoadWatch, remoteLoadEdge) = SerialEdgeWatch.Observe(_remoteLoadWatch, remoteLoadSerialNow);
+        return _remoteClassifier.Observe(nowMs, remoteLoadEdge, digestChanged);
     }
 
     /// <summary>

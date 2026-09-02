@@ -35,6 +35,12 @@ public sealed partial class KotorGameBridge
 
     private bool _partyPoolEverScanned;
 
+    /// <summary>A NEW world's first sweep (after <see cref="ClearPartyPoolSuppressionCache"/>) is
+    /// held until a second sweep a full <see cref="PartyPoolScanIntervalMs"/> later agrees with
+    /// it — see <see cref="PartyPoolSettleRule"/> for the live reload that published a pool with
+    /// two grenade stacks that were gone a second later.</summary>
+    private readonly PartyPoolSettleRule _partyPoolSettle = new();
+
     /// <summary>
     /// How recent a <see cref="TryGetItemCreationObservation"/> fact has to be, relative to the
     /// scan that first notices this item, for that item to be treated as ambient-script noise
@@ -51,6 +57,33 @@ public sealed partial class KotorGameBridge
     /// breath, by something other than our own code.
     /// </summary>
     private const long PartyPoolAmbientSuppressionWindowMs = 1000;
+
+    /// <summary>
+    /// True from the moment a world's caches are reset (<see cref="ClearPartyPoolSuppressionCache"/>,
+    /// and from construction) until the first sweep that walks the whole repository — the
+    /// world's OPENING. While it holds, <see cref="IsAmbientPartyPoolNoise"/> treats any
+    /// non-cheat creation fact from this world as ambient regardless of the window above.
+    ///
+    /// Why the window alone is not enough at world-up (live 2026-09-02,
+    /// docs/research/shared-inventory-v2.md §17): the first sweep of a reloaded world cannot
+    /// run until the load is acked, the player has resolved and the settle rule has held its
+    /// confirming interval — many seconds after the ambient script created its deposit, so a
+    /// fact recorded within a tick of the creation is long outside the 1 s window by the time
+    /// the scan first meets the id, and the item is counted. Nothing but a script can create
+    /// and pool an item before the world's first sweep — a human has no GUI yet, and every
+    /// path of this instance's own is cheat-flagged — so during the opening the creation fact
+    /// alone is the whole answer, and the window (which exists to separate a script's deposit
+    /// from a much older item a human dragged in) has nothing to separate.
+    /// </summary>
+    private bool _partyPoolWorldOpening = true;
+
+    /// <summary>Test seam for <see cref="_partyPoolWorldOpening"/>.</summary>
+    internal bool PartyPoolWorldOpening => _partyPoolWorldOpening;
+
+    /// <summary>The world's opening is over: a sweep has walked the whole repository. Called
+    /// by <see cref="TryScanPartyPoolTotals"/> at that point; internal so
+    /// <c>PartyPoolAmbientSuppressionTests</c> can pin both halves of the rule.</summary>
+    internal void NotePartyPoolWorldSwept() => _partyPoolWorldOpening = false;
 
     /// <summary>
     /// Per-item id, whether <see cref="IsAmbientPartyPoolNoise"/> decided this item is ambient
@@ -133,7 +166,7 @@ public sealed partial class KotorGameBridge
 
         bool suppress = TryGetItemCreationObservation(itemId, out bool isCheat, out long observedAtMs)
             && !isCheat
-            && nowMs - observedAtMs < PartyPoolAmbientSuppressionWindowMs;
+            && (_partyPoolWorldOpening || nowMs - observedAtMs < PartyPoolAmbientSuppressionWindowMs);
 
         if (suppress)
         {
@@ -141,6 +174,29 @@ public sealed partial class KotorGameBridge
         }
 
         return suppress;
+    }
+
+    /// <summary>
+    /// How many of a suppressed stack's <paramref name="stackSize"/> units the ambient creation
+    /// actually put there — the amount <see cref="PartyPoolAmbientBaseline.NoteSuppressed"/> may
+    /// hide. Live 2026-09-02 (docs/research/shared-inventory-v2.md §17): the id the plugin's ring
+    /// reports is the SURVIVING stack the ambient item was merged INTO (the engine merges the
+    /// loaded stack into the new item, frees the loaded one, and the new item takes its id), so
+    /// a save-loaded medpac stack of 2 that END_M01AA's world-up script topped up by 1 shows as
+    /// "id 0x12B created, count 1" with a stack of 3. Version 63 baselined all 3, the key vanished
+    /// from the host's snapshot, and the client re-deposited its own 2 — physical duplication
+    /// the sync layer could not see. Bounded by the stack size (a merge can never leave fewer
+    /// units than were created) and falling back to the whole stack ONLY when the plugin gave
+    /// no count at all (0), the pre-64 rule for the one case it still fits.
+    /// </summary>
+    internal int AmbientUnitsOf(uint itemId, int stackSize)
+    {
+        if (TryGetItemCreationObservation(itemId, out _, out _, out int createdCount) && createdCount > 0)
+        {
+            return Math.Min(createdCount, stackSize);
+        }
+
+        return stackSize;
     }
 
     /// <summary>Drops every party-pool suppression decision. Called on module change, alongside
@@ -152,6 +208,17 @@ public sealed partial class KotorGameBridge
         _partyPoolSuppressionDecided.Clear();
         _partyPoolAmbientSuppressed.Clear();
         _partyPoolAmbient.Clear();
+
+        // The last good scan described the world that just went away. Every "stale but honest"
+        // path above hands it back as the current observation — after a reload that is the OLD
+        // pool being reported as the new one, for as long as the new world's ids stay
+        // unresolved. Forget it: until the new world has been swept once, there is no
+        // observation, and TryScanPartyPoolTotals says so by returning false.
+        _partyPoolLastScan = [];
+        _partyPoolEverScanned = false;
+        _nextPartyPoolScanTicks = 0;
+        _partyPoolSettle.Reset();
+        _partyPoolWorldOpening = true;
 
         // Dropping the baseline can make the very next scan's totals step UP for a key whose
         // ambient content was previously offset — movement no engine action caused. A
@@ -181,8 +248,48 @@ public sealed partial class KotorGameBridge
             return true;
         }
 
+        if (_partyPoolSettle.Holding && now < _nextPartyPoolScanTicks)
+        {
+            // Settling (see _partyPoolSettle): the confirming sweep has to be a full
+            // interval after the first one, or two reads a few ms apart would "agree" on the
+            // same transient. No observation until then.
+            LastPartyPoolScanWasStale = true;
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
         if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
         {
+            LastPartyPoolScanWasStale = true;
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
+        // ⚠ BETWEEN WORLDS IS NOT AN OBSERVATION. Live 2026-09-02 (shared-inventory-v2.md §17):
+        // the client rejoined a reloaded host in-world; its own load tore its world down, and for
+        // the ~5 s until the new world's player resolved (which is where TryReadLocalState runs
+        // the WorldLoadSerial reset that empties this cache and bumps the epoch) this method
+        // kept reading the party table directly. The engine had already emptied the repository,
+        // so the read was a FRESH, non-stale "0 of everything" — the pump reconciled all three
+        // stacks back in, the loaded save then brought the originals, and the surplus went to
+        // the host as local deposits: both pools doubled. The plugin counts teardowns in
+        // WorldLoadSerial (bumped at teardown, not at the next world's arrival), so a serial
+        // that has moved past the one the caches were built under means the world is between
+        // lives: hand back the last scan as stale (before the reset) or no observation (after
+        // it). The engine-player pointer the plugin republishes is 0 while no world is up and
+        // covers the same gap from the other end. 0/0 without a plugin: never fires.
+        //
+        // ⚠ AND SO DOES A LOAD THIS AGENT HAS ASKED FOR AND NOT YET BEEN ACKED. Live 2026-09-02
+        // (session-save.md, the rejoin hang round): the client's reconcile add went out ONE
+        // second after its own rejoin load request — the plugin had not torn the world down
+        // yet, so the serial and the player pointer both still described the OLD world and
+        // neither guard above fired, and the add landed in a repository the engine was about
+        // to discard ("the game never answered that - is a world loaded?"). The plugin acks a
+        // load request only once the new world is up and on screen, so request != ack is the
+        // whole window, from the moment of asking.
+        if (IsWorldBetweenLives)
+        {
+            LastPartyPoolScanNote = "party pool: the world is between lives (load in progress) - no observation";
             LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;
@@ -198,11 +305,8 @@ public sealed partial class KotorGameBridge
             // empty pool, not a read failure. CSWPartyTable::GetPartyItems constructs the
             // repository lazily on first use; reading a null pointer here is the honest,
             // ordinary "nothing in it yet" case, not a resolve failure.
-            _partyPoolLastScan = [];
-            _partyPoolEverScanned = true;
-            LastPartyPoolScanWasStale = false;
-            totals = _partyPoolLastScan;
-            return true;
+            NotePartyPoolWorldSwept();
+            return PublishPartyPoolScan([], out totals);
         }
 
         if (!_memory.TryReadInt32(repo + RepositoryItemCount, out int count)
@@ -271,7 +375,7 @@ public sealed partial class KotorGameBridge
             // docs/research/party-pool-sync.md §20.
             if (IsAmbientPartyPoolNoise(itemId, now))
             {
-                _partyPoolAmbient.NoteSuppressed(itemId, key, identity.StackSize);
+                _partyPoolAmbient.NoteSuppressed(itemId, key, AmbientUnitsOf(itemId, identity.StackSize));
             }
         }
 
@@ -287,11 +391,29 @@ public sealed partial class KotorGameBridge
             return _partyPoolEverScanned;
         }
 
+        // The whole repository has been walked once: every id the world opened with has had
+        // its ambient decision made (above, cached per id), so from here the ordinary window
+        // applies to anything that appears later.
+        NotePartyPoolWorldSwept();
+
         LastPartyPoolScanNote = string.Empty;
+        return PublishPartyPoolScan(_partyPoolAmbient.Net(raw), out totals);
+    }
+
+    /// <summary>The one exit for a sweep that read the whole repository. Ordinarily it becomes
+    /// the current observation; while the world is new (<see cref="_partyPoolSettle"/>) it is
+    /// held back until the next full-interval sweep reproduces it exactly.</summary>
+    private bool PublishPartyPoolScan(Dictionary<PartyPoolStackKey, int> scan, out IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+    {
+        if (!_partyPoolSettle.Accept(scan, out string note))
+        {
+            LastPartyPoolScanNote = note;
+            LastPartyPoolScanWasStale = true;
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
         LastPartyPoolScanWasStale = false;
-
-        Dictionary<PartyPoolStackKey, int> scan = _partyPoolAmbient.Net(raw);
-
         _partyPoolLastScan = scan;
         _partyPoolEverScanned = true;
         totals = _partyPoolLastScan;
@@ -313,6 +435,57 @@ public sealed partial class KotorGameBridge
     /// longer stale on the NEXT ask.</summary>
     public void InvalidatePartyPoolScanCache()
     {
-        _nextPartyPoolScanTicks = 0;
+        // Not while settling: the confirming sweep has to stay a full interval after the first.
+        if (!_partyPoolSettle.Settling)
+        {
+            _nextPartyPoolScanTicks = 0;
+        }
+    }
+
+    /// <summary>
+    /// Every item id currently linked into the shared party pool's repository, or null when
+    /// there is no world / no pool yet / the repository does not read sanely. A cheap read
+    /// (one pointer chain and one id array — no identity resolution), so callers that only
+    /// need MEMBERSHIP, not totals, can ask on every sample.
+    ///
+    /// Why membership matters on its own: the pool's items carry the PARTY LEADER as their
+    /// possessor, and the engine re-points that whenever leadership moves — a downed PC
+    /// handing control to a companion and taking it back two seconds later flips every pool
+    /// item's possessor away from the PC and back (live 2026-09-02, host's `down`: the next
+    /// <see cref="ReadPossessedItems"/> diff reported the whole pool as "3 new items in the
+    /// PC's inventory" and granted it to the peer). A possessor-keyed view of "what the PC
+    /// holds" must therefore treat pool membership as possession, whoever leads right now.
+    /// </summary>
+    public HashSet<uint>? TryReadPartyPoolItemIds()
+    {
+        if (!EngineGlobals.TryGetServerInternal(_memory, out nint serverInternal))
+        {
+            return null;
+        }
+
+        nint partyTable = serverInternal + PartyTableOffset;
+        if (!_memory.TryReadPointer(partyTable + PartyTableItemRepo, out nint repo) || repo == 0)
+        {
+            return null;
+        }
+
+        if (!_memory.TryReadInt32(repo + RepositoryItemCount, out int count)
+            || count is < 0 or > 4096
+            || !_memory.TryReadPointer(repo + RepositoryItemArray, out nint ids)
+            || (count > 0 && ids == 0))
+        {
+            return null;
+        }
+
+        HashSet<uint> result = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            if (_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId) && itemId is not 0 and < 0x7F000000)
+            {
+                result.Add(itemId);
+            }
+        }
+
+        return result;
     }
 }

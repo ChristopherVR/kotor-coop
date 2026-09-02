@@ -141,6 +141,34 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    /// <summary>CClientExoApp::RunDeathSequence (0x005EDC40, forwards to the internal
+    /// 0x005F7200) — the game-over: game_over_state + fade pending, HideAllPanels, the
+    /// "Your entire party has been killed" box, camera on the last downed member. Zero
+    /// arguments; <c>this</c> is the CClientExoApp the engine's own single call site reaches
+    /// through <c>mov edx,[0x7A39FC]; mov ecx,[edx+4]</c> (0x004B6E90).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> RunDeathSequenceFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005EDC40;
+
+    /// <summary>
+    /// Runs the engine's own game-over flow on this instance — the exact call
+    /// <c>TempDeathUpdate</c>'s all-dead scan makes, for a client whose scan is dark
+    /// (<c>client_temp_death_suppress</c>) once the session has ruled the wipe real. Idempotent
+    /// in the engine (it writes the same two state words <c>SetGameOver</c> does); the caller
+    /// still latches it so the log carries one line per wipe. Returns false only when there is
+    /// no client app to call it on. MAIN THREAD ONLY.
+    /// </summary>
+    public static bool RunDeathSequence()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        RunDeathSequenceFn(client);
+        return true;
+    }
+
     /// <summary>Makes a creature raiseable, which the Resurrection handler checks before it
     /// does anything. The engine's own auto-revive writes this same flag raw.</summary>
     public static void SetRaiseable(nint creature) => *(int*)(creature + CreatureIsRaiseable) = 1;

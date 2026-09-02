@@ -27,31 +27,39 @@ public sealed partial class KotorGameBridge
         // against a body somewhere else. The plugin republishes the engine's
         // GetPlayerCreature() every frame (0 while no world is up); adopt it whenever it
         // names a different creature than the one the scan chose.
-        if (_pluginBlock != 0
-            && _memory.TryReadUInt32(_pluginBlock + BlockEnginePlayerPointer, out uint enginePlayer)
+        // ⚠ Work on a snapshot of the field: SaveLoader's WaitFor(InWorld) calls TryResolve on
+        // its own thread during a mid-session load and can null `_player` between any check
+        // here and the use at the bottom (live 2026-09-02, client rejoin: NRE at
+        // `_player!.Address`).
+        CreatureRef? player = _player;
+        nint pluginBlock = _pluginBlock;
+        if (pluginBlock != 0
+            && _memory.TryReadUInt32(pluginBlock + BlockEnginePlayerPointer, out uint enginePlayer)
             && enginePlayer != 0
-            && (_player is null || _player.Address != (nint)enginePlayer)
-            && _memory.TryReadUInt32(_pluginBlock + BlockEnginePlayerId, out uint engineId)
+            && (player is null || player.Address != (nint)enginePlayer)
+            && _memory.TryReadUInt32(pluginBlock + BlockEnginePlayerId, out uint engineId)
             && StillLooksLikeThePlayer((nint)enginePlayer))
         {
             ResolveDiagnostic?.Invoke(
                 $"player: adopted the engine's own creature 0x{enginePlayer:X} (id 0x{engineId:X})"
-                + (_player is null ? string.Empty : $" over the scan's 0x{_player.Address:X}"));
-            _player = new CreatureRef((nint)enginePlayer, engineId, string.Empty, true, false);
+                + (player is null ? string.Empty : $" over the scan's 0x{player.Address:X}"));
+            player = new CreatureRef((nint)enginePlayer, engineId, string.Empty, true, false);
+            _player = player;
         }
 
-        if (_player is not null && !StillLooksLikeThePlayer(_player.Address))
+        if (player is not null && !StillLooksLikeThePlayer(player.Address))
         {
             if (_playerLostLogged < 3)
             {
                 _playerLostLogged++;
-                ResolveDiagnostic?.Invoke(DescribePlayerMismatch(_player.Address));
+                ResolveDiagnostic?.Invoke(DescribePlayerMismatch(player.Address));
             }
 
+            player = null;
             _player = null;
         }
 
-        if (_player is null)
+        if (player is null)
         {
             // ⚠ RATE-LIMITED, and it has to be. Re-resolving means a full pattern scan of the
             // game's committed memory — hundreds of milliseconds. Running that on every failed
@@ -67,6 +75,12 @@ public sealed partial class KotorGameBridge
             _lastResolveAttemptMs = nowMs;
 
             if (!TryResolve(out _))
+            {
+                return false;
+            }
+
+            player = _player;
+            if (player is null)
             {
                 return false;
             }
@@ -96,7 +110,7 @@ public sealed partial class KotorGameBridge
             }
         }
 
-        nint creature = _player!.Address;
+        nint creature = player.Address;
 
         if (!TryReadVector(creature + OffPosition, out Vector3f position))
         {
@@ -184,12 +198,30 @@ public sealed partial class KotorGameBridge
             _itemTags.Clear();
             _itemAddresses.Clear();
             _itemTagsBuiltAtMs = 0;
+            _itemSweepProvenance.Reset();
 
             // Engine object ids are only meaningful within the module that minted them; a
             // stale (id -> resref) fact surviving a module change would be actively wrong
             // rather than merely uninformative — see the cache's own doc comment.
             ClearSpawnedItemResrefCache();
-            ClearItemCreationObservationCache();
+
+            // ⚠ NOT the creation facts the NEW world already produced. This reset runs when
+            // the new world's player first resolves — seconds after its ambient scripts ran
+            // and the spawn-ring drain recorded what they created. A plain clear here threw
+            // those facts away, and the party-pool sweep that followed counted an ambient
+            // deposit as the player's own (live 2026-09-02, shared-inventory-v2.md §17). The
+            // drain tags each fact with the serial of the world that minted the id; keep
+            // exactly those tagged with the world being entered. Without a plugin there are
+            // no facts to keep and the serial never moves, so the plain clear stands.
+            if (worldReloaded)
+            {
+                ForgetItemCreationsFromOtherWorlds(worldSerial);
+            }
+            else
+            {
+                ClearItemCreationObservationCache();
+            }
+
             ClearPartyPoolSuppressionCache();
         }
 

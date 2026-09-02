@@ -32,6 +32,15 @@ public sealed class ScriptItemGrantPumpTests
         /// by a test standing in for a reload of the same module.</summary>
         public int WorldEpoch { get; set; }
 
+        /// <summary>What the bridge reports as <see cref="IWorldStateBridge.IsWorldBetweenLives"/>
+        /// — the plugin's own "the world is being torn down or loaded" signal.</summary>
+        public bool IsWorldBetweenLives { get; set; }
+
+        /// <summary>Whether <see cref="TryReadLocalState"/> succeeds — false stands in for the
+        /// engine having no resolvable player (mid-load), the same read the agent retains its
+        /// previous state across.</summary>
+        public bool ReadSucceeds { get; set; } = true;
+
         public bool IsAttached => true;
 
         public bool CanWriteRemotes => true;
@@ -39,7 +48,7 @@ public sealed class ScriptItemGrantPumpTests
         public bool TryReadLocalState(out PlayerState state)
         {
             state = Local;
-            return true;
+            return ReadSucceeds;
         }
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
@@ -364,6 +373,111 @@ public sealed class ScriptItemGrantPumpTests
         Assert.Empty(session.PublishedGrants);
 
         // A grant in the new world is still seen.
+        bridge.Possessed =
+        [
+            .. bridge.Possessed,
+            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+
+        (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
+        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+    }
+
+    /// <summary>
+    /// Live 2026-09-02, the client side of the same reload (docs/research/shared-inventory-v2.md
+    /// §17): the client's OWN rejoin load emptied the engine's repositories seconds before the
+    /// new world's player resolved. In that window the local read was failing and the epoch had
+    /// not moved yet, so the pump baselined on "nothing" and, once the world was up, published
+    /// the whole reloaded inventory as seven fresh grants — which the host pooled and the client
+    /// then reconciled back in. A failed local read is not an observation: no baseline, no diff.
+    /// </summary>
+    [Fact]
+    public void WhileTheLocalReadFailsNothingIsBaselinedOrPublished()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce(); // baseline carries the pistol
+
+        // The load tears the world down: the read fails and the inventory reads as empty.
+        bridge.ReadSucceeds = false;
+        bridge.Possessed = [];
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        // The world comes back up with MORE than the old baseline (the autosave was later), the
+        // read recovers, and the epoch edge lands in the same breath the player resolves.
+        bridge.ReadSucceeds = true;
+        bridge.WorldEpoch++;
+        bridge.Possessed =
+        [
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_a_clothes01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_fraggren01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Empty(session.PublishedGrants);
+    }
+
+    /// <summary>The bridge's own between-lives verdict gates the same way, independently of
+    /// whether the local read happens to succeed that tick (the engine keeps answering reads
+    /// for a moment after the plugin has already seen the teardown).</summary>
+    [Fact]
+    public void WhileTheWorldIsBetweenLivesNothingIsBaselinedOrPublished()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce();
+
+        bridge.IsWorldBetweenLives = true;
+        bridge.Possessed = [];
+        agent.PumpOnce();
+
+        bridge.Possessed =
+        [
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_a_clothes01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+        Assert.Empty(session.PublishedGrants);
+
+        // The world is up: this is the first observation of the new world and it must reseed
+        // (via the epoch edge) rather than diff against the pre-load baseline...
+        bridge.IsWorldBetweenLives = false;
+        bridge.WorldEpoch++;
+        agent.PumpOnce();
+        Assert.Empty(session.PublishedGrants);
+
+        // ...and a genuine grant afterwards is still seen.
+        bridge.Possessed =
+        [
+            .. bridge.Possessed,
+            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+        (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
+        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+    }
+
+    /// <summary>A blip with NO epoch edge afterwards (a transient read failure in a world that
+    /// was never replaced) resumes diffing from the baseline it had — the baseline was left
+    /// alone, not dropped, so a grant that landed during the blip is still reported once.</summary>
+    [Fact]
+    public void ATransientReadFailureKeepsTheBaselineItHad()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce();
+
+        bridge.ReadSucceeds = false;
+        agent.PumpOnce();
+
+        bridge.ReadSucceeds = true;
         bridge.Possessed =
         [
             .. bridge.Possessed,

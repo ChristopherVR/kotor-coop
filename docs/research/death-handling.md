@@ -645,3 +645,190 @@ parallelise only across pids; `Get-Process swkotor` tells you the rig is up, `pg
 the demo's adoption may pick a **session-saved character from a previous rig run** ("newer
 than the own save") — expected for the rig, worth knowing when the client's inventory does
 not match its save.
+
+### 6.5 2026-09-02, later — the in-world `HostReload` variant §6.4 left NEEDS-LIVE, and what the pool channel did under both reloads
+
+The host `loadgame 0` while the client stands in its world (the `inSession: true` rejoin path
+§6.4 had not run) was exercised in the same rig, back to back with the wipe cycle. It exposed a
+client hang, a double rejoin and a trigger that never fired for a same-save reload — all in
+session-save.md's dated entry — and, with `party_pool_sync=2` on for the first time across ANY
+reload, seven distinct ways the reload fabricated inventory (shared-inventory-v2.md §17). The
+wipe cycle itself is unchanged from §6.4: release → both away → host reload → one
+`WipeRecovery` rejoin. The pool/grant traffic that used to follow the rejoin is what §17 closed;
+the version-64 cycle table there is the evidence for this section too.
+
+Still NEEDS-LIVE: step 5 (`client_temp_death_suppress=1`) — run next, §6.6.
+
+### 6.6 2026-09-02, later still — step 5 live: `client_temp_death_suppress=1` made a wipe impossible, and the two-part fix
+
+The last NEEDS-LIVE item of §6.3 ran on the same rig (END_M01AA, save 1, both inventory
+channels on, block version 64, client `coop.ini` `client_temp_death_suppress=1`; the client
+plugin's startup line reads `configured=True` and the guard armed once `DamageDealtEnabled`
+came up). Four wipe cycles were needed to get one clean; the first three found a defect in the
+guard as §6.2 shipped it.
+
+**What the guard got right (positive step-5 findings).** With the client's PC downed (`down 0`
+then `down`, the host 5.1 u away at (20.0, 22.2) vs (15.4, 20.1)) the client stayed down for
+**7+ minutes with no auto-revive** — the engine's own 5-s stand-up is gone, as §6.2 intended —
+and the host walked in and rescued them: at 3.2 u the client agent logged `Lanik revived you
+(3.2 units …)`, the client plugin `death: revive applied; the player stands up` and `topped up
+to 12 hp`, and the host's `who` dropped the `[down]` tag. Nothing on the client side turned
+out to depend on the combat-clear timers advancing (§6.2's open question): no faults, no
+hang, Tab/portraits back after the revive.
+
+**The defect: a client with the guard on can never report "my party is wiped".** The rig's
+wipe recipe (client down, then host down) released nothing on cycles W1–W3; `blockpoke death`
+on the client showed `gameOverSerial 0` throughout while the host's climbed. The chain is:
+`PlayerState.FlagPartyWiped` ← agent `TrackPartyWipe` ← plugin `GameOverSerial` ← the
+`FlagGameOverWanted` the game-over call-site guard sets when the engine's all-dead scan asks
+for `RunDeathSequence` — and that scan lives inside `TempDeathUpdate`, the very function the
+third guard darkens. So the client's PC is down but the session never hears "wiped"; the
+host's `DeathPump` sees `allDown = false` forever and keeps `SuppressGameOver` on; and then the
+HOST's own un-darkened `TempDeathUpdate` does what §5 always said it would: ~5 s after the
+host's companion went down with no hostile visible it auto-revives the host's whole party
+(`death: the local player is back up` / `back up; returning control from 0x127`), the host is
+standing again, `Agent.exe load` refuses with "already in the world; nothing to load", and the
+cycle is dead. §6.2's "marginal effect on game-over" sentence was wrong: on a client the
+darkened scan is the ONLY producer of the wipe signal, so the guard removes the client from
+the session's wipe vote entirely.
+
+**⚠ (added later the same day) Parts 1 and 2 below are the W4 build. Part 2's CSWParty walk
+failed on the very next cycle (W5, after a rejoin) and the shipped code votes on the PC alone
+and runs `RunDeathSequence` itself on release — see §6.7.**
+
+**The fix, part 1 — the plugin synthesises the ask the darkened scan would have made.**
+`DeathController.OnFrame` no longer writes the third guard's flag straight from `configured &&
+DamageDealtEnabled`; while the guard is armed it calls `MaintainClientTempDeathGuard(player,
+downed)` every frame:
+
+- `wholePartyDown = downed && Odyssey.IsWholeLocalPartyDown()`;
+- if `wholePartyDown && !block.SuppressGameOver` (the session has released the game-over),
+  drop the guard (`FlagSuppressClientTempDeath = 0`, logged once: `death: every player is down
+  and the session released the game-over; letting TempDeathUpdate end the game on this
+  client`) and return — the engine's own all-dead scan runs on the next server tick and ends
+  the game the normal way, so the client reaches the same game-over screen as the host;
+- otherwise keep the guard up and, if `wholePartyDown`, set `FlagGameOverWanted = 1` — the
+  exact ask the guarded call site would have made, which the existing `GameOverSerial`
+  once-per-episode bump turns into the agent's `FlagPartyWiped`.
+
+**The fix, part 2 — which "party" to scan, and why the first attempt failed.** The first cut
+walked the CSWPartyTable slots (`GetPartyRosterObjectId`) and W3 still failed: on a client the
+table holds the host's mirrored companion (0x127 here), which sits at **hp 1** on the client,
+never reads downed, and is not something the client's PC-down state can ever change (the
+client's own `down 0` had put it back to 36). The engine's all-dead scan and `GetDeadTemp` do
+not use the table; they use the CSWParty live view (`GetSWPartyFn(client)`, count at
+`SwPartyMemberCount`, ids at `SwPartyMember0ClientId + i*SwPartyMemberStride` masked with
+`~ControlPartyNpcFlag`) — and on a client that view holds ONE member, the PC (the 0xFFFFFFFF
+sentinel resolving through 0x7FFFFFFF), while CSWPartyTable's count is 1 for the companion.
+So on a client "party wiped" is exactly "the PC is down", which is also what the engine would
+have concluded. `Odyssey.IsWholeLocalPartyDown()` (ControlSwitch.cs) walks that view,
+resolves each id with `ResolveServerObject`, keeps only `IsServerCreature` hits (new helper in
+Health.cs: vtable compare), and returns true only when at least one member was seen and none
+reads `!IsDowned`. On a host the same walk covers the real party, so the helper is honest on
+both halves even though only the client guard calls it today.
+
+**W4 on the rebuilt plugin — the whole cycle, clean (host pid 39272 / client 25328):**
+
+| t | where | line |
+|---|---|---|
+| 19:15:10.040 | client plugin | `death: the local player is down` → `death: game-over suppressed; the session decides` (the synthesised ask; host `who` shows `Malak END_M01AA [party down]`) |
+| 19:15:16.303 | host plugin | host `down 0`+`down` back to back: `death: game-over suppressed; the session decides` |
+| 19:15:16 | both agents | `every player is down; releasing the game-over screen for everyone` (same second) |
+| 19:15:16.421 | client plugin | `death: every player is down and the session released the game-over; letting TempDeathUpdate end the game on this client`; 3 ms later `the local player is back up` — the game-over flow's own state change, the same line the host has always logged when its un-darkened `TempDeathUpdate` runs the sequence (15:00:24 in the host plugin log earlier today) |
+| 19:15:31 / :32 | client / host agent | `away` — both worlds torn down by the game-over screen |
+| 19:15:38 | rig | `Agent.exe load --pid 39272 --load-save 1` → "staged '000002 - Game1' as the autosave; load request 2 sent … loaded through the plugin" |
+| 19:15:41 | client agent | `the host's world was reloaded - rejoining their world` → `session-save: starting rejoin (HostReload)` → `rejoined 'END_M01AA'` at 19:15:42 — exactly one rejoin |
+| 19:15:44 | host agent | `withdrawing the published snapshot` → `party pool trace: host snapshot 3 key(s)`; client firstSight `snap=1/2/1 … reconcile=0` |
+| 19:16:3x | both | `items 80`: both pools = the save's three stacks; `Responding: True` on both; no pool/grant traffic, no first-chance faults in either plugin log |
+
+Two notes on the rejoin. The trigger was `HostReload` (via `HostWorldReplacedRule`'s serial
+edge), not `WipeRecovery` — `WipeRecoveryRule` and `HostWorldReplacedRule` both feed
+`ClientLoadRejoinRule`, whichever fires first wins, and the outcome is identical; the
+distinction only matters for reading logs. And after the reload both players stand at the
+save's (20.0, 22.2): the client has to be tp'd apart again before another death test
+(separate players first — the 3.5 u auto-rescue is real).
+
+**Status.** Step 5 is now VERIFIED live end to end: guard on → no auto-revive → peer rescue at
+3.2 u; guard on → wipe vote reaches the session → release → both game-over → host reload →
+one rejoin → clean pool. The key stays default-OFF in `profiles/coop.ini.example` until it has
+run in real combat (a hostile still visible at the moment of the wipe is the case the rig's
+`down` verb does not cover); the shipped code path is the fixed one regardless of the key.
+
+### 6.7 2026-09-02, evening — §6.6's part 2 did not survive a rejoin: the CSWParty view is not a roster on a rejoined client, the vote is the PC alone, and the release runs `RunDeathSequence` directly
+
+**⚠ Supersedes §6.6's "fix, part 2" and its "letting TempDeathUpdate end the game" line.**
+`Odyssey.IsWholeLocalPartyDown()` and `IsServerCreature` are gone; the W4 table above is still
+an accurate record of what that build did, but the shipped code is what this section describes.
+
+**W5 — the same cycle as W4, run as the SECOND wipe of the rig (i.e. after W4's rejoin), failed
+at the vote (host 39272 / client 25328, 19:21).** Client `down 0`+`down` → `death: the local
+player is down` and nothing else: no "game-over suppressed; the session decides" (the
+synthesised ask never went out), the host saw the client as merely `[party down]`, the host's
+own `down` produced its usual "suppressed; the session decides", the session never released
+("your party is down — a peer can still revive you"), and the host's un-darkened
+`TempDeathUpdate` auto-revived it four seconds later (`19:21:42.009 the local player is back
+up`). `Agent.exe load` then refused with "already in the world; nothing to load". A `resolve
+party` dump on the client explains it — the CSWParty live view after a rejoin:
+
+| slot | id | what it is on this client |
+|---|---|---|
+| member[0] | 0x80000129 | the host's mirrored companion — hp **1**, min-1-hp pinned and host-health mirrored by `PartyPresenceController` every ~150 ms (a client `down 0` on it is undone within 4 ms: `min1hp floor restored on 0x129 (hp 36)`) — can never read downed |
+| member[1] | 0x80000127 | a **stale id from the previous world** that now names an item (vtable 0x748CC0) |
+| member[2] | 0xFFFFFFFF | the PC's sentinel — **beyond `count 2`**, so a `i < count` walk never reaches it |
+
+On the fresh connect (W4) the same view was `count 1` = the PC, which is why §6.6's walk
+worked exactly once. The engine's own all-dead scan is the same `i < count` walk, so with the
+guard off a rejoined client would have concluded "not all dead" too (member[0] is at hp 1) —
+i.e. even the ENGINE cannot produce a client-side wipe vote from that view after a rejoin.
+
+**Fix (shipped, `DeathController.MaintainClientTempDeathGuard`).** Two changes:
+
+1. The client's vote is the PC alone: `downed` (the same `Odyssey.IsDowned(player)` reading the
+   controller already publishes) is the whole test. No party walk. The mirrored companion is
+   the host's creature wearing the host's health, so a client can never be the one to observe
+   it down, and the session's own vote (`DeathPump` allDown over the players' published
+   states) is where the two players' downs are combined anyway.
+2. The release no longer drops the guard and waits for the engine's scan (which, per the
+   table, would not fire): once `block.SuppressGameOver` clears while the PC is down, the
+   plugin calls `CClientExoApp::RunDeathSequence` (0x005EDC40, `this` = `*(*(0x7A39FC)+4)`,
+   zero args — the exact call at 0x4B6E90..99 the darkened scan would have made) itself,
+   latched once per wipe (`_clientDeathSequenceRun`, reset in `Invalidate()` and when the
+   player is back up). New log line: `death: every player is down and the session released
+   the game-over; running the engine's death sequence on this client` (or `… but the client
+   app pointer is 0 - no death sequence to run`). The guard stays up throughout — nothing in
+   the darkened function is needed any more.
+
+**W6 (fresh launch, host 45824 / client 23940) and W7 (fresh launch, host 50820 / client
+23780, after the item-cache fix below) — both clean:**
+
+| t (W6 / W7) | where | line |
+|---|---|---|
+| 19:40:24 / 19:56:21 | client plugin | `death: the local player is down` → `game-over suppressed; the session decides` |
+| 19:40:40 / 19:56:29 | host plugin + both agents | host down → `every player is down; releasing the game-over screen for everyone` on both agents in the same second |
+| 19:40:40.356 / 19:56:29.557 | client plugin | `death: every player is down and the session released the game-over; running the engine's death sequence on this client` — the client reaches the stock "Your entire party has been killed" screen |
+| 19:41:26 / 19:56:54 | rig | `Agent.exe load --load-save 1` on the host; `menu: the world is up and on screen` at 19:41:36.3 / 19:56:58.2 |
+| 19:41:32 / 19:56:57 | client agent | `the host is back in the world after the wipe - rejoining their world` → `session-save: starting rejoin (WipeRecovery)` → `rejoin: load request 2 sent to the plugin (module END_M01AA, carried character, mid-session)` → `rejoined 'END_M01AA'` — exactly one rejoin, this time through `WipeRecoveryRule` (W4 went through `HostReload`; either trigger, same outcome) |
+| 19:41:40.0 / 19:57:02.2 | client plugin | `menu: the world is up and on screen` |
+| 19:41:41 / 19:57:03 | client agent | pool firstSight `snap=1/2/1 … reconcile=0` against the host's re-published 3-key snapshot |
+| W7 19:57:46–48 | both | `items 80`: both pools = the save's three stacks; `Responding: True` on both; no grant traffic, no first-chance faults |
+
+**W6 exposed a different defect — the client published its OWN short sword as a script grant
+19 s after the rejoin** (`19:41:53 script item grant: 1 new item(s) … g_w_shortswrd01` → host
+`dialogue grant: received 1 item(s) from peer 2` → host pool 4 keys → client reconciled a
+second sword (0x137) into its pool next to its own 0x128). Root cause in
+`KotorGameBridge.ServiceItemTagCache`: the client's new player resolved at 19:41:36.5 (the
+WorldEpoch edge dropped the item caches) but the plugin acked the world on screen only at
+19:41:40.0, and a lookup in that window ran the one-time inline item sweep against a heap
+still being filled — it found the carried character's clothes (0x127) but not its sword
+(0x128). A sweep is trusted for `ItemTagRebuildMs` (15 s), so the grant pump's post-epoch
+baseline — correctly taken only after `IsWorldBetweenLives` cleared — was read through that
+incomplete view; the next background sweep (19:41:52) found the sword and the resref-count
+diff called it new. W4's `HostReload` path did not hit it only by timing. Fix: a sweep taken
+while `IsWorldBetweenLives` is PROVISIONAL (`ItemSweepProvenanceRule`, Memory) — it is still
+served (an empty inventory is the worse answer) but the first lookup in the settled world
+rebuilds inline before answering; reset with the other caches at the epoch edge. Pinned by
+`ItemSweepProvenanceRuleTests`. The dirty world from W6 was discarded (fresh launch for W7).
+
+**Status.** Step 5 is LIVE on both rejoin flavours (W4 HostReload on the §6.6 build; W6, W7
+WipeRecovery on the shipped build), 3/3 clean cycles since the vote fix, pools identical after
+W7. Still not run in real combat with a hostile visible at the wipe; the key stays default-OFF.

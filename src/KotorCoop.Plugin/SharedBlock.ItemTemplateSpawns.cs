@@ -80,6 +80,20 @@ internal partial struct SharedBlock
     public const uint ItemTemplateSpawnIsCheatBit = 1u << 0;
 
     /// <summary>
+    /// Plugin -&gt; agent, version 64 (2026-09-02). Bits 8..23 of the same flags dword carry the
+    /// stack count the <c>CreateItemOnObject</c> call asked for (its <c>nStackSize</c>, 1 when
+    /// omitted, clamped by the engine to the template's maximum) — 0 when the hook could not
+    /// read it. The id in the entry is the SURVIVING stack, not a temporary (see
+    /// <c>ItemTemplateSpawnHook.StackCount</c>'s own remarks for the merge order that makes it
+    /// so), so this is the only figure that says how much of that stack the call actually
+    /// contributed; the agent's ambient-noise suppression subtracts exactly this, never the
+    /// whole stack. docs/research/shared-inventory-v2.md §17.
+    /// </summary>
+    public const int ItemTemplateSpawnStackCountShift = 8;
+
+    public const uint ItemTemplateSpawnStackCountMask = 0xFFFFu;
+
+    /// <summary>
     /// Plugin -&gt; agent. A count of entries EVER written, never wrapped or reset — the slot
     /// for the Nth write (1-indexed) is <c>(N - 1) % ItemTemplateSpawnRingCapacity</c>.
     /// Written LAST, strictly after that write's own id+resref payload

@@ -2061,3 +2061,48 @@ The rejoin's fresh `CoopClient` reclaims the same peer id (stable `PeerIdentity`
 which is why every client instance now mints its party-pool/store intent serials from a
 random base (`IntentSerialBase`): the host's (peer, serial) dedup outlives the client's
 first lifetime, and serials restarting at 1 were acked as replays and never applied.
+
+## The in-world `HostReload` variant, run for the first time with the inventory channels on (2026-09-02)
+
+The host standing in END_M01AA, the client standing beside it, `loadgame 0` on the host
+(`blockpoke.ps1 … console 'loadgame 0'`). Three separate defects on the rejoin path, none of
+them in the pool pumps themselves (those are shared-inventory-v2.md §17):
+
+1. **The client froze on the game thread during its rejoin** — no crash, no fault, `Responding
+   = False` forever. `hangstack.ps1` put the main thread inside `CSWSArea::ComputeSafeLocation`
+   under `CreateObject`, called from the plugin's phantom spawner. The host's own-state read
+   during its reload had copied `(-4.15e34, 0, -1.06e37)` — three FINITE floats — out of the
+   creature the engine was tearing down; `PlayerState.IsPlausible` only checked for
+   NaN/infinity, so it went out on the wire, and the client's spawner handed it to the engine
+   as the phantom's position. The walkmesh search outward from that point never ends.
+   `Vector3f.IsWorldPlausible` (finite AND |coordinate| < 10,000; mirrored as
+   `Vec3.IsWorldPlausible` in the plugin) now gates the own-state read, the receive path, and
+   every plugin consumer that hands a position to the engine, including the spawner's own
+   offset-from-the-player fallback (`phantom spawn deferred: the player is not placed yet` —
+   the player creature exists before it is placed during a load).
+2. **The rejoin's reconcile add landed in the world being discarded** — one second after the
+   client's own load request, before the plugin had torn anything down, so neither the
+   `WorldLoadSerial` guard nor the engine-player-pointer guard fired ("the game never answered
+   that - is a world loaded?"). `PluginMenuLoader.TryReadLoadInFlight` (request serial ≠
+   applied serial; the plugin acks only once the new world is up and on screen) is the third
+   clause of `IsWorldBetweenLives`, and the whole window from the moment of asking counts.
+3. **The client rejoined twice.** A fresh `CoopClient` reports `WorldDigest.Empty` until the
+   host's first `WorldDigestPacket`; `SessionSaveWatch.ObserveRemoteVerdict` baselined its
+   `SerialEdgeWatch` on that 0, and the host's real serial arriving a tick later read as a
+   second load edge. Digest 0 is now "no reading, no edge" (`SaveIdentityWatch` already skipped
+   0 on its own; the serial legitimately starts at 0 on the host, so it could not).
+
+And the trigger itself: a reload of the STAGED save (or a Load of an older one) leaves the
+host's digest unchanged, so `SaveOrLoadClassifier` never turns the serial edge into a
+`HostReload` verdict — `host_load_readopt` had only ever been live-verified against loads
+that changed the digest. `HostWorldReplacedRule` (Session, pure) is the serial-only fallback:
+arms on the raw remote serial edge (`ObserveRemoteVerdict` now hands that out alongside the
+verdict), fires once the host's row stands in a named module, disarmed by `TriggerRejoin`
+whatever fired — one host load, one rejoin. Same lifecycle as `WipeRecoveryRule`.
+
+The host side had one of its own: `KotorGameBridge.TryResolve` ran on the pump thread and on
+the command thread (`SaveLoader.WaitFor(InWorld)`) at once and NREd reading a field the other
+call had just nulled (`pump tick failed: Object reference … at KotorGameBridge.TryResolve`);
+it now works on locals and publishes them.
+
+VERIFIED on the version-64 build: see shared-inventory-v2.md §17.9 for the cycle table.

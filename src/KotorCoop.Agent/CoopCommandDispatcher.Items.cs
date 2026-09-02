@@ -87,6 +87,16 @@ public sealed partial class CoopCommandDispatcher
         uint localPlayer = _kotor.Player?.ObjectId ?? 0;
         int limit = cap > 0 ? Math.Min(cap, items.Count) : Math.Min(DefaultItemListing, items.Count);
 
+        // The party pool's own id array, read straight off the repository: "yours" below is
+        // possessor-keyed and the pool's possessor follows the party leader, so pool
+        // MEMBERSHIP is reported separately (and the raw list first, so an id in the pool that
+        // no body below answers to is visible as such).
+        HashSet<uint>? poolIds = _kotor.TryReadPartyPoolItemIds();
+        Reply(poolIds is null
+            ? "items: party pool repository unreadable"
+            : $"items: party pool repository lists {poolIds.Count} id(s): "
+              + string.Join(", ", poolIds.OrderBy(id => id).Select(id => $"0x{id:X}")));
+
         for (int i = 0; i < limit; i++)
         {
             KotorGameBridge.ItemListing item = items[i];
@@ -96,6 +106,10 @@ public sealed partial class CoopCommandDispatcher
                 : item.Possessor == localPlayer
                     ? "yours"
                     : $"held by 0x{item.Possessor:X}";
+            if (poolIds is not null && poolIds.Contains(item.ObjectId))
+            {
+                where += " [pool]";
+            }
 
             // A body with no name at all is almost always one CreateItemOnFloor built from a
             // blueprint that is not in this install — it does not check the template load, so

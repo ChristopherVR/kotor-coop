@@ -2663,3 +2663,108 @@ still an obstacle, or the path stopped short` on both attempts (from `tp 47.4 11
 transition was ever started, so nothing about the fix was tested by it. Both instances stayed
 alive and fault-free throughout. The five warps above are the evidence; a real-door confirmation
 is still open.
+
+## Host in-world reload with both inventory channels on: 6/6 clean on block version 64 (2026-09-02)
+
+The first live run of `RejoinTrigger.HostReload` (the host reloads a save while standing in the
+world; the client follows) with `party_pool_sync=2` and `store_sync=2` on. The rounds leading up
+to it found seven distinct ways a reload fabricated pool content and one client hang; all are
+in docs/research/shared-inventory-v2.md §17 (the pool side) and docs/research/session-save.md's
+2026-09-02 entry (the rejoin side). This is the result on the fixed build.
+
+Rig: `pwsh tools/demo.ps1 -Save 1`, END_M01AA, host GOG install + client second copy, both
+agents with `party_pool_trace=1`; six `loadgame 0` on the host ~55 s apart, `spawnring.ps1` and
+`items 80` between cycles.
+
+| cycle | host reload | client | host spawn ring | host snapshot | client first sight | pool/grant traffic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 18:33:39 | one `HostReload` rejoin (18:33:44), `Responding: True` | none | withdrawn, republished `adrnaline003=1, medeqpmnt01=2, blstrrfl001=1` | `snap=1/2/1 reconcile=0` | none |
+| 2 | 18:34:35 | one (18:34:38) | `0x12B g_i_medeqpmnt01 cheat 0 count 1` — ambient merged into the loaded stack | `medeqpmnt01=2` | `snap=1/2/1 reconcile=0` | none |
+| 3 | 18:35:29 | one (18:35:32) | `0x12B g_i_medeqpmnt01 cheat 0 count 1` | `medeqpmnt01=2` | `snap=1/2/1 reconcile=0` | none |
+| 4 | 18:36:28 | one (18:36:32) | none | same three keys | `snap=1/2/1 reconcile=0` | none |
+| 5 | 18:37:25 | one (18:37:30) | none | same three keys | `snap=1/2/1 reconcile=0` | none |
+| 6 | 18:38:21 | one (18:38:25) | none | same three keys | `snap=1/2/1 reconcile=0` | none |
+
+Cycles 2 and 3 are the version-63 dirty case (shared-inventory-v2.md §17.7): the module's
+world-up script merged one ambient medpac into the loaded stack of two, and the hook reported
+the SURVIVING id. Version 63 baselined the whole stack, hid the key, and the client re-deposited
+its two; version 64 baselines the reported `count 1`, the snapshot stays at 2, nothing moves.
+
+Across the whole run, on both agents: 0 `added` / `removed` / `local add` / `script item grant`
+/ `dialogue grant: received` lines, 0 exceptions, 0 `pump tick failed`; the host's physical pool
+at the end is exactly the save's (`0x12A g_i_adrnaline003 ×1, 0x12B g_i_medeqpmnt01 ×2, 0x12C
+g_w_blstrrfl001 ×1`); the §16.6 connect-time first-sight publish did not occur on this launch.
+Plugin logs on both sides: only the benign `0x406D1388` thread-naming first-chance entries.
+
+Test suite: 3000/3000.
+
+Still open from the same recipe: the full wipe cycle (client `down` first, host `down 0` +
+`down`, game-over release, `WipeRecovery` rejoin) on this build, and recipe step 5
+(`client_temp_death_suppress=1` on the client) — death-handling.md §6.5.
+
+## Full wipe cycle with `client_temp_death_suppress=1`: 1/1 clean after the guard fix (2026-09-02)
+
+Same rig and build as the entry above (block version 64, both inventory channels on), client
+`coop.ini` `client_temp_death_suppress=1`. Recipe: client `down 0` + `down`, host `who`, host
+`down 0` + `down` back to back, wait for the release, wait for both `away`, `Agent.exe load
+--pid <host> --load-save 1`, wait for `rejoined`, settle 45 s, `items 80` on both.
+
+- Cycles W1–W3 never released: with the guard on, the client's `TempDeathUpdate` — where the
+  engine's all-dead scan asks for the game-over — was dark, so the client never raised
+  `GameOverSerial`, the agent never published `FlagPartyWiped`, and the host's own
+  `TempDeathUpdate` auto-revived the host's party 5 s after its companion went down. Fixed in
+  the plugin (`DeathController.MaintainClientTempDeathGuard` + `Odyssey.IsWholeLocalPartyDown`
+  on the CSWParty live view); mechanism and the failed party-table attempt in
+  death-handling.md §6.6.
+- W4 on the rebuilt plugin: client down 19:15:10 (`death: game-over suppressed; the session
+  decides` — the synthesised ask; host `who` → `[party down]`), host down 19:15:16, both agents
+  `every player is down; releasing the game-over screen for everyone` in the same second,
+  client plugin `letting TempDeathUpdate end the game on this client`, both `away` by 19:15:32,
+  host reload at 19:15:38, client `session-save: starting rejoin (HostReload)` → `rejoined
+  'END_M01AA'` 19:15:42 (one rejoin), host `withdrawing the published snapshot` → `host
+  snapshot 3 key(s)` 19:15:44, client firstSight `snap=1/2/1 reconcile=0`, both pools = the
+  save's three stacks, both `Responding: True`, 0 pool/grant lines, 0 faults.
+- Also on this build, with the guard on: the client stayed down 7+ min with no auto-revive and
+  was revived by the host walking in (`Lanik revived you (3.2 units …)`, `topped up to 12 hp`).
+
+The rejoin trigger was `HostReload` (`HostWorldReplacedRule`), not `WipeRecovery`; both feed the
+same rejoin and whichever fires first wins.
+
+## Full wipe cycle, continued: the CSWParty vote failed after a rejoin (W5), fixed, then 2/2 clean and one pool fabrication closed (2026-09-02, evening)
+
+Same recipe as the entry above. Full detail in death-handling.md §6.7.
+
+- W5 (second cycle on the same rig, i.e. after W4's rejoin): no release. The client's
+  `IsWholeLocalPartyDown` walk of the CSWParty view found `count 2` = the host's mirrored
+  companion at hp 1 (min-1-hp pinned, host-health mirrored) and a stale id from the previous
+  world (now an item), with the PC's sentinel at member[2] beyond the count — the walk never
+  reached the PC, the client never voted, the host auto-revived at +4 s, `Agent.exe load`
+  refused ("already in the world; nothing to load"). The view was `count 1` = the PC on the
+  fresh connect, which is why W4 passed once.
+- Fix: the client's vote is the PC alone (`Odyssey.IsDowned(player)`), and on release the
+  plugin calls `CClientExoApp::RunDeathSequence` (0x005EDC40) itself, latched once per wipe —
+  new line `death: every player is down and the session released the game-over; running the
+  engine's death sequence on this client`. `IsWholeLocalPartyDown`/`IsServerCreature` removed.
+- W6 (fresh launch, host 45824 / client 23940): client down 19:40:24, host down 19:40:40, both
+  agents released in the same second, client plugin ran the death sequence at 19:40:40.356,
+  both `away`, host reload 19:41:26, client `session-save: starting rejoin (WipeRecovery)` →
+  `rejoined` 19:41:34 (one rejoin), world up on the client 19:41:40.0, firstSight
+  `snap=1/2/1 reconcile=0`. BUT at 19:41:53 the client published `script item grant: …
+  g_w_shortswrd01` — its own carried sword — and the host pooled it (host pool 4 keys, client
+  reconciled a second sword 0x137 next to its own 0x128).
+- Root cause: the client's player resolved 3.5 s before the plugin acked the world on screen,
+  a lookup in that window ran the post-epoch inline item sweep against a heap still being
+  filled (clothes 0x127 found, sword 0x128 not), and that sweep was trusted for 15 s — long
+  enough for the settled grant baseline to be read through it; the next background sweep
+  found the sword and the diff called it new. Fix: `ItemSweepProvenanceRule` (Memory) — a
+  sweep taken while `IsWorldBetweenLives` is served but provisional, and the first lookup in
+  the settled world rebuilds inline first. `ItemSweepProvenanceRuleTests` pins it.
+- W7 (fresh launch on the fixed agent, host 50820 / client 23780): client down 19:56:21, host
+  down 19:56:29, released in the same second, client death sequence 19:56:29.557, host reload
+  19:56:54, `starting rejoin (WipeRecovery)` → `rejoined` 19:56:58, world up 19:57:02.2,
+  firstSight `snap=1/2/1 reconcile=0`, `items 80` at 19:57:46/48: both pools = the save's
+  three stacks (host 0x12A–0x12C, client 0x12C–0x12E), both `Responding: True`, 0 grant lines,
+  0 faults in either plugin log.
+
+Death pipeline with the guard on: 3/3 clean cycles since the vote fix (W4 on the previous
+build, W6, W7), across both rejoin triggers. Still not run with a hostile visible at the wipe.

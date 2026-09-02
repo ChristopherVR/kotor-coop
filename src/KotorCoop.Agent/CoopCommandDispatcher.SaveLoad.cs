@@ -86,6 +86,11 @@ public sealed partial class CoopCommandDispatcher
     /// after a session wipe, which neither classifier can see. Reset with the two above.</summary>
     private WipeRecoveryState _wipeRecoveryState = WipeRecoveryState.Initial;
 
+    /// <summary>See <see cref="HostWorldReplacedRule"/> — a host load whose serial edge never
+    /// found a digest change to correlate with (live 2026-09-02: an in-world reload of the
+    /// staged save). Reset with the three above, and disarmed by <see cref="TriggerRejoin"/>.</summary>
+    private HostWorldReplacedState _hostWorldReplacedState = HostWorldReplacedState.Initial;
+
     private Task? _rejoinTask;
 
     /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
@@ -138,6 +143,7 @@ public sealed partial class CoopCommandDispatcher
             _rejoinState = RejoinDecisionState.Idle;
             _mismatchRejoinState = MismatchRejoinWatchState.Initial;
             _wipeRecoveryState = WipeRecoveryState.Initial;
+            _hostWorldReplacedState = HostWorldReplacedState.Initial;
             return;
         }
 
@@ -187,7 +193,7 @@ public sealed partial class CoopCommandDispatcher
             SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);
             WorldDigest hostDigest = client.RemoteWorldDigest;
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
-                hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs);
+                hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs, out bool hostLoadEdge);
 
             // The wipe watch runs every tick regardless of the verdicts below: its latch must
             // be armed during the ~13 s both parties lie wiped before the game-over teardown,
@@ -208,6 +214,13 @@ public sealed partial class CoopCommandDispatcher
                 WipeRecoveryRule.Observe(_wipeRecoveryState, localState, hostState);
             _wipeRecoveryState = nextWipeState;
 
+            // The serial-only fallback for the host's load, same lifecycle as the wipe watch:
+            // arms on the raw edge, fires once the host stands in a named module. Runs every
+            // tick too, so an edge that lands mid-teardown is not lost behind another branch.
+            (bool hostWorldReplaced, HostWorldReplacedState nextReplacedState) =
+                HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge, hostState);
+            _hostWorldReplacedState = nextReplacedState;
+
             if (ownVerdict == SaveOrLoadVerdict.Load)
             {
                 Reply("you loaded a save - rejoining the host's world");
@@ -222,6 +235,11 @@ public sealed partial class CoopCommandDispatcher
             {
                 Reply("the host is back in the world after the wipe - rejoining their world");
                 TriggerRejoin(RejoinTrigger.WipeRecovery);
+            }
+            else if (hostWorldReplaced)
+            {
+                Reply("the host's world was reloaded - rejoining their world");
+                TriggerRejoin(RejoinTrigger.HostReload);
             }
             else
             {
@@ -393,6 +411,10 @@ public sealed partial class CoopCommandDispatcher
 
         (bool shouldStart, RejoinDecisionState next) = ClientLoadRejoinRule.Decide(_rejoinState, trigger, gateEnabled);
         _rejoinState = next;
+
+        // Whatever fired, the host's pending serial edge (if any) belongs to this same load:
+        // one host load, one rejoin. Disarmed even when the gate refuses, for the same reason.
+        _hostWorldReplacedState = HostWorldReplacedRule.Disarm();
 
         if (!shouldStart)
         {

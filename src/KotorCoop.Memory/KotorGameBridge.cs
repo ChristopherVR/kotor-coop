@@ -49,7 +49,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
     /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 3F 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 40 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead

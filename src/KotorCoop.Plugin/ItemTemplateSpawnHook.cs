@@ -44,8 +44,12 @@ namespace KotorCoop.Plugin;
 /// 0x0052F7CA's push into the VM's own result-push call, 0x5d10d0) — so whatever this hook
 /// captures is, by construction, exactly what the SCRIPT ITSELF believes it just created,
 /// including in the "the new item merged into an existing stack" case, since <c>eax</c> here
-/// is unconditionally the item this function's OWN <c>LoadFromTemplate</c> call produced,
-/// never whatever it may have merged into.</item>
+/// is unconditionally the item this function's OWN <c>LoadFromTemplate</c> call produced.
+/// ⚠ Live 2026-09-02 (docs/research/shared-inventory-v2.md §17): that item IS the surviving
+/// stack in a merge — the engine merges the existing stack's units into the new item, frees
+/// the existing one, and the new item then takes the freed (lowest free) id. So the id here
+/// is the stack the script's units ended up in, carrying the pre-existing units too; only
+/// <see cref="StackCount"/> says how many of them this call contributed.</item>
 /// </list>
 ///
 /// So <b>this function is the hook</b>, at the one point inside it where both facts — the
@@ -138,6 +142,30 @@ internal static unsafe class ItemTemplateSpawnHook
     private static readonly uint[] Serials = new uint[Capacity];
     private static readonly bool[] IsCheat = new bool[Capacity];
 
+    /// <summary>
+    /// The stack count the CALL asked for — <c>CreateItemOnObject</c>'s own <c>nStackSize</c>
+    /// argument (1 when the script omitted it), after the engine clamped it to the template's
+    /// maximum. Read from the caller's frame at the splice point: 0x0052F5C6 seeds
+    /// <c>[esp+4]</c> with 1, 0x0052F5DB pops the script's own value over it when the call
+    /// carried three arguments, <c>push esi</c> at 0x0052F617 moves it to <c>[esp+8]</c>, and
+    /// 0x0052F6CC writes the clamped value back to the same slot before anything is placed. No
+    /// later instruction on the way to 0x0052F748 writes <c>[esp+8]</c> (the same walk the
+    /// class remarks did for the resref slot), so it is still the requested count there.
+    ///
+    /// Why it matters (docs/research/shared-inventory-v2.md §17): the id this hook captures is
+    /// the SURVIVING stack, not a temporary. When the created item merges into an existing
+    /// same-key stack the engine merges the OLD stack into the new item, destroys the old one and
+    /// only then registers the new item — which is dealt the lowest free id, i.e. the very id the
+    /// old stack just gave up. Live, the party pool's medpac stack kept its id 0x12B through
+    /// every ambient +1 (the spawn ring shows 0x12B created non-cheat twice, and 0x12B is still
+    /// the stack). So "this id was created by an ambient script" says nothing about how MUCH of
+    /// the stack is ambient; the agent's suppression must subtract only what the call created,
+    /// or a save-loaded stack that took one ambient medpac vanishes from the sync view entirely
+    /// (host snapshot short by a key, the client re-deposits its own copy, physical duplication
+    /// the sync layer cannot see).
+    /// </summary>
+    private static readonly ushort[] StackCount = new ushort[Capacity];
+
     private static int _write;
     private static uint _sequence;
 
@@ -165,12 +193,15 @@ internal static unsafe class ItemTemplateSpawnHook
 
     /// <summary>Reads one captured entry by slot index (wrapped). A zero <paramref
     /// name="serial"/> means this slot has never been written.</summary>
-    public static void Read(int index, out uint objectId, out uint serial, out bool isCheat, Span<byte> resRef)
+    public static void Read(
+        int index, out uint objectId, out uint serial, out bool isCheat, out ushort stackCount,
+        Span<byte> resRef)
     {
         int i = ((index % Capacity) + Capacity) % Capacity;
         objectId = ObjectId[i];
         serial = Serials[i];
         isCheat = IsCheat[i];
+        stackCount = StackCount[i];
 
         for (int b = 0; b < ResRefBytes && b < resRef.Length; b++)
         {
@@ -227,6 +258,7 @@ internal static unsafe class ItemTemplateSpawnHook
             Serials[i] = 0;
             ObjectId[i] = 0;
             IsCheat[i] = false;
+            StackCount[i] = 0;
         }
 
         _write = 0;
@@ -275,23 +307,27 @@ internal static unsafe class ItemTemplateSpawnHook
 
         // Entered by JMP at the exact point the original mov/jmp pair would have run, so esp
         // is still the caller function's own esp and eax is still the item pointer the
-        // preceding (untouched) `mov eax,[esp+0x40]` loaded. Compute the resref address FIRST,
-        // from THIS esp, before pushad shifts it.
+        // preceding (untouched) `mov eax,[esp+0x40]` loaded. Compute the resref address and
+        // load the requested stack count FIRST, from THIS esp, before pushad shifts it.
+        // ecx is free here: the original code never reads it again between the splice and the
+        // function's tail, and pushad/popad round-trip it regardless.
         s[n++] = 0x8D; s[n++] = 0x54; s[n++] = 0x24; s[n++] = 0x1C; // lea edx, [esp+0x1C]
+        s[n++] = 0x8B; s[n++] = 0x4C; s[n++] = 0x24; s[n++] = 0x08; // mov ecx, [esp+0x08]
 
-        s[n++] = 0x60; // pushad — eax (item ptr) and edx (resref ptr) survive unchanged
+        s[n++] = 0x60; // pushad — eax (item ptr), edx (resref ptr), ecx (count) survive unchanged
 
-        // cdecl args, right to left: push edx (resref ptr) then eax (item ptr), so the
-        // callback's first parameter is the item pointer.
+        // cdecl args, right to left: push ecx (count), edx (resref ptr), then eax (item ptr),
+        // so the callback's first parameter is the item pointer.
+        s[n++] = 0x51; // push ecx
         s[n++] = 0x52; // push edx
         s[n++] = 0x50; // push eax
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<uint, uint, void>)&OnItemTemplateSpawn;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<uint, uint, uint, void>)&OnItemTemplateSpawn;
         s[n++] = 0xE8; // call OnItemTemplateSpawn
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
-        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x08; // add esp, 8 (cdecl cleanup)
+        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x0C; // add esp, 12 (cdecl cleanup)
         s[n++] = 0x61;                               // popad — restores eax for the relocated read below
 
         // The relocated `mov esi, [eax+0x14]` (Prologue's first 3 bytes) — position-independent,
@@ -333,7 +369,7 @@ internal static unsafe class ItemTemplateSpawnHook
     /// that can throw: this is the game's thread mid-dispatch of a VM command.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnItemTemplateSpawn(uint itemPtr, uint resrefPtr)
+    private static void OnItemTemplateSpawn(uint itemPtr, uint resrefPtr, uint requestedCount)
     {
         try
         {
@@ -362,6 +398,12 @@ internal static unsafe class ItemTemplateSpawnHook
 
             ObjectId[slot] = id;
             IsCheat[slot] = NextSpawnIsCheat;
+
+            // The engine clamps the request to the template's own max stack (0x0052F6CC) and
+            // refuses anything below 1 (0x0052F6D3) before it reaches here, so the value is
+            // already in a sane range; the narrowing to u16 only guards a frame this hook has
+            // misread, and 0 is the agent's own "unknown" marker.
+            StackCount[slot] = requestedCount is >= 1 and <= ushort.MaxValue ? (ushort)requestedCount : (ushort)0;
 
             // Serial last: the reader trusts a slot only once this says it is complete.
             Serials[slot] = ++_sequence;

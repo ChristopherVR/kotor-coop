@@ -19,8 +19,28 @@ public sealed partial class KotorGameBridge
     /// engine created it," since <see cref="DrainItemTemplateSpawns"/> runs unconditionally
     /// every tick (docs/research/item-identity.md §13.2) and this fact is therefore observed
     /// within one tick of the real creation, never meaningfully later.
+    ///
+    /// <paramref name="WorldSerial"/> is the plugin's <see cref="WorldLoadSerial"/> at the
+    /// moment of the drain — which world minted this id. Live 2026-09-02
+    /// (docs/research/shared-inventory-v2.md §17): END_M01AA's own ambient scripting deposits a
+    /// random consumable into the party pool at world-up, on either instance, and the plugin's
+    /// ring faithfully captured every one of them as non-cheat — but the drain had already run
+    /// by the time the NEW world's player resolved, and <c>TryReadLocalState</c>'s world reset
+    /// then wiped the fact along with the old world's. The scan that followed found the item
+    /// with no creation fact, counted it, and the pump published it as a deposit. The serial
+    /// lets the reset keep exactly the facts that belong to the world it is resetting INTO.
+    ///
+    /// <paramref name="StackCount"/> (version 64, same live round): how many units the
+    /// creation call itself asked for — 0 when unknown (an older seed path, or a hook that
+    /// could not read it). Live: the id the hook captures is the SURVIVING stack — the engine
+    /// merges the loaded stack into the new item, frees the old one, and the new item then
+    /// takes the freed id — so a "created" fact about id X does NOT mean all of X's units were
+    /// created by that call. Baselining the whole stack (what version 63 did) hid save-loaded
+    /// units too: loaded 2 + ambient 1 → baseline 3 → the key vanished from the host snapshot
+    /// → the client re-deposited its own 2 → real duplication the sync could not see.
     /// </summary>
-    private readonly record struct ItemCreationObservation(bool IsCheat, long ObservedAtMs);
+    private readonly record struct ItemCreationObservation(
+        bool IsCheat, long ObservedAtMs, uint WorldSerial, int StackCount);
 
     /// <summary>
     /// objectId -&gt; how/when this session learned it was created — fed by
@@ -45,6 +65,12 @@ public sealed partial class KotorGameBridge
     /// plugin block or a memory scan — the identical seam
     /// <see cref="RememberSpawnedItemResref"/> already grants for its own cache.</summary>
     internal void RememberItemCreation(uint objectId, bool isCheat, long nowMs)
+        => RememberItemCreation(objectId, isCheat, nowMs, WorldLoadSerial);
+
+    internal void RememberItemCreation(uint objectId, bool isCheat, long nowMs, uint worldSerial)
+        => RememberItemCreation(objectId, isCheat, nowMs, worldSerial, stackCount: 0);
+
+    internal void RememberItemCreation(uint objectId, bool isCheat, long nowMs, uint worldSerial, int stackCount)
     {
         if (objectId is 0 or ObjectInvalid)
         {
@@ -61,7 +87,8 @@ public sealed partial class KotorGameBridge
         // overwrites: this fact is about "the freshest thing this session has learned," not an
         // immutable blueprint identity, so the newest observation is always the right one to
         // keep.
-        _itemCreationObservations[objectId] = new ItemCreationObservation(isCheat, nowMs);
+        _itemCreationObservations[objectId] =
+            new ItemCreationObservation(isCheat, nowMs, worldSerial, Math.Max(0, stackCount));
 
         while (_itemCreationObservationOrder.Count > ItemCreationObservationCacheCapacity)
         {
@@ -75,16 +102,25 @@ public sealed partial class KotorGameBridge
     /// recency window. See <see cref="_itemCreationObservations"/>'s own remarks.
     /// </summary>
     internal bool TryGetItemCreationObservation(uint objectId, out bool isCheat, out long observedAtMs)
+        => TryGetItemCreationObservation(objectId, out isCheat, out observedAtMs, out _);
+
+    /// <summary><paramref name="stackCount"/>: how many units the creation call asked for, 0
+    /// when unknown — see <see cref="ItemCreationObservation"/>'s remarks for why this and not
+    /// the stack's size is what the ambient baseline may subtract.</summary>
+    internal bool TryGetItemCreationObservation(
+        uint objectId, out bool isCheat, out long observedAtMs, out int stackCount)
     {
         if (_itemCreationObservations.TryGetValue(objectId, out ItemCreationObservation observation))
         {
             isCheat = observation.IsCheat;
             observedAtMs = observation.ObservedAtMs;
+            stackCount = observation.StackCount;
             return true;
         }
 
         isCheat = false;
         observedAtMs = 0;
+        stackCount = 0;
         return false;
     }
 
@@ -92,6 +128,38 @@ public sealed partial class KotorGameBridge
     {
         _itemCreationObservations.Clear();
         _itemCreationObservationOrder.Clear();
+    }
+
+    /// <summary>
+    /// The world-reload flavour of <see cref="ClearItemCreationObservationCache"/>: drops every
+    /// creation fact EXCEPT those the drain tagged with <paramref name="keepWorldSerial"/> —
+    /// the world the reset is entering, whose ids were minted after the teardown that bumped
+    /// the serial and are therefore exactly the ids the next party-pool sweep will meet. See
+    /// <see cref="ItemCreationObservation"/>'s own remarks for the live round where the plain
+    /// clear threw away the one fact that would have kept an ambient deposit out of the sync.
+    /// A stale-world fact is still dropped: the new world reuses its ids.
+    /// </summary>
+    internal void ForgetItemCreationsFromOtherWorlds(uint keepWorldSerial)
+    {
+        // The order queue names each id once (RememberItemCreation only enqueues a NEW id), so
+        // walking it in order rebuilds the same FIFO minus the dropped entries.
+        List<(uint Id, ItemCreationObservation Observation)> kept = [];
+        foreach (uint objectId in _itemCreationObservationOrder)
+        {
+            if (_itemCreationObservations.TryGetValue(objectId, out ItemCreationObservation observation)
+                && observation.WorldSerial == keepWorldSerial)
+            {
+                kept.Add((objectId, observation));
+            }
+        }
+
+        _itemCreationObservations.Clear();
+        _itemCreationObservationOrder.Clear();
+        foreach ((uint objectId, ItemCreationObservation observation) in kept)
+        {
+            _itemCreationObservations[objectId] = observation;
+            _itemCreationObservationOrder.Enqueue(objectId);
+        }
     }
     /// <summary>
     /// The highest ring cursor value this session has already consumed. 0 before the first
@@ -150,6 +218,11 @@ public sealed partial class KotorGameBridge
             LastItemTemplateSpawnLostCount += range.Lost;
         }
 
+        // Which world minted the ids drained this pass — read once per pass, not per entry.
+        // The serial is bumped at teardown, so an id created for the world being loaded is
+        // already tagged with that world's serial however early in the load it was minted.
+        uint worldSerial = range.Count > 0 ? WorldLoadSerial : 0;
+
         for (int i = 0; i < range.Count; i++)
         {
             uint cursorValue = range.StartCursor + (uint)i;
@@ -170,9 +243,15 @@ public sealed partial class KotorGameBridge
             // this agent used to attach already guarantees the plugin's block is this exact
             // version — see PluginSignature's own remarks — so a stride/offset mismatch against
             // an older plugin cannot happen here.)
-            bool isCheat = _memory.TryReadUInt32(entry + BlockItemTemplateSpawnIsCheatOffset, out uint rawFlags)
-                && (rawFlags & BlockItemTemplateSpawnIsCheatBit) != 0;
-            RememberItemCreation(objectId, isCheat, Environment.TickCount64);
+            bool flagsRead = _memory.TryReadUInt32(entry + BlockItemTemplateSpawnIsCheatOffset, out uint rawFlags);
+            bool isCheat = flagsRead && (rawFlags & BlockItemTemplateSpawnIsCheatBit) != 0;
+            // Version 64: the units this call contributed to the (surviving) stack it names.
+            // 0 = unknown, which the party-pool baseline treats as "the whole stack" — the
+            // pre-64 behaviour, kept only for that degenerate case.
+            int createdCount = flagsRead
+                ? (int)((rawFlags >> BlockItemTemplateSpawnStackCountShift) & BlockItemTemplateSpawnStackCountMask)
+                : 0;
+            RememberItemCreation(objectId, isCheat, Environment.TickCount64, worldSerial, createdCount);
 
             if (!_memory.TryReadAsciiString(
                     entry + BlockItemTemplateSpawnResrefOffset, BlockItemTemplateSpawnResrefLength,

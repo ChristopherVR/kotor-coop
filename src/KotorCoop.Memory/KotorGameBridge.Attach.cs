@@ -564,9 +564,17 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        _player = creatures.FirstOrDefault(c => c.IsPlayer);
+        // ⚠ Two threads resolve at once during a mid-session load: the pump re-resolves on its
+        // first failed read of the torn-down world while SaveLoader's WaitFor(InWorld) polls
+        // this from the command thread. Every field write below is an atomic reference swap,
+        // but reading a FIELD back afterwards (for the diagnostic) can see the other call's
+        // "no creatures yet" null — live 2026-09-02, the host's own in-world `loadgame 0`:
+        // `pump tick failed: Object reference ... at KotorGameBridge.TryResolve`. Work on
+        // locals and publish them; never read the fields back.
+        CreatureRef? player = creatures.FirstOrDefault(c => c.IsPlayer);
+        _player = player;
 
-        if (_player is null)
+        if (player is null)
         {
             _phantoms = [];
             diagnostic = $"found {creatures.Count} creatures but none flagged is_pc";
@@ -582,26 +590,28 @@ public sealed partial class KotorGameBridge
         // player, every frame, in the same instance.
         HashSet<uint> partyRoster = ReadPartyRosterIds();
 
-        _phantoms =
+        List<CreatureRef> phantoms =
         [
             .. creatures
                 .Where(c => !PartyCensusRule.IsOwnParty(c.ObjectId, c.IsPlayer, c.IsPartyMember, partyRoster))
                 .OrderBy(c => c.ObjectId)
                 .Take(_maxPhantoms),
         ];
+        _phantoms = phantoms;
 
         _consecutiveFailures = 0;
 
         TryFindPlugin();
         TryResolveGlobals();
 
-        string mode = _pluginBlock != 0
-            ? $"PLUGIN mode: block at 0x{_pluginBlock:X}, the plugin will spawn and walk real creatures"
-            : $"external mode: claimed {_phantoms.Count} existing creature(s) as phantom bodies: "
-                + string.Join(", ", _phantoms.Select(p => p.Tag.Length > 0 ? p.Tag : $"0x{p.ObjectId:X}"));
+        nint pluginBlock = _pluginBlock;
+        string mode = pluginBlock != 0
+            ? $"PLUGIN mode: block at 0x{pluginBlock:X}, the plugin will spawn and walk real creatures"
+            : $"external mode: claimed {phantoms.Count} existing creature(s) as phantom bodies: "
+                + string.Join(", ", phantoms.Select(p => p.Tag.Length > 0 ? p.Tag : $"0x{p.ObjectId:X}"));
 
         diagnostic =
-            $"player at 0x{_player.Address:X} (id 0x{_player.ObjectId:X}); "
+            $"player at 0x{player.Address:X} (id 0x{player.ObjectId:X}); "
             + $"{creatures.Count} creatures; {mode}";
         return true;
     }

@@ -32,6 +32,24 @@ public readonly record struct Vector3f(float X, float Y, float Z)
 
     public bool IsFinite => float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z);
 
+    /// <summary>The largest |coordinate| any KOTOR area reaches, with room to spare: the biggest
+    /// stock modules span a few hundred units. Mirrors the plugin's Vec3.MaxWorldCoordinate.</summary>
+    public const float MaxWorldCoordinate = 10_000f;
+
+    /// <summary>
+    /// Finite AND inside any conceivable area. Finite alone let a real hang through: live
+    /// 2026-09-02 (docs/research/session-save.md), the host's own-state read during its
+    /// in-world reload copied (-4.15e34, 0, -1.06e37) out of the creature the engine was
+    /// tearing down, published it, and the rejoining client's phantom spawner handed it to
+    /// the engine, which searched for a walkmesh point near it forever. The own-state read
+    /// and the receive path both gate on this, so such a frame is dropped at BOTH ends.
+    /// </summary>
+    public bool IsWorldPlausible =>
+        IsFinite
+        && MathF.Abs(X) < MaxWorldCoordinate
+        && MathF.Abs(Y) < MaxWorldCoordinate
+        && MathF.Abs(Z) < MaxWorldCoordinate;
+
     public override string ToString() => $"({X:F2}, {Y:F2}, {Z:F2})";
 }
 

@@ -3279,3 +3279,15 @@ own suppression window (1000ms, decided once per item id) can itself be fooled b
 `pooladd` landing inside that same window as ambient noise for the identical resref — the exact
 collision this round's recipe (`pooladd g_i_medeqpmnt01`, a resref this save's own `END_M01AA`
 content also apparently spawns) would produce if so.
+
+## 28. 2026-09-02 — pointer: §20's ambient suppression baselines the CREATED COUNT now, not the stack
+
+§27's "concrete next step" is answered in `docs/research/shared-inventory-v2.md` §17.7: the
+`END_M01AA` content IS a contributing factor, and the way §20's per-id decision interacts with
+it is exactly the mechanism §27 guessed at, inverted. The id the ring reports for an ambient
+`CreateItemOnObject` is the SURVIVING stack the new item merged into — the engine merges the
+loaded stack into the new item, frees the loaded one, and the new item takes its id — so a
+save-loaded stack topped up by one ambient unit was baselined whole and vanished from the sync.
+Block version 64 carries each creation's own `nStackSize` in the ring entry's flags dword
+(bits 8..23) and the baseline subtracts `min(created, stack)`. §20's decision rule (non-cheat,
+within the window, or during the world's opening) is unchanged; only the AMOUNT hidden is.
