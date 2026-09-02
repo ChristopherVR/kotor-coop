@@ -1206,7 +1206,7 @@ engaged.
   "second player can pull aggro" behaviour co-op needs, achieved without the engine's own AI
   cooperating.
 
-### 11.3 What was NOT measured: the host walking away
+### 11.3 What was NOT measured (at the time): the host walking away — *answered in §11.6*
 
 The follow-up (host `tp 130 60 2.25` at 04:40:3x with the client still attacking) was meant
 to show whether the retarget sticks when the host stops hitting. It is inconclusive: the
@@ -1234,3 +1234,24 @@ with exactly one remote peer (3+ peers → inert, §9.2), never a plot creature,
 downed or absent phantom. `profiles/coop.ini.example` now ships `threat_retarget=1`; the code
 fallback when the key is absent stays OFF, same as `liveness_sync`. §10.4's "stays OFF"
 is superseded by this section.
+
+### 11.6 (04:48–04:51) The host-away rerun: with the host out of reach the engine's own AI picks the client and STAYS — no order needed
+
+§11.3's recipe, run exactly: host `tp 160 88 2.25`, `spawncreature tar10_vulkpoo002 1` → `0x144`
+(client stand-in `0x13C`), `applyeffect temporaryhitpoints 0x144 300000 400`, host `tp 130 60
+2.25` at ~04:48:34 (the Vulkar had already landed three hits on the host's PC, 04:48:27–33, while
+the host stood next to it), client `attack 0x7FFFFFFF 0x13C` at 04:48:41.
+
+- Host log after the `tp`: ZERO further `attacker=0x144` ground-truth lines, and ZERO
+  `threat:`/`attacktarget diag` lines for `0x144` at all — the rule never had to fire.
+- Client log: `combat: took N damage from a hit on our phantom (attacker 0x144)` from 04:48:48
+  on, then (once that budgeted line ran out) the `combat ground-truth: local PC took N damage,
+  attacker=0x144 (forwarded-damage applier ...)` lines kept coming every ~3 s — 28 hits by
+  04:50:54, uninterrupted.
+- `blockpoke.ps1 threat`: `creature 0x144 currentTarget 0x139 (threat 22.29) topAttacker 0x139`.
+
+So the three cases are now all measured: the client attacks first → the engine picks the client
+(§10.3); the host is engaged and stays in melee → the engine keeps pulling back to the host PC
+and this channel's re-issued order splits the fight (§11.1); the host disengages → the engine's
+own AI moves to the client and stays there without help. `threat_retarget` only ever acts in the
+middle case, which is exactly the case it was built for.

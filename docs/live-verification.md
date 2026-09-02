@@ -3425,6 +3425,7 @@ phantom). Every order landed (`attacktarget diag: 0x141 round+0x958 0->1`) and e
 undone by the host PC's next landed hit within ~3–10 s, so the 4 s cooldown turns it into an
 alternation — the enemy splits between the two players rather than following one. 0 faults.
 `profiles/coop.ini.example` now ships `threat_retarget=1`; full timeline and the verdict in
-docs/research/peer-damage-ledger.md §11. Not measured (temp-HP expiry killed the creature
-mid-experiment): whether the retarget sticks once the host stops hitting — §11.3 has the rerun
-recipe.
+docs/research/peer-damage-ledger.md §11. Rerun 04:48–04:51 with the host `tp`'d away
+first (§11.6): the engine's own AI went to the client and stayed — 28 phantom hits in two
+minutes, none on the host PC, no `threat:` order needed — so the channel acts only while both
+players are in the same melee.
