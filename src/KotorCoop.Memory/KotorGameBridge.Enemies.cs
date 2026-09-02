@@ -292,6 +292,44 @@ public sealed partial class KotorGameBridge
         return ids;
     }
 
+    private const int BlockMaterialisedOwnerIds = 0x4B00;
+    private const int BlockMaterialisedOwnerIdCapacity = BlockEnemyCapacity;
+
+    /// <summary>
+    /// Version 65: the owner ids <c>MaterialisedEnemies</c> currently has a LOCAL STAND-IN body
+    /// for, straight off the plugin's own table — so a materialised-loot give can be filtered
+    /// BEFORE it costs a round trip on the single-slot giveloot cheat channel, instead of only
+    /// discovering the refusal after spending it (<c>Session.MaterialisedLootFilterRule</c>).
+    ///
+    /// Null means UNKNOWN (no plugin attached). ⚠ That is the ONLY case that means "don't
+    /// know": <c>PluginSignature</c> embeds the block version byte-exact in the scan pattern
+    /// (see that field's own remarks), so a version-mismatched agent/plugin pair never finds
+    /// the block at all rather than reading it half-right — there is no partial-version case
+    /// to worry about here. Callers MUST treat null as "send it anyway"; only a real, if
+    /// possibly empty, set licenses filtering by membership. See
+    /// <c>SharedBlock.OffsetMaterialisedOwnerIds</c> and
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
+    /// </summary>
+    public IReadOnlySet<uint>? ReadMaterialisedOwnerIds()
+    {
+        if (_pluginBlock == 0)
+        {
+            return null;
+        }
+
+        HashSet<uint> ids = new(BlockMaterialisedOwnerIdCapacity);
+        for (int i = 0; i < BlockMaterialisedOwnerIdCapacity; i++)
+        {
+            if (_memory.TryReadUInt32(_pluginBlock + BlockMaterialisedOwnerIds + (i * 4), out uint id)
+                && id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
     /// <summary>
     /// What this instance has DEALT to each enemy, straight out of the plugin's ledger.
     ///

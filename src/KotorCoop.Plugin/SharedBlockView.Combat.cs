@@ -65,6 +65,19 @@ internal sealed unsafe partial class SharedBlockView
     public uint GetLocalCombatExcludedId(int slot) =>
         *U32(SharedBlock.OffsetLocalCombatExcludedIds + (Clamp(slot, SharedBlock.LocalCombatSlotCapacity) * 4));
 
+    /// <summary>Plugin -&gt; agent (version 65). Publishes every owner id
+    /// <c>MaterialisedEnemies</c> currently has a local stand-in body for, one dword per slot —
+    /// see <see cref="SharedBlock.OffsetMaterialisedOwnerIds"/>. <paramref name="ownerIds"/> is
+    /// <c>MaterialisedEnemies.OwnerIdsSnapshot</c>, copied verbatim (already 0 = unused per
+    /// slot, so no packing or count field is needed).</summary>
+    public void SetMaterialisedOwnerIds(ReadOnlySpan<uint> ownerIds)
+    {
+        for (int i = 0; i < SharedBlock.EnemyCapacity; i++)
+        {
+            *U32(SharedBlock.OffsetMaterialisedOwnerIds + (i * 4)) = i < ownerIds.Length ? ownerIds[i] : 0;
+        }
+    }
+
     public EnemyPresenceView GetEnemyPresence(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetEnemyPresenceSlots

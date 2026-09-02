@@ -122,7 +122,15 @@ internal partial struct SharedBlock
     ///                   breakdown), relocated here at merge time because 63 had already
     ///                   claimed 0x4A00 on its branch.
     /// </summary>
-    public const int TotalSize = 0x4B00;
+    /// <summary>
+    /// Grown from 0x4B00 to 0x4C00 for the materialised-owner-id table (version 65,
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section): the tail past the
+    /// per-attacker phantom-damage IN table (0x4AC0) leaves only 0x40 free bytes before
+    /// 0x4B00 — not enough for the EnemyCapacity-wide (32 x 4 = 0x80 byte) array
+    /// <see cref="OffsetMaterialisedOwnerIds"/> needs — so this region starts cleanly at the
+    /// old boundary, the same choice every earlier growth in this file made.
+    /// </summary>
+    public const int TotalSize = 0x4C00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -205,6 +213,11 @@ internal partial struct SharedBlock
     /// — see SharedBlock.Combat.cs and docs/research/peer-damage-ledger.md §7. Version 63
     /// (same day) added <see cref="OffsetCompanionDamageSlots"/>/<see cref="OffsetCompanionDamageOwedSlots"/>
     /// — see SharedBlock.CompanionDamage.cs and docs/research/companion-state-sync.md §13.
+    /// Version 64 (same day) widened the item-template-spawn ring's flags dword with the
+    /// per-entry stack count — see SharedBlock.ItemTemplateSpawns.cs and
+    /// docs/research/shared-inventory-v2.md §17. Version 65 (same day) added
+    /// <see cref="OffsetMaterialisedOwnerIds"/> — see SharedBlock.Combat.cs and
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

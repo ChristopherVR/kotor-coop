@@ -441,3 +441,122 @@ materialisation needs a creature that exists in exactly one engine; the natural 
 encounter spawn, and the one dev verb that creates a runtime body (`recruit`) creates a PARTY
 body, which §7.1 now excludes by construction. The next session that sees a real encounter spawn
 gets the answer for free from the two log lines above.
+
+## 8. Filtering a doomed give BEFORE it spends the round trip (2026-09-02)
+
+### The noise measured live
+
+A client rejoining after a wipe reload, 23:03:05: the host published a `MaterialisedLootPacket`
+for a corpse's items the usual way (§6), and the client's `LootPump.PumpMaterialisedLoot` queued
+one give per item unconditionally, same as every session before this one. But this client held
+the REAL creature under that owner id — not a materialised stand-in — the overwhelmingly common
+case §6 already names: an ordinary GIT-identical enemy that had already rolled its own equivalent
+loot independently when it died locally. Six items went through
+`CoopCommandDispatcher.DrainAutomaticLoot` and the single-slot giveloot cheat channel in one
+second, each one:
+
+- occupying the ONE channel a human's typed `giveloot` shares, for a request that could never
+  succeed;
+- costing two log lines (agent: `materialised loot: submitting '<resref>' for target 0x<id>
+  through the giveloot channel`; plugin: `cheat: 0x<id> is not a materialised stand-in here -
+  nothing to give (status -3)`) for a refusal the client could have known about without asking.
+
+Nothing was WRONG — `CheatController.GiveLoot`'s refusal is exactly correct, and it is the
+backstop this whole design still leans on (below). The bug was spending a round trip to learn
+something the client's own plugin already knew.
+
+### The question: does the agent already know which ids are materialised locally?
+
+No — not before this pass. `MaterialisedEnemies.ToLocal`/`.OwnerIds` is plugin-side, static,
+in-process state; nothing published it across the block. The other bounded id tables the agent
+already reads (`SharedBlock.OffsetLocalCombatExcludedIds`, `SharedBlock.OffsetDamageDealtSlots`)
+are a close structural match — a fixed-capacity array, written by the plugin every pass, read by
+the agent through `SharedBlockView`/`KotorGameBridge` — but none of them carries owner ids the
+way `MaterialisedEnemies.OwnerIds` already does. So option (b) from the task: publish one.
+
+### The design chosen
+
+**SharedBlock version 65** (2026-09-02, TotalSize grown 0x4B00 → 0x4C00):
+`SharedBlock.OffsetMaterialisedOwnerIds` (0x4B00..0x4B80) is a fixed `EnemyCapacity`-wide (32)
+array of owner ids, 0 marking an unused slot — the SAME shape
+`SharedBlock.OffsetLocalCombatExcludedIds` already uses, chosen deliberately because
+`MaterialisedEnemies.OwnerIds` already IS this table, unpacked, in place: publishing it is a
+straight `ReadOnlySpan<uint>` copy (`MaterialisedEnemies.OwnerIdsSnapshot`), not a rebuild, and
+needs no separate count field for the same reason the local-combat table does not. Written by
+`EnemyPresenceController.PublishMaterialisedOwnerIds`, called alongside every
+`MaterialisedEnemies.Sweep` (all three call sites in `EnemyPresenceController.OnFrame`) — Sweep
+is what actually changes the table, so publishing at the same cadence keeps the two in lockstep
+with no separate schedule to reason about, and no new PluginSignature byte pattern to keep in
+sync (the growth sits well past the signature's first 16 bytes).
+
+Both the block version scalar (`PluginHost.cs`'s `_block->Version`) and its byte-exact twin
+inside `KotorGameBridge.PluginSignature` (byte 8: `40` → `41`) moved together, per the existing
+"one number in two files" guard — `ItemHarnessTests.TheBlockVersionIsTheSameNumberInBothHalves`
+and `TransitionMovieTests.TheBlockVersionMovedInBothHalves` both still pass, the latter now
+pinned at 65.
+
+**Agent side:** `IEnemyBridge.ReadMaterialisedOwnerIds()` (default `null`), implemented by
+`KotorGameBridge.ReadMaterialisedOwnerIds` — reads the table, returns a `HashSet<uint>`, or
+`null` when `_pluginBlock == 0`. Null is deliberately the ONLY case meaning "don't know": because
+`PluginSignature` embeds the block version byte-exact in the scan pattern (see that field's own
+remarks), a version-mismatched agent/plugin pair never finds the block at all rather than reading
+it half-right, so there is no partial/stale-version case to hedge against separately.
+
+**The filter itself: `KotorCoop.Session.MaterialisedLootFilterRule`**, a pure, stateless
+`static bool ShouldQueue(uint ownerEnemyId, IReadOnlySet<uint>? materialisedOwnerIds)` —
+`materialisedOwnerIds is null || materialisedOwnerIds.Contains(ownerEnemyId)`. Tri-state by
+design, matching the task's own explicit requirement: a null set (unsure — no plugin attached)
+always sends, trusting the plugin's own refusal as the backstop; a real set, however it reads —
+including a genuinely empty one — is trusted by membership. `LootPump.PumpMaterialisedLoot` reads
+the snapshot ONCE per pump (not once per packet, not once per item — a burst of several deaths in
+one tick shares one plugin-block read, the same reasoning `ReadPossessedItems`'s own "one sweep
+per tick" doc already gives) and applies the rule per PACKET, since every item in a
+`MaterialisedLootPacket` shares one `OwnerEnemyId`. A filtered packet costs exactly ONE log line
+naming the owner id and the item count, not one per item — the whole point was to stop the
+per-item noise, and a per-item log would just move it from the plugin's log to the agent's.
+
+**The dialogue-grant half of the same queue is never filtered.** `PumpMaterialisedLoot` enqueues
+two different things through the same `_pendingLoot` queue (see that field's own doc): a
+materialised-loot give (owner id, needs `MaterialisedEnemies.ToLocal` translation) and a
+dialogue-grant give (`AgentWellKnownIds.LocalPlayerObjectId` sentinel, targets the local PC
+directly, needs no translation at all). The filter is applied ONLY inside the first loop, over
+`session.DrainMaterialisedLoot()`'s packets — the second loop, over
+`session.DrainDialogueGrants()`, never calls `MaterialisedLootFilterRule` at all, by construction
+(no code path connects them), so a dialogue grant is unaffected by whatever the materialised-id
+table currently holds, including an empty one. `MaterialisedLootQueueTests
+.ADialogueGrantIsNeverFilteredEvenAgainstAnEmptyMaterialisedTable` pins this directly.
+
+**Host side: unchanged, by construction.** `ICoopSession.DrainMaterialisedLoot()` defaults to
+`[]`, and `CoopHost` never overrides it — only `CoopClient` does (§6's own wire section) — so the
+loop this filter sits inside runs zero times on a host regardless of what
+`ReadMaterialisedOwnerIds()` would answer there. Nothing about this pass touches the publish side
+in `CoopAgent.DetectMaterialisedDeaths`.
+
+### On the "materialise a moment after the packet arrives" race
+
+Filtering earlier (at enqueue time) than the plugin's own check (at cheat-submission time, one or
+more single-slot-channel turns later) narrows — but does not add — a pre-existing race: an owner
+id whose stand-in is still mid-spawn when its loot packet is drained here reads as unmapped now,
+whereas today's un-filtered code could still succeed later if materialisation finished before the
+queued cheat was actually submitted. Judged acceptable for three reasons: (1) the measured failure
+mode this pass fixes — a client that never had, and never will have, a stand-in for that id
+(§6's ordinary case, and literally the rejoin scenario measured above) — is the overwhelming
+majority of refusals, not the rare in-flight-materialisation case; (2) `TryMaterialise` runs every
+engine frame while the combat pump that drives `PumpMaterialisedLoot` is throttled to a slower
+interval, so a stand-in already in flight when the corpse died (the ordinary case — the enemy
+was visible and fought before it died, which is what let this client's own census see it) is
+very likely to have finished mapping several frames before the death is even detected, captured,
+transmitted and drained; and (3) the SAME race already existed at the plugin's own `ToLocal`
+lookup before this pass — this only moves the decision point earlier by roughly one combat-pump
+tick, it does not create a new failure mode. **NEEDS-LIVE**: no live capture yet confirms the
+false-positive rate this trade costs is actually negligible in practice; the fix as measured only
+covers the confirmed-forever-unmapped case above.
+
+### Tests
+
+`MaterialisedLootFilterRuleTests` (the pure tri-state contract: null unsure/always-sends, empty
+set filters everything, a real set filters by membership) and five cases added to
+`MaterialisedLootQueueTests` (no known table still queues; a known empty table queues nothing;
+a mapped id is still queued alongside a filtered one in the same pump; one log line per filtered
+owner regardless of item count; a dialogue grant is never filtered). `dotnet test
+tests/KotorCoop.Tests --filter "FullyQualifiedName~Loot"` — 82 passed.

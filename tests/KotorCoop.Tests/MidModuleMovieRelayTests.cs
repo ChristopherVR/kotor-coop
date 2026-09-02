@@ -211,8 +211,9 @@ public class MidModuleMovieRelayTests
         // for that ring's own per-entry cheat flag (version 59, docs/research/
         // party-pool-sync.md §20), then to 0x4B00 in one pass by the 2026-09-02 combat wave:
         // N-slot local_combat's excluded-id array (61, 0x4800), per-attacker damage attribution
-        // (62, 0x4900) and the companion-damage channel (63, 0x4A00) — see SharedBlock.TotalSize.
-        Assert.Equal(0x4B00, SharedBlock.TotalSize);
+        // (62, 0x4900) and the companion-damage channel (63, 0x4A00), then to 0x4C00 the same
+        // day for the materialised-owner-id table (65, 0x4B00) — see SharedBlock.TotalSize.
+        Assert.Equal(0x4C00, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

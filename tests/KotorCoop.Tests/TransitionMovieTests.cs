@@ -241,9 +241,12 @@ public class TransitionMovieTests
         // combat wave (block grown to 0x4B00: N-slot local_combat at 0x4800, per-attacker
         // damage attribution at 0x4900, the companion-damage channel at 0x4A00), 64 the
         // item-template-spawn ring's per-entry created stack count (flags bits 8..23, no
-        // layout change, docs/research/shared-inventory-v2.md §17.7) — see the
-        // changelog comments beside `_block->Version` and `PluginSignature` for the full history.
-        Assert.Equal(64, int.Parse(version.Groups[1].Value));
+        // layout change, docs/research/shared-inventory-v2.md §17.7), 65 the same day's
+        // materialised-owner-id table (block grown to 0x4C00, SharedBlock.
+        // OffsetMaterialisedOwnerIds, docs/research/enemy-materialisation.md's 2026-09-02
+        // section) — see the changelog comments beside `_block->Version` and `PluginSignature`
+        // for the full history.
+        Assert.Equal(65, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

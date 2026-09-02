@@ -1,6 +1,7 @@
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
+using KotorCoop.Session.Pumps;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -27,6 +28,12 @@ public class MaterialisedLootQueueTests
 
         public bool CanWriteRemotes => true;
 
+        /// <summary>What <see cref="ReadMaterialisedOwnerIds"/> answers - null (the interface's
+        /// own default, and every other test file in this suite that does not touch it) unless
+        /// a test sets one, so the filtering tests below can drive both the "unsure" and the
+        /// "known" halves of MaterialisedLootFilterRule's contract without a real plugin.</summary>
+        public IReadOnlySet<uint>? MaterialisedOwnerIds { get; set; }
+
         public bool TryReadLocalState(out PlayerState state)
         {
             state = Local;
@@ -34,6 +41,8 @@ public class MaterialisedLootQueueTests
         }
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
+
+        public IReadOnlySet<uint>? ReadMaterialisedOwnerIds() => MaterialisedOwnerIds;
 
         public void Dispose()
         {
@@ -50,6 +59,18 @@ public class MaterialisedLootQueueTests
         {
             List<MaterialisedLootPacket> ready = [.. Incoming];
             Incoming.Clear();
+            return ready;
+        }
+
+        /// <summary>Dialogue-grant packets waiting to be handed to the agent - rides the SAME
+        /// pending-give queue as materialised loot, but targets the local PC directly and must
+        /// never be filtered by MaterialisedLootFilterRule (see that type's own doc).</summary>
+        public List<DialogueGrantPacket> IncomingDialogueGrants { get; } = [];
+
+        public IReadOnlyList<DialogueGrantPacket> DrainDialogueGrants()
+        {
+            List<DialogueGrantPacket> ready = [.. IncomingDialogueGrants];
+            IncomingDialogueGrants.Clear();
             return ready;
         }
 
@@ -139,6 +160,12 @@ public class MaterialisedLootQueueTests
 
     private static (CoopAgent Agent, StubSession Session) Build()
     {
+        (CoopAgent agent, _, StubSession session) = BuildWithBridge();
+        return (agent, session);
+    }
+
+    private static (CoopAgent Agent, MinimalBridge Bridge, StubSession Session) BuildWithBridge()
+    {
         MinimalBridge bridge = new();
         StubSession session = new();
 
@@ -147,7 +174,7 @@ public class MaterialisedLootQueueTests
         // not need to wait out a real wall clock.
         CoopAgent agent = new(bridge, session, new AgentSettings { CombatPumpIntervalMs = 0 });
 
-        return (agent, session);
+        return (agent, bridge, session);
     }
 
     private static MaterialisedLootItem Item(string resref, uint stack = 1) =>
@@ -263,6 +290,101 @@ public class MaterialisedLootQueueTests
         Assert.Equal(50, give.Item.Identity.MaxCharges);
         Assert.Equal(0x5u, give.Item.Identity.Upgrades);
         Assert.Equal(0x3, give.Item.Identity.Flags);
+    }
+
+    // ---- 2026-09-02: filter a give whose owner id has no local materialised stand-in, ----
+    // ---- BEFORE it costs a giveloot round trip (docs/research/enemy-materialisation.md) --
+
+    /// <summary>The default/pre-existing behaviour, pinned: a bridge that does not answer
+    /// <c>ReadMaterialisedOwnerIds</c> (every OTHER test in this file, and any bridge older
+    /// than version 65) reads as UNSURE, and an unsure give is always queued - this is the
+    /// same shape <see cref="EveryItemOnAPacketIsQueued"/> already exercises, restated here to
+    /// pin the "no known table at all" half of the contract explicitly.</summary>
+    [Fact]
+    public void WithNoKnownMaterialisedTableEveryGiveIsStillQueued()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = null;
+
+        session.Incoming.Add(Packet(0xE, Item("g_w_blstrpstl001")));
+        agent.PumpOnce();
+
+        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
+        Assert.Equal(0xEu, give.TargetObjectId);
+    }
+
+    /// <summary>The whole point of the feature: a real, if empty, table means this instance has
+    /// no local stand-in for ANY owner id right now, so nothing is queued and the single-slot
+    /// giveloot channel is never spent on a refusal.</summary>
+    [Fact]
+    public void AnOwnerIdMissingFromAKnownEmptyTableIsNeverQueued()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = new HashSet<uint>();
+
+        session.Incoming.Add(Packet(0xE, Item("g_w_blstrpstl001"), Item("g_i_medeqpmnt01")));
+        agent.PumpOnce();
+
+        Assert.False(agent.TryDequeuePendingLoot(out _));
+    }
+
+    /// <summary>The positive case sitting right next to the negative one above: an owner id the
+    /// table DOES map is queued exactly as before, even while other ids in the same pump are
+    /// filtered out.</summary>
+    [Fact]
+    public void AnOwnerIdPresentInTheTableIsStillQueued()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = new HashSet<uint> { 0x35 };
+
+        session.Incoming.Add(Packet(0xE, Item("skipped-owner-not-mapped")));
+        session.Incoming.Add(Packet(0x35, Item("g_w_lghtsbr01")));
+        agent.PumpOnce();
+
+        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
+        Assert.Equal(0x35u, give.TargetObjectId);
+        Assert.Equal("g_w_lghtsbr01", give.Item.Resref);
+
+        // 0xE's items never reached the queue at all.
+        Assert.False(agent.TryDequeuePendingLoot(out _));
+    }
+
+    /// <summary>Several items behind one filtered owner id cost exactly ONE log line, not one
+    /// per item - the whole reason this filter exists is to stop the round-trip noise, and a
+    /// per-item log would just move the noise from the plugin's log to the agent's.</summary>
+    [Fact]
+    public void AFilteredOwnerCostsOneLogLineNotOnePerItem()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = new HashSet<uint>();
+
+        List<string> logs = [];
+        agent.Log = logs.Add;
+
+        session.Incoming.Add(Packet(0xE, Item("a"), Item("b"), Item("c")));
+        agent.PumpOnce();
+
+        Assert.Equal(1, logs.Count(l => l.Contains("0xE", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>The dialogue-grant half of the SAME queue must never be filtered - it targets
+    /// the local PC directly (<c>AgentWellKnownIds.LocalPlayerObjectId</c>), needs no owner-id
+    /// translation, and is not what MaterialisedEnemies' table is even about. Proven here
+    /// against a table that maps NOTHING, which would filter out any ordinary owner id.</summary>
+    [Fact]
+    public void ADialogueGrantIsNeverFilteredEvenAgainstAnEmptyMaterialisedTable()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = new HashSet<uint>();
+
+        session.IncomingDialogueGrants.Add(new DialogueGrantPacket(
+            OriginPeerId: 3, OpSequence: 1, PartnerTag: "npc_carth",
+            Items: [Item("g_w_blstrpstl001")]));
+        agent.PumpOnce();
+
+        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
+        Assert.Equal(AgentWellKnownIds.LocalPlayerObjectId, give.TargetObjectId);
+        Assert.Equal("g_w_blstrpstl001", give.Item.Resref);
     }
 
     // ---- item 11(a): the client's dedup set must be reset on a module change ------------

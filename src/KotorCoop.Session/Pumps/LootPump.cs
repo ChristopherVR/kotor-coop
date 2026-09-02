@@ -85,8 +85,30 @@ internal sealed class LootPump(
             session.ResetMaterialisedLootDedup();
         }
 
+        // Read once per pump, not once per packet or per item: MaterialisedEnemies' own table
+        // (SharedBlock.OffsetMaterialisedOwnerIds, version 65) changes at most once per engine
+        // frame, so one snapshot is fresh enough for every packet this pump drains this tick,
+        // and re-reading per packet would cost a redundant plugin-block sweep for a burst of
+        // several deaths landing in one datagram window.
+        IReadOnlySet<uint>? materialisedOwnerIds = bridge.ReadMaterialisedOwnerIds();
+
         foreach (MaterialisedLootPacket packet in session.DrainMaterialisedLoot())
         {
+            if (!MaterialisedLootFilterRule.ShouldQueue(packet.OwnerEnemyId, materialisedOwnerIds))
+            {
+                // Skip the WHOLE packet before it ever reaches the single-slot giveloot cheat
+                // channel — the overwhelmingly common case is a peer holding the real,
+                // GIT-identical creature, which already rolled its own equivalent loot, so
+                // MaterialisedEnemies has no stand-in for this owner id and never will for this
+                // one. One line per owner id, not one per item: measured live 2026-09-02, six
+                // wasted round trips (twelve log lines, one refusal each) in one second on a
+                // client rejoining after a wipe reload — see
+                // docs/research/enemy-materialisation.md's 2026-09-02 section.
+                log($"materialised loot: 0x{packet.OwnerEnemyId:X} has no local stand-in here - "
+                    + $"skipping {packet.Items.Count} item(s), never queueing a doomed giveloot round trip");
+                continue;
+            }
+
             log($"materialised loot: received {packet.Items.Count} item(s) for owner 0x{packet.OwnerEnemyId:X}, queueing");
 
             foreach (MaterialisedLootItem item in packet.Items)

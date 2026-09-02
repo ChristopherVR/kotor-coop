@@ -529,6 +529,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             // Still sweep: a session that ended leaves materialised bodies with nobody
             // refreshing them, and they must not stand around (or reach a save) forever.
             MaterialisedEnemies.Sweep(now);
+            PublishMaterialisedOwnerIds();
             return;
         }
 
@@ -557,6 +558,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         if (count == 0)
         {
             MaterialisedEnemies.Sweep(now);
+            PublishMaterialisedOwnerIds();
             return;
         }
 
@@ -592,6 +594,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         }
 
         MaterialisedEnemies.Sweep(now);
+        PublishMaterialisedOwnerIds();
 
         // ⚠ STAMPED ONLY HERE, at the bottom of a pass that actually ran. Every early return
         // above -- no session, drive disabled, a local conversation, an empty census -- leaves
@@ -916,6 +919,18 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             Odyssey.PostTextLine(p, DeferredNoticeColumn, DeferredNoticeRow, DeferredNoticeLife);
         }
     }
+
+    /// <summary>
+    /// Publishes <c>MaterialisedEnemies</c>' own owner-id table verbatim into the shared block
+    /// (version 65), so the agent can skip a doomed giveloot round trip for an owner id with no
+    /// local stand-in before it ever reaches the single-slot cheat channel. Called right
+    /// alongside every <c>MaterialisedEnemies.Sweep</c> — Sweep is what actually changes the
+    /// table (a destroy clears a slot, a fresh materialise fills one), so publishing at the
+    /// same cadence keeps the two in lockstep with no separate schedule to reason about. See
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
+    /// </summary>
+    private void PublishMaterialisedOwnerIds() =>
+        block.SetMaterialisedOwnerIds(MaterialisedEnemies.OwnerIdsSnapshot);
 
     private static byte[] EncodeAscii(string text)
     {

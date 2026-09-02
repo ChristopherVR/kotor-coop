@@ -32,6 +32,20 @@ public interface IEnemyBridge
     IReadOnlyList<uint> ReadLocalCombatExcludedIds() => [];
 
     /// <summary>
+    /// Version 65: the owner ids the plugin's own <c>MaterialisedEnemies</c> table currently
+    /// maps to a LOCAL stand-in body — read once per pump so a materialised-loot give can be
+    /// filtered before it costs a round trip on the single-slot giveloot cheat channel instead
+    /// of only discovering the refusal after spending it (see
+    /// <c>Session.MaterialisedLootFilterRule</c>). Null means UNKNOWN (no plugin attached — a
+    /// version-mismatched agent/plugin pair simply never finds the block at all, so this is the
+    /// only case that means "don't know") and callers MUST treat that as "send it anyway"; a
+    /// real, if possibly empty, set licenses filtering by membership. See
+    /// <c>KotorGameBridge.ReadMaterialisedOwnerIds</c> and
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
+    /// </summary>
+    IReadOnlySet<uint>? ReadMaterialisedOwnerIds() => null;
+
+    /// <summary>
     /// Mirroring side: how much damage this instance has DEALT to each enemy since its
     /// object ids were last assigned, plus the ledger generation those totals belong to.
     /// Cumulative and monotonic within a generation; empty when no plugin is attached.
