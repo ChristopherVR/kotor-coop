@@ -240,6 +240,10 @@ internal static class AgentComposition
             StunServers = PublicAddressDiscovery.ParseServers(
                 config?.StunServers ?? PublicAddressDiscovery.DefaultServers),
             UpnpEnabled = config?.Upnp ?? true,
+
+            // DEBUG/TEST-ONLY (coop.ini debug_hello_version) — see
+            // SessionSettings.DebugHelloVersionOverride's own doc comment.
+            DebugHelloVersionOverride = config?.DebugHelloVersionOverride ?? 0,
         };
 
         // The dispatcher owns every command surface and the one LAN listener. It re-reads

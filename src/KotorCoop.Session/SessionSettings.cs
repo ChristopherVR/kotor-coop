@@ -154,4 +154,21 @@ public sealed record SessionSettings
     /// multicast search — the same reasoning behind <see cref="StunServers"/> defaulting empty.
     /// </summary>
     public bool UpnpEnabled { get; init; }
+
+    /// <summary>
+    /// DEBUG/TEST-ONLY — coop.ini <c>debug_hello_version</c>, default 0 (off). When nonzero, a
+    /// CLIENT patches just this byte into its own Hello's version field (see
+    /// <see cref="CoopClient.SendHello"/>) — every packet after that first Hello still carries
+    /// <see cref="ProtocolConstants.Version"/> unchanged. Exists solely because the live rig
+    /// launches host and client from the SAME build (<c>tools/demo.ps1</c>), so there is
+    /// otherwise no way to make a real host see a version-mismatched Hello and exercise
+    /// <see cref="CoopHost.HandleVersionMismatch"/>'s typed Reject (<c>E_PROTO</c>). Because
+    /// both processes here are still the SAME real build — only the Hello lies — the host's
+    /// Reject comes back written in its (matching) real version, so the client reads it through
+    /// the ordinary strict path, not <see cref="CoopClient.TryHandleVersionMismatchReject"/>'s
+    /// lenient fallback (that path is for two genuinely different builds, already covered by
+    /// <c>ProtocolVersionMismatchTests</c>). Ignored by a host, which never sends a Hello. See
+    /// docs/research/disconnect-reconnect.md's 2026-09-02 section for the recipe.
+    /// </summary>
+    public byte DebugHelloVersionOverride { get; init; }
 }

@@ -1012,3 +1012,105 @@ suppression, interaction locks, spawned bodies); both HUD/chat notices post; the
 dialogue survives untouched; the reconnect loop keeps re-Helloing in the background the whole
 time; and the host coming back re-mirrors everything with no player action. Spectator reply-list
 rendering during a host-led dialogue is confirmed unaffected by this change.
+
+## 12. `E_PROTO` live-verification recipe (2026-09-02, NEEDS-LIVE)
+
+`docs/limitations.md`'s "Protocol-version mismatch reject (`E_PROTO`)" row has read Unverified
+since the mechanism was built (§7 above; `CoopHost.HandleVersionMismatch`,
+`CoopClient.TryHandleVersionMismatchReject`) — the two unit tests in
+`ProtocolVersionMismatchTests` prove the wire behaviour with a hand-crafted socket standing in
+for the mismatched peer, but nobody had ever watched a real two-instance rig produce a genuine
+`E_PROTO` reject, because `tools/demo.ps1` launches host and client from the **same build**.
+Two identical binaries can never disagree on `ProtocolConstants.Version`, so the path was
+structurally unreachable on the rig.
+
+**The fix is not new behaviour — it is a way to trigger existing behaviour.** Everything this
+section verifies (the host's typed Reject, the client giving up rather than looping, the log
+line, the in-game notice) already existed in `CoopHost`/`CoopClient` before this pass; see §7
+and `ProtocolVersionMismatchTests`. What was missing was purely a way to make ONE side of a
+real rig lie about its version. That is `SessionSettings.DebugHelloVersionOverride` / coop.ini
+`debug_hello_version` (default `0`, off) — see `docs/CONFIG.md`'s "Debug / test-only keys"
+subsection. Set nonzero, it patches only the version byte of the CLIENT's own Hello
+(`CoopClient.SendHello`, after `PacketCodec.Write` has already built the real packet) — every
+packet the client sends after that first Hello, including its retried Hellos while still
+unadmitted, carries the real `ProtocolConstants.Version` untouched, because the override is
+applied to the send buffer once per `SendHello` call, not baked into the codec.
+
+**One nuance worth being explicit about.** Both processes on this recipe's rig are still the
+SAME real build — only the Hello's byte lies. So the host's Reject comes back written in ITS
+real (and here, matching) `ProtocolConstants.Version`, and the client reads it through the
+ORDINARY strict `HandleReject` path, not `CoopClient.TryHandleVersionMismatchReject`'s lenient
+fallback — that fallback exists for a peer on a genuinely different build, which this recipe
+does not (and, on a single-build rig, cannot) produce. That case is already covered by
+`ProtocolVersionMismatchTests`' hand-crafted-socket tests. What this recipe actually live-verifies
+is the HOST's `HandleVersionMismatch`/typed-Reject half of the mechanism, plus the ordinary
+client-side Reject handling (stop retrying, log, notice) that a wrong-password reject already
+exercises today — the one thing that could not be watched live before is a real host emitting
+`E_PROTO` specifically, which is exactly what `debug_hello_version` makes possible.
+
+### The recipe
+
+1. On the **JOINING** instance's `coop.ini` only (never the host's — a host never sends a
+   Hello, so the key would be inert there anyway): add
+   `debug_hello_version = <anything other than 0 and other than the real ProtocolConstants.Version>`,
+   e.g. `debug_hello_version = 1` (guaranteed to differ — version 1 has not existed on the wire
+   since the earliest builds this project's `ProtocolConstants.Version` doc comment records).
+2. Start the host normally (no debug key set).
+3. Start the joiner and issue the ordinary `connect <host>` (console or menu button). Do **not**
+   set a password on either side — this recipe isolates the version-mismatch path from
+   `E_PASSWORD`, which is a different `RejectPacket` reason and would confound the read.
+
+### What to expect on the HOST
+
+Nothing on screen. `CoopHost.HandleVersionMismatch` calls `_channel.NoteVersionMismatch()`
+(bumps `SessionStats.VersionMismatches`) and sends the Reject, but — unlike the client side
+below — nothing in `KotorCoop.Agent` currently prints a log line or an in-game notice for a
+version-mismatched Hello landing on a host; the counter is not read anywhere in
+`AgentDashboard`/`CoopCommandDispatcher`. This is a real, if minor, gap: an admin host has no
+way to notice a rejected old-build peer except that peer telling them. Confirming this
+counter's silence — i.e. that the host truly shows nothing, not that something was missed — is
+itself one of the NEEDS-LIVE items below.
+
+### What to expect on the CLIENT (the joiner running `debug_hello_version`)
+
+Two separate lines, same tick, in this order (`CoopCommandDispatcher`'s dispatch loop runs
+`ReflectPhase()` before `AnnounceConnectionStatus()`):
+
+```
+[coop] failed - rejected by host: E_PROTO: host is v50, you are v1
+[coop] co-op: connection failed
+```
+
+(`v50` is `ProtocolConstants.Version` as of this writing — read whatever the running build's
+`ProtocolConstants.Version` doc comment currently says; `v1` is whatever `debug_hello_version`
+was set to.) Both lines go out through `CoopCommandDispatcher.Reply` — console window when
+there is one, always into the `--log` file, and always through `IMenuBridge.PostConsoleReply`
++ `PostChatLine`, so both should also appear in the in-game console reply line and the
+always-on chat overlay. The first line is the specific one (`ReflectPhase`, phase
+`Connecting` → `Failed`, `manager.Detail` = `CoopClient.GetStats().Status`); the second is the
+generic persistent-indicator line every other connection failure also produces
+(`ConnectionStatusAnnouncer.Line(ConnectionIndicatorState.Failed)`) and carries no reason text
+by itself — the reason lives only in the first line, which is why both matter here.
+
+**No retry loop.** `CoopClient.Tick` gates `SendHello` on `_rejectReason.Length == 0`
+(`CoopClient.cs`), and `HandleReject` sets `_rejectReason` the instant the Reject is parsed —
+so the client's Hello traffic should stop entirely the tick the Reject lands, rather than
+silently retrying every 500 ms until `DefaultConnectTimeoutMs` (15 s) gives up on a host that
+never answered at all. Watching the join hang for the full 15 s instead of failing within
+roughly one round trip would mean the Reject never made it back or was never read — worth
+checking explicitly, since that 15 s silent timeout is exactly the symptom
+`docs/limitations.md`'s row is asking this pass to rule out.
+
+### NEEDS-LIVE
+
+Nothing above has been run against the real game or the rig. In particular:
+
+1. That the host truly prints/shows nothing for a version-mismatched Hello (the "What to
+   expect on the HOST" claim above), as opposed to some log path this write-up missed.
+2. That both client lines actually appear in the in-game chat overlay and console reply line,
+   not just the `--log` file — `IMenuBridge.PostChatLine`/`PostConsoleReply` are exercised
+   constantly by other features, but never specifically by this path before.
+3. That the join genuinely fails fast (well under 15 s) rather than hanging out the silent
+   connect timeout, confirming the fix this whole recipe exists to demonstrate.
+4. That `debug_hello_version` set on the HOST side is inert (a host never calls `SendHello`, so
+   this should be a non-event by construction, but it has not been watched).

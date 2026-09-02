@@ -100,6 +100,15 @@ was fixed, the agent's own copy (`CoopConfig.MovieRelayEnabled`) defaulted OFF w
 absent, so the two readers disagreed the moment `movie_relay` was removed from `coop.ini`
 entirely; both now default ON, matching each other and the shipped file's explicit `=1`.
 
+## Debug / test-only keys
+
+Not part of normal play — omitted from the table above so they never look like something a
+player should set. Each exists to make an otherwise-unreachable code path reachable on the rig.
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `debug_hello_version` (added 2026-09-02) | `0` (off) | CLIENT only: overrides the version byte written into this client's Hello packet, and that packet alone — every later packet (state updates, pings, Bye) still carries the real `ProtocolConstants.Version`. `tools/demo.ps1` launches host and client from the same build, so there is otherwise no way to make the two sides disagree on protocol version and exercise `CoopHost.HandleVersionMismatch`'s typed `E_PROTO` Reject live. Set on the JOINING side only | [disconnect-reconnect.md](research/disconnect-reconnect.md) §12 |
+
 ## Plugin-side keys (`PluginConfig.cs` + per-controller reads)
 
 | Key | Default (code) | Meaning | Doc |

@@ -624,6 +624,16 @@ public sealed record CoopConfig
     /// </summary>
     public int StoreSyncMode { get; init; } = 2;
 
+    /// <summary>
+    /// DEBUG/TEST-ONLY — <c>debug_hello_version</c>, default 0 (off). Nonzero overrides the
+    /// version byte a CLIENT writes into its Hello, and its Hello alone — see
+    /// <see cref="SessionSettings.DebugHelloVersionOverride"/> for the full reasoning and
+    /// docs/research/disconnect-reconnect.md's 2026-09-02 section for the live recipe this
+    /// exists to run. Never documented alongside the ordinary keys above; see docs/CONFIG.md's
+    /// "Debug / test-only keys" subsection instead.
+    /// </summary>
+    public byte DebugHelloVersionOverride { get; init; }
+
     /// <summary>The anchor as the plugin's numeric code (0=TL, 1=TR, 2=BL, 3=BR).</summary>
     public uint ChatOverlayAnchorCode => ChatOverlayAnchor.Trim().ToLowerInvariant() switch
     {
@@ -820,6 +830,12 @@ public sealed record CoopConfig
             StoreSyncMode = !kv.ContainsKey("store_sync")
                 ? 2
                 : ParseSyncMode(kv.GetValueOrDefault("store_sync")),
+
+            // DEBUG/TEST-ONLY — see the property's own doc comment. Absent or 0 means off;
+            // clamped to a byte since that is all the wire's version field ever was.
+            DebugHelloVersionOverride = int.TryParse(kv.GetValueOrDefault("debug_hello_version"), out int hv)
+                ? (byte)Math.Clamp(hv, 0, 255)
+                : (byte)0,
         };
     }
 
