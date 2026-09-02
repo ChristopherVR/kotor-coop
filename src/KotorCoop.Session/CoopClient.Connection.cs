@@ -61,6 +61,19 @@ public sealed partial class CoopClient
                 SessionPassword.Hash(_settings.Password), _settings.Behaviour));
         if (length > 0)
         {
+            // DEBUG/TEST-ONLY (coop.ini debug_hello_version, default 0/off — see
+            // SessionSettings.DebugHelloVersionOverride's own doc). Patches only the header's
+            // version byte (magic[2] + version[1] + type[1], PacketWriter.WriteHeader's layout)
+            // on THIS ONE datagram, so a rig that otherwise runs an identical build on both
+            // sides can still exercise CoopHost.HandleVersionMismatch's typed E_PROTO Reject.
+            // Nothing else about this Hello changes, and every packet sent after it — state
+            // updates, pings, Bye — goes out through the ordinary PacketCodec.Write path
+            // untouched.
+            if (_settings.DebugHelloVersionOverride != 0)
+            {
+                _sendBuffer[2] = _settings.DebugHelloVersionOverride;
+            }
+
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
         }
     }
