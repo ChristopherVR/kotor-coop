@@ -93,6 +93,66 @@ internal sealed unsafe class DeathController(SharedBlockView block)
     private uint _downedSerial;
     private bool _wasDowned;
 
+    /// <summary>
+    /// The local PLAYER CHARACTER's object id, latched once per world and resolved by id every
+    /// frame — deliberately NOT <c>Odyssey.GetPlayerCreaturePointer</c> re-read each tick.
+    ///
+    /// ⚠ LIVE-MEASURED 2026-09-02 (death-handling.md §6, round B-death, host instance): the
+    /// frame the PC went down, <c>GetPlayerCreature</c> switched from the PC
+    /// (0x187498E8, hp 12 → -9987) to the companion (0x1874AEF8, hp 36) and stayed there. That
+    /// is not a stale-membership fault, it is the engine's own death auto-swap (death-handling.md
+    /// §2) doing its job: the HOST does not suppress it (<c>DeathPump</c> arms the swap guard on
+    /// clients only, so the host player can still Tab between the companions it owns), so on
+    /// the host "the player creature" legitimately becomes whoever the engine handed control
+    /// to. Watching that moving target meant this class never saw the PC fall (no "death: the
+    /// local player is down" line, <c>LocalDowned</c> never raised, so the agent never
+    /// published the downed flag and no peer could ever rescue a host), and
+    /// <see cref="ApplyReviveRequest"/> would have resurrected the companion instead of the
+    /// body on the floor. The agent's own player read already pins itself to the is_pc creature
+    /// (KotorGameBridge.Player.cs, <c>StillLooksLikeThePlayer</c>), so it kept publishing the
+    /// PC's -9987 hp while the plugin was reporting the companion as "up" — the two halves
+    /// disagreed about who the player was. Latching the is_pc creature's id here makes them
+    /// agree again. 0 = not latched yet this world.
+    /// </summary>
+    private uint _localPlayerObjectId;
+
+    /// <summary>
+    /// Whether the player was driving their own PC the last time it was sampled while up —
+    /// the fact that decides whether a revive should undo the engine's death auto-swap.
+    ///
+    /// On a host the swap is NOT suppressed (see <see cref="_localPlayerObjectId"/>), so a
+    /// downed host plays on as a companion until the PC stands up — good, the fight goes on —
+    /// but stock KOTOR then leaves them driving the companion until they Tab back, while every
+    /// peer keeps seeing the PC as the host's avatar. So when the PC comes back up, control
+    /// goes back to it — but ONLY if the PC was what the player was driving before they fell.
+    /// A host who had deliberately switched to a companion and whose idle PC then got knocked
+    /// down keeps their choice.
+    /// </summary>
+    private bool _pcControlledWhileUp;
+    private int _controlSampleCountdown;
+
+    /// <summary>Camera re-assert passes left after a hand-back — <c>SetCameraFollow</c> silently
+    /// no-ops in combat mode (docs/research/spectate-camera.md), and a revive very often
+    /// happens mid-fight, so one call is not enough; see ControlReturnController.</summary>
+    private int _handBackAssertsLeft;
+
+    /// <summary>Last world epoch <see cref="TrackControlWhileUp"/> saw — the same first-frame-
+    /// after-a-warp guard ControlReturnController uses (PartyFollowTransitionRule).</summary>
+    private ulong _lastSeenEpoch;
+
+    private const int ControlSampleIntervalFrames = 10;
+    private const int HandBackAssertBudget = 30;
+
+    /// <summary>Whether the current run of swallowed game-over attempts has already been
+    /// reported to the agent (one <c>GameOverSerial</c> bump per episode — see OnFrame).</summary>
+    private bool _gameOverReported;
+    private int _gameOverQuietFrames;
+
+    /// <summary>Frames without a game-over attempt after which the next one counts as a new
+    /// episode. ~1 s at 60 fps: a downed body's per-frame re-asks never leave a gap that
+    /// long, and a second knock-down after a revive always does.</summary>
+    private const int GameOverEpisodeQuietFrames = 60;
+
     /// <summary>Pending hit-point top-up after a Resurrection, applied a tick later so the
     /// effect handler has run (a same-frame write can land while the target still reads
     /// dead, and the engine drops it).</summary>
@@ -104,9 +164,26 @@ internal sealed unsafe class DeathController(SharedBlockView block)
     /// <summary>Drops per-world state; the patches themselves are process-lifetime.</summary>
     public void Invalidate()
     {
+        // Lower the published LEVEL too, not just the edge tracker. Live 2026-09-02
+        // (death-handling.md §6.4): a host that reloaded a save from the game-over screen
+        // came back with LocalDowned still 1 — the PC had gone down, the world tore down
+        // under it, and the new world's standing PC produced no edge to lower it — so the
+        // agent kept publishing a 12/12-hp player as DOWNED and the session held its
+        // game-over release open for a wipe that had long since ended.
+        if (_wasDowned)
+        {
+            block.LocalDowned = 0;
+        }
+
         _wasDowned = false;
+        _localPlayerObjectId = 0;
         _pendingHitPoints = 0;
         _pendingHitPointTarget = 0;
+        _pcControlledWhileUp = false;
+        _controlSampleCountdown = 0;
+        _handBackAssertsLeft = 0;
+        _gameOverReported = false;
+        _gameOverQuietFrames = 0;
 
         if (_flags != null)
         {
@@ -165,16 +242,33 @@ internal sealed unsafe class DeathController(SharedBlockView block)
             ClientTempDeathSuppressConfigured && block.DamageDealtEnabled ? 1 : 0;
 
         // The engine asked for game-over and the stub swallowed it: tell the agent once per
-        // occurrence. It decides whether this is a genuine session-wide wipe (every player
-        // down) and, if so, clears SuppressGameOver so the next attempt goes through.
+        // EPISODE, not per attempt. It decides whether this is a genuine session-wide wipe
+        // (every player down) and, if so, clears SuppressGameOver so the next attempt goes
+        // through. Live 2026-09-02 (death-handling.md §6): with the party clamped to the PC
+        // alone (a client under party_together) the engine re-asks EVERY FRAME for as long as
+        // the PC lies there — 500 serial bumps in ~6 s — so the serial is bumped on the first
+        // ask and again only after the engine has stayed quiet for a while (a new episode).
+        // The agent's TryTakeGameOverAttempt is edge-triggered on the serial, so each bump
+        // is one "your party is down" line over there; the next attempt after the release
+        // still goes through unsuppressed regardless of this latch — it never reaches here.
         if (_flags[FlagGameOverWanted] != 0)
         {
             _flags[FlagGameOverWanted] = 0;
-            block.GameOverSerial++;
-            PluginHost.Log("death: game-over suppressed; the session decides");
+            _gameOverQuietFrames = 0;
+
+            if (!_gameOverReported)
+            {
+                _gameOverReported = true;
+                block.GameOverSerial++;
+                PluginHost.Log("death: game-over suppressed; the session decides");
+            }
+        }
+        else if (_gameOverReported && ++_gameOverQuietFrames >= GameOverEpisodeQuietFrames)
+        {
+            _gameOverReported = false;
         }
 
-        nint player = Odyssey.GetPlayerCreaturePointer();
+        nint player = ResolveLocalPlayerCharacter();
         if (player == 0)
         {
             return;
@@ -183,6 +277,7 @@ internal sealed unsafe class DeathController(SharedBlockView block)
         // Publish the downed state as a level plus an edge, so the agent can both see the
         // current state and count individual knock-downs.
         bool downed = Odyssey.IsDowned(player);
+
         if (downed != _wasDowned)
         {
             _wasDowned = downed;
@@ -196,11 +291,125 @@ internal sealed unsafe class DeathController(SharedBlockView block)
             else
             {
                 PluginHost.Log("death: the local player is back up");
+                _gameOverReported = false; // standing up ends the episode either way
+                HandControlBackToPc(player);
             }
         }
 
+        TrackControlWhileUp(player, downed);
         ApplyPendingHitPoints();
         ApplyReviveRequest(player);
+    }
+
+    /// <summary>
+    /// Samples, while the PC is up, whether the player is driving it — the fact
+    /// <see cref="HandControlBackToPc"/> needs at the revive edge, when it is already too late
+    /// to ask (the death auto-swap has moved control by then). Every
+    /// <see cref="ControlSampleIntervalFrames"/> frames, not every frame: the answer only
+    /// changes on a Tab/portrait click/<c>leader</c>, and a reading taken during a downed
+    /// window would just record the companion the engine handed the player.
+    /// </summary>
+    private void TrackControlWhileUp(nint player, bool downed)
+    {
+        // The frame after a warp is the dangerous one (PartyFollowTransitionRule): the party
+        // structure this reads through may not be rebuilt yet. Skip it, and forget what the
+        // previous world thought — a sample from before the warp belongs to that world.
+        bool worldEpochReadable = Odyssey.TryGetWorldEpoch(out ulong epoch);
+        if (PartyFollowTransitionRule.ShouldSkipThisFrame(worldEpochReadable, epoch, _lastSeenEpoch))
+        {
+            if (worldEpochReadable)
+            {
+                _lastSeenEpoch = epoch;
+            }
+
+            _pcControlledWhileUp = false;
+            _controlSampleCountdown = 0;
+            _handBackAssertsLeft = 0;
+            return;
+        }
+
+        if (_handBackAssertsLeft > 0)
+        {
+            _handBackAssertsLeft--;
+            Odyssey.RestoreCameraToControlledCreature();
+        }
+
+        if (downed)
+        {
+            return;
+        }
+
+        if (--_controlSampleCountdown > 0)
+        {
+            return;
+        }
+
+        _controlSampleCountdown = ControlSampleIntervalFrames;
+        _pcControlledWhileUp = Odyssey.GetControlledCreaturePointer() == player;
+    }
+
+    /// <summary>
+    /// The PC just stood up: if the player was driving it when it fell and something (the
+    /// engine's death auto-swap, on a host) moved control elsewhere in between, put it back.
+    /// See <see cref="_pcControlledWhileUp"/> for why this is conditional, and
+    /// <see cref="_localPlayerObjectId"/> for why the host cannot simply suppress the swap.
+    /// A client never gets here with control elsewhere (its swap guard is armed), and a
+    /// player who chose a companion before the knock-down keeps it — both fall through the
+    /// same two checks.
+    /// </summary>
+    private void HandControlBackToPc(nint player)
+    {
+        if (!_pcControlledWhileUp)
+        {
+            return;
+        }
+
+        nint controlled = Odyssey.GetControlledCreaturePointer();
+        if (controlled == 0 || controlled == player)
+        {
+            return;
+        }
+
+        if (!Odyssey.SwitchControlToPc())
+        {
+            PluginHost.Log($"death: back up, but control could not be returned from 0x{Odyssey.GetObjectId(controlled):X} to the player character");
+            return;
+        }
+
+        _handBackAssertsLeft = HandBackAssertBudget;
+        PluginHost.Log($"death: back up; returning control from 0x{Odyssey.GetObjectId(controlled):X} to the player character");
+    }
+
+    /// <summary>
+    /// The local player character this world — see <see cref="_localPlayerObjectId"/> for why
+    /// this is latched by id rather than re-asked of the engine every frame. Latches only a
+    /// creature whose stats say is_pc: right after a load the engine's player slot IS the PC,
+    /// but if this ever ran first on a frame where control already sat with a companion, the
+    /// latch would pin this class to the wrong body for the whole world.
+    /// </summary>
+    private nint ResolveLocalPlayerCharacter()
+    {
+        if (_localPlayerObjectId != 0)
+        {
+            // Re-checked as a creature every frame, not just non-null: an id outlives the
+            // object it named, and the same id in a replaced world can be a door.
+            nint latched = Odyssey.ResolveServerObject(_localPlayerObjectId);
+            if (latched != 0 && Odyssey.IsPlayerCharacter(latched))
+            {
+                return latched;
+            }
+
+            _localPlayerObjectId = 0; // the world changed under it; re-latch below
+        }
+
+        nint candidate = Odyssey.GetPlayerCreaturePointer();
+        if (candidate == 0 || !Odyssey.IsPlayerCharacter(candidate))
+        {
+            return 0;
+        }
+
+        _localPlayerObjectId = Odyssey.GetObjectId(candidate);
+        return candidate;
     }
 
     /// <summary>The top-up owed to a creature revived on an earlier tick.</summary>
@@ -249,7 +458,11 @@ internal sealed unsafe class DeathController(SharedBlockView block)
 
         _appliedReviveSerial = serial;
 
-        uint playerId = Odyssey.GetPlayerObjectId();
+        // The LATCHED PC, never a fresh GetPlayerObjectId: on a host the death auto-swap has
+        // already moved that to a companion by the time a peer reaches the body (see
+        // _localPlayerObjectId), and resurrecting the standing companion would leave the
+        // player on the floor with the request consumed.
+        uint playerId = _localPlayerObjectId;
         if (playerId == 0)
         {
             block.ReviveStatus = 1;

@@ -38,13 +38,15 @@ internal static unsafe partial class Odyssey
 
     /// <summary>
     /// The creature CLIENT INPUT currently drives — CSWParty member[0]
-    /// (client-control-lock.md's control gate: <c>[[[0x7A39FC]+4]+0x270]+0x24</c>), which is
-    /// NOT what <see cref="GetPlayerCreaturePointer"/> answers: that resolves a FIXED
-    /// connected-players slot (the real PC, or nothing) and never moves with Tab/`leader`/
-    /// <c>ChangeCharacter</c>. This function instead reads the field that DOES move — the
-    /// same one <see cref="SwitchControlToPartySlot"/>/<see cref="SwitchControlToPc"/> locate a
-    /// member index against — resolved through the same generic resolver every other id read
-    /// in this file uses (<see cref="ResolveServerObject"/>). See docs/research/control-return.md.
+    /// (client-control-lock.md's control gate: <c>[[[0x7A39FC]+4]+0x270]+0x24</c>). This is
+    /// the field a control switch reorders; <see cref="GetPlayerCreaturePointer"/> instead
+    /// resolves the server's connected-player entry (<c>CSWSPlayer+0x28</c>), which a REAL
+    /// engine switch (<c>CSWParty::SetLeader</c> → <c>CSWSPlayer::SetGameObject</c>) updates
+    /// alongside the array — live-confirmed 2026-09-02 when the death auto-swap moved it to a
+    /// companion — and which this plugin's own switches now keep in step too
+    /// (<see cref="SyncServerPlayerToLeader"/>). Between a rotation and its sync, or after any
+    /// raw member[0] write, the two can disagree; this one is the input truth. See
+    /// docs/research/control-return.md and death-handling.md §6.
     /// </summary>
     public static nint GetControlledCreaturePointer()
     {

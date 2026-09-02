@@ -16,7 +16,12 @@ public sealed partial class CoopCommandDispatcher
     {
         // Straight to the plugin: this question can only be answered on the game thread, and
         // the value of the answer is that it is taken in ONE frame.
-        if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint resolveId))
+        if (string.Equals(command.Address, "party", StringComparison.OrdinalIgnoreCase))
+        {
+            // The plugin's CheatTargetParty: the whole CSWParty member array in one frame.
+            SendCheat(new CheatRequest(CheatKinds.Resolve, Target: uint.MaxValue - 1));
+        }
+        else if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint resolveId))
         {
             SendCheat(new CheatRequest(CheatKinds.Resolve, Target: resolveId));
         }

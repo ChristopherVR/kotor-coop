@@ -173,11 +173,6 @@ internal sealed partial class CombatPump
         // yet been asked to run. See TriggerPump.PumpTriggerFiring's own doc comment.
         triggerPump.PumpTriggerFiring(local);
 
-        // DIAGNOSTIC (temporary, kept until the moduleClean/exclusion interaction below is
-        // confirmed live): see docs/research/combat-when-apart.md.
-        log($"local combat diag (agent): moduleClean={moduleClean} censusModule='{censusModule}' "
-            + $"local.Module='{local.Module}'");
-
         // The enemy apply and the damage report are world-labelled; a dirty label skips
         // them (see the same-breath note above).
         if (!moduleClean)

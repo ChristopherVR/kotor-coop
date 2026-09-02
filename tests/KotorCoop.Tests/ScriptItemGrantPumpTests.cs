@@ -28,6 +28,10 @@ public sealed class ScriptItemGrantPumpTests
 
         public string Description => "script-item-test";
 
+        /// <summary>What the bridge reports as <see cref="IWorldStateBridge.WorldEpoch"/> — bumped
+        /// by a test standing in for a reload of the same module.</summary>
+        public int WorldEpoch { get; set; }
+
         public bool IsAttached => true;
 
         public bool CanWriteRemotes => true;
@@ -329,5 +333,45 @@ public sealed class ScriptItemGrantPumpTests
         agent.PumpOnce();
 
         Assert.Empty(session.PublishedGrants);
+    }
+
+    /// <summary>
+    /// Live 2026-09-02 (docs/research/death-handling.md §6.4): a game-over reload of END_M01AA
+    /// into END_M01AA re-mints every object id while the module name never moves. The baseline
+    /// taken in the old world diffed the reloaded inventory as freshly granted and published the
+    /// lot to the peer, feeding a party-pool add loop. The bridge reports the replacement as a
+    /// <see cref="IWorldStateBridge.WorldEpoch"/> edge; the pump must treat it like a module
+    /// change — reseed silently — and then carry on diffing in the new world.
+    /// </summary>
+    [Fact]
+    public void AReloadOfTheSameModuleResetsTheBaselineSilently()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce(); // baseline carries the pistol
+
+        // The reloaded save carries MORE than the baseline did (the autosave was taken later):
+        // same module, new world. Nothing here was granted between two reads of one world.
+        bridge.WorldEpoch++;
+        bridge.Possessed =
+        [
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_a_clothes01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+
+        Assert.Empty(session.PublishedGrants);
+
+        // A grant in the new world is still seen.
+        bridge.Possessed =
+        [
+            .. bridge.Possessed,
+            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+
+        (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
+        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
     }
 }

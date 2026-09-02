@@ -82,6 +82,10 @@ public sealed partial class CoopCommandDispatcher
     /// cooldown timer started against a previous one.</summary>
     private MismatchRejoinWatchState _mismatchRejoinState = MismatchRejoinWatchState.Initial;
 
+    /// <summary>See <see cref="WipeRecoveryRule"/> — the host's reload from the game-over menu
+    /// after a session wipe, which neither classifier can see. Reset with the two above.</summary>
+    private WipeRecoveryState _wipeRecoveryState = WipeRecoveryState.Initial;
+
     private Task? _rejoinTask;
 
     /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
@@ -133,6 +137,7 @@ public sealed partial class CoopCommandDispatcher
             _sessionSaveWatch.Reset();
             _rejoinState = RejoinDecisionState.Idle;
             _mismatchRejoinState = MismatchRejoinWatchState.Initial;
+            _wipeRecoveryState = WipeRecoveryState.Initial;
             return;
         }
 
@@ -184,6 +189,25 @@ public sealed partial class CoopCommandDispatcher
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
                 hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs);
 
+            // The wipe watch runs every tick regardless of the verdicts below: its latch must
+            // be armed during the ~13 s both parties lie wiped before the game-over teardown,
+            // and it fires on the host's reappearance, which neither classifier reports.
+            PlayerState? localState = bridge.TryReadLocalState(out PlayerState localNow) ? localNow : null;
+            PlayerState? hostState = null;
+            IReadOnlyList<RemotePeer> peersNow = session.GetRemotePeers();
+            for (int i = 0; i < peersNow.Count; i++)
+            {
+                if (peersNow[i].PeerId == CoopHost.HostPeerId)
+                {
+                    hostState = peersNow[i].State;
+                    break;
+                }
+            }
+
+            (bool hostBackAfterWipe, WipeRecoveryState nextWipeState) =
+                WipeRecoveryRule.Observe(_wipeRecoveryState, localState, hostState);
+            _wipeRecoveryState = nextWipeState;
+
             if (ownVerdict == SaveOrLoadVerdict.Load)
             {
                 Reply("you loaded a save - rejoining the host's world");
@@ -193,6 +217,11 @@ public sealed partial class CoopCommandDispatcher
             {
                 Reply("host loaded a save - rejoining their world");
                 TriggerRejoin(RejoinTrigger.HostReload);
+            }
+            else if (hostBackAfterWipe)
+            {
+                Reply("the host is back in the world after the wipe - rejoining their world");
+                TriggerRejoin(RejoinTrigger.WipeRecovery);
             }
             else
             {
@@ -353,6 +382,7 @@ public sealed partial class CoopCommandDispatcher
         {
             RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
             RejoinTrigger.HostReload => HostLoadReadoptEnabled,
+            RejoinTrigger.WipeRecovery => HostLoadReadoptEnabled,
             // ⚠ auto_adopt_world, NOT client_load_rejoin — see AutoAdoptWorldEnabled's own doc
             // comment. This is "the client notices its own world is not the host's and adopts
             // the host's", which is a different question from "put me back after I load a

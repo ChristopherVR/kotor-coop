@@ -22,8 +22,17 @@ namespace KotorCoop.Protocol;
 /// Bounded by TIME, not by count: an entry older than the window is worthless (whatever
 /// caused it either already showed up in a sample or never will) and is pruned lazily rather
 /// than swept on a timer, so an idle session costs nothing.
+///
+/// ⚠ The window is bounded BELOW by how long a fresh row can stay invisible to the sweep. The
+/// sweep reads through <c>KotorGameBridge</c>'s item caches, which the pump thread refreshes
+/// from a background scan at most every 15 s (<c>ItemTagRebuildMs</c>); a row that lands
+/// right after a rebuild is not in any sample for the next 15 s. At 5 s the budget expired
+/// before the row it covered was ever seen — live 2026-09-02 (death-handling.md §6.4): the
+/// client's post-reload pool reconcile added two stacks at :55, its inventory sweep first saw
+/// them at :11, and both went to the host as script grants, which gave itself duplicates.
+/// 20 s covers a full rebuild interval plus the sample that follows it.
 /// </summary>
-public sealed class RecentlySyncedItems(long windowMs = 5000)
+public sealed class RecentlySyncedItems(long windowMs = 20_000)
 {
     private readonly record struct Entry(string Resref, long ExpiresAtMs);
 

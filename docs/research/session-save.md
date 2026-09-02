@@ -2035,3 +2035,29 @@ carried-character stash written there 2 s earlier was gone by the time the plugi
 (`DestroyServer` at `0x6CB316` / `CClientExoApp::UnloadModule` at `0x6CB324`), which a
 from-the-menu load never performs, which is why the main-menu adoption never saw it. Anything
 this path must carry across the load now lives in the game directory root instead.
+
+## A fourth rejoin trigger (2026-09-02): `WipeRecovery` — the reload the classifiers cannot see
+
+A session wipe (every player's whole party down — `death-handling.md` §6.4) parks both
+instances at the game-over menu, and the host's way out is a load from that menu. Neither
+`SaveOrLoadClassifier` instance fires for it: the classifier diffs the digest of a RUNNING
+world across a serial edge, and a load from the game-over menu has no running "before" world
+on either side — the client's own world is already torn down (reads failing, published as
+away), and the host's digest goes straight from "away, wiped" to "standing in END_M01AA".
+Live, the client sat at its own game-over menu indefinitely while the host played on.
+
+`WipeRecoveryRule` (Session, pure, eight tests) closes it from the wire alone: it latches
+when the local row and the host's row both carry `FlagPartyWiped`, holds through the local
+teardown and the host's parked away row, and triggers `RejoinTrigger.WipeRecovery` exactly
+once when the host's row is standing in a named module without the downed flag.
+`SessionManager` feeds it through the same `ClientLoadRejoinRule` gate as `HostReload`
+(`host_load_readopt`), and `RejoinAfterLoadAsync` runs with `inSession: true` — the client's
+world is gone, so the rejoin is a full adoption of the host's current world, not a re-adopt
+on top of a running one. `BuildWorldSnapshot` on the host serves it from the staged autosave
+exactly as any other mid-session rejoin. Three consecutive live cycles VERIFIED: the client
+is back in the host's world within about a second of the host standing.
+
+The rejoin's fresh `CoopClient` reclaims the same peer id (stable `PeerIdentity` nonce) —
+which is why every client instance now mints its party-pool/store intent serials from a
+random base (`IntentSerialBase`): the host's (peer, serial) dedup outlives the client's
+first lifetime, and serials restarting at 1 were acked as replays and never applied.

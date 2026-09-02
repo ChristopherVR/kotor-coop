@@ -518,6 +518,78 @@ public class SharedInventoryV2LoopbackTests
         }
     }
 
+    /// <summary>
+    /// Live 2026-09-02 (docs/research/death-handling.md §6.4): a rejoin after a session wipe
+    /// builds a FRESH CoopClient that reclaims the same peer id (the nonce is the stable
+    /// PeerIdentity). Its intent serials used to restart at 1, so its first two intents collided
+    /// with the (peer, serial) pairs the host still remembered from the first join: acked as
+    /// replays, applied never — and the client, taking the acks as landings, reconciled its own
+    /// two carried stacks away to match the host. The second lifetime's deposit must land.
+    /// </summary>
+    [Fact]
+    public async Task ARejoinedClientsIntentsAreNotDedupedAgainstItsFirstLifetime()
+    {
+        const uint identity = 0xC0FFEE42;
+        CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CancellationTokenSource cts = new(TimeSpan.FromSeconds(90));
+        _ = host.RunAsync(cts.Token);
+        using AgentLoopV2 hostAgent = new(host, 150);
+
+        static CoopClient Join(CoopHost host, CancellationToken token)
+        {
+            CoopClient client = new(
+                new SessionSettings { PlayerName = "Malak", TickRate = 30, PeerIdentity = identity },
+                new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+            _ = client.RunAsync(token);
+            return client;
+        }
+
+        using (host)
+        {
+            // First lifetime: one deposit, serial 1 on the wire, lands on the host.
+            CoopClient first = Join(host, cts.Token);
+            AgentLoopV2 firstAgent = new(first, 150);
+            Assert.True(
+                await WaitForAsync(() => first.IsConnected && host.GetRemotePeers().Count == 1, Timeout),
+                "first lifetime never connected");
+            await Task.Delay(300);
+
+            firstAgent.Bridge.TruePartyPool[Blaster] = 1;
+            Assert.True(
+                await WaitForAsync(() => hostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == 1, Timeout),
+                "the first lifetime's deposit never landed on the host");
+
+            // The wipe: the client's session ends, the host reloads a save that never had the
+            // deposit, and the client rejoins with a new CoopClient under the same identity.
+            firstAgent.Dispose();
+            first.Dispose();
+            hostAgent.Bridge.TruePartyPool.Clear();
+
+            CoopClient second = Join(host, cts.Token);
+            using AgentLoopV2 secondAgent = new(second, 150);
+            using (second)
+            {
+                Assert.True(
+                    await WaitForAsync(() => second.IsConnected, Timeout),
+                    "second lifetime never connected");
+                await Task.Delay(300);
+
+                // The carried character still holds the stack the host's reload lost; it is a
+                // local surplus against the host's snapshot and goes out as this lifetime's
+                // very first intent.
+                secondAgent.Bridge.TruePartyPool[Blaster] = 1;
+
+                Assert.True(
+                    await WaitForAsync(() => hostAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == 1, Timeout),
+                    "the rejoined client's deposit was deduped against its first lifetime's serial and never applied");
+                Assert.True(
+                    await StaysAsync(() => secondAgent.Bridge.TruePartyPool.GetValueOrDefault(Blaster) == 1,
+                        TimeSpan.FromSeconds(3)),
+                    "the rejoined client must keep its own stack, not reconcile it away");
+            }
+        }
+    }
+
     [Fact]
     public async Task ThreeRapidClientDepositsConvergeToExactlySumOnBothSides()
     {

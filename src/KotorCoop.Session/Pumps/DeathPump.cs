@@ -13,8 +13,15 @@ namespace KotorCoop.Session.Pumps;
 /// - **Rescue.** A downed player whose peer is standing beside them is revived at once,
 ///   rather than waiting out the engine's own combat-clear timer.
 /// - **A wipe is unanimous.** When one instance's whole party falls, its game-over is
-///   swallowed and this instance simply lies there. Only when EVERY player is down does the
-///   suppression lift, and then it lifts on all of them.
+///   swallowed and this instance simply lies there. Only when EVERY participant's whole
+///   party is down does the suppression lift, and then it lifts on all of them. "Whole
+///   party", not "player character": a host whose PC is down while a companion still fights
+///   is not wiped — the companion may win, the PC auto-revives once the area is clear, and
+///   the host can then walk over and pick the client up. Judging on the PC alone sent a
+///   client to the load-game menu while the host played on (live 2026-09-02,
+///   docs/research/death-handling.md §6.4). Each instance's engine already knows when its
+///   party is gone — that is when it asks for game-over — and
+///   <see cref="PlayerState.FlagPartyWiped"/> carries that ask.
 ///
 /// Both suppressions live in the plugin as inert byte patches until turned on here, so a game
 /// with no session behaves exactly like stock KOTOR.
@@ -40,7 +47,7 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
             return;
         }
 
-        // A wipe needs every player down — including this one. A peer in another module is
+        // A wipe needs every party down — including this one. A peer in another module is
         // not part of this fight, but it is also not a corpse: it can still come back for
         // us, so it counts as standing. That is why this takes the UNFILTERED list.
         //
@@ -50,7 +57,7 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
         // Counting it as a standing player is how a full party wipe became impossible: an
         // unpublished avatar is all zeroes, all zeroes is finite, finite is "plausible", and
         // a plausible undowned peer holds the game-over suppression on forever.
-        bool everyPeerDown = true;
+        bool everyPeerWiped = true;
         int participants = 0;
 
         for (int i = 0; i < peers.Count; i++)
@@ -62,14 +69,16 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
 
             participants++;
 
-            if (!peers[i].State.IsDowned)
+            if (!peers[i].State.IsPartyWiped)
             {
-                everyPeerDown = false;
+                everyPeerWiped = false;
                 break;
             }
         }
 
-        bool allDown = local.IsDowned && participants > 0 && everyPeerDown;
+        // Wiped implies downed, but the bridge can latch the wipe a tick before it reads the
+        // downed level (same plugin frame, serial written first) — insist on both.
+        bool allDown = local.IsDowned && local.IsPartyWiped && participants > 0 && everyPeerWiped;
 
         // Hold the game-over unless the session really is wiped; always hold the control
         // swap (it fights the control lock and hands a client the host's companions).

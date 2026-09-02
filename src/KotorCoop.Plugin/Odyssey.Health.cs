@@ -43,6 +43,48 @@ internal static unsafe partial class Odyssey
     private const int LevelStatsHitPoints = 0x02B;  // byte, the hit points rolled at that level
 
     /// <summary>
+    /// True for a creature whose stats block says is_pc — the player character itself, never a
+    /// companion. The same test KotorGameBridge.Player.cs's <c>StillLooksLikeThePlayer</c>
+    /// applies out of process, so a plugin-side "who is the player" agrees with the agent's.
+    /// </summary>
+    public static bool IsPlayerCharacter(nint creature)
+    {
+        // ⚠ LIVE 2026-09-02 (death-handling.md §6.4): the first frames after a mid-session
+        // adopted load handed this a resolved object that was NOT a creature, and reading a
+        // "stats pointer" 0xA74 bytes into it faulted (client RVA 0xAF71D, three frames in a
+        // row, right after "the world is up"). CSWSObject ids resolve to doors, placeables
+        // and items too, and nothing upstream promises a creature — so the vtable decides
+        // before anything is dereferenced through the object, and the refusal is logged
+        // (bounded) so the next such frame names what it saw instead of faulting silently.
+        if (creature == 0)
+        {
+            return false;
+        }
+
+        if (*(nint*)creature != ServerCreatureVtable)
+        {
+            if (_notACreatureRefusals < 10)
+            {
+                _notACreatureRefusals++;
+                PluginHost.Log($"is-pc: 0x{creature:X} (id 0x{*(uint*)(creature + 0x04):X}) is not a creature (vtable 0x{*(nint*)creature:X}) - not the player");
+            }
+
+            return false;
+        }
+
+        nint stats = Deref(creature + CreStats);
+        return stats != 0 && *(int*)(stats + StatsIsPc) == 1;
+    }
+
+    /// <summary>CSWSCreature's vtable — the same value CreatureFinder sweeps for.</summary>
+    private const nint ServerCreatureVtable = 0x007470C8;
+
+    private static int _notACreatureRefusals;
+
+    /// <summary>CSWSObject + 0x04 = the object's id.</summary>
+    public static uint GetObjectId(nint obj) => *(uint*)(obj + 0x04);
+
+    /// <summary>
     /// Max hit points, following the SAME branch the engine's own
     /// <c>CSWSCreature::GetMaxHitPoints</c> (0x004ED310) follows, unlike the plain stored-field
     /// read <see cref="GetMaxHitPoints"/> still is. See <see cref="MaxHitPointsRule"/>'s own

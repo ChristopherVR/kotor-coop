@@ -12,6 +12,17 @@ internal sealed unsafe partial class CheatController
     private const int DownLethalDamage = 9999;
 
     /// <summary>
+    /// Frames <see cref="ApplyPendingMinOneHpRestore"/> waits before re-arming the pin.
+    /// Live-measured 2026-09-02 (death-handling.md §6): the death decision has visibly run by
+    /// the NEXT frame after <see cref="Odyssey.ApplyDamageEffect"/> returns — on a host the
+    /// engine's death auto-swap had already moved <c>GetPlayerCreature</c> to the companion
+    /// 47 ms after the hit — so one frame is enough and two is margin. Note hp does NOT
+    /// "settle" to anything observable: OnApplyDeath's -11 clamp only RAISES a value above it
+    /// (death-handling.md §1), so a -9987 body reads -9987 until the auto-revive stands it up.
+    /// </summary>
+    private const int MinOneHpRestoreDelayFrames = 2;
+
+    /// <summary>
     /// Real damage through the exact pipeline a live hit uses — <see cref="Odyssey.ApplyDamageEffect"/>,
     /// the same VM-dispatched <c>EffectDamage</c>/<c>ApplyEffectToObject</c> call
     /// <see cref="Slay"/>'s <c>KillHere</c> branch and <see cref="Odyssey.KillCreature"/> both
@@ -50,6 +61,14 @@ internal sealed unsafe partial class CheatController
         Answer(SharedBlock.CheatStatusApplied, $"{who} hit for {amount}: {before} -> {after} hp{downedNote}");
     }
 
+    /// <summary>A min1hp restore owed after a <see cref="Down"/> hit that bypassed it — see
+    /// that method's own doc comment for why an immediate same-call restore is unsafe.
+    /// 0 = nothing pending (object ids here are never 0 for a resolved creature).</summary>
+    private uint _pendingMinOneHpRestoreTarget;
+
+    /// <summary>Frames left before <see cref="ApplyPendingMinOneHpRestore"/> re-arms the pin.</summary>
+    private int _pendingMinOneHpRestoreFramesLeft;
+
     /// <summary>
     /// Forces the SAME genuine temp-death state a real lethal hit produces, by bypassing the
     /// one thing that would stop it: a <c>min1hp</c> pin (a module's own, or <c>god</c>'s)
@@ -62,8 +81,19 @@ internal sealed unsafe partial class CheatController
     /// A REAL party member never truly dies from this: <c>CSWSCreature::GetDead</c>
     /// hard-returns 0 for a client-party member (death-handling.md §1), so the lethal damage
     /// this applies can only ever produce temp-death, which <see cref="DeathController"/>/
-    /// <see cref="DeathPump"/>/the engine's own <c>TempDeathUpdate</c> auto-revive already know
-    /// how to handle — that is the entire point of this verb existing.
+    /// <c>DeathPump</c>/the engine's own <c>TempDeathUpdate</c> auto-revive already
+    /// know how to handle — that is the entire point of this verb existing.
+    ///
+    /// ⚠ THE RESTORE IS DEFERRED, NOT IMMEDIATE. death-handling.md §6.1 flagged an immediate
+    /// same-call restore as the first suspect if a live round ever saw `down` land as "set hp
+    /// 1" instead of a genuine downed state on a creature that DID have min1hp set; the
+    /// 2026-09-02 live round (death-handling.md §6) measured the death decision landing
+    /// within the frame AFTER <see cref="Odyssey.ApplyDamageEffect"/> returns, not inside it,
+    /// so <see cref="ApplyPendingMinOneHpRestore"/> re-arms the pin
+    /// <see cref="MinOneHpRestoreDelayFrames"/> frames later from OnFrame. The same round also
+    /// found that touching the creature again from THIS call (an IsDowned/GetMinOneHitPoint
+    /// read straight after the apply) hung the host — OnApplyDeath's choreography is still in
+    /// flight — so nothing here reads the creature back after the hit.
     /// </summary>
     private void Down(nint player, uint playerId)
     {
@@ -87,21 +117,63 @@ internal sealed unsafe partial class CheatController
 
         bool applied = Odyssey.ApplyDamageEffect(creatureId, DownLethalDamage, out int failure);
 
-        // Restore the pin regardless of the outcome — a refused hit must not leave a module's
-        // (or god mode's) floor quietly disarmed.
-        if (hadMinOneHp)
-        {
-            Odyssey.SetMinOneHitPoint(creature, true);
-        }
-
+        // No creature read-back from here on — see the class doc comment's hang note.
         if (!applied)
         {
+            // The hit never landed: nothing is racing a death decision that will never fire,
+            // so restore right away rather than leave a module's (or god mode's) floor
+            // quietly disarmed for even a tick.
+            if (hadMinOneHp)
+            {
+                Odyssey.SetMinOneHitPoint(creature, true);
+            }
+
             Answer(SharedBlock.CheatStatusEngineRefused, $"down refused for {who} (failure {failure})");
             return;
         }
 
-        string floorNote = hadMinOneHp ? "min1hp floor bypassed, then restored" : "no min1hp floor was set";
+        string floorNote;
+        if (hadMinOneHp)
+        {
+            _pendingMinOneHpRestoreTarget = creatureId;
+            _pendingMinOneHpRestoreFramesLeft = MinOneHpRestoreDelayFrames;
+            floorNote = "min1hp floor bypassed, restored a frame later";
+        }
+        else
+        {
+            floorNote = "no min1hp floor was set";
+        }
+
         Answer(SharedBlock.CheatStatusApplied, $"{who} downed ({floorNote})");
+    }
+
+    /// <summary>The min1hp restore <see cref="Down"/> deferred — see that method's own doc
+    /// comment for why it is not done in the same call. Re-arms the pin
+    /// <see cref="MinOneHpRestoreDelayFrames"/> frames after the hit, by id, so a module
+    /// change in between simply drops it (<see cref="Invalidate"/> clears the target too).</summary>
+    private void ApplyPendingMinOneHpRestore()
+    {
+        if (_pendingMinOneHpRestoreTarget == 0)
+        {
+            return;
+        }
+
+        if (--_pendingMinOneHpRestoreFramesLeft > 0)
+        {
+            return;
+        }
+
+        uint target = _pendingMinOneHpRestoreTarget;
+        _pendingMinOneHpRestoreTarget = 0;
+
+        nint creature = Odyssey.ResolveServerObject(target);
+        if (creature == 0)
+        {
+            return; // the world changed under it; nothing left to restore the pin on
+        }
+
+        Odyssey.SetMinOneHitPoint(creature, true);
+        PluginHost.Log($"cheat: min1hp floor restored on 0x{target:X} (hp {Odyssey.GetCurrentHitPoints(creature)})");
     }
 
     /// <summary>

@@ -55,6 +55,16 @@ public interface IWorldStateBridge
     uint WorldLoadSerial => 0;
 
     /// <summary>
+    /// Bumped every time the bridge concludes the WORLD it reads was replaced — a module
+    /// change, or a reload of the same module (a <see cref="WorldLoadSerial"/> edge) — and
+    /// dropped its own object-id caches for it. Every object id, every (id -> resref) fact and
+    /// every baseline taken from a live inventory belongs to one epoch; a consumer that diffs
+    /// across ticks re-baselines when this moves instead of reading the new world's ids as
+    /// changes to the old one. 0 forever on a bridge that never sees a world (the mock harness).
+    /// </summary>
+    int WorldEpoch => 0;
+
+    /// <summary>
     /// Roadmap item 14 phase 2's rejoin action: requests the plugin replay the same adopted-
     /// world load <c>agent adopt</c> uses for the first join. False (with a reason) for
     /// bridges that cannot drive the plugin at all (the mock harness).

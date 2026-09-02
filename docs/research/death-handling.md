@@ -545,3 +545,103 @@ None of this recipe has been run against a live game as part of this pass (build
 only, per this round's own constraints) — every claim in §6.1/§6.2 above is tagged
 accordingly. The recipe is written to be followed verbatim by whichever session next has the
 rig.
+
+### 6.4 Live result 2026-09-02 — the recipe run on the rig (END_M01AA, save 1), what it found, what shipped
+
+Run by an unattended session on the rig (`tools/demo.ps1 -Save 1`, `blockpoke.ps1 … console
+'down'`), three full wipe → recovery cycles back to back on the final build. Tags below are
+VERIFIED = watched in the logs of that run; everything under "shipped" has a unit test.
+
+**Steps 1–3 (one player down, peer rescue, game-over held) — VERIFIED.** Nothing surprising
+beyond two engine facts the recipe did not know:
+
+- The plugin's game-over/control-swap asks arrive **per frame** while a party is down; the
+  agent throttles its answer rather than re-deciding 500×/s (`per-frame-engine-writes` rule).
+- The engine's own auto-revive is **per party** (~5 s with no hostiles in range), so a downed
+  PC whose companion still stands comes back on its own; "down" in the co-op sense means the
+  whole party. That is why the recipe's wipe needs `down 0` (the companion slot) AND `down`
+  on BOTH instances, and why `PlayerState.FlagPartyWiped` (= 256, protocol 50) exists: a
+  peer's wire row now says "my whole party is down", distinct from `FlagDowned`.
+
+**Step 4 (both down) — VERIFIED, with the whole post-wipe path that step 4 never described:**
+
+1. `every player is down; releasing the game-over screen for everyone` on both agents in the
+   same second. Both games show the stock "party killed" flow.
+2. ~13–18 s later each game tears its world down; agent reads fail; each publishes its last
+   state as **away** (`AwayRule`). A stale `LocalDowned` used to survive that teardown and
+   report "back in a world, 12/12 hp, still downed" after the reload — `DeathController.
+   Invalidate` now lowers it on teardown (pinned by `WipeRecoveryRuleTests.AStaleDownedHost…`).
+3. The host reloads a save (`Agent.exe load --pid <host> --load-save 1`, or the menu). Neither
+   `SaveOrLoadClassifier` sees it: the classifier watches digests of a running world, and a
+   load from the game-over menu has no "before" world to diff against. So no `HostReload`
+   trigger ever fired and the client sat at its own game-over menu forever.
+4. **Shipped:** `WipeRecoveryRule` (Session) — pure: latch when both the local and the host
+   rows carry `FlagPartyWiped`; hold through the local teardown (`local == null`) and the
+   host's parked away/wiped row; trigger exactly once when the host's row is standing in a
+   named module without the downed flag; disarm. `SessionManager` runs it every tick and feeds
+   `RejoinTrigger.WipeRecovery` into the same `ClientLoadRejoinRule` gate as `HostReload`;
+   `RejoinAfterLoadAsync` is called with `inSession: true` (the client's own world is gone).
+   Client log: `the host is back in the world after the wipe - rejoining their world` →
+   `session-save: starting rejoin (WipeRecovery)` → `rejoined 'END_M01AA'`. Eight rule tests.
+
+**Three crashes/loops the first recoveries exposed, all fixed and re-verified:**
+
+- **Client AV after the rejoin** (`FIRST-CHANCE … eip 0x69DEF3DD`, unsymbolizable at first).
+  `CrashProbe` now logs the plugin's own image range at install and stamps `(OURS: rva 0x…)`
+  on a first-chance line inside it; `llvm-symbolizer --obj=dinput8.dll --relative-address`
+  put RVA `0xAF71D` at `Odyssey.IsPlayerCharacter` (Odyssey.Health.cs). Cause: after the
+  reload the client's CSWParty still held member id `0x127` (the host's companion) BEYOND its
+  count; that id now named a `CSWSItem` (vtable `0x748CC0`), and `+0xA74` (CreStats) on an
+  item faulted. Fix: `IsPlayerCharacter` refuses anything whose vtable is not
+  `CSWSCreature` (`0x007470C8`), logging the first ten refusals (`is-pc: 0x… (id 0x127) is
+  not a creature (vtable 0x748CC0)`), and `DeathController`'s latched PC pointer is
+  re-validated through it every use — an id outlives the object it named. The next two runs
+  logged the refusals and no fault; the run after that logged neither.
+  `resolve party` (new console verb, `CheatTargetParty = 0xFFFFFFFE` — not `0xFFFFFFFF`,
+  which is what member[0] holds for the PC: `0x7FFFFFFF | ControlPartyNpcFlag`) dumps the
+  member array; post-rejoin shape on the client was `count 1; [PC, 0x80000127 → NOT a
+  creature, 0x80000129 → companion hp 36]`, on the host `count 2; [PC, companion, empty]`.
+- **Party-pool inflation loop** after a same-module reload: every 10 s the client logged
+  `expected-reconcile entry for 'g_w_blstrrfl001' never observed landing … presumed
+  resolved` and `local add of 1x 'g_a_clothes01' detected`, the host `added 'g_a_clothes01'
+  x1`, forever; plus `script item grant: … end_door05` (a door tag as an inventory item) on
+  both sides during the reload. Cause: `KotorGameBridge` dropped its object-id caches
+  (`_itemTags`, `_itemAddresses`, spawn/creation/suppression) only on a module NAME change.
+  A reload of END_M01AA into END_M01AA re-mints every id and the caches answered with the old
+  world's facts until the 15 s background rescan — and a rescan that started mid-teardown
+  applied freed item bodies with half-overwritten ids/tags. Fix: the reset also fires on a
+  `WorldLoadSerial` edge (the plugin counts teardowns), bumps a new
+  `IWorldStateBridge.WorldEpoch`, and background scan hits requested under an older epoch are
+  discarded; `ScriptItemGrantPump` re-baselines on a `WorldEpoch` change exactly as on a
+  module change (test `AReloadOfTheSameModuleResetsTheBaselineSilently`).
+- **The rejoined client's carried stacks were silently deleted.** After the reload the client
+  re-requested its two stacks (`requesting (serial 1)`, `(serial 2)`); the host never applied
+  them, the client then removed both from its own inventory. Cause: `CoopHost` dedups intents
+  by (peer, serial) and remembers 4096 pairs; a rejoin builds a fresh `CoopClient` that
+  reclaims the same peer id (the nonce is the stable `PeerIdentity`) and restarted its serials
+  at 1 — so its first intents matched the pairs remembered from the first join, were acked as
+  replays, and the acks were read as landings. Fix: `IntentSerialBase.Mint()` — every client
+  instance's party-pool and store intent serials start from a random base in [1, 2^31). Live
+  after the fix: `requesting (serial 1489680311)` → host `added 'g_i_medeqpmnt01' x1`. Test
+  `ARejoinedClientsIntentsAreNotDedupedAgainstItsFirstLifetime` (loopback, two lifetimes of
+  one identity) fails with the base at 1 and passes with the fix.
+- Same run, smaller: the client's post-reload pool reconcile added two stacks at :55, its
+  inventory sweep first saw them at :11 (the 15 s cache rebuild), and the 5 s
+  `RecentlySyncedItems` budget had expired — both went to the host as script grants and the
+  host gave itself duplicates. The window is now 20 s (bounded below by `ItemTagRebuildMs`).
+
+**Final state, three cycles in a row on one build:** release → both away → host reload →
+client `rejoined 'END_M01AA'` within ~1 s of the host standing → both `hp 12/12`, `who` sees
+each other, the client's carried stacks land in the host's pool once, no pool/grant traffic
+for the following two minutes, no first-chance faults in either plugin log.
+
+**Still NEEDS-LIVE from this section:** step 5 (`client_temp_death_suppress=1`), and the
+in-world `HostReload` variant (host `loadgame` while the client stands in a world) on the
+`inSession: true` rejoin path.
+
+**Rig notes that cost time:** two `blockpoke.ps1` pokes to the SAME pid at once collide (the
+host downed only slot 0 and the client auto-revived at 1 hp) — sequence the verbs per pid and
+parallelise only across pids; `Get-Process swkotor` tells you the rig is up, `pgrep` does not;
+the demo's adoption may pick a **session-saved character from a previous rig run** ("newer
+than the own save") — expected for the rig, worth knowing when the client's inventory does
+not match its save.

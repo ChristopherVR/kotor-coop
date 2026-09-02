@@ -37,6 +37,8 @@ internal sealed class ScriptItemGrantPump(
 
     private string _baselineModule = string.Empty;
 
+    private int _baselineWorldEpoch;
+
     private long _lastSampleMs;
 
     /// <summary>True while the dialogue pump owned the previous tick — the edge this flips on
@@ -81,13 +83,20 @@ internal sealed class ScriptItemGrantPump(
 
         long nowMs = Environment.TickCount64;
 
+        // A reload of the same module is a new world with the same name (every id re-minted,
+        // the bridge's own caches dropped — IWorldStateBridge.WorldEpoch); the baseline taken
+        // in the old one would diff the reloaded inventory as freshly granted. Live 2026-09-02:
+        // that diff published the whole inventory to the peer after a game-over reload.
+        int worldEpoch = bridge.WorldEpoch;
         bool moduleChanged = module.Length > 0
             && !ModuleNameGuard.IsFallbackModuleName(module)
             && !string.Equals(module, _baselineModule, StringComparison.OrdinalIgnoreCase);
+        bool worldReplaced = worldEpoch != _baselineWorldEpoch;
 
-        if (moduleChanged)
+        if (moduleChanged || worldReplaced)
         {
             _baselineModule = module;
+            _baselineWorldEpoch = worldEpoch;
             _hasBaseline = false;
             suppression.Clear();
         }

@@ -139,11 +139,15 @@ public class DeathPumpTests
         public void Dispose() { }
     }
 
-    private static PlayerState State(Vector3f position, bool downed = false, string module = "end_m01aa") =>
-        new(position, 0f, module, downed ? 0 : 20, 0, Flags: downed ? PlayerState.FlagDowned : 0u);
+    /// <param name="downed">The player character is on the floor.</param>
+    /// <param name="wiped">The WHOLE party is down — the engine asked for game-over. Implies
+    /// downed on the wire; a downed-but-not-wiped player has a companion still fighting.</param>
+    private static PlayerState State(Vector3f position, bool downed = false, string module = "end_m01aa", bool wiped = false) =>
+        new(position, 0f, module, downed ? 0 : 20, 0,
+            Flags: (downed ? PlayerState.FlagDowned : 0u) | (wiped ? PlayerState.FlagPartyWiped : 0u));
 
-    private static RemotePeer Peer(uint id, Vector3f position, bool downed = false, string module = "end_m01aa") =>
-        new(id, $"peer{id}", State(position, downed, module));
+    private static RemotePeer Peer(uint id, Vector3f position, bool downed = false, string module = "end_m01aa", bool wiped = false) =>
+        new(id, $"peer{id}", State(position, downed, module, wiped));
 
     private static (DeathBridge Bridge, DeathSession Session, CoopAgent Agent) Rig()
     {
@@ -229,22 +233,53 @@ public class DeathPumpTests
     }
 
     [Fact]
-    public void GameOverIsReleasedOnlyWhenEveryPlayerIsDown()
+    public void GameOverIsReleasedOnlyWhenEveryPartyIsDown()
     {
         (DeathBridge bridge, DeathSession session, CoopAgent agent) = Rig();
 
-        bridge.Local = State(Vector3f.Zero, downed: true);
+        bridge.Local = State(Vector3f.Zero, downed: true, wiped: true);
         session.Peers.Add(Peer(1, new Vector3f(40f, 0f, 0f)));
         agent.PumpOnce();
 
         // A peer still stands: the wipe is not unanimous, so the screen stays held.
         Assert.Equal([(true, true)], bridge.Suppressions);
 
-        session.Peers[0] = Peer(1, new Vector3f(40f, 0f, 0f), downed: true);
+        session.Peers[0] = Peer(1, new Vector3f(40f, 0f, 0f), downed: true, wiped: true);
         agent.PumpOnce();
 
-        // Now everyone is down: the suppression lifts so both games end together.
+        // Now every party is down: the suppression lifts so both games end together.
         Assert.Equal([(true, true), (false, true)], bridge.Suppressions);
+    }
+
+    [Fact]
+    public void ADownedPeerWhoseCompanionStillFightsHoldsTheGameOver()
+    {
+        // Live 2026-09-02 (death-handling.md §6.4): host PC down, host's Trask standing, client
+        // party wiped. Judged on the PC alone this released the client to the load-game menu
+        // while the host auto-revived and played on. The peer is downed but NOT wiped.
+        (DeathBridge bridge, DeathSession session, CoopAgent agent) = Rig();
+
+        bridge.Local = State(Vector3f.Zero, downed: true, wiped: true);
+        session.Peers.Add(Peer(1, new Vector3f(40f, 0f, 0f), downed: true));
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Equal([(true, true)], bridge.Suppressions);
+    }
+
+    [Fact]
+    public void ALocalPartyWithAStandingCompanionIsNotWiped()
+    {
+        // The mirror image: this instance's PC is down but its engine never asked for
+        // game-over (a companion fights on), while the only peer's party is gone. Not a wipe
+        // — the companion may win, and this PC will be back up to rescue the peer.
+        (DeathBridge bridge, DeathSession session, CoopAgent agent) = Rig();
+
+        bridge.Local = State(Vector3f.Zero, downed: true);
+        session.Peers.Add(Peer(1, new Vector3f(40f, 0f, 0f), downed: true, wiped: true));
+        agent.PumpOnce();
+
+        Assert.Equal([(true, true)], bridge.Suppressions);
     }
 
     [Fact]

@@ -270,6 +270,14 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
+        if (objectId == SharedBlock.CheatTargetParty)
+        {
+            string party = Odyssey.DescribeParty();
+            PluginHost.Log(party);
+            Answer(SharedBlock.CheatStatusApplied, party);
+            return;
+        }
+
         string detail = Odyssey.DescribeObjectResolution(objectId);
         PluginHost.Log($"resolve: {detail}");
 

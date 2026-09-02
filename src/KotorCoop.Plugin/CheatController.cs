@@ -40,6 +40,11 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
         _pendingHitPoints = 0;
         _pendingHitPointTarget = 0;
 
+        // Same reasoning as the hit-point top-up above: a module change drops the deferred
+        // min1hp restore rather than firing it against a stranger who now holds this id.
+        _pendingMinOneHpRestoreTarget = 0;
+        _pendingMinOneHpRestoreFramesLeft = 0;
+
         // PendingMoviePlay itself is cancelled centrally (PluginHost.InvalidateAll); this just
         // stops OnFrame's finally from waiting on a serial that will never complete now.
         _deferredMovieSerial = 0;
@@ -54,6 +59,7 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
     public void OnFrame()
     {
         ApplyPendingHitPoints();
+        ApplyPendingMinOneHpRestore();
         RetryPendingDoorWalk();
         WatchDoorWalk();
 

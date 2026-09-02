@@ -309,6 +309,13 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatKindResolve = 9;
 
+    /// <summary>A <see cref="CheatKindResolve"/> target that is not an object at all: dump
+    /// CSWParty's member array instead (the `resolve party` verb). Above every real id
+    /// (creatures top out far below, and 0x7F000000 is the engine's own invalid marker) and
+    /// deliberately NOT 0xFFFFFFFF, which is what CSWParty member[0] holds for the PC
+    /// (0x7FFFFFFF | ControlPartyNpcFlag) — a resolve of that exact id must stay a resolve.</summary>
+    public const uint CheatTargetParty = 0xFFFFFFFE;
+
     /// <summary>
     /// Make the local player USE a door — the second half of the cinematic instrument, and
     /// the only one of the two that can test the pre-store flush hypothesis.

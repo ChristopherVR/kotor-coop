@@ -156,8 +156,15 @@ public static class ProtocolConstants
     /// the identical reason (docs/research/peer-damage-ledger.md). <c>companion_damage_sync</c>,
     /// default ON. See docs/research/companion-state-sync.md §13. (48 and 49 landed together
     /// from parallel branches in the 2026-09-02 combat wave.)
+    ///
+    /// Version 50: <see cref="PlayerState.FlagPartyWiped"/> — a new bit on the existing flags
+    /// dword (no packet shape changed), bumped anyway because it changes what a wipe MEANS:
+    /// the session now releases the game-over screen only when every participant's WHOLE
+    /// PARTY is down, not merely every player character. A v49 peer never publishes the bit,
+    /// so a mixed session would hold the suppression forever. See
+    /// docs/research/death-handling.md §6.4.
     /// </summary>
-    public const byte Version = 49;
+    public const byte Version = 50;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

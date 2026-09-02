@@ -27,6 +27,11 @@ public enum RejoinTrigger
     /// warp reaches exactly this state and neither <see cref="OwnLoad"/> nor
     /// <see cref="HostReload"/> ever fires for it.</summary>
     SaveMismatch,
+
+    /// <summary><see cref="WipeRecoveryRule"/> saw the host back in a world after a session
+    /// wipe parked everyone at the game-over menu. Gated like <see cref="HostReload"/> — it IS
+    /// a host reload, one the classifiers cannot see (see that rule's own doc comment).</summary>
+    WipeRecovery,
 }
 
 /// <summary>Where a rejoin attempt is: <see cref="Idle"/> (nothing running, a new trigger is

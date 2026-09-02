@@ -47,7 +47,7 @@ internal static class ConsoleVerbCatalog
         ("peers", "peers"),
         ("where", "where"),
         ("census", "census [id]  (what my enemy census holds, and what my engine says of it)"),
-        ("resolve", "resolve <id>  (what the engine knows about one id; chain in the plugin log)"),
+        ("resolve", "resolve <id|party>  (what the engine knows about one id, or the CSWParty member array; chain in the plugin log)"),
         ("firescript", "firescript <id> [fire]  (peek or fire the +0x260 event script)"),
         ("netsim", "netsim <off|status|loss <pct>|latency <ms> [jitter]|blackout <secs> [in|out|both]>"),
 

@@ -432,7 +432,14 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             return null;
         }
 
-        if (!bridge.TryRequestAdoptedWorldLoad(out string diagnostic))
+        // inSession: true — a rejoin can start from either side of a world. Parked at the
+        // game-over menu after a wipe (WipeRecoveryRule) there is no server and the plugin
+        // takes its main-menu route regardless; standing in a world of our own (the host
+        // reloaded while we played on) the mid-session replay is the only one that loads at
+        // all — the main-menu-only request is acked and mooted the instant a server exists.
+        // The mid-session replay itself is the path join_mode=newcharacter live-verified
+        // 2026-08-29 (docs/research/world-adoption.md).
+        if (!bridge.TryRequestAdoptedWorldLoad(inSession: true, out string diagnostic))
         {
             Log?.Invoke($"rejoin: {diagnostic}");
             return null;

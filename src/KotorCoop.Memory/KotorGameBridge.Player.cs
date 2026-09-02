@@ -161,9 +161,25 @@ public sealed partial class KotorGameBridge
         // A module change rebuilds every object in the game, so every cached ADDRESS is now
         // meaningless. The caches exist because scanning for them is what starved this pump;
         // dropping them exactly here is what keeps them honest.
-        if (module.Length > 0 && !string.Equals(module, _cachedForModule, StringComparison.OrdinalIgnoreCase))
+        //
+        // ⚠ SO DOES A RELOAD OF THE SAME MODULE, and the module name cannot see one. Live
+        // 2026-09-02 (death-handling.md §6.4): after a game-over reload of END_M01AA into
+        // END_M01AA every object id was minted afresh, the (id -> resref) caches below kept
+        // the OLD world's answers, and the inventory read through them named a DOOR
+        // ("script item grant: ... end_door05"), granted the whole reloaded inventory to the
+        // peer as new, and fed a party-pool add/reconcile loop that inflated the pool by one
+        // stack every ten seconds. The plugin's WorldLoadSerial counts exactly those
+        // teardowns (a load, not a door), so a changed serial is the same event as a changed
+        // name. 0 without a plugin: never changes, never fires.
+        uint worldSerial = WorldLoadSerial;
+        bool moduleChanged = module.Length > 0
+            && !string.Equals(module, _cachedForModule, StringComparison.OrdinalIgnoreCase);
+        bool worldReloaded = worldSerial != _cachedForWorldSerial;
+        if (moduleChanged || worldReloaded)
         {
             _cachedForModule = module;
+            _cachedForWorldSerial = worldSerial;
+            WorldEpoch++;
             InvalidateCreatureCache();
             _itemTags.Clear();
             _itemAddresses.Clear();
@@ -289,9 +305,17 @@ public sealed partial class KotorGameBridge
         // Downed comes from the plugin, which asks the engine directly (GetDeadTemp): a
         // party member at zero hit points is temp-dead, not dead, and hit points alone
         // cannot distinguish "downed" from "the read failed".
-        if (IsLocalPlayerDowned)
+        bool downed = IsLocalPlayerDowned;
+        if (downed)
         {
             flags |= PlayerState.FlagDowned;
+        }
+
+        // Stronger than downed: the engine asked for game-over, so the whole local party is
+        // down (a host's standing companion keeps this off). See PlayerState.FlagPartyWiped.
+        if (TrackPartyWipe(downed))
+        {
+            flags |= PlayerState.FlagPartyWiped;
         }
 
         // Plugin-published (SoloSegmentController): this player's own local roster just got

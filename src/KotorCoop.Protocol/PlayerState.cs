@@ -108,6 +108,24 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagSoloSegment = 128;
 
+    /// <summary>
+    /// This player's WHOLE PARTY is down: their engine asked for the game-over screen (which
+    /// the plugin swallowed while the session decides). Strictly stronger than
+    /// <see cref="FlagDowned"/>, which only says the player character itself is on the floor —
+    /// a host whose PC is down while a companion still fights is downed but NOT wiped, and
+    /// that companion may yet win the fight and stand everybody back up.
+    ///
+    /// Live 2026-09-02 (docs/research/death-handling.md §6.4): judging a wipe on
+    /// <see cref="FlagDowned"/> alone sent a client to the load-game menu while the host's
+    /// Trask was still standing and the host's PC then auto-revived and played on — one
+    /// player at a menu, the other mid-fight. A wipe is unanimous only when every
+    /// participant's party is gone, and the engine's own game-over ask is exactly that signal
+    /// per instance. A LEVEL: set on the first swallowed ask of a downed episode, cleared
+    /// when the PC stands up. Derived agent-side from the plugin's game-over serial (no block
+    /// layout change).
+    /// </summary>
+    public const uint FlagPartyWiped = 256;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -123,6 +141,8 @@ public readonly record struct PlayerState(
     public bool IsInCombat => (Flags & FlagInCombat) != 0;
 
     public bool IsDowned => (Flags & FlagDowned) != 0;
+
+    public bool IsPartyWiped => (Flags & FlagPartyWiped) != 0;
 
     public bool IsInMinigame => (Flags & FlagInMinigame) != 0;
 

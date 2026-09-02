@@ -13,7 +13,18 @@ public sealed partial class CoopClient
 {
     private readonly Dictionary<uint, PendingIntentV2> _pendingStoreIntentsV2 = [];
 
-    private uint _nextStoreIntentSerialV2 = 1;
+    /// <summary>
+    /// ⚠ NOT 1. The host dedups intents by (peer, serial) and remembers thousands of pairs
+    /// (<c>CoopHost.MaxRememberedIntentsV2</c>), while a REJOIN builds a fresh CoopClient that
+    /// reclaims the SAME peer id (the nonce is the stable PeerIdentity). Live 2026-09-02
+    /// (death-handling.md §6.4): after a session wipe and the host's reload, the rejoined client
+    /// re-requested its two carried stacks as serials 1 and 2 — the host had already seen
+    /// (2, 1) and (2, 2) from the first join, acked both as replays and applied neither; the
+    /// client took the acks as landings, reconciled to the host's snapshot and removed both
+    /// stacks from its own inventory. Every instance therefore mints its serials from its own
+    /// random base, so no two lifetimes of one peer share a (peer, serial) pair.
+    /// </summary>
+    private uint _nextStoreIntentSerialV2 = IntentSerialBase.Mint();
 
     private Dictionary<StoreStackKey, int> _storeSnapshotV2 = [];
 

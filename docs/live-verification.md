@@ -235,9 +235,23 @@ both joiners' overlays. See this doc's own "Rig pass (2026-08-27, round 2)" and 
 - Walk the other player up to them: `death: revive applied; the player stands up` within a
   second, then `topped up to N hp`.
 - Take BOTH players down at once: only then should the game-over screen appear, and on both
-  instances together.
+  instances together. "Down" means the whole party — the engine auto-revives a PC whose
+  companion still stands after ~5 s — so the unattended recipe is `down 0` (the companion
+  slot) then `down` on EACH instance: `( host 'down 0'; host 'down' ) & ( client 'down 0';
+  client 'down' ) & wait`. Sequence the two verbs per pid; two pokes to the same pid at once
+  collide and one is lost.
+- After the wipe (VERIFIED 2026-09-02, three cycles): both agents log `every player is down;
+  releasing the game-over screen for everyone`, then ~15 s later `away: local reads have
+  failed`. Reload the host (`KotorCoop.Agent.exe load --pid <host> --load-save 1`, or the
+  menu). The client's agent must log `the host is back in the world after the wipe -
+  rejoining their world` and `rejoined '<module>'` within a couple of seconds of the host
+  standing, both end at full hp with `who` seeing each other, and the following two minutes
+  of both logs must carry NO repeating `party pool` / `script item grant` lines. The
+  client's carried stacks land in the host's pool exactly once (`added '<resref>' x1`).
+  `grep -a FIRST-CHANCE` on both `kotorcoop-plugin.log`s must be empty.
 - `pwsh tools\blockpoke.ps1 -ProcId <pid> death` prints the whole state, and
-  `death revive` fires a rescue by hand.
+  `death revive` fires a rescue by hand; `console 'resolve party'` dumps the CSWParty
+  member array (a stale id beyond the count after a reload is expected and harmless).
 
 ---
 

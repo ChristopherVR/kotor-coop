@@ -214,7 +214,8 @@ public sealed partial class CoopCommandDispatcher
         foreach (RemotePeer peer in peers)
         {
             string module = peer.State.Module.Length > 0 ? peer.State.Module : "?";
-            string flags = peer.State.IsDowned ? "  [down]"
+            string flags = peer.State.IsPartyWiped ? "  [party down]"
+                : peer.State.IsDowned ? "  [down]"
                 : peer.State.IsInDialogue ? "  [talking]"
                 : peer.State.IsInCombat ? "  [fighting]"
                 : string.Empty;

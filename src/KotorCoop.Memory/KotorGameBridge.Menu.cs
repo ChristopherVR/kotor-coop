@@ -258,6 +258,70 @@ public sealed partial class KotorGameBridge
         return true;
     }
 
+    private nint _wipeBlock;
+    private uint _wipeSerialSeen;
+    private bool _partyWiped;
+    private bool _wipeWasDowned;
+    private int _wipeUpTicks;
+
+    /// <summary>Ticks of "wiped but not downed" after which the latch is dropped without an
+    /// up-edge — a missed edge must not hold a stale wipe on the wire (~1-2 s of ticks).</summary>
+    private const int PartyWipeStaleTicks = 50;
+
+    /// <summary>
+    /// The LEVEL behind <see cref="PlayerState.FlagPartyWiped"/>: this instance's engine has
+    /// asked for the game-over screen during the current downed episode, i.e. the whole local
+    /// party is down, not just the PC. Sampled every tick from the same game-over serial
+    /// <see cref="TryTakeGameOverAttempt"/> edges on (its own baseline; taking that edge here
+    /// would starve the pump's once-per-episode line), and cleared on the downed→up edge
+    /// rather than on the level so the one-tick straddle between the plugin's serial bump and
+    /// its downed write (same frame, serial first) cannot clear a wipe the moment it is set.
+    /// </summary>
+    private bool TrackPartyWipe(bool downed)
+    {
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockGameOverSerial, out uint serial))
+        {
+            _wipeBlock = 0;
+            _partyWiped = false;
+            return false;
+        }
+
+        if (_wipeBlock != _pluginBlock)
+        {
+            // A (re)found plugin: its counter is history, not a wipe in progress.
+            _wipeBlock = _pluginBlock;
+            _wipeSerialSeen = serial;
+            _partyWiped = false;
+            _wipeUpTicks = 0;
+        }
+
+        if (serial != _wipeSerialSeen)
+        {
+            _wipeSerialSeen = serial;
+            _partyWiped = true;
+            _wipeUpTicks = 0;
+        }
+
+        if (_wipeWasDowned && !downed)
+        {
+            _partyWiped = false;
+        }
+
+        _wipeWasDowned = downed;
+
+        if (_partyWiped && !downed && ++_wipeUpTicks >= PartyWipeStaleTicks)
+        {
+            _partyWiped = false;
+        }
+        else if (downed)
+        {
+            _wipeUpTicks = 0;
+        }
+
+        return _partyWiped;
+    }
+
     /// <summary>
     /// Stands the local PC back up at <paramref name="hitPoints"/> (0 = the plugin's
     /// default). Used when a peer has reached a downed player.

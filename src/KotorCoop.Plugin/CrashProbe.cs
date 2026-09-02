@@ -75,6 +75,41 @@ internal static unsafe partial class CrashProbe
     private static uint _reported;
     private static int _logged;
 
+    /// <summary>This DLL's own load range. The base moves per process, so a fault address in
+    /// a dead process's log could never be symbolized after the fact without it — the RVA
+    /// (eip − base) is what <c>llvm-symbolizer --relative-address</c> wants.</summary>
+    private static uint _ownBase;
+    private static uint _ownSize;
+
+    /// <summary>Resolves the range of the image containing this code, from the PE header
+    /// (<c>SizeOfImage</c> at <c>e_lfanew + 0x50</c>). Silent on any failure: a probe that
+    /// cannot name its own image still records faults.</summary>
+    private static void ResolveOwnImage()
+    {
+        try
+        {
+            delegate*<void> here = &ResolveOwnImage;
+            nint module = 0;
+            if (!NativeMethods.GetModuleHandleEx(
+                    NativeMethods.GetModuleHandleExFlagFromAddress | NativeMethods.GetModuleHandleExFlagUnchangedRefcount,
+                    (nint)here, &module) || module == 0)
+            {
+                return;
+            }
+
+            byte* image = (byte*)module;
+            int ntHeaders = *(int*)(image + 0x3C);
+            _ownSize = *(uint*)(image + ntHeaders + 0x50);
+            _ownBase = (uint)module;
+            PluginHost.Log($"crash probe: this plugin's image is 0x{_ownBase:X}..0x{_ownBase + _ownSize:X}"
+                + " (a fault eip in that range is ours: llvm-symbolizer --obj=dinput8.dll --relative-address <eip - base>)");
+        }
+        catch
+        {
+            // Diagnostic only.
+        }
+    }
+
     /// <summary>Lines this will write before it goes quiet. A first-chance fault is no longer
     /// fatal, so a recoverable one could otherwise repeat every frame.</summary>
     private const int MaxLogged = 8;
@@ -106,6 +141,7 @@ internal static unsafe partial class CrashProbe
             if (AddVectoredExceptionHandler(1, handler) != 0)
             {
                 PluginHost.Log($"crash probe installed (native handler 0x{handler:X})");
+                ResolveOwnImage();
             }
         }
         catch (Exception ex)
@@ -294,8 +330,13 @@ internal static unsafe partial class CrashProbe
             }
         }
 
+        // Our own fault, named as the RVA the PDB understands — the base is gone with the process.
+        string ours = _ownSize != 0 && eip >= _ownBase && eip < _ownBase + _ownSize
+            ? $" (OURS: rva 0x{eip - _ownBase:X})"
+            : string.Empty;
+
         PluginHost.Log(
-            $"FIRST-CHANCE {name} (0x{code:X8}) at 0x{address:X}, eip 0x{eip:X}, esp 0x{esp:X}"
+            $"FIRST-CHANCE {name} (0x{code:X8}) at 0x{address:X}, eip 0x{eip:X}{ours}, esp 0x{esp:X}"
             + (missed > 0 ? $" ({missed} earlier not shown)" : string.Empty)
             + $"; image-range stack values:{trace}");
     }

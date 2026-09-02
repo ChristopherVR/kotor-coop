@@ -68,6 +68,18 @@ public sealed partial class KotorGameBridge
 
     /// <summary>Which module the address caches were built for.</summary>
     private string _cachedForModule = string.Empty;
+
+    /// <summary>The <see cref="WorldLoadSerial"/> the address caches were built under — a
+    /// reload of the SAME module replaces every object too. See the reset in
+    /// <c>TryReadLocalState</c> (KotorGameBridge.Player.cs).</summary>
+    private uint _cachedForWorldSerial;
+
+    /// <inheritdoc/>
+    public int WorldEpoch { get; private set; }
+
+    /// <summary>The <see cref="WorldEpoch"/> the last background item sweep was asked for
+    /// under; hits that come back under a different one are discarded, not applied.</summary>
+    private int _itemScanRequestedEpoch;
     private long _itemTagsBuiltAtMs;
 
     /// <summary>
@@ -152,6 +164,18 @@ public sealed partial class KotorGameBridge
 
         if (ItemScanWorker.TryTakeHits(ItemVtable, out List<nint> hits))
         {
+            // A sweep asked for in one world and finished in the next saw a heap mid-teardown:
+            // freed item bodies still wearing the vtable, ids and tags half overwritten by the
+            // objects that replaced them (live 2026-09-02, an inventory "item" tagged
+            // end_door05). Those hits describe no world that exists; the reset that bumped the
+            // epoch already cleared the caches, so ask again rather than fill them with this.
+            if (_itemScanRequestedEpoch != WorldEpoch)
+            {
+                _itemScanRequestedEpoch = WorldEpoch;
+                ItemScanWorker.Request(ItemVtable, ItemScanLimit);
+                return _itemAddresses.Count > 0;
+            }
+
             ApplyItemScanHits(hits);
             _itemTagsBuiltAtMs = Environment.TickCount64;
             return true;
@@ -159,6 +183,7 @@ public sealed partial class KotorGameBridge
 
         if (Environment.TickCount64 - _itemTagsBuiltAtMs >= ItemTagRebuildMs)
         {
+            _itemScanRequestedEpoch = WorldEpoch;
             ItemScanWorker.Request(ItemVtable, ItemScanLimit);
         }
 
