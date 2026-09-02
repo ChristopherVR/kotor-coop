@@ -35,7 +35,10 @@ public sealed partial class CoopCommandDispatcher
     {
         if (ConsoleCommand.TryParseObjectId(command.Address ?? string.Empty, out uint moveId))
         {
-            SendCheat(new CheatRequest(CheatKinds.MoveNear, Target: moveId));
+            // X/Y/Z cross as-is (0,0,0 when the console line named no explicit destination) -
+            // CheatController.MoveNear tells "explicit" from "default near the player" apart by
+            // the same origin sentinel Teleport/WalkTo already use.
+            SendCheat(new CheatRequest(CheatKinds.MoveNear, Target: moveId, X: command.X, Y: command.Y, Z: command.Z));
         }
         else
         {

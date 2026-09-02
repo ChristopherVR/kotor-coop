@@ -165,7 +165,7 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 break;
 
             case SharedBlock.CheatKindMoveNear:
-                MoveNear();
+                MoveNear(player);
                 break;
 
             case SharedBlock.CheatKindApplyEffect:

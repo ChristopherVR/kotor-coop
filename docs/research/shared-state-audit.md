@@ -2785,6 +2785,17 @@ into one census scope to trigger the cap for real, which this save's population 
 and would let a future round retest this cleanly against a genuine hostile-AI creature once one
 is available (a more crowded area, or a different save).
 
+> **2026-09-02 — the hardcoded destination was a live bug, and it's fixed.** The "near
+> `sithsoldier 0xE`" point above (29.0, 143.5) only ever made sense in `END_M01AA`, where round
+> 36 built it. Measured live in `tar_m10aa`: `movenear 0x46` on a live Vulkar snapped it to
+> exactly that same hardcoded point — off the map, outside any real area geometry. `movenear`'s
+> default destination is module-agnostic now: next to the LOCAL PLAYER (a fixed +X offset, no
+> facing math — deliberately trivial to check from the log), which is always somewhere real in
+> whatever module is actually loaded because it is published to every peer every tick. An
+> explicit `movenear <id> <x> <y> [z]` still overrides it for a round that wants a specific point
+> the way this round did. See `MoveNearDestinationRule` (the pure destination arithmetic, unit
+> tested) and `CheatController.MoveNear`'s own doc comment.
+
 Both `coop.ini` unchanged, `local_combat` untouched. Full suite 953/953, both builds clean, rig
 torn down and confirmed clean (`Get-Process`).
 
