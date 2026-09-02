@@ -632,10 +632,12 @@ internal static unsafe partial class PluginHost
     /// <summary>
     /// Rotates every "kotorcoop-*.log" this process writes (the combined file and every
     /// channel split) that has grown past coop.ini's <c>log_max_mb</c> (default
-    /// <see cref="LogRotation.DefaultCapMb"/>): the existing file becomes "*.1.log",
-    /// overwriting whatever was there, so exactly one prior session's tail survives and the
-    /// fresh session starts a clean file. A file at or under the cap is left alone —
-    /// sessions keep concatenating into it until it next crosses the line.
+    /// <see cref="LogRotation.DefaultCapMb"/>): the existing file becomes "*.1.log" and every
+    /// generation already sitting there shifts up one (".1.log" -&gt; ".2.log", etc.) through
+    /// coop.ini's <c>log_keep</c> (default <see cref="LogRotation.DefaultKeepGenerations"/>),
+    /// dropping whatever sat in the oldest slot, so that many prior sessions' tails survive
+    /// instead of only one and the fresh session starts a clean file. A file at or under the
+    /// cap is left alone — sessions keep concatenating into it until it next crosses the line.
     ///
     /// Called once, here, before <see cref="Log"/> is ever called — nothing else can be
     /// contending for <see cref="LogFileGate"/> yet, this just establishes the discipline the
@@ -705,11 +707,14 @@ internal static unsafe partial class PluginHost
     /// <summary>
     /// The actual sweep shared by <see cref="RotateLogsIfNeeded"/> (once, at startup) and
     /// <see cref="RotateLogsIfNeededMidSession"/> (periodically, during play): every
-    /// "kotorcoop-*.log" over cap becomes its "*.1.log" sibling, overwriting whatever was
-    /// there, so exactly one prior generation's tail survives. Callers must already hold
-    /// <see cref="LogFileGate"/>.
+    /// "kotorcoop-*.log" over cap has its generations shifted up via
+    /// <see cref="LogRotation.ShiftPlan"/>/<see cref="LogRotation.ApplyShiftPlan"/> so
+    /// <c>log_keep</c> prior generations survive instead of only one. Callers must already
+    /// hold <see cref="LogFileGate"/>.
     ///
-    /// Skips "kotorcoop-agent.log" on purpose — that file belongs to the agent process
+    /// Skips every already-rotated generation file (anything matching "*.N.log") — only a
+    /// live "*.log" file is ever a rotation SOURCE, the shift plan is what produces the rest —
+    /// and "kotorcoop-agent.log" on purpose: that file belongs to the agent process
     /// AgentLauncher spawns, and it rotates it itself right before opening it (see
     /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep. It
     /// cannot be rotated mid-session by either side: see the comment on
@@ -718,11 +723,13 @@ internal static unsafe partial class PluginHost
     private static void RotateLogFilesOverCap(string directory)
     {
         long cap = LogRotation.CapBytes(PluginConfig.ReadInt("log_max_mb", LogRotation.DefaultCapMb));
+        int keep = LogRotation.ClampKeepGenerations(
+            PluginConfig.ReadInt("log_keep", LogRotation.DefaultKeepGenerations));
 
         foreach (string path in Directory.EnumerateFiles(directory, "kotorcoop-*.log"))
         {
             string name = Path.GetFileName(path);
-            if (name.EndsWith(".1.log", StringComparison.OrdinalIgnoreCase)
+            if (IsRotatedGenerationFileName(name)
                 || name.Equals("kotorcoop-agent.log", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -734,7 +741,25 @@ internal static unsafe partial class PluginHost
                 continue;
             }
 
-            File.Move(path, LogRotation.RotatedPath(path), overwrite: true);
+            LogRotation.ApplyShiftPlan(LogRotation.ShiftPlan(path, keep));
         }
+    }
+
+    /// <summary>True for a name already in "*.N.log" shape (e.g. "kotorcoop-plugin.2.log") —
+    /// the segment before the final ".log" parses as a positive integer. Used to keep the
+    /// directory sweep above from treating an already-rotated generation as a fresh rotation
+    /// source; the shift plan is what moves those, never the enumeration itself.</summary>
+    private static bool IsRotatedGenerationFileName(string name)
+    {
+        if (!name.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string withoutExtension = name[..^".log".Length];
+        int dot = withoutExtension.LastIndexOf('.');
+        return dot >= 0
+            && int.TryParse(withoutExtension.AsSpan(dot + 1), out int generation)
+            && generation > 0;
     }
 }
