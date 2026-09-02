@@ -123,7 +123,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `local_combat_bisect_mask` | `0` (off) | debug: bisection mask for isolating a local-combat bug | — |
 | `local_combat_range` | `20` | max distance (units) to release a local-combat enemy | — |
 | `local_combat_engage_range` | `11` | engage distance for a released local-combat enemy | — |
-| `local_combat_timeout_s` | `25` | seconds before a released enemy reclaims to the mirror | — |
+| `local_combat_timeout_s` | `25` | seconds of NO ACTIVITY (no damage dealt to it, not currently targeting the local player) before a released enemy reclaims to the mirror — not a fight-length cap; fresh activity keeps refreshing this clock indefinitely | [combat-participation.md §13](research/combat-participation.md) |
 | `local_combat_targeting_us_fresh_s` | `2` | freshness window for targeting data, seconds | — |
 | `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on a free local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
 | `local_combat_engage_fallback` | ON | if a local-combat script fire leaves a creature with no attack target after a short grace window (an idle GIT hostile, not one already mid-round), drive its attack on the local player directly through the same engine call `attack`/`companion_local_combat` already use, once per fight | [combat-participation.md §12](research/combat-participation.md) |

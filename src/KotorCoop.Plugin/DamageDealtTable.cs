@@ -48,6 +48,28 @@ internal sealed class DamageDealtTable
 
     public uint TotalAt(int index) => _total[index];
 
+    /// <summary>The current cumulative total for one target, or 0 if nothing has ever been
+    /// added for it — the read half of <see cref="Add"/>, for a caller (local_combat's
+    /// inactivity timer, docs/research/combat-participation.md §13) that needs one id's own
+    /// total rather than this ledger's whole array shape.</summary>
+    public uint TotalFor(uint objectId)
+    {
+        if (objectId == 0)
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < _id.Length; i++)
+        {
+            if (_id[i] == objectId)
+            {
+                return _total[i];
+            }
+        }
+
+        return 0;
+    }
+
     /// <summary>
     /// Adds one hit. Returns false when the table was full and the damage was dropped.
     /// </summary>
