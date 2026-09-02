@@ -126,6 +126,21 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         DialogueState token = session.GetDialogue();
         bool followingPeer = token.IsHeldByAnotherThan(session.LocalPeerId);
 
+        // ⚠ STUNT MODULE: a scripted cutscene, not a conversation any peer could meaningfully
+        // join or leave this instance in the middle of (see StuntModuleRule). Never follow
+        // ANYONE while sitting in one — there is no real dialogue UI here to drive a spectate
+        // copy into — and, below, never publish this instance's own "dialogue" as something
+        // followable either. DialogueState carries no owner-module field, so this cannot
+        // separately detect "the OWNER announced from inside a stunt module" — but that case
+        // is already covered from the source: the owner's own PumpDialogue call, running this
+        // same gate on ITS local module, is what would otherwise have published a followable
+        // token in the first place, so a peer never sees one to follow.
+        bool localInStuntModule = StuntModuleRule.IsStuntModule(local.Module);
+        if (localInStuntModule)
+        {
+            followingPeer = false;
+        }
+
         // ⚠ A follower's conversation is NOT a claim. While this instance follows a peer's
         // conversation, its own client is genuinely "in a conversation" — the copy we
         // opened. Publishing that as a claim made the roles flip at the end: the owner
@@ -170,6 +185,15 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
 
         bool active = rawInDialogue
             || (_dialogueLastActiveMs > 0 && (nowMs - _dialogueLastActiveMs) < DialogueLingerMs);
+
+        // Never publish as active while this instance sits in a stunt module — see the gate
+        // above. The linger window still exists for an ordinary conversation caught mid-line
+        // by an ordinary module change; a stunt module is not that, so it is forced off
+        // unconditionally rather than left to expire on its own.
+        if (localInStuntModule)
+        {
+            active = false;
+        }
 
         // Set here, ahead of the tick-gate's possible early return below, so it tracks the
         // engine every call the way _dialogueLastActiveMs/_dialogueHeldPartnerTag above do —

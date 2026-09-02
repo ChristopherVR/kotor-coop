@@ -25,6 +25,19 @@ internal sealed class WorldStatePump(
     /// </summary>
     public void PumpInteractionLocks(in PlayerState local)
     {
+        // A stunt module's "interaction" is whatever the cutscene's own scripted objects
+        // happen to look like — not a real container/door/NPC this player chose to use, and
+        // not something a peer's engine could resolve at all (see StuntModuleRule). Neither
+        // publish a claim from here (a peer would freeze an object it cannot see, forever,
+        // once the lease outlives the cutscene) nor apply anyone else's locks onto this
+        // instance's own cutscene-only object table. The claim is a lease, so simply not
+        // refreshing it here lets it expire on its own the moment this instance enters the
+        // stunt module — nothing further to withdraw.
+        if (StuntModuleRule.IsStuntModule(local.Module))
+        {
+            return;
+        }
+
         bridge.TryReadLocalInteraction(out string tag, out uint kind, out bool active, out uint targetId);
 
         // Sent even when the tag is empty: that is how the session learns which module the

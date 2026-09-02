@@ -190,7 +190,7 @@ internal sealed class PartyPoolPumpV2(
     /// <see cref="_pendingGate"/>, exactly like <see cref="_pendingApplies"/> itself.</summary>
     private readonly Queue<ExpectedReconcileMovement?> _dispatchOrder = new();
 
-    public void Pump(SessionCapabilities caps)
+    public void Pump(SessionCapabilities caps, string localModule = "")
     {
         if (!bridge.SupportsPartyPool || (caps & SessionCapabilities.PartyPool) == 0)
         {
@@ -199,7 +199,7 @@ internal sealed class PartyPoolPumpV2(
 
         if (session.IsEnemyAuthority)
         {
-            PumpHost();
+            PumpHost(localModule);
         }
         else
         {
@@ -207,8 +207,22 @@ internal sealed class PartyPoolPumpV2(
         }
     }
 
-    private void PumpHost()
+    private void PumpHost(string localModule)
     {
+        // A stunt module's party pool repository is a cutscene-only world (see
+        // StuntModuleRule) — do not scan-and-publish it, and do not drain/apply intents
+        // against it either (an accepted deposit applied to whatever the stunt module's own
+        // pool object happens to be would be a write into a world that is about to be torn
+        // down, not the shared one). Hold everything exactly as it stood the tick before this
+        // host entered the stunt module: `_lastScanEpoch`/`_everPumped` are deliberately left
+        // untouched here, so the epoch-change withdraw-and-resweep below still fires correctly
+        // the moment this host is back in a real module and the bridge's own bookkeeping has
+        // moved on from whatever it was before the cutscene.
+        if (StuntModuleRule.IsStuntModule(localModule))
+        {
+            return;
+        }
+
         // The bridge dropped its scan bookkeeping (the host's own world was replaced — a reload
         // of the same or another module, IWorldStateBridge.WorldEpoch). Whatever this host last
         // published described the OLD world's pool; stop broadcasting it until a fresh sweep of

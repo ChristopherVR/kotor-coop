@@ -141,7 +141,7 @@ internal sealed class StorePumpV2(
     /// </summary>
     private readonly HashSet<uint> _baselinedStores = [];
 
-    public void Pump(SessionCapabilities caps)
+    public void Pump(SessionCapabilities caps, string localModule = "")
     {
         if (!bridge.SupportsStore || (caps & SessionCapabilities.Store) == 0)
         {
@@ -150,7 +150,7 @@ internal sealed class StorePumpV2(
 
         if (session.IsEnemyAuthority)
         {
-            PumpHost();
+            PumpHost(localModule);
         }
         else
         {
@@ -158,8 +158,18 @@ internal sealed class StorePumpV2(
         }
     }
 
-    private void PumpHost()
+    private void PumpHost(string localModule)
     {
+        // A stunt module's own store objects (if any resolve at all) belong to a cutscene-only
+        // world that is about to be torn down — see StuntModuleRule. Nothing scanned there is
+        // the shared store's real stock, so neither scan-and-publish nor drain-and-apply run
+        // while this host sits in one; the host's last real snapshot for every store stays
+        // exactly as published until this host is back in an ordinary module.
+        if (StuntModuleRule.IsStuntModule(localModule))
+        {
+            return;
+        }
+
         if (bridge.TryScanOpenStore(out uint storeObjectId, out IReadOnlyDictionary<StoreStackKey, int> totals))
         {
             session.PublishStoreSnapshotV2(storeObjectId, totals);

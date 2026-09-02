@@ -207,9 +207,19 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
 
     private bool _baselined;
 
-    public void Pump(SessionCapabilities caps)
+    public void Pump(SessionCapabilities caps, string localModule)
     {
         if (!bridge.SupportsPartyPool || (caps & SessionCapabilities.PartyPool) == 0)
+        {
+            return;
+        }
+
+        // This channel has no host/client split (every peer runs the same detect-and-reconcile
+        // loop against the wire) — see the class remarks. A stunt module's pool repository is
+        // still a cutscene-only world either way (StuntModuleRule), so hold this instance's own
+        // belief exactly where it stood rather than diff a fake reading against it or reconcile
+        // toward it; the very next real-module tick resumes from the same belief unchanged.
+        if (StuntModuleRule.IsStuntModule(localModule))
         {
             return;
         }

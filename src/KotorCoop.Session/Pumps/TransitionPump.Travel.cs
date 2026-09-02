@@ -179,8 +179,8 @@ internal sealed partial class TransitionPump
 
         // Stunt modules stage cutscenes. The host will be dumped back into a real module
         // when its scene ends; following it in would trap this player in someone else's
-        // cinematic.
-        if (target.StartsWith("stunt", StringComparison.OrdinalIgnoreCase))
+        // cinematic. See StuntModuleRule for the same test shared with the state publishers.
+        if (StuntModuleRule.IsStuntModule(target))
         {
             return;
         }
@@ -330,7 +330,7 @@ internal sealed partial class TransitionPump
         // The stunt gate and the fallback-name guard apply to an announced destination
         // exactly as they do to the host's published module in the slow path below — an
         // announcement is earlier information, not different rules.
-        if (announce.Module.StartsWith("stunt", StringComparison.OrdinalIgnoreCase)
+        if (StuntModuleRule.IsStuntModule(announce.Module)
             || ModuleNameGuard.IsFallbackModuleName(announce.Module))
         {
             _pendingAnnounce = null;
