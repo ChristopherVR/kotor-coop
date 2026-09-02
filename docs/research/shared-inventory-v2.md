@@ -2781,3 +2781,30 @@ and lets `ScriptItemGrantPump` start diffing again anyway — the live evidence 
 WHEN the items appeared relative to the world being acked (some time before the 15 s rebuild
 fired at 23:31:19), not how many seconds after the ack the engine actually finished creating
 them.
+
+### 18.4 Live 2026-09-03 00:00 — the settle closed at +3 s and the grant fired anyway; the id set was the wrong thing to compare
+
+Same recipe, fresh rig on the merged settle (e708774): wipe (host `down 0` + `down`, client
+`down`), host `load --load-save 1` via the plugin route, one WipeRecovery rejoin on the client.
+Host log:
+
+    [00:00:01] party pool: the bridge reset its own scan bookkeeping (module change)
+    [00:00:05] * script item grant: 2 new item(s) in the local PC's inventory outside dialogue: g_a_clothes01, g_w_shortswrd01
+    [00:00:21] * party pool trace: host snapshot 5 key(s): g_a_clothes01 ..., g_w_shortswrd01 ...
+
+Four seconds after the edge — so the window was open, and it CLOSED: the inline rebuild at
++0 s and the 2 s-cadence background sweep at +2 s named the same set of item ids, and the
+pump's first trusted diff a second later found two "new" items. But no sweep ran between the
+baseline and that diff: `ReadPossessedItems` filters the cached bodies on their POSSESSOR field
+(read live, `+0x268`), and that is what moved. The engine mints the save's equipped clothes and
+short sword as heap objects (same ids on both sweeps) and assigns them to the PC a beat later,
+so two sweeps agreed on WHICH bodies existed while the view the pump actually reads — "which of
+them does the PC hold" — was still changing underneath.
+
+Fix: the settle set is a `Fingerprint(id, possessor, tagKnown)` per body (`ulong`: id in the
+high word, holder in the low, bit 63 = tag unreadable), built in `ApplyItemScanHits` from one
+extra `uint` read per hit. Two sweeps that agree on the ids but not on the holders — or on a
+body whose tag was blank on one and readable on the next (the view's key is the resref) — are
+not agreement. `ItemSweepProvenanceRuleTests.TheSameIdsUnderADifferentHolderAreNotAgreement`,
+`ABodyWhoseTagBecomesReadableIsAChangedView`, `FingerprintsKeepIdAndHolderApart`.
+NEEDS-LIVE (third attempt at this row).

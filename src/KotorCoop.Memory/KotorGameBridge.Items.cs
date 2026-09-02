@@ -95,6 +95,13 @@ public sealed partial class KotorGameBridge
     /// own doc for the rejoin that published the client's own sword as a script grant.</summary>
     private readonly ItemSweepProvenanceRule _itemSweepProvenance = new();
 
+    /// <summary>What the last sweep found, as <see cref="ItemSweepProvenanceRule.Fingerprint"/>s
+    /// (id + possessor + whether the tag read) — the set two settle sweeps must agree on. Rebuilt
+    /// by <see cref="ApplyItemScanHits"/>; the possessor is read there, once per hit, because the
+    /// possessed view <see cref="ReadPossessedItems"/> serves is filtered on that field and a
+    /// reload assigns the save's equipment to the PC AFTER minting it (live 2026-09-03 00:00).</summary>
+    private readonly List<ulong> _lastSweepFingerprints = [];
+
     /// <inheritdoc/>
     public bool IsItemViewSettled => !_itemSweepProvenance.Settling;
 
@@ -215,7 +222,7 @@ public sealed partial class KotorGameBridge
             }
 
             ApplyItemScanHits(hits);
-            _itemSweepProvenance.Swept(betweenLives, _itemAddresses.Keys, Environment.TickCount64);
+            _itemSweepProvenance.Swept(betweenLives, _lastSweepFingerprints, Environment.TickCount64);
             _itemTagsBuiltAtMs = Environment.TickCount64;
             return true;
         }
@@ -239,7 +246,7 @@ public sealed partial class KotorGameBridge
         PatternScanner scanner = new(_memory);
 
         ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit));
-        _itemSweepProvenance.Swept(IsWorldBetweenLives, _itemAddresses.Keys, Environment.TickCount64);
+        _itemSweepProvenance.Swept(IsWorldBetweenLives, _lastSweepFingerprints, Environment.TickCount64);
     }
 
     /// <summary>
@@ -251,6 +258,7 @@ public sealed partial class KotorGameBridge
     {
         _itemTags.Clear();
         _itemAddresses.Clear();
+        _lastSweepFingerprints.Clear();
 
         int duplicates = 0;
 
@@ -294,6 +302,9 @@ public sealed partial class KotorGameBridge
             {
                 _itemTags[id] = tag;
             }
+
+            uint possessor = _memory.TryReadUInt32(address + ItemPossessor, out uint holder) ? holder : ObjectInvalid;
+            _lastSweepFingerprints.Add(ItemSweepProvenanceRule.Fingerprint(id, possessor, tag.Length > 0));
         }
 
         LastItemScanNote =

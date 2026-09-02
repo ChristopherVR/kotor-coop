@@ -120,7 +120,7 @@ public class ItemSweepProvenanceRuleTests
         ItemSweepProvenanceRule rule = new();
         rule.Reset(nowMs: 0);
 
-        uint[] ids = [0x127, 0x128];
+        ulong[] ids = [0x127, 0x128];
 
         rule.Swept(betweenLives: false, ids, nowMs: 0);
         Assert.True(rule.Settling, "one sweep is not enough to trust");
@@ -136,7 +136,7 @@ public class ItemSweepProvenanceRuleTests
         ItemSweepProvenanceRule rule = new();
         rule.Reset(nowMs: 0);
 
-        uint[] ids = [0x127, 0x128];
+        ulong[] ids = [0x127, 0x128];
 
         rule.Swept(betweenLives: false, ids, nowMs: 0);
         rule.Swept(betweenLives: false, ids, nowMs: 200);
@@ -153,20 +153,20 @@ public class ItemSweepProvenanceRuleTests
         ItemSweepProvenanceRule rule = new();
         rule.Reset(nowMs: 0);
 
-        rule.Swept(betweenLives: false, new uint[] { 0x127 }, nowMs: 0);
+        rule.Swept(betweenLives: false, new ulong[] { 0x127 }, nowMs: 0);
         Assert.True(rule.Settling);
 
         // The sword shows up: this sweep disagrees with the held candidate, so it becomes the
         // new candidate rather than confirming the old one.
-        rule.Swept(betweenLives: false, new uint[] { 0x127, 0x128 }, nowMs: 1_500);
+        rule.Swept(betweenLives: false, new ulong[] { 0x127, 0x128 }, nowMs: 1_500);
         Assert.True(rule.Settling, "a differing sweep must not be read as agreement");
 
         // A short-spaced repeat of the same set does not count either.
-        rule.Swept(betweenLives: false, new uint[] { 0x127, 0x128 }, nowMs: 1_600);
+        rule.Swept(betweenLives: false, new ulong[] { 0x127, 0x128 }, nowMs: 1_600);
         Assert.True(rule.Settling);
 
         // Properly spaced from the SECOND sweep (the new candidate), the set finally agrees.
-        rule.Swept(betweenLives: false, new uint[] { 0x127, 0x128 }, nowMs: 3_000);
+        rule.Swept(betweenLives: false, new ulong[] { 0x127, 0x128 }, nowMs: 3_000);
         Assert.False(rule.Settling);
     }
 
@@ -176,7 +176,7 @@ public class ItemSweepProvenanceRuleTests
         ItemSweepProvenanceRule rule = new();
         rule.Reset(nowMs: 0);
 
-        uint[] ids = [0x127];
+        ulong[] ids = [0x127];
 
         // Between-lives sweeps are expected to keep changing; they must never become (or
         // confirm) a settle candidate no matter how many of them agree.
@@ -200,15 +200,63 @@ public class ItemSweepProvenanceRuleTests
         rule.Reset(nowMs: 0);
 
         // Every sweep disagrees with the last — an inventory that never stops changing.
-        rule.Swept(betweenLives: false, new uint[] { 1 }, nowMs: 0);
-        rule.Swept(betweenLives: false, new uint[] { 1, 2 }, nowMs: 2_000);
-        rule.Swept(betweenLives: false, new uint[] { 1, 2, 3 }, nowMs: 4_000);
-        rule.Swept(betweenLives: false, new uint[] { 1, 2, 3, 4 }, nowMs: 19_000);
+        rule.Swept(betweenLives: false, new ulong[] { 1 }, nowMs: 0);
+        rule.Swept(betweenLives: false, new ulong[] { 1, 2 }, nowMs: 2_000);
+        rule.Swept(betweenLives: false, new ulong[] { 1, 2, 3 }, nowMs: 4_000);
+        rule.Swept(betweenLives: false, new ulong[] { 1, 2, 3, 4 }, nowMs: 19_000);
         Assert.True(rule.Settling, "still under the cap");
 
-        rule.Swept(betweenLives: false, new uint[] { 1, 2, 3, 4, 5 }, nowMs: 20_500);
+        rule.Swept(betweenLives: false, new ulong[] { 1, 2, 3, 4, 5 }, nowMs: 20_500);
 
         Assert.False(rule.Settling, "the cap must not pin every caller to rebaseline-only forever");
+    }
+
+    /// <summary>Live 2026-09-03 00:00 (shared-inventory-v2.md §18.1): the reload minted the
+    /// clothes and sword first and gave them to the PC a beat later. Two sweeps that agree on
+    /// the IDS but not on who holds them have not agreed on the view the pump reads.</summary>
+    [Fact]
+    public void TheSameIdsUnderADifferentHolderAreNotAgreement()
+    {
+        ItemSweepProvenanceRule rule = new();
+        rule.Reset(nowMs: 0);
+
+        const uint Pc = 0x7FFFFFFF;
+        const uint Nobody = 0x7F000000;
+
+        rule.Swept(betweenLives: false,
+            [ItemSweepProvenanceRule.Fingerprint(0x127, Nobody), ItemSweepProvenanceRule.Fingerprint(0x128, Nobody)],
+            nowMs: 0);
+
+        // Same two bodies, now equipped: the possessor field moved, so this is a new candidate.
+        rule.Swept(betweenLives: false,
+            [ItemSweepProvenanceRule.Fingerprint(0x127, Pc), ItemSweepProvenanceRule.Fingerprint(0x128, Pc)],
+            nowMs: 2_000);
+        Assert.True(rule.Settling, "the ids matched but the holders did not");
+
+        rule.Swept(betweenLives: false,
+            [ItemSweepProvenanceRule.Fingerprint(0x127, Pc), ItemSweepProvenanceRule.Fingerprint(0x128, Pc)],
+            nowMs: 4_000);
+        Assert.False(rule.Settling);
+    }
+
+    [Fact]
+    public void ABodyWhoseTagBecomesReadableIsAChangedView()
+    {
+        ItemSweepProvenanceRule rule = new();
+        rule.Reset(nowMs: 0);
+
+        rule.Swept(betweenLives: false, [ItemSweepProvenanceRule.Fingerprint(0x127, 0x7FFFFFFF, tagKnown: false)], nowMs: 0);
+        rule.Swept(betweenLives: false, [ItemSweepProvenanceRule.Fingerprint(0x127, 0x7FFFFFFF, tagKnown: true)], nowMs: 2_000);
+
+        Assert.True(rule.Settling, "the view's key is the resref; a blank tag becoming readable changes it");
+    }
+
+    [Fact]
+    public void FingerprintsKeepIdAndHolderApart()
+    {
+        Assert.NotEqual(ItemSweepProvenanceRule.Fingerprint(1, 2), ItemSweepProvenanceRule.Fingerprint(2, 1));
+        Assert.NotEqual(ItemSweepProvenanceRule.Fingerprint(1, 2), ItemSweepProvenanceRule.Fingerprint(1, 2, tagKnown: false));
+        Assert.Equal(ItemSweepProvenanceRule.Fingerprint(0x127, 0x7FFFFFFF), ItemSweepProvenanceRule.Fingerprint(0x127, 0x7FFFFFFF));
     }
 
     [Fact]

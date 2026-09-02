@@ -831,3 +831,42 @@ client `down`, host `load --pid <host> --load-save 1`, wait for the client's sin
 `WipeRecovery` rejoin via the plugin route, then host `warp tar_m10aa`. Check the client's
 plugin log for `EXITPROCESS` / `FIRST-CHANCE` and whether `transition: closed the client
 world` appears.
+
+### 2026-09-03 00:06 — reproduced (2/2), and `ExitProbe` named the exit
+
+Same recipe, plugins with `ExitProbe` in both dirs: wipe → host `load --load-save 1` (plugin
+route) → client WipeRecovery rejoin, one only → six clean minutes → host `warp tar_m10aa`.
+Client plugin, last four lines:
+
+    [00:06:35.038] flush, before the module is stored: destroyed phantom 0x12F (slot 0)
+    [00:06:35.043] travel: moving to module 'tar_m10aa' on the session's authority
+    [00:06:35.054] epoch: world unloading; clearing phantom, item, combat and door state
+    [00:06:35.059] EXITPROCESS(3221225477) called from 0x6FB0C7 (swkotor.exe) on thread 1; image-range stack values: 0x6FB20F 0x6FB230 0x6FB54B 0x6FB3A5 0x6FB38D 0x6FB38D
+
+3221225477 = 0xC0000005: the engine's own top-level exception handler (the `0x6FB0xx` frames
+are all inside it) caught an access violation on the main thread and called `ExitProcess`
+with the exception code. That is why the earlier one left nothing: no Windows Application-log
+entry (the engine handled it), no `FATAL (managed)` (not our thread), and no `FIRST-CHANCE`
+line because the vectored handler's record is drained by the worker thread and the process
+was gone 5 ms later — the persisted-record work in `CrashProbe` is what will name the
+faulting eip next time.
+
+What is known without it:
+
+- It is the PLUGIN-ROUTE rejoin that arms it. The 23:02 wipe reload (four menu-route rejoins)
+  was followed by two clean `warp tar_m10aa` follows (23:02:42, 23:02:53, both reaching
+  `transition: closed the client world ahead of the map init` ~40 ms after the travel line).
+  The 23:34 and 00:06 follows, each the first after a `load request 2 sent to the plugin`
+  rejoin (`MenuLoadController.FireMidSessionPhase1`: DestroyServer / ClientUnloadModule /
+  CreateServer / LoadPCAutoSave with a never-shown `CSWGuiSaveLoad` panel), died 5-11 ms
+  after `epoch: world unloading`, before the next frame's close-client-world step ran.
+- Timing puts the fault inside the remainder of the frame in which the server module was
+  first seen gone — the same frame travel-map-init-crash.md's map-init dereference lives in,
+  which the close-client-world step only covers from the NEXT frame.
+
+Candidates, in order: (1) something the mid-session load leaves alive that the ordinary
+menu-route load does not (the never-shown save panel, the load-screen state, the in-game GUI
+the retail branch rebuilds and ours does not), which the module teardown then walks; (2) the
+map-init dereference reached on the teardown frame itself because the client's GUI is in a
+state the ordinary path never has. Next: merge the persisted crash record, re-run this exact
+recipe (deterministic now), symbolicate the eip.

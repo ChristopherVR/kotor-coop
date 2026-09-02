@@ -65,8 +65,24 @@ internal sealed class ItemSweepProvenanceRule
     private const long SettleCapMs = 20_000;
 
     private long _settleStartedAtMs;
-    private HashSet<uint>? _pendingIds;
+    private HashSet<ulong>? _pendingIds;
     private long _pendingAtMs;
+
+    /// <summary>
+    /// What one item contributes to the set two sweeps must agree on: its id AND who holds it.
+    ///
+    /// ⚠ THE ID ALONE IS NOT ENOUGH. Live 2026-09-03 00:00 (shared-inventory-v2.md §18.1): on a
+    /// game-over reload the engine mints the save's equipped clothes and short sword as heap
+    /// objects first and assigns them to the PC a beat later — two sweeps 2 s apart found the
+    /// SAME ids (so the id-only rule settled at +3 s), and the pump's first trusted diff a
+    /// second later saw two items whose possessor field had meanwhile become the PC and
+    /// granted the peer a second set. The possessed view <c>ScriptItemGrantPump</c> consumes is
+    /// filtered on that field, so the field is part of what has to stand still. <paramref
+    /// name="tagKnown"/> rides along for the same reason: the view's key is the resref, and a
+    /// body whose tag was still blank on one sweep and readable on the next is a changed view.
+    /// </summary>
+    public static ulong Fingerprint(uint itemId, uint possessor, bool tagKnown = true) =>
+        ((ulong)itemId << 32) | possessor | (tagKnown ? 0UL : 1UL << 63); // ids are < 0x7F000000, so bit 63 is free
 
     /// <summary>True while the caches describe a sweep taken between lives.</summary>
     public bool Provisional { get; private set; }
@@ -74,7 +90,7 @@ internal sealed class ItemSweepProvenanceRule
     /// <summary>
     /// True from a world edge (<see cref="Reset"/>) until the item view has stood still: two
     /// consecutive sweeps, at least <see cref="MinSweepSpacingMs"/> apart, named the exact same
-    /// set of item ids, or <see cref="SettleCapMs"/> has passed since the edge and this gives up
+    /// set of item <see cref="Fingerprint"/>s (id + holder), or <see cref="SettleCapMs"/> has passed since the edge and this gives up
     /// waiting. Starts false on a fresh rule (a bridge that never sees a world edge — the mock
     /// harness, or before the first attach — never settles anything, so nothing should ever hold
     /// a caller back).
@@ -83,14 +99,15 @@ internal sealed class ItemSweepProvenanceRule
 
     /// <summary>
     /// A sweep has just been applied to the caches, taken while the world was (or was not)
-    /// between lives. <paramref name="itemIds"/> is the id set the sweep found — read only while
+    /// between lives. <paramref name="itemIds"/> is the <see cref="Fingerprint"/> set the sweep
+    /// found (a bare id is the same as a fingerprint with no holder) — read only while
     /// <see cref="Settling"/>, so a caller not tracking the fix this half exists for can keep
     /// calling the old one-argument shape and get exactly the old behaviour. <paramref
     /// name="nowMs"/> is the caller's own clock (<c>Environment.TickCount64</c> in
     /// <c>KotorGameBridge</c>), passed in rather than read here so this stays pure and pinnable
     /// without an engine.
     /// </summary>
-    public void Swept(bool betweenLives, IReadOnlyCollection<uint>? itemIds = null, long nowMs = 0)
+    public void Swept(bool betweenLives, IReadOnlyCollection<ulong>? itemIds = null, long nowMs = 0)
     {
         Provisional = betweenLives;
 
@@ -115,7 +132,7 @@ internal sealed class ItemSweepProvenanceRule
             return;
         }
 
-        HashSet<uint> ids = itemIds is null ? [] : [.. itemIds];
+        HashSet<ulong> ids = itemIds is null ? [] : [.. itemIds];
 
         if (_pendingIds is null)
         {
