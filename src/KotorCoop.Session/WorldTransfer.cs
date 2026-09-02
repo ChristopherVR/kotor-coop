@@ -340,7 +340,20 @@ public static class WorldTransfer
         await stream.WriteAsync(request, cancellationToken).ConfigureAwait(false);
 
         byte[] header = new byte[8];
-        await ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException error)
+        {
+            // Nothing that speaks this protocol has replied yet, so a reset here is the same
+            // "not a co-op host" the magic check below reports — a foreign listener that
+            // never reads our request and hangs up (RST, not FIN) surfaces as a transport
+            // error on Windows, and a joiner wants the clear diagnosis, not a socket message.
+            throw new InvalidDataException(
+                "world transfer: the reply is not from a co-op host (the connection dropped before a reply)",
+                error);
+        }
 
         if ((ushort)(header[0] | (header[1] << 8)) != Magic)
         {
