@@ -113,6 +113,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomAttackerTable.cs" Link="Plugin\PhantomAttackerTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MoveNearDestinationRule.cs" Link="Plugin\MoveNearDestinationRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GalaxyMapConfirmSuppressionRule.cs" Link="Plugin\GalaxyMapConfirmSuppressionRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ThreatTable.cs" Link="Plugin\ThreatTable.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ThreatRetargetRule.cs" Link="Plugin\ThreatRetargetRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -54,6 +54,17 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
     private readonly DamageOwedLedger _owed = new(SharedBlock.DamageLedgerCapacity);
 
+    /// <summary>THREAT_RETARGET's own per-creature threat bookkeeping — see that class's own
+    /// doc comment for what it does and does not track. Only ever touched when
+    /// <see cref="Odyssey.ThreatRetargetEnabled"/> is on; harmless (and empty) otherwise.</summary>
+    private readonly ThreatTable _threat = new();
+
+    /// <summary>Rule-defined tunables for the retarget decision. Not coop.ini keys of their
+    /// own — see docs/research/peer-damage-ledger.md §9 for why the defaults were picked.</summary>
+    private static readonly ThreatRetargetOptions ThreatOptions = new();
+
+    private int _threatLogged;
+
     /// <summary>Scratch for the attacker set: the PC plus the party roster.</summary>
     private readonly uint[] _attackers = new uint[PartyNpcSlots + 1];
 
@@ -144,6 +155,11 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         ForgetResolutionHistory();
         block.DamageOwedCount = 0;
         block.DamageDealtCount = 0;
+
+        // Object ids are per module load; a threat row keyed by a creature or attacker id from
+        // the old module would name a stranger in the new one.
+        _threat.Clear();
+        block.ThreatDebugCount = 0;
     }
 
     /// <summary>Drops what is known about which ids resolve here. Object ids are per module
@@ -320,6 +336,16 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         // Computed once per pass, not per row: it does not vary within a pass.
         uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? block.SoleRemotePhantomId() : 0;
 
+        // THREAT_RETARGET (coop.ini threat_retarget, docs/research/peer-damage-ledger.md §9).
+        // Independent of damage_creator_attribution above — this only needs the peer's phantom
+        // id to bank ThreatTable rows, not to pass through EffectDamage's creator slot, so it
+        // is resolved on its own rather than reusing creatorId (which stays 0 whenever
+        // damage_creator_attribution itself is off). Same SoleRemotePhantomId() limit as §8.6:
+        // unambiguous only with exactly one remote peer connected.
+        uint threatAttackerId = Odyssey.ThreatRetargetEnabled ? block.SoleRemotePhantomId() : 0;
+        double threatNowSeconds = Odyssey.ThreatRetargetEnabled ? Environment.TickCount64 / 1000.0 : 0;
+        int threatDebugRows = 0;
+
         for (int i = 0; i < count; i++)
         {
             block.GetDamageOwed(i, out uint objectId, out uint owed);
@@ -355,7 +381,8 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             // host log had not one word about it. Bounded by its own counter so a genuine
             // transition (where every id is briefly unresolvable) costs a few lines, not a
             // flood.
-            if (Odyssey.ResolveServerObject(objectId) == 0)
+            nint creature = Odyssey.ResolveServerObject(objectId);
+            if (creature == 0)
             {
                 // ⚠ ONE LINE PER ID, and it says whether the id was EVER ours. "Does not
                 // resolve" is three different findings wearing one sentence: an id from
@@ -400,6 +427,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                         $"combat: applied {amount} of a peer's damage to 0x{objectId:X} "
                         + $"(owed {owed})");
                 }
+
+                if (Odyssey.ThreatRetargetEnabled && threatAttackerId != 0)
+                {
+                    threatDebugRows = EvaluateThreat(
+                        objectId, creature, threatAttackerId, amount, threatNowSeconds, threatDebugRows);
+                }
             }
             else if (_logged < 20)
             {
@@ -407,5 +440,103 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 PluginHost.Log($"combat: peer damage refused for 0x{objectId:X} (failure {failure})");
             }
         }
+
+        if (Odyssey.ThreatRetargetEnabled)
+        {
+            block.ThreatDebugCount = (uint)threatDebugRows;
+            block.ThreatDebugGeneration += 1;
+        }
+    }
+
+    /// <summary>
+    /// THREAT_RETARGET (coop.ini <c>threat_retarget</c>, docs/research/peer-damage-ledger.md
+    /// §9): banks this pass's applied peer damage as threat against <paramref name="creatureId"/>,
+    /// and — if its current attack target clearly no longer deserves it — orders the retarget
+    /// directly through <see cref="Odyssey.AttackTarget"/> rather than relying on the engine's
+    /// own passive <c>+0x158</c>/<c>+0x160</c> write, which §8.10 measured live reaches no
+    /// native retargeting logic for an already-engaged creature.
+    ///
+    /// Publishes one diagnostic row for <c>blockpoke.ps1 threat</c> whenever a top attacker is
+    /// known, regardless of the decision — up to <see cref="SharedBlock.ThreatDebugCapacity"/>
+    /// rows per pass. Returns the row count after this creature's own row (unchanged if this
+    /// creature was skipped or the table was already full).
+    /// </summary>
+    private int EvaluateThreat(
+        uint creatureId, nint creature, uint attackerId, int amount, double nowSeconds, int debugRows)
+    {
+        // Never a plot/story actor — the same exemption CombatController's own census-driven
+        // mirror already grants a cutscene actor (EnemyView.Plot). Checked before anything is
+        // even recorded, not just before the retarget itself, so a plot creature's row never
+        // exists for blockpoke to read either.
+        if (Odyssey.IsPlot(creature))
+        {
+            return debugRows;
+        }
+
+        _threat.AddThreat(creatureId, attackerId, amount, nowSeconds);
+
+        // Never retarget a creature that is not hostile/in combat: 0 (no round pointer, or the
+        // round has no live target) is exactly what ThreatRetargetRule.Decide reads as
+        // NotInCombat below — this call always runs (never gated on it) so the diagnostic row
+        // still shows an idle creature's tracked threat.
+        uint currentTargetId = Odyssey.GetCurrentAttackTargetId(creature);
+
+        if (!_threat.TryGetTopAttacker(creatureId, nowSeconds, out uint topAttackerId, out double topThreat))
+        {
+            return debugRows;
+        }
+
+        double currentTargetThreat = _threat.GetThreat(creatureId, currentTargetId, nowSeconds);
+
+        if (debugRows < SharedBlock.ThreatDebugCapacity)
+        {
+            block.SetThreatDebugRow(
+                debugRows, creatureId, currentTargetId, topAttackerId, topThreat, currentTargetThreat);
+            debugRows++;
+        }
+
+        double secondsSinceLastRetarget = _threat.SecondsSinceLastRetarget(creatureId, nowSeconds);
+        ThreatRetargetDecision decision = ThreatRetargetRule.Decide(
+            currentTargetId, topAttackerId, topThreat, currentTargetThreat, secondsSinceLastRetarget,
+            ThreatOptions);
+
+        if (decision != ThreatRetargetDecision.Retarget)
+        {
+            return debugRows;
+        }
+
+        // Never onto a dead or unresolved target: the top attacker's own phantom body has to
+        // actually be here (and not downed) to be worth swinging at.
+        nint topAttackerBody = Odyssey.ResolveServerObject(topAttackerId);
+        if (topAttackerBody == 0 || Odyssey.IsDowned(topAttackerBody))
+        {
+            return debugRows;
+        }
+
+        // Armed before the call, win or lose: a refusal that repeats every pass (a structural
+        // failure, not a transient one) must not hammer AttackTarget at the owed-loop's own
+        // cadence for the whole cooldown window — the next real attempt is exactly as informed
+        // once the cooldown clears again.
+        _threat.MarkRetargeted(creatureId, nowSeconds);
+
+        if (Odyssey.AttackTarget(creatureId, topAttackerId, out int failure))
+        {
+            if (_threatLogged < 20)
+            {
+                _threatLogged++;
+                PluginHost.Log(
+                    $"threat: 0x{creatureId:X} retargeted 0x{currentTargetId:X} -> 0x{topAttackerId:X} "
+                    + $"(threat {topThreat:F0} vs {currentTargetThreat:F0})");
+            }
+        }
+        else if (_threatLogged < 20)
+        {
+            _threatLogged++;
+            PluginHost.Log(
+                $"threat: 0x{creatureId:X} retarget refused 0x{currentTargetId:X} -> 0x{topAttackerId:X} "
+                + $"(failure {failure})");
+        }
+
+        return debugRows;
     }
 }

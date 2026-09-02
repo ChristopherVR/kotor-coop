@@ -143,6 +143,19 @@ internal static unsafe partial class Odyssey
         return round == 0 ? 0 : *(uint*)(round + RoundCurrentTarget);
     }
 
+    /// <summary>coop.ini <c>threat_retarget</c> (default OFF; assigned once from
+    /// <c>PluginHost.Startup.cs</c>, same pattern as <see cref="DamageCreatorAttributionEnabled"/>).
+    /// When ON, the HOST side of <see cref="PeerDamageController"/> keeps a small per-creature
+    /// threat table (<see cref="ThreatTable"/>) and, when a peer's tracked threat against a
+    /// creature clearly outweighs its current attack target's own
+    /// (<see cref="ThreatRetargetRule"/>), commands the creature onto that peer's phantom
+    /// directly through <see cref="AttackTarget"/> — because §8.10 of
+    /// docs/research/peer-damage-ledger.md measured live that <c>damage_creator_attribution</c>'s
+    /// passive <c>+0x158</c>/<c>+0x160</c> write reaches no native retargeting logic for an
+    /// already-engaged creature. See docs/research/peer-damage-ledger.md §9. NEEDS-LIVE: nothing
+    /// about this flag has been run against a live game.</summary>
+    public static bool ThreatRetargetEnabled;
+
     /// <summary>
     /// CSWSCombatRound::AddAttackAction(uint targetId, int, int, int nDelayMs, int) —
     /// queues one swing at <c>targetId</c> on the round's pending-action list. VERIFIED by

@@ -78,6 +78,44 @@ internal sealed unsafe partial class SharedBlockView
         }
     }
 
+    // ---- threat-retarget diagnostics (version 66) --------------------------------
+    //
+    // Dev-only snapshot of PeerDamageController's own ThreatTable, for `tools/blockpoke.ps1
+    // threat` — see SharedBlock.Combat.cs's own remarks on the region. Never read by the agent.
+
+    /// <summary>Plugin -&gt; (blockpoke only). How many of <see cref="SetThreatDebugRow"/>'s
+    /// rows are valid this pass.</summary>
+    public uint ThreatDebugCount
+    {
+        get => *U32(SharedBlock.OffsetThreatDebugCount);
+        set => *U32(SharedBlock.OffsetThreatDebugCount) = value;
+    }
+
+    /// <summary>Plugin -&gt; (blockpoke only). Bumped on every publish.</summary>
+    public uint ThreatDebugGeneration
+    {
+        get => *U32(SharedBlock.OffsetThreatDebugGeneration);
+        set => *U32(SharedBlock.OffsetThreatDebugGeneration) = value;
+    }
+
+    /// <summary>Plugin -&gt; (blockpoke only). Writes one row of the diagnostic snapshot —
+    /// <paramref name="topThreat"/>/<paramref name="currentTargetThreat"/> are the RAW (not
+    /// x100) decayed threat values; this scales and truncates them the same way for every
+    /// caller so a reader never has to guess the fixed-point convention.</summary>
+    public void SetThreatDebugRow(
+        int index, uint creatureId, uint currentTargetId, uint topAttackerId,
+        double topThreat, double currentTargetThreat)
+    {
+        byte* row = baseAddress + SharedBlock.OffsetThreatDebugRows
+            + (Clamp(index, SharedBlock.ThreatDebugCapacity) * SharedBlock.ThreatDebugRowStride);
+
+        *(uint*)(row + 0x00) = creatureId;
+        *(uint*)(row + 0x04) = currentTargetId;
+        *(uint*)(row + 0x08) = topAttackerId;
+        *(uint*)(row + 0x0C) = (uint)Math.Max(0, Math.Round(topThreat * 100.0));
+        *(uint*)(row + 0x10) = (uint)Math.Max(0, Math.Round(currentTargetThreat * 100.0));
+    }
+
     public EnemyPresenceView GetEnemyPresence(int index)
     {
         byte* slot = baseAddress + SharedBlock.OffsetEnemyPresenceSlots

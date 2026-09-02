@@ -442,6 +442,47 @@ internal partial struct SharedBlock
     public const int OffsetMaterialisedOwnerIds = 0x4B00;
 
 
+    // ---- threat-retarget diagnostics (version 66, region 0x4B80..0x4C00) ----------
+    //
+    // NOT part of the feature itself — coop.ini threat_retarget's own decision runs entirely
+    // inside PeerDamageController.ApplyOwed against ThreatTable, a plain C# Dictionary with
+    // nothing worth publishing to the AGENT. This region exists purely so `tools/blockpoke.ps1
+    // threat` (the dev verb docs/research/peer-damage-ledger.md §9's live recipe uses) can see
+    // what the table currently believes without attaching a debugger — the exact same
+    // "publish plugin-internal state for scripted verification" reasoning the `ledger`/`combat`
+    // verbs already rest on for PhantomHitHook/DamageOwedLedger. Plugin -> (blockpoke only);
+    // the agent never reads this region.
+    //
+    // Fits the 0x80 bytes the materialised-owner-id table's own tail leaves before 0x4C00
+    // exactly (4 + 4 + 6*0x14 = 0x80), so TotalSize did not need to grow again this round.
+
+    /// <summary>Plugin -&gt; (blockpoke only). How many of <see cref="ThreatDebugCapacity"/> rows
+    /// below are valid this pass. Rewritten every <c>PeerDamageController.ApplyOwed</c> pass
+    /// that runs with <c>coop.ini threat_retarget</c> (<see cref="Odyssey.ThreatRetargetEnabled"/>)
+    /// on, even to 0 (an empty table reads as 0 rows, not stale ones from a fight that ended).</summary>
+    public const int OffsetThreatDebugCount = 0x4B80;
+
+    /// <summary>Plugin -&gt; (blockpoke only). Bumped every publish, so a poller can tell a fresh
+    /// read from a repeat of the last one — same idiom as every other generation dword in this
+    /// file.</summary>
+    public const int OffsetThreatDebugGeneration = 0x4B84;
+
+    /// <summary>How many rows <see cref="OffsetThreatDebugRows"/> carries. Small: this is a
+    /// diagnostic snapshot of whichever creatures this pass's owed loop touched, not an
+    /// exhaustive dump of every creature <c>ThreatTable</c> has ever seen.</summary>
+    public const int ThreatDebugCapacity = 6;
+
+    public const int ThreatDebugRowStride = 0x14;
+
+    /// <summary>Plugin -&gt; (blockpoke only). <see cref="ThreatDebugCapacity"/> rows of
+    /// <see cref="ThreatDebugRowStride"/> bytes each: creature id (u32 @0), its current
+    /// round+0x9CC attack target id (u32 @4), the table's top attacker id for it (u32 @8), the
+    /// top attacker's threat *100 as a u32 (@0xC), and the current target's own threat *100 as
+    /// a u32 (@0x10) — fixed-point rather than a float so blockpoke's existing byte-oriented U32
+    /// reader needs no new helper. Occupies 0x4B88..0x4C00.</summary>
+    public const int OffsetThreatDebugRows = 0x4B88;
+
+
     // ---- peer effect sync (version 44, region 0x3A00..0x3B88) ---------------------
     //
     // Non-damage effects that land on a peer's phantom (stun, paralyze, knockdown, slow,
