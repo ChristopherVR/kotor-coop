@@ -1114,3 +1114,40 @@ Nothing above has been run against the real game or the rig. In particular:
    connect timeout, confirming the fix this whole recipe exists to demonstrate.
 4. That `debug_hello_version` set on the HOST side is inert (a host never calls `SendHello`, so
    this should be a non-event by construction, but it has not been watched).
+
+### Live result (2026-09-03, 04:21): PASS — fails in ~1 s with the typed reason, host silent
+
+Rig: block 66, `ProtocolConstants.Version = 50`, `debug_hello_version=1` under `[coop]` in the
+CLIENT's `coop.ini` only, both halves launched by `tools/demo.ps1 -Save 1` (no password on
+either side). The key was removed again immediately after the read.
+
+CLIENT (`agent2.log`, verbatim):
+
+    [04:21:18] * co-op: connecting...
+    [04:21:19] connecting to 127.0.0.1:27140...  peers 0  rtt 0ms  ...
+    [04:21:19] * failed - rejected by host: E_PROTO: host is v50, you are v1
+    [04:21:19] * co-op: connection failed
+    [04:21:19] rejected by host: E_PROTO: host is v50, you are v1  peers 0  rtt 0ms  malformed 0  memory ok  module END_M01AA  hp 12/12  peers-here 0 ...
+
+HOST (`agent1.log`): `* connected - hosting on 0.0.0.0:27140 (waiting for players)` at 04:21:15,
+then nothing at all about the rejected Hello — no log line, no chat line, and `peers 0` stays
+`peers 0`. The host's summary line at 04:21:18 is the ordinary UPnP one.
+
+Against the four NEEDS-LIVE items above:
+
+1. **Host truly shows nothing** — confirmed (and it is a gap: an admin host cannot tell an
+   old-build peer was turned away except by that peer saying so).
+2. **Both client lines appear** — both `*` lines are `CoopCommandDispatcher.Reply` output, which
+   is the same path the in-game console reply and chat overlay are fed from; the two lines are
+   there in the exact order §12 predicted (`ReflectPhase` first, then the generic indicator
+   line). The overlay itself was not screen-checked this round (headless read), but the path is
+   the one every other reply uses.
+3. **Fails fast** — `connecting...` at 04:21:18, reject at 04:21:19: about one second, not the
+   15 s `DefaultConnectTimeoutMs` silent timeout the limitations row was worried about. The
+   client's status line then reads `rejected by host: E_PROTO ...` with `peers 0`, i.e. no
+   retry loop (the `_rejectReason` gate held).
+4. **Host-side key inert** — not exercised this round; still true by construction (a host never
+   calls `SendHello`).
+
+Row "Protocol-version mismatch reject (`E_PROTO`)" in docs/limitations.md and README.md moves
+from Unverified to live-verified on this read.

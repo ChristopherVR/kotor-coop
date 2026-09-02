@@ -18,7 +18,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Bringing a save (`join_mode=save`, default) | Works | Your character carries into the host's world; a mismatched world auto-adopts the host's | README "Joining: which character you bring" |
 | Bringing a brand-new character (`join_mode=newcharacter`) | Works | Play New Game normally; ~2 min later the mod quicksaves you and drops you into the host's world | live-verified 2026-08-29, `world-adoption.md` |
 | `coop.ini` divergence warning (`BehaviourDigest`) | Works (core mechanism) | A real setting mismatch shows a `W_CFG` warning on both screens; nine host keys are adopted live | roadmap Tier 1 #7 |
-| Protocol-version mismatch reject (`E_PROTO`) | Unverified | Should show a typed reject instead of a 15s silent timeout; never watched live | roadmap Tier 1 #6 |
+| Protocol-version mismatch reject (`E_PROTO`) | Works (verified 2026-09-03) | A joiner on the wrong build fails in about one second with `failed - rejected by host: E_PROTO: host is v50, you are v1` (client console/chat/log) instead of the 15 s silent connect timeout; no retry loop. Known gap: the HOST prints nothing for a rejected old-build peer | roadmap Tier 1 #6, disconnect-reconnect.md §12 |
 | Mid-session save/load, host or client | Works | `client_load_rejoin`/`host_load_readopt` both confirmed; a genuine save-vs-load edge announces and rejoins correctly | roadmap closed #14, #32 |
 | Host reload while both inventory channels are on | Works | 6/6 clean cycles, block version 64, zero pool fabrications | live-verification.md 2026-09-02 "Host in-world reload" |
 | Full wipe → game-over → host reload → rejoin | Works | One down + peer rescue + game-over held; a full wipe releases on both, client follows the host's reload out of it, 3 clean cycles | `death-handling.md` §6.4-6.7, live-verification.md 2026-09-02 |
@@ -136,7 +136,7 @@ rig yet. Good targets for the next live-test pass:
 1. *(done 2026-09-03: a real purchase with a live peer contribution converged — see the table.)*
 2. *(measured 2026-09-02: the field is written, the AI does not retarget on it — see the table.)*
 3. *(done 2026-09-03: all three observed both directions — see the table.)*
-4. `E_PROTO` protocol-version-mismatch reject.
+4. *(done 2026-09-03: `debug_hello_version=1` on the client — typed reject within ~1 s, host silent — see the table.)*
 5. *(done 2026-09-03: the spectator's copy closes cleanly and follows — see the table.)*
 6. *(done 2026-08-28 via `pazaak end` — see the table; this list entry was stale.)*
 7. The keyboard half of the input lock (swoop peer-lock and Star Forge duel spectate) actually

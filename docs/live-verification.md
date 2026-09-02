@@ -3394,6 +3394,24 @@ lines). `combat-participation.md` §13's own NEEDS-LIVE mark is closed — see i
 
 **Galaxy map** — already documented in `galaxy-map-and-party-select.md`; no new facts this round.
 
-**Still NEEDS-LIVE**: `E_PROTO` (`debug_hello_version=1` in the CLIENT `coop.ini` before launch),
-a real unlocked transition door (`usedoor`) exercising the warp-crash fix, and the galaxy-map
-confirm refusal firing against a real Accept click.
+**Still NEEDS-LIVE**: a real unlocked transition door (`usedoor`) exercising the warp-crash fix,
+and the galaxy-map confirm refusal firing against a real Accept click. (`E_PROTO` was done at
+04:21 the same night — see the section below.)
+
+## `E_PROTO` version-mismatch reject, live (2026-09-03, 04:21)
+
+Rig: block 66, `ProtocolConstants.Version = 50`; `debug_hello_version=1` added under `[coop]` in
+the CLIENT's `coop.ini` only, `demo.ps1 -Save 1`, no password either side. Removed right after.
+
+CLIENT (`agent2.log`): `* co-op: connecting...` at 04:21:18, then at 04:21:19 — one second
+later, not the 15 s `DefaultConnectTimeoutMs` — `* failed - rejected by host: E_PROTO: host is
+v50, you are v1` followed by `* co-op: connection failed`, and the status line thereafter reads
+`rejected by host: E_PROTO: host is v50, you are v1  peers 0` (no retry loop). Both lines are
+`CoopCommandDispatcher.Reply` output, the same path the in-game console reply and chat overlay
+are fed from (overlay not screen-checked this round).
+
+HOST (`agent1.log`): nothing at all about the rejected Hello — `peers 0` stays `peers 0`. That
+silence is the one known gap (a host cannot tell an old-build peer was turned away).
+
+Row moved to Works in docs/limitations.md and README.md. Full write-up:
+docs/research/disconnect-reconnect.md §12 "Live result".
