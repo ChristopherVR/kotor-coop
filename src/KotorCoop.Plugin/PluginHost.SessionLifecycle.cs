@@ -160,6 +160,13 @@ internal static unsafe partial class PluginHost
     private static void InvalidateAll(string reason)
     {
         Log($"epoch: {reason}; clearing phantom, item, combat and door state");
+        if (FloatyTextNodeGuardHook.CreatesSkipped != 0 || FloatyTextNodeGuardHook.UpdatesSkipped != 0)
+        {
+            // The floaty guard's running totals, printed where a live session will look for
+            // them (its own log lines are budgeted; the update tick is per-frame).
+            Log($"floaty: guard totals so far - {FloatyTextNodeGuardHook.CreatesSkipped} floaty(ies) not added, "
+                + $"{FloatyTextNodeGuardHook.UpdatesSkipped} tick(s) skipped");
+        }
 
         // First, before any controller can act on them again: the agent-written world inputs
         // are stale (the agent's reads fail through a transition, so it cannot clear them

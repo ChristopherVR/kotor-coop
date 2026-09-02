@@ -427,5 +427,20 @@ internal static unsafe partial class PluginHost
         {
             Log($"galaxy-map confirm gate NOT installed: {galaxyMapDiagnostic}");
         }
+
+        // Floaty-text null-node guard (FloatyTextNodeGuardHook's own header): the engine
+        // dereferences a model node it never null-checks when it draws "+N XP" / "+N" /
+        // "miss" over an object; a materialised stand-in or a phantom whose client model has
+        // no node yet made that a client crash at 0x688F54 twice (effect-sync.md §11.4 and
+        // the 2026-09-03 spawncreature/slay round). Installed unconditionally on both halves
+        // - the null path is the same no-op exit the engine's own no-model guard takes.
+        if (FloatyTextNodeGuardHook.Install(out string floatyDiagnostic))
+        {
+            Log($"floaty: {floatyDiagnostic}");
+        }
+        else
+        {
+            Log($"floaty null-node guard NOT installed: {floatyDiagnostic}");
+        }
     }
 }
