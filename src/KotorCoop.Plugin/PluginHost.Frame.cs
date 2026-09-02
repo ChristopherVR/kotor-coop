@@ -427,27 +427,40 @@ internal static unsafe partial class PluginHost
         //     TravelController.OwnWarpPending is already true (set the instant TravelToModule
         //     succeeded), so the skip below still holds even though PluginHost's own
         //     single-frame _travelAnnounced has already reset to false again.
-        if (_transitionAnnounceScriptedEnabled)
+        //
+        // The same rising edge is also where the writers this plugin does not own (a
+        // galaxy-map departure, a stage change, a trigger) get CSWParty+0x00 bounded by its
+        // resolvable run before StartNewModule's DoPCAutosave walks the array with no null
+        // check (PartyCountRestoreRule.SafeTravelCount has the crash) - best effort, since the
+        // flag may already have been drained by the time this frame sees it; our own warps
+        // are bounded inside Odyssey.TravelToModule before the raise. Idempotent, and NOT under
+        // the announce config gate: a crash guard does not switch off with a feature flag.
+        bool moveToModulePending = Odyssey.IsMoveToModulePending();
+        if (moveToModulePending)
         {
-            bool moveToModulePending = Odyssey.IsMoveToModulePending();
-            if (moveToModulePending)
+            if (!_moveToModulePendingSeen)
             {
-                if (!_moveToModulePendingSeen)
-                {
-                    _moveToModulePendingSeen = true;
+                _moveToModulePendingSeen = true;
 
-                    if (!_doorTransitionAnnouncedThisEpoch
-                        && !(_travel?.OwnWarpPending ?? false)
-                        && _view is { } scriptedAnnounceView)
-                    {
-                        TransitionAnnounceWatch.OnScriptedTransitionBegan(scriptedAnnounceView);
-                    }
+                if (Odyssey.TryBoundClientPartyCountByResolvable(
+                    out int countBefore, out int resolvable, out string entries))
+                {
+                    Log($"party count: bounded {countBefore} -> {resolvable} on the move-to-module "
+                        + $"edge (entries {entries}; DoPCAutosave walks the array without a null check)");
+                }
+
+                if (_transitionAnnounceScriptedEnabled
+                    && !_doorTransitionAnnouncedThisEpoch
+                    && !(_travel?.OwnWarpPending ?? false)
+                    && _view is { } scriptedAnnounceView)
+                {
+                    TransitionAnnounceWatch.OnScriptedTransitionBegan(scriptedAnnounceView);
                 }
             }
-            else
-            {
-                _moveToModulePendingSeen = false;
-            }
+        }
+        else
+        {
+            _moveToModulePendingSeen = false;
         }
 
         if (_travel is { HasPendingRequest: true } travel)

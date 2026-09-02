@@ -3199,3 +3199,42 @@ reproduction attempt: wipe → host reload → client WipeRecovery rejoin (plugi
 - `log_keep` rotation: `kotorcoop-plugin.1.log` etc. exist beside the live files on both sides.
 - The loot-relay noise on rejoin (six `not a materialised stand-in` refusals in one second) is
   what the client-side pre-filter (block 65, `MaterialisedLootFilterRule`) removes; NEEDS-LIVE.
+
+## Wipe reload, third pass: equipment duplication verified fixed, client follow-crash root-caused and fixed (2026-09-03, 00:17–00:33)
+
+Rig: `-Save 1`, plugins rebuilt twice this stretch (fingerprint settle at 00:14; the party-count
+travel bound at 00:26). Same wipe recipe as the section above (client `tp 28 22.2 -1.3`, host
+`down 0` then `down`, client `down`; note the host `down 0`/`down` pair sometimes needs a second
+go — the engine revived the host at 1 hp once when Trask's down had not settled).
+
+### Defect 1 (equipment duplication) — VERIFIED FIXED, twice
+
+00:17 and 00:30 host reloads through the plugin route: no `script item grant`, host snapshot
+3 keys before and after, one `WipeRecovery` rejoin each. shared-inventory-v2.md §18.5.
+
+### Defect 2 (client vanish on first follow) — ROOT-CAUSED and FIXED, verified 1/1
+
+00:18: third reproduction, with the persisted crash record. `tools/crashbin.ps1` decoded
+`access violation at 0x63D4B3`, symbolicated to `CSWCObject::GetServerObject` ←
+`CSWCCreature::GetServerCreature` ← `CServerExoAppInternal::DoPCAutosave` (+0xB5F), the loop
+`StartNewModule` runs over `i < [CSWParty+0x00]` with no null check on `GetCharacter(i)`. The
+plugin-route rejoin keeps the client half alive across the swap, so the mirrored companion's
+pre-wipe id stays in the array and the first move dereferences NULL for it.
+
+00:26 rebuild with `PartyCountRestoreRule.SafeTravelCount` (bound the count by the leading
+resolvable run before the move). 00:31:42 host `warp tar_m10aa` after the 00:30:46 rejoin:
+
+    client plugin  [00:31:42.656] party count: bounded 2 -> 1 before the module move (entries 0x80000129 0x80000127!; ...)
+    client plugin  [00:31:42.709] transition: closed the client world ahead of the map init
+    client agent   [00:32:26] connected ... module tar_m10aa  hp 12/12  peers-here 1
+
+`0x80000127` = Trask's pre-wipe client id (the host's `down 0` named slot 0 as 0x127) — the
+stale entry is the mirrored companion, not the PC's own slot. Second warp (`end_m01aa`)
+followed cleanly with no bound needed. 0 faults either side across the whole stretch (only the
+0x406D1388 thread-naming first-chance lines at launch). transition-crashes.md 2026-09-03.
+
+### Also this launch
+
+- Loot-relay noise on rejoin: zero `not a materialised stand-in` refusals on the 00:30 rejoin
+  (the pre-filter round had six in one second) — `MaterialisedLootFilterRule` verified as far as
+  this recipe exercises it.

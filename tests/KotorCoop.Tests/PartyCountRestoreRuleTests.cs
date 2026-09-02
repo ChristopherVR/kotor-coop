@@ -95,4 +95,57 @@ public class PartyCountRestoreRuleTests
         Assert.Equal(0, PartyCountRestoreRule.SafeRestoreCount(
             currentCount, desiredCount, resolvableMembers, capacity));
     }
+
+    // ---- SafeTravelCount: the same bound, enforced DOWNWARD before a module move ----------
+    //
+    // The 2026-09-03 CLIENT crash (docs/research/transition-crashes.md): after a plugin-route
+    // mid-session rejoin the client's CSWParty kept an entry the new world could not resolve,
+    // and the host's first `warp` sent the client's engine through StartNewModule ->
+    // DoPCAutosave -> GetCharacter(i) -> GetServerCreature -> GetServerObject(this = NULL).
+
+    /// <summary>The crash, in one line: a count of 2 over an array whose leading resolvable run
+    /// is 1 — the bound comes down to what resolves before the engine walks it.</summary>
+    [Fact]
+    public void ATravelBoundsTheCountByTheResolvableRun()
+    {
+        Assert.Equal(1, PartyCountRestoreRule.SafeTravelCount(
+            currentCount: 2, resolvableMembers: 1, Capacity));
+    }
+
+    /// <summary>Zero is a real answer, not "nothing to do": a struct whose FIRST entry does not
+    /// resolve (a stale pre-load PC id) must be bounded at 0, or DoPCAutosave's i=0 iteration
+    /// dereferences NULL just the same.</summary>
+    [Fact]
+    public void AWhollyStaleArrayIsBoundedAtZero()
+    {
+        Assert.Equal(0, PartyCountRestoreRule.SafeTravelCount(
+            currentCount: 1, resolvableMembers: 0, Capacity));
+    }
+
+    /// <summary>Never UP, never a no-op write: a count already within the run is left alone —
+    /// this must be safe to run on every rising edge of the engine's own move-to-module flag.</summary>
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(1, 2)]
+    [InlineData(0, 0)]
+    [InlineData(0, 3)]
+    public void ACountWithinTheRunIsNotWritten(int currentCount, int resolvableMembers)
+    {
+        Assert.Equal(-1, PartyCountRestoreRule.SafeTravelCount(
+            currentCount, resolvableMembers, Capacity));
+    }
+
+    /// <summary>The same "not a count this code recognises" refusal as the restore: a field
+    /// reading outside 0..capacity, a negative run, or no capacity at all writes nothing.</summary>
+    [Theory]
+    [InlineData(-1, 0, Capacity)]
+    [InlineData(4, 1, Capacity)]
+    [InlineData(2, -1, Capacity)]
+    [InlineData(2, 1, 0)]
+    public void NonsenseTravelInputsWriteNothing(int currentCount, int resolvableMembers, int capacity)
+    {
+        Assert.Equal(-1, PartyCountRestoreRule.SafeTravelCount(
+            currentCount, resolvableMembers, capacity));
+    }
 }

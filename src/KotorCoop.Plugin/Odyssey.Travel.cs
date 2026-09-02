@@ -121,6 +121,16 @@ internal static unsafe partial class Odyssey
         };
         SetMoveToModuleStartWaypointFn(server, &waypoint);
 
+        // The flag below hands the main loop to StartNewModule, whose DoPCAutosave walks
+        // CSWParty's member array under CSWParty+0x00 with no null check. Bound the count by
+        // what actually resolves FIRST (PartyCountRestoreRule.SafeTravelCount has the crash).
+        if (TryBoundClientPartyCountByResolvable(out int before, out int resolvable, out string entries))
+        {
+            PluginHost.Log(
+                $"party count: bounded {before} -> {resolvable} before the module move "
+                + $"(entries {entries}; DoPCAutosave walks the array without a null check)");
+        }
+
         SetMoveToModulePendingFn(server, 1);
         return true;
     }

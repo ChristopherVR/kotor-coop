@@ -293,6 +293,65 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Bounds CSWParty's member count by its LEADING RUN of resolvable entries
+    /// (<see cref="CountResolvableClientPartyMembers"/>) — the invariant
+    /// <c>CServerExoAppInternal::DoPCAutosave</c> assumes on every <c>StartNewModule</c> and
+    /// dereferences NULL without (<see cref="PartyCountRestoreRule.SafeTravelCount"/> has the
+    /// crash). Called right before this plugin raises the move-to-module flag, and again on the
+    /// rising edge of the engine's own flag for the writers this plugin does not own.
+    ///
+    /// Returns true only when the field was written; <paramref name="before"/> /
+    /// <paramref name="resolvable"/> are filled whenever the struct could be read at all, and
+    /// <paramref name="entries"/> names every slot under the OLD bound as
+    /// <c>0xID</c> (resolved) or <c>0xID!</c> (did not), so the log says WHICH entry was stale —
+    /// the open question the first reproduction left (was it the PC's own slot, or a mirrored
+    /// companion's?).
+    ///
+    /// Same contract as <see cref="TryClampClientPartyCount"/>: never raises, refuses a count
+    /// outside the array's capacity, MAIN THREAD ONLY.
+    /// </summary>
+    public static bool TryBoundClientPartyCountByResolvable(out int before, out int resolvable, out string entries)
+    {
+        before = -1;
+        resolvable = -1;
+        entries = string.Empty;
+
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        int* countPtr = (int*)(party + SwPartyMemberCount);
+        before = *countPtr;
+        resolvable = CountResolvableClientPartyMembers(client, party);
+
+        int target = PartyCountRestoreRule.SafeTravelCount(before, resolvable, SwPartyMemberCapacity);
+        if (target < 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < before; i++)
+        {
+            uint id = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
+            bool resolves = id != 0
+                && (id & ~ControlPartyNpcFlag) != ObjectInvalidClientId
+                && GetCreatureByClientIdFn(client, id) != 0;
+            entries += (i == 0 ? "" : " ") + $"0x{id:X8}" + (resolves ? "" : "!");
+        }
+
+        *countPtr = target;
+        return true;
+    }
+
+    /// <summary>
     /// Teleports every party companion into formation around the local player, through the
     /// engine's own <c>PositionParty</c> — the same call a module transition makes.
     ///

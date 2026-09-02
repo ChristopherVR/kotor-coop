@@ -560,3 +560,11 @@ set filters everything, a real set filters by membership) and five cases added t
 a mapped id is still queued alongside a filtered one in the same pump; one log line per filtered
 owner regardless of item count; a dialogue grant is never filtered). `dotnet test
 tests/KotorCoop.Tests --filter "FullyQualifiedName~Loot"` — 82 passed.
+
+### Live 2026-09-03 00:30 — the rejoin noise is gone
+
+The recipe that produced the six-in-one-second `not a materialised stand-in` refusals (a
+client's `WipeRecovery` rejoin after a host game-over reload) ran again with the filter in
+place: zero refusal lines on either side across the rejoin and two host warps that followed.
+The false-positive question above stays open only in the sense that no combat loot was rolled
+in this pass; what it was built for is verified (live-verification.md 2026-09-03).

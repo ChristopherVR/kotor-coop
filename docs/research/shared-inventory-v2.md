@@ -2808,3 +2808,11 @@ body whose tag was blank on one and readable on the next (the view's key is the 
 not agreement. `ItemSweepProvenanceRuleTests.TheSameIdsUnderADifferentHolderAreNotAgreement`,
 `ABodyWhoseTagBecomesReadableIsAChangedView`, `FingerprintsKeepIdAndHolderApart`.
 NEEDS-LIVE (third attempt at this row).
+
+### 18.5 Live 2026-09-03 00:17 and 00:30 — verified, twice
+
+Both plugin-route host reloads from a game-over (`load --load-save 1`, `load request 2 sent to
+the plugin`) produced NO `script item grant` line on the host, the host snapshot stayed at
+three keys (`g_i_adrnaline003`, `g_i_medeqpmnt01`, `g_w_blstrrfl001`) through the reload, and
+the client took exactly one `WipeRecovery` rejoin. The 00:30 run then followed two host warps
+(tar_m10aa and back) with the pool unchanged. Row closed: **Works**.

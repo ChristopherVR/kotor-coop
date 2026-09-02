@@ -88,4 +88,42 @@ internal static class PartyCountRestoreRule
         // the count is party_together_fix's job and its own (client-only) decision.
         return target > currentCount ? target : 0;
     }
+
+    /// <summary>
+    /// The SAME invariant, enforced the other way, at the one moment the engine is about to walk
+    /// the array itself: what to write into <c>CSWParty+0x00</c> right before a module move, or
+    /// <c>-1</c> for "write nothing" (0 is a legitimate answer here — an array with NO
+    /// resolvable leading entry must be bounded at 0, not left alone).
+    ///
+    /// ⚠ THE CRASH THIS CLOSES (2026-09-03 00:18, docs/research/transition-crashes.md). Every
+    /// <c>CServerExoAppInternal::StartNewModule</c> (0x004BA920) calls <c>DoPCAutosave</c>
+    /// (0x004B8300, sole call site 0x004BAB7B), which loops <c>i &lt; [CSWParty+0]</c> over
+    /// <c>CSWParty::GetCharacter(i)</c> → <c>CSWCCreature::GetServerCreature</c> →
+    /// <c>CSWCObject::GetServerObject</c>, and the last of those reads <c>[this+0xF8]</c> with
+    /// no null test. On a client that had rejoined through the plugin route
+    /// (<c>MenuLoadController.FireMidSessionPhase1</c>: DestroyServer / ClientUnloadModule /
+    /// CreateServer / LoadPCAutoSave) the struct kept an entry the new world could not resolve,
+    /// and the host's first <c>warp</c> ended the client through <c>ExitProcess(0xC0000005)</c>
+    /// at exactly that dereference — 3/3, with the persisted crash record's eip at 0x0063D4B3.
+    ///
+    /// Only ever DOWN, and only to the measured leading run (<paramref name="resolvableMembers"/>,
+    /// the same <c>GetCreatureByGameObjectID</c> walk <c>GetCharacter</c> itself performs). A
+    /// count outside 0..<paramref name="capacity"/> is not one this code recognises as a count
+    /// and is left alone: better the engine's own fault record than a write into a struct that
+    /// does not look like the one this was verified against.
+    /// </summary>
+    public static int SafeTravelCount(int currentCount, int resolvableMembers, int capacity)
+    {
+        if (capacity <= 0 || currentCount < 0 || currentCount > capacity)
+        {
+            return -1;
+        }
+
+        if (resolvableMembers < 0)
+        {
+            return -1;
+        }
+
+        return currentCount > resolvableMembers ? resolvableMembers : -1;
+    }
 }

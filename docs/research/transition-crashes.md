@@ -785,7 +785,7 @@ i.e. the legitimate case (count 2, both members resolvable) still works. The rea
 on both attempts and never started a transition, a staging-verb/pathing limitation unrelated to
 this fix.
 
-## The CLIENT vanishing on its first follow after a wipe-recovery rejoin (2026-09-02, open)
+## The CLIENT vanishing on its first follow after a wipe-recovery rejoin (2026-09-02, open; FIXED 2026-09-03)
 
 One occurrence, not yet reproduced. Sequence: both players wiped outside combat (`down 0` +
 `down` on the host, `down` on the client), host reloaded save 1 from the game-over, the client
@@ -870,3 +870,71 @@ the retail branch rebuilds and ours does not), which the module teardown then wa
 map-init dereference reached on the teardown frame itself because the client's GUI is in a
 state the ordinary path never has. Next: merge the persisted crash record, re-run this exact
 recipe (deterministic now), symbolicate the eip.
+
+### 2026-09-03 00:18 — the persisted crash record named it: `DoPCAutosave` walking CSWParty past its resolvable entries
+
+Third reproduction (3/3), plugins with the persisted-record `CrashProbe` in both dirs. Same
+recipe; client gone 6 ms after `epoch: world unloading` again. `pwsh tools/crashbin.ps1 -GameDir
+'D:\Games\swkotor-gog-p2'` on `kotorcoop-crash.bin`:
+
+    access violation (0xC0000005) at 0x63D4B3 (swkotor.exe), thread 1
+    image-range stack values: 0x60FB28 0x4B8E5F ...
+
+Symbolicated (`tools/q.py` / `tools/disasm.py`):
+
+    0x63D4B0  CSWCObject::GetServerObject      +3: mov eax,[esi+0xF8]   ← this = NULL
+    0x60FB20  CSWCCreature::GetServerCreature  (return 0x60FB28) — no null test on `this`
+    0x4B8300  CServerExoAppInternal::DoPCAutosave (return 0x4B8E5F, +0xB5F)
+                loop i < [CSWParty+0x00]:
+                  CClientExoApp::GetSWParty → CSWParty::GetCharacter(i) (0x6346C0)
+                  → CSWCCreature::GetServerCreature(result)   ← result was NULL for i = 1
+    0x4BA920  CServerExoAppInternal::StartNewModule (sole call site of DoPCAutosave, 0x4BAB7B)
+
+So it is the SAME invariant as the 2026-08-29 host crash (`UpdatePortraits`), reached from the
+other side: `CSWParty+0x00` is the bound every consumer walks the member array with, and after a
+plugin-route mid-session rejoin (`MenuLoadController.FireMidSessionPhase1`: DestroyServer /
+ClientUnloadModule / CreateServer / LoadPCAutoSave) the client's struct kept an entry the NEW
+world could not resolve. `StartNewModule` runs `DoPCAutosave` first thing, `GetCharacter(1)`
+returns NULL for the stale slot, and `GetServerCreature` dereferences it. The engine's top-level
+handler turned that into the `ExitProcess(0xC0000005)` the 00:06 run saw. Neither candidate
+from the 00:06 section (the never-shown save panel, the map-init dereference) was it.
+
+Menu-route rejoins do not arm it because the menu load rebuilds `CClientExoApp` (and CSWParty
+with it); the plugin route deliberately keeps the client half alive across the swap — which is
+what makes it fast, and what leaves the old world's member ids in the array.
+
+#### Fixed 2026-09-03 00:26 — bound the count by the resolvable run before the move; verified 1/1
+
+`PartyCountRestoreRule.SafeTravelCount(currentCount, resolvableMembers, capacity)` — the
+2026-08-29 rule's invariant enforced DOWNWARD: write `min(count, leading resolvable run)` when
+the count exceeds the run, else nothing. 0 is a legitimate answer (a wholly stale array is
+bounded at 0, not left alone). `Odyssey.TryBoundClientPartyCountByResolvable` measures the run
+with the same `GetCreatureByGameObjectID` walk `GetCharacter` itself does, and names every slot
+under the old bound in the log (`0xID` resolved, `0xID!` did not). Two call sites:
+
+- `Odyssey.TravelToModule`, immediately before `SetMoveToModulePending(1)` — our own warps,
+  which is the crashing case;
+- the rising edge of `IsMoveToModulePending()` in `PluginHost.OnFrame` — the writers we do not
+  own (galaxy map, stage changes, triggers), best effort since the flag may already be drained;
+  lifted out from under the `transition_announce_scripted` gate so a crash guard does not switch
+  off with a feature flag. Idempotent: a bounded count never exceeds the run.
+
+Live, same recipe (wipe 00:29 → host `load --load-save 1` plugin route 00:30:46 → exactly one
+`WipeRecovery` rejoin → host `warp tar_m10aa` 00:31:42). Client plugin:
+
+    [00:31:42.656] party count: bounded 2 -> 1 before the module move (entries 0x80000129 0x80000127!; DoPCAutosave walks the array without a null check)
+    [00:31:42.656] travel: moving to module 'tar_m10aa' on the session's authority
+    [00:31:42.666] epoch: world unloading; clearing phantom, item, combat and door state
+    [00:31:42.709] transition: closed the client world ahead of the map init
+
+The client reached tar_m10aa (`module tar_m10aa hp 12/12 peers-here 1`), followed a second
+`warp end_m01aa` cleanly with no bound needed, 0 faults on either side. And the open question
+is answered: the stale entry was NOT the PC's slot — `0x80000129` (the PC, party-npc flag set)
+resolved; `0x80000127` is Trask's PRE-WIPE client id (the host's `down 0` that started the
+wipe named slot 0 as 0x127), the mirrored companion the old world had and the new one never
+rebuilt. Answer: the client's own slot is safe; it is the mirrored companion entries that go
+stale across a plugin-route swap.
+
+Tests: `PartyCountRestoreRuleTests.ATravelBoundsTheCountByTheResolvableRun`,
+`AWhollyStaleArrayIsBoundedAtZero`, `ACountWithinTheRunIsNotWritten`,
+`NonsenseTravelInputsWriteNothing`.
