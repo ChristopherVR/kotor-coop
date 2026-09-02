@@ -83,7 +83,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | --- | --- | --- | --- |
 | Shared party item pool (`party_pool_sync`, mode 2) | Works | ON by default; three clean host deposits mirrored one-for-one, a client deposit/withdrawal each applied exactly once, a cross-channel echo bug closed | roadmap Tier 1 #1 |
 | Only the host switches active party character | Not supported (by design) | Mirrored to everyone else; control returns to your own character on connect | README "Honest limitations" |
-| Galaxy map / pre-departure party-select GUI | Not supported | Each instance runs the vanilla UI with no co-op awareness; the client's panel is suppressed but galaxy-map gating and an auto-confirm fallback are undone; the legs themselves have never been driven live (no non-story primitive reaches them) | roadmap Tier 2 #18 |
+| Galaxy map / pre-departure party-select GUI | Built, NEEDS-LIVE | Each instance runs the vanilla UI; the client's party-select panel is suppressed, and a client's galaxy-map accept click under follow_lead=host is refused ("only the host can choose a destination") with the host's own confirm untouched; an auto-confirm fallback for party-select is still undone, and neither the refusal splice nor the legs themselves have ever been driven live | roadmap Tier 2 #18 |
 | `end_m01ab` escape-pod party-select GUI | Not supported (by design) | Only the host can answer it — no console primitive reaches inside; confirmed to gate the corridor's entrance for every start-to-end run | roadmap Tier 2 #31 |
 
 ## Stores, Pazaak, minigames (swoop)
@@ -145,5 +145,7 @@ rig yet. Good targets for the next live-test pass:
 11. *(done 2026-09-02, one cycle under a real fight — see the table.)*
 12. Two companions released to local combat at the same time.
 13. Galaxy map / escape-pod leg's own co-op-specific gating (#2/#4 in roadmap Tier 2 #18) —
-    the legs themselves have no non-story primitive to drive them.
+    the legs themselves have no non-story primitive to drive them; the galaxy-map accept-button
+    refusal itself (`galaxy_map_host_only`) is now built (2026-09-02) but has never been spliced
+    on a running process.
 14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).

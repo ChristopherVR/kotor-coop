@@ -395,5 +395,21 @@ internal static unsafe partial class PluginHost
         {
             Log($"death handling NOT installed: {deathDiagnostic}");
         }
+
+        // Galaxy-map gating (docs/research/galaxy-map-and-party-select.md, "Galaxy-map
+        // gating" section): on a CLIENT under follow_lead=host, refuse this instance's own
+        // accept-button click on the galaxy map and post "only the host can choose a
+        // destination" instead of running the confirm script. Installed unconditionally
+        // (verify-bytes-or-refuse) - GalaxyMapConfirmHook itself reads galaxy_map_host_only
+        // and follow_lead and only ever refuses a client under host-lead; a host's own
+        // confirm is always let through untouched. NEEDS-LIVE.
+        if (GalaxyMapConfirmHook.Install(out string galaxyMapDiagnostic))
+        {
+            Log($"galaxy-map: {galaxyMapDiagnostic}");
+        }
+        else
+        {
+            Log($"galaxy-map confirm gate NOT installed: {galaxyMapDiagnostic}");
+        }
     }
 }

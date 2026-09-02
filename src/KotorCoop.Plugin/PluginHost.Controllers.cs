@@ -70,5 +70,9 @@ internal static unsafe partial class PluginHost
         // The minimap draw runs on the render path and has no other route to peer
         // positions, so it reads the block directly.
         MinimapPeerHook.Bind(_view);
+
+        // The galaxy-map confirm gate fires from the GUI event dispatch and has no other
+        // route to TryGetHostPartyRoster/PostLocalChatLine - see GalaxyMapConfirmHook.
+        GalaxyMapConfirmHook.Bind(_view);
     }
 }

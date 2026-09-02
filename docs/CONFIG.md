@@ -171,6 +171,7 @@ player should set. Each exists to make an otherwise-unreachable code path reacha
 | `dialogue_recruit_sync` | OFF³ | recruit a companion through the real network path on the peer | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
+| `galaxy_map_host_only` | ON (NEEDS-LIVE) | on a CLIENT under `follow_lead=host`, refuse the galaxy map's own accept-button click and post "only the host can choose a destination"; the host's own confirm is always let through untouched | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
 | `pause_button_hook` | ON | hook the in-game pause button | — |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |
