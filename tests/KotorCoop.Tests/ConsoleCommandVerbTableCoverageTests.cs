@@ -52,6 +52,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.InspectItem] = "item 0x131",
         [CoopCommandKind.SetItem] = "setitem 0x131",
         [CoopCommandKind.UseDoor] = "usedoor",
+        [CoopCommandKind.CrossDoor] = "crossdoor",
         [CoopCommandKind.GiveLoot] = "giveloot 0x35 g_w_blstrpstl001",
         [CoopCommandKind.ApplyEffect] = "applyeffect stun",
         [CoopCommandKind.Effects] = "effects",

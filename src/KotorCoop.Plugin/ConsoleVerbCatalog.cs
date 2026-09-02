@@ -78,6 +78,12 @@ internal static class ConsoleVerbCatalog
         // The engine-initiated half: only a door transition opens the pre-store flush window
         // a queued movie might swallow, so this and `moviewarp queue` are used together.
         ("usedoor", "usedoor [tag|id]  (blank = nearest module transition door)"),
+
+        // crossdoor (2026-09-03): same target resolution as usedoor, but posts the door's own
+        // crossing event directly instead of queuing a walk - usedoor's walk has stalled short
+        // of the door on every live attempt (docs/research/cinematics.md §8.3b). Does not
+        // shadow a retail verb (checked the same way every staging cheat above was).
+        ("crossdoor", "crossdoor [tag|id]  (blank = nearest module transition door; posts the crossing event, no walk)"),
         ("opendoor", "opendoor [tag|id]  (blank = nearest door; unlike usedoor, no transition needed)"),
 
         // The container-sync live-test primitive: use a chest/corpse/switch through the

@@ -60,6 +60,14 @@ internal static unsafe class FuncInterpHook
         // plugin does not run is not something to reach by a near-miss.
         "moviewarp", "usedoor", "opendoor",
 
+        // crossdoor (2026-09-03, docs/research/cinematics.md's dated addendum): posts the SAME
+        // door-crossing event usedoor's own walk relies on the pathfinder to trigger, directly
+        // through CServerAIMaster::AddEventDeltaTime, with no walk at all. Does not shadow a
+        // retail verb — checked against docs/research/console-cheats.md's table the same way
+        // every other staging verb above was (ConsoleCompletionEngineTests.
+        // NoCoopVerbShadowsARetailConsoleVerb also asserts it at build time).
+        "crossdoor",
+
         // The container-sync live-test primitive (docs/research/container-sync.md): not a
         // retail verb (checked against docs/research/console-cheats.md's table the same way
         // every other staging verb above was).

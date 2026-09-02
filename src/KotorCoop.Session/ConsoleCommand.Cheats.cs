@@ -540,6 +540,8 @@ public static partial class ConsoleCommand
         // The pair: queue the movie, then make the ENGINE start the transition. Only this
         // order opens the pre-store flush window a movie might swallow.
         "  usedoor [tag|id]                walk through a transition door (nearest by default)",
+        "  crossdoor [tag|id]              post the door-crossing event directly, no walk",
+        "                      (nearest by default) - for when usedoor's walk stalls short",
         "  opendoor [tag|id]               open an ORDINARY door (no transition; nearest by default)",
         "  useplaceable [tag|id]           use a container/corpse/switch (nearest container by default)",
         "  closeplaceable [tag|id]         close a container's loot panel (nearest by default)",

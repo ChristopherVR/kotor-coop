@@ -1,4 +1,4 @@
-# Cinematics in a co-op session — what a movie actually does to this mod (2026-08-14)
+﻿# Cinematics in a co-op session — what a movie actually does to this mod (2026-08-14)
 
 The canonical case: leaving the Endar Spire and arriving on Taris. What happens today when a
 cinematic plays in a live pair, what the host-authoritative design should be, and the exact
@@ -1294,6 +1294,85 @@ so the sweep early-outs and cannot contribute to the number you are about to rea
 `CSWCDoor::ToggleDoorState 0x00683D90`, which sends `ChangeDoorState 0x00677D70` with `0x2725`
 to open. Neither transitions. The binding stays, declared honestly, because the address is
 right for a placeable and the comment is what stops the next person repeating the mistake.
+
+### 8.3c ⚠ `crossdoor` (2026-09-03): posting the crossing event directly, no walk
+
+`usedoor`'s own walk has never yet landed. Across three separate live rounds the queued
+`ActionMoveToLocation` reliably MOVED the PC — narrowing the gap every time — and then stopped
+short of the door face by 1.8-5.9 m, past `DoorUse.WalkThroughOvershoot`'s own margin and past
+the stall-reissue window `RetryStalledDoorWalk` already covers. So the "a real crossing reaches
+`CSWSDoor::EventHandler`'s own transition arm" half of the warp-crash fix's premise
+(docs/research/warp-crash-and-snapshot-lesson.md) is still, as of this writing, UNVERIFIED — not
+because the arm is suspected wrong, but because nothing has ever actually crossed to exercise it.
+
+`crossdoor` removes the pathfinder from the equation. §8.3's own table already established that
+event **0x1E** — not a walk-adjacent use-input — is what `CSWSDoor::EventHandler` needs to reach
+the transition arm at `0x0058C0BE`, and that every builder of that event is movement code.
+`AIActionMoveToPoint 0x0051F4F0` is the one `usedoor`'s walk ultimately reaches, and its own
+event-construction tail (once the crossing point is reached) is short enough to replicate
+directly. Fresh disassembly against the live GOG 1.0.3 exe for this addendum
+(`python tools/disasm.py 0x005200A0 300`, re-checked rather than trusted from an earlier pass,
+per this project's own rule for anything a doc relies on), starting from the
+`[door+0x2CC] != 0` (door already open) branch:
+
+```
+0x005200C9  mov al, [ecx+0x2CC]         ; door's own committed open state
+0x005200CF  test al, al ; jne 0x52013e  ; nonzero (open) -> the 0x1E branch
+0x005200D1  push 0x34                    ; sizeof(CScriptEvent) - shared by both branches
+0x0052013E  call 0x6FA7E6                ; operator new(0x34), CDECL, caller pops
+0x0052015B  call 0x4D7540                ; CScriptEvent::CScriptEvent(this) - thiscall, no args
+0x00520166  mov word ptr [edi], 0x1E     ; event TYPE = the door-crossing event
+0x0052016E  push creatureId / push 0 / mov ecx,edi / call 0x4D7780
+                                         ; CScriptEvent::SetObjectID(index=0, objectId) - ret 8
+0x00520183  mov edx,[0x7A39FC]; mov eax,[0x7441DC]; mov ecx,[edx+8]
+                                         ; ecx = CServerExoApp (AppManagerPtr+8); eax = the LIVE event id
+0x00520195  push data/eventId/doorId/creatureId/0/0
+0x005201A0  call 0x4AED80                ; GetServerAIMaster(this=ecx) - thiscall, no args -> eax = AI master
+0x005201A7  mov ecx,eax ; call 0x4B08D0  ; AddEventDeltaTime(this, days=0, time=0, sourceId=creature,
+                                         ;   targetId=door, eventId, data=event) - thiscall, ret 0x18
+```
+
+`Odyssey.PostDoorCrossingEvent`, in the new `Odyssey.DoorCross.cs`, carries the complete
+instruction-by-instruction commentary this table summarises, including the note that the retail
+code path itself does NOT guard the allocation failing (a null `operator new` result flows
+straight into an unconditional write at `0x520166`) — `PostDoorCrossingEvent` refuses instead.
+
+`crossdoor` (`CheatController.Doors.CrossDoor`) shares every resolution step `usedoor` already
+has — same tag/id/nearest-transition-door search, same open-if-shut step (§8.3b: a closed door
+takes `AIActionMoveToPoint`'s OTHER branch and builds a different event, 0x1F, not 0x1E, so an
+open door is exactly as much a precondition for `crossdoor` as it is for a walk), same
+`IsPartyTogether` gather (§8.3a's gate applies to this event exactly as it does to a walked
+one) — through a shared helper, `ResolveOpenAndGatherForDoorTransition`, factored out of what
+used to be `usedoor`'s own hundred-line body so the two verbs cannot drift apart on a guard both
+depend on. The two diverge only at the very last step: `usedoor` queues `ActionMoveToLocation`;
+`crossdoor` calls `Odyssey.PostDoorCrossingEvent` directly.
+
+The door's transition arm additionally requires the posting creature to be the party LEADER
+(`GetIsLeader` at `0x0058C206`) — the local PC normally is, and `crossdoor` logs the PC's own
+party index (`Odyssey.TryGetClientPartyIndex`) before posting, so a refusal traced back to that
+check already has the evidence in the log rather than needing a second round to gather it.
+
+A small watch (`WatchDoorCrossing`, ~120 frames — the same shape as `usedoor`'s own
+`WatchDoorWalk`, minus the walk-stall retry, since there is no walk to retry here) reports the
+negative case explicitly: if `Odyssey.IsAreaTransitionPending()` never goes true in that window,
+the log says so — "the event was posted but no transition followed" — rather than staging
+something unobservable. A successful transition prints nothing at all, because the module
+change runs `CheatController.Invalidate`, which zeroes the watch first; that silence-on-success
+is deliberate and matches `WatchDoorWalk`'s own convention.
+
+**Why this is the faithful way to exercise the arm, and not a shortcut around it.** `crossdoor`
+does not simulate the transition, guess at its effects, or write any of `CSWSArea`'s own state
+directly — it hands the ENGINE'S OWN `CServerAIMaster` the identical event object a real
+crossing would have built, addressed to the identical door and creature ids, through the
+identical `AddEventDeltaTime` call a real crossing makes. Everything downstream of that call —
+`CSWSDoor::EventHandler`'s dispatch, the `GetIsLinked`/`trans_pending` checks, the fade, the
+move-to-module calls — runs exactly as it would for a walked crossing, because from the AI
+master's own queue onward there is no way to tell the two apart. The only thing `crossdoor`
+skips is the part that has never once worked live: the walk itself.
+
+NEEDS-LIVE: this verb has not yet been run against a real game. The three prior `usedoor` rounds
+established the stall; this section documents the instrument built to route around it, not a
+confirmed result.
 
 
 ### 8.3a The party gate, and why `usedoor` gathers
