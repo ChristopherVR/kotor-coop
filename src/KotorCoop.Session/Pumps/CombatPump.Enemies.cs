@@ -33,6 +33,12 @@ internal sealed partial class CombatPump
     private string _exclusionModule = string.Empty;
     private readonly HashSet<uint> _exclusionLetThrough = [];
 
+    /// <summary>Rate-limits the "local combat diag (agent)" TEMPORARY DIAGNOSTIC lines below
+    /// (see <see cref="LocalCombatDiagThrottle"/>) so a fight does not print the same numbers
+    /// several times a second.</summary>
+    private LocalCombatDiagSnapshot? _lastDiagSnapshot;
+    private long _lastDiagLoggedMs = long.MinValue;
+
     /// <summary>
     /// Moves enemy state between the game and the session in whichever direction this peer
     /// is responsible for. The two directions carry deliberately different things. DOWN from
@@ -222,6 +228,7 @@ internal sealed partial class CombatPump
             _exclusion.Reset();
         }
 
+        bool logDiagThisTick = false;
         if (excludedIds.Count > 0)
         {
             // Not a plain drop any more: an excluded id the owner reports DEAD, or has stopped
@@ -233,10 +240,24 @@ internal sealed partial class CombatPump
 
             // DIAGNOSTIC (temporary): confirms the exclusion filter is actually removing every
             // excluded id before assuming a bug lies elsewhere. See
-            // docs/research/combat-when-apart.md.
-            log($"local combat diag (agent): excludedIds=[{string.Join(",", excludedIds.Select(id => $"0x{id:X}"))}] "
-                + $"enemies.Count={enemies.Count} filtered.Count={filtered.Count} "
-                + $"(removed {enemies.Count - filtered.Count})");
+            // docs/research/combat-when-apart.md. Rate-limited to once per value-change (or at
+            // most every LocalCombatDiagThrottle.MinIntervalMs) — PumpEnemies runs on the
+            // ~150ms combat cadence and this used to fire every tick a fight was excluding
+            // anything, several times a second, always reporting the same numbers between hits.
+            long nowMs = Environment.TickCount64;
+            LocalCombatDiagSnapshot diagSnapshot = new(
+                enemies.Count, filtered.Count, LocalCombatDiagThrottle.ExcludedKey(excludedIds));
+            logDiagThisTick = LocalCombatDiagThrottle.ShouldLog(
+                diagSnapshot, _lastDiagSnapshot, nowMs, _lastDiagLoggedMs);
+            if (logDiagThisTick)
+            {
+                _lastDiagSnapshot = diagSnapshot;
+                _lastDiagLoggedMs = nowMs;
+
+                log($"local combat diag (agent): excludedIds=[{string.Join(",", excludedIds.Select(id => $"0x{id:X}"))}] "
+                    + $"enemies.Count={enemies.Count} filtered.Count={filtered.Count} "
+                    + $"(removed {enemies.Count - filtered.Count})");
+            }
 
             // Once per id, not once per pump: the entry keeps passing until the plugin releases
             // the slot, which is the edge that drops it from the excluded set.
@@ -254,7 +275,7 @@ internal sealed partial class CombatPump
         }
 
         bool wrote = bridge.TryWriteEnemies(enemies);
-        if (excludedIds.Count > 0)
+        if (logDiagThisTick)
         {
             log($"local combat diag (agent): TryWriteEnemies returned {wrote}, wrote {enemies.Count} enemies");
         }
