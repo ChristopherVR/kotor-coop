@@ -36,6 +36,11 @@ public sealed class ScriptItemGrantPumpTests
         /// — the plugin's own "the world is being torn down or loaded" signal.</summary>
         public bool IsWorldBetweenLives { get; set; }
 
+        /// <summary>What the bridge reports as <see cref="IWorldStateBridge.IsItemViewSettled"/>
+        /// — true by default (the interface's own default), set false by a test standing in for
+        /// the window right after a world edge where the item view has not yet stood still.</summary>
+        public bool IsItemViewSettled { get; set; } = true;
+
         /// <summary>Whether <see cref="TryReadLocalState"/> succeeds — false stands in for the
         /// engine having no resolvable player (mid-load), the same read the agent retains its
         /// previous state across.</summary>
@@ -373,6 +378,61 @@ public sealed class ScriptItemGrantPumpTests
         Assert.Empty(session.PublishedGrants);
 
         // A grant in the new world is still seen.
+        bridge.Possessed =
+        [
+            .. bridge.Possessed,
+            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+
+        (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
+        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+    }
+
+    /// <summary>
+    /// Live 2026-09-02, 23:31 (a game-over reload of END_M01AA, docs/research/shared-inventory-v2.md's
+    /// 2026-09-02 evening round): the host's world settled (<c>IsWorldBetweenLives</c> cleared)
+    /// while the save's equipped clothes and short sword were still being created by the engine —
+    /// the "settled" item sweep that built this pump's baseline missed them, and the next
+    /// ordinary rebuild fifteen seconds later diffed them in as a fresh grant. While the bridge
+    /// reports its item view as not yet settled, an item that "appears" must be folded silently
+    /// into the baseline (never diffed, never published); once it reports settled, a genuine
+    /// grant is seen normally again.
+    /// </summary>
+    [Fact]
+    public void WhileTheItemViewIsNotSettledAnAppearingItemIsRebaselinedNotPublished()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        agent.PumpOnce(); // seeds an empty baseline, item view already settled
+
+        // The world edges: the item view is not yet settled, and the two items the reload is
+        // still creating "appear" in the inventory the bridge reports.
+        bridge.WorldEpoch++;
+        bridge.IsItemViewSettled = false;
+        bridge.Possessed =
+        [
+            ("g_a_clothes01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+        Assert.Empty(session.PublishedGrants);
+
+        bridge.Possessed =
+        [
+            .. bridge.Possessed,
+            ("g_w_shortswrd01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce(); // still not settled: the sword must not be reported either
+
+        Assert.Empty(session.PublishedGrants);
+
+        // The item view settles: this sample must rebaseline (fold the reload's own items in)
+        // rather than diff them in as a grant now that settling has just cleared.
+        bridge.IsItemViewSettled = true;
+        agent.PumpOnce();
+        Assert.Empty(session.PublishedGrants);
+
+        // A genuine script grant AFTER settling is still seen normally.
         bridge.Possessed =
         [
             .. bridge.Possessed,

@@ -2700,3 +2700,84 @@ the first lookup after `IsWorldBetweenLives` clears rebuilds inline before answe
 one-time stall per load, the same one the attach already accepts. Reset with the other caches
 at the epoch edge. W7 on this build: firstSight `snap=1/2/1 reconcile=0`, 0 grant lines, both
 pools = the save's three stacks after the rejoin.
+
+## 18. 2026-09-02, 23:31 — the settled world's FIRST item sweep can still be wrong, because
+## "the plugin says the world is up" and "the engine finished creating what the save describes"
+## are two different moments; `ItemSweepProvenanceRule` grows a settle state machine, gated
+## behind a new `IWorldStateBridge.IsItemViewSettled`; NEEDS-LIVE
+
+### 18.1 The evidence
+
+A host game-over reload of `END_M01AA` via `KotorCoop.Agent.exe load --load-save 1`:
+
+```
+[23:31:00.822] [resolve] player: adopted the engine's own creature 0x1BBF2CC0 (id 0x7FFFFFFF) over the scan's 0x1411941C
+[23:31:01] hosting ... module END_M01AA  hp 8/8 ...          <- the PC is not finished being built (it is 12/12 a moment later)
+[23:31:03] * co-op: connected, 1 player
+[23:31:19] * script item grant: 2 new item(s) in the local PC's inventory outside dialogue: g_a_clothes01, g_w_shortswrd01
+client: [23:31:19] * dialogue grant: received 2 item(s) from peer 1 (''), queueing → gave 'g_a_clothes01' / 'g_w_shortswrd01' to 0x7FFFFFFF → party pool: local add detected ... → host pool snapshot went from 3 keys to 5
+```
+
+Same symptom §17.10 already closed once — a client's own equipped item published as a script
+grant after a reload — on the HOST side this time, and by a mechanism §17.10's fix does not
+reach. §17.10 (`ItemSweepProvenanceRule.MustRebuildNow`) forces exactly one inline resweep the
+first time a lookup runs after `IsWorldBetweenLives` clears, so a sweep taken WHILE between
+lives is never trusted past that point. Here the inline resweep itself ran AFTER
+`IsWorldBetweenLives` had already cleared — the plugin acks the world on screen (hp 8/8) before
+the PC is finished being built (hp 12/12 a beat later), and the save's equipped clothes and
+short sword are created by the engine after the player object resolves, not before. The
+"settled" sweep is therefore not PROVISIONAL by this rule's existing test (`betweenLives` was
+already false when it ran) and is trusted for the full `ItemTagRebuildMs` = 15 s — exactly long
+enough for the next background sweep (18-19 s later) to find both items and have
+`ScriptItemGrantPump` diff them in as a fresh grant, which the host pooled and the client
+reconciled back into its own inventory: `host pool snapshot went from 3 keys to 5`.
+
+### 18.2 The fix
+
+`ItemSweepProvenanceRule` (src/KotorCoop.Memory/ItemSweepProvenanceRule.cs) grows a second,
+independent piece of state alongside `Provisional`/`MustRebuildNow`:
+
+- `Settling` opens at every world edge (`Reset`, called from the same `WorldEpoch++` site in
+  `KotorGameBridge.Player.cs` that already drops the item caches) and stays true until two
+  consecutive sweeps — at least 1.5 s apart — name the exact same set of item ids, the same
+  "hold the first, compare a full interval later" shape `PartyPoolSettleRule` already uses for
+  the party-pool channel, reusing the id set `ApplyItemScanHits` already builds rather than
+  adding a new comparison surface.
+- A between-lives sweep never counts as a settle candidate (it is expected to keep changing);
+  only a sweep taken once `betweenLives` is false is compared.
+- A 20 s cap gives up waiting so a genuinely churning inventory (a script still dropping loot on
+  its own timer) cannot pin every caller to the rebaseline-only path for the rest of the
+  session.
+- While `Settling`, `KotorGameBridge.ServiceItemTagCache` requests a background sweep on a 2 s
+  cadence (`ItemSettleRebuildMs`) instead of waiting out the ordinary 15 s
+  (`ItemTagRebuildMs`) — the existing inline resweep at the provisional→settled edge is
+  unchanged, so a caller still never sees an artificially empty inventory.
+
+`KotorGameBridge.IsItemViewSettled` (`IWorldStateBridge.IsItemViewSettled`, new member, default
+`true` for test doubles and bridges with no notion of settling — the mock harness) exposes
+`!Settling`. `ScriptItemGrantPump.PumpScriptItemGrants` adds `!bridge.IsItemViewSettled` as a
+fourth reason to take a silent rebaseline instead of a diff (alongside "no baseline yet", "the
+dialogue pump just released the window", and the existing `IsWorldBetweenLives` gate one door
+earlier) — an item that merely finishes appearing while the view is settling is folded into the
+baseline, never published as a grant; a genuine grant landing after settling is still seen
+normally.
+
+`PartyPool` checked and left alone: `KotorGameBridge.PartyPool.cs` already carries its own
+independent settle rule, `PartyPoolSettleRule` (§17.3), scoped to the pool repository's own
+totals rather than the item-address cache — it is not a one-line gate on the new flag, it is a
+separate, already-shipped mechanism for the same *shape* of exposure on a different channel, so
+gating it on `IsItemViewSettled` too would be redundant rather than a fix.
+
+### 18.3 NEEDS-LIVE
+
+Unit-tested only this pass (`ItemSweepProvenanceRuleTests`'s new settling cases,
+`ScriptItemGrantPumpTests.WhileTheItemViewIsNotSettledAnAppearingItemIsRebaselinedNotPublished`).
+Not yet run against the live 23:31 recipe (`KotorCoop.Agent.exe load --load-save 1` against a
+game-over `END_M01AA` save, watching for `script item grant:` lines and the host pool snapshot
+key count in the 15-20 s window after the world is acked). The open question a live round has to
+answer: whether 1.5-2 s of spacing and a handful of 2 s-cadence sweeps are actually enough beats
+for the engine to finish creating the save's equipped items before `SettleCapMs` (20 s) gives up
+and lets `ScriptItemGrantPump` start diffing again anyway — the live evidence above only pins
+WHEN the items appeared relative to the world being acked (some time before the 15 s rebuild
+fired at 23:31:19), not how many seconds after the ack the engine actually finished creating
+them.
