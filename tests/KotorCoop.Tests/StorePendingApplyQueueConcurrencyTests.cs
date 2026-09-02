@@ -187,11 +187,23 @@ public class StorePendingApplyQueueConcurrencyTests
         consumer.Start();
 
         const int Iterations = 8_000;
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
 
         try
         {
             for (int i = 0; i < Iterations; i++)
             {
+                // Keep the in-flight count under the pump's 256-entry cap: the consumer is a
+                // plain OS thread, and on a loaded machine (2026-09-03: two builds and a
+                // test run sharing the box) it was descheduled long enough for the producer to
+                // overrun the cap and log 364 "dropping apply" lines - the cap doing its job,
+                // not the race this test exists for. The two threads still overlap on every
+                // enqueue/dequeue; only the backlog is bounded.
+                while (i - observed.Count >= 128 && DateTime.UtcNow < deadline)
+                {
+                    Thread.Sleep(1);
+                }
+
                 // A fresh key every iteration - a genuine remote Add this instance's engine owes,
                 // exactly the shape session.DrainStoreOps() hands to step 2 in production.
                 session.Incoming.Add(new StoreOpPacket(
@@ -199,7 +211,7 @@ public class StorePendingApplyQueueConcurrencyTests
                 agent.PumpOnce();
             }
 
-            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
             while (observed.Count < Iterations && DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(15);
