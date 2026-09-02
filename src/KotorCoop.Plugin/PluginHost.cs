@@ -333,7 +333,15 @@ internal static unsafe partial class PluginHost
         //      Closes the wasted-round-trip noise measured live the same day: six refused
         //      gives in one second on a client rejoining after a wipe reload. NEEDS-LIVE. See
         //      docs/research/enemy-materialisation.md's 2026-09-02 section.
-        _block->Version = 65;
+        // 66 = 2026-09-03: the threat-retarget diagnostics region at 0x4B80..0x4C00
+        //      (SharedBlock.OffsetThreatDebugCount/OffsetThreatDebugGeneration/
+        //      OffsetThreatDebugRows) — fits the materialised-owner-id table's own leftover
+        //      tail, so TotalSize stayed 0x4C00. Diagnostics only: dumps what
+        //      PeerDamageController's ThreatTable currently believes for `tools/blockpoke.ps1
+        //      threat`; the agent never reads this region. coop.ini `threat_retarget` itself
+        //      (default OFF, NEEDS-LIVE) needs no wire/protocol change — see
+        //      docs/research/peer-damage-ledger.md §9.
+        _block->Version = 66;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

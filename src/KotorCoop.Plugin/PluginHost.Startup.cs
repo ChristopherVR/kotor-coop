@@ -240,6 +240,19 @@ internal static unsafe partial class PluginHost
             : "combat: damage_creator_attribution=OFF (default) - forwarded damage applies with "
                 + "no creator, as before");
 
+        // The active retarget this instance's mirrored enemies need §8.10 found the passive
+        // creator write does not provide: on the HOST, PeerDamageController tracks per-creature
+        // threat from forwarded peer damage and orders a lopsided fight's target directly
+        // through Odyssey.AttackTarget. Default OFF, NEEDS-LIVE — see
+        // docs/research/peer-damage-ledger.md §9.
+        Odyssey.ThreatRetargetEnabled = PluginConfig.ReadBool("threat_retarget", false);
+        Log(Odyssey.ThreatRetargetEnabled
+            ? "combat: threat_retarget=ON - a creature whose tracked threat clearly favours a "
+                + "peer over its current attack target will be ordered onto that peer directly "
+                + "(see combat log 'threat:' lines)"
+            : "combat: threat_retarget=OFF (default) - mirrored enemies keep whichever target "
+                + "the engine's own AI picked, as before");
+
         DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
         if (DialogueGateHook.Install(out string gateDiagnostic))
         {

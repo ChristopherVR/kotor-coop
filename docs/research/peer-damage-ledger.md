@@ -864,3 +864,221 @@ Shipped:
 
 Open: which effect it was. The hook's dump will say; until then a mirrored fight can no longer
 be ended by it.
+
+## 9. 2026-09-03: threat retarget — an ACTIVE substitute for §8.10's passive dead end
+
+§8.10 measured, live, that `damage_creator_attribution`'s write of the client's phantom id
+into `+0x158`/`+0x160` reaches no native retargeting logic for a creature already fighting
+someone: `round+0x9CC` stayed pinned on the host's own PC for 27s of the client's own hits
+landing on the same guard droid, sampled every 2.5s. Correct "who last hit me", not an aggro
+pull — and §1 of `combat-participation.md` already fully decoded WHY: `CreateNewAttackActions`
+and `EndCombatRound`, the only two functions that ever write `round+0x9CC`, never read
+`+0x158` anywhere in their own logic. There is no passive lever left to pull here; the only way
+to make an enemy switch onto whoever is actually hitting it is to tell it to, directly, through
+the same primitive the test battery already uses to stage a fight in the first place.
+
+### 9.1 The mechanism
+
+Entirely host-side, entirely additive — no protocol change, no new wire field, and (see §9.4)
+no `SharedBlock` growth either. Behind a NEW plugin-only coop.ini key, **`threat_retarget`**
+(default **OFF**, NEEDS-LIVE), wired the identical way `damage_creator_attribution` is:
+`Odyssey.ThreatRetargetEnabled`, assigned once in `PluginHost.Startup.cs` with a startup log
+line, read by exactly one call site.
+
+**`ThreatTable`** (`src/KotorCoop.Plugin/ThreatTable.cs`) is pure C# — no engine calls, no
+unsafe pointers, a plain `Dictionary<uint, Dictionary<uint, …>>` keyed first by creature id
+then by attacker id. This is deliberately NOT the fixed-array-on-the-hot-hook-path shape
+`PhantomAttackerTable`/`DamageOwedLedger` use: those live on `PhantomHitHook.OnDamage`, which
+runs on every damage event in the whole game and cannot allocate. `ThreatTable` is only ever
+touched from `PeerDamageController.ApplyOwed`'s existing per-row loop — itself throttled to
+once every 10 frames, and only when a peer's forwarded damage has actually landed (the same
+cadence the existing `combat: applied N of a peer's damage` log line already runs at) — so a
+`Dictionary` costs nothing measurable here, the same tradeoff the SESSION-side
+`PeerDamageLedger` merge already makes for the identical reason.
+
+Each (creature, attacker) entry decays **linearly** to zero over a fixed window (default 10s,
+`ThreatTable.DefaultWindowSeconds`) rather than an exponential half-life — simplest to reason
+about and to pin with a fixed clock in a unit test, and the curve only changes how fast an
+attacker who stops swinging loses priority, not whether the feature works at all.
+
+**`ThreatRetargetRule.Decide`** (`src/KotorCoop.Plugin/ThreatRetargetRule.cs`) is the whole
+decision, a static function with no state of its own:
+
+1. `NotInCombat` — the creature's `round+0x9CC` (read through the EXISTING accessor
+   `Odyssey.GetCurrentAttackTargetId`, added for `LocalFightActivityRule`'s §13 and reused
+   verbatim here, per this task's own instruction not to invent a new offset) is 0 or
+   `OBJECT_INVALID`. Never force an idle/non-hostile creature into a fight through this rule —
+   that is `local_combat_engage_fallback`'s job, a different feature entirely.
+2. `NoTopAttacker` — nothing is tracked against this creature at all.
+3. `AlreadyTarget` — the top attacker already IS the current target; nothing to do.
+4. `BelowMinimum` — the top attacker's threat has not cleared an absolute floor
+   (`ThreatRetargetOptions.MinThreatToRetarget`, default 15). This is the test that actually
+   matters in practice — see §9.2 below for why the margin test alone is not enough.
+5. `BelowMargin` — the top attacker's threat has not cleared `MarginRatio` (default 1.5x) times
+   the CURRENT target's own tracked threat.
+6. `OnCooldown` — this creature was retargeted more recently than `CooldownSeconds` (default 4)
+   ago. A fresh creature with no retarget history is never held back by this (`ThreatTable`
+   reports `double.PositiveInfinity` seconds-since for one that has never been marked).
+7. `Retarget` — every test passed. `PeerDamageController` then (a) resolves the top attacker's
+   phantom body and refuses if it is unresolvable or downed (never onto a dead or unresolved
+   target), (b) arms the cooldown UNCONDITIONALLY at this point — win or lose, so a structural
+   refusal (e.g. a stale phantom id) cannot hammer `Odyssey.AttackTarget` at the owed-loop's own
+   ~6/s cadence for the whole window — and (c) calls
+   `Odyssey.AttackTarget(creatureId, topAttackerId, out int failure)`, the EXISTING primitive
+   (`src/KotorCoop.Plugin/Odyssey.Faction.cs`) that dispatches through the real
+   `ExecuteCommandAttack -> AddAttackActions -> AddAttackAction` chain and arms the round timer
+   the same way `QueueAttackAction` does — confirmed live (round 11, that file's own doc
+   comment) to take a genuinely fresh creature from inert to landing real damage.
+
+`plot`/story actors are exempted BEFORE anything is even recorded (`Odyssey.IsPlot(creature)`,
+checked first in `PeerDamageController.EvaluateThreat`) — the same exemption
+`CombatController.Apply` already grants a cutscene actor via the census's own `EnemyView.Plot`
+flag, applied here directly off the live engine object since this loop works from a resolved
+id, not the census view.
+
+### 9.2 ⚠ WHAT THIS DOES NOT TRACK, and why the margin test is mostly decorative today
+
+Only damage this instance can attribute to a SPECIFIC attacker id feeds the table: a peer's
+forwarded damage, via `SharedBlockView.SoleRemotePhantomId()` — unambiguous only with exactly
+one remote peer connected, the identical limit `damage_creator_attribution` already documents
+(§8.6/§8.9). A 3+-peer session's forwarded damage banks into the ledger the same way it always
+has, but contributes NOTHING to the threat table (the attacker id is unresolvable), so
+`threat_retarget` simply never fires for that session — falls back to today's behaviour rather
+than guessing which peer to name, the same choice §8.9 already made for attribution.
+
+More importantly: **the HOST's own local PC/party damage to the same creature is not recorded
+here at all.** This was investigated, not assumed — `PhantomHitHook.Dealt` (the table that
+would seem to answer "how much has the local player dealt to this creature") is only ever
+populated while `block.DamageDealtEnabled` is true, and that flag is precisely the signal that
+THIS instance is NOT the fight's owner (`PeerDamageController.RefreshAttackers`'s own remarks:
+"how the fight's OWNER opts out … its own damage is already authoritative, nobody will ever
+read its ledger" — `WatchAttackers([])` is called and the hook stops watching entirely). No
+other cheap existing ground-truth read for "how much did the HOST's own PC just deal to THIS
+specific enemy" was found in this pass. Building one would mean either watching the host's own
+PC as an attacker unconditionally on `PhantomHitHook` (a change to a hot per-frame native hook,
+out of scope for a host-side-only feature this task asked to build from EXISTING primitives) or
+threading a new per-enemy read through `CombatController`'s own health-mirror pass, which reads
+health, not damage dealt. Left undone and documented rather than guessed at.
+
+The practical consequence: the current target's own threat almost always reads 0 (it is not a
+tracked peer attacker id, and the host is never one), so `BelowMargin` (test 5) is trivially
+satisfied by any tracked peer damage at all — the ratio math reduces to `topThreat >= 0`, always
+true. **`BelowMinimum` (test 4, the absolute floor) is therefore the test doing essentially all
+the real work today**, not the margin. The margin test is still real and still exercised
+(`ThreatRetargetRuleTests.BelowTheMarginOverAKnownCurrentTargetRefuses`/
+`ExactlyAtTheMarginIsEnough`) for the case where the current target happens to also be a
+tracked attacker id (a second peer, in a topology where that peer's own hits are separately
+attributable) — it simply is not the common case yet.
+
+### 9.3 VERIFIED / INFERRED / NEEDS-LIVE
+
+**VERIFIED (unchanged from earlier sections, re-cited for this feature's own reasoning):**
+`round+0x9CC` is the combat round's own live target field (`combat-participation.md` §1.2,
+disassembly); `CreateNewAttackActions`/`EndCombatRound` never read `+0x158` (§8.5, disassembly,
+and confirmed by §8.10's live measurement finding no retarget); `Odyssey.AttackTarget` takes a
+genuinely fresh creature from inert to landing real damage (`Odyssey.Faction.cs`'s own doc
+comment, round 11, live); `SoleRemotePhantomId()`'s fallback behaviour (2-vs-3+ peers) is pinned
+at the unit level (`SoleRemotePhantomIdTests`, §8.9).
+
+**VERIFIED, this pass (unit level, 27 tests, `dotnet test … --filter "FullyQualifiedName~Threat"`):**
+`ThreatTable`'s accumulation, linear decay (including the "a fresh hit resets the clock on top
+of what remains" interaction), top-attacker selection under mixed decay ages, cooldown arming
+and the "never held back before a first retarget" case, and per-creature `Forget` versus global
+`Clear` (`ThreatTableTests`, 14 tests); every branch of `ThreatRetargetRule.Decide`, including
+the not-in-combat sentinel test, the absolute-floor-alone case, the margin boundary exactly at
+1.5x, and the cooldown boundary exactly at 4s (`ThreatRetargetRuleTests`, 13 tests).
+
+**NEEDS-LIVE (nothing below has been run against a live game):**
+
+1. **The core question**: does a mirrored enemy actually turn and swing at the peer's phantom
+   after `threat_retarget=1` orders it there, the same way the anti-7.4 phantom-targetability
+   flip already does (`combat-participation.md`'s own live pass)? `Odyssey.AttackTarget` is
+   independently live-verified for a FRESH creature (round 11); this is the first live exercise
+   of it against a creature ALREADY mid-round with a different target locked (`round+0x9CC`
+   already non-`OBJECT_INVALID`) — whether `AddAttackAction`'s own re-validation (test 1-6,
+   `combat-participation.md` §1.2) simply appends a new pending action on top of the existing
+   round, or whether a stale round state actually blocks the new order, is unmeasured.
+2. **Whether the cadence feels right in practice** — `ApplyOwed` runs once every 10 frames only
+   when a peer's damage has actually landed, so the very first retarget after a peer engages a
+   fresh enemy waits for that enemy's first forwarded-damage pass, not a whole extra observation
+   step of its own. The 4s cooldown and 1.5x/15-point thresholds are rule-defined defaults
+   (§9.1), not measured against how a real fight feels — expect to tune them after the first
+   live pass.
+3. **§9.2's gap, live**: whether the "current target's threat mostly reads 0" reduction actually
+   causes visible thrash (rapid re-retargets as the top attacker changes) in a real 3-way tug of
+   war (host PC + one peer both hitting the same enemy), which the cooldown (test 6) should
+   dampen but has never been watched do so.
+4. **The diagnostic region itself** — `tools/blockpoke.ps1 threat` reads
+   `SharedBlock.OffsetThreatDebugCount`/`OffsetThreatDebugRows` (version 66) against a live
+   process for the first time in the recipe below; only the WRITE side
+   (`SharedBlockView.SetThreatDebugRow`) has been exercised, indirectly, by the plugin build
+   succeeding.
+
+### 9.4 Block layout — no growth, a genuine first for this file
+
+Every earlier growth in `SharedBlock.cs`'s own history (versions 31 through 65) either
+widened `TotalSize` to a fresh `0x100` boundary or claimed a small leftover gap smaller than
+what it needed. This is the first to claim a leftover gap and have it fit EXACTLY:
+`OffsetMaterialisedOwnerIds` (version 65) ends at `0x4B80`, `TotalSize` stays `0x4C00`, and the
+threat-debug region's count/generation dwords plus its 6-row table
+(`4 + 4 + 6*0x14 = 0x80` bytes) fill the remaining `0x80` bytes precisely. `SharedBlock.Version`
+bumped 65 → 66. The region is diagnostics only — dev-verb output for `blockpoke.ps1 threat`, not
+read by the agent, no wire/protocol implication.
+
+### 9.5 Live-verification recipe (verbatim, once a rig is available)
+
+1. `threat_retarget=1` in `coop.ini` on the HOST only — this is entirely a host-side channel
+   (the client's own `threat_retarget` value is inert; nothing on a client instance ever reads
+   `Odyssey.ThreatRetargetEnabled` from a code path a client's own `PeerDamageController.ApplyOwed`
+   would reach, since a client never has rows in `block.DamageOwedCount` for enemies it does not
+   own). The host's `kotorcoop-plugin.log` should show `combat: threat_retarget=ON - …` once,
+   near startup.
+2. Load a 2-instance rig (host + one client) on `tar_m10aa` (the same module §8.7's own recipe
+   uses — a Black Vulkar reachable by both players at once).
+3. **Stage the lopsided fight.** Host attacks the Vulkar first through the `attack` dev verb
+   (`tools/blockpoke.ps1 -ProcId <host> attack <hostPcId> <vulkarId>`) so `round+0x9CC` locks
+   onto the host's own PC. Confirm with `tools/blockpoke.ps1 -ProcId <host> ledger` that the
+   Vulkar's id is not yet in the owed table.
+4. **The client attacks the SAME creature** (`tools/blockpoke.ps1 -ProcId <client> attack
+   <clientPcId> <vulkarId>` — the client's own real swing, not a scripted forward) and keeps
+   hitting it for several rounds so the host's `ledger`/`combat: applied N of a peer's damage`
+   lines accumulate past the 15-point floor.
+5. **Sample `round+0x9CC` on the HOST** (`combat-participation.md` §8's existing dev tooling, or
+   `tools/blockpoke.ps1 -ProcId <host> threat` — the `currentTarget` column of the Vulkar's own
+   row) every couple of seconds. Prediction: within roughly one `ApplyOwed` pass after the
+   client's tracked threat clears both the absolute floor and the 4s cooldown, the HOST's log
+   shows `threat: 0x<vulkar> retargeted 0x<hostPcId> -> 0x<clientPhantomId> (threat <N> vs <M>)`,
+   and the very next `threat` dump's `currentTarget` column reads the client's phantom id.
+6. **Watch it happen on screen, on the host's own view**: the Vulkar should visibly turn and
+   swing at the client's phantom rather than the host's PC — the same visual confirmation §8.7
+   step 4 describes for the passive-write test, but this time driven by an active order rather
+   than an unconfirmed AI read.
+7. **Refusal path**: repeat with the client's phantom ALREADY downed (or disconnected mid-fight)
+   at the moment its threat would otherwise win — expect NO retarget line, and (if `AttackTarget`
+   itself was reached and refused for an unrelated reason) a `threat: 0x<id> retarget refused …
+   (failure <code>)` line instead, never a silent no-op.
+8. **Cooldown**: immediately after step 5's retarget, have the host's own PC land another hit
+   restoring its own targeting priority is not possible today (its threat is untracked, §9.2) —
+   instead confirm the NEGATIVE: within the 4s cooldown window, no second `threat: … retargeted`
+   line appears for the same creature even if the client's tracked threat keeps climbing: `Get`
+   the same `threat` row twice, ~1s apart, and see `currentTarget` hold steady.
+9. **No regression check**: with the key OFF (default), confirm `ledger`/`combat: applied …`
+   behaviour is byte-for-byte unchanged and no `threat:` line ever appears —
+   `EvaluateThreat` is never called at all when `Odyssey.ThreatRetargetEnabled` is false, so this
+   should require no explanation beyond "the code path is not entered," the same closing note
+   §8.7 step 6 makes for `damage_creator_attribution`.
+
+### 9.6 NEEDS-LIVE checklist
+
+1. §9.5 step 5's core question — does the ordered retarget actually turn a mid-round creature,
+   confirmed both via `round+0x9CC` and visually on the host's own screen.
+2. Whether `AttackTarget`'s re-validation path behaves the same against an ALREADY-engaged
+   creature as it does against the fresh one round 11 confirmed (§9.3 item 1).
+3. Whether the rule-defined thresholds (1.5x margin, 15-point floor, 4s cooldown) feel right in
+   a real fight, or need rig-driven tuning — same caveat every other rule-defined default in
+   this codebase carries at ship time.
+4. The diagnostic region itself, end to end, against a live process (§9.3 item 4).
+5. A 3+-peer session's threat table staying genuinely empty (never firing) rather than merely
+   assumed to — `SoleRemotePhantomId()`'s own fallback is unit-pinned (§8.9), but this feature's
+   OWN consumption of it (`threatAttackerId` in `PeerDamageController.ApplyOwed`) has not been
+   exercised against a real 3-peer rig, which does not exist in this codebase's test harness.

@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -359,6 +359,23 @@ switch ($Command) {
         for ($i = 0; $i -lt $n; $i++) {
             $base = 0x2018 + ($i * 8)
             "    owed[{0}]: id 0x{1:X}  total {2}" -f $i, (U32 $base), (U32 ($base + 4))
+        }
+    }
+    'threat' {
+        # THREAT_RETARGET's own diagnostic snapshot (coop.ini threat_retarget, SharedBlock
+        # version 66, docs/research/peer-damage-ledger.md §9): what PeerDamageController's
+        # ThreatTable believed as of the last owed-loop pass that ran with the key on. Empty
+        # (count 0) either means the key is off, nothing is currently owed against any enemy,
+        # or every tracked attacker's threat has fully decayed — `combat`/`ledger` above show
+        # whether the underlying damage channel itself is alive.
+        "  threat: count {0}  generation {1}" -f (U32 0x4B80), (U32 0x4B84)
+        $n = [Math]::Min([int](U32 0x4B80), 6)
+        for ($i = 0; $i -lt $n; $i++) {
+            $base = 0x4B88 + ($i * 0x14)
+            $topThreat = (U32 ($base + 0xC)) / 100.0
+            $curThreat = (U32 ($base + 0x10)) / 100.0
+            "    threat[{0}]: creature 0x{1:X}  currentTarget 0x{2:X} (threat {3:F2})  topAttacker 0x{4:X} (threat {5:F2})" -f `
+                $i, (U32 $base), (U32 ($base + 4)), $curThreat, (U32 ($base + 8)), $topThreat
         }
     }
     'encounters' {

@@ -130,6 +130,14 @@ internal partial struct SharedBlock
     /// <see cref="OffsetMaterialisedOwnerIds"/> needs — so this region starts cleanly at the
     /// old boundary, the same choice every earlier growth in this file made.
     /// </summary>
+    /// <summary>
+    /// TotalSize did NOT grow for the threat-retarget diagnostics region (version 66,
+    /// docs/research/peer-damage-ledger.md §9): the materialised-owner-id table's own tail
+    /// (0x4B80) leaves exactly 0x80 free bytes before 0x4C00, and
+    /// <see cref="OffsetThreatDebugRows"/>'s 6-row table plus its count/generation dwords fits
+    /// that gap precisely (4 + 4 + 6*0x14 = 0x80) — the first growth in this file's history that
+    /// did not need a new 0x100 boundary.
+    /// </summary>
     public const int TotalSize = 0x4C00;
 
     public const int ProfileVisibleSize = 0x250;
@@ -217,7 +225,11 @@ internal partial struct SharedBlock
     /// per-entry stack count — see SharedBlock.ItemTemplateSpawns.cs and
     /// docs/research/shared-inventory-v2.md §17. Version 65 (same day) added
     /// <see cref="OffsetMaterialisedOwnerIds"/> — see SharedBlock.Combat.cs and
-    /// docs/research/enemy-materialisation.md's 2026-09-02 section.
+    /// docs/research/enemy-materialisation.md's 2026-09-02 section. Version 66 (2026-09-03)
+    /// added <see cref="OffsetThreatDebugCount"/>/<see cref="OffsetThreatDebugGeneration"/>/
+    /// <see cref="OffsetThreatDebugRows"/> — diagnostics only (the <c>threat</c> blockpoke
+    /// verb), never read by the agent — see SharedBlock.Combat.cs and
+    /// docs/research/peer-damage-ledger.md §9.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;
