@@ -52,7 +52,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [combat-when-apart.md](combat-when-apart.md) | What happens when the two players are not together | Reviewed; encounters-only-fire-for-host gap intentionally NOT fixed (structural) |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | One visible fight instead of two private ones | Design over verified research; implemented, live-verified |
 | [enemy-materialisation.md](enemy-materialisation.md) | Building a mirror body for an enemy the mirror has none for | Implemented, live-verified |
-| [peer-damage-ledger.md](peer-damage-ledger.md) | Carrying a peer's damage as DEALT, not sampled health; §7 per-attacker attribution | Implemented, live-verified; §7 built, NEEDS-LIVE |
+| [peer-damage-ledger.md](peer-damage-ledger.md) | Carrying a peer's damage as DEALT, not sampled health; §7 per-attacker attribution; §8 creator/aggro attribution | Implemented, live-verified; §7 built, NEEDS-LIVE; §8 built (`damage_creator_attribution`, default OFF), NEEDS-LIVE |
 | [client-encounters.md](client-encounters.md) | Making a client's own ambush trigger fire for the host | Implemented, live-verified, ON by default |
 | [min-one-hitpoint.md](min-one-hitpoint.md) | Why a player floors at 1 hp and never goes down | Root-caused (KOTOR's own tutorial script); one related stale-GUI bug logged, open |
 | [death-handling.md](death-handling.md) | The death pipeline, control-swap, game-over, revival | RE reference; downed/revive implemented, confirmed live once (2026-08-01), NOT re-verified against later builds (roadmap-seamless.md item 29). 2026-09-02: `hurt`/`down` dev verbs and the client `TempDeathUpdate` guard shipped, making the pipeline live-testable — NEEDS-LIVE |

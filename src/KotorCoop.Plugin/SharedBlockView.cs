@@ -205,6 +205,40 @@ internal sealed unsafe partial class SharedBlockView(byte* baseAddress)
             ? *U32(SharedBlock.OffsetPhantomIdTable + (index * 4))
             : 0;
 
+    /// <summary>
+    /// The single unambiguous remote-peer phantom id — 0 unless exactly one phantom slot is
+    /// occupied. Used for <c>damage_creator_attribution</c> (docs/research/peer-damage-ledger.md
+    /// §8): the enemy- and companion-damage owed ledgers both merge every contributing peer's
+    /// rise into ONE total before this instance ever sees a row (peer-damage-ledger.md §3.1,
+    /// CompanionDamageLedger.Merge), so there is no per-row peer identity left once more than
+    /// one peer is connected — this is the only case where "the peer's phantom" is unambiguous
+    /// without a protocol change. Correct for the two-player topology this codebase tests
+    /// against; a 3+-peer session falls back to 0 (no attribution) rather than guess wrong.
+    /// </summary>
+    public uint SoleRemotePhantomId()
+    {
+        uint found = 0;
+        int count = 0;
+
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            uint id = GetPhantomId(i);
+            if (id == 0)
+            {
+                continue;
+            }
+
+            found = id;
+            count++;
+            if (count > 1)
+            {
+                return 0;
+            }
+        }
+
+        return count == 1 ? found : 0;
+    }
+
     public void SetLocalState(Vec3 position, float facing, int health)
     {
         *F32(0x10) = position.X;

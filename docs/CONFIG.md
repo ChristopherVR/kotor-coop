@@ -126,6 +126,7 @@ entirely; both now default ON, matching each other and the shipped file's explic
 | `local_combat_timeout_s` | `25` | seconds before a released enemy reclaims to the mirror | — |
 | `local_combat_targeting_us_fresh_s` | `2` | freshness window for targeting data, seconds | — |
 | `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on a free local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
+| `damage_creator_attribution` | OFF | pass a real creator id (a peer's phantom, or a per-attacker id) through every forwarded-damage apply, so the receiving engine's own aggro/last-attacker bookkeeping sees who really hit it, instead of nobody | [peer-damage-ledger.md §8](research/peer-damage-ledger.md) |
 | `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |

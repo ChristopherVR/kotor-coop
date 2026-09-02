@@ -220,6 +220,21 @@ internal static unsafe partial class PluginHost
         // visibly disturb.
         Odyssey.DialogueJoinTeleportEnabled = PluginConfig.ReadBool("dialogue_join_teleport", true);
 
+        // Whether forwarded-damage applies (PeerDamageController/IncomingDamageController/
+        // CompanionDamageController) pass a real creator through to the receiving engine's own
+        // EffectDamage, so its aggro/last-attacker bookkeeping sees who really hit it instead of
+        // nobody. Default OFF, NEEDS-LIVE — see docs/research/peer-damage-ledger.md §8 for the
+        // RE this rests on. Logged once here, at startup, rather than per controller: it is one
+        // session-wide switch and every consumer reads the same flag.
+        Odyssey.DamageCreatorAttributionEnabled = PluginConfig.ReadBool("damage_creator_attribution", false);
+        Log(Odyssey.DamageCreatorAttributionEnabled
+            ? "combat: damage_creator_attribution=ON - forwarded damage carries a real creator "
+                + "id where one can be named (a peer's phantom for owner-applied enemy/companion "
+                + "hits, a per-attacker id for incoming phantom hits); falls back to no creator "
+                + "otherwise (see combat log lines for individual refusals)"
+            : "combat: damage_creator_attribution=OFF (default) - forwarded damage applies with "
+                + "no creator, as before");
+
         DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);
         if (DialogueGateHook.Install(out string gateDiagnostic))
         {
