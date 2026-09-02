@@ -550,6 +550,20 @@ public static class CheatKinds
     public const uint GalaxyMapStats = 67;
 
     /// <summary>
+    /// <c>spawncreature &lt;template&gt; [count] [x y [z]]</c> (alias <c>spawn</c>) —
+    /// DEV-ONLY TEST PRIMITIVE (docs/research/creature-liveness.md's 2026-09-03 checklist item
+    /// 6): spawns <c>Amount</c> hostile creatures (default 1, max 32) from the .utc template
+    /// resref in <c>Text</c> through the engine's own CreateObject path, next to the local
+    /// player by default or at an explicit <c>X</c>/<c>Y</c>/<c>Z</c> — same origin-sentinel
+    /// convention <see cref="Teleport"/>/<see cref="WalkTo"/> already use. See
+    /// <c>SharedBlock.CheatKindSpawnCreature</c>. Local only, and only the local instance
+    /// spawns: on a CLIENT the spawned creatures are local-only, not carried by peer sync.
+    ///
+    /// ⚠ 68, next free after every noted range through 67 as of 2026-09-03.
+    /// </summary>
+    public const uint SpawnCreature = 68;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

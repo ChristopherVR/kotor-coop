@@ -2,7 +2,7 @@ namespace KotorCoop.Session;
 
 /// <summary>
 /// The read/diagnostic verbs used to localise a live desync: netsim (fault injection), census,
-/// resolve, firescript, movenear.
+/// resolve, firescript, movenear, spawncreature.
 /// </summary>
 public static partial class ConsoleCommand
 {
@@ -77,6 +77,17 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.MoveNear, Address: rest[0], X: x, Y: y, Z: z);
     }
+
+    // spawncreature <template> [count] [x y [z]]  - DEV-ONLY TEST PRIMITIVE, see
+    // CoopCommandKind.SpawnCreature. The count/position grammar is SpawnCreatureVerbRule (pure,
+    // unit-tested) so it does not need re-testing through this dispatcher's own plumbing - same
+    // pattern ParseGalaxyMap already established for its own three-way parse.
+    private static CoopCommand ParseSpawnCreature(string[] rest) =>
+        SpawnCreatureVerbRule.TryParse(rest, out SpawnCreatureVerbRule.Result result, out string error)
+            ? new CoopCommand(
+                CoopCommandKind.SpawnCreature,
+                Address: result.Template, Amount: result.Count, X: result.X, Y: result.Y, Z: result.Z)
+            : new CoopCommand(CoopCommandKind.Invalid, Error: error);
 
     // faction <id|me> [vsId|me]  - LIVE-TEST/DIAGNOSTIC PRIMITIVE, see CoopCommandKind.Faction.
     // Read-only: reports GetAIStateReputation (both directions) plus each side's raw

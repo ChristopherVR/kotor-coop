@@ -33,6 +33,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.ResolveObject] = "resolve 0x35",
         [CoopCommandKind.FireScript] = "firescript 0x35",
         [CoopCommandKind.MoveNear] = "movenear 0x35",
+        [CoopCommandKind.SpawnCreature] = "spawncreature g_vulkar001",
         [CoopCommandKind.NetSim] = "netsim status",
         [CoopCommandKind.LagStats] = "lagstats",
         [CoopCommandKind.PublicAddress] = "public_address",

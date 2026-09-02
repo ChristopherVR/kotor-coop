@@ -1177,4 +1177,23 @@ internal partial struct SharedBlock
     /// ⚠ 67, next free after every noted reserved range through 66 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindGalaxyMapStats = 67;
+
+    /// <summary>
+    /// <c>spawncreature &lt;template&gt; [count] [x y [z]]</c> (alias <c>spawn</c>) — DEV-ONLY
+    /// TEST PRIMITIVE (docs/research/creature-liveness.md's 2026-09-03 checklist item 6, and
+    /// docs/research/peer-damage-ledger.md §9.5's own combat-staging need). Spawns
+    /// <c>CheatAmount</c> hostile creatures (default 1, max 32) from the .utc template resref in
+    /// <c>CheatText</c> through the engine's own CreateObject path (<c>Odyssey.SpawnCreature</c>
+    /// — the same call <c>MaterialisedEnemies</c>/<c>PhantomController</c> already make for their
+    /// own stand-ins), spread in a small grid (<see cref="SpawnCreatureGridRule"/>) next to the
+    /// local player by default, or anchored on <c>CheatPosition</c> when it is not the origin
+    /// sentinel — same convention <see cref="CheatKindMoveNear"/> already uses. Faction and every
+    /// other field comes from the template itself; nothing is forced. Local only, and only the
+    /// local instance spawns: on a CLIENT the spawned creatures are local-only bodies this
+    /// instance owns, not the host's, so peer sync will not carry them — the intended use is on
+    /// the HOST.
+    ///
+    /// ⚠ 68, next free after every noted reserved range through 67 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindSpawnCreature = 68;
 }
