@@ -83,6 +83,22 @@ internal static unsafe class PhantomHitHook
 
     private const uint ObjectInvalid = 0x7F000000;
 
+    /// <summary>The largest single hit this bookkeeping will believe. KOTOR's biggest real
+    /// numbers (a critical two-weapon sneak attack, a thermal detonator, Force Storm) stay in
+    /// two digits or low three; our own KillCreature applies 9999 but under SuppressDealt.
+    /// Anything past this is a misread effect, never a hit — see OnDamage's gate.</summary>
+    internal const int MaxPlausibleHit = 2000;
+
+    /// <summary>How many implausible effects get their int list dumped to the log. The
+    /// first few are the diagnosis; after that the counter alone says it is still happening.</summary>
+    private const int ImplausibleDumpLimit = 5;
+    private static int _implausibleDumped;
+
+    /// <summary>Implausible hits refused so far this process, published for the dashboard-
+    /// style checks (a non-zero value on a peer means an effect this hook does not
+    /// understand is landing on someone's creature).</summary>
+    public static uint ImplausibleRefused { get; private set; }
+
     /// <summary>Phantom object ids currently being watched, and the damage each has taken.
     /// Fixed slots indexed by phantom slot — the array is read on the engine's damage path,
     /// so there is nothing to allocate or lock.</summary>
@@ -529,6 +545,23 @@ internal static unsafe class PhantomHitHook
                 return;
             }
 
+            // ⚠ PLAUSIBILITY GATE (2026-09-02). Live on tar_m10aa a client's ledger row for
+            // tar10_vulkarpt02 (0x46) jumped from 3 to 1,634,994,435 (0x61747103) between two
+            // agent ticks; the host's rise-only merge banked the whole rise, its per-pass clamp
+            // turned it into "applied 200" nine times in a second, and the Vulkar died of
+            // nothing anyone had done. A number that size is not a hit in this game — no weapon,
+            // grenade or Force power reaches four digits — so whatever effect carried it
+            // (its int list is dumped below, bounded, for the next occurrence) must NOT be
+            // credited to any of the three cumulative totals: an enemy ledger row becomes a
+            // guaranteed kill on the owner, a companion row wipes the host's companion, a
+            // phantom row wipes the peer's PC. The engine's own apply still runs (the stub
+            // always resumes into it); only OUR bookkeeping refuses it.
+            if (total > MaxPlausibleHit)
+            {
+                NoteImplausibleHit(target, targetId, effect, total);
+                return;
+            }
+
             if (companionSlot >= 0)
             {
                 uint rosterSlotPlusOne = _companionRosterSlotPlusOne[companionSlot];
@@ -575,6 +608,53 @@ internal static unsafe class PhantomHitHook
         {
             // Never let a managed fault unwind into the engine's damage application.
         }
+    }
+
+    /// <summary>
+    /// Counts an implausible hit and, for the first few, dumps everything about the effect
+    /// that carried it: the effect's vtable and its first header dwords (type/subtype live in
+    /// there), the creator, the int list's count and every int the engine would read. This is
+    /// the evidence the 2026-09-02 occurrence did not leave behind — the client log had rotated
+    /// and nothing named the hit, only the host's ledger row showed the number. Bounded so a
+    /// repeating source costs five lines and a counter, not a log per frame.
+    /// </summary>
+    private static void NoteImplausibleHit(nint target, uint targetId, nint effect, int total)
+    {
+        ImplausibleRefused++;
+
+        if (_implausibleDumped >= ImplausibleDumpLimit)
+        {
+            return;
+        }
+
+        _implausibleDumped++;
+
+        int count = *(int*)(effect + EffectIntCount);
+        nint ints = *(nint*)(effect + EffectInts);
+        int shown = Math.Min(Math.Max(count, 0), 24);
+
+        System.Text.StringBuilder sb = new(320);
+        sb.Append("combat: REFUSED an implausible hit of ").Append(total)
+          .Append(" on 0x").Append(targetId.ToString("X"))
+          .Append(" (hp ").Append(*(short*)(target + ObjCurrentHitPoints))
+          .Append(") from creator 0x").Append((*(uint*)(effect + EffectCreator)).ToString("X"))
+          .Append(": effect 0x").Append(((nint)effect).ToString("X"))
+          .Append(" vtable 0x").Append((*(nint*)effect).ToString("X"))
+          .Append(" hdr");
+
+        for (int i = 4; i < 0x30; i += 4)
+        {
+            sb.Append(' ').Append((*(uint*)(effect + i)).ToString("X"));
+        }
+
+        sb.Append(" ints[").Append(count).Append("]@0x").Append(ints.ToString("X")).Append(" =");
+
+        for (int i = 0; i < shown && ints != 0; i++)
+        {
+            sb.Append(' ').Append(*(int*)(ints + (i * 4)));
+        }
+
+        PluginHost.Log(sb.ToString());
     }
 
     /// <summary>

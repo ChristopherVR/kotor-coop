@@ -174,6 +174,25 @@ public class CompanionDamageLedgerTests
         Assert.Equal(25u, plugin.AppliedTo(1));
     }
 
+    /// <summary>Same gate as the enemy ledger (PeerDamageLedger.MaxPlausibleRise): a rise no
+    /// fight could produce is a misread effect on the peer, and banked against a companion it
+    /// would wipe the host's copy. Refused, counted, baseline moved.</summary>
+    [Fact]
+    public void ARiseNoFightCouldProduceIsRefused()
+    {
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Report(2, 1, 7)]);
+        ledger.Merge([Report(2, 1, 1_634_994_435)]);
+
+        Assert.Equal(7u, ledger.OwedFor(1));
+        Assert.Equal(1u, ledger.RefusedRises);
+        Assert.Equal((2u, 1u, 1_634_994_428u), ledger.LastRefused);
+
+        ledger.Merge([Report(2, 1, 1_634_994_440)]);
+        Assert.Equal(12u, ledger.OwedFor(1));
+    }
+
     private static PeerCompanionDamage Report(uint peer, uint rosterSlotPlusOne, uint total, uint generation = 1) =>
         new(peer, generation, rosterSlotPlusOne, total);
 }

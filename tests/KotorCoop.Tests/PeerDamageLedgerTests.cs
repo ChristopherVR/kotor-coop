@@ -482,6 +482,61 @@ public class PeerDamageLedgerTests
     private static PeerEnemyDamage Report(uint peer, uint id, uint total, uint generation = 1) =>
         new(peer, generation, id, total);
 
+    // ---- the plausibility gate (2026-09-02): a corrupt rise is refused, not banked --------
+
+    /// <summary>
+    /// Live on tar_m10aa a client's row for one Vulkar rose from 3 to 1,634,994,435 between two
+    /// ticks. Banked, the owner's 200-per-pass clamp fed it to the creature until it died of a
+    /// hit nobody had landed. The rise is refused, the baseline still moves to the reported
+    /// total (so the very next real hit is credited from there, not swallowed under a total
+    /// the ledger has "already seen"), and the refusal is counted for the pump's one line.
+    /// </summary>
+    [Fact]
+    public void ARiseNoFightCouldProduceIsRefusedAndTheNextRealHitStillCounts()
+    {
+        PeerDamageLedger agent = new();
+
+        agent.Merge(Here, [new PeerEnemyDamage(2, 1, 0x46, 3)]);
+        Assert.Equal(3u, agent.OwedFor(0x46));
+
+        agent.Merge(Here, [new PeerEnemyDamage(2, 1, 0x46, 1_634_994_435)]);
+
+        Assert.Equal(3u, agent.OwedFor(0x46));
+        Assert.Equal(1u, agent.RefusedRises);
+        Assert.Equal((2u, 0x46u, 1_634_994_432u), agent.LastRefused);
+
+        // A real hit on top of the corrupt total: credited as its own rise.
+        agent.Merge(Here, [new PeerEnemyDamage(2, 1, 0x46, 1_634_994_440)]);
+
+        Assert.Equal(8u, agent.OwedFor(0x46));
+        Assert.Equal(1u, agent.RefusedRises);
+    }
+
+    [Fact]
+    public void TheLargestBelievableRiseIsStillBanked()
+    {
+        PeerDamageLedger agent = new();
+
+        agent.Merge(Here, [new PeerEnemyDamage(2, 1, 0x46, PeerDamageLedger.MaxPlausibleRise)]);
+
+        Assert.Equal(PeerDamageLedger.MaxPlausibleRise, agent.OwedFor(0x46));
+        Assert.Equal(0u, agent.RefusedRises);
+    }
+
+    /// <summary>A generation change still resets the baseline to zero, so a fresh run's first
+    /// report is judged as a rise from nothing — a corrupt FIRST report is refused the same way.</summary>
+    [Fact]
+    public void ACorruptFirstReportOfANewGenerationIsRefusedToo()
+    {
+        PeerDamageLedger agent = new();
+
+        agent.Merge(Here, [new PeerEnemyDamage(2, 1, 0x46, 40)]);
+        agent.Merge(Here, [new PeerEnemyDamage(2, 2, 0x46, 4_000_000_000)]);
+
+        Assert.Equal(40u, agent.OwedFor(0x46));
+        Assert.Equal(1u, agent.RefusedRises);
+    }
+
     private static uint TotalFor(DamageDealtTable table, uint objectId)
     {
         for (int i = 0; i < table.Capacity; i++)

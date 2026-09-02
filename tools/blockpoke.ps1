@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -341,6 +341,24 @@ switch ($Command) {
                 "  phantom slot {0}: id 0x{1:X}  taken {2}  lastAttacker 0x{3:X}  hits {4}" -f `
                     $i, $id, (U32 ($base + 4)), (U32 ($base + 8)), (U32 ($base + 0xC))
             }
+        }
+    }
+    'ledger' {
+        # The peer-damage ledger, both directions (SharedBlock.Combat.cs): what THIS instance
+        # has dealt to other people's enemies (plugin -> agent, cumulative per enemy id) and
+        # what the peers owe this instance's own enemies (agent -> plugin). Cumulative totals,
+        # so a row that jumps by more than any weapon can deal is a corrupt read, not a hit.
+        "  dealt: count {0}  dropped {1}  generation {2}  enabled {3}" -f (U32 0x2000), (U32 0x2004), (U32 0x2008), (U32 0x2118)
+        $n = [Math]::Min([int](U32 0x2000), 32)
+        for ($i = 0; $i -lt $n; $i++) {
+            $base = 0x1E60 + ($i * 8)
+            "    dealt[{0}]: id 0x{1:X}  total {2}" -f $i, (U32 $base), (U32 ($base + 4))
+        }
+        "  owed: count {0}  epoch 0x{1:X8}  applied {2}" -f (U32 0x2010), (U32 0x200C), (U32 0x2014)
+        $n = [Math]::Min([int](U32 0x2010), 32)
+        for ($i = 0; $i -lt $n; $i++) {
+            $base = 0x2018 + ($i * 8)
+            "    owed[{0}]: id 0x{1:X}  total {2}" -f $i, (U32 $base), (U32 ($base + 4))
         }
     }
     'encounters' {

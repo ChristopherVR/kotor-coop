@@ -48,6 +48,22 @@ public sealed class PeerDamageLedger
 
     public uint Epoch { get; private set; }
 
+    /// <summary>
+    /// The largest rise one peer's total against one enemy may show between two ticks.
+    /// Ticks are ~100 ms apart and a blackout of a minute at the game's best sustained damage
+    /// stays in the low thousands, while an enemy that could absorb this much would be dead
+    /// many times over — so a bigger jump is a misread effect on the peer's side. The number
+    /// is deliberately generous: refusing a real hit is the failure this channel exists to
+    /// remove, refusing a corrupt one is the failure the 2026-09-02 Vulkar showed.
+    /// </summary>
+    public const uint MaxPlausibleRise = 10_000;
+
+    /// <summary>How many rises were refused as implausible, for the pump's one-line notice.</summary>
+    public uint RefusedRises { get; private set; }
+
+    /// <summary>The most recent refusal — who reported it, against what, by how much.</summary>
+    public (uint Peer, uint ObjectId, uint Delta) LastRefused { get; private set; }
+
     /// <summary>Total damage banked against one enemy, for tests and diagnostics.</summary>
     public uint OwedFor(uint objectId) => _owed.TryGetValue(objectId, out uint owed) ? owed : 0;
 
@@ -87,6 +103,20 @@ public sealed class PeerDamageLedger
             }
 
             uint delta = report.CumulativeDamage - previous;
+
+            // ⚠ A rise no fight could produce is a corrupt number, not damage (2026-09-02: a
+            // client's row for one Vulkar rose by 1,634,994,432 between two ticks; banked, the
+            // owner's per-pass clamp fed it to the creature 200 at a time until it died of
+            // nothing). The baseline above is still moved to the reported total, so a real
+            // hit after the corrupt one is credited from there, and the refusal is counted
+            // for the pump to say so once. The peer-side hook has the same gate at the source.
+            if (delta > MaxPlausibleRise)
+            {
+                RefusedRises++;
+                LastRefused = (report.PeerId, report.ObjectId, delta);
+                continue;
+            }
+
             uint owed = OwedFor(report.ObjectId);
 
             // Saturating. A wrap would read as a reset on the plugin's side and hand the

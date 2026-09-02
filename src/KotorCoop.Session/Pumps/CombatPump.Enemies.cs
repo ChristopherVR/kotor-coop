@@ -24,6 +24,7 @@ internal sealed partial class CombatPump
     /// <summary>Owner side: every peer's cumulative damage, folded into one monotonic total
     /// per enemy for our own engine to spend.</summary>
     private readonly PeerDamageLedger _peerDamage = new();
+    private uint _refusedRisesLogged;
 
     /// <summary>Mirror side: local_combat's exclusion filter, with its memory of which excluded
     /// ids the owner has stopped listing (see <see cref="LocalCombatExclusionRule"/>), the module
@@ -120,6 +121,15 @@ internal sealed partial class CombatPump
             bridge.TryPublishDamageOwed(
                 _peerDamage.Epoch,
                 _peerDamage.Merge(censusModule, session.GetEnemyDamage(censusModule)));
+
+            if (_peerDamage.RefusedRises != _refusedRisesLogged)
+            {
+                _refusedRisesLogged = _peerDamage.RefusedRises;
+                (uint peer, uint id, uint delta) = _peerDamage.LastRefused;
+                log($"combat: REFUSED an implausible damage rise of {delta} against 0x{id:X} "
+                    + $"from peer {peer} ({_refusedRisesLogged} refused so far) - a misread effect "
+                    + "on the peer, not a hit; its own plugin log names the effect");
+            }
 
             return;
         }

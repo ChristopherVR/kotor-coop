@@ -41,6 +41,12 @@ public sealed class CompanionDamageLedger
     /// <summary>Everything every peer has ever dealt to one companion's roster slot.</summary>
     private readonly Dictionary<uint, uint> _owed = [];
 
+    /// <summary>How many rises were refused as implausible (PeerDamageLedger.MaxPlausibleRise).</summary>
+    public uint RefusedRises { get; private set; }
+
+    /// <summary>The most recent refusal — who reported it, which roster slot, by how much.</summary>
+    public (uint Peer, uint RosterSlotPlusOne, uint Delta) LastRefused { get; private set; }
+
     /// <summary>Total damage banked against one roster slot, for tests and diagnostics.</summary>
     public uint OwedFor(uint rosterSlotPlusOne) =>
         _owed.TryGetValue(rosterSlotPlusOne, out uint owed) ? owed : 0;
@@ -79,6 +85,16 @@ public sealed class CompanionDamageLedger
             }
 
             uint delta = report.CumulativeDamage - previous;
+
+            // Same gate as PeerDamageLedger, same reason: a rise no fight could produce is a
+            // misread effect, and banked against a companion it would wipe the host's copy.
+            if (delta > PeerDamageLedger.MaxPlausibleRise)
+            {
+                RefusedRises++;
+                LastRefused = (report.PeerId, report.RosterSlotPlusOne, delta);
+                continue;
+            }
+
             uint owed = OwedFor(report.RosterSlotPlusOne);
 
             // Saturating, not wrapping — a wrap would read as a reset on the plugin's side and

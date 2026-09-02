@@ -13,6 +13,7 @@ internal sealed partial class CombatPump
     /// <summary>Host side: every peer's cumulative damage against its own companions, folded
     /// into one monotonic total per NPC roster slot for our own engine to spend.</summary>
     private readonly CompanionDamageLedger _companionDamage = new();
+    private uint _companionRefusedLogged;
 
     /// <summary>
     /// Moves companion-damage state between the game and the session in whichever direction
@@ -38,6 +39,15 @@ internal sealed partial class CombatPump
             // LEVEL the plugin diffs against what it has already applied, so a pass the plugin
             // misses costs nothing and republishing the same table is free.
             bridge.TryPublishCompanionDamageOwed(_companionDamage.Merge(session.GetCompanionDamage()));
+
+            if (_companionDamage.RefusedRises != _companionRefusedLogged)
+            {
+                _companionRefusedLogged = _companionDamage.RefusedRises;
+                (uint peer, uint slotPlusOne, uint delta) = _companionDamage.LastRefused;
+                log($"companion damage: REFUSED an implausible damage rise of {delta} on roster "
+                    + $"slot {slotPlusOne - 1} from peer {peer} ({_companionRefusedLogged} refused so far)");
+            }
+
             return;
         }
 
