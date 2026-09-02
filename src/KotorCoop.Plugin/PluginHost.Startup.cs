@@ -8,12 +8,15 @@ namespace KotorCoop.Plugin;
 // points in its own sequence as this code used to run inline.
 internal static unsafe partial class PluginHost
 {
-    private static void InstallCrashProbe()
+    private static void InstallCrashProbe(string directory)
     {
         // FIRST, before a single hook or controller exists. A fault during startup is
         // exactly as fatal as one during play, and the probe is what turns "the game
-        // vanished" into a line naming the exception.
-        CrashProbe.Install();
+        // vanished" into a line naming the exception. Passed the game directory (not
+        // read from _logPath) because it must resolve kotorcoop-crash.bin's path itself;
+        // _logPath is already set by the time this runs, but CrashProbe does not reach
+        // into PluginHost's fields for it.
+        CrashProbe.Install(directory);
 
         // Second, and also before any hook: the clean-exit twin of the probe above. A
         // process that leaves through ExitProcess writes no fault and no Application-log

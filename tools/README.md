@@ -34,7 +34,8 @@ channel without playing through a whole scenario.
 | `sethp.ps1` | Reads or writes a creature's current hit points by object id, for testing enemy-health mirroring without a real fight. |
 | `creatures.ps1` | Enumerates live `CSWSCreature` objects using the public Ghidra address database. |
 | `teleport.ps1` | Writes a player's world position directly (`CSWSObject.position`) — test-only, since nothing else contests an idle player's position. |
-| `crashlog.ps1` | Shows how the game last died, from the plugin log (access violations, managed exceptions) and the .NET NativeAOT fail-fast path the plugin log can't cover. |
+| `crashlog.ps1` | Shows how the game last died, from the plugin log (access violations, managed exceptions), the .NET NativeAOT fail-fast path the plugin log can't cover, and points at `kotorcoop-crash.bin` (below) when a game directory has one. |
+| `crashbin.ps1` | Decodes `kotorcoop-crash.bin`: the last first-chance fault written straight to disk by `CrashProbe`'s vectored stub, so it survives a process TERMINATED before the plugin's worker thread ever turns the same record into a log line — see `CrashProbe.cs`'s top-of-file doc comment (2026-09-02). |
 | `inputalive.ps1` | Answers "will menu automation work on this instance?" before anything tries to click — KOTOR's menu input can silently die. |
 | `barkprobe.ps1` | Fires a bark end to end on a live two-instance session and reports whether it arrived. |
 | `dlgprobe.ps1` | Measures a shared conversation end to end on a live session. |
@@ -88,7 +89,7 @@ touch a running game.
 | `disasm.py` | Disassembles a range of `swkotor.exe` by virtual address. |
 | `xrefs.py` | Finds call/jmp sites targeting an address. |
 | `fieldwrites.py` | Finds instructions that write a given struct field offset — "who assigns this field" versus `xrefs.py`'s "who calls this". |
-| `checkstub.py` | Re-emits and disassembles `CrashProbe.BuildHandler`'s hand-assembled exception stub, byte for byte, as an offline correctness check. |
+| `checkstub.py` | Re-emits and disassembles `CrashProbe.BuildHandler`'s hand-assembled exception stub — now including the `SetFilePointer`/`WriteFile` calls that hand the record to `kotorcoop-crash.bin` — byte for byte, as an offline correctness check. |
 | `globalvars.py` | Reader for KOTOR 1 save-game GFF files, specialised for `GLOBALVARS.res`. |
 | `kotorfiles.py` | Pure-stdlib readers for the Odyssey engine's data formats (KEY/BIF/GFF/2DA/TLK and friends). |
 | `patch_mainmenu.py` | Builds the `Override\mainmenu*.gui` that turns the dormant `BTN_WARP` control into the visible "Coop" button. |

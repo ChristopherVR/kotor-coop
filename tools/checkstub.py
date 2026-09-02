@@ -9,7 +9,15 @@ import capstone
 
 RecCode, RecAddress, RecEip, RecEsp, RecStackWords, RecStack = 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18
 StackWords = 64
+RECORD_SIZE = RecStack + (StackWords * 4)
+RecWriteFileCell = RECORD_SIZE
+RecSetFilePointerCell = RECORD_SIZE + 4
+RecWrittenScratch = RECORD_SIZE + 8
 RECORD = 0x00A00000
+FILE_HANDLE = 0x000000EC          # a plausible-looking HANDLE value, for the disassembly only
+WRITE_FILE_CELL = RECORD + RecWriteFileCell
+SET_FILE_POINTER_CELL = RECORD + RecSetFilePointerCell
+WRITTEN_CELL = RECORD + RecWrittenScratch
 
 out = bytearray()
 
@@ -27,13 +35,13 @@ emit(0x56)
 emit(0x57)
 emit(0x8B, 0x74, 0x24, 0x10)
 emit(0x85, 0xF6)
-emit(0x74, 0x00); j1 = len(out) - 1
+emit(0x0F, 0x84); j1 = len(out); emit32(0)
 emit(0x8B, 0x06)
 emit(0x85, 0xC0)
-emit(0x74, 0x00); j2 = len(out) - 1
+emit(0x0F, 0x84); j2 = len(out); emit32(0)
 emit(0x8B, 0x5E, 0x04)
 emit(0x85, 0xDB)
-emit(0x74, 0x00); j3 = len(out) - 1
+emit(0x0F, 0x84); j3 = len(out); emit32(0)
 emit(0xBF); emit32(RECORD)
 emit(0x8B, 0x08)
 emit(0x89, 0x4F, RecCode)
@@ -61,6 +69,22 @@ emit(0x5F)
 emit(0xC7, 0x47, RecStackWords); emit32(StackWords)
 store = len(out)
 emit(0xFF, 0x07)
+
+# SetFilePointer(fileHandle, 0, NULL, FILE_BEGIN)
+emit(0x68); emit32(0)                       # push FILE_BEGIN (0)
+emit(0x68); emit32(0)                       # push NULL       ; lpDistanceToMoveHigh
+emit(0x68); emit32(0)                       # push 0          ; lDistanceToMove
+emit(0x68); emit32(FILE_HANDLE)             # push fileHandle
+emit(0xFF, 0x15); emit32(SET_FILE_POINTER_CELL)
+
+# WriteFile(fileHandle, record, RecordSize, &written, NULL)
+emit(0x68); emit32(0)                       # push NULL       ; lpOverlapped
+emit(0x68); emit32(WRITTEN_CELL)            # push &written
+emit(0x68); emit32(RECORD_SIZE)             # push RecordSize
+emit(0x57)                                  # push edi        ; lpBuffer = record
+emit(0x68); emit32(FILE_HANDLE)             # push fileHandle
+emit(0xFF, 0x15); emit32(WRITE_FILE_CELL)
+
 done = len(out)
 emit(0x5F)
 emit(0x5E)
@@ -68,7 +92,10 @@ emit(0x5B)
 emit(0x33, 0xC0)
 emit(0xC2, 0x04, 0x00)
 
-for slot, target in ((j1, done), (j2, done), (j3, done), (j4, store), (j5, store)):
+struct.pack_into("<i", out, j1, done - (j1 + 4))
+struct.pack_into("<i", out, j2, done - (j2 + 4))
+struct.pack_into("<i", out, j3, done - (j3 + 4))
+for slot, target in ((j4, store), (j5, store)):
     disp = target - (slot + 1)
     assert 0 <= disp <= 127, (slot, disp)
     out[slot] = disp
@@ -92,3 +119,4 @@ print()
 print("bytes emitted: %d, bytes decoded: %d  %s" % (len(out), consumed,
       "OK - fully decodable" if consumed == len(out) else "MISMATCH"))
 print("store=%d done=%d" % (store, done))
+print("stub size vs 256-byte VirtualAlloc: %d bytes used, %d spare" % (len(out), 256 - len(out)))
