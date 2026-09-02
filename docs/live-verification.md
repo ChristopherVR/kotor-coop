@@ -3333,3 +3333,67 @@ owner ended the conversation; closing`, 02:25:14 gate `True -> False`, `followin
 dialogue GUI, no crash on either side. (The `W_SAVE` "different save" auto-rejoin that followed
 at 02:25:24 is the ordinary world-adoption path every host warp triggers on this rig — 24 today —
 not part of this row.) Works.
+
+## 2026-09-03 (00:30–04:15): floaty-text crash root-caused and fixed, `spawncreature` and `liveness_sync`'s checklist verified (`liveness_sync` now ON by default), `threat_retarget` live, local-combat inactivity timeout confirmed
+
+Rig: `pwsh tools/demo.ps1 -Save 1`, host `C:\GOG Games\Star Wars KOTOR (GOG)`, client
+`D:\Games\swkotor-gog-p2`, block version 66.
+
+**The 0x688F54 / 0x6890A4 floaty-text crash — FIXED.** §11.4's phantom-heal crash (00:38)
+recurred twice more: 03:45:32 over a 49-creature population (`materialise: owner 0x182 -> local
+0x139 (appearance 264, renders no twin yet, faction 1)`, host `slay 0x182`,
+`access violation (0xC0000005) at 0x688F54`), and 03:56:47 on the per-entry update after only the
+first site was guarded (`floaty: target model has no anchor node - not drawn (would have been the
+0x688F54 crash; 1 so far)` then 3 ms later `access violation (0xC0000005) at 0x6890A4`). A
+self-inflicted build mistake (resuming at the fault site instead of `SpliceAt + run length`)
+crashed the HOST at 04:01:00 on an ordinary damage floaty. Final build, both sites guarded,
+04:08–04:11: 20 host-spawned creatures slain, `floaty: floaty-text null-node guard on 2/2
+site(s): CreateEntry 0x688F45 (stub 0x17120000); Update 0x689079 (stub 0x17130000)`, ending at
+`floaty: guard totals so far - 27 floaty(ies) not added, 16967 tick(s) skipped`, zero crashes,
+host log carrying no guard lines at all. Full RE and fix: `FloatyTextNodeGuardHook.cs`,
+`effect-sync.md` §11.5, `transition-crashes.md` 2026-09-03.
+
+**`spawncreature` — verified.** `spawncreature g_vulkar001 3` refused with failure 9 (template
+did not resolve); `spawncreature tar10_vulkpoo002 3` → `spawned 3/3 tar10_vulkpoo002: 0x13F 0x142
+0x145`, then batches of 20 more. Spawned creatures materialise as ordinary stand-ins on the
+client, loot flows off them, and they land real damage on the host PC (`combat ground-truth:
+local PC took 4 damage, attacker=0x140`). `creature-liveness.md`'s 2026-09-03 addendum,
+`CONSOLE.md`'s `spawncreature` row.
+
+**`liveness_sync`'s checklist — items 1, 2, 3, 4, 6 clean; flipped ON by default (`2bbf8de`).**
+Item 1: host `destroyobject 0x1F` → client `liveness: 0x1F no longer exists on the owner and
+still did here - destroying to match (local 0x1F)`, one line. Item 2 (host launched with
+`--enemy-census-cap 5`): host `slay 0x3B` → client `liveness: 0x3B is a corpse on the owner and
+was still alive here - killing to match`, one line. Item 3: `liveness-freshness-probe.ps1
+-Stage destroyobject` on 0x1C, 26-creature `tar_m10aa` population, zero disagreements. Item 4:
+warp `tar_m10aa` → `tar_m03aa`, `epoch: world unloading; clearing phantom, item, combat and door
+state`; object ids are reused across module loads (0x2 was a 22/22 Vulkar, then a 20/20 plot
+creature). Item 6: at a 49-creature population, `census: gate: array ... confirmed 52 of 70`,
+`OWNER 32 id(s)` — the census caps at 32, sorted fighting-first then by squared distance to the
+NEAREST player, so only the far/idle creatures shed — not a bare truncation. A log-budget bug
+(the shared 20-line cap spent entirely on the anomaly counter) hid the destroy/kill lines above
+until fixed (99c6ffe, one budget per outcome). `creature-liveness.md`'s 2026-09-03 sections.
+
+**`threat_retarget` — live, three rounds.** Round 1 exposed `ThreatRetargetOptions.Default` built
+with `new()` (a record struct's zero-initialiser skips the primary-constructor defaults), so every
+threshold read 0 and a 6-point hit retargeted through what should have been a 15-point floor
+(`threat: 0x24 retargeted 0x7FFFFFFF -> 0x13F (threat 6 vs 0)`); fixed (99c6ffe). Round 2: a
+genuine retarget fired at the corrected 1.5x/15/4s thresholds when the AI had gone for the host
+first (0x3B retargeted at 15/20 threat). Round 3: the engine's own AI already prefers the client's
+phantom when the client is the attacker (`creature 0x26 currentTarget 0x13A topAttacker 0x13A
+(threat 9.42)`), so no retarget fired — and none should have. Default stays OFF.
+`peer-damage-ledger.md` §10.
+
+**Local-combat inactivity timeout — confirmed live**, 04:00–04:01, `tar_m10aa`, before the
+`spawncreature` rounds above: a slot with traffic extends past 25s
+(`local_combat: slot 2/3 still active (dealt +3 to 0x4D), timeout extended`) while an idle one
+releases exactly at 25s (`local_combat: slot 1/3 released id=0x4A reason=timed out (no activity
+for 25s)`); the 04:08 round added `local_combat: slot N/3 still active (it targets us), timeout
+extended` (12 lines) and `local_combat: slot N/3 armed id=... reason=proximity (timeout 25s)` (9
+lines). `combat-participation.md` §13's own NEEDS-LIVE mark is closed — see its own §14.
+
+**Galaxy map** — already documented in `galaxy-map-and-party-select.md`; no new facts this round.
+
+**Still NEEDS-LIVE**: `E_PROTO` (`debug_hello_version=1` in the CLIENT `coop.ini` before launch),
+a real unlocked transition door (`usedoor`) exercising the warp-crash fix, and the galaxy-map
+confirm refusal firing against a real Accept click.

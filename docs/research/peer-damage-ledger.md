@@ -1082,3 +1082,49 @@ read by the agent, no wire/protocol implication.
    assumed to — `SoleRemotePhantomId()`'s own fallback is unit-pinned (§8.9), but this feature's
    OWN consumption of it (`threatAttackerId` in `PeerDamageController.ApplyOwed`) has not been
    exercised against a real 3-peer rig, which does not exist in this codebase's test harness.
+
+## 10. 2026-09-03: live pass — the `new()` zero-defaults bug found and fixed, two rounds of genuine retargeting, verdict stays OFF by default
+
+Rig: `pwsh tools/demo.ps1 -Save 1`, `coop.ini` has `threat_retarget=1` on the HOST only, per §9.5
+step 1; shipped `profiles/coop.ini.example` keeps it `0`.
+
+### 10.1 Round 1 — the `new()` zero-defaults bug
+
+02:55: the first retarget fired, but the diagnostic read as a "6 vs 0"-style threshold instead of
+the documented 1.5x/15/4s — `ThreatRetargetOptions.Default` had been constructed with `new()`,
+which for a record struct is the zero-initialiser and does NOT run the primary constructor's
+parameter defaults, so every tunable read 0:
+
+```
+threat: 0x24 retargeted 0x7FFFFFFF -> 0x13F (threat 6 vs 0)
+```
+
+a 6-point hit redirected a Vulkar straight through a "15-point" floor that was really 0. Fixed in
+99c6ffe: `Default` now explicitly constructs `new(MarginRatio: 1.5, MinThreatToRetarget: 15.0,
+CooldownSeconds: 4.0)` — see `ThreatRetargetRule.cs`'s own remarks on `ThreatRetargetOptions` for
+the full account, and `ThreatRetargetRuleTests` for the regression pin.
+
+### 10.2 Round 2 — a genuine retarget, correct thresholds
+
+With the fix in place: `0x3B` retargeted at 15/20 threat, with the host going first — the engine's
+AI had chosen the host as the initial target — exactly the case this whole design targets.
+
+### 10.3 Round 3 — the engine's own AI already picks the client when the client attacks first
+
+When the CLIENT was the attacker, the engine's own AI picked the client's phantom as the target
+without any retarget order being needed:
+
+```
+creature 0x26 currentTarget 0x13A topAttacker 0x13A (threat 9.42)
+```
+
+`blockpoke.ps1 threat` showed non-zero sticky rows (count 1, generation climbing), and no "not
+retargeted" refusal lines appeared, because top threat never crossed the 15-point floor in this
+round.
+
+### 10.4 Verdict
+
+`threat_retarget` only matters when the AI went for the host first — the case the engine's own
+targeting already handles correctly (round 3) needs no help from this channel. Live-verified
+2026-09-03; ships OFF by default (`profiles/coop.ini.example` keeps `threat_retarget=0`) — see
+`docs/limitations.md`'s combat table.

@@ -1068,3 +1068,100 @@ either side. 3/3 crash → 4/4 clean on the same save and the same recruit.
 The flag is one third of a recruit; the other two thirds (`AVAILNPC<slot>.utc` and the faction
 membership) are what the next module move needs, and the flag alone is persisted into saves
 and adopted worlds as a slot that can never be rebuilt.
+
+## The 0x688F54 / 0x6890A4 floaty-text crash, continued (2026-09-03, 03:45–04:11): two more occurrences over a materialised stand-in, root-caused and FIXED — see `effect-sync.md` §11.5 and `src/KotorCoop.Plugin/FloatyTextNodeGuardHook.cs`
+
+The "Adjacent, NOT this crash" note above (00:38, `eip 0x688F54`, `applyeffect heal` on a phantom,
+1/4) recurred twice more the same night, both over a HOST-SPAWNED / materialised stand-in rather
+than the staging-verb path, and this time it was root-caused and fixed.
+
+### Occurrence 2 — 03:45:32, client, tar_m10aa, 49-creature population
+
+Host had run `spawncreature tar10_vulkpoo002 3` then 20 more; the client materialised them as
+stand-ins (e.g. `materialise: owner 0x182 -> local 0x139 (appearance 264, renders no twin yet,
+faction 1)`). Right after host `slay 0x182`, the client crashed. Crash record
+(`tools/crashbin.ps1 -GameDir 'D:\Games\swkotor-gog-p2'`):
+
+```
+access violation (0xC0000005) at 0x688F54, esp 0x1AF8F4
+image-range stack values: 0x68B82B 0x72F7CB 0x602AA8 0x6FB81D 0x6FB822 0x727320 0x4FB48F
+```
+
+RE chain: `CSWSCreature::ApplyDeathExperience` (0x4FB1E0) tail 0x4FB47C-0x4FB48A calls
+`AddFloatyText(dyingCreatureId=[edi+4], kind 3, formatted string via 0x5EDA50)` ->
+`CClientExoApp::AddFloatyText` 0x5EDEA0 (a 7-way switch at 0x602831 over kinds; strrefs 1373
+'miss', 38551 'XP', 32154 'Level', 1391 'Sneak Attack', 42403 'Spotted'; return 0x602AA8 after
+`call 0x62b080` CGuiInGame::AddFloatyText) -> `CSWGuiMainInterface::AddFloatyText` 0x68B7C0 (ret
+0x68B82B) -> `CSWGuiFloatyText::CreateEntry` 0x688E10: GetClientObjectByObjectId 0x5ED580 ->
+vtbl+0xC scene object -> vtbl+0x2C model check passes -> `call [edx+0x98](0xff,1)` node lookup
+returns NULL -> `mov edi,eax` 0x688F45 -> `mov edx,[edi]` 0x688F54 faults. Engine's own guards
+exit at 0x688FD9 (no object 0x688EB4, no scene 0x688EC5, no model 0x688F2E).
+
+### Occurrence 3 — 03:56:47, client, same recipe with ONLY CreateEntry guarded
+
+The first (CreateEntry-only) guard build fired once, then crashed 3 ms later on the SAME entry's
+per-frame update — a NEW, adjacent site:
+
+```
+[03:56:47.068] floaty: target model has no anchor node - not drawn (would have been the 0x688F54 crash; 1 so far)
+[03:56:47.068] combat: killed 0x14F (owner id, local stand-in 0x131) on the owner's authority
+```
+
+3 ms later:
+
+```
+access violation (0xC0000005) at 0x6890A4, eip 0x6890A4, esp 0x1AFCE0
+image-range stack values: 0x686BC8 0x40CEB8 0x603CA0 0x7273A8 0x4046C2
+```
+
+The per-entry update function (0x688FF0, called with the frame delta, ticks the entry timer at
++0x140, removes the entry via 0x688060 once expired) does the same `[vtbl+0x98](0xFF,1)` lookup at
+0x689073 into ebx and dereferences it at 0x6890A4; its own guards exit at 0x6891D7.
+
+### A self-inflicted host crash during the fix, worth recording as a lesson
+
+The first two-site build set the update's resume address to the FAULT site (0x6890A4) instead of
+the instruction after the 15-byte relocated run (0x689088), skipping the camera lookup in between.
+The HOST crashed at 04:01:00 on its first ordinary damage floaty
+(`combat ground-truth: local PC took 4 damage, attacker=0x140`):
+
+```
+FIRST-CHANCE access violation (0xC0000005) at 0x6890F3, eip 0x6890F3, esp 0x1AFCDC
+image-range stack values: 0x686BC8 0x40CEB8 0x603CA0 0x7273A8 0x4046C2
+```
+
+Lesson: a relocated-run splice resumes at SpliceAt + run length, derived, never hand-written; in
+CreateEntry the two coincided so the mistake was invisible there. See
+`FloatyTextNodeGuardHook.cs`'s `Site.ResumeAt`.
+
+### Final verification, 04:08-04:11 — both guards installed, 0 crashes across 20 slays
+
+```
+floaty: floaty-text null-node guard on 2/2 site(s): CreateEntry 0x688F45 (stub 0x17120000); Update 0x689079 (stub 0x17130000)
+```
+
+Warp `tar_m10aa`, god on both, host `tp 160 88 2.25`, client `tp 161 90 2.25`, host
+`spawncreature tar10_vulkpoo002 20` -> `spawned 20/20 tar10_vulkpoo002: 0x13F 0x142 0x145 0x148
+0x14B +`; client materialised 10 of the 20 (0x16F 0x157 0x178 0x15A 0x142 0x15D 0x160 0x175 0x13F
+0x145 — the census cap, see `creature-liveness.md`); client `attack 0x7FFFFFFF 0x13F`; host slew
+0x142 0x145 0x157 0x15A 0x15D 0x160 0x16F 0x175 0x178 two seconds apart. Client log:
+
+```
+[04:09:57.668] floaty: target model has no anchor node - not added (would have been the 0x688F54 crash; 1 so far)
+...
+[04:09:57.671] floaty: an entry's model lost its anchor node - tick skipped, it will age out unseen (would have been the 0x6890A4 crash; 1 ticks so far)
+```
+
+climbing to "20 so far" by 04:10:19 and "15000 ticks" by 04:10:28. Host `warp tar_m03aa` -> client
+`[04:11:04.845] floaty: guard totals so far - 27 floaty(ies) not added, 16967 tick(s) skipped`
+(printed by InvalidateAll at every epoch). Host log had ZERO guard lines the whole round — real
+models always have the node. Both processes alive throughout; client travel `serial 2 applied 2
+status 0 module 'tar_m03aa'`.
+
+An earlier 04:05 run (8 slays, first counter version) logged 7600 skips in ~25 s, the rate
+stopping at 04:05:51 when the entries expired — proof the node-less entries age out rather than
+accumulate.
+
+**Verdict: this hazard is closed.** §11.4's "Left open as a staging hazard" status (and
+`limitations.md`'s "Open, 1/4" row) is superseded — see `limitations.md`'s combat table and
+`effect-sync.md` §11.5.

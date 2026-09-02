@@ -1287,3 +1287,35 @@ applies to the local player only), so this is reachable only through the staging
 engine heal landing on a phantom that is the local last-target. Left open as a staging hazard;
 if it recurs the cheap guard is to refuse `applyeffect heal` on a phantom whose model lacks the
 node (or to apply the staging heal with the floaty suppressed).
+
+### 11.5 The 0x688F54 / 0x6890A4 crash (§11.4) — root-caused and FIXED (2026-09-03, 03:45–04:11)
+
+§11.4's phantom-heal crash (00:38, `eip 0x688F54`, `applyeffect heal` on a phantom, 1/4) recurred
+twice more the same night, both times over a HOST-SPAWNED / materialised stand-in rather than the
+staging-verb path, and this time it was root-caused and fixed. Full RE write-up and patch:
+`src/KotorCoop.Plugin/FloatyTextNodeGuardHook.cs`'s class summary (authoritative — reuse its
+wording for anything not repeated here); the blow-by-blow of both new occurrences, a self-inflicted
+host crash during the fix, and the final live verification are in
+`docs/research/transition-crashes.md`'s continuation of the "Adjacent, NOT this crash" note.
+
+Both `CSWGuiFloatyText::CreateEntry` (0x688E10) and its per-entry update (0x688FF0) resolve the
+floaty's target through `CClientExoApp::GetClientObjectByObjectId`, then ask the scene object for
+its anchor node (`[vtbl+0x98](0xFF, 1)`) and dereference the answer with NO null test — exactly the
+case the engine's own three guards (no object / no scene / no model) do not cover. A materialised
+stand-in's client model can hit that window: on the spawn frame before
+`MaterialisedEnemies.Dress` closes the twin latch, or during the kill/destroy teardown that follows
+`combat: killed ... on the owner's authority` (see `enemy-materialisation.md` §7.2 and
+`limitations.md`'s combat table for what the twin latch itself looks like when it succeeds).
+
+`FloatyTextNodeGuardHook` splices both sites with a relocated 15-byte run plus a `test reg,reg`
+null check; the null path counts the skip and takes the function's own existing no-op exit, so a
+node-less entry is refused (CreateEntry) or ages out unseen (the per-entry update) instead of
+crashing. Final live verification (04:08–04:11, 20 host-spawned creatures slain against both
+guards): `floaty: floaty-text null-node guard on 2/2 site(s): CreateEntry 0x688F45 (stub
+0x17120000); Update 0x689079 (stub 0x17130000)`, climbing to `floaty: guard totals so far - 27
+floaty(ies) not added, 16967 tick(s) skipped` by the next module epoch, host log carrying ZERO
+guard lines across the whole round (real models always have the node), both processes alive
+throughout.
+
+**§11.4's "left open as a staging hazard" status is superseded — this hazard is closed.** See
+`docs/limitations.md`'s combat table.

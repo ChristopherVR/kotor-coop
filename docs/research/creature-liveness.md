@@ -1628,7 +1628,7 @@ this instance's own engine created, not registered with any peer-sync channel, s
 learns they exist — the intended use is on the HOST, where a spawned creature is population like
 any other the host's own module already owns.
 
-**Status: NEEDS-LIVE.** This pass did not run the rig — no live confirmation that a 40+ creature
+**Status: NEEDS-LIVE at the time of writing; verified live 2026-09-03 — see this document's own "2026-09-03, later" addendum below for the confirming facts.** This pass (as originally written) did not run the rig — no live confirmation that a 40+ creature
 `spawncreature` population actually stresses `tools/liveness-freshness-probe.ps1` any differently
 from the ~33-creature natural ceiling the 2026-08-24 rounds already surveyed cleanly. Checklist
 item 6 (§7, "The live checklist to flip `liveness_sync`") is now genuinely runnable rather than
@@ -1661,3 +1661,85 @@ contain.
 Build: `src/KotorCoop.Plugin/build.ps1 -WarnAsError` clean. `dotnet test tests/KotorCoop.Tests -c
 Debug --filter "FullyQualifiedName~SpawnCreature"`: 27/27 passed. No rig access this pass —
 everything above the plugin/test build is NEEDS-LIVE.
+
+## 2026-09-03, later — `spawncreature` live-verified: checklist item 6 confirmed runnable, and a real refusal case found
+
+`spawncreature g_vulkar001 3` — the example resref this document's own row and `docs/CONSOLE.md`'s
+row used — refused live with failure 9 (template did not resolve): the resref has to be a real
+creature template actually present in the loaded module or override, not any plausible-looking
+`.utc` name. `spawncreature tar10_vulkpoo002 3` succeeded: `spawned 3/3 tar10_vulkpoo002: 0x13F
+0x142 0x145`, then 20 more the same way, then (the final round, see "Item 6" in the checklist
+addendum below) `spawned 20/20 tar10_vulkpoo002: ...`. Host log form for a larger batch:
+`spawncreature: 12/12 'tar10_vulkpoo002' spawned near the player - ids: 0x140 0x143 0x146 0x149
+0x14C 0x14F 0x152 0x155 0x158 0x15B 0x15E 0x161`.
+
+Spawned creatures reach the CLIENT as materialised stand-ins exactly like any other host-owned
+enemy — `materialise: owner 0x182 -> local 0x139 (appearance 264, renders no twin yet, faction
+1)` — loot flows off them (`gave loot 'g_w_vbroshort01' to stand-in 0x139`), and they DO attack
+the host PC for real (`combat ground-truth: local PC took 4 damage, attacker=0x140 (unrecognized
+attacker id (not driven, not a phantom, not our own apply))`).
+
+Also see `docs/CONSOLE.md`'s `spawncreature` row for the failure-9 caveat now noted there.
+
+## 2026-09-03, 00:30–04:15 — the live checklist run: items 1, 2, 3, 4, 6 confirmed; `liveness_sync` flipped ON by default (`2bbf8de`)
+
+Rig: `pwsh tools/demo.ps1 -Save 1`, host `C:\GOG Games\Star Wars KOTOR (GOG)`, client
+`D:\Games\swkotor-gog-p2`, block version 66, `liveness_sync=1` on both halves for the session (the
+template default has SINCE flipped to `1` as well — `2bbf8de`, "the 2026-09-03 live checklist ...
+cleared the bar the template set for it" — see `profiles/coop.ini.example`, `README.md`,
+`docs/CONFIG.md`). Item numbers below match "The live checklist to flip `liveness_sync`" above.
+
+### Item 1 — destroy-to-match
+
+Host `destroyobject 0x1F` → client, exactly one line: `liveness: 0x1F no longer exists on the
+owner and still did here - destroying to match (local 0x1F)`; client `resolve 0x1F` read `0x0`
+afterwards.
+
+### Item 2 — out-of-census kill
+
+Host agent launched with `--enemy-census-cap 5` — worth recording for anyone repeating this: `&
+tools/demo.ps1 -Save 1 -Agent1ExtraArgs @('--enemy-census-cap','5')` run in-process from
+PowerShell; calling `pwsh tools/demo.ps1` with the array arg breaks binding (`Could not find a
+part of the path '...\5\coop.ini'`). Host `slay 0x3B` → client, one line: `liveness: 0x3B is a
+corpse on the owner and was still alive here - killing to match`.
+
+### Item 3 — freshness probe
+
+`tools/liveness-freshness-probe.ps1 -Stage destroyobject` on `0x1C`, `tar_m10aa` with a
+26-creature population: both sides gone at t=0, zero disagreements over the run.
+
+### Item 4 — epoch
+
+Warp `tar_m10aa` → `tar_m03aa` → `epoch: world unloading; clearing phantom, item, combat and
+door state`. Object ids ARE reused across module loads in one process — `0x2` was a 22/22 Vulkar
+on `tar_m10aa`, then a 20/20 plot creature on `tar_m03aa` — so `Invalidate` genuinely matters
+here. Plot creatures (`0xF`, `0x1A`, `0x2` on the new module) resolve on the client and are
+untouched.
+
+### Item 6 — large population (49 creatures after spawning)
+
+Host `census: gate: array ... confirmed 52 of 70` and `OWNER 32 id(s)` — the enemy census is
+capped at 32 slots (`SharedBlock`; the liveness region's own capacity is 96). This is not a bare
+truncation: `KotorGameBridge.Enemies.cs` sorts candidates fighting-first, then by squared distance
+to the NEAREST player (any peer in the module, not just the publisher), and only then takes the
+first 32 — so what fell off the list at 52 candidates was the far, idle creatures; every creature
+actually fighting or standing near either player was published. `liveness_sync` is exactly what
+covers a death among the shed ones. The round that reached this population ended in the
+floaty-text crash documented elsewhere in this project (now fixed — see `effect-sync.md` §11.5,
+`transition-crashes.md` 2026-09-03).
+
+### Item 5 — untouched this round
+
+Not exercised this pass.
+
+### Log budget fix (99c6ffe, `LivenessReconcileController.cs`)
+
+The shared 20-line log cap had been spent entirely on the anomaly line (counter reaching 148)
+before the first genuine destroy ran, making the destroy/kill lines above invisible until the
+fix — one budget per outcome (kills, destroys, anomalies, 20 lines each) now. The anomaly counter
+itself keeps climbing regardless (60 in one client run; a line roughly every 130 ms for a creature
+the client already reads dead before the owner's own snapshot agrees) — harmless, and never
+resurrects anything.
+
+**Verdict.** Every item this rig could reach came back clean; `liveness_sync` shipped ON by
+default the same day (`2bbf8de`) — see `docs/limitations.md`'s combat table.

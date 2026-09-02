@@ -1344,7 +1344,33 @@ and the release reason, now explicit about which kind of timeout fired:
   window the client's timeout fired in.
 - **VERIFIED (disassembly, §1.2, unchanged from §11/§12):** `round+0x9CC` is the combat round's own
   live target field.
-- **NEEDS-LIVE (this fix itself):** built and unit-tested this pass, not yet rig-verified against
-  the actual churn above. A live pass should confirm the same `tar_m10aa` fight now runs past 25s
-  without a release/re-arm cycle while the client keeps landing hits, and that a genuinely idle
-  slot (nothing hit, nothing targeting back) still releases at the configured timeout as before.
+- **VERIFIED (this fix itself, live 2026-09-03):** confirmed against a real fight — see this
+  document's own §14 below for the verbatim lines: a slot with ongoing traffic is extended past
+  25s, and a genuinely idle slot still releases at the configured timeout.
+
+## §14 — Live pass (2026-09-03, 04:00–04:01 and 04:08): the inactivity-timeout fix confirmed
+
+Rig: `pwsh tools/demo.ps1 -Save 1`, `tar_m10aa`, before the `spawncreature` rounds documented
+elsewhere this same night (`docs/live-verification.md` 2026-09-03).
+
+A slot with ongoing traffic extended past the 25s boundary:
+
+    [04:01:18.932] local_combat: slot 2/3 still active (dealt +3 to 0x4D), timeout extended
+
+A genuinely idle slot released exactly at the configured timeout — slot 1's `0x4A` stood 7.23 u
+away and never exchanged damage, the per-second diagnostic tracking it up to the release:
+
+    local combat diag: slot 1/3 t=24.0s 0x4A at (154.87,93.84) player at (161.00,90.00) dist=7.23
+    [04:01:20.431] local_combat: slot 1/3 released id=0x4A reason=timed out (no activity for 25s)
+
+A second round at 04:08 added twelve more "still active" extensions, this time targeting-us-based:
+
+    local_combat: slot N/3 still active (it targets us), timeout extended
+
+and nine proximity arms:
+
+    local_combat: slot N/3 armed id=... reason=proximity (timeout 25s)
+
+**Verdict.** Exactly the two outcomes §13 predicted: activity (either a landed hit or the
+creature targeting the local player) resets the clock, and its absence still releases the slot at
+the configured timeout. This closes §13's own NEEDS-LIVE mark.
