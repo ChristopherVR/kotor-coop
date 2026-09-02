@@ -354,6 +354,45 @@ public sealed class ProgressionPumpTests
     }
 
     [Fact]
+    public void ThreePeersConvergeToTheHighestExperience()
+    {
+        // A 3+ peer session: every report is folded in by max in one pass, regardless of
+        // arrival order, so the party lands on the single highest total.
+        (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
+        bridge.Experience = 200;
+        session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 500));
+        session.Reports.Add(new PeerProgression(3, 9, 0, 0, Experience: 1200));
+        session.Reports.Add(new PeerProgression(4, 11, 0, 0, Experience: 800));
+
+        agent.PumpOnce();
+
+        Assert.Equal(1200u, bridge.Experience);
+        Assert.Contains(session.Published, p => p.Experience == 1200);
+    }
+
+    [Fact]
+    public void AStaleLowerReportNeverPullsTheHostsExperienceBackward()
+    {
+        // The rejoin case: a peer's report was once the highest the party had seen, then that
+        // same peer reconnects (or simply reports again) with a LOWER reading — an older save,
+        // a stale cache, a reordered datagram. The host's own bridge already reflects the
+        // earlier merge (TryWriteProgression persisted it, exactly like the real party table
+        // would), so the next merge cannot regress even though the raw report went down.
+        (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
+        bridge.Experience = 500;
+        session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 900));
+
+        agent.PumpOnce();
+        Assert.Equal(900u, bridge.Experience);
+
+        session.Reports[0] = new PeerProgression(2, 7, 0, 0, Experience: 100);
+        agent.PumpOnce();
+
+        Assert.Equal(900u, bridge.Experience);
+        Assert.Contains(session.Published, p => p.Experience == 900);
+    }
+
+    [Fact]
     public void TwoClientsBothContributeToOnePurse()
     {
         (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);

@@ -363,6 +363,13 @@ public sealed class CompanionStateSyncTests
         public bool TryWriteCompanionExperience(IReadOnlyList<uint> xpBySlot, ushort presentMask)
         {
             LastWrittenCompanionXp = ([.. xpBySlot], presentMask);
+
+            // Write-through, like the real party table: the next TryReadCompanionExperience
+            // sees what was just written, exactly as the live engine would. Several tests rely
+            // on this to prove a later, lower report cannot pull an already-merged value back
+            // down.
+            Array.Copy(LastWrittenCompanionXp.Value.Xp, LocalXp, Math.Min(LastWrittenCompanionXp.Value.Xp.Length, LocalXp.Length));
+            LocalPresentMask = presentMask;
             return true;
         }
 
@@ -562,6 +569,62 @@ public sealed class CompanionStateSyncTests
         Assert.Equal(300u, reportedXp[0]);
 
         Assert.NotNull(bridge.LastWrittenCompanionXp);
+        Assert.Equal(900u, bridge.LastWrittenCompanionXp!.Value.Xp[0]);
+    }
+
+    [Fact]
+    public void ThreePeersConvergeToTheHighestCompanionXp()
+    {
+        // Same 3+ peer shape as ProgressionPumpTests.ThreePeersConvergeToTheHighestExperience,
+        // one layer down: every peer's per-slot reading is folded in by
+        // CompanionExperienceMerge.MergeInto in one pass, so the party lands on the single
+        // highest reading for that companion regardless of report order.
+        (CoopAgent agent, CompanionBridge bridge, StubPartySession session) = Build(host: true);
+        bridge.LocalPresentMask = 0b1;
+        bridge.LocalXp[0] = 100;
+
+        uint[] xpA = new uint[ProtocolConstants.PartyRosterSlots];
+        xpA[0] = 500;
+        uint[] xpB = new uint[ProtocolConstants.PartyRosterSlots];
+        xpB[0] = 1200;
+        uint[] xpC = new uint[ProtocolConstants.PartyRosterSlots];
+        xpC[0] = 800;
+        session.CompanionXpReports.Add(new PeerCompanionXp(2, 0b1, xpA));
+        session.CompanionXpReports.Add(new PeerCompanionXp(3, 0b1, xpB));
+        session.CompanionXpReports.Add(new PeerCompanionXp(4, 0b1, xpC));
+
+        agent.PumpOnce();
+
+        Assert.Equal(1200u, bridge.LastWrittenCompanionXp!.Value.Xp[0]);
+        (ushort mask, uint[] xp) = Assert.Single(session.PublishedCompanionXp);
+        Assert.Equal(0b1, mask);
+        Assert.Equal(1200u, xp[0]);
+    }
+
+    [Fact]
+    public void AStaleLowerCompanionXpReportNeverPullsTheHostsMergedValueBackward()
+    {
+        // The rejoin case, companion side: a peer's report was once the highest the party had
+        // seen for this slot, then reports again with a LOWER reading. The host already wrote
+        // the earlier merge into its own companion (write-through, see CompanionBridge above),
+        // so the next merge starts from that elevated local reading and cannot regress even
+        // though the fresh report is lower.
+        (CoopAgent agent, CompanionBridge bridge, StubPartySession session) = Build(host: true);
+        bridge.LocalPresentMask = 0b1;
+        bridge.LocalXp[0] = 200;
+
+        uint[] peerXp = new uint[ProtocolConstants.PartyRosterSlots];
+        peerXp[0] = 900;
+        session.CompanionXpReports.Add(new PeerCompanionXp(2, 0b1, peerXp));
+
+        agent.PumpOnce();
+        Assert.Equal(900u, bridge.LocalXp[0]);
+
+        uint[] staleLowerXp = new uint[ProtocolConstants.PartyRosterSlots];
+        staleLowerXp[0] = 100;
+        session.CompanionXpReports[0] = new PeerCompanionXp(2, 0b1, staleLowerXp);
+        agent.PumpOnce();
+
         Assert.Equal(900u, bridge.LastWrittenCompanionXp!.Value.Xp[0]);
     }
 
