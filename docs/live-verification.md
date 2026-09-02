@@ -3273,3 +3273,28 @@ node the phantom's client model returned for the "+N" floaty (chain from
 `CSWSEffectListHandler::OnApplyHeal` via `AddFloatyText`; eip 0x688F54). Not reproduced in three
 further tries; not reachable through the sync's receive side. Written up in effect-sync.md §11.4
 and a limitations row.
+
+## The first real vendor purchase: a stale store cache wrapped the purse to a fortune, fixed, converged (2026-09-03, 01:03–01:19)
+
+Rig `demo.ps1 -Save 1`, both instances warped to tar_m02aa. Host cleared the warp-in
+conversation (`selectreply 0` / `skipline`, three rounds), `openstore Larrim_Store`.
+
+**Defect found: `CSWGuiStore::BuyItem` spends from the panel's gold snapshot, not the party
+table.** Panel opened at 100, client contributed `grantgold 400` (table 500, cache 100), host
+bought a 110-credit pistol: the engine wrote `100 − 110` unsigned —
+`[01:06:38] * purse: peer 2 contributed +0 -3294967287, party gold 4294967286 -> 999999999` —
+and both purses settled at 999,999,999. Written up in store-sync.md (2026-09-03 section).
+
+**Fix build crashed the host on its first frame (1/1, fixed).** `CGuiInGame+0x84` is non-null
+with store id 0 on a fresh module; the reconcile called `PopulateStoreItemListBox` on it —
+`access violation at 0x6C1872`. Gated on store id + `GetStoreByGameObjectID` + player; clean
+since.
+
+**Fix verified (01:17–01:18).** Host panel open at 0, client `grantgold 400`: host `[01:17:52.459]
+store: gold cache 0 -> 400 (the party table moved while the panel was open)`, purse `0 -> 400`;
+host buy → `gold 290` on both sides. Vendor-purchase ledger convergence: Works.
+
+**Not verified this pass: a real door crossing.** Host `usedoor` in tar_m02aa picked door 0x23
+→ 'tar_m02af', the walk never reached it (`600 frames after the walk the player is 5.9m from
+0x23`), `opendoor` replied `REFUSED to open (still state 2)` — a locked apartment door, not a
+transition. Needs a module whose transition door is unlocked from the warp-in side.

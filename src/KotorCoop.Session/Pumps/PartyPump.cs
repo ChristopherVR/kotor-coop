@@ -178,16 +178,24 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
             return;
         }
 
-        if (!bridge.TryReadProgression(out uint gold, out uint experience))
+        if (!bridge.TryReadProgression(out uint rawGold, out uint experience))
         {
             return;
+        }
+
+        // A wrapped overdraft (store-sync.md 2026-09-03) must not reach the ledger as
+        // earnings; the party is broke, not rich, and the host writes that back below.
+        uint gold = GoldReadingRule.Sanitise(rawGold);
+        if (gold != rawGold && _lastObservedGold >= 0)
+        {
+            log($"purse: party gold read {rawGold} - a wrapped overdraft, treating it as 0");
         }
 
         ObserveLocalGold(gold);
 
         if (session.IsEnemyAuthority)
         {
-            PumpProgressionHost(gold, experience);
+            PumpProgressionHost(gold, rawGold, experience);
             return;
         }
 
@@ -200,7 +208,10 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
             // other backwards while a report is in flight.
             if (bridge.TryWriteProgression(hostGold, Math.Max(hostExperience, experience)))
             {
-                _lastObservedGold = hostGold;
+                // Re-baseline to what the engine will actually hold, not what was asked for:
+                // the write clamps at the engine ceiling, and a baseline above it would read
+                // back as a phantom spend the size of the difference.
+                _lastObservedGold = Math.Min(hostGold, GoldReadingRule.Max);
             }
         }
     }
@@ -209,7 +220,7 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// The host: spend every client's outstanding contribution against the party table, then
     /// publish the result.
     /// </summary>
-    private void PumpProgressionHost(uint gold, uint experience)
+    private void PumpProgressionHost(uint gold, uint rawGold, uint experience)
     {
         long purse = gold;
         uint mergedExperience = experience;
@@ -250,10 +261,13 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
         }
 
         // The party cannot owe money: the engine's gold is unsigned, and a negative write
-        // would wrap to something enormous.
-        purse = Math.Clamp(purse, 0, uint.MaxValue);
+        // would wrap to something enormous. And it cannot hold more than the engine's own
+        // ceiling: SetGold clamps there, so a purse above it would read back as a spend.
+        purse = Math.Clamp(purse, 0, GoldReadingRule.Max);
 
-        if ((purse != gold || mergedExperience != experience)
+        // Compared against the RAW reading: a sanitised wrap is a purse the table does not
+        // yet hold, and must be written even when nobody contributed this tick.
+        if ((purse != rawGold || mergedExperience != experience)
             && bridge.TryWriteProgression((uint)purse, mergedExperience))
         {
             // Our own write is not the game earning or spending; re-baseline so the next

@@ -1013,6 +1013,14 @@ internal static unsafe partial class Odyssey
                 break;
             }
 
+            // BuyItem subtracts from the panel's CACHED gold (`+0x2270`, snapshotted when the
+            // panel opened), not from the live total this guard just read. Live 2026-09-03
+            // 01:06: the panel opened at 100, `grantgold 400` raised the party to 500, the
+            // guard passed a 110-credit pistol, and BuyItem wrote SetGold(100 - 110) = -10 —
+            // the wrap the guard exists to prevent, reached through the other operand. The
+            // cache is brought up to the live total before every unit so the two agree.
+            *(int*)(panel + StorePanelGoldCacheOffset) = gold;
+
             GuiBuyItemFn(panel, item);
             bought++;
         }
@@ -1124,6 +1132,80 @@ internal static unsafe partial class Odyssey
     /// the NEXT buy on the same open panel. VERIFIED, fresh disasm (both BuyItem and SellItem
     /// write it).</summary>
     private const int StorePanelGoldCacheOffset = 0x2270;
+
+    /// <summary>
+    /// Keeps an open store panel's cached gold (<see cref="StorePanelGoldCacheOffset"/>) equal
+    /// to the party's live total. Every frame while a panel is open; a write only on divergence.
+    ///
+    /// ⚠ THE CO-OP HAZARD THIS CLOSES (live 2026-09-03 01:06, docs/research/store-sync.md).
+    /// The panel snapshots gold ONCE, in <c>PopulateStore</c>, and the real Buy click computes
+    /// <c>SetGold(cache - price)</c> against that snapshot. Single-player, nothing else can
+    /// move the party's gold while the panel is up. In co-op the agent's progression pump
+    /// writes the purse straight into the party table whenever a PEER earns or spends — a
+    /// client looting a footlocker or buying from their own vendor while this player is still
+    /// shopping — and the next click here then silently REVERTS that change (the peer's
+    /// purchase refunded, their loot discarded) or, when the peer spent more than the stale
+    /// snapshot allows, drives the plain uint gold negative and the whole ledger to
+    /// 999,999,999 on both sides, which is exactly what the console recipe reproduced.
+    ///
+    /// The panel's own transactions update the cache and the party table in one synchronous
+    /// handler, so between frames the two are equal unless something outside the panel wrote
+    /// the table: a divergence IS the external write. <c>PopulateStoreItemListBox</c> is the
+    /// engine's own post-transaction refresh (it repaints the currency label from the cache).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool TryReconcileStoreGoldCache(out int cached, out int live)
+    {
+        cached = 0;
+        live = 0;
+
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            return false;
+        }
+
+        // The panel object outlives its own visibility: a freshly loaded module already has
+        // one allocated here with `+0x2278` still 0, and `PopulateStoreItemListBox` on that
+        // dereferences `GetStoreByGameObjectID(0)` at 0x6C1872 — the host died there on its
+        // first frame (2026-09-03 01:13) when this only tested the pointer. A panel is "open"
+        // for this purpose only while its store id names a live store.
+        nint panel = *(nint*)(gui + InGameGuiStoreOffset);
+        if (panel == 0)
+        {
+            return false;
+        }
+
+        uint storeObjectId = *(uint*)(panel + StorePanelObjectIdOffset);
+        if (storeObjectId == 0)
+        {
+            return false;
+        }
+
+        nint server = GetServer();
+        if (server == 0 || GetStoreByGameObjectIDFn(server, storeObjectId) == 0)
+        {
+            return false;
+        }
+
+        nint player = GetPlayerCreaturePointer();
+        if (player == 0)
+        {
+            return false;
+        }
+
+        cached = *(int*)(panel + StorePanelGoldCacheOffset);
+        live = GetGoldFn(player);
+        if (cached == live)
+        {
+            return false;
+        }
+
+        *(int*)(panel + StorePanelGoldCacheOffset) = live;
+        PopulateStoreItemListBoxFn(panel);
+        return true;
+    }
 
     /// <summary>CSWGuiStore::GetItemSellValue(panel, item) 0x006C07F0, ret 4. VERIFIED, fresh
     /// disasm this pass — <c>SellItem</c>'s own price lookup, the sell-side mirror of

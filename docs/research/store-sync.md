@@ -3262,3 +3262,81 @@ the documented UDP-port flake). `tools/verify.ps1` baseline (separate, `party_po
 (7 core known failures plus both documented flaky substitutions, `a client hit costs the enemy real
 hit points` and `an item picked up here vanishes on the peer`, landing together this run, matching
 this doc's own 2026-08-28 precedent for that exact combination). No regression anywhere.
+
+## Live 2026-09-03 01:03–01:19: the first real vendor purchase, a stale-cache overdraft that wrapped the purse, and the fix
+
+Rig `demo.ps1 -Save 1`, both instances in tar_m02aa (Larrim's store). Host `openstore Larrim_Store`
+(after clearing the warp-in conversation with `selectreply 0` / `skipline`), then `buy
+Larrim_Store g_w_blstrpstl001` (price 110) with the client contributing gold through the party
+purse. Limitations row "Vendor-purchase gold ledger convergence" was Unverified until this pass.
+
+### The hazard: `CSWGuiStore::BuyItem` spends from a snapshot, and the co-op purse moves the real thing underneath it
+
+`CSWGuiStore::BuyItem` (0x6C0BE0) does not read the party table. It computes
+`SetGold(panel+0x2270 − price)`: `panel+0x2270` (`StorePanelGoldCacheOffset`) is the player's gold
+as `PopulateStore` snapshotted it when the panel opened, and the engine assumes nothing else can
+touch gold while a shop is open. In co-op that assumption is false on every frame: the agent's
+progression pump writes peer contributions straight into `partyTable+0xFC`
+(`KotorGameBridge.Party.cs TryWriteProgression`), so a peer earning or spending while this player
+browses leaves the cache stale and the next click either reverts the peer's change or drives gold
+negative.
+
+Reproduced at 01:06: panel opened at 100 gold, then `grantgold 400` arrived from the peer (party
+table 500, cache still 100). The buy was first refused by our own affordability guard (`buy
+'g_w_blstrpstl001' failed: cannot afford: price 110, gold 100` — it reads the same cache), and
+once forced through the engine wrote `100 − 110` as an unsigned purse:
+
+```
+[01:06:38] * purse: peer 2 contributed +0 -3294967287, party gold 4294967286 -> 999999999
+```
+
+The host ledger read 4294967286 as a legitimate fortune, clamped it to its ceiling and broadcast
+it; both purses settled at 999,999,999. One stale click turned a 110-credit pistol into infinite
+money for the table.
+
+### Fix (plugin + agent), three parts
+
+1. **`BuyFromStore` refreshes the cache before every `GuiBuyItem`** (`Odyssey.Store.cs`): the live
+   `GetGold(player)` is written into `panel+0x2270` right after the affordability guard, so a
+   scripted buy always spends from the real purse.
+2. **`Odyssey.TryReconcileStoreGoldCache`** runs at the end of every `PluginHost.OnFrame`: while a
+   store panel is genuinely open it compares the cache with the live gold and, on divergence,
+   writes cache = live and calls `PopulateStoreItemListBox` (0x6C1840) so the currency label
+   repaints. Log line: `store: gold cache {cached} -> {live} (the party table moved while the
+   panel was open)`. This covers the player's own mouse clicks, which the mod never sees.
+3. **`GoldReadingRule`** (Session, `Max = 999_999_999`, `IsWrapped(raw) => raw > Max`,
+   `Sanitise`): the progression pump treats any read above the ceiling as a wrapped overdraft and
+   reads it as 0 (`purse: party gold read {raw} - a wrapped overdraft, treating it as 0`); the host
+   compares its clamped purse against the RAW read so a sanitised wrap is written back as 0
+   rather than left in the table; the client's mirror baseline is `Math.Min(hostGold, Max)`. So
+   even a stale click that reaches the engine cannot mint a fortune — it costs the table at most
+   the overdraft, which the sanitiser zeroes.
+
+### ⚠ The first reconcile build crashed the host on its first frame
+
+The panel pointer at `CGuiInGame+0x84` is NON-NULL on a fresh module with `panel+0x2278`
+(store object id) = 0 — the GUI object exists before any shop is opened. The first build gated
+only on the pointer and called `PopulateStoreItemListBox` on it; persisted crash record:
+`access violation (0xC0000005) at 0x6C1872` (`mov ebx,[eax+0x230]` after
+`GetStoreByGameObjectID(0)` returned NULL), `ExitProcess` from 0x6FB0C7. The shipped gate is:
+pointer non-null AND store id non-zero AND `GetStoreByGameObjectID(server, id) != 0` AND the
+player creature resolves. Clean since.
+
+### Live result (01:17–01:18)
+
+Host panel open at 0 gold; client `grantgold 400`:
+
+```
+host  [01:17:52.459] store: gold cache 0 -> 400 (the party table moved while the panel was open)
+host  [01:17:52] * purse: peer 2 contributed +400 -0, party gold 0 -> 400
+```
+
+(the `store:` line appeared twice in the same millisecond — the pump and the panel raced by one
+frame; harmless, the second write was a no-op). Host `buy Larrim_Store g_w_blstrpstl001` → host
+`gold 400 -> 290`, client mirrored `290`. Ledger converged on a real purchase with a live
+cross-peer contribution mid-browse — the row is now Works.
+
+A wrap can no longer be forced live after the fix (`setgold` rejects negatives, `grantgold -300`
+clamps 290 → 0), so `GoldReadingRule`'s sanitiser is pinned by unit tests only
+(`GoldReadingRuleTests`, and `ProgressionPumpTests.AWrappedOverdraftOnTheHostIsWrittenBackAsBrokeNotBroadcastAsAFortune`
+/ `AClientMirroringAboveTheCeilingDoesNotReportThePhantomSpend`).

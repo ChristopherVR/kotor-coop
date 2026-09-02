@@ -483,3 +483,19 @@ distinct peer ids with different XP values and asserting the host converges on t
 and publishes it. **NEEDS-LIVE:** a real 3+ peer rig run was not exercised this round (still
 covered only at the pump-unit level, as gold's own `TwoClientsBothContributeToOnePurse` test
 already was for two peers).
+
+## A gold read above the ceiling is a wrapped overdraft, not a fortune (2026-09-03)
+
+Live 2026-09-03 01:06 (store-sync.md): a store purchase spent from the panel's stale gold
+snapshot and the engine wrote `100 − 110` into `partyTable+0xFC` unsigned — 4294967286. The
+host pump read that as a legitimate balance, clamped it to its 999,999,999 ceiling and
+broadcast it; both purses became infinite.
+
+`GoldReadingRule` (Session): `Max = 999_999_999` (the engine's own display ceiling),
+`IsWrapped(raw) => raw > Max`, `Sanitise(raw) => IsWrapped ? 0 : raw`. `PartyPump.PumpProgression`
+sanitises every read (logging `purse: party gold read {raw} - a wrapped overdraft, treating it
+as 0`), the host clamps its merged purse to `Max` and compares against the RAW read so a
+sanitised wrap is written back as 0, and the client baseline is `Math.Min(hostGold, Max)` so a
+mirror above the ceiling is not reported as a phantom spend. Pinned by `GoldReadingRuleTests`
+and two `ProgressionPumpTests` cases. The plugin-side cause (the store cache) is closed
+separately; this is the belt for anything else that can drive the table below zero.

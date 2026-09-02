@@ -646,5 +646,13 @@ internal static unsafe partial class PluginHost
         // phantom table, the party roster and the mirror's pin, all of which this frame's
         // passes have just brought up to date.
         _cheats?.OnFrame();
+
+        // Last, after any purse write this frame could have landed: an open store panel's
+        // cached gold must match the party table before the next Buy click subtracts from
+        // it (Odyssey.TryReconcileStoreGoldCache has the live failure).
+        if (Odyssey.TryReconcileStoreGoldCache(out int cachedGold, out int liveGold))
+        {
+            Log($"store: gold cache {cachedGold} -> {liveGold} (the party table moved while the panel was open)");
+        }
     }
 }

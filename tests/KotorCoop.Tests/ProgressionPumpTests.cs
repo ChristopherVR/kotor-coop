@@ -436,4 +436,41 @@ public sealed class ProgressionPumpTests
         Assert.Equal(1000u, bridge.Gold);
         Assert.Empty(session.Sent);
     }
+
+    // ---- the wrapped overdraft (store-sync.md 2026-09-03) -------------------------------
+
+    [Fact]
+    public void AWrappedOverdraftOnTheHostIsWrittenBackAsBrokeNotBroadcastAsAFortune()
+    {
+        // Live 2026-09-03 01:06: a store click subtracted 110 from a stale cached 100 and the
+        // party table read 4294967286. Fed raw, that became "earned four billion" and a
+        // 999,999,999 purse on both sides.
+        (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
+        bridge.Gold = 500;
+        agent.PumpOnce();
+
+        bridge.Gold = 4294967286u;
+        agent.PumpOnce();
+
+        Assert.Equal(0u, bridge.Gold);
+        Assert.Equal((0u, 0u), session.Published[^1]);
+    }
+
+    [Fact]
+    public void AClientMirroringAboveTheCeilingDoesNotReportThePhantomSpend()
+    {
+        // The write clamps at the engine ceiling; the baseline has to as well, or the next
+        // read (at the ceiling) looks like the client spent the difference.
+        (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: false);
+        bridge.Gold = 100;
+        agent.PumpOnce();
+
+        session.FromHost = (uint.MaxValue, 0);
+        agent.PumpOnce();
+        bridge.Gold = Math.Min(bridge.Gold, GoldReadingRule.Max);   // what the engine holds
+        agent.PumpOnce();
+
+        (_, _, uint spent, _) = session.Sent[^1];
+        Assert.Equal(0u, spent);
+    }
 }

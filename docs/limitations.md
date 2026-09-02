@@ -57,7 +57,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Companion equipment sync (`companion_gear_sync`) | Works | Body slot and both weapon slots confirmed live, propagation under 3s | roadmap Tier 1 #11 |
 | Companion XP sync (`companion_xp_sync`) | Works | Host- and client-side script XP grants converge to the higher value; cross-side kill XP also confirmed agreeing (150→300 on both sides) with no merge needed | roadmap Tier 1 #12, N-slot round |
 | Companion damage TAKEN while released (`companion_damage_sync`) | Works | A client's hits downed the host's Trask (36→1→-11 hp), the engine revived him, both copies converged; two bugs found and fixed the same night | roadmap Tier 1 #34, live-verification.md 2026-09-02 (night) |
-| Vendor-purchase gold ledger convergence | Unverified | Code complete, never exercised against a real vendor purchase | roadmap Tier 1 #3 |
+| Vendor-purchase gold ledger convergence | Works (verified 2026-09-03) | First real purchase found that `CSWGuiStore::BuyItem` spends from the panel's gold snapshot, so a peer contribution mid-browse wrapped the purse to 4294967286 and both sides settled at 999,999,999; fixed by refreshing the cache per frame while a store is open (`Odyssey.TryReconcileStoreGoldCache`) and reading any wrapped purse as 0 (`GoldReadingRule`). Host at 0, client `grantgold 400`, host buys a 110-credit pistol: `store: gold cache 0 -> 400`, 290 on both sides | `store-sync.md` 2026-09-03, `progression-sync.md` 2026-09-03 |
 | Downed player + revive + rescue | Works | A downed player can be rescued by a peer; full wipe/reload/rejoin cycle confirmed 3x clean | `death-handling.md` §6, live-verification.md 2026-09-02 |
 | Wipe with a hostile still visible | Works | One cycle under a real fight (8+ Vulkars and droids shooting, no `down` verb): host fell first, client 14 s later, both released at once, host reload + client rejoin clean, 0 faults | live-verification.md "Wipe with hostiles visible" 2026-09-02 |
 | Rejoin churn after a wipe reload | Works | Re-run after the `TryReadWorldLoadSerial` fix: exactly one `WipeRecovery` rejoin (plugin route), no SaveMismatch/OwnLoad follow-ups, both at 12/12 in 6 s | live-verification.md "Wipe reload re-run" 2026-09-02 |
@@ -94,7 +94,7 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Merchant store stock (`store_sync`, mode 2) | Works | ON by default; three clean sessions in a row — buy, sell-back, re-buy succeeding once and refused the second time, 155s idle with zero spurious writes | roadmap Tier 1 #20 |
 | Store reads while nobody has the shop GUI open | Not supported (engine limitation) | A shop's stock can only be read while some player has that GUI open | README "Honest limitations" |
 | Pazaak detection + "waiting" notice | Works | Latch, park, and the waiting toast all confirmed on a real completed hand | roadmap Tier 1 #9 |
-| Ending a Pazaak hand (the CLEAR direction) | Unverified | No console primitive drives `EndPazaakGame`; only a real completed GUI hand reaches it | roadmap Tier 1 #9 |
+| Ending a Pazaak hand (the CLEAR direction) | Works (verified 2026-08-28) | `pazaak end` drives `EndPazaakGame` (disassembly-verified signature); live: `pazaak: left - back in the shared world` / `minigame: exited` after `running now: False`, no crash. This row was stale until 2026-09-03 | `minigames.md` "Live pass (2026-08-28): `pazaak end` built" |
 | Swoop racing | Works, one player at a time | The race branch runs end to end once the right dialogue path is taken; the other player is held with a "racing — waiting" notice instead of being warped onto the single-seat track; rewards reach everyone | roadmap Tier 3 #21 |
 | Input lock stopping a real WASD press (swoop) | Unverified | Same limit as the duel spectate lock above — injected keystrokes never reach this game | roadmap Tier 3 #21 |
 
@@ -132,12 +132,12 @@ are testing-rig quirks, not things a real playthrough will hit:
 Everything in this list is built and unit-tested; nobody has watched it run on the two-instance
 rig yet. Good targets for the next live-test pass:
 
-1. Vendor-purchase gold ledger convergence (progression sync, roadmap #3).
+1. *(done 2026-09-03: a real purchase with a live peer contribution converged — see the table.)*
 2. *(measured 2026-09-02: the field is written, the AI does not retarget on it — see the table.)*
-3. Three newly-added effect-sync kinds: heal, temporary hitpoints, confused.
+3. *(done 2026-09-03: all three observed both directions — see the table.)*
 4. `E_PROTO` protocol-version-mismatch reject.
 5. Mid-dialogue partner transition — whether the spectator's copy of the conversation orphans.
-6. Ending a Pazaak hand (the CLEAR direction / `EndPazaakGame`).
+6. *(done 2026-08-28 via `pazaak end` — see the table; this list entry was stale.)*
 7. The keyboard half of the input lock (swoop peer-lock and Star Forge duel spectate) actually
    stopping a real physical key press — injected keystrokes can't reach this game to test it.
 8. A real door crossing exercising the host relocating-warp crash fix (only `warp` has been used).
