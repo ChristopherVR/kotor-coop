@@ -6,6 +6,16 @@
 # ending mid-sentence. The only record is the Windows Application log, and a crash that
 # leaves no trace in the file you are already reading is a crash nobody looks for.
 #
+# 2026-09-02: neither of those helps if the process was TERMINATED before the plugin's
+# worker thread got a chance to turn its in-memory fault record into a log line at all
+# (WER off, or an engine filter that calls TerminateProcess right after the fault) — the
+# game just vanishes, no line here, no Application-log entry. CrashProbe's vectored stub
+# now hands that same record straight to kernel32!WriteFile on the faulting thread, into
+# kotorcoop-crash.bin next to this plugin log, so it survives even that. If a game
+# directory below has one, decode it with:
+#
+#   pwsh tools\crashbin.ps1 -GameDir '<that directory>'
+#
 #   pwsh tools\crashlog.ps1              # the last few swkotor crashes
 #   pwsh tools\crashlog.ps1 -Hours 2     # only recent ones
 #   pwsh tools\crashlog.ps1 -EnableDumps # (admin) turn on local minidumps for next time
@@ -83,5 +93,10 @@ foreach ($dir in 'C:\GOG Games\Star Wars KOTOR (GOG)', 'D:\Games\swkotor-gog-p2'
         $fatal = @(Select-String -Path $log -Pattern 'FATAL|CRASH' -SimpleMatch:$false)
         "  $log  ($((Get-Item $log).LastWriteTime))  fatal/crash lines: $($fatal.Count)"
         $fatal | Select-Object -Last 3 | ForEach-Object { "      $($_.Line)" }
+
+        $bin = Join-Path $dir 'kotorcoop-crash.bin'
+        if (Test-Path $bin) {
+            "      + $bin  ($((Get-Item $bin).LastWriteTime))  -- pwsh tools\crashbin.ps1 -GameDir '$dir'"
+        }
     }
 }

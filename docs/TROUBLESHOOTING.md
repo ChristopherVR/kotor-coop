@@ -368,6 +368,26 @@ recent (~200 MB each — a 32-bit game's full dump). Turn it back off with
 dev-only `tools/crashlog.ps1 -EnableDumps` does the identical registry write for a hardcoded
 dev dump folder — the two are equivalent, just aimed at different audiences.
 
+**2026-09-02:** none of the above helps if the process was TERMINATED rather than left to
+report its own fault — WER off (the default) plus an engine filter that calls
+`TerminateProcess` right after the crash leaves the plugin log ending mid-sentence with no
+`FATAL`/`FIRST-CHANCE` line at all, because that line is only ever written by the plugin's
+WORKER thread on its next poll, and a terminated process has no next poll. This killed a
+client 100 ms into a follow after a wipe-recovery rejoin with nothing anywhere to explain it
+(see the "CLIENT vanishing" case in
+[research/transition-crashes.md](research/transition-crashes.md)). `CrashProbe`'s vectored
+stub now hands the same fault record straight to `kernel32!WriteFile`, on the faulting
+thread, in the same breath as filling it — no managed code involved, so it survives a
+`TerminateProcess` the log-writing path never gets a chance to run for. The result lands next
+to the plugin log as `kotorcoop-crash.bin`; decode it with:
+
+```powershell
+pwsh tools\crashbin.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
+```
+
+`tools/crashlog.ps1` points at the `.bin` for any game directory that has one, alongside the
+Application-log scan above.
+
 ## My partner looks like the wrong character (a stranger, or a companion) after a warp
 
 The body a peer is drawn with has two halves — the server object the mod writes, and the

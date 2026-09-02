@@ -37,15 +37,47 @@ namespace KotorCoop.Plugin;
 /// object we can read. Between them: hardware faults land in the log via the stub, managed
 /// faults via the event, and anything the runtime aborts on internally leaves a Windows
 /// Application log entry that <c>tools\crashlog.ps1</c> explains.
+///
+/// 2026-09-02: none of that helps if the process is TERMINATED before the WORKER thread's
+/// next poll ever runs — WER off (the default) plus an engine filter that calls
+/// TerminateProcess right after the fault leaves the record filled in memory but the log
+/// line never written, because <see cref="DrainReports"/> only runs from the worker loop.
+/// This is exactly what killed a client 100 ms into a follow after a wipe-recovery rejoin
+/// (docs/research/transition-crashes.md, the "CLIENT vanishing" section): no first-chance
+/// line, no Application-log entry, log just stops. So the stub now hands the record to
+/// <c>kernel32!WriteFile</c> itself, on the faulting thread, in the same breath as filling
+/// it — <c>kotorcoop-crash.bin</c> next to the plugin log — so a report reaches disk even
+/// when nothing managed ever runs again. <c>tools\crashbin.ps1</c> decodes it. Still no
+/// managed call: WriteFile is an ordinary stdcall function, resolved once at
+/// <see cref="Install"/> time and called through a fixed cell, exactly like
+/// <see cref="ExitProbe"/>'s indirect jump to the real <c>ExitProcess</c>.
 /// </summary>
 internal static unsafe partial class CrashProbe
 {
     [LibraryImport("kernel32.dll")]
     private static partial nint AddVectoredExceptionHandler(uint first, nint handler);
 
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint CreateFileW(
+        string fileName, uint desiredAccess, uint shareMode, nint securityAttributes,
+        uint creationDisposition, uint flagsAndAttributes, nint templateFile);
+
     private const uint PageExecuteReadWrite = 0x40;
     private const uint PageReadWrite = 0x04;
     private const uint MemCommitReserve = 0x3000;
+
+    /// <summary>CreateFileW flags for the .bin record: write-only, readable by another
+    /// process (a live decoder or a session that watches for it) while this one still
+    /// holds it, fresh every session so a decoder never sees a report from a previous run.</summary>
+    private const uint GenericWrite = 0x4000_0000;
+    private const uint FileShareRead = 0x1;
+    private const uint CreateAlways = 2;
+    private const uint FileAttributeNormal = 0x80;
+    private const nint InvalidHandleValue = -1;
+
+    /// <summary>FILE_BEGIN for the stub's SetFilePointer call — named for the comment at
+    /// the call site, even though its value is the same 0 as a NULL argument.</summary>
+    private const uint FileBegin = 0;
 
     /// <summary>Image range of swkotor.exe: values in it are candidate return addresses.</summary>
     private const uint ImageLow = 0x400000;
@@ -62,6 +94,16 @@ internal static unsafe partial class CrashProbe
     private const int RecStack = 0x18;
     private const int StackWords = 64;
     private const int RecordSize = RecStack + (StackWords * 4);
+
+    // Past RecordSize, so WriteFile's fixed nNumberOfBytesToWrite=RecordSize never touches
+    // them: scratch cells the stub reaches by absolute address, exactly like the record
+    // fields above, filled in once by Install (never by the stub) and then only ever READ
+    // by the stub. RecWrittenScratch is WriteFile's mandatory out-param target; its value
+    // is never read back by anything.
+    private const int RecWriteFileCell = RecordSize;
+    private const int RecSetFilePointerCell = RecordSize + 4;
+    private const int RecWrittenScratch = RecordSize + 8;
+    private const int RecordAreaSize = RecordSize + 12;
 
     /// <summary>STATUS_ACCESS_VIOLATION.</summary>
     private const uint AccessViolation = 0xC0000005;
@@ -119,11 +161,11 @@ internal static unsafe partial class CrashProbe
     /// fatal, so a recoverable one could otherwise repeat every frame.</summary>
     private const int MaxLogged = 8;
 
-    public static void Install()
+    public static void Install(string directory)
     {
         try
         {
-            nint buffer = NativeMethods.VirtualAlloc(0, RecordSize, MemCommitReserve, PageReadWrite);
+            nint buffer = NativeMethods.VirtualAlloc(0, RecordAreaSize, MemCommitReserve, PageReadWrite);
             if (buffer == 0)
             {
                 PluginHost.Log("crash probe NOT installed: could not allocate its record");
@@ -131,12 +173,56 @@ internal static unsafe partial class CrashProbe
             }
 
             _record = (uint*)buffer;
-            for (int i = 0; i < RecordSize / 4; i++)
+            for (int i = 0; i < RecordAreaSize / 4; i++)
             {
                 _record[i] = 0;
             }
 
-            nint handler = BuildHandler(buffer);
+            // Resolved HERE, on the startup thread where an ordinary managed GetProcAddress
+            // call is safe, and written into the record area's cells — the stub never
+            // resolves anything itself, only ever indirects through what Install put there,
+            // the same discipline ExitProbe's _realCell uses for the real ExitProcess.
+            // Both are foundational kernel32 exports that predate every Windows version this
+            // plugin can run on; if either is somehow missing, the WHOLE probe (including
+            // the log-only path) is withheld rather than baking a null call target into the
+            // stub — a `call dword ptr [cell]` through an unresolved (zero) cell would jump
+            // to address 0 the moment the process next faults, which is precisely the
+            // "handler that faults while handling a fault" failure mode this file exists to
+            // rule out.
+            nint kernel32 = NativeMethods.GetModuleHandle("kernel32.dll");
+            nint writeFile = kernel32 == 0 ? 0 : NativeMethods.GetProcAddress(kernel32, "WriteFile");
+            nint setFilePointer = kernel32 == 0 ? 0 : NativeMethods.GetProcAddress(kernel32, "SetFilePointer");
+            if (writeFile == 0 || setFilePointer == 0)
+            {
+                PluginHost.Log("crash probe NOT installed: could not resolve kernel32!WriteFile/SetFilePointer");
+                return;
+            }
+
+            *(nint*)((byte*)buffer + RecWriteFileCell) = writeFile;
+            *(nint*)((byte*)buffer + RecSetFilePointerCell) = setFilePointer;
+
+            // CREATE_ALWAYS: a fresh, empty file every session, so a decoder never mistakes
+            // a stale report from a previous run for this one. FILE_SHARE_READ so
+            // tools\crashbin.ps1 (or another instance) can read it while this process still
+            // holds the handle open.
+            string binPath = Path.Combine(directory, "kotorcoop-crash.bin");
+            nint fileHandle = CreateFileW(
+                binPath, GenericWrite, FileShareRead, 0, CreateAlways, FileAttributeNormal, 0);
+            if (fileHandle == InvalidHandleValue)
+            {
+                // Not fatal to the rest of the probe: WriteFile against a bad handle fails
+                // gracefully (ERROR_INVALID_HANDLE) rather than faulting — see BuildHandler's
+                // doc comment — so the FIRST-CHANCE log line still works even without it.
+                PluginHost.Log(
+                    $"crash probe: could not open {binPath} for the binary record "
+                    + $"(error {Marshal.GetLastWin32Error()}); FIRST-CHANCE log lines still work");
+            }
+            else
+            {
+                PluginHost.Log($"crash probe: binary crash record at {binPath} (tools\\crashbin.ps1 decodes it)");
+            }
+
+            nint handler = BuildHandler(buffer, fileHandle);
             if (handler == 0)
             {
                 PluginHost.Log("crash probe NOT installed: could not allocate its handler");
@@ -182,16 +268,49 @@ internal static unsafe partial class CrashProbe
     /// </code>
     ///
     /// It reads the exception code, the faulting address, EIP and ESP out of the OS structures
-    /// and copies them plus 256 bytes of the faulting stack into the record, then returns 0
+    /// and copies them plus 256 bytes of the faulting stack into the record, bumps the serial,
+    /// hands the record to <c>kernel32!WriteFile</c> (see below), then returns 0
     /// (EXCEPTION_CONTINUE_SEARCH) so crash behaviour is otherwise unchanged. The serial is
-    /// written LAST, so the poller never reads a half-filled record.
+    /// written before the WriteFile calls but after every field, so the poller never reads a
+    /// half-filled record and the .bin's serial (offset 0) always matches what it copied.
     ///
     /// ⚠ The stack copy is bounded by the THREAD'S OWN limits, read from the TEB at fs:[4]
     /// (StackBase) and fs:[8] (StackLimit). Everything between them is committed, so the copy
     /// cannot fault — and a handler that faults while handling a fault is how a diagnosable
     /// crash becomes an undiagnosable one.
+    ///
+    /// After the serial bump, two more stdcall calls, both indirect through a cell
+    /// <see cref="Install"/> resolved and filled in (never re-resolved here — see its comment
+    /// on why a null cell must never reach this stub):
+    ///
+    /// <code>
+    ///   SetFilePointer(fileHandle, 0, NULL, FILE_BEGIN);
+    ///   WriteFile(fileHandle, record, RecordSize, &amp;written, NULL);
+    /// </code>
+    ///
+    /// SetFilePointer resets to offset 0 before every write, so <c>kotorcoop-crash.bin</c>
+    /// stays a fixed RecordSize bytes — the LATEST report only — no matter how many
+    /// first-chance faults this process sees before it dies; growing it unboundedly would
+    /// repeat the exact "a recoverable one could otherwise repeat every frame" risk
+    /// <see cref="MaxLogged"/> already guards on the log side, except unbounded on disk
+    /// instead of merely unbounded in the log. <c>fileHandle</c> may be
+    /// <c>INVALID_HANDLE_VALUE</c> if <see cref="Install"/> could not open the file — that is
+    /// safe to bake in and call through unconditionally, because a bad HANDLE value is data,
+    /// not an address: the OS validates it in kernel mode and both calls just fail with
+    /// <c>ERROR_INVALID_HANDLE</c>, no fault, no different from any other WriteFile failure
+    /// this stub does not check. <c>FlushFileBuffers</c> is deliberately NOT called: WriteFile
+    /// returning has already handed the bytes to the OS file cache, which survives a
+    /// TerminateProcess of THIS process (the cache belongs to the OS, not the process), and a
+    /// synchronous flush-to-disk is a blocking call this thread cannot afford if it is itself
+    /// the reason the process is about to die.
+    ///
+    /// Both new calls are stdcall (callee pops its own argument bytes, preserves
+    /// ebx/esi/edi/ebp) and both run after every field of the record is filled and after EDI
+    /// has been restored to point at the record's start (whether or not the stack copy ran —
+    /// both the copy path and the two "too close to a stack limit" skips reconverge on it), so
+    /// <c>push edi</c> is exactly <c>lpBuffer=record</c> with no extra bookkeeping.
     /// </summary>
-    private static nint BuildHandler(nint record)
+    private static nint BuildHandler(nint record, nint fileHandle)
     {
         nint stub = NativeMethods.VirtualAlloc(0, 256, MemCommitReserve, PageExecuteReadWrite);
         if (stub == 0)
@@ -221,13 +340,13 @@ internal static unsafe partial class CrashProbe
         Emit(0x57);                               // push edi
         Emit(0x8B, 0x74, 0x24, 0x10);             // mov esi, [esp+0x10]   ; EXCEPTION_POINTERS*
         Emit(0x85, 0xF6);                         // test esi, esi
-        Emit(0x74, 0x00); int j1 = n - 1;         // je done
+        Emit(0x0F, 0x84); int j1 = n; Emit32(0);  // je near done          ; disp32 patched below
         Emit(0x8B, 0x06);                         // mov eax, [esi]        ; ExceptionRecord
         Emit(0x85, 0xC0);                         // test eax, eax
-        Emit(0x74, 0x00); int j2 = n - 1;         // je done
+        Emit(0x0F, 0x84); int j2 = n; Emit32(0);  // je near done          ; disp32 patched below
         Emit(0x8B, 0x5E, 0x04);                   // mov ebx, [esi+4]      ; ContextRecord
         Emit(0x85, 0xDB);                         // test ebx, ebx
-        Emit(0x74, 0x00); int j3 = n - 1;         // je done
+        Emit(0x0F, 0x84); int j3 = n; Emit32(0);  // je near done          ; disp32 patched below
 
         Emit(0xBF); Emit32((int)record);          // mov edi, record
 
@@ -261,6 +380,26 @@ internal static unsafe partial class CrashProbe
         int store = n;
         Emit(0xFF, 0x07);                         // inc dword [edi]       ; serial, written last
 
+        // SetFilePointer(fileHandle, 0, NULL, FILE_BEGIN) — reset to offset 0 so the .bin
+        // stays fixed-size. Args pushed right-to-left, last param nearest the call.
+        nint setFilePointerCell = record + RecSetFilePointerCell;
+        Emit(0x68); Emit32((int)FileBegin);              // push FILE_BEGIN        ; dwMoveMethod
+        Emit(0x68); Emit32(0);                            // push 0                 ; lpDistanceToMoveHigh
+        Emit(0x68); Emit32(0);                            // push 0                 ; lDistanceToMove
+        Emit(0x68); Emit32((int)fileHandle);              // push fileHandle        ; hFile
+        Emit(0xFF, 0x15); Emit32((int)setFilePointerCell); // call dword ptr [setFilePointerCell]
+
+        // WriteFile(fileHandle, record, RecordSize, &written, NULL) — edi is still `record`
+        // here (restored above whether or not the stack copy ran).
+        nint writeFileCell = record + RecWriteFileCell;
+        nint writtenCell = record + RecWrittenScratch;
+        Emit(0x68); Emit32(0);                            // push 0                 ; lpOverlapped
+        Emit(0x68); Emit32((int)writtenCell);             // push writtenCell        ; lpNumberOfBytesWritten
+        Emit(0x68); Emit32(RecordSize);                   // push RecordSize          ; nNumberOfBytesToWrite
+        Emit(0x57);                                        // push edi                  ; lpBuffer = record
+        Emit(0x68); Emit32((int)fileHandle);               // push fileHandle            ; hFile
+        Emit(0xFF, 0x15); Emit32((int)writeFileCell);      // call dword ptr [writeFileCell]
+
         int done = n;
         Emit(0x5F);                               // pop edi
         Emit(0x5E);                               // pop esi
@@ -268,11 +407,12 @@ internal static unsafe partial class CrashProbe
         Emit(0x33, 0xC0);                         // xor eax, eax          ; CONTINUE_SEARCH
         Emit(0xC2, 0x04, 0x00);                   // ret 4                 ; __stdcall, 1 arg
 
-        // Every branch is rel8 and every target is forward; the displacement is measured from
-        // the byte after the jump.
-        s[j1] = (byte)(done - (j1 + 1));
-        s[j2] = (byte)(done - (j2 + 1));
-        s[j3] = (byte)(done - (j3 + 1));
+        // j1-j3 are near (rel32) jumps because `done` now sits well past a short jump's
+        // +127 reach; the displacement is measured from the byte after the 4-byte immediate,
+        // i.e. from (slot + 4). j4/j5 stay short (rel8) — their target, `store`, did not move.
+        *(int*)(s + j1) = done - (j1 + 4);
+        *(int*)(s + j2) = done - (j2 + 4);
+        *(int*)(s + j3) = done - (j3 + 4);
         s[j4] = (byte)(store - (j4 + 1));
         s[j5] = (byte)(store - (j5 + 1));
 

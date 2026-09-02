@@ -154,7 +154,7 @@ internal static unsafe partial class PluginHost
             // FIRST, before a single hook or controller exists. A fault during startup is
             // exactly as fatal as one during play, and the probe is what turns "the game
             // vanished" into a line naming the exception.
-            InstallCrashProbe();
+            InstallCrashProbe(directory);
 
             // The in-game ~ console needs the engine's dev console, which is gated by
             // EnableCheats in swkotor.ini. Enabling it is the game's own sanctioned surface.
