@@ -1554,3 +1554,50 @@ or the retail engine's own input path) is still required to exercise the refusal
 8. Repeat step 3-4 several times back to back on the client (open, pick different planets,
    accept) — the crash/stability check the 2026-09-02 section's own live test plan item 4 already
    asks for, now driveable without walking to `infoterm001` each time.
+
+## `galaxymap open`/`close` live (2026-09-03, 02:46–02:54): the verbs work, their success test was wrong, and `+0x80` is not a closed/open flag
+
+Rig: block 66, client pid 42144 (then 42144 after a rebuild), `warp ebo_m12aa` on both halves.
+
+### What the first build reported
+
+    galaxymap open  -> "already open (CGuiInGame+0x80 = 0x1B9161B0)"      (it had just opened it)
+    galaxymap close -> "HideGalaxyMapGui called — CGuiInGame+0x80 0x1B9161B0 -> 0x1B9161B0" (status -4, refused)
+    galaxymap open  -> passed the +0x30 busy gate and opened again              (so the close HAD worked)
+
+`CGuiInGame+0x80` (the `CSWGuiInGameGalaxyMap*` this file's §1.1 names) is allocated by the
+first `ShowGalaxyMapGui` and NEVER nulled by `HideGalaxyMapGui`: the same pointer
+(`0x1B9161B0`, later `0x1AC0C1D8` on a fresh process) survived open → close → open. It is a
+"has a panel object ever been built" pointer, not a state flag. The "Live recipe" section's
+step 7 expectation (`0x... -> 0x0`) was therefore never going to happen.
+
+### What moves, and what the verbs now judge success on
+
+`CGuiInGame+0x30` (`InGameGuiBusyOffset`, the full-screen-GUI field `ShowGalaxyMapGui` itself
+gates on): 0 → 1 on open, 1 → 0 on close, every time. The GUI manager's modal stack stayed at 1
+throughout on this rig (it is not a galaxy-map indicator either). Rebuilt with both verbs
+reading `+0x30`:
+
+    [02:53:40.082] galaxymap open: ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> 1, GUI-manager modal stack 1 -> 1, panel 0x1AC0C1D8 (open)             (status 1)
+    [02:53:43.223] galaxymap open: the full-screen in-game GUI is up (...) — close it first (CGuiInGame+0x30 = 1, GUI-manager modal stack = 1)               (status -4, correct: it IS open)
+    [02:53:46.371] galaxymap close: HideGalaxyMapGui called — CGuiInGame+0x30 1 -> 0, GUI-manager modal stack 1 -> 1, panel 0x1AC0C1D8 (the panel pointer persists by design) (status 1)
+    [02:53:49.519] galaxymap close: no full-screen GUI is up, so the galaxy map is already closed (CGuiInGame+0x30 = 0, GUI-manager modal stack = 1)          (status 1, idempotent)
+
+`galaxymap stats` → `installed=True, refused=0, allowed=0` (the hook is spliced; nothing has
+clicked Accept, so nothing has been counted — the refusal itself still needs a real click, and
+an `Odyssey.GalaxyMap` synthesised confirm is still deliberately not built, see "`galaxymap
+confirm` — investigated, deliberately NOT shipped" above).
+
+### One observation for the next round: `+0x30` reads 1 right after a `warp`
+
+Twice (02:46 and 02:52) the FIRST `galaxymap open` after `warp ebo_m12aa` was refused with
+`CGuiInGame+0x30 = 1` although no screen was up; `galaxymap close` (which is
+`HideGalaxyMapGui`, gated only on `+0x108`) put it back to 0 and everything after that was
+normal. Whatever the transition leaves in `+0x30` (the loading screen, or the party-select
+panel the client suppresses), `closegui`/`galaxymap close` clears it. Not chased further.
+
+### Recipe correction
+
+Step 7 above should read: expect `applied`, `"HideGalaxyMapGui called — CGuiInGame+0x30 1 ->
+0 ..."`; a second `galaxymap close` answers `applied`, `"no full-screen GUI is up, so the
+galaxy map is already closed"`. Never read `+0x80` for state.

@@ -46,7 +46,14 @@ internal static unsafe partial class Odyssey
     /// <summary>CGuiInGame + this = CSWGuiInGameGalaxyMap*, or null. VERIFIED,
     /// docs/research/galaxy-map-and-party-select.md §1.1 (symbol database) and this file's own
     /// fresh disasm of ShowGalaxyMapGui's own write to this exact field
-    /// (`mov dword ptr [esi+0x80], eax` at 0x0062D17F/0x0062D185).</summary>
+    /// (`mov dword ptr [esi+0x80], eax` at 0x0062D17F/0x0062D185).
+    ///
+    /// ⚠ NOT an "is the map open" flag. Live 2026-09-03 02:46 (client, ebo_m12aa): the pointer
+    /// stayed <c>0x1B9161B0</c> across open → close → open — the panel object is allocated once
+    /// and <c>HideGalaxyMapGui</c> does not null it. What DOES move is the full-screen-GUI
+    /// field <see cref="InGameGuiBusyOffset"/> (+0x30, 0 → 1 on open, back to 0 on close) and
+    /// the GUI manager's modal stack (0 → 1 → 0), so those are what the two verbs report
+    /// success on; the pointer is printed for information only.</summary>
     private const int InGameGuiGalaxyMapOffset = 0x80;
 
     /// <summary>Passed as <c>nPlanet</c> to <see cref="ShowGalaxyMapGuiFn"/> when the caller has
@@ -108,21 +115,17 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint before = *(nint*)(gui + InGameGuiGalaxyMapOffset);
+        int modalsBefore = ReadModalStackCount(gui);
 
         ShowGalaxyMapGuiFn(gui, SelectedPlanetNone);
 
         nint panel = *(nint*)(gui + InGameGuiGalaxyMapOffset);
-        if (panel == 0)
-        {
-            detail = "ShowGalaxyMapGui returned but no panel was produced (allocation failed?)";
-            return false;
-        }
-
-        detail = before == 0
-            ? $"opened (CGuiInGame+0x80 0 -> 0x{panel:X})"
-            : $"already open (CGuiInGame+0x80 = 0x{panel:X})";
-        return true;
+        int busyAfter = *(int*)(gui + InGameGuiBusyOffset);
+        int modalsAfter = ReadModalStackCount(gui);
+        detail = $"ShowGalaxyMapGui called — CGuiInGame+0x30 0 -> {busyAfter}, GUI-manager modal "
+            + $"stack {modalsBefore} -> {modalsAfter}, panel 0x{panel:X}"
+            + (busyAfter == 0 ? " (the engine did not open it)" : " (open)");
+        return busyAfter != 0;
     }
 
     /// <summary>
@@ -152,17 +155,21 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint before = *(nint*)(gui + InGameGuiGalaxyMapOffset);
-        if (before == 0)
+        int busyBefore = *(int*)(gui + InGameGuiBusyOffset);
+        int modalsBefore = ReadModalStackCount(gui);
+        if (busyBefore == 0)
         {
-            detail = "the galaxy map is already closed (CGuiInGame+0x80 = 0)";
+            detail = "no full-screen GUI is up, so the galaxy map is already closed (CGuiInGame+0x30 "
+                + $"= 0, GUI-manager modal stack = {modalsBefore})";
             return true;
         }
 
         HideGalaxyMapGuiFn(gui);
 
-        nint after = *(nint*)(gui + InGameGuiGalaxyMapOffset);
-        detail = $"HideGalaxyMapGui called — CGuiInGame+0x80 0x{before:X} -> 0x{after:X}";
-        return after == 0;
+        int busyAfter = *(int*)(gui + InGameGuiBusyOffset);
+        detail = $"HideGalaxyMapGui called — CGuiInGame+0x30 {busyBefore} -> {busyAfter}, GUI-manager "
+            + $"modal stack {modalsBefore} -> {ReadModalStackCount(gui)}, panel "
+            + $"0x{*(nint*)(gui + InGameGuiGalaxyMapOffset):X} (the panel pointer persists by design)";
+        return busyAfter == 0;
     }
 }
