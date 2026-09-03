@@ -17,7 +17,8 @@ internal sealed unsafe partial class EnemyPresenceController
     /// ON hands the local copies back to their own AI so they can complete combat rounds
     /// here — which is the only way this engine's combat state can rise, since the engine
     /// derives it from being fought rather than from a flag anyone can set (measured: a
-    /// written flag is reverted in 0-2 ms, see CombatStateController).
+    /// written flag is reverted in 0-2 ms — docs/research/combat-participation.md's
+    /// 2026-08-27 section).
     ///
     /// ⚠ TURNING THIS ON WITHOUT MOVING DAMAGE AUTHORITY DOUBLE-COUNTS EVERY HIT: the local
     /// enemy swings here AND the owner forwards the same swing that landed on this player's

@@ -101,6 +101,41 @@ public class CoopIniExampleDocSyncTests
         Assert.True(mismatches.Count == 0, string.Join("\n", mismatches));
     }
 
+    /// <summary>
+    /// Every key either reader consumes must appear SOMEWHERE in docs/CONFIG.md — the "Player
+    /// settings" table or the "Developer switches" table. Catches an undocumented switch: a key
+    /// a controller reads via <c>PluginConfig.Read*</c> (or <c>CoopConfig</c>'s own kv lookups)
+    /// but that nobody ever added a row for, which would otherwise sit there silently with no
+    /// pointer to what it does or why. Player-facing classification itself (which table a key
+    /// belongs in) is exercised directly against <c>CoopConfig</c>'s own sets in
+    /// <c>CoopConfigTests</c>; this only checks that a row exists at all.
+    /// </summary>
+    [Fact]
+    public void EveryConsumedKeyIsDocumentedInConfigMd()
+    {
+        string root = RepositoryRoot();
+        HashSet<string> consumed = ConsumedKeys(root);
+        Assert.True(consumed.Count > 50, $"only found {consumed.Count} consumed keys - the " +
+            "scrape regex probably broke, not the readers");
+
+        string configMd = File.ReadAllText(Path.Combine(root, "docs", "CONFIG.md"));
+        HashSet<string> documented = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Match row in Regex.Matches(configMd, @"^\|\s*`([a-zA-Z0-9_]+)`", RegexOptions.Multiline))
+        {
+            documented.Add(row.Groups[1].Value);
+        }
+
+        Assert.True(documented.Count > 50, $"only found {documented.Count} documented keys in " +
+            "docs/CONFIG.md - the scrape regex probably broke, not the docs");
+
+        List<string> undocumented = [.. consumed.Where(k => !documented.Contains(k))];
+        Assert.True(
+            undocumented.Count == 0,
+            "a reader (CoopConfig.cs's kv lookups, or a PluginConfig.Read/ReadBool/ReadInt/"
+            + "ReadFloat call anywhere under src/KotorCoop.Plugin) consumes a coop.ini key with "
+            + "no row in either of docs/CONFIG.md's tables: " + string.Join(", ", undocumented));
+    }
+
     /// <summary>key -&gt; raw value, for every UNCOMMENTED <c>key = value</c> line - the same
     /// "skip # ; [ " rule <see cref="KotorCoop.Session.CoopConfig.TryLoad"/> itself uses.</summary>
     private static Dictionary<string, string> KeyValues(IEnumerable<string> lines)

@@ -143,7 +143,8 @@ Steam at all.
 ## Configure
 
 `coop.ini` beside `swkotor.exe` is the only config file. Nothing in it needs editing to play;
-the useful keys:
+open it and every key is commented in plain language, grouped under Connecting, Your character,
+Screen, Internet play and Advanced. The most commonly-touched ones:
 
 | Key | Meaning |
 | --- | --- |
@@ -152,11 +153,16 @@ the useful keys:
 | `port` | UDP port (default `27140`). The host's port must be reachable from the client. |
 | `host` / `mode` | Address to join and host/join mode — the in-game menu sets these for you; they matter for the console `connect`. |
 | `menu_button` | `1` shows the Co-op button on the main menu. |
-| `auto_start_agent` | `1` (default) lets the game start `KotorCoop.Agent.exe` for you. |
+| `follow_lead` | who may lead an area transition the other player follows automatically. |
+| `dialogue_auto_join` | whether you're pulled into a conversation your partner starts. |
 | `stun_servers` | STUN servers asked for the host's public address (see "Play over the internet"). Empty disables it. |
 | `upnp` | `1` (default) tries to forward the port automatically when hosting. |
 
-Every other key is documented in the file itself and in the project's `docs/CONFIG.md`.
+That's the whole file — it's deliberately short. The mod has many more internal switches for
+tuning and bisecting bugs during development; they aren't in `coop.ini` on purpose, since a
+player never needs them. Every one of them is documented, with what it does and its shipped
+value, in the project's `docs/CONFIG.md` under "Developer switches" — setting one by hand is
+unsupported.
 
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 

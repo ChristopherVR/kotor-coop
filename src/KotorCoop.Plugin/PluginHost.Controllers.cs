@@ -49,7 +49,6 @@ internal static unsafe partial class PluginHost
         _movieRelay = new MidModuleMovieController(_view);
         _galaxyDeparture = new GalaxyDepartureController(_view);
         _pause = new PauseController(_view);
-        _combatState = new CombatStateController();
         _pauseKey = new PauseKeyController();
         _journal = new JournalController(_view);
         _mapMarkers = new MapMarkerController(_view);
