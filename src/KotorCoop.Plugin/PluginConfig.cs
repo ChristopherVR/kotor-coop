@@ -24,6 +24,8 @@ internal static class PluginConfig
                 return null;
             }
 
+            List<string> developer = [];
+            List<string> unknown = [];
             foreach (string raw in File.ReadAllLines(path))
             {
                 string line = raw.Trim();
@@ -174,6 +176,8 @@ internal static class PluginConfig
                 return;
             }
 
+            List<string> developer = [];
+            List<string> unknown = [];
             foreach (string raw in File.ReadAllLines(path))
             {
                 string line = raw.Trim();
@@ -201,9 +205,28 @@ internal static class PluginConfig
                     continue;
                 }
 
-                log(Contains(DeveloperKnownKeys, key)
-                    ? $"coop.ini: developer switch '{key} = {value}' is set (not a player setting; see docs/CONFIG.md)"
-                    : $"coop.ini: unknown key '{key}' ignored");
+                if (Contains(DeveloperKnownKeys, key))
+                {
+                    developer.Add($"{key}={value}");
+                }
+                else
+                {
+                    unknown.Add(key);
+                }
+            }
+
+            // One line per category, not per key: a coop.ini written from the pre-2026-09-03
+            // template carries a hundred developer keys, and a hundred startup lines reads
+            // like a hundred problems. install.ps1 -UpdateDefaults offers to strip them.
+            if (developer.Count > 0)
+            {
+                log($"coop.ini: {developer.Count} developer switch(es) set - not player settings, see docs/CONFIG.md: "
+                    + string.Join(", ", developer));
+            }
+
+            if (unknown.Count > 0)
+            {
+                log($"coop.ini: {unknown.Count} unknown key(s) ignored: {string.Join(", ", unknown)}");
             }
         }
         catch

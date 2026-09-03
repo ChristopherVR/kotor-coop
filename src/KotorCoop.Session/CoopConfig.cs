@@ -950,7 +950,7 @@ public sealed record CoopConfig
         };
     }
 
-    /// <summary>Logs one line per non-player-facing key coop.ini actually sets — a developer
+    /// <summary>Logs the non-player-facing keys coop.ini actually sets — the developer
     /// switch (known to some reader, see docs/CONFIG.md) or a genuinely unrecognised key.
     /// Called from <see cref="TryLoad"/> so it fires wherever coop.ini is actually parsed for
     /// real use, through <see cref="Console.WriteLine"/>, the same sink every other agent
@@ -958,15 +958,20 @@ public sealed record CoopConfig
     private static void LogNonPlayerKeys(IReadOnlyDictionary<string, string> kv)
     {
         (List<string> developer, List<string> unknown) = ClassifyNonPlayerKeys(kv.Keys);
-        foreach (string key in developer)
+
+        // One line per category, not per key: a coop.ini written from the pre-2026-09-03
+        // template carries a hundred developer keys, and a hundred startup lines reads like a
+        // hundred problems. install.ps1 -UpdateDefaults offers to strip them.
+        if (developer.Count > 0)
         {
             Console.WriteLine(
-                $"coop.ini: developer switch '{key} = {kv[key]}' is set (not a player setting; see docs/CONFIG.md)");
+                $"coop.ini: {developer.Count} developer switch(es) set - not player settings, see docs/CONFIG.md: "
+                + string.Join(", ", developer.Select(key => $"{key}={kv[key]}")));
         }
 
-        foreach (string key in unknown)
+        if (unknown.Count > 0)
         {
-            Console.WriteLine($"coop.ini: unknown key '{key}' ignored");
+            Console.WriteLine($"coop.ini: {unknown.Count} unknown key(s) ignored: {string.Join(", ", unknown)}");
         }
     }
 
