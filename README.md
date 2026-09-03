@@ -33,9 +33,10 @@ What you should know before starting:
   AI keeps pulling them back to the host.
 - **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works every menu;
   the address/password box, chat and the console still need a keyboard.
-- **Internet play works for most home routers** (the address is found and the port opened
-  automatically), but this has only been tested on a local network so far, and very restrictive
-  networks can't be reached — there is no relay server.
+- **Internet play has only been tested on a local network so far.** The pieces that should make it
+  work on a typical home router are built (the host's address is found and the port opened
+  automatically), but nobody has yet watched them against a real router; very restrictive networks
+  can't be reached at all — there is no relay server.
 
 The full list, activity by activity, is [docs/limitations.md](docs/limitations.md). Every line
 there has been watched on two real copies of the game unless it says otherwise; the dates, counts

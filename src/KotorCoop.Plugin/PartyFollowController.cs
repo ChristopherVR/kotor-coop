@@ -496,10 +496,11 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                     Odyssey.TryGetFollowDiagnostics(creature, objectId, out preStep);
                 }
 
-                // ROUND 74 EXPERIMENT (not yet a permanent fix — see Odyssey.
-                // TryResetStuckFollowPhase's own remarks for the disasm this is based on).
-                // Live test only: unwedge the step FSM's phase field when it is caught in the
-                // -1/5 ping-pong that never calls FindPath.
+                // ROUND 74 FIX, narrowed in round 84 to phase == -1 only (see Odyssey.
+                // TryResetStuckFollowPhase's own remarks for the disasm this is based on):
+                // unwedge the step FSM's phase field when it is caught in the -1/5 ping-pong
+                // that never calls FindPath. Shipped and live-verified; the phase-6/7 geometric
+                // wedge it cannot see is DriveStallRecovery's job (round 105).
                 Odyssey.TryResetStuckFollowPhase(objectId, out _);
 
                 // ROUND 80 EXPERIMENT: see Odyssey.TryDriveFollowLeaderStep's own remarks — a
