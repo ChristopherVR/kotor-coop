@@ -489,17 +489,25 @@ public class CoopCommandDispatcherTests
     /// dispatcher's Host lands on "could not start the session", and every Hosting* test in a
     /// row failed with `manager.Current` null until the sequence walked out of the block
     /// (2026-09-03, 3/3 red then 3/3 green with no code change in between).
+    ///
+    /// Second lesson (2026-09-03, full run after the galaxy-map relay): letting the UDP stack
+    /// pick the number is itself the trap — ephemeral ports are dealt SEQUENTIALLY, so when the
+    /// sequence sits inside a TCP-excluded block, all 50 probes land in that same block and four
+    /// Hosting* tests fail with "no port free … after 50 probes". So this picks RANDOM numbers
+    /// in a fixed high range instead and binds BOTH protocols explicitly on each: two adjacent
+    /// draws share nothing, and an excluded block costs one attempt, not fifty.
     /// </summary>
     private static int FreePort()
     {
         for (int attempt = 0; attempt < 50; attempt++)
         {
-            using Socket udp = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            udp.Bind(new IPEndPoint(IPAddress.Any, 0));
-            int port = ((IPEndPoint)udp.LocalEndPoint!).Port;
+            int port = Random.Shared.Next(20000, 60000);
 
             try
             {
+                using Socket udp = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                udp.Bind(new IPEndPoint(IPAddress.Any, port));
+
                 using TcpListener tcp = new(IPAddress.Loopback, port);
                 tcp.Start();
                 tcp.Stop();
@@ -507,11 +515,11 @@ public class CoopCommandDispatcherTests
             }
             catch (SocketException)
             {
-                // TCP side taken on that number; ask the UDP stack for another.
+                // One side taken or excluded on that number; draw another.
             }
         }
 
-        throw new InvalidOperationException("no port free for both UDP and TCP after 50 probes");
+        throw new InvalidOperationException("no port free for both UDP and TCP after 50 random probes");
     }
 
     /// <summary>The world-serve listener starts on the dispatcher's own 150 ms tick, so the

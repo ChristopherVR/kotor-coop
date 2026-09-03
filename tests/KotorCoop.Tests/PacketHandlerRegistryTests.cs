@@ -34,6 +34,9 @@ public class PacketHandlerRegistryTests
         // shared-inventory-v2.md): the host only ever RECEIVES an intent (never a snapshot or
         // an ack — it originates both of those itself).
         PacketType.PartyPoolIntentV2, PacketType.StoreIntentV2,
+        // Galaxy-map departure relay (docs/research/galaxy-map-and-party-select.md, 2026-09-03):
+        // any peer's accept click travels to the host, which rebroadcasts it to the others.
+        PacketType.GalaxyDeparture,
         PacketType.None,
     ];
 
@@ -60,6 +63,8 @@ public class PacketHandlerRegistryTests
         // host -> client only: a clean-shutdown announcement (PacketType.HostBye's own doc
         // comment). The host never receives one, so HostHandledTypes above is unchanged.
         PacketType.HostBye,
+        // Galaxy-map departure relay: the host's own accept, or another client's relayed one.
+        PacketType.GalaxyDeparture,
         PacketType.None,
     ];
 
