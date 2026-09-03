@@ -107,7 +107,10 @@ jobs:
           grep -q '^layout: chain' check.txt
           if grep -q '^FAIL' check.txt; then exit 1; fi   # (a bare `! grep` is exempt from set -e)
           # a second run is an upgrade: same layout, no second prev, no duplicate entries
-          "$pkg/install.sh" --game-dir "$game" | grep -q 'upgrading the plugin and loader in place'
+          # (to a file, not `| grep -q`: grep -q exits at the first match, the installer's next
+          # echo gets EPIPE, and pipefail reports that as a failed install)
+          "$pkg/install.sh" --game-dir "$game" > out.txt
+          grep -q 'upgrading the plugin and loader in place' out.txt
           test "$(grep -v '^#' "$game/dinput8.chain" | tr '\n' ' ')" = 'KotorCoop.Plugin.dll dinput8.prev.dll '
           "$pkg/install.sh" --uninstall --game-dir "$game"
           test "$(cat "$game/dinput8.dll")" = 'MZ fake ReShade build'
