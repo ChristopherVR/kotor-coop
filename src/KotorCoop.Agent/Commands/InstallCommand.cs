@@ -16,16 +16,23 @@ internal static class InstallCommand
 {
     public static int Install(AgentOptions options)
     {
-        string package = options.PackageDirectory ?? AppContext.BaseDirectory;
         string? game = ResolveGameDirectory(options, interactive: false);
         if (game is null)
         {
             return 1;
         }
 
+        if (options.Check)
+        {
+            // Read-only report: nothing else below applies.
+            return PackageInstaller.Check(game, Console.WriteLine) ? 0 : 1;
+        }
+
+        string package = options.PackageDirectory ?? AppContext.BaseDirectory;
+        bool ok;
         try
         {
-            PackageInstaller.Install(new PackageInstaller.Options(package, game, options.Chain, options.ChainLoad, options.Force), Console.WriteLine);
+            ok = PackageInstaller.Install(new PackageInstaller.Options(package, game, options.Chain, options.ChainLoad, options.Force), Console.WriteLine);
         }
         catch (PackageInstaller.RefusedException ex)
         {
@@ -36,7 +43,7 @@ internal static class InstallCommand
         Console.WriteLine();
         Console.WriteLine("The game loads DirectInput from its own directory before the system one, so this is");
         Console.WriteLine("picked up on next launch. Nothing else was modified; remove it with: KotorCoop.Agent.exe uninstall");
-        return 0;
+        return ok ? 0 : 1;
     }
 
     public static int Uninstall(AgentOptions options)
@@ -83,17 +90,39 @@ internal static class InstallCommand
             }
 
             bool chain = false;
-            if (PackageInstaller.Identify(Path.Combine(game, PackageInstaller.PluginFileName)) == PackageInstaller.DinputKind.Foreign)
+            bool force = false;
+            string proxyPath = Path.Combine(game, PackageInstaller.PluginFileName);
+            if (PackageInstaller.Identify(proxyPath) == PackageInstaller.DinputKind.Foreign)
             {
+                ForeignDinputIdentity.Identity identity = PackageInstaller.IdentifyForeign(proxyPath);
                 Console.WriteLine();
-                Console.WriteLine("Another mod already uses dinput8.dll in that folder (ReShade, an ASI loader, ...).");
-                chain = Ask("Keep it and load both? (the alternative overwrites it)", defaultYes: true, interactive);
+                if (identity.Kind == ForeignDinputIdentity.Kind.SystemFile)
+                {
+                    // Not a mod - nothing to ask about, PackageInstaller.Install below just
+                    // replaces it and says so.
+                    Console.WriteLine($"The dinput8.dll here is {identity.FriendlyName} - not a mod, so it will simply be replaced.");
+                }
+                else
+                {
+                    Console.WriteLine($"Another mod already uses dinput8.dll in that folder: {identity.FriendlyName}.");
+                    chain = Ask("Keep it and load both? (the alternative overwrites it)", defaultYes: true, interactive);
+                    force = !chain;
+                }
             }
 
             Console.WriteLine();
-            PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, Force: !chain), Console.WriteLine);
+            bool ok = PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, force), Console.WriteLine);
             Console.WriteLine();
-            Console.WriteLine("Installed. From now on just start the game: the Co-op button is on the main menu.");
+            if (ok)
+            {
+                Console.WriteLine("Installed. From now on just start the game: the Co-op button is on the main menu.");
+            }
+            else
+            {
+                Console.WriteLine("Installed, but the check above found a problem (a FAIL line). Run");
+                Console.WriteLine("KotorCoop.Agent.exe install --check for the details, or try setup again.");
+            }
+
             return OfferLaunch(game, interactive);
         }
         catch (Exception ex)

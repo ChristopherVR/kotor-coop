@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using KotorCoop.Memory;
@@ -22,10 +23,17 @@ namespace KotorCoop.Agent;
 ///   chain-loader\dinput8.dll    the wrapper used in chain mode (see below)
 ///
 /// CHAIN MODE. Only one file can be called dinput8.dll. When another mod already owns the
-/// name (ReShade, an ASI loader...), the loader is installed as dinput8.dll instead, the
-/// plugin as KotorCoop.Plugin.dll, the other mod is renamed dinput8.prev.dll, and a
-/// dinput8.chain file lists the load order. Our two DLLs are recognised by markers, so a
-/// foreign dinput8.dll is never overwritten or deleted without being asked.
+/// name (ReShade, an ASI loader...), this is detected AUTOMATICALLY: the loader is installed
+/// as dinput8.dll instead, the plugin as KotorCoop.Plugin.dll, the other mod is renamed
+/// dinput8.prev.dll, and a dinput8.chain file lists the load order — no flag needed, one
+/// summary line names what was found (<see cref="ForeignDinputIdentity"/>). The exception is
+/// a plain copy of Windows' own dinput8.dll: that isn't a mod, so it's just replaced, the same
+/// as if nothing had been there. <c>--force</c> always overwrites a foreign dinput8.dll
+/// outright instead of chaining it; <c>--chain</c> forces chain mode explicitly (now mostly a
+/// no-op, since it is the automatic default). Our two DLLs are recognised by markers, so a
+/// foreign dinput8.dll is never overwritten or deleted without being asked (again, short of
+/// --force). Re-running install over an existing install — plain or chain — upgrades files in
+/// place rather than duplicating or dropping anything; see <see cref="Install"/>.
 /// </summary>
 public static partial class PackageInstaller
 {
@@ -52,8 +60,12 @@ public static partial class PackageInstaller
         IReadOnlyList<string>? Load = null,
         bool Force = false);
 
-    /// <summary>Thrown for a condition the caller must decide about (a foreign dinput8.dll
-    /// without -Chain/-Force); the message says what the options are.</summary>
+    /// <summary>
+    /// Thrown for a condition auto-detection cannot resolve on its own — today just
+    /// dinput8.prev.dll already existing when a chain install would need to create it (an
+    /// earlier chain install left in a half-finished state). A plain foreign dinput8.dll no
+    /// longer throws this: it is chained automatically instead (see the class doc comment).
+    /// </summary>
     public sealed class RefusedException(string message) : Exception(message);
 
     // The plugin's startup banner (a UTF-16 .NET literal) and the loader's exported marker
@@ -77,6 +89,31 @@ public static partial class PackageInstaller
         return image.AsSpan().IndexOf(PluginMarker) >= 0 ? DinputKind.Plugin : DinputKind.Foreign;
     }
 
+    /// <summary>
+    /// A friendly name for the foreign (not-ours) file at <paramref name="path"/>, for the
+    /// install-summary message — "ReShade", "Ultimate ASI Loader", "the system dinput8.dll
+    /// (Microsoft Corporation)", or a generic "another dinput8 mod" fallback. The byte-content
+    /// checks are <see cref="ForeignDinputIdentity"/> (pure, unit-tested); this just supplies
+    /// the file bytes and, when readable, the version resource's FileDescription for the
+    /// fallback name.
+    /// </summary>
+    public static ForeignDinputIdentity.Identity IdentifyForeign(string path)
+    {
+        byte[] image = File.ReadAllBytes(path);
+        string? fileDescription = null;
+        try
+        {
+            fileDescription = FileVersionInfo.GetVersionInfo(path).FileDescription;
+        }
+        catch (Exception)
+        {
+            // No version resource, or one FileVersionInfo could not parse: judged on the
+            // file's content alone.
+        }
+
+        return ForeignDinputIdentity.Identify(image, fileDescription);
+    }
+
     /// <summary>True when <paramref name="directory"/> looks like an extracted package (or a
     /// game directory the package was extracted into).</summary>
     public static bool IsPackageDirectory(string directory) =>
@@ -91,8 +128,12 @@ public static partial class PackageInstaller
         Identify(Path.Combine(gameDirectory, PluginFileName)) is DinputKind.Plugin or DinputKind.Loader
         && File.Exists(Path.Combine(gameDirectory, "KotorCoop.Agent.exe"));
 
-    /// <summary>Installs; every file placed is reported through <paramref name="log"/>.</summary>
-    public static void Install(Options options, Action<string> log)
+    /// <summary>
+    /// Installs; every file placed is reported through <paramref name="log"/>. Returns
+    /// whether the health check run at the end (<see cref="Check"/>) passed — the caller
+    /// decides what to do with a failing install (exit code, a "here's what to try" message).
+    /// </summary>
+    public static bool Install(Options options, Action<string> log)
     {
         string package = Path.GetFullPath(options.PackageDirectory);
         string game = Path.GetFullPath(options.GameDirectory);
@@ -119,18 +160,53 @@ public static partial class PackageInstaller
         {
             // The zip was extracted straight into the game folder: that IS the install.
             log($"package and game directory are the same ({game}); the files are already in place");
-            return;
+            return Check(game, log);
         }
 
         string proxyTarget = Path.Combine(game, PluginFileName);
         DinputKind existing = Identify(proxyTarget);
 
-        if (existing == DinputKind.Foreign && !chainMode && !options.Force)
+        // Whether THIS directory already looks like a chain install (the loader is in the
+        // dinput8.dll slot, or its two companion files are already here) — used below so a
+        // plain re-run of `install` over an existing chain install upgrades it in place
+        // instead of silently falling through to plain mode and overwriting the loader with
+        // the bare plugin, which would orphan KotorCoop.Plugin.dll/dinput8.chain/dinput8.prev.dll.
+        bool chainAlreadyInstalled = existing == DinputKind.Loader
+            || File.Exists(Path.Combine(game, ChainFileName))
+            || File.Exists(Path.Combine(game, ChainPluginFileName));
+
+        // The friendly name of whatever we're chaining behind, when this run is the one doing
+        // the chaining — carried through to the .asi summary below.
+        string? chainedModName = null;
+
+        if (existing == DinputKind.Foreign && !options.Force)
         {
-            throw new RefusedException(
-                $"{proxyTarget} already exists and is not kotor-coop's - another mod is using the dinput8 slot.\n"
-                + "  chain  keeps it: the loader becomes dinput8.dll and loads both (recommended)\n"
-                + "  force  overwrites it (that mod stops working)");
+            ForeignDinputIdentity.Identity identity = IdentifyForeign(proxyTarget);
+            if (identity.Kind == ForeignDinputIdentity.Kind.SystemFile)
+            {
+                // Not a mod - Windows' own file landed in the slot somehow. Nothing to keep,
+                // so this is treated exactly like "nothing was there": chainMode stays
+                // whatever it already was (an explicit --chain still chains it if asked).
+                if (!chainMode)
+                {
+                    log($"{proxyTarget} is {identity.FriendlyName} - not a mod, so it is simply replaced (no chain needed)");
+                }
+            }
+            else
+            {
+                chainedModName = identity.FriendlyName;
+                if (!chainMode)
+                {
+                    chainMode = true;
+                    log($"found another mod in dinput8.dll ({identity.FriendlyName}); installing as a chain: our loader "
+                        + "takes dinput8.dll, the other mod is kept as dinput8.prev.dll and loaded after us");
+                }
+            }
+        }
+        else if (!chainMode && chainAlreadyInstalled)
+        {
+            chainMode = true;
+            log($"{proxyTarget} is already the kotor-coop chain loader; upgrading the plugin and loader in place (chain kept)");
         }
 
         if (chainMode)
@@ -160,12 +236,19 @@ public static partial class PackageInstaller
             File.Copy(pluginSource, pluginTarget, overwrite: true);
             log($"installed plugin -> {pluginTarget}");
 
-            // The plugin first (it receives the game's calls), the previous mod next (so the
-            // plugin forwards into it), then whatever was asked for.
-            List<string> entries = [ChainPluginFileName];
-            if (File.Exists(Path.Combine(game, PreviousFileName)))
+            // Start from whatever dinput8.chain already lists — a re-run must not drop an
+            // entry a player added by hand, or duplicate the ones we manage ourselves — then
+            // make sure our plugin leads (it receives the game's calls), the kept foreign DLL
+            // follows it, and any --load extras are present.
+            string chainFile = Path.Combine(game, ChainFileName);
+            List<string> entries = ParseChainEntries(chainFile);
+            entries.RemoveAll(e => string.Equals(e, ChainPluginFileName, StringComparison.OrdinalIgnoreCase));
+            entries.Insert(0, ChainPluginFileName);
+
+            if (File.Exists(Path.Combine(game, PreviousFileName))
+                && !entries.Contains(PreviousFileName, StringComparer.OrdinalIgnoreCase))
             {
-                entries.Add(PreviousFileName);
+                entries.Insert(1, PreviousFileName);
             }
 
             foreach (string item in extra)
@@ -176,7 +259,6 @@ public static partial class PackageInstaller
                 }
             }
 
-            string chainFile = Path.Combine(game, ChainFileName);
             File.WriteAllLines(chainFile,
             [
                 "# dinput8.chain - DLLs the kotor-coop loader (dinput8.dll) loads, in order.",
@@ -187,6 +269,16 @@ public static partial class PackageInstaller
                 .. entries,
             ]);
             log($"wrote {chainFile} ({string.Join(", ", entries)})");
+
+            // .asi mods (Ultimate ASI Loader's own plugin folders, or any dropped loose) keep
+            // working unmodified - mention them so the player isn't left wondering. Never moved.
+            IReadOnlyList<string> asiMods = FindAsiMods(game);
+            if (asiMods.Count > 0)
+            {
+                string via = chainedModName ?? "the chain";
+                string plural = asiMods.Count == 1 ? "" : "s";
+                log($"found {asiMods.Count} .asi mod{plural} ({string.Join(", ", asiMods)}) - they will keep loading through {via}");
+            }
         }
         else
         {
@@ -204,6 +296,12 @@ public static partial class PackageInstaller
 
             File.Copy(pluginSource, proxyTarget, overwrite: true);
             log($"installed -> {proxyTarget}");
+
+            string orphanedPrevious = Path.Combine(game, PreviousFileName);
+            if (File.Exists(orphanedPrevious))
+            {
+                log($"note: {orphanedPrevious} exists but nothing chains to it - run install --chain to load it alongside kotor-coop");
+            }
         }
 
         // The agent, into the game ROOT: AgentLauncher searches the game directory first, so
@@ -255,6 +353,156 @@ public static partial class PackageInstaller
             File.Copy(iniSource, iniTarget);
             log($"installed -> {iniTarget}");
         }
+
+        log(string.Empty);
+        log("checking the install...");
+        return Check(game, log);
+    }
+
+    /// <summary>
+    /// Every <c>*.asi</c> beside the game or in its <c>scripts\</c>/<c>plugins\</c>
+    /// subfolders (the two locations Ultimate ASI Loader and similar tools scan), as paths
+    /// relative to <paramref name="game"/>. Purely informational — nothing here is ever moved.
+    /// </summary>
+    private static List<string> FindAsiMods(string game)
+    {
+        List<string> found = [];
+        foreach (string dir in new[] { game, Path.Combine(game, "scripts"), Path.Combine(game, "plugins") })
+        {
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            foreach (string file in Directory.GetFiles(dir, "*.asi"))
+            {
+                found.Add(Path.GetRelativePath(game, file));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The entries already listed in a <c>dinput8.chain</c> file (comments and blank lines
+    /// stripped, in file order), or empty when it doesn't exist. Shared by <see cref="Install"/>
+    /// (to merge in what a re-run needs without dropping what a player added by hand) and
+    /// <see cref="Check"/> (to verify every entry still exists).
+    /// </summary>
+    private static List<string> ParseChainEntries(string chainFilePath)
+    {
+        List<string> entries = [];
+        if (!File.Exists(chainFilePath))
+        {
+            return entries;
+        }
+
+        foreach (string rawLine in File.ReadAllLines(chainFilePath))
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0 || line[0] == '#' || line[0] == ';')
+            {
+                continue;
+            }
+
+            entries.Add(line);
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Reports the install layout found in <paramref name="gameDirectory"/> — plain, chain,
+    /// foreign-only or none — and verifies every piece that should be there actually is:
+    /// every <c>dinput8.chain</c> entry exists on disk, the loader and
+    /// <see cref="ChainPluginFileName"/> carry their markers, <c>coop.ini</c> exists. Changes
+    /// nothing. Every line is a PASS/FAIL through <paramref name="log"/>; the return value is
+    /// whether everything passed.
+    /// </summary>
+    public static bool Check(string gameDirectory, Action<string> log)
+    {
+        string game = Path.GetFullPath(gameDirectory);
+        bool ok = true;
+
+        void Report(bool passed, string message)
+        {
+            log($"{(passed ? "PASS" : "FAIL")}: {message}");
+            ok &= passed;
+        }
+
+        if (!Directory.Exists(game))
+        {
+            log($"FAIL: game directory not found: {game}");
+            return false;
+        }
+
+        string proxy = Path.Combine(game, PluginFileName);
+        DinputKind kind = Identify(proxy);
+        string chainPluginPath = Path.Combine(game, ChainPluginFileName);
+        string chainFilePath = Path.Combine(game, ChainFileName);
+        bool hasChainPlugin = File.Exists(chainPluginPath);
+        bool hasChainFile = File.Exists(chainFilePath);
+
+        string layout = kind switch
+        {
+            DinputKind.Loader => "chain",
+            DinputKind.Plugin => "plain",
+            DinputKind.Foreign => "foreign-only",
+            _ when hasChainPlugin || hasChainFile => "chain (dinput8.dll missing)",
+            _ => "none",
+        };
+
+        log($"layout: {layout} ({proxy})");
+
+        switch (kind)
+        {
+            case DinputKind.None:
+                Report(false, $"no dinput8.dll in {game} - kotor-coop is not installed here");
+                break;
+
+            case DinputKind.Foreign:
+                Report(false, $"{proxy} belongs to another mod - kotor-coop is not installed here "
+                    + "(run install to chain behind it or --force to overwrite it)");
+                break;
+
+            case DinputKind.Plugin:
+                Report(true, $"{proxy} carries the kotor-coop plugin marker");
+                break;
+
+            case DinputKind.Loader:
+                Report(true, $"{proxy} carries the chain loader marker");
+                Report(hasChainPlugin, hasChainPlugin
+                    ? $"{chainPluginPath} is present"
+                    : $"{chainPluginPath} is MISSING");
+
+                if (hasChainPlugin)
+                {
+                    Report(Identify(chainPluginPath) == DinputKind.Plugin,
+                        $"{chainPluginPath} carries the kotor-coop plugin marker");
+                }
+
+                if (hasChainFile)
+                {
+                    List<string> entries = ParseChainEntries(chainFilePath);
+                    Report(entries.Count > 0, $"{chainFilePath} lists at least one entry");
+                    foreach (string entry in entries)
+                    {
+                        string entryPath = Path.IsPathRooted(entry) ? entry : Path.Combine(game, entry);
+                        Report(File.Exists(entryPath), $"chain entry '{entry}' exists ({entryPath})");
+                    }
+                }
+                else
+                {
+                    Report(false, $"{chainFilePath} is MISSING");
+                }
+
+                break;
+        }
+
+        string iniPath = Path.Combine(game, "coop.ini");
+        Report(File.Exists(iniPath), File.Exists(iniPath) ? $"{iniPath} exists" : $"{iniPath} is MISSING");
+
+        return ok;
     }
 
     /// <summary>Removes only what Install placed, recognising our DLLs by marker; restores a
