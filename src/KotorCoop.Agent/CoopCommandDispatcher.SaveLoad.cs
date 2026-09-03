@@ -200,7 +200,10 @@ public sealed partial class CoopCommandDispatcher
         }
         else if (session is CoopClient client)
         {
-            string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+            // The digest watches the session's save (FindSessionSave: the staged autosave);
+            // the capture reads this install's OWN newest save — never the staged copy of the
+            // host's world, whose player is the host's PC. See StagedSave.
+            string? currentSave = ClientCharacterPersistence.FindCaptureSource(Path.Combine(gameDirectory, "saves"));
             string? outcome = _sessionSaveWatch.ObserveClient(digest, currentSave);
             if (outcome is not null)
             {
@@ -594,7 +597,10 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+        // Same source rule as the per-tick capture: this install's own newest save, not the
+        // staged copy of the host's world (the 2026-09-03 live pass caught exactly this call
+        // writing the host's PC into the sidecar).
+        string? currentSave = ClientCharacterPersistence.FindCaptureSource(Path.Combine(gameDirectory, "saves"));
         string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);
         if (outcome is not null)
         {

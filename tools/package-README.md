@@ -323,6 +323,10 @@ player's helper. Clients talk only to the host.
   touching anything else in the file. Two shop limitations remain even when on: a shop's stock
   is only read while somebody has that shop open, and an infinite-stock item's purchases never
   replicate.
+- **You join and come up as the host's character:** an older version could copy the host's
+  character into your saved co-op character when you quit. Delete `saves\kotorcoop-character.pifo`
+  and `saves\kotorcoop-character.json` in your game folder once and join again — you will make a
+  fresh character, and from then on it is kept correctly.
 - **Partner never appears / "no reply from host":** ports must match and the host's UDP port
   must be open; passwords must match exactly.
 - **Nothing happens at all:** look for `kotorcoop-plugin.log` beside the game. If it does

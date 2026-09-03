@@ -267,6 +267,16 @@ public static class WorldAdoption
             return null;
         }
 
+        // 3a. Say which save is the host's. The slot just written is a byte copy of the host's
+        //     world, host PC included, and the engine will later reuse the very same slot for
+        //     the joiner's own transition autosave — the character captures (SessionSaveWatch)
+        //     tell the two apart only by this marker. Not fatal when it cannot be written; the
+        //     line below is the evidence of which case ran.
+        if (!StagedSave.TryRecord(Path.GetDirectoryName(slot)!, slot, out string markerDiagnostic))
+        {
+            log?.Invoke($"world adoption: {markerDiagnostic} - a later character capture may read the host's PC");
+        }
+
         if (!PlayerIfo.TryWritePifo(gameDirectory, player, out string pifoDiagnostic))
         {
             log?.Invoke($"world adoption: {pifoDiagnostic}");

@@ -21,8 +21,9 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Item | Status | What you'll see | Source |
 | --- | --- | --- | --- |
 | Host/join from the in-game Co-op menu button | Works | Host presses Host, joiner picks the server and presses Connect; the agent starts itself | README Quick start |
-| First join makes the co-op character (`join_mode=auto`, default since 2026-09-03) | Works (chargen leg live-verified 2026-08-29; the auto New Game press and the immediate sidecar write are new and NEEDS-LIVE) | Connect and character creation opens; ~2 min later the mod quicksaves you and drops you into the host's world. The character is written to `saves\kotorcoop-character.*` the moment it is captured | `JoinFlow`, `JoinModeRule`, `world-adoption.md` |
-| Every later join carries the co-op character (`join_mode=auto`) | Built, unit-tested, NEEDS-LIVE (2026-09-03) | Connect; the sidecar character is adopted straight into the host's world from the main menu, whatever single-player saves the install has. A mid-session rejoin (host reload, wipe recovery) carries it unconditionally too | `JoinFlow.AdoptWithCoopCharacterAsync`, `SessionManager.RejoinAfterLoadAsync(carriedIsAuthoritative)` |
+| First join makes the co-op character (`join_mode=auto`, default since 2026-09-03) | Live-verified 2026-09-03 (auto New Game press, chargen, quicksave, sidecar write, adoption: chargen accept → in the host's world in 2 min 8 s, of which ~2 min is the deliberate settle before the engine save) | Connect and character creation opens; ~2 min later the mod quicksaves you and drops you into the host's world. The character is written to `saves\kotorcoop-character.*` the moment it is captured | `JoinFlow`, `JoinModeRule`, `world-adoption.md` |
+| Every later join carries the co-op character (`join_mode=auto`) | Live-verified 2026-09-03, three runs (connect → in the host's world with the sidecar character in 5 s, no chargen) | Connect; the sidecar character is adopted straight into the host's world from the main menu, whatever single-player saves the install has. A mid-session rejoin (host reload, wipe recovery) carries it unconditionally too | `JoinFlow.AdoptWithCoopCharacterAsync`, `SessionManager.RejoinAfterLoadAsync(carriedIsAuthoritative)` |
+| The sidecar never takes the HOST's character | Fixed and live-verified 2026-09-03 (`StagedSave`; was broken in v0.9.0, see below) | The disconnect/save-edge capture reads this install's own newest save and refuses the staged copy of the host's world; a quicksave in the adopted world IS captured (verified: quicksave → disconnect → sidecar rewritten with the joiner's PC) | `StagedSave`, `ClientCharacterPersistence.Capture/FindCaptureSource`, `session-save.md` |
 | Bringing a save (`join_mode=save`, the pre-2026-09-03 default) | Works | Your own most recent save's character carries into the host's world; a mismatched world auto-adopts the host's | README "Joining: which character you bring" |
 | Forcing a new character (`join_mode=newcharacter`) | Works | Play New Game normally even when a co-op character exists; the new one replaces it | live-verified 2026-08-29 as the then-only chargen path, `world-adoption.md` |
 | `coop.ini` divergence warning (`BehaviourDigest`) | Works (core mechanism) | A real setting mismatch shows a `W_CFG` warning on both screens; nine host keys are adopted live | roadmap Tier 1 #7 |
@@ -36,6 +37,27 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | Steam ↔ DRM-free (GOG) session | Works | Verified live 2026-08-29: connect, mutual presence, a module transition with the world transferred | README "Steam" section |
 | Internet play (no LAN) | Partial | Public address (STUN) and UPnP port mapping are built and unit-tested; never watched against a real router; no relay for symmetric NAT | `network-topology.md` |
 | 3+ players (up to 8) | Works | `demo3.ps1`/`verify3.ps1`, 34/34 checks: connect, chat, phantom mirroring across three real instances | roadmap Tier 2 #19 |
+
+**The v0.9.0 sidecar bug (fixed 2026-09-03, after the tag).** World adoption stages the host's
+save — host PC and all — into `saves\000001 - AUTOSAVE`, and `SaveDigest.FindSessionSave`
+prefers that slot because it IS the save the session is playing. The "resume tomorrow" capture
+(`SessionSaveWatch`, on a save edge and on every clean disconnect) used the same lookup, so
+every disconnect lifted the HOST's player out of the staged copy and wrote it over the joiner's
+sidecar; on the next join `ShouldPreferSidecar` saw a sidecar newer than the joiner's own save
+and carried the host's character in. Caught on the first `join_mode = auto` live pass (the
+`session-saved character: carried the character from '000001 - AUTOSAVE' ... (11918 bytes)` line
+fired one second before the adoption, and the pifo then contained the host's name). The fix is
+`StagedSave`: adoption records the staged `SAVEGAME.sav` (size + mtime) in
+`saves\kotorcoop-staged.json`, captures read `ClientCharacterPersistence.FindCaptureSource`
+(this install's newest save, skipping the staged copy) and refuse a source older than the
+sidecar; with no marker at all (an install upgraded mid-life) the autosave slot's own content
+decides — the engine writes a live `pifo` into every autosave it makes, a staged world carries a
+renamed one or none. All three live-verified 2026-09-03: marker match → `kept the sidecar`,
+marker deleted → still kept (content rule), client quicksave → disconnect → sidecar rewritten with
+the joiner's own PC. Anyone who joined on v0.9.0 with `join_mode = save` and quit at least once
+may have a corrupt sidecar; the next `join_mode = auto` join (the new default) carries whatever
+the sidecar holds, so delete `saves\kotorcoop-character.*` once after upgrading if the joiner
+comes up as the host's character.
 
 ## Moving through the world and module transitions
 

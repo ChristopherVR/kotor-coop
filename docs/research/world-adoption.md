@@ -430,10 +430,33 @@ What changed (all in `JoinFlow.cs`, `JoinModeRule.cs`, `SessionManager.RejoinAft
 - The CLI `--join` starts the flow only for the two adoption actions and only if the game is
   still at the main menu once the handshake lands (`!bridge.TryReadLocalState`), so
   demo3.ps1/session.ps1, which load a save before the agent joins, are untouched. demo.ps1
-  writes `join_mode = save` into the client install explicitly.
+  writes `join_mode = save` into the client install explicitly; `-ClientAutoCharacter` writes
+  `auto` and leaves instance 2 at the main menu (delete the client's sidecar first for the
+  first-join leg, keep it for the later-join leg), `-ClientNewCharacter` writes `newcharacter`.
 
-NEEDS-LIVE: the auto New Game press inside the flow, the immediate sidecar write, and the
-sidecar-adopt-from-the-main-menu leg (a second join after a first one). The chargen leg itself is
+**VERIFIED 2026-09-03** (`demo.ps1 -ClientAutoCharacter`, chargen driven with `blockpoke
+chargen quick 0` / `accept`), both legs:
+
+- *First join, no sidecar.* `newchar: armed` 20:46:38 → `chargen: newgame opened character
+  creation` 20:46:39 (the flow's own New Game press) → chargen accepted 20:47:1x → the plugin's
+  ~2 min settle → `newchar: the engine saved the new character into saves\000000 - QUICKSAVE
+  (570103 bytes)` 20:49:19.760 → sidecar written (10054 bytes, host identity rewritten to
+  0x155107BD after adoption) → `world adoption: adopted 'END_M01AA' (654,006 bytes, identity
+  0x155107BD), carrying the character from the character you just created` → reconnected
+  20:49:24, `memory ok module END_M01AA hp 6/6`, no `W_SAVE`. Chargen accept → in-world: 2 min 8 s.
+  The client's PC model was its own (`pmbas01`), the host's its own (Yasuko Kaar).
+- *Every later join, sidecar present.* Three runs (20:51, 21:14, 21:18): `join: carrying this
+  install's co-op character (saves\kotorcoop-character.pifo) into the host's world` → adopted
+  `carrying the character from your co-op character (captured 2026-09-03 10:49:20Z)` → `co-op
+  character: you are in 'END_M01AA' with your co-op character ...; reconnecting to the host.`
+  No chargen. Connect → in-world: 5 s.
+
+The first pass also caught a real bug on the way out — the disconnect-time character capture
+lifting the HOST's PC out of the staged autosave into the sidecar. Fixed the same day
+(`StagedSave`, the `saves\kotorcoop-staged.json` marker written right after
+`WorldTransfer.WriteSaveDirectory`, plus the autosave slot's pifo content as the marker-less
+fallback); the account and the three live checks are in `docs/status-engineering.md` ("The
+v0.9.0 sidecar bug") and `session-save.md`'s live-trigger paragraph. The chargen leg itself is
 the 2026-08-29 round below, unchanged.
 
 `auto_adopt_world` took `RejoinTrigger.SaveMismatch` over from `client_load_rejoin`. They were

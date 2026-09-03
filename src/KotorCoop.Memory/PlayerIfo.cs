@@ -2,6 +2,18 @@ using KotorCoop.Memory.GameFiles;
 
 namespace KotorCoop.Memory;
 
+/// <summary>The pifo member of a <c>SAVEGAME.sav</c>, as <see cref="PlayerIfo.InspectPifo"/>
+/// reads it: <see cref="Live"/> is what this install's engine writes into an autosave;
+/// <see cref="Neutralised"/> and <see cref="None"/> are what a staged copy of another
+/// install's world carries.</summary>
+public enum PifoPresence
+{
+    Unreadable,
+    None,
+    Live,
+    Neutralised,
+}
+
 /// <summary>
 /// Lifts a player character out of one save and re-emits it as <c>Temp\pifo.ifo</c>, so the
 /// engine can log that character into a world it did not come from.
@@ -242,31 +254,11 @@ public static class PlayerIfo
             return false;
         }
 
-        uint count = ReadU32(savegame, 0x10);
-        uint keysOffset = ReadU32(savegame, 0x18);
+        return FindIfoMember(savegame, PifoResRef, out long key)
+            && Rename(savegame, key);
 
-        for (uint i = 0; i < count && i < 4096; i++)
+        static bool Rename(byte[] savegame, long key)
         {
-            long key = keysOffset + (24L * i);
-            if (key + 24 > savegame.Length)
-            {
-                return false;
-            }
-
-            int type = savegame[key + 20] | (savegame[key + 21] << 8);
-            if (type != IfoType)
-            {
-                continue;
-            }
-
-            if (!string.Equals(
-                GameFileText.CString(savegame.AsSpan((int)key, 16)),
-                PifoResRef,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
             // 16-byte NUL-padded cell: clear it, then write the replacement over the front.
             Span<byte> cell = savegame.AsSpan((int)key, 16);
             cell.Clear();
@@ -275,6 +267,68 @@ public static class PlayerIfo
                 cell[c] = (byte)NeutralisedPifoName[c];
             }
 
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// What a <c>SAVEGAME.sav</c> says about its own origin, read from the pifo member alone:
+    /// the engine writes a live <c>pifo</c> into every autosave it makes; a world staged by
+    /// <c>WorldTransfer.WriteSaveDirectory</c> carries either the <see cref="TryNeutralisePifo"/>
+    /// rename (the host's autosave) or no pifo at all (the host's manual save). So in the
+    /// AUTOSAVE slot specifically, "no live pifo" means "not written by this install's engine"
+    /// — the content-level fallback <c>StagedSave.IsStagedCopy</c> uses when no marker exists
+    /// (a copy staged before the marker shipped, or a marker write that failed).
+    /// </summary>
+    public static PifoPresence InspectPifo(byte[] savegame)
+    {
+        ArgumentNullException.ThrowIfNull(savegame);
+
+        if (savegame.Length < 160)
+        {
+            return PifoPresence.Unreadable;
+        }
+
+        if (FindIfoMember(savegame, NeutralisedPifoName, out _))
+        {
+            return PifoPresence.Neutralised;
+        }
+
+        return FindIfoMember(savegame, PifoResRef, out _) ? PifoPresence.Live : PifoPresence.None;
+    }
+
+    /// <summary>Locates the ERF key cell of the ifo-typed member named <paramref name="resref"/>.
+    /// False when absent or the key table runs past the buffer (an unreadable ERF).</summary>
+    private static bool FindIfoMember(byte[] savegame, string resref, out long key)
+    {
+        key = -1;
+
+        uint count = ReadU32(savegame, 0x10);
+        uint keysOffset = ReadU32(savegame, 0x18);
+
+        for (uint i = 0; i < count && i < 4096; i++)
+        {
+            long candidate = keysOffset + (24L * i);
+            if (candidate + 24 > savegame.Length)
+            {
+                return false;
+            }
+
+            int type = savegame[candidate + 20] | (savegame[candidate + 21] << 8);
+            if (type != IfoType)
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                GameFileText.CString(savegame.AsSpan((int)candidate, 16)),
+                resref,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            key = candidate;
             return true;
         }
 

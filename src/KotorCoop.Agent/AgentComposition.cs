@@ -273,6 +273,13 @@ internal static class AgentComposition
         // The default (join_mode = auto) sends a first-time joiner through the game's own
         // character creation and carries the mod-owned co-op character on every join after;
         // join_mode = save is the old "load my own save" path, which JoinFlow hands back here.
+        //
+        // ⚠ The flow's lines go through manager.Log — the dashboard's Note once it exists, so
+        // they land under the status line AND in --log. Console.WriteLine here is the trap the
+        // manager.Log assignment below describes: the 2026-09-03 join_mode = auto live pass
+        // had to be read from the PLUGIN's log because "join: ..." went only to a window.
+        void SayJoin(string line) => (manager.Log ?? Console.WriteLine)(line);
+
         async Task EnterTheWorld()
         {
             if (manager.Current is CoopHost)
@@ -290,7 +297,7 @@ internal static class AgentComposition
                 current?.JoinMode ?? JoinMode.Auto,
                 current?.AutoAdoptWorld ?? true,
                 loadOwnSave: () => LoadIntoTheWorld(memory),
-                Console.WriteLine,
+                SayJoin,
                 cts.Token).ConfigureAwait(false);
         }
 
@@ -378,16 +385,16 @@ internal static class AgentComposition
                         {
                             if (bridge.TryReadLocalState(out _))
                             {
-                                Console.WriteLine("join: already in a world; leaving it as it is.");
+                                SayJoin("join: already in a world; leaving it as it is.");
                                 return;
                             }
 
                             _ = JoinFlow.RunAsync(
                                 manager, bridge, joinDirectory, joinMode, autoAdopt,
-                                loadOwnSave: null, Console.WriteLine, cts.Token);
+                                loadOwnSave: null, SayJoin, cts.Token);
                         },
                         cts.Token,
-                        Console.WriteLine),
+                        SayJoin),
                     cts.Token);
             }
         }

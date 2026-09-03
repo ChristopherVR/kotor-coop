@@ -419,12 +419,29 @@ used, on screen.
 `bridge.SaveIdentityDigest` once per dispatcher tick (150 ms) with `SaveIdentityWatch` — a
 pure edge detector with NO peer comparison: the first real (nonzero) reading each connection
 becomes the baseline, not a change; a later DIFFERENT nonzero reading is the one edge. On a
-CLIENT, that edge captures the character out of whatever `SaveDigest.FindSessionSave` reports
-right now into the sidecar (item 1's "client saves normally in-game" trigger). The "OR on
-clean disconnect" trigger is `SessionManager.OnDisconnecting`, a new hook invoked immediately
-before ANY session teardown (a clean disconnect, a reconnect's implicit teardown, or a fresh
-`Connect` replacing one already running) while `Current` is still readable — wired to
-`dispatcher.CaptureCharacterOnDisconnect()`.
+CLIENT, that edge captures the character out of this install's own newest save
+(`ClientCharacterPersistence.FindCaptureSource`) into the sidecar (item 1's "client saves
+normally in-game" trigger). The "OR on clean disconnect" trigger is
+`SessionManager.OnDisconnecting`, a new hook invoked immediately before ANY session teardown (a
+clean disconnect, a reconnect's implicit teardown, or a fresh `Connect` replacing one already
+running) while `Current` is still readable — wired to `dispatcher.CaptureCharacterOnDisconnect()`.
+
+⚠ **Not `SaveDigest.FindSessionSave` (changed 2026-09-03).** Until then both triggers read the
+save the digest watches, which for a joiner is the staged copy of the HOST's world in
+`saves\000001 - AUTOSAVE` — host PC included — so every clean disconnect wrote the host's
+character over the joiner's sidecar, and `ShouldPreferSidecar` carried it in on the next join
+(the sidecar being newer than the joiner's own save). `FindCaptureSource` takes the newest
+`SAVEGAME.sav` by file mtime and skips the staged copy, which `StagedSave.IsStagedCopy` knows
+two ways: the `saves\kotorcoop-staged.json` marker adoption writes (slot, size, mtime of the
+file it staged — a later engine autosave into the same slot moves both and stops matching), or,
+for the autosave slot with no marker, the file's own pifo member (`PlayerIfo.InspectPifo`: the
+engine writes a live `pifo` into every autosave it makes; staging leaves a renamed one or
+none). `ClientCharacterPersistence.Capture` additionally refuses a source written before the
+sidecar was captured (`CharacterCapture.Kept`), so a session left without saving cannot roll
+the character back to an older save. Live 2026-09-03: marker match → `session-saved character:
+'000000 - QUICKSAVE' (written ...) is no newer than the sidecar (captured ...) - kept the
+sidecar`; marker deleted → same line (content rule); client `save` then disconnect → `carried
+the character from '000000 - QUICKSAVE' ...; wrote the character sidecar (9846 bytes ...)`.
 
 **Item 2, host mid-session load refusal (design §3.2 item 5).** Reuses the SAME
 `SaveIdentityWatch` primitive on the HOST side of `SessionSaveWatch`: the digest changing

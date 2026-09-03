@@ -21,6 +21,11 @@ param(
     [switch]$Stop,
     [switch]$SkipLaunch,
     [switch]$ClientNewCharacter,
+    # Like -ClientNewCharacter (instance 2 left at the main menu, no save) but with the shipped
+    # default join_mode = auto: the join presses New Game itself the first time, and carries
+    # saves\kotorcoop-character.* on every join after. Delete that sidecar in $Game2 first to
+    # test the first-join leg; leave it to test the later-join leg.
+    [switch]$ClientAutoCharacter,
     # Extra raw args appended to instance 1/2's own `agent run` invocation — e.g.
     # -Agent1ExtraArgs @('--enemy-census-cap','5') to shrink the host's combat-census
     # truncation for a liveness-reconciliation live test (docs/research/creature-liveness.md).
@@ -151,9 +156,12 @@ Set-AutoStartAgent -Directory $Game2 -Value '0'
 # coop.ini asks for the chargen join. The agent then arms the plugin's capture and waits for a
 # character to exist; the run's own steps (or a human) drive New Game and character creation.
 # -Stop puts join_mode back to `save`.
-Set-CoopIniKey -Directory $Game2 -Key 'join_mode' -Value ($ClientNewCharacter ? 'newcharacter' : 'save')
-if ($ClientNewCharacter) {
-    'client install set to join_mode = newcharacter; it will NOT load a save'
+$clientJoinMode = $ClientNewCharacter ? 'newcharacter' : ($ClientAutoCharacter ? 'auto' : 'save')
+Set-CoopIniKey -Directory $Game2 -Key 'join_mode' -Value $clientJoinMode
+# Either at-the-menu rig: instance 2 gets no save, and the join itself brings the character.
+$clientAtMenu = $ClientNewCharacter -or $ClientAutoCharacter
+if ($clientAtMenu) {
+    "client install set to join_mode = $clientJoinMode; it will NOT load a save"
 }
 
 if (-not $SkipLaunch) {
@@ -185,11 +193,11 @@ if (-not $SkipLaunch) {
     Start-Sleep -Seconds 14
     $second = @(Get-Process swkotor | Sort-Object StartTime)[1]
 
-    if ($ClientNewCharacter) {
+    if ($clientAtMenu) {
         # ⚠ THE POINT OF THE SWITCH: instance 2 gets NO save. Loading one here would give it
         # a character to carry, which is precisely the case join_mode = newcharacter does not
         # cover. It sits at the main menu until New Game and character creation are driven.
-        'instance 2 left at the main menu (-ClientNewCharacter): no save loaded'
+        "instance 2 left at the main menu (join_mode = $clientJoinMode): no save loaded"
         & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X 830 -Y 0
         $global:LASTEXITCODE = 0
     }
@@ -227,7 +235,7 @@ if (-not $SkipLaunch) {
         }
     }
 
-    } # end of the non--ClientNewCharacter load block
+    } # end of the load block (skipped by -ClientNewCharacter / -ClientAutoCharacter)
 }
 
 $procs = @(Get-Process swkotor | Sort-Object StartTime)

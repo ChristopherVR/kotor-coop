@@ -67,6 +67,16 @@ public sealed record SidecarMetadata(uint HostSaveIdentity, DateTime CapturedAtU
     public static SidecarMetadata None => new(0, DateTime.MinValue);
 }
 
+/// <summary>What one <see cref="ClientCharacterPersistence.Capture"/> did to the sidecar on
+/// disk. <see cref="Kept"/> is not a failure: the capture found nothing it should write —
+/// the sidecar already holds the newer (or the only correct) character.</summary>
+public enum CharacterCapture
+{
+    Written,
+    Kept,
+    Failed,
+}
+
 /// <summary>
 /// Roadmap item 14 phase 1, "resume tomorrow": a joiner's progressed character (inventory,
 /// equipment, alignment, feats) lives only in the ADOPTED world's save while a session is
@@ -95,31 +105,111 @@ public static class ClientCharacterPersistence
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     /// <summary>
-    /// Extracts the player out of <paramref name="saveDirectory"/> — the client's own,
-    /// currently-active save (whatever <c>SaveDigest.FindSessionSave</c> is watching) — and
-    /// writes it as the sidecar. Best-effort: every failure reports through
-    /// <paramref name="diagnostic"/> and never throws.
+    /// The save a capture should lift the character out of: the newest <c>SAVEGAME.sav</c>
+    /// under <paramref name="savesDirectory"/> by file mtime, SKIPPING the staged copy of the
+    /// host's world (<see cref="StagedSave.IsStagedCopy"/>). Null when nothing qualifies.
+    ///
+    /// Not <c>SaveDigest.FindSessionSave</c>, deliberately: that one prefers the autosave
+    /// slot outright because it answers "which save is this session PLAYING" (the staged
+    /// world, for a joiner) — the right question for the digest, the wrong one here, where
+    /// the staged world is the one save that must never be captured from.
     /// </summary>
-    public static bool TryCaptureAndWrite(
+    public static string? FindCaptureSource(string savesDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(savesDirectory))
+            {
+                return null;
+            }
+
+            return new DirectoryInfo(savesDirectory)
+                .GetDirectories()
+                .Select(d => new FileInfo(Path.Combine(d.FullName, "SAVEGAME.sav")))
+                .Where(f => f.Exists)
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Select(f => f.DirectoryName!)
+                .FirstOrDefault(d => !StagedSave.IsStagedCopy(savesDirectory, d));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Extracts the player out of <paramref name="saveDirectory"/> — this install's own,
+    /// most recently written save (<see cref="FindCaptureSource"/>) — and writes it as the
+    /// sidecar. Best-effort: every failure reports through <paramref name="diagnostic"/>
+    /// and never throws.
+    ///
+    /// Two refusals keep a capture from making the sidecar WORSE, both reported as
+    /// <see cref="CharacterCapture.Kept"/> (the sidecar on disk stays as it was):
+    /// <list type="bullet">
+    /// <item>the source is the staged copy of the host's world — its player is the HOST's
+    /// PC, and carrying that into the next join is the 2026-09-03 live bug
+    /// (<see cref="StagedSave"/>);</item>
+    /// <item>the source was written before the sidecar was captured — a disconnect with no
+    /// save since the last capture would otherwise roll the character back to whatever
+    /// older save happens to be newest on disk.</item>
+    /// </list>
+    /// </summary>
+    public static CharacterCapture Capture(
         string savesDirectory,
         string saveDirectory,
         uint hostSaveIdentity,
         out string diagnostic)
     {
+        string sourceName = Path.GetFileName(saveDirectory);
+
+        if (StagedSave.IsStagedCopy(savesDirectory, saveDirectory))
+        {
+            diagnostic = $"'{sourceName}' is the staged copy of the host's world, not this install's own save - kept the sidecar";
+            return CharacterCapture.Kept;
+        }
+
+        if (TryReadSidecar(savesDirectory, out _, out SidecarMetadata existing, out _)
+            && TryGetSaveLastWriteUtc(saveDirectory, out DateTime sourceWrittenUtc)
+            && sourceWrittenUtc <= existing.CapturedAtUtc)
+        {
+            diagnostic = $"'{sourceName}' (written {sourceWrittenUtc:u}) is no newer than the sidecar (captured {existing.CapturedAtUtc:u}) - kept the sidecar";
+            return CharacterCapture.Kept;
+        }
+
         if (!PlayerIfo.TryExtractPlayer(saveDirectory, out GffStruct player, out diagnostic))
         {
-            return false;
+            return CharacterCapture.Failed;
         }
 
         string extracted = diagnostic;
 
         if (!TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic))
         {
-            return false;
+            return CharacterCapture.Failed;
         }
 
         diagnostic = $"{extracted}; {diagnostic}";
-        return true;
+        return CharacterCapture.Written;
+    }
+
+    private static bool TryGetSaveLastWriteUtc(string saveDirectory, out DateTime lastWriteUtc)
+    {
+        lastWriteUtc = DateTime.MinValue;
+        try
+        {
+            FileInfo save = new(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            if (!save.Exists)
+            {
+                return false;
+            }
+
+            lastWriteUtc = save.LastWriteTimeUtc;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Writes the sidecar pair atomically. Public on its own (not folded into

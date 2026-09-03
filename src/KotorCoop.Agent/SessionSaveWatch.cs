@@ -15,7 +15,10 @@ namespace KotorCoop.Agent;
 /// <item><b>CLIENT.</b> A change is the client saving normally in-game while playing in the
 /// adopted world — the "resume tomorrow" trigger. <see cref="ObserveClient"/> captures the
 /// character straight into the <see cref="ClientCharacterPersistence"/> sidecar every time,
-/// because a save is always safe to persist. The SAME signal would also fire for a
+/// because a save is always safe to persist — a save of the CLIENT's, that is: the source is
+/// <see cref="ClientCharacterPersistence.FindCaptureSource"/> (this install's newest save),
+/// never the staged copy of the host's world sitting in the autosave slot, which holds the
+/// host's PC (<see cref="StagedSave"/>). The SAME signal would also fire for a
 /// client-side mid-session LOAD (design doc §4), but a save and a load are not
 /// distinguishable from a content digest alone — auto-rejoin (roadmap item 14 phase 1 item 3)
 /// is therefore deliberately NOT implemented here; see
@@ -200,10 +203,15 @@ public sealed class SessionSaveWatch(string gameDirectory)
         currentSaveDirectory is null ? null : Capture(currentSaveDirectory);
 
     private string? Capture(string currentSaveDirectory) =>
-        ClientCharacterPersistence.TryCaptureAndWrite(
-            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic)
-            ? $"session-saved character: {diagnostic}"
-            : $"session-saved character NOT captured: {diagnostic}";
+        ClientCharacterPersistence.Capture(
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic) switch
+        {
+            CharacterCapture.Written => $"session-saved character: {diagnostic}",
+            // Not an error: the staged copy of the host's world, or a save older than the
+            // sidecar — either way the sidecar on disk is the right one and stays.
+            CharacterCapture.Kept => $"session-saved character: {diagnostic}",
+            _ => $"session-saved character NOT captured: {diagnostic}",
+        };
 
     /// <summary>Runs the pure watch and records the connection's baseline the first time it
     /// establishes. Returns (justEstablished, changed) — <see cref="ObserveHost"/> and

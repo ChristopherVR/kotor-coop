@@ -185,18 +185,180 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void CaptureAndWriteExtractsFromARealSaveDirectory()
+    public void CaptureExtractsFromARealSaveDirectory()
     {
         string save = BuildSave("end_m01aa", nextObjId: 0x99, "Trask Ulgo");
         string saves = TempDirectory();
 
-        Assert.True(ClientCharacterPersistence.TryCaptureAndWrite(
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
             saves, save, hostSaveIdentity: 0x42, out string diagnostic));
         Assert.True(diagnostic.Length > 0);
 
         Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out SidecarMetadata meta, out _));
         Assert.Equal("Trask Ulgo", read.GetLocString("FirstName")!.Text());
         Assert.Equal(0x42u, meta.HostSaveIdentity);
+    }
+
+    // ---- the staged-copy guard (2026-09-03 live bug) --------------------------------
+    //
+    // World adoption stages the HOST's save — host PC included — into the autosave slot, and
+    // the engine later reuses that same slot for the joiner's own transition autosave. A
+    // capture that read the staged copy wrote the host's PC into the sidecar; the next join
+    // carried it in as the joiner's character.
+
+    [Fact]
+    public void CaptureRefusesTheStagedCopyOfTheHostsWorld()
+    {
+        string saves = TempDirectory();
+        string staged = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Yasuko Kaar");
+        Assert.True(StagedSave.TryRecord(saves, staged, out string recorded));
+        Assert.Contains("000001 - AUTOSAVE", recorded, StringComparison.Ordinal);
+
+        Assert.Equal(CharacterCapture.Kept, ClientCharacterPersistence.Capture(
+            saves, staged, hostSaveIdentity: 0x42, out string diagnostic));
+        Assert.Contains("staged copy of the host's world", diagnostic, StringComparison.Ordinal);
+
+        Assert.False(ClientCharacterPersistence.TryReadSidecar(saves, out _, out _, out _));
+    }
+
+    [Fact]
+    public void TheEnginesOwnAutosaveInTheSameSlotIsCapturable()
+    {
+        string saves = TempDirectory();
+        string slot = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Yasuko Kaar");
+        Assert.True(StagedSave.TryRecord(saves, slot, out _));
+        Assert.True(StagedSave.IsStagedCopy(saves, slot));
+
+        // The joiner walks through a door: the engine rewrites the very same slot with the
+        // joiner's own world — a live pifo inside, as every engine autosave has. Size and
+        // mtime move; the marker no longer matches.
+        Directory.Delete(slot, recursive: true);
+        BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01ab", 0x1234, "Trask Ulgo", pifoMember: "pifo");
+        File.SetLastWriteTimeUtc(Path.Combine(slot, "SAVEGAME.sav"), DateTime.UtcNow.AddMinutes(5));
+
+        Assert.False(StagedSave.IsStagedCopy(saves, slot));
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+            saves, slot, hostSaveIdentity: 0x42, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out _, out _));
+        Assert.Equal("Trask Ulgo", read.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void FindCaptureSourceSkipsTheStagedCopyAndPicksTheNewestOwnSave()
+    {
+        string saves = TempDirectory();
+        string quick = BuildSaveIn(saves, "000000 - QUICKSAVE", "end_m01aa", 0x10, "Trask Ulgo");
+        string old = BuildSaveIn(saves, "000002 - Game1", "end_m01aa", 0x11, "Trask Ulgo");
+        string staged = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Yasuko Kaar");
+        File.SetLastWriteTimeUtc(Path.Combine(old, "SAVEGAME.sav"), DateTime.UtcNow.AddDays(-2));
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), DateTime.UtcNow.AddHours(-1));
+        File.SetLastWriteTimeUtc(Path.Combine(staged, "SAVEGAME.sav"), DateTime.UtcNow);
+        Assert.True(StagedSave.TryRecord(saves, staged, out _));
+
+        // The staged copy is the newest file on disk and is skipped; the quicksave is next.
+        Assert.Equal(quick, ClientCharacterPersistence.FindCaptureSource(saves));
+
+        // No marker: the content rule still knows a pifo-less autosave was not the engine's.
+        File.Delete(Path.Combine(saves, StagedSave.MarkerFileName));
+        Assert.Equal(quick, ClientCharacterPersistence.FindCaptureSource(saves));
+
+        // The engine's own autosave (live pifo), no marker: plain newest wins.
+        Directory.Delete(staged, recursive: true);
+        BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01ab", 0x12, "Trask Ulgo", pifoMember: "pifo");
+        File.SetLastWriteTimeUtc(Path.Combine(staged, "SAVEGAME.sav"), DateTime.UtcNow);
+        Assert.Equal(staged, ClientCharacterPersistence.FindCaptureSource(saves));
+
+        Assert.Null(ClientCharacterPersistence.FindCaptureSource(Path.Combine(saves, "missing")));
+    }
+
+    [Fact]
+    public void TheAutosaveSlotsContentTellsAStagedCopyApartWithoutAMarker()
+    {
+        // An install upgraded mid-life: the previous session staged the host's world before
+        // the marker existed. The 2026-09-03 re-run captured exactly such a copy once more.
+        string saves = TempDirectory();
+        string slot = Path.Combine(saves, "000001 - AUTOSAVE");
+
+        // The host's autosave, staged: its pifo was renamed on the way in.
+        BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Yasuko Kaar", pifoMember: "kcoopoldpifo");
+        Assert.True(StagedSave.IsStagedCopy(saves, slot));
+        Assert.Equal(CharacterCapture.Kept, ClientCharacterPersistence.Capture(saves, slot, 0, out _));
+
+        // The host's manual save, staged: no pifo at all.
+        Directory.Delete(slot, recursive: true);
+        BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Yasuko Kaar");
+        Assert.True(StagedSave.IsStagedCopy(saves, slot));
+
+        // This install's engine's own autosave: a live pifo.
+        Directory.Delete(slot, recursive: true);
+        BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Trask Ulgo", pifoMember: "pifo");
+        Assert.False(StagedSave.IsStagedCopy(saves, slot));
+
+        // A manual save in any other slot has no pifo either and is NOT a staged copy.
+        string quick = BuildSaveIn(saves, "000000 - QUICKSAVE", "end_m01aa", 0x10, "Trask Ulgo");
+        Assert.False(StagedSave.IsStagedCopy(saves, quick));
+    }
+
+    [Fact]
+    public void InspectPifoReadsTheThreeShapes()
+    {
+        string saves = TempDirectory();
+        byte[] Sav(string slot, string? member) =>
+            File.ReadAllBytes(Path.Combine(BuildSaveIn(saves, slot, "end_m01aa", 1, "x", member), "SAVEGAME.sav"));
+
+        Assert.Equal(PifoPresence.Live, PlayerIfo.InspectPifo(Sav("a", "pifo")));
+        Assert.Equal(PifoPresence.Neutralised, PlayerIfo.InspectPifo(Sav("b", "kcoopoldpifo")));
+        Assert.Equal(PifoPresence.None, PlayerIfo.InspectPifo(Sav("c", null)));
+        Assert.Equal(PifoPresence.Unreadable, PlayerIfo.InspectPifo([1, 2, 3]));
+
+        // Neutralising a live one is what staging does, and it reads back as such.
+        byte[] live = Sav("d", "pifo");
+        Assert.True(PlayerIfo.TryNeutralisePifo(live));
+        Assert.Equal(PifoPresence.Neutralised, PlayerIfo.InspectPifo(live));
+    }
+
+    [Fact]
+    public void CaptureKeepsASidecarNewerThanTheSource()
+    {
+        // Session 1 ended with a capture from a door autosave at T1; session 2 was joined
+        // (the slot restaged) and left without any save. The newest OWN save on disk is now
+        // older than the sidecar — a capture must not roll the character back to it.
+        string saves = TempDirectory();
+        string quick = BuildSaveIn(saves, "000000 - QUICKSAVE", "end_m01aa", 0x10, "Trask Ulgo");
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), DateTime.UtcNow.AddHours(-1));
+
+        Assert.True(ClientCharacterPersistence.TryWriteSidecar(
+            saves, BuildPlayer("Trask Ulgo (progressed)"), 7, DateTime.UtcNow, out _));
+
+        Assert.Equal(CharacterCapture.Kept, ClientCharacterPersistence.Capture(
+            saves, quick, hostSaveIdentity: 7, out string diagnostic));
+        Assert.Contains("no newer than the sidecar", diagnostic, StringComparison.Ordinal);
+
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out _, out _));
+        Assert.Equal("Trask Ulgo (progressed)", read.GetLocString("FirstName")!.Text());
+
+        // A save written AFTER the capture is progress, and replaces it.
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), DateTime.UtcNow.AddMinutes(1));
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+            saves, quick, hostSaveIdentity: 7, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out read, out _, out _));
+        Assert.Equal("Trask Ulgo", read.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void StagedMarkerToleratesAbsentAndCorruptFiles()
+    {
+        string saves = TempDirectory();
+        Assert.False(StagedSave.TryRead(saves, out StagedSaveMarker? marker));
+        Assert.Null(marker);
+        Assert.False(StagedSave.IsStagedCopy(saves, Path.Combine(saves, "000001 - AUTOSAVE")));
+
+        File.WriteAllText(Path.Combine(saves, StagedSave.MarkerFileName), "{ not json");
+        Assert.False(StagedSave.TryRead(saves, out _));
+        Assert.False(StagedSave.IsStagedCopy(saves, Path.Combine(saves, "000001 - AUTOSAVE")));
+
+        Assert.False(StagedSave.TryRecord(saves, Path.Combine(saves, "000001 - AUTOSAVE"), out string diagnostic));
+        Assert.Contains("no SAVEGAME.sav", diagnostic, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -253,9 +415,25 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     /// <summary>A save directory holding one player, in the exact shape
     /// <see cref="PlayerIfo.TryExtractPlayer"/> reads — trimmed from
     /// <c>WorldAdoptionTests.BuildSave</c> to just what a character-only test needs.</summary>
-    private static string BuildSaveStatic(string module, uint nextObjId, string name)
+    private static string BuildSaveStatic(string module, uint nextObjId, string name) =>
+        BuildSaveAt(
+            Path.Combine(Path.GetTempPath(), "kotorcoop-charpersist-" + Guid.NewGuid().ToString("N")),
+            module, nextObjId, name);
+
+    /// <summary>A named slot under a <c>saves\</c> directory the test already owns — the
+    /// shape <see cref="ClientCharacterPersistence.FindCaptureSource"/> and the staged
+    /// marker actually look at.</summary>
+    private static string BuildSaveIn(
+        string savesDirectory, string slot, string module, uint nextObjId, string name, string? pifoMember = null) =>
+        BuildSaveAt(Path.Combine(savesDirectory, slot), module, nextObjId, name, pifoMember);
+
+    /// <param name="pifoMember">An ifo-typed member to add beside the module .sav — "pifo"
+    /// is what the engine writes into its own autosave, "kcoopoldpifo" is what staging
+    /// renames the host's to (<see cref="PlayerIfo.TryNeutralisePifo"/>); null is a manual
+    /// save, or a staged copy of one.</param>
+    private static string BuildSaveAt(
+        string directory, string module, uint nextObjId, string name, string? pifoMember = null)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "kotorcoop-charpersist-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
 
         GffWriter ifo = new("IFO ");
@@ -274,9 +452,13 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
 
         byte[] inner = BuildErf("SAV ", ("Module", 2014 /* ifo */, ifo.ToBytes()));
 
-        File.WriteAllBytes(
-            Path.Combine(directory, "SAVEGAME.sav"),
-            BuildErf("SAV ", (module, 2057 /* module .sav */, inner)));
+        List<(string Resref, int Type, byte[] Data)> members = [(module, 2057 /* module .sav */, inner)];
+        if (pifoMember is not null)
+        {
+            members.Add((pifoMember, 2014 /* ifo */, ifo.ToBytes()));
+        }
+
+        File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"), BuildErf("SAV ", [.. members]));
 
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
         File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), [5, 6, 7, 8]);
