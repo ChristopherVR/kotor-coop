@@ -97,6 +97,13 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `chat_overlay_lines` | `5` | lines shown at once | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_fade_ms` | `9000` | ms a chat line stays before it fades (0 = forever) | [chat-input-scroll.md](research/chat-input-scroll.md) |
 
+### Controller
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `gamepad` | ON | play with an Xbox-style (XInput) controller; the pad drives the game's own key bindings and cursor. 0 turns it off entirely | [gamepad.md](research/gamepad.md) |
+| `gamepad_cursor_speed` | `1.0` | cursor speed multiplier for the sticks, 0.1 - 5 | [gamepad.md](research/gamepad.md) |
+
 ### Internet play
 
 | Key | Default (shipped) | Meaning | Doc |

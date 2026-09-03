@@ -70,8 +70,13 @@ Only one conversation runs at a time — the other player watches it live. If yo
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
 
-**No gamepad/controller support.** The server browser, the password box and the `~` console
-all assume mouse and keyboard; a controller can't navigate them.
+**Controller:** plug in any Xbox-style (XInput) pad and it works, in the menus and in the
+world — left stick walks and turns, right stick is the cursor, A is the default action / click,
+B is Escape, X cancels combat / right-clicks, Y switches character, LB/RB cycle targets or
+pages, LT pauses, RT clicks, the D-pad is action slots 1-4 (scrolls on a menu), Back is the
+map, RS click forces cursor mode. Your `swkotor.ini` bindings are respected. A pad can't type:
+the address/password box, chat and the `~` console still need a keyboard. `gamepad = 0` in
+`coop.ini` turns it off.
 
 ## Play over the internet
 

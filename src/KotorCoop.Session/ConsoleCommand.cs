@@ -832,6 +832,20 @@ public enum CoopCommandKind
     /// that dispatch) runs exactly as a real click's would. Takes no arguments. Local only.
     /// </summary>
     GalaxyAccept,
+
+    /// <summary>
+    /// <c>gamepad [status|on|off|cursor|sim ...|sim off]</c> — the controller layer's own
+    /// verb (docs/research/gamepad.md §5). The whole argument string crosses in
+    /// <see cref="CoopCommand.Address"/> (at most <c>CheatKinds.GamepadTextLength - 1</c>
+    /// characters, the shared cheat-text slot's width) and is interpreted by the plugin's
+    /// <c>GamepadController.HandleConsole</c>; the answer comes back as the cheat detail so
+    /// it prints on the console like every other plugin verb. Takes the same route as every
+    /// other plugin-side verb on purpose: <c>tools/blockpoke.ps1 console</c> only ever feeds
+    /// THIS parser, so a verb the plugin answered in-process (the first cut, 2026-09-03) was
+    /// unreachable from the unattended rig. Works with no world loaded — the plugin handles it
+    /// before its "no player loaded" gate. Local only.
+    /// </summary>
+    Gamepad,
 }
 
 /// <summary>
@@ -1050,6 +1064,7 @@ public static partial class ConsoleCommand
         new(["chargen"], ParseChargen),
         new(["galaxymap"], ParseGalaxyMap),
         new(["galaxyaccept"], ParseGalaxyAccept),
+        new(["gamepad"], ParseGamepad),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

@@ -33,6 +33,7 @@ internal static unsafe partial class PluginHost
         _chargenDrive = new CharGenDriveController(_view);
         _connectMenu = new ConnectMenuController(_view);
         _chatInput = new ChatInputController();
+        _gamepad = new GamepadController(directory);
         _passwordPrompt = new PasswordPromptController(_view);
         _browser = new ServerBrowserController(_view);
         _nativeBrowser = new NativeBrowserController(_view);

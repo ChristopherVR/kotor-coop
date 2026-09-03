@@ -621,6 +621,16 @@ public static class CheatKinds
     public const uint GalaxyMapDepart = 73;
 
     /// <summary>
+    /// <c>gamepad ...</c> — the controller layer's console verb; the argument string crosses
+    /// in the cheat text and the plugin's <c>GamepadController.HandleConsole</c> answers with
+    /// its status line as the detail. Handled before the plugin's "no player loaded" gate so
+    /// it works on the main menu too. See <c>SharedBlock.CheatKindGamepad</c>.
+    ///
+    /// ⚠ 74, next free after every noted range through 73 as of 2026-09-03.
+    /// </summary>
+    public const uint Gamepad = 74;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

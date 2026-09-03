@@ -106,6 +106,21 @@ chat_overlay_lines = 5
 chat_overlay_fade_ms = 9000
 
 ; ------------------------------------------------------------------------------------------
+; Controller
+; ------------------------------------------------------------------------------------------
+; Play with an Xbox-style (XInput) controller. Left stick walks and turns, right stick moves
+; the cursor, RT clicks, A = default action, B = back, X = cancel combat, Y = switch
+; character, LB/RB = previous/next target, LT = pause, D-pad = action slots 1-4, Start =
+; menu, Back = map, LS click = stealth, RS click = cursor mode (both sticks move the cursor,
+; A clicks - automatic in menus, conversations and at the main menu). Your swkotor.ini key
+; bindings are respected. Typing (passwords, chat, the console) still needs a keyboard.
+; 0 turns the controller off entirely.
+gamepad = 1
+
+; Cursor speed multiplier for the sticks (0.1 - 5).
+gamepad_cursor_speed = 1.0
+
+; ------------------------------------------------------------------------------------------
 ; Internet play
 ; ------------------------------------------------------------------------------------------
 ; Steam friends-list "Join Game": while you host, a friend can join straight from Steam's

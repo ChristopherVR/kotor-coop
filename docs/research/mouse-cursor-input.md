@@ -599,13 +599,28 @@ Neither has anything to do with DirectInput deltas or a sensitivity multiplier.
 
 ## 9. What still needs a live pass
 
-* **NEEDS-LIVE** — Recipe A end-to-end: post `WM_LBUTTONDOWN/UP` at `(484, 353)` on the main menu
-  at 800×600 and confirm the Movies panel opens. Log `GUI_MGR+0x00/+0x04` and `0x008338F4`
-  immediately before and after.
+* **VERIFIED 2026-09-03 (in the 3D view, from inside the process)** — Recipe A: the gamepad
+  layer posts `WM_MOUSEMOVE` to steer `CLIENT+0x3C8/+0x3CC` and `WM_LBUTTONDOWN/UP` at that
+  position (`GamepadController`, [gamepad.md](gamepad.md) §4/§6). With the cursor on a
+  footlocker, `CLIENT+0x4A4` (the per-frame world pick, taken from `GUI_MGR+0x00/+0x04`) held
+  the locker's id; the first click made it the last target (`+0x2B4`), the second ran its
+  default action and the PC walked to it. Clicks on empty floor do nothing — there is no
+  click-to-move — which is what an earlier "clicks don't work" run had actually been testing.
+  The main-menu half of the recipe (`(484, 353)` → Movies) has been the menu loader's daily
+  path since `GameInput.ClickClient` shipped and needs no separate pass.
 * **NEEDS-LIVE** — the resolution caveat in §5: at 1024×768, read the main-menu panel's
   `+0x04/+0x08` (or call `0x0040AA00`) and confirm whether the 800×600 block is top-left anchored
   or something else re-centres it. Use the runtime formula, not the hardcoded table, either way.
 * **NEEDS-LIVE** — confirm `CoopInputActive()` is `1` in the situations where we want to inject
   (e.g. while our own overlay has drawn, while a second instance is running windowed).
 * **INFERRED** — the `CLIENT+0x9C` mouse-mode values (`2`, `3`, `4`) are read off branch
-  comparisons only; their names are guesses. Only matters if we ever inject clicks in the 3D view.
+  comparisons only; their names are guesses. Live 2026-09-03 the value was `0` in the 3D view
+  with no panel up, and the world-click path ran; nothing has needed the names yet.
+* **VERIFIED 2026-09-03** — the world click itself. `PerformLButtonDownAction(arg)` is called
+  with `arg = (event value == -1)`; for an ordinary press (`arg == 0`) it copies the last target
+  `CLIENT+0x2B4` into `+0x2B8`. `PerformLButtonUpAction` reaches `HandleMouseClickInWorld
+  0x00620350` when no GUI control captured the click: if `+0x2B8 == +0x2B4 == +0x4A4` (hovered
+  object, `HandleMouseOver 0x006222F0`) the target's default action runs (`+0x4C8/+0x4CC`) and
+  `+0x2B8` is reset to `0x7F000000`; otherwise `SetLastTarget 0x005F4A20(+0x4A4, 0)` selects the
+  hovered object and `CSWGuiMainInterface::PopulateMenus 0x00689D80` rebuilds the action bar.
+  So one click selects, a second click on the same object acts — the mouse's own behaviour.

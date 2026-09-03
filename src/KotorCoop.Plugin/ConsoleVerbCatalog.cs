@@ -142,5 +142,6 @@ internal static class ConsoleVerbCatalog
         // which is exactly where the console detour still works and the frame hook does not.
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
         ("chargen", "chargen quick [class 0-5] | chargen accept  (picks a class + Quick template, or presses Play)"),
+        ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
     ];
 }

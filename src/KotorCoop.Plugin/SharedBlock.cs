@@ -1285,4 +1285,15 @@ internal partial struct SharedBlock
     /// ⚠ 73, next free after every noted reserved range through 72 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindGalaxyMapDepart = 73;
+
+    /// <summary>
+    /// <c>gamepad [status|on|off|cursor|sim ...|sim off]</c> — the controller layer's verb
+    /// (docs/research/gamepad.md §5). The argument string arrives in the cheat text and
+    /// <c>GamepadController.HandleConsole</c> answers with its status line, returned as the
+    /// detail so the console prints it. Handled by <c>CheatController.Execute</c> BEFORE the
+    /// "no player loaded" gate: the pad must be inspectable on the main menu. Local only.
+    ///
+    /// ⚠ 74, next free after every noted reserved range through 73 as of 2026-09-03.
+    /// </summary>
+    public const uint CheatKindGamepad = 74;
 }

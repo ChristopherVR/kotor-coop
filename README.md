@@ -31,7 +31,8 @@ What you should know before starting:
 - **Minigames are single-seat.** One of you plays Pazaak or races; the other is told they're waiting.
 - **Enemies alternate between you rather than sticking to whoever hurt them most** — the game's own
   AI keeps pulling them back to the host.
-- **Mouse and keyboard only.** No controller support for the co-op menus.
+- **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works every menu;
+  the address/password box, chat and the console still need a keyboard.
 - **Internet play works for most home routers** (the address is found and the port opened
   automatically), but this has only been tested on a local network so far, and very restrictive
   networks can't be reached — there is no relay server.
@@ -224,6 +225,19 @@ pwsh tools\demo.ps1 -Stop    # shut everything down
 Driving the agent by hand, `KotorCoop.MockGame` (a stand-in process for testing without KOTOR), and the CI/release
 pipeline: see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
+## Playing with a controller
+
+Plug in any Xbox-style (XInput) controller and it just works — in the menus as well as in the world, and
+in the base game too, which never supported one. Left stick walks and turns, right stick is the cursor,
+A is the default action, B/Start is Escape, X cancels combat, Y switches character, LB/RB cycle targets,
+LT pauses, RT clicks what the cursor points at (as with a mouse, one click selects a door, container or
+character and a second click on it walks over and uses it — the game has no click-to-move, the left stick
+is how you walk), the D-pad is action slots 1-4, Back opens the map, LS click is stealth. On any menu or panel A clicks, X right-clicks, the D-pad scrolls and pages; RS click
+forces cursor mode on and off. Your own `swkotor.ini` key bindings are respected. The one thing a pad
+can't do is type: the address/password box, chat and the `~` console still need a keyboard. `gamepad = 0`
+in `coop.ini` turns it off; `gamepad status` in the console shows what it is doing. Details:
+[docs/research/gamepad.md](docs/research/gamepad.md).
+
 ## Console
 
 Press `~` in-game for the console. `connect`/`disconnect`/`reconnect` manage the session without a restart;
@@ -283,7 +297,7 @@ Two documents, for two readers:
   table and detailed engineering notes that used to live on this page.
 
 The things most likely to surprise a first-time pair are already in "Status at a glance" above:
-one conversation at a time, the host owns the party, minigames are single-seat, no controller, and
+one conversation at a time, the host owns the party, minigames are single-seat, a controller can't type, and
 internet play is untested against a real router. Things that *look* like bugs but aren't — the
 1-hp floor on the Endar Spire, an old `coop.ini` keeping a stale default — are listed at the end of
 docs/limitations.md.

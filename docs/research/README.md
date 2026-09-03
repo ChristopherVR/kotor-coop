@@ -1,6 +1,6 @@
 # Research
 
-77 write-ups behind every feature in the top-level README, plus the reverse-engineering they
+78 write-ups behind every feature in the top-level README, plus the reverse-engineering they
 stand on. Each is verified against the retail GOG `swkotor.exe` v1.0.3 (disk == memory, no
 ASLR) or the game files themselves, not folklore.
 
@@ -116,6 +116,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [network-topology.md](network-topology.md) | Peer-to-peer vs. a dedicated host; internet play (STUN + UPnP, roadmap item 24) | STUN/UPnP built and unit-tested (2026-08-27) — NEEDS-LIVE against a real router; relay/hole-punching not planned |
 | [steam-support.md](steam-support.md) | The Steam build (SteamStub v3 over the same 1.0.3 link), and native friends-list invites | **Part 1 LIVE-VERIFIED (§18, 2026-08-29): the Steam build hooks cleanly with the overlay on, and a Steam client shared a session with a DRM-free host** — connect, presence, module transition, 663 KB world transfer. §8's blocker is fixed: `ContentDigest.ExeDigest` now carries the plugin's hash of the RUNNING image (`ExeImageDigestRule`, taken before the first hook), so the two builds agree — same digest `C6962619` from two files with different SHA-256s. Steam is a supported install target in `PackageInstaller`. Open: a real door crossing with a Steam client (rig pathing, not store-specific). Part 2 phase 1 built and unit-tested; live: `SteamAPI_InitFlat` + `SteamAPI_SteamFriends_v018` + `SetRichPresence` verified with a borrowed `steam_api64.dll`; `InviteUserToGame` and callback 337 need a second machine |
 | [mouse-cursor-input.md](mouse-cursor-input.md) | Where the engine's mouse cursor lives and how to click | RE reference; one resolution caveat NEEDS-LIVE |
+| [gamepad.md](gamepad.md) | Controller support: XInput → the engine's own buffered DirectInput keyboard read (vtable wrap of the device this DLL hands out) + posted mouse messages for the cursor | Implemented, unit-tested (2026-09-03); live checks per §6 |
 
 ## Engine reverse-engineering
 

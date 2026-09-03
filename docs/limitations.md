@@ -97,7 +97,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | | Status | What to expect |
 | --- | --- | --- |
 | Keyboard and mouse | **Works** | Everything the game already does, plus `~` for the console and Enter to chat. |
-| Gamepad / controller | **Not supported** | The Co-op menu, password box and console are mouse-and-keyboard only. No fix planned. |
+| Gamepad / controller | **Works, except typing** | Any Xbox-style (XInput) pad plays the whole game — walking, combat, every menu and panel — through your own key bindings. It can't type: the address/password box, chat and the `~` console need a keyboard. Layout in the README; `gamepad = 0` turns it off. |
 | Seeing that you're connected | **Works, with a catch** | A one-line status in the top-left. The line has been confirmed in the data; the exact on-screen pixels have not been eyeballed on the test rig. |
 | Pausing | **Works** | Either player pauses both games. |
 

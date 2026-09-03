@@ -258,6 +258,10 @@ internal static unsafe partial class PluginHost
         _chatInput?.OnFrame();
         _chatOverlay?.OnFrame();
 
+        // Also before the epoch gate: the pad drives the main menu's cursor too, and its
+        // release-everything path must run on the very frame a world goes away.
+        _gamepad?.OnFrame();
+
         // Before the epoch gate, and before anything else touches the world: during a module
         // transition there is a frame in which the server's module is destroyed but the
         // client still holds one, and the engine's own map init dereferences the server

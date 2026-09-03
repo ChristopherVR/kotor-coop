@@ -352,6 +352,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.GalaxyMapUnlock] = c => SendCheat(new CheatRequest(CheatKinds.GalaxyMapUnlock, Amount: c.Amount)),
         [CoopCommandKind.GalaxyMapDepart] = c => SendCheat(new CheatRequest(CheatKinds.GalaxyMapDepart, Amount: c.Amount)),
         [CoopCommandKind.GalaxyAccept] = _ => SendCheat(new CheatRequest(CheatKinds.GalaxyAccept)),
+        [CoopCommandKind.Gamepad] = c => SendCheat(new CheatRequest(CheatKinds.Gamepad, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
 
         // ⚠ Deliberately does NOT call NoteLocalItemGiven, unlike CoopCommandKind.GiveLoot's own

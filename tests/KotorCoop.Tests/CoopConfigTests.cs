@@ -641,6 +641,8 @@ public class CoopConfigTests
     [InlineData("port")]
     [InlineData("chat_overlay_fade_ms")]
     [InlineData("dinput8_next")]
+    [InlineData("gamepad")]
+    [InlineData("gamepad_cursor_speed")]
     [InlineData("MENU_BUTTON")] // case-insensitive
     public void PlayerFacingKeysAreRecognisedAsPlayerFacing(string key)
     {

@@ -41,6 +41,9 @@ internal static unsafe class FuncInterpHook
         // IP:port and UPnP verdict for sharing with a joiner. Not a retail verb.
         "public_address", "publicaddress", "pubaddr",
 
+        // The controller layer's verb (docs/research/gamepad.md §5). Not a retail verb.
+        "gamepad",
+
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
         "census", "resolve", "firescript",

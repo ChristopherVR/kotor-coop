@@ -222,9 +222,31 @@ internal static unsafe class Exports
             PluginHost.Log($"FATAL during startup (at the export boundary): {ex}");
         }
 
-        return _directInput8Create is null
-            ? ErrorFail
-            : _directInput8Create(instance, version, riid, output, outer);
+        if (_directInput8Create is null)
+        {
+            return ErrorFail;
+        }
+
+        int result = _directInput8Create(instance, version, riid, output, outer);
+
+        // Gamepad support (GamepadController): the IDirectInput8 the game is about to receive
+        // is wrapped so the keyboard device it creates from it can carry the pad's key events.
+        // A vptr swap on the returned object only, fenced like EnsureStarted above; coop.ini
+        // gamepad = 0 leaves the object exactly as the real DLL returned it.
+        if (result >= 0 && PluginConfig.ReadBool("gamepad", true))
+        {
+            try
+            {
+                DirectInputKeyboardHook.WrapDirectInput(output);
+                PluginHost.Log($"gamepad: {DirectInputKeyboardHook.LastDiagnostic ?? "IDirectInput8 not wrapped"}");
+            }
+            catch (Exception ex)
+            {
+                PluginHost.Log($"gamepad: IDirectInput8 wrap threw: {ex.Message}");
+            }
+        }
+
+        return result;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "DllCanUnloadNow", CallConvs = [typeof(CallConvStdcall)])]

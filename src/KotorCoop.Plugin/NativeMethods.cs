@@ -157,6 +157,44 @@ internal static partial class NativeMethods
     public static bool IsKeyDownHere(int virtualKey) =>
         IsForeground() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
+    // ── Mouse emulation for the gamepad (GamepadController) ─────────────────────────────
+    // The engine takes its cursor and clicks from ordinary window messages, position in
+    // lParam (docs/research/mouse-cursor-input.md §"Recipe A"), so a pad drives the cursor by
+    // posting the same messages a mouse would. PostMessage (not Send): it lands on the game's
+    // own PeekMessage pump next frame, exactly like real input, with no re-entrancy.
+
+    public const uint WmMouseMove = 0x0200;
+    public const uint WmLButtonDown = 0x0201;
+    public const uint WmLButtonUp = 0x0202;
+    public const uint WmRButtonDown = 0x0204;
+    public const uint WmRButtonUp = 0x0205;
+    public const uint WmMouseWheel = 0x020A;
+    public const uint MkLButton = 0x0001;
+    public const uint MkRButton = 0x0002;
+    public const int WheelDelta = 120;
+
+    [LibraryImport("user32.dll", EntryPoint = "PostMessageA")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PostMessage(nint window, uint message, nuint wParam, nint lParam);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetCursorPos(int x, int y);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point
+    {
+        public int X;
+        public int Y;
+    }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ClientToScreen(nint window, ref Point point);
+
+    /// <summary>Packs client coordinates the way every mouse message carries them.</summary>
+    public static nint MouseLParam(int x, int y) => (nint)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+
     public static unsafe string GetSystemDirectoryPath()
     {
         char* buffer = stackalloc char[512];

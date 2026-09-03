@@ -85,6 +85,7 @@ internal static unsafe partial class PluginHost
     private static CharGenDriveController? _chargenDrive;
     private static ConnectMenuController? _connectMenu;
     private static ChatInputController? _chatInput;
+    private static GamepadController? _gamepad;
     private static PasswordPromptController? _passwordPrompt;
     private static ServerBrowserController? _browser;
     private static NativeBrowserController? _nativeBrowser;
@@ -630,6 +631,29 @@ internal static unsafe partial class PluginHost
         string prefix = CanonicalChannel(message[..colon].ToLowerInvariant());
 
         return Array.IndexOf(LogChannels, prefix) >= 0 ? prefix : "general";
+    }
+
+    /// <summary>The `gamepad` console verb, from CheatController (main thread, the cheat
+    /// drain). Returns the one-line reply the console prints.</summary>
+    public static string OnGamepadConsole(string arguments)
+    {
+        try
+        {
+            if (_gamepad is { } gamepad)
+            {
+                return gamepad.HandleConsole(arguments);
+            }
+
+            const string NotReady = "gamepad: the plugin has not finished starting; try again in a moment";
+            Log(NotReady);
+            return NotReady;
+        }
+        catch (Exception ex)
+        {
+            string failed = $"gamepad: console verb failed: {ex.Message}";
+            Log(failed);
+            return failed;
+        }
     }
 
     public static void Log(string message)

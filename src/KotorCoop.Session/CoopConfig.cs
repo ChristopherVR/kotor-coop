@@ -688,7 +688,7 @@ public sealed record CoopConfig
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
         "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp", "log_max_mb",
-        "log_keep", "auto_start_agent", "dinput8_next",
+        "log_keep", "auto_start_agent", "dinput8_next", "gamepad", "gamepad_cursor_speed",
     ];
 
     /// <summary>Every other key either reader (this one, or PluginConfig.Read/ReadBool/ReadInt/

@@ -515,4 +515,30 @@ public class ConsoleCommandTests
         Assert.Equal(CoopCommandKind.Census, c.Kind);
         Assert.Equal("0x35", c.Address);
     }
+
+    /// <summary>`gamepad` is a plugin-side verb whose sub-grammar the plugin owns; the parser
+    /// only has to carry the text across intact (bare = `status`, since the shared cheat text
+    /// slot has no "empty means default" of its own) and refuse a line the slot cannot hold.</summary>
+    [Theory]
+    [InlineData("gamepad", "status")]
+    [InlineData("gamepad status", "status")]
+    [InlineData("gamepad   sim  ly=1 a", "sim ly=1 a")]
+    [InlineData("GAMEPAD cursor", "cursor")]
+    public void GamepadCarriesItsArgumentsAsText(string line, string expected)
+    {
+        CoopCommand c = ConsoleCommand.Parse(line);
+        Assert.Equal(CoopCommandKind.Gamepad, c.Kind);
+        Assert.Equal(expected, c.Address);
+    }
+
+    [Fact]
+    public void GamepadRefusesArgumentsTheCheatSlotCannotHold()
+    {
+        string args = new('x', ConsoleCommand.GamepadTextMaxLength + 1);
+        CoopCommand c = ConsoleCommand.Parse("gamepad " + args);
+        Assert.Equal(CoopCommandKind.Invalid, c.Kind);
+        Assert.Contains("too long", c.Error);
+
+        Assert.Equal(CoopCommandKind.Gamepad, ConsoleCommand.Parse("gamepad " + args[..^1]).Kind);
+    }
 }

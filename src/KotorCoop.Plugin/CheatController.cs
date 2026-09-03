@@ -101,6 +101,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
 
     private void Execute(uint kind)
     {
+        // Needs no world: the pad is worth inspecting (and the virtual pad worth driving) on
+        // the main menu, where the gate below would refuse it.
+        if (kind == SharedBlock.CheatKindGamepad)
+        {
+            Answer(SharedBlock.CheatStatusApplied, PluginHost.OnGamepadConsole(ReadCheatText()));
+            return;
+        }
+
         nint player = Odyssey.GetPlayerCreaturePointer();
         uint playerId = Odyssey.GetPlayerObjectId();
 
