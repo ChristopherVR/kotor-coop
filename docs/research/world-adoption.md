@@ -395,8 +395,46 @@ fully unattended live test of this path would need.
 
 | key | default | meaning |
 | --- | --- | --- |
-| `join_mode` | `save` | `save` = carry this install's own save's character (today's behaviour). `newcharacter` = go through retail chargen and carry that. |
-| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts instead of playing degraded. Also what makes a HOST serve its world by default — a joiner with no save has no other way to obtain one. |
+| `join_mode` | `auto` (since 2026-09-03; was `save`) | `auto` = the mod owns the co-op character: the first join goes through retail chargen and the result is written to the `saves\kotorcoop-character.*` sidecar at once; every later join adopts the host's world carrying the sidecar, unconditionally. `newcharacter` = retail chargen on this join even when a sidecar exists (replaces it). `save` = the pre-2026-09-03 behaviour: carry this install's own most recent save's character. |
+| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts instead of playing degraded. Also what makes a HOST serve its world by default — a joiner with no save has no other way to obtain one. With it OFF, `join_mode = auto` degrades to the `save` decision (adoption is the only carrier). |
+
+### `join_mode = auto` — the mod-owned co-op character (2026-09-03)
+
+The user's requirement: "even if we fetch the host world we always need to go through character
+creation mode, and once we have a character it's used going forward". Two things were wrong
+with the previous default: `save` carried the PC of whatever single-player save was newest on
+the install (a co-op session could silently start with someone's Dark Side solo run), and the
+sidecar was only ever written on an own in-game save or a clean disconnect, so a joiner who
+crashed out before their first save had no co-op character at all.
+
+What changed (all in `JoinFlow.cs`, `JoinModeRule.cs`, `SessionManager.RejoinAfterLoadAsync`):
+
+- `JoinModeRule.Decide` is now the production decision (`JoinFlow.Decide`), not just a tested
+  one. It takes `hasCoopCharacter` (the sidecar reads) and, in `auto`, ignores `hasOwnCharacter`
+  and `saveIdentityMatchesHost` entirely: sidecar → `AdoptWithCoopCharacter`, none →
+  `CreateCharacterThenAdopt`.
+- The first-time flow presses New Game itself through `CharGenDriveController`'s `newgame`
+  (the console verb's replay of `OnNewGamePicked`'s body; the old "the player clicks it" note in
+  the flow's header was stale since that verb shipped). A refused press falls back to telling the
+  player to click.
+- The sidecar is written immediately after the chargen quicksave is captured (host identity 0)
+  and rewritten with the real identity once adoption succeeds.
+- The every-later-join path reuses `SessionManager.AdoptWithNewCharacterAsync` with the sidecar's
+  player handed in. It runs from the MAIN MENU although the request carries `inSession: true`:
+  `MenuLoadController` takes the main-menu route whenever `Odyssey.HasServer` is false, whatever
+  the flag says (the flag only matters when a server exists).
+- Mid-session rejoins (`TriggerRejoin` → `RejoinAfterLoadAsync`) pass `carriedIsAuthoritative`
+  in `auto`, which adopts through `TryAdoptWithCharacterAsync` and never resolves an own save —
+  a fresh install that joined through chargen may not have one, and a newer single-player save
+  must not outrank the co-op character on age (`ShouldPreferSidecar` still governs `save`).
+- The CLI `--join` starts the flow only for the two adoption actions and only if the game is
+  still at the main menu once the handshake lands (`!bridge.TryReadLocalState`), so
+  demo3.ps1/session.ps1, which load a save before the agent joins, are untouched. demo.ps1
+  writes `join_mode = save` into the client install explicitly.
+
+NEEDS-LIVE: the auto New Game press inside the flow, the immediate sidecar write, and the
+sidecar-adopt-from-the-main-menu leg (a second join after a first one). The chargen leg itself is
+the 2026-08-29 round below, unchanged.
 
 `auto_adopt_world` took `RejoinTrigger.SaveMismatch` over from `client_load_rejoin`. They were
 answering different questions that happened to share an answer: `client_load_rejoin` is "when I

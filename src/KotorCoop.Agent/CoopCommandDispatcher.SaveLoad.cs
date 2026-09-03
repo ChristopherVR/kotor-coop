@@ -66,6 +66,14 @@ public sealed partial class CoopCommandDispatcher
     private bool AutoAdoptWorldEnabled =>
         _autoAdoptWorldEnabled ??= loadConfig?.Invoke()?.AutoAdoptWorld ?? true;
 
+    /// <summary>coop.ini <c>join_mode</c> — see <see cref="JoinModeRule"/>. In the default
+    /// <see cref="JoinMode.Auto"/> the sidecar is THE co-op character, so a rejoin carries it
+    /// unconditionally instead of weighing it against this install's own most recent save.</summary>
+    private JoinMode? _joinMode;
+
+    private JoinMode JoinModeSetting =>
+        _joinMode ??= loadConfig?.Invoke()?.JoinMode ?? JoinMode.Auto;
+
     /// <summary>Roadmap item 14 phase 2's rejoin decision state — see
     /// <see cref="ClientLoadRejoinRule"/>. Best-effort threading: written synchronously from
     /// this dispatcher's own tick when a rejoin starts, and once more (back to Idle) by the
@@ -461,7 +469,9 @@ public sealed partial class CoopCommandDispatcher
             try
             {
                 AdoptedWorld? adopted = await manager
-                    .RejoinAfterLoadAsync(bridge, gameDirectory, carried, CancellationToken.None)
+                    .RejoinAfterLoadAsync(
+                        bridge, gameDirectory, carried, CancellationToken.None,
+                        carriedIsAuthoritative: JoinModeSetting == JoinMode.Auto)
                     .ConfigureAwait(false);
 
                 if (adopted is null)

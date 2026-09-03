@@ -79,15 +79,17 @@ internal static class RunCommand
             // a failure. The bridge re-resolves lazily once a save is loaded. Any other mode
             // genuinely needs the player now.
             //
-            // ⚠ EXCEPT coop.ini join_mode = newcharacter, which is the SAME situation reached a
-            // different way: that joiner has no save, so they are at the main menu on purpose and
-            // will be for as long as character creation takes. Refusing here is what made
-            // `run --join` exit 2 before a first-time joiner could do anything at all — the exact
-            // player the mode exists for. See NewCharacterJoinFlow.
-            bool newCharacterJoin = options.Mode == CoopMode.Join
-                && TryReadJoinMode(memory.ProcessId) == JoinMode.NewCharacter;
+            // ⚠ EXCEPT a joiner whose coop.ini join_mode is auto (the default) or newcharacter,
+            // which is the SAME situation reached a different way: that joiner is at the main
+            // menu on purpose — for as long as character creation takes, or for the co-op
+            // character's adoption to fire — and JoinFlow gets them into a world from there.
+            // Refusing here is what made `run --join` exit 2 before a first-time joiner could
+            // do anything at all — the exact player the mode exists for. Only join_mode = save
+            // still requires a world of the caller's own.
+            bool menuJoin = options.Mode == CoopMode.Join
+                && TryReadJoinMode(memory.ProcessId) != JoinMode.Save;
 
-            if (!options.MenuConnect && !newCharacterJoin)
+            if (!options.MenuConnect && !menuJoin)
             {
                 Console.Error.WriteLine($"could not locate player state: {diagnostic}");
                 return 2;
@@ -191,9 +193,11 @@ internal static class RunCommand
     /// <summary>
     /// coop.ini's <c>join_mode</c> for the install this process was launched from, read here
     /// rather than taken from <see cref="AgentComposition"/> because the decision it feeds — may
-    /// this agent run with no world yet? — happens strictly before composition. Any failure
-    /// (no file, unreadable, no game directory) reads as the default, which is the mode that
-    /// requires a world, so an unreadable coop.ini can never silently relax the guard.
+    /// this agent run with no world yet? — happens strictly before composition. A missing
+    /// coop.ini reads as the default (auto), exactly as <c>AgentComposition</c> will read it;
+    /// an install whose directory cannot be resolved reads as <see cref="JoinMode.Save"/>, the
+    /// mode that requires a world, because JoinFlow cannot do anything without that directory
+    /// either and the guard must not relax for a joiner it could never get into a world.
     /// </summary>
     private static JoinMode TryReadJoinMode(int processId)
     {
@@ -206,7 +210,7 @@ internal static class RunCommand
                 return JoinMode.Save;
             }
 
-            return CoopConfig.TryLoad(CoopConfig.PathFor(directory))?.JoinMode ?? JoinMode.Save;
+            return CoopConfig.TryLoad(CoopConfig.PathFor(directory))?.JoinMode ?? JoinMode.Auto;
         }
         catch (Exception)
         {

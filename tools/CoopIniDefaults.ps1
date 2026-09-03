@@ -134,6 +134,13 @@ $script:CoopIniDriftedDefaults = @(
         Date     = '2026-09-03'
         Meaning  = 'reconciles a body left alive on one instance and dead on another'
     }
+    [pscustomobject]@{
+        Key      = 'join_mode'
+        OldValue = 'save'
+        NewValue = 'auto'
+        Date     = '2026-09-03'
+        Meaning  = 'the first join creates your co-op character; every join after carries it (a single-player save is no longer what you bring)'
+    }
 )
 
 # Every developer switch's CURRENT shipped/verified default (docs/CONFIG.md's "Developer

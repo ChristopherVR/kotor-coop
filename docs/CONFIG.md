@@ -70,7 +70,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
 | `name` | unset | your name/character name shown to peers | — |
 | `server_name` | falls back to `name` | name shown in the server browser | [server-browser.md](research/server-browser.md) |
-| `join_mode` | `save` | how a JOINER gets a character into the host's world: `save` (your own save) or `newcharacter` (make one through the game's own New Game screens) | [world-adoption.md](research/world-adoption.md) |
+| `join_mode` | `auto` | how a JOINER gets a character into the host's world. `auto`: the first join opens the game's own character creation and keeps the result as your co-op character (`saves\kotorcoop-character.*`), used on every join after. `newcharacter`: make a new one even though one exists. `save`: carry the character from your own most recent save | [world-adoption.md](research/world-adoption.md) |
 | `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts the host's world instead of playing degraded | [world-adoption.md](research/world-adoption.md) |
 | `menu_button` | ON⁷ | show the main-menu "Co-op" button | [menu-frame-hook.md](research/menu-frame-hook.md) |
 

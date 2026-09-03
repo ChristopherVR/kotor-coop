@@ -101,22 +101,21 @@ needing this repo. CLI equivalent: `KotorCoop.Agent.exe install|uninstall --game
 
 ### Joining: which character you bring
 
-Co-op is one world — the host's — with each player in their own body. How your body gets there depends on what you
-already have, and `coop.ini`'s `join_mode` says which:
+Co-op is one world — the host's — with each player in their own body. Your **co-op character** is separate from any
+single-player game on the same install: the mod makes it with you the first time you join and keeps it
+(`saves\kotorcoop-character.*`), and every join after that uses it. `coop.ini`'s `join_mode` says which:
 
-| your situation | `join_mode` | what happens |
-| --- | --- | --- |
-| you have a save | `save` (the default) | your save's character is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
-| you have never played this game | `newcharacter` | connect, then choose **New Game** at the main menu and create a character exactly as you normally would. Your game starts as usual; a few seconds later the mod quicksaves it and pulls you into the **host's** world with the character you just made (live-verified: 2 min 10 s, the player does nothing but chargen; arrival is at the module entry, ~5 units from the host) |
+| `join_mode` | what happens |
+| --- | --- |
+| `auto` (the default) | **First join:** connect, and the game's own character-creation screens open; make your character exactly as you normally would. Your game starts as usual; a few seconds later the mod quicksaves it and pulls you into the **host's** world with the character you just made (live-verified: 2 min 10 s, the player does nothing but chargen; arrival is at the module entry, ~5 units from the host). **Every later join:** that same character is carried straight into the host's world, whatever single-player saves you have — it keeps everything you earned in co-op, refreshed on every in-game save you make while connected |
+| `newcharacter` | make a new co-op character on this join even though you already have one (it replaces the old one) |
+| `save` | the old way: the character from your own most recent save is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
 
 Either way **your own saves are never touched** — only the autosave slot is written — so leaving the session and
 loading your own game again costs nothing. What you give up when the worlds differ is the world you were playing:
 party, inventory, companions, globals and journal all come from the host (your party is inherited cosmetically),
 because in co-op those are shared. You bring your character; the host brings the world. A mismatched save
 auto-adopts the host's world (`auto_adopt_world`, on by default), and a host serves its own world by default too.
-
-A `newcharacter` join leaves a save of your own behind — the one the mod made to carry your character across — so
-from the next session on, `join_mode = save` (the default) does the right thing without being told.
 
 See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the mechanism.
 

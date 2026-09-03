@@ -162,7 +162,7 @@ public class PostAdoptConvergenceTests
 
         foreach (string relative in
             (string[])["src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs",
-                "src/KotorCoop.Agent/NewCharacterJoinFlow.cs"])
+                "src/KotorCoop.Agent/JoinFlow.cs"])
         {
             string path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(path), $"expected to find {path}");

@@ -37,10 +37,11 @@ public class CoopConfigTests
             Assert.Equal("Malak", c.Name);
             Assert.True(c.MenuButton);
 
-            // Absent keys: the join path this config describes is the one that already
-            // shipped, and adoption is on. Pinned so a change to either default is caught as a
-            // behaviour change needing a docs/CONFIG.md update, not silent drift.
-            Assert.Equal(JoinMode.Save, c.JoinMode);
+            // Absent keys: the join path is the mod-owned co-op character (first join creates
+            // it, every later join carries it — 2026-09-03), and adoption is on. Pinned so a
+            // change to either default is caught as a behaviour change needing a docs/CONFIG.md
+            // update, not silent drift.
+            Assert.Equal(JoinMode.Auto, c.JoinMode);
             Assert.True(c.AutoAdoptWorld);
 
             Assert.NotNull(c.ResolveEndPoint());

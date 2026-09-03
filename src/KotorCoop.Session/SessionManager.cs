@@ -387,11 +387,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// same method on every connected CLIENT once the host's own reload settles). Returns null
     /// with nothing torn down when there is no prior client connection to rejoin from.
     /// </summary>
+    /// <param name="carriedIsAuthoritative">coop.ini <c>join_mode = auto</c> (the default): the
+    /// sidecar IS the co-op character, full stop — carry it without consulting this install's
+    /// own saves at all (<see cref="WorldAdoption.TryAdoptWithCharacterAsync"/>). A fresh
+    /// install that joined through character creation may have no own save to resolve, and a
+    /// single-player save written since must never outrank the co-op character on age. Ignored
+    /// when <paramref name="carriedCharacter"/> is null.</param>
     public async Task<AdoptedWorld?> RejoinAfterLoadAsync(
         IGameBridge bridge,
         string gameDirectory,
         (GffStruct Player, SidecarMetadata Metadata)? carriedCharacter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool carriedIsAuthoritative = false)
     {
         bool host;
         IPEndPoint? endpoint;
@@ -411,21 +418,37 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
         Disconnect();
 
-        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slotIndex: 0, out string ownSave, out string which))
+        AdoptedWorld? adopted;
+        if (carriedIsAuthoritative && carriedCharacter is { } coop)
         {
-            Log?.Invoke($"rejoin: {which}");
-            return null;
+            adopted = await WorldAdoption.TryAdoptWithCharacterAsync(
+                gameDirectory,
+                coop.Player,
+                $"the co-op character (captured {coop.Metadata.CapturedAtUtc:u})",
+                endpoint,
+                SessionPassword.Hash(settings.Password),
+                expectedSaveIdentity: 0,
+                Log,
+                cancellationToken).ConfigureAwait(false);
         }
+        else
+        {
+            if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slotIndex: 0, out string ownSave, out string which))
+            {
+                Log?.Invoke($"rejoin: {which}");
+                return null;
+            }
 
-        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
-            gameDirectory,
-            ownSave,
-            carriedCharacter,
-            endpoint,
-            SessionPassword.Hash(settings.Password),
-            expectedSaveIdentity: 0,
-            Log,
-            cancellationToken).ConfigureAwait(false);
+            adopted = await WorldAdoption.TryAdoptAsync(
+                gameDirectory,
+                ownSave,
+                carriedCharacter,
+                endpoint,
+                SessionPassword.Hash(settings.Password),
+                expectedSaveIdentity: 0,
+                Log,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         if (adopted is null)
         {

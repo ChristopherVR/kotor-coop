@@ -264,30 +264,34 @@ internal static class AgentComposition
             gameDirectory: gameDirectory,
             steam: ComposeSteam(config, gameDirectory, options));
 
-        // How a session that started from the game's own menu gets into a world. Two paths, and
-        // which one runs is re-read from coop.ini at the moment of the press (not captured at
-        // startup) for the same reason every other menu-time setting is: an edit made at the
-        // menu must be honoured without restarting the agent.
+        // How a session that started from the game's own menu gets into a world. A host loads
+        // its own save; a joiner goes through JoinFlow, which is coop.ini join_mode's
+        // production caller — re-read at the moment of the press (not captured at startup) for
+        // the same reason every other menu-time setting is: an edit made at the menu must be
+        // honoured without restarting the agent.
         //
-        // The default is unchanged — load the player's own save. join_mode = newcharacter is
-        // for the joiner who has none, and sends them through the game's own character creation
-        // first; see NewCharacterJoinFlow.
+        // The default (join_mode = auto) sends a first-time joiner through the game's own
+        // character creation and carries the mod-owned co-op character on every join after;
+        // join_mode = save is the old "load my own save" path, which JoinFlow hands back here.
         async Task EnterTheWorld()
         {
-            CoopConfig? current = TryLoadCoopConfig(memory.ProcessId);
-
-            if (current?.JoinMode == JoinMode.NewCharacter && manager.Current is not CoopHost)
+            if (manager.Current is CoopHost)
             {
-                await NewCharacterJoinFlow.RunAsync(
-                    manager,
-                    bridge,
-                    TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty,
-                    Console.WriteLine,
-                    cts.Token).ConfigureAwait(false);
+                LoadIntoTheWorld(memory);
                 return;
             }
 
-            LoadIntoTheWorld(memory);
+            CoopConfig? current = TryLoadCoopConfig(memory.ProcessId);
+
+            await JoinFlow.RunAsync(
+                manager,
+                bridge,
+                TryResolveInstallDirectory(memory.ProcessId) ?? string.Empty,
+                current?.JoinMode ?? JoinMode.Auto,
+                current?.AutoAdoptWorld ?? true,
+                loadOwnSave: () => LoadIntoTheWorld(memory),
+                Console.WriteLine,
+                cts.Token).ConfigureAwait(false);
         }
 
         // Roadmap item 14 phase 1's "OR on clean disconnect" trigger: the dispatcher's own
@@ -352,20 +356,36 @@ internal static class AgentComposition
 
             // ⚠ The CLI join does NOT arm the dispatcher's menu auto-load — that is a
             // menu-BUTTON affordance, and `--join` has always left "get into a world" to the
-            // caller (`agent load`, demo.ps1's own -Save). join_mode = newcharacter is the one
-            // case where there is nothing for the caller to load, so the flow is started here
-            // explicitly, waiting for the handshake first through the same MenuAutoLoad gate
-            // the button path uses: a REFUSED join must not send the player through character
-            // creation for a session they were never admitted to.
-            if (config?.JoinMode == JoinMode.NewCharacter)
+            // caller (`agent load`, demo.ps1's own -Save). The character-creation and co-op-
+            // character adoptions are the cases where there is nothing for the caller to load,
+            // so for THOSE the flow is started here explicitly, waiting for the handshake first
+            // through the same MenuAutoLoad gate the button path uses (a REFUSED join must not
+            // send the player through character creation for a session they were never
+            // admitted to) and only if the game is verifiably still at the main menu by then —
+            // a caller that already loaded a save (demo3.ps1, session.ps1) keeps its world.
+            string joinDirectory = installDirectory ?? string.Empty;
+            JoinMode joinMode = config?.JoinMode ?? JoinMode.Auto;
+            bool autoAdopt = config?.AutoAdoptWorld ?? true;
+
+            if (JoinFlow.Decide(joinDirectory, joinMode, autoAdopt, out _)
+                is JoinAction.CreateCharacterThenAdopt or JoinAction.AdoptWithCoopCharacter)
             {
-                string newCharacterDirectory = installDirectory ?? string.Empty;
                 _ = Task.Run(
                     () => MenuAutoLoad.RunAsync(
                         manager,
                         host: false,
-                        load: () => _ = NewCharacterJoinFlow.RunAsync(
-                            manager, bridge, newCharacterDirectory, Console.WriteLine, cts.Token),
+                        load: () =>
+                        {
+                            if (bridge.TryReadLocalState(out _))
+                            {
+                                Console.WriteLine("join: already in a world; leaving it as it is.");
+                                return;
+                            }
+
+                            _ = JoinFlow.RunAsync(
+                                manager, bridge, joinDirectory, joinMode, autoAdopt,
+                                loadOwnSave: null, Console.WriteLine, cts.Token);
+                        },
                         cts.Token,
                         Console.WriteLine),
                     cts.Token);

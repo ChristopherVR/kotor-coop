@@ -16,8 +16,8 @@ shared copy. Companions follow the host's game, and a companion can fight for th
 conversation runs at a time: whoever starts it picks the replies and the other player watches
 it live. Pazaak and the swoop race are single-seat — the other player is told they're waiting.
 If somebody saves, loads, quits to the menu, or the host's game crashes, the other side notices
-and rejoins on its own. If you have never played the game, `join_mode = newcharacter` lets you
-create a character through the normal New Game screen and join with it. Mouse and keyboard only.
+and rejoins on its own. The first time you join you create a co-op character through the normal
+New Game screen; the mod keeps it and uses it on every join after. Mouse and keyboard only.
 The full list — what works, what has a catch, and what is deliberately left to the host — is
 `docs/limitations.md` in the full repository (link at the bottom).
 
@@ -43,19 +43,21 @@ in advance.
 2. Click **Co-op** on the main menu.
 3. One player presses **Host**; the other picks that server from the list (or types the
    host's address) and presses **Connect**. A password set in `coop.ini` is asked for.
-4. Load a save. Your partner appears next to you.
+4. **Host:** load a save. **Joining for the first time:** the game's character-creation screens
+   open — make your character exactly as you normally would. Your game starts as usual, and a
+   few seconds later you are pulled into the host's world with it. **Joining again later:** nothing
+   to do; your co-op character is taken straight into the host's world.
 
 What the join actually does: the **host must have a save on disk** (any manual save, or the
-game's own first autosave) — that save is what the client receives. The client keeps their
-**own character** from their own most recent save and is dropped into the host's world at the
-area entrance; the client's own save file is never written. To start a brand-new game
-together, the host plays until the first autosave (or saves once), then hosts.
+game's own first autosave) — that save is what the client receives. The client's **co-op
+character** is separate from any single-player game on the same install: the mod keeps it in
+`saves\kotorcoop-character.*`, refreshes it whenever you save while connected, and drops it into
+the host's world at the area entrance; your own save files are never written. To start a
+brand-new game together, the host plays until the first autosave (or saves once), then hosts.
 
-**Never played this game before?** Then you have no save and no character to bring. Set
-`join_mode = newcharacter` in `coop.ini` and step 4 changes: instead of loading a save, choose
-**New Game** and create a character exactly as you normally would. When you finish, you are
-taken into the **host's** world with it rather than into the Endar Spire. Save once afterwards
-and you can put `join_mode` back to `save` (the default) for every join after that.
+Want a different co-op character? Set `join_mode = newcharacter` in `coop.ini` for one join and
+you go through character creation again (the old one is replaced). `join_mode = save` is the old
+behaviour — the character from your own most recent save is the one carried in.
 
 Related: `auto_adopt_world` (on by default) is what fetches the host's world whenever yours
 does not match theirs. With it off you can still join, but enemies, doors, containers and the

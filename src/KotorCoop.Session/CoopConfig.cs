@@ -20,9 +20,11 @@ namespace KotorCoop.Session;
 ///                       ; ProtocolConstants.DefaultPort (27015) — see docs/CONFIG.md footnote 8
 ///   password = swordfish
 ///   name = Malak
-///   join_mode = save         ; or newcharacter - go through the game's own New Game /
-///                             ; character-creation screens and carry THAT character into the
-///                             ; host's world. Default `save` (today's behaviour).
+///   join_mode = auto         ; auto (default): the first join goes through the game's own
+///                             ; character creation and the character it makes is the co-op
+///                             ; character on every join after (saves\kotorcoop-character.*);
+///                             ; newcharacter = force a fresh one even when one exists;
+///                             ; save = carry the PC of this install's own most recent save
 ///   auto_adopt_world = 1     ; a joiner whose world does not match the host's adopts the
 ///                             ; host's world automatically instead of playing degraded
 ///                             ; (default on) - docs/research/world-adoption.md
@@ -59,14 +61,16 @@ public sealed record CoopConfig
 
     /// <summary>
     /// How a JOINER gets a character into the host's world — coop.ini <c>join_mode</c>,
-    /// default <see cref="JoinMode.Save"/> (this install already has a save; its PC is what
-    /// gets carried). <see cref="JoinMode.NewCharacter"/> is the first-time joiner: no save,
-    /// no character, so they go through the retail New Game / character-creation screens and
-    /// the character chargen writes to <c>TEMP:pifo</c> is carried into the host's world
-    /// instead of into the Endar Spire's own story start. Ignored when hosting. See
-    /// <see cref="JoinModeRule"/> and docs/research/world-adoption.md.
+    /// default <see cref="JoinMode.Auto"/>: the first join on an install goes through the
+    /// retail New Game / character-creation screens, the character that comes out is kept as
+    /// the mod-owned co-op character (<c>saves\kotorcoop-character.*</c>), and every later
+    /// join carries THAT into the host's world — never a single-player save's PC.
+    /// <see cref="JoinMode.NewCharacter"/> forces a fresh character even when one exists;
+    /// <see cref="JoinMode.Save"/> is the pre-2026-09-03 "carry my own most recent save's PC"
+    /// path. Ignored when hosting. See <see cref="JoinModeRule"/> and
+    /// docs/research/world-adoption.md.
     /// </summary>
-    public JoinMode JoinMode { get; init; } = JoinMode.Save;
+    public JoinMode JoinMode { get; init; } = JoinMode.Auto;
 
     /// <summary>
     /// Whether a joiner whose world does not fingerprint the same as the host's adopts the
@@ -820,7 +824,7 @@ public sealed record CoopConfig
             Host = host,
 
             // Tolerant on purpose (JoinModeRule.Parse): a misspelled value must degrade to
-            // today's behaviour, never to a character creation the player did not ask for.
+            // the default, never to a mode the player did not ask for.
             JoinMode = JoinModeRule.Parse(kv.GetValueOrDefault("join_mode")),
             AutoAdoptWorld = !kv.ContainsKey("auto_adopt_world")
                 || IsTruthy(kv.GetValueOrDefault("auto_adopt_world")),

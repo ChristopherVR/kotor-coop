@@ -32,11 +32,14 @@ name =
 # server_name =
 
 ; For mode = join: how you get a character into the host's world. Ignored when hosting.
-;   save          the default - you already have a save, and its character is what you bring.
-;   newcharacter  you have never played this game - choose NEW GAME at the main menu and make
-;                 a character as usual; a few seconds later the mod carries it into the
-;                 host's world. That save is yours to keep afterwards.
-join_mode = save
+;   auto          the default - your co-op character is separate from any single-player game
+;                 on this install. The FIRST join opens the game's own character creation;
+;                 make a character as usual and a few seconds later the mod carries it into
+;                 the host's world. It is kept in saves\kotorcoop-character.* and used on
+;                 every join after that, refreshed whenever you save while connected.
+;   newcharacter  make a new co-op character on this join (replaces the one you have).
+;   save          the old way - the character from your own most recent save is what you bring.
+join_mode = auto
 
 ; When your world does not match the host's, fetch and adopt the host's world instead of
 ; playing a degraded session (enemies, doors, containers and party all off). Your own saves
