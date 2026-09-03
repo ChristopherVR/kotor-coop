@@ -3,7 +3,7 @@
 # game and copies everything in. Layout of the zip root:
 #
 #   dinput8.dll                 the NativeAOT plugin (the proxy the game loads itself)
-#   KotorCoop.*                 the agent (exe, dlls, runtimeconfig)
+#   KotorCoop.*                 the agent: one self-contained exe (runtime inside) + pdbs
 #   coop.ini                    the config template
 #   Override\k_coop_*           the override assets the plugin needs
 #   chain-loader\dinput8.dll    the C wrapper for sharing the dinput8 slot with another mod
@@ -47,7 +47,7 @@ New-Item -ItemType Directory -Path $staging | Out-Null
 # build.ps1 imports the MSVC x86 environment (vcvarsall.bat) into ITS OWN process env, which
 # includes a "Platform=x86" variable that MSBuild picks up from any dotnet invocation that
 # follows in the same process — silently redirecting the agent's plain `dotnet publish` below
-# into a bin\x86\... output path instead of bin\Release\net10.0-windows\publish. Running the
+# into a bin\x86\... output path instead of bin\Release\net10.0-windows\win-x64\publish. Running the
 # native builds as child pwsh processes keeps that environment from leaking into this script.
 $warnArgs = if ($WarnAsError) { @('-WarnAsError') } else { @() }
 
@@ -77,7 +77,9 @@ Copy-Item $loaderDll (Join-Path $staging 'chain-loader\dinput8.dll')
 Copy-Item (Join-Path $repo 'src\KotorCoop.Loader\dinput8.chain.example') (Join-Path $staging 'dinput8.chain.example')
 "staged loader: $loaderDll"
 
-# --- agent: framework-dependent publish, same net10.0-windows TFM as the plugin/game -------
+# --- agent: self-contained single-file win-x64 publish (the csproj's _IsPublishing block) ----
+# One KotorCoop.Agent.exe with the runtime inside: no .NET install on the player's machine,
+# and nothing to put into a Wine prefix for the Proton/Steam Deck case (docs/research/proton.md).
 $agentProject = Join-Path $repo 'src\KotorCoop.Agent'
 Push-Location $agentProject
 try {
@@ -90,17 +92,21 @@ finally {
     Pop-Location
 }
 
-$agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\publish'
+$agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\win-x64\publish'
 if (-not (Test-Path (Join-Path $agentPublishDir 'KotorCoop.Agent.exe'))) {
     throw "agent publish succeeded but KotorCoop.Agent.exe not found in $agentPublishDir"
 }
 
 # Game root, not a subfolder: AgentLauncher searches the game directory first. Only
-# KotorCoop.* files, so the uninstaller's "everything KotorCoop.* is ours" rule holds.
+# KotorCoop.* files, so the uninstaller's "everything KotorCoop.* is ours" rule holds — the
+# single-file publish is what keeps a bundled runtime inside that rule (a plain self-contained
+# publish drops ~200 System.*.dll beside the game and trips the check below).
 $agentFiles = Get-ChildItem $agentPublishDir -File -Filter 'KotorCoop.*'
 foreach ($file in $agentFiles) { Copy-Item $file.FullName (Join-Path $staging $file.Name) }
 $stray = Get-ChildItem $agentPublishDir -File | Where-Object { $_.Name -notlike 'KotorCoop.*' }
 if ($stray) { throw "agent publish contains non-KotorCoop.* files the installer cannot track: $($stray.Name -join ', ')" }
+$agentExe = Get-Item (Join-Path $agentPublishDir 'KotorCoop.Agent.exe')
+if ($agentExe.Length -lt 20MB) { throw "KotorCoop.Agent.exe is $([math]::Round($agentExe.Length / 1MB, 1)) MB: not the self-contained single-file publish (see the _IsPublishing block in KotorCoop.Agent.csproj)" }
 "staged agent: $agentPublishDir ($($agentFiles.Count) files)"
 
 # --- coop.ini template, renamed from the .example so a player can use it as-is -------------

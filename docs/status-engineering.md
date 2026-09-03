@@ -119,6 +119,13 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 | --- | --- | --- | --- |
 | Gamepad/controller support | Implemented 2026-09-03 (XInput → the engine's own buffered DirectInput keyboard read + posted mouse messages); unit-tested; live-verified on the rig through the virtual pad — walking, Escape/panels, the cursor, and world clicks that select an object and then run its default action ([gamepad.md](research/gamepad.md) §6). A physical pad has not been on the rig | Walking, combat keys, the cursor and clicks on every screen, `[Keymapping]` honoured; text entry (address/password, chat, console) still keyboard-only; no click-to-move (the engine has none — the left stick walks) | [gamepad.md](research/gamepad.md) |
 
+## Platforms
+
+| Item | Status | What you'll see | Source |
+| --- | --- | --- | --- |
+| Linux / Steam Deck (Proton, Wine) | Implemented 2026-09-03, **NEEDS-LIVE end to end** (no Linux box on the rig): the packaged agent is a self-contained single-file win-x64 exe (no .NET in the prefix), the installer finds the game under `Z:\home\…` (Proton `STEAM_COMPAT_INSTALL_PATH`, Linux Steam libraries incl. Flatpak and SD-card `libraryfolders.vdf`, Heroic/Lutris folders — unit-tested), and both halves log `running under Wine x.y` via ntdll's `wine_get_version` | Needs the `WINEDLLOVERRIDES="dinput8=n,b"` launch option so Wine loads our DLL over its built-in DirectInput; the open questions are listed in [proton.md](research/proton.md) §6 in the order a player would hit them | [proton.md](research/proton.md) |
+| Windows without .NET installed | Fixed as a side effect 2026-09-03: `KotorCoop.Agent.exe` carries its own runtime (~38 MB, compressed single file); `dotnet build`/the rig stay framework-dependent | `package.ps1` refuses an agent exe under 20 MB so a framework-dependent publish cannot ship by accident | [proton.md](research/proton.md) §2 |
+
 ## Known rig-only artifacts (not real limitations)
 
 These showed up during live testing and are worth knowing about if you're chasing a "bug" — they

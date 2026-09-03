@@ -11,6 +11,18 @@ internal static class Program
     {
         AgentOptions options = AgentOptions.Parse(args);
 
+        // Linux/Proton: NEEDS-LIVE, no Wine box exists to confirm this against — see
+        // KotorCoop.Memory.WineDetection's own doc comment for the detection method. Printed
+        // once, before dispatch, so a Linux player sees it whichever verb they ran (including
+        // the no-argument setup — see InstallCommand.Setup).
+        if (KotorCoop.Memory.WineDetection.IsWine)
+        {
+            string? host = KotorCoop.Memory.WineDetection.HostDescription;
+            Console.WriteLine(host is null
+                ? $"running under Wine {KotorCoop.Memory.WineDetection.Version}"
+                : $"running under Wine {KotorCoop.Memory.WineDetection.Version} ({host})");
+        }
+
         try
         {
             return options.Command switch

@@ -72,8 +72,10 @@ notes — a mismatched module only drops that module's channels, a different sav
 
 ## Requirements
 
-- Windows. The packaged zip needs only the .NET 10 runtime; building from source needs the .NET 10 SDK and the
-  Visual Studio 2022 MSVC x86 C++ toolset (NativeAOT `win-x86` plugin, C chain loader).
+- Windows, or Linux / Steam Deck through Proton or Wine (see [Linux and Steam Deck](#linux-and-steam-deck-proton)).
+  The packaged zip has no prerequisites — the agent ships with its own .NET runtime inside one exe. Building from
+  source needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ toolset (NativeAOT `win-x86` plugin, C chain
+  loader).
 - **KOTOR 1, v1.0.3.** A DRM-free build is what everything here is developed and tested against. The Steam copy is
   the *same binary* under a DRM wrapper, its addresses match at runtime, and it is supported: a Steam client and a
   DRM-free host have been verified in one live session — see [Steam](#steam) below. KOTOR 2 is untouched.
@@ -200,6 +202,33 @@ steam_invites = 1     ; coop.ini; 0 stops the agent talking to Steam at all
 ```powershell
 KotorCoop.Agent.exe run --steam-join 'kc1/203.0.113.7:27140'   # what "Join Game" passes; also usable by hand
 ```
+
+## Linux and Steam Deck (Proton)
+
+Full write-up: [docs/research/proton.md](docs/research/proton.md).
+
+Both halves of the mod are Windows programs that run inside the game's Wine/Proton prefix, and both are built so
+that the prefix needs nothing added: the plugin is a native x86 DLL with no runtime, and since 2026-09-03 the
+packaged agent is one self-contained `KotorCoop.Agent.exe` with the .NET runtime inside (that is also why a
+Windows player no longer needs .NET installed). The installer recognises Wine and looks for the game where Proton,
+Heroic and Lutris put it (`Z:\home\…` Steam libraries, `Games\Heroic`, `Games`, `STEAM_COMPAT_INSTALL_PATH`).
+
+What a Linux player does differently, in short: extract the zip into the game folder (or run the installer inside
+the prefix — `protontricks-launch --appid 32370 KotorCoop.Agent.exe`, Heroic's *Run EXE on prefix*, Lutris' *Run EXE
+inside Wine prefix*), and add the DLL override that makes Wine load our `dinput8.dll` instead of its built-in one:
+
+```
+WINEDLLOVERRIDES="dinput8=n,b" %command%        # Steam / Steam Deck launch options
+```
+
+(Heroic: game settings → environment variable `WINEDLLOVERRIDES=dinput8=n,b`; Lutris: runner options → DLL
+overrides `dinput8` → `n,b`.) Everything after that — hosting, joining, `coop.ini`, the controller layer with the
+Deck's own controls — is the same as on Windows. The recipe and the caveats are spelled out in the packaged README.
+
+**Honest status: nothing here has run on a Linux machine yet.** The engineering is done and reasoned against
+Wine's documented behaviour, the plugin and agent log `running under Wine x.y` so a report from a real Deck or
+desktop tells us immediately where it got to, and the open questions are listed in
+[proton.md](docs/research/proton.md) §6. First live report wins.
 
 ## Building from source
 

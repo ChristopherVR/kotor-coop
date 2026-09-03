@@ -84,7 +84,10 @@ hook installed, all three modules visible in the process.
 `.github/workflows/ci.yml` runs on every push and pull request: `dotnet build -warnaserror`,
 the test suite (minus the known-flaky `HeavyPacketLossStillConverges`), then
 `tools/package.ps1 -WarnAsError`, which builds the NativeAOT plugin, the C loader and the
-agent and uploads `kotor-coop-<git describe>.zip` as the run's artifact — so every green
+agent (a self-contained single-file `win-x64` publish — the runtime is inside the exe, so a
+player needs no .NET and a Proton prefix needs nothing added; `dotnet build` and the rig stay
+framework-dependent, see `KotorCoop.Agent.csproj` and [research/proton.md](research/proton.md)
+§2) and uploads `kotor-coop-<git describe>.zip` (~33 MB) as the run's artifact — so every green
 run has a ready-to-use build attached.
 
 `.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes

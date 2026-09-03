@@ -5,6 +5,29 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!--
+    `dotnet publish` (tools/package.ps1, CI) produces ONE self-contained KotorCoop.Agent.exe
+    that carries its own .NET runtime, so a player needs nothing installed — and, the reason
+    it went in: a Linux/Steam Deck player running the game under Proton has no way to put a
+    Windows .NET runtime into the Wine prefix that is not worse than this. Single-file keeps
+    the game directory to KotorCoop.* files, which is the rule the uninstaller relies on
+    (PackageInstaller.cs); the ~38 MB is compressed in place. Not trimmed: three JSON
+    (de)serialisations and CoopAgent.TopFrame use reflection the trimmer rejects, and the
+    saving is not worth the risk in a process that talks to a game's memory.
+
+    `dotnet build` is untouched (framework-dependent, plain bin\Debug path): that is what
+    tools/demo.ps1 and build.ps1 -Install run on the rig, and it starts faster.
+    _IsPublishing is what the `dotnet publish` CLI sets; the SDK's own PublishRelease default
+    keys off the same property.
+  -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\KotorCoop.Session\KotorCoop.Session.csproj" />
 

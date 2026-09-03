@@ -111,8 +111,9 @@ see `docs/research/network-topology.md` if you want the full picture.
 
 ## Requirements
 
-- Windows, and the **.NET 10 runtime** (Windows offers to install it the first time
-  `KotorCoop.Agent.exe` starts if it is missing).
+- Windows — or Linux / Steam Deck with the game running under Proton or Wine, see **Linux and
+  Steam Deck** below. Nothing else to install: `KotorCoop.Agent.exe` carries its own .NET
+  runtime (that is why it is ~40 MB).
 - **KOTOR 1, v1.0.3.** A DRM-free (GOG) copy is what this is developed and tested against.
   Steam's copy is the *same binary* under a DRM wrapper — the engine addresses are correct on
   it too — but it is only partly supported; see **Steam** below.
@@ -144,6 +145,51 @@ not allowed to ship Valve's). Without that file you get one line in the log and 
 works exactly as before. Both players need to own KOTOR on Steam, and while the agent runs
 Steam will show you as playing KOTOR. Set `steam_invites = 0` to stop the agent talking to
 Steam at all.
+
+## Linux and Steam Deck
+
+The mod is two Windows programs that live inside the game's own Wine/Proton prefix: the
+`dinput8.dll` the game loads, and `KotorCoop.Agent.exe`, which the DLL starts and stops for
+you. Neither needs anything installed into the prefix (the agent carries its own .NET). What
+you need to do differently from Windows is two things:
+
+1. **Put the files in the game folder.** Easiest: extract this zip straight into it —
+   Steam: `~/.local/share/Steam/steamapps/common/swkotor/` (or `~/.steam/steam/...`; on a Steam
+   Deck do this in Desktop Mode, or right-click the game → Manage → Browse local files);
+   Heroic / Lutris (GOG copy): the game's folder from the launcher's "Open install folder".
+   If another mod already owns `dinput8.dll` (ReShade, an ASI loader, a widescreen fix), run
+   the installer inside the prefix instead so it can chain them: Steam →
+   `protontricks-launch --appid 32370 KotorCoop.Agent.exe`, Heroic → the game's
+   settings → "Run EXE on prefix", Lutris → "Run EXE inside Wine prefix". The installer finds
+   the game under `Z:\home\...` (Steam libraries, Heroic and Lutris folders) — or pass the
+   path.
+2. **Tell Wine to load *our* `dinput8.dll`, not its own.** Wine ships a built-in DirectInput
+   and prefers it over a DLL beside the exe unless told otherwise:
+   - Steam / Steam Deck: right-click the game → Properties → Launch Options:
+     `WINEDLLOVERRIDES="dinput8=n,b" %command%`
+   - Heroic: game settings → Advanced → Environment variables: `WINEDLLOVERRIDES` = `dinput8=n,b`
+   - Lutris: Configure → Runner options → DLL overrides: `dinput8` → `n,b`
+
+   Without it the game runs fine and the mod simply never loads. `kotorcoop-plugin.log`
+   appearing in the game folder is the sign it worked; it logs `running under Wine x.y`.
+
+Then play as on Windows — the same host/join, the same `coop.ini`. A few things to know:
+
+- **Firewall.** If your distribution runs one (`ufw`, `firewalld`), the host has to open the
+  UDP port (`27140` by default) like a Windows host would; UPnP works the same way. A Steam
+  Deck has no firewall out of the box.
+- **Controller.** The Deck's built-in controls (and any pad Steam Input presents as an Xbox
+  controller) drive the game through the mod's controller support; the address box, chat and
+  the console still want a keyboard — on a Deck, the on-screen keyboard (STEAM + X).
+- **Copying the address to the clipboard** from the agent's console may do nothing under
+  Wine; the address is always printed on screen and in the log.
+- **Two copies on one Linux machine** (`launch --instance 2`) has not been tried.
+
+Proton 9 or newer (or the current Proton Experimental / GE) is what to expect this to work
+with. **None of this has been run on a Linux machine by the developers yet** — it is built to
+work under Wine and checked against Wine's documented behaviour, and the first reports from
+real Decks and desktops are what will turn "should work" into "works". Please send them,
+with `kotorcoop-plugin.log` and the agent's log.
 
 ## Configure
 

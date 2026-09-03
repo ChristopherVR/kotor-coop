@@ -27,6 +27,12 @@ The plugin did not load. `dinput8.dll` must sit in the same directory as `swkoto
 (not a subfolder), and must be the x86 build (`build.ps1` checks this). In chain mode, read
 `dinput8-chain.log`: it lists every entry the loader tried and which one it forwards to.
 
+**On Linux / Steam Deck (Proton, Wine)** this is almost always the missing DLL override: Wine
+loads its own built-in `dinput8` instead of ours unless the game is launched with
+`WINEDLLOVERRIDES="dinput8=n,b" %command%` (Heroic: environment variable; Lutris: runner DLL
+overrides). With the override in place the log's first lines include `running under Wine x.y`.
+See [research/proton.md](research/proton.md) §3 and §7.
+
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 
 The installer refuses to overwrite a `dinput8.dll` it does not recognise as its own (the

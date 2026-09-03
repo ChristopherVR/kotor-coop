@@ -69,6 +69,14 @@
     <Compile Include="..\KotorCoop.Protocol\PartyCensusRule.cs" Link="Shared\PartyCensusRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ExeImageDigestRule.cs" Link="Shared\ExeImageDigestRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\PhantomAttackerLedger.cs" Link="Shared\PhantomAttackerLedger.cs" />
+
+    <!--
+      Same technique, one file from KotorCoop.Memory: WineDetection needs to be reachable from
+      both this NativeAOT DLL and the ordinary KotorCoop.Agent assembly (which already reaches
+      KotorCoop.Memory by reference, via KotorCoop.Session), and this is the only way this
+      project ever shares code at all. See WineDetection.cs's own doc comment.
+    -->
+    <Compile Include="..\KotorCoop.Memory\WineDetection.cs" Link="Shared\WineDetection.cs" />
   </ItemGroup>
 
 </Project>

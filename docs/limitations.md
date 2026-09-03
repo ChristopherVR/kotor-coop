@@ -101,6 +101,13 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Seeing that you're connected | **Works, with a catch** | A one-line status in the top-left. The line has been confirmed in the data; the exact on-screen pixels have not been eyeballed on the test rig. |
 | Pausing | **Works** | Either player pauses both games. |
 
+## Linux and Steam Deck
+
+| | Status | What to expect |
+| --- | --- | --- |
+| Playing through Proton / Wine | **Should work — untested** | Everything is built to run inside the game's Proton prefix with nothing extra installed (the agent carries its own .NET). You add one launch option, `WINEDLLOVERRIDES="dinput8=n,b" %command%`, so Wine loads the mod's `dinput8.dll` instead of its own; the packaged README has the Steam Deck, Heroic and Lutris versions. Nobody has run it on a real Linux machine yet — the logs say `running under Wine` so a report tells us exactly how far it got. |
+| The Deck's built-in controls | **Should work — untested** | They reach the game as an Xbox controller, which the controller support above picks up. Typing (address, chat, console) needs the on-screen keyboard. |
+
 ---
 
 ## Things that are *not* limitations
@@ -127,5 +134,8 @@ Built and automatically tested, but nobody has watched them on the running game 
 - The exact on-screen look of the connection line and of the shared map reveal.
 - Refusing a client's galaxy-map choice when `follow_lead = host` is set (the default lets anyone
   choose, and that path is verified).
+- Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
+  between a Deck and a Windows PC.
+- A physical gamepad (the controller support was verified with a simulated one).
 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.

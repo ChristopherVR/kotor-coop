@@ -678,77 +678,81 @@ public static partial class PackageInstaller
             Add(Path.Combine(library, @"steamapps\common\swkotor"), "Steam library", supported: true);
         }
 
+        // Linux/Proton. NEEDS-LIVE: there is no Wine box in this environment, so none of this
+        // has been exercised against a real install — see ProtonPaths' own doc comment for why
+        // it is written to be testable without one. Harmless on real Windows either way: every
+        // path below only exists at all when Z:\ is actually Wine's root mapping, and every
+        // candidate is re-verified for swkotor.exe exactly like every other source above.
+        Add(ProtonPaths.SteamCompatInstallPath(Environment.GetEnvironmentVariable), "Steam (Proton)", supported: true);
+
+        foreach (string library in ProtonSteamLibraryDirectories())
+        {
+            Add(Path.Combine(library, @"steamapps\common\swkotor"), "Steam library (Proton)", supported: true);
+        }
+
+        foreach (string library in ProtonPaths.HeroicLutrisRoots(ProtonPaths.HomeDirectories(Directory.Exists, SafeEnumerateDirectories)))
+        {
+            if (!Directory.Exists(library))
+            {
+                continue;
+            }
+
+            Add(library, "Heroic/Lutris folder", supported: true);
+            try
+            {
+                foreach (string sub in Directory.GetDirectories(library))
+                {
+                    Add(sub, "Heroic/Lutris folder", supported: true);
+                }
+            }
+            catch (Exception)
+            {
+                // Unreadable library folder: skip it.
+            }
+        }
+
         return found;
     }
 
-    /// <summary>
-    /// Every Steam library root on this machine: the client's own install directory, plus
-    /// every path listed in its <c>steamapps\libraryfolders.vdf</c> — which is how a second
-    /// drive's library is found, the common case for a large collection.
-    ///
-    /// Deliberately a regex over the VDF rather than a parser. The only thing wanted is the
-    /// <c>"path"</c> values; a wrong or stale line costs nothing, because every result is
-    /// checked for <c>swkotor.exe</c> afterwards. Never throws: an unreadable or absent file
-    /// yields whatever was already found.
-    /// </summary>
-    public static IReadOnlyList<string> SteamLibraryDirectories()
+    /// <summary>Adds <paramref name="path"/> to <paramref name="roots"/> if it exists on disk
+    /// and is not already there (case-insensitively) — the one piece of logic every Steam
+    /// library root, native or Proton, is collected through. A malformed or unresolvable path
+    /// is simply not a library; this never throws.</summary>
+    private static void AddLibraryRoot(List<string> roots, string? path)
     {
-        List<string> roots = [];
-
-        void AddRoot(string? path)
+        if (string.IsNullOrWhiteSpace(path))
         {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return;
-            }
-
-            try
-            {
-                string full = Path.GetFullPath(path).TrimEnd('\\');
-                if (Directory.Exists(full) && !roots.Any(r => string.Equals(r, full, StringComparison.OrdinalIgnoreCase)))
-                {
-                    roots.Add(full);
-                }
-            }
-            catch (Exception)
-            {
-                // A malformed path in the VDF is simply not a library.
-            }
+            return;
         }
 
-        if (OperatingSystem.IsWindows())
+        try
         {
-            try
+            string full = Path.GetFullPath(path).TrimEnd('\\');
+            if (Directory.Exists(full) && !roots.Any(r => string.Equals(r, full, StringComparison.OrdinalIgnoreCase)))
             {
-                using RegistryKey? user = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
-                AddRoot(user?.GetValue("SteamPath") as string);
-            }
-            catch (Exception)
-            {
-                // No registry access is just "not found".
-            }
-
-            foreach (string hive in new[] { @"SOFTWARE\WOW6432Node\Valve\Steam", @"SOFTWARE\Valve\Steam" })
-            {
-                try
-                {
-                    using RegistryKey? key = Registry.LocalMachine.OpenSubKey(hive);
-                    AddRoot(key?.GetValue("InstallPath") as string);
-                }
-                catch (Exception)
-                {
-                    // Same.
-                }
+                roots.Add(full);
             }
         }
-
-        // The usual locations too, in case the registry says nothing.
-        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+        catch (Exception)
         {
-            AddRoot(Path.Combine(drive.RootDirectory.FullName, @"Program Files (x86)\Steam"));
-            AddRoot(Path.Combine(drive.RootDirectory.FullName, "SteamLibrary"));
+            // A malformed path is simply not a library.
         }
+    }
 
+    /// <summary>
+    /// Follows every root already in <paramref name="roots"/> to its own
+    /// <c>steamapps\libraryfolders.vdf</c> and adds whatever extra libraries it lists — how a
+    /// second drive's library (native) or a second mount (Proton) is found, the common case
+    /// for a large collection. Deliberately a regex over the VDF rather than a parser: the
+    /// only thing wanted is the <c>"path"</c> values, and a wrong or stale line costs nothing
+    /// because every result is checked for <c>swkotor.exe</c> afterwards. A vdf entry that is
+    /// itself a POSIX path (a Linux Steam client's own library list) is converted to Wine form
+    /// the same way <see cref="ProtonPaths.ToWinePath"/> converts everything else here — an
+    /// entry that is already a Windows path passes through unchanged. Never throws: an
+    /// unreadable or absent file leaves <paramref name="roots"/> exactly as it already was.
+    /// </summary>
+    private static void ExpandLibraryFoldersVdf(List<string> roots)
+    {
         foreach (string root in roots.ToList())
         {
             try
@@ -761,7 +765,8 @@ public static partial class PackageInstaller
 
                 foreach (Match match in SteamLibraryPathPattern().Matches(File.ReadAllText(vdf)))
                 {
-                    AddRoot(match.Groups[1].Value.Replace(@"\\", @"\"));
+                    string raw = match.Groups[1].Value.Replace(@"\\", @"\");
+                    AddLibraryRoot(roots, ProtonPaths.ToWinePath(raw));
                 }
             }
             catch (Exception)
@@ -769,6 +774,88 @@ public static partial class PackageInstaller
                 // Unreadable libraryfolders.vdf: the roots already found still stand.
             }
         }
+    }
+
+    /// <summary><see cref="Directory.GetDirectories(string)"/>, but "unreadable" is just an
+    /// empty result instead of an exception — the shape <see cref="ProtonPaths"/>' delegates
+    /// need, and the same tolerance every other directory walk in this file already has.</summary>
+    private static IEnumerable<string> SafeEnumerateDirectories(string path)
+    {
+        try
+        {
+            return Directory.GetDirectories(path);
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Every Steam library root on this machine: the client's own install directory, plus
+    /// every path listed in its <c>steamapps\libraryfolders.vdf</c> — which is how a second
+    /// drive's library is found, the common case for a large collection.
+    /// </summary>
+    public static IReadOnlyList<string> SteamLibraryDirectories()
+    {
+        List<string> roots = [];
+
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using RegistryKey? user = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
+                AddLibraryRoot(roots, user?.GetValue("SteamPath") as string);
+            }
+            catch (Exception)
+            {
+                // No registry access is just "not found".
+            }
+
+            foreach (string hive in new[] { @"SOFTWARE\WOW6432Node\Valve\Steam", @"SOFTWARE\Valve\Steam" })
+            {
+                try
+                {
+                    using RegistryKey? key = Registry.LocalMachine.OpenSubKey(hive);
+                    AddLibraryRoot(roots, key?.GetValue("InstallPath") as string);
+                }
+                catch (Exception)
+                {
+                    // Same.
+                }
+            }
+        }
+
+        // The usual locations too, in case the registry says nothing.
+        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+        {
+            AddLibraryRoot(roots, Path.Combine(drive.RootDirectory.FullName, @"Program Files (x86)\Steam"));
+            AddLibraryRoot(roots, Path.Combine(drive.RootDirectory.FullName, "SteamLibrary"));
+        }
+
+        ExpandLibraryFoldersVdf(roots);
+
+        return roots;
+    }
+
+    /// <summary>
+    /// The Linux/Proton equivalent of <see cref="SteamLibraryDirectories"/>: starts from
+    /// <see cref="ProtonPaths.SteamLibraryRoots"/> (the native/Flatpak/SD-card Steam
+    /// installs reachable under Wine's <c>Z:\</c>) instead of the registry and drive letters,
+    /// then follows the exact same <c>libraryfolders.vdf</c> expansion — a Proton Steam
+    /// client's OWN extra libraries are found through it identically to a native one's.
+    /// </summary>
+    public static IReadOnlyList<string> ProtonSteamLibraryDirectories()
+    {
+        List<string> roots = [];
+        IReadOnlyList<string> homes = [.. ProtonPaths.HomeDirectories(Directory.Exists, SafeEnumerateDirectories)];
+
+        foreach (string root in ProtonPaths.SteamLibraryRoots(homes, Directory.Exists, SafeEnumerateDirectories))
+        {
+            AddLibraryRoot(roots, root);
+        }
+
+        ExpandLibraryFoldersVdf(roots);
 
         return roots;
     }

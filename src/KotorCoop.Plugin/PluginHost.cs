@@ -145,6 +145,16 @@ internal static unsafe partial class PluginHost
 
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
 
+            // Linux/Proton: NEEDS-LIVE, no Wine box exists to confirm this against — see
+            // KotorCoop.Memory.WineDetection's own doc comment for the detection method.
+            if (KotorCoop.Memory.WineDetection.IsWine)
+            {
+                string? host = KotorCoop.Memory.WineDetection.HostDescription;
+                Log(host is null
+                    ? $"running under Wine {KotorCoop.Memory.WineDetection.Version}"
+                    : $"running under Wine {KotorCoop.Memory.WineDetection.Version} ({host})");
+            }
+
             // One-time diagnostic: name any coop.ini key that is not a player setting (a
             // developer switch, or something no reader recognises at all) — see
             // PluginConfig.LogNonPlayerKeys and docs/CONFIG.md's "Developer switches" table.
