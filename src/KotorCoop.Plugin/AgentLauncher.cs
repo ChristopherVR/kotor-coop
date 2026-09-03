@@ -101,6 +101,15 @@ internal static unsafe class AgentLauncher
     /// </summary>
     private const uint CreateNoWindow = 0x08000000;
 
+    /// <summary>
+    /// Born suspended so <see cref="AgentJob"/> can put it in the game-lifetime job before
+    /// its first instruction; <see cref="ResumeThread"/> then lets it go.
+    /// </summary>
+    private const uint CreateSuspended = 0x00000004;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(nint thread);
+
     private const uint GenericWrite = 0x40000000;
     private const uint FileShareReadWrite = 0x00000003;
     private const uint CreateAlways = 2;
@@ -251,7 +260,7 @@ internal static unsafe class AgentLauncher
                 0,
                 0,
                 haveLog,           // inherit handles only when there is one to inherit
-                CreateNoWindow,
+                CreateNoWindow | CreateSuspended,
                 0,
                 gameDirectory,
                 ref startup,
@@ -271,13 +280,20 @@ internal static unsafe class AgentLauncher
                 return;
             }
 
-            // Nothing here owns the agent's lifetime; it attaches by pid and exits with the
-            // game. Close both handles so the plugin holds no references to it.
+            // The agent attaches by pid and exits on its own when the game does; the job is
+            // the backstop that makes that true even when it cannot (see AgentJob). Assign
+            // while still suspended, then let it run. Nothing else here owns it: both
+            // handles are closed so the plugin holds no reference to the process.
+            bool joined = AgentJob.TryAssign(info.Process);
+            ResumeThread(info.Thread);
             CloseHandle(info.Thread);
             CloseHandle(info.Process);
             _startedGameDirectory = gameDirectory;
             StartupFailure = null;
-            PluginHost.Log($"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}; log -> {Path.GetFileName(logPath)}");
+            PluginHost.Log(
+                $"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}"
+                + (joined ? " (tied to the game's lifetime)" : string.Empty)
+                + $"; log -> {Path.GetFileName(logPath)}");
         }
         catch (Exception ex)
         {

@@ -123,6 +123,15 @@ internal static class RunCommand
                 await game.WaitForExitAsync(cts.Token).ConfigureAwait(false);
                 Console.WriteLine("the game exited; the agent shuts down with it.");
                 cts.Cancel();
+
+                // The cancel is the polite exit. If teardown does not finish — a socket
+                // blocked on a dead route, a pump stuck behind a lock the game's death
+                // orphaned — this hidden, windowless process must not sit in Task Manager
+                // for ever. The plugin's job object (AgentJob) is the last line; this is the
+                // one before it, so a hand-started agent gets the same guarantee.
+                await Task.Delay(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                Console.WriteLine("teardown did not finish within 10s of the game exiting; exiting now.");
+                Environment.Exit(0);
             }
             catch
             {
