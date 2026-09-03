@@ -1,10 +1,22 @@
-﻿# Configuration
+# Configuration
 
 `coop.ini` lives beside the game executable and is parsed by two independent readers that
 never talk to each other: the external agent (`src/KotorCoop.Session/CoopConfig.cs`) and the
 in-process plugin (`src/KotorCoop.Plugin/PluginConfig.cs` plus direct per-controller reads).
 A few keys are read by both sides. The agent's `KotorCoop.Agent` CLI also takes its own
 flags, independent of `coop.ini`.
+
+**This page has two tables.** [Player settings](#player-settings) is the entire shipped
+`profiles/coop.ini.example` — every key a player would ever want to change, with a plain-
+language explanation. [Developer switches](#developer-switches-do-not-change) is everything
+else either reader consumes: tuning knobs and bisect levers built for the test rig and for
+isolating a specific bug, each one **shipped at its own verified value** and not something a
+player needs to touch. Setting one by hand is unsupported — it may reintroduce a bug that was
+fixed by flipping it, or regress a measured latency win. Both readers log a line
+(`coop.ini: developer switch 'X = value' is set (not a player setting; see docs/CONFIG.md)`)
+whenever a coop.ini they load sets one of these, and a similar line for any key neither reader
+recognises at all, so a stray or copy-pasted line is never silently in effect with nothing
+pointing at it.
 
 **Behaviour-flag negotiation (2026-08-27).** Twenty of the keys below (and two CLI-only ones,
 `--no-party-sync` and `--require-identical-save`) are now compared between the two peers at
@@ -27,7 +39,7 @@ end to end as of 2026-08-27. See [mod-compatibility.md](research/mod-compatibili
 "Behaviour-flag negotiation" section for the full design and the exact wire shape. Nothing
 here changes what a key is READ as locally (`CoopConfig`/`AgentSettings` still describe this
 install's own coop.ini/CLI exactly as before); adoption lives in a separate, session-scoped
-`SessionOverrides` layer.
+`SessionOverrides` layer. All nine of these are developer switches below, not player settings.
 
 Every default below is the CODE's own fallback — what applies if the key is absent from
 `coop.ini` entirely. **The file that actually ships** (`profiles/coop.ini.example`, staged
@@ -36,120 +48,145 @@ the code fallback for anyone using the packaged release. Where the shipped file'
 differs from the code fallback, a footnote says so — that is the value a real install
 actually runs with.
 
-## Agent-side keys (`CoopConfig.cs`)
+**Retired keys.** `combat_state_sync` (a no-op since 2026-08-27 — see
+[combat-participation.md](research/combat-participation.md)'s dated section) was removed
+entirely from `coop.ini.example`, both readers, and this doc as part of the 2026-09
+"player settings vs. developer switches" cleanup; see git history for the old stub
+(`CombatStateController.cs`) if you need the archaeology.
 
-| Key | Default (code) | Meaning | Doc |
+## Player settings
+
+Every key in the shipped `profiles/coop.ini.example`, grouped the same way the file itself
+is. The Default column is the value the shipped file actually sets, not the bare code
+fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
+
+### Connecting
+
+| Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `mode` | `join` unless `host` | `host` a session or `join` one | [connect-flow.md](research/connect-flow.md) |
-| `host` | `127.0.0.1`, unset | server address to join | [connect-flow.md](research/connect-flow.md) |
-| `port` | `27015`⁸ | UDP port | [network-topology.md](research/network-topology.md) |
+| `mode` | `join` | `host` a session or `join` one | [connect-flow.md](research/connect-flow.md) |
+| `host` | example address, unset in code | for `mode = join`: the host's address | [connect-flow.md](research/connect-flow.md) |
+| `port` | `27140`⁸ | UDP port; host and client must match | [network-topology.md](research/network-topology.md) |
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
-| `name` | unset | player/character name shown to peers | — |
-| `join_mode` | `save` | JOINER only: how you get a character into the host's world. `save` = your own save's character (today's behaviour). `newcharacter` = you have no save; go through the game's own New Game / character-creation screens, your game starts normally, and a few seconds later the mod saves it and pulls you into the host's world with that character | [world-adoption.md](research/world-adoption.md) |
-| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts the host's world instead of playing degraded. Also what makes a HOST serve its world by default. Your own saves are never touched — only the autosave slot | [world-adoption.md](research/world-adoption.md) |
+| `name` | unset | your name/character name shown to peers | — |
 | `server_name` | falls back to `name` | name shown in the server browser | [server-browser.md](research/server-browser.md) |
-| `menu_button` | ON⁷ | show the in-game Co-op menu button | [menu-frame-hook.md](research/menu-frame-hook.md) |
-| `tick_rate` | `0` (keeps the built-in rate) | state send rate in Hz, clamped 5-120 | [lag-audit.md](research/lag-audit.md) |
-| `interp_ms` | `-1` (keeps the built-in delay) | how far in the past peers render, ms, clamped 0-500 | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
-| `dejitter` | OFF | file received avatar snapshots on a regularised playback timeline instead of raw arrival times | [lag-audit.md](research/lag-audit.md) |
-| `perf_trace` | OFF | once-a-second pump/network/phantom telemetry into the agent log (rig measurement) | [lag-audit.md](research/lag-audit.md) |
-| `pause_sync` | ON | mirror a peer's pause into this game | — |
-| `minigame_hide_peer` | ON | park a peer's phantom while they race/man a turret | [minigames.md](research/minigames.md) |
-| `minigame_spectate` | OFF | hand the camera to a racing/turret peer (not yet wired) | [minigames.md](research/minigames.md) |
-| `pazaak_detect` | ON⁹ | treat a running Pazaak hand as "in a minigame" too (live-verified 2026-08-28) | [minigames.md](research/minigames.md) |
-| `minigame_lock_peers` | ON | one player races, everybody else waits: hold non-racers still with a "&lt;name&gt; is racing - waiting" notice, and refuse to follow a peer onto a single-seat track module. Needs the peer's minigame flag AND a track module, so a Pazaak hand (same flag, ordinary module) never locks anyone | [minigames.md](research/minigames.md) §24 |
-| `minigame_lock_timeout_s` | `600` | seconds a minigame lock may stand before releasing itself regardless of the racer's flag (0 = no timeout) | [minigames.md](research/minigames.md) §24 |
-| `minigame_modules` | unset (the four stock tracks only) | comma-separated extra module resrefs to treat as single-seat minigame tracks, on top of `tar_m03mg`/`manm26mg`/`tat_m17mg`/`m12ab` | [minigames.md](research/minigames.md) §24 |
-| `chat_overlay` | ON | show the always-on chat overlay | [chat-input-scroll.md](research/chat-input-scroll.md) |
+| `join_mode` | `save` | how a JOINER gets a character into the host's world: `save` (your own save) or `newcharacter` (make one through the game's own New Game screens) | [world-adoption.md](research/world-adoption.md) |
+| `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts the host's world instead of playing degraded | [world-adoption.md](research/world-adoption.md) |
+| `menu_button` | ON⁷ | show the main-menu "Co-op" button | [menu-frame-hook.md](research/menu-frame-hook.md) |
+
+### Your character
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `follow_lead` | `any` | who may LEAD a transition the other player follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
+| `dialogue_auto_join` | `off` | be pulled into an ORDINARY conversation another player starts: `off`, `near`, or `always`. A conversation the game itself forces on both players always auto-joins regardless | [dialogue-sync.md](research/dialogue-sync.md) |
+| `dialogue_auto_join_range` | `20` | the range (game units) `dialogue_auto_join = near` auto-joins within | [dialogue-sync.md](research/dialogue-sync.md) |
+| `spectate_on_down` | ON | hand your camera to the other player while you are downed | [spectate-camera.md](research/spectate-camera.md) |
+| `control_return` | ON | return control to your own character the moment you connect | [control-return.md](research/control-return.md) |
+
+### Screen
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `hide_party_portraits` | ON | on a client, hide the HUD's companion portraits (they show state this instance does not own) | [client-control-lock.md](research/client-control-lock.md) |
+| `status_toasts` | ON | a short line posted only when connection state changes | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
+| `status_indicator` | ON | a separate, always-on one-line connection summary | [connect-flow.md](research/connect-flow.md) |
+| `chat_overlay` | ON | the always-on chat overlay | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_opacity` | `75` | overlay opacity, 0-100 | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_anchor` | `bottom-left` | overlay corner | [chat-input-scroll.md](research/chat-input-scroll.md) |
 | `chat_overlay_lines` | `5` | lines shown at once | [chat-input-scroll.md](research/chat-input-scroll.md) |
-| `chat_overlay_fade_ms` | `9000` | ms a line stays before it fades (0 = forever) | [chat-input-scroll.md](research/chat-input-scroll.md) |
+| `chat_overlay_fade_ms` | `9000` | ms a chat line stays before it fades (0 = forever) | [chat-input-scroll.md](research/chat-input-scroll.md) |
+
+### Internet play
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `steam_invites` | ON | Steam friends-list "Join Game"; inert without your own `steam_api64.dll`, Steam running, and owning app 32370 | [steam-support.md](research/steam-support.md) |
+| `stun_servers` | two well-known public servers¹² | HOST only: STUN servers asked for the host's public IP:port; empty disables discovery | [network-topology.md](research/network-topology.md) |
+| `upnp` | ON | HOST only: attempt a UPnP router port mapping; fails soft | [network-topology.md](research/network-topology.md) |
+
+### Advanced
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `log_max_mb` | `8` | plugin/agent log rotation cap, MB | — |
+| `log_keep` | `3` | rotated log generations kept, clamped 1-10 | — |
+| `auto_start_agent` | ON | the plugin launches/attaches the agent itself; set 0 only if you run the agent yourself | — |
+| `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
+
+## Developer switches (do not change)
+
+Everything else either reader consumes. Every one of these ships at its own verified
+setting — tuned or bisected across many recorded live-test rounds under `docs/research/` —
+for the test rig and for isolating a specific bug. A player never needs any of them, and
+hand-editing one is unsupported.
+
+### Connection & network tuning
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
 | `connect_timeout_ms` | `0` (keeps the built-in 15000) | ms a connect attempt waits before giving up | [connect-flow.md](research/connect-flow.md) |
-| `host_loss_release` | ON | a CLIENT that loses its host releases every plugin-side lock (control lock, party-select suppression, follow mirroring, dialogue spectate, minigame lock, ...) and plays solo instead of staying locked out until a manual disconnect; the client still auto-reconnects in the background either way | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
-| `host_loss_timeout_ms` | `0` (keeps the built-in 5000, same as the silence-based reconnect trigger) | ms the host may stay silent before `host_loss_release` fires | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
-| `status_toasts` | ON | the persistent connection indicator | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
-| `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `script_item_sync` | OFF³ | forward a script (OnEnter/OnDeath/heartbeat, outside any conversation) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
-| `party_fast_pump` | ON | pump the party channel on the real-time path | [lag-audit.md](research/lag-audit.md) |
-| `container_fast_pump` | OFF | pump placeable open/lock state on the real-time path | [container-sync.md](research/container-sync.md) |
-| `session_save_host_refusal` | OFF | tear the session down when the host's own save-load watch fires | [session-save.md](research/session-save.md) |
-| `client_load_rejoin` | ON | a client's own Load Game tears down and rejoins the session | [session-save.md](research/session-save.md) |
-| `host_load_readopt` | ON | a host's own Load Game has every client rejoin instead of disconnecting | [session-save.md](research/session-save.md) |
-| `transition_announce` | ON | a follower acts on an announced transition immediately | [transition-smoothness.md](research/transition-smoothness.md) |
-| `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
-| `follow_lead` | `any` | who may lead a transition the other follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
-| `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (agent's own copy) | [cinematics.md](research/cinematics.md) |
-| `companion_xp_sync` | OFF³ | share each active companion's experience the same way the PC's own is (live-verified 2026-08-27) | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_gear_sync` | ON (all three slots — body, right weapon, left weapon — live-confirmed 2026-08-28) | read each companion's real equipped gear and hand it to the plugin (agent's own copy) — the 2026-08-27 live-verified FAILURE (apply lands on the PLAYER, not the companion) was root-caused and fixed; a follow-up round found and fixed a weapon-slot-specific `EquipSlotMap` bit-flag encoding bug, then live-confirmed both weapon slots and the body slot, with mid-session propagation under 3s | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_damage_sync` | ON | forward cumulative damage TAKEN by a `companion_local_combat`-released companion to the host, which spends it as real engine damage on its own authoritative body — closes the gap where a released companion's damage went nowhere and the host's higher figure overwrote it on the next mirror pass. Inert unless `companion_local_combat` (itself OFF by default) has actually released a companion. NEEDS-LIVE | [companion-state-sync.md](research/companion-state-sync.md) §13 |
-| `party_pool_sync` | `2` (ON — flipped 2026-08-29) — `0` off; `1` is the original bidirectional op-log, DISQUALIFIED by a 2026-08-28 rig round that amplified a 3-unit deposit past 500 units, kept only so an existing `party_pool_sync = 1` config keeps its old meaning; `2` is the host-authoritative absolute-snapshot-plus-client-intents redesign and the shipped default. It took six live rig rounds to get there — shared-inventory-v2.md §6-§15 record every defect found and closed, the last two being the plugin's own deposit primitive returning a PRODUCT rather than a sum (§15.1) and an expiry clock that ran through a blind window (§15.2). The flip round re-ran the recipe with `dialogue_item_sync`/`script_item_sync` at their own shipped defaults (ON) rather than isolated, and caught one more real cross-channel echo: a party-pool add lands in the PC's own item repository, so `script_item_sync` re-broadcast our own pool applies as fresh script grants and the peer materialised a second copy — closed by `CoopAgent.NoteLocalPartyPoolAdd` | sync the shared party item pool (`CSWPartyTable+0x118`) both ways — `1` = the op-log (`Pumps/PartyPoolPump.cs`), `2` = host snapshot + client intents (`Pumps/PartyPoolPumpV2.cs`) | [party-pool-sync.md](research/party-pool-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) §1-16 |
-| `party_pool_trace` | OFF | rig-only diagnostics for BOTH mode-2 shared-inventory pumps (`party_pool_sync=2` and `store_sync=2`): per key, per tick, the scan value / this pump's belief / the host's snapshot / raw movement / what its queued reconciles still expect / what it has outstanding to the host / what it published / the reconcile target and delta. Several lines a second on a busy pool | [shared-inventory-v2.md](research/shared-inventory-v2.md) §12 |
-| `solo_segment_spectate` | ON¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment (Bastila/Malak duels — live-verified 2026-08-28) | [star-forge-finale.md](research/star-forge-finale.md) |
-| `steam_invites` | ON | Steam friends-list "Join Game": a host publishes a `connect` rich-presence string and an accepted invite dials it. ON is safe because it is INERT unless the player supplied a `steam_api64.dll` (this project cannot redistribute Valve's), Steam is running, AND the account owns app 32370 — a GOG install gets one log line and behaves exactly as before. `0` stops the agent talking to Steam at all. Phase 1 (the codec, the config, `--steam-join`, the join wiring) is unit-tested; the native calls are NEEDS-LIVE | [steam-support.md](research/steam-support.md) |
-| `store_sync` | `2` (ON — flipped 2026-08-29) — `0` off; `1` is the original bidirectional op-log where `buy`/`sell` are live-confirmed but a blackout+reconnect resync double-applied a sell into the buyer's own inventory, DISQUALIFIED and kept only for config compatibility; `2` is the same host-authoritative redesign the party pool uses and the shipped default, on THREE clean live sessions in a row — each a client buy, a client sell-back, a host re-buy that succeeded exactly once, a second host re-buy correctly refused (`no stock matching that resref`), and 155s of idle with zero engine writes on either side. §15.5's last wobble (the client re-inserting what it had just bought) was root-caused to the HOST's own published snapshot regressing under a scan taken before its queued engine apply had landed, and is closed by `CoopHost._storeIntentEffectV2` — an accepted intent's write-through is now defended against a disagreeing scan until the apply is genuinely observed | sync merchant store stock (`CSWSStore+0x230`) both ways — reads only while a store's GUI is open; `1` = the op-log (`Pumps/StorePump.cs`), `2` = host snapshot + client intents (`Pumps/StorePumpV2.cs`) | [store-sync.md](research/store-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) §1-16 |
-| `stun_servers` | two well-known public servers¹² | HOST only: STUN servers (`host:port`, comma-separated) asked for the host's public IP:port; empty disables discovery (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
-| `upnp` | ON | HOST only: attempt a UPnP IGD port mapping for the session (and world-transfer) port; fails soft (roadmap item 24, NEEDS-LIVE) | [network-topology.md](research/network-topology.md) |
+| `host_loss_release` | ON | a CLIENT that loses its host releases every plugin-side lock and plays solo instead of staying locked out | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
+| `host_loss_timeout_ms` | `0` (keeps the built-in 5000) | ms the host may stay silent before `host_loss_release` fires | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
+| `tick_rate` | `0` (keeps the built-in rate) | state send rate in Hz, clamped 5-120 | [lag-audit.md](research/lag-audit.md) |
+| `interp_ms` | `-1` (keeps the built-in delay) | how far in the past peers render, ms, clamped 0-500 | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
+| `dejitter` | OFF | regularise received avatar snapshots onto a playback timeline instead of raw arrival times | [lag-audit.md](research/lag-audit.md) |
+| `perf_trace` | OFF | once-a-second pump/network/phantom telemetry into the agent log (rig measurement) | [lag-audit.md](research/lag-audit.md) |
+| `pause_sync` | ON | mirror a peer's pause into this game | — |
 
-¹ The property's own C# doc comment used to claim this was OFF by default while the actual
-parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
-shipped `coop.ini.example`; the comment has since been corrected to say ON.
-² The plugin reads the same key independently and also defaults it ON (see below). Until this
-was fixed, the agent's own copy (`CoopConfig.MovieRelayEnabled`) defaulted OFF when the key was
-absent, so the two readers disagreed the moment `movie_relay` was removed from `coop.ini`
-entirely; both now default ON, matching each other and the shipped file's explicit `=1`.
-
-## Debug / test-only keys
-
-Not part of normal play — omitted from the table above so they never look like something a
-player should set. Each exists to make an otherwise-unreachable code path reachable on the rig.
+### Combat
 
 | Key | Default (code) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `debug_hello_version` (added 2026-09-02) | `0` (off) | CLIENT only: overrides the version byte written into this client's Hello packet, and that packet alone — every later packet (state updates, pings, Bye) still carries the real `ProtocolConstants.Version`. `tools/demo.ps1` launches host and client from the same build, so there is otherwise no way to make the two sides disagree on protocol version and exercise `CoopHost.HandleVersionMismatch`'s typed `E_PROTO` Reject live. Set on the JOINING side only | [disconnect-reconnect.md](research/disconnect-reconnect.md) §12 |
-
-## Plugin-side keys (`PluginConfig.cs` + per-controller reads)
-
-| Key | Default (code) | Meaning | Doc |
-| --- | --- | --- | --- |
-| `auto_start_agent` | ON | plugin launches/attaches the agent itself | — |
-| `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` — overrides the `dinput8.chain` order; see TROUBLESHOOTING.md "Another mod already uses dinput8.dll" | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
-| `menu_button` | ON | plugin's own copy of the menu-button key | [menu-frame-hook.md](research/menu-frame-hook.md) |
-| `status_indicator` | ON | persistent on-screen connection summary (separate from the agent's `status_toasts`) | [connect-flow.md](research/connect-flow.md) |
-| `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
-| `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
-| `item_template_spawn_sync` | ON | capture the real blueprint resref of every item `CreateItemOnObject` creates (vanilla scripts, `giveloot`/`scriptgive`/`storeinsert`/`partypooladd`), so `script_item_sync` can forward it instead of a possibly-diverging Tag | [item-identity.md §13](research/item-identity.md) |
-| `combat_state_sync` | OFF | RETIRED 2026-08-27 (no-op, kept only so the key still parses) — see [combat-participation.md](research/combat-participation.md)'s dated section | [combat-participation.md](research/combat-participation.md) |
-| `control_return` | ON | return control to your own character on connect | [control-return.md](research/control-return.md) |
-| `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |
-| `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |
-| `mirror_smooth_ms` | `150` | smoothing window for enemy/party mirroring, ms, clamped 0-600 | [lag-audit.md](research/lag-audit.md) |
 | `local_combat` | ON | let a mirrored enemy fight a client through the client's own engine | [combat-participation.md](research/combat-participation.md) |
-| `local_combat_slots` | `3` | how many hostiles a client may fight simultaneously through local_combat, clamped 1-3; 1 reproduces the original single-fight behaviour bit for bit; plugin-local, not required to match between peers (see §11 for why) | [combat-participation.md §11](research/combat-participation.md) |
+| `local_combat_slots` | `3` | how many hostiles a client may fight simultaneously, clamped 1-3 | [combat-participation.md §11](research/combat-participation.md) |
 | `local_combat_diag_undriven_id` | `0` (off) | debug: force one id undriven, to isolate a bug | — |
 | `local_combat_bypass_id` | `0` (off) | debug: bypass id for local combat | — |
 | `local_combat_bisect_mask` | `0` (off) | debug: bisection mask for isolating a local-combat bug | — |
 | `local_combat_range` | `20` | max distance (units) to release a local-combat enemy | — |
 | `local_combat_engage_range` | `11` | engage distance for a released local-combat enemy | — |
-| `local_combat_timeout_s` | `25` | seconds of NO ACTIVITY (no damage dealt to it, not currently targeting the local player) before a released enemy reclaims to the mirror — not a fight-length cap; fresh activity keeps refreshing this clock indefinitely | [combat-participation.md §13](research/combat-participation.md) |
+| `local_combat_timeout_s` | `25` | seconds of no activity before a released enemy reclaims to the mirror | [combat-participation.md §13](research/combat-participation.md) |
 | `local_combat_targeting_us_fresh_s` | `2` | freshness window for targeting data, seconds | — |
 | `local_combat_deferred_notice` | ON | HUD line for other hostiles waiting on a free local-combat exclusion slot | [combat-participation.md](research/combat-participation.md) |
-| `local_combat_engage_fallback` | ON | if a local-combat script fire leaves a creature with no attack target after a short grace window (an idle GIT hostile, not one already mid-round), drive its attack on the local player directly through the same engine call `attack`/`companion_local_combat` already use, once per fight | [combat-participation.md §12](research/combat-participation.md) |
-| `damage_creator_attribution` | OFF | pass a real creator id (a peer's phantom, or a per-attacker id) through every forwarded-damage apply, so the receiving engine's own aggro/last-attacker bookkeeping sees who really hit it, instead of nobody | [peer-damage-ledger.md §8](research/peer-damage-ledger.md) |
-| `threat_retarget` | ON (since 2026-09-03; was OFF) | HOST only: keeps a small per-creature threat table from forwarded peer damage (`ThreatTable`/`ThreatRetargetRule` in `PeerDamageController`) and, when a peer's tracked threat against a creature clearly outweighs its current attack target's own, orders the creature onto that peer's phantom directly through `Odyssey.AttackTarget` — because `damage_creator_attribution`'s passive `+0x158`/`+0x160` write was live-measured (§8.10) to reach no native retargeting logic for an already-engaged creature. Same `SoleRemotePhantomId()` limit as `damage_creator_attribution`: unambiguous attribution only with exactly one remote peer connected. Live 2026-09-03 §11: with both players on one enemy the hits split 12/10 host/client over 98 s where the passive write alone gave the client 0; the order is re-issued every ≥4 s because the host PC's own hits pull the AI back. `tools/blockpoke.ps1 threat` dumps the live table | [peer-damage-ledger.md §9, §11](research/peer-damage-ledger.md) |
-| `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
+| `local_combat_engage_fallback` | ON | drive an idle armed creature's attack directly when its script fire leaves it with no target | [combat-participation.md §12](research/combat-participation.md) |
+| `damage_creator_attribution` | OFF | pass a real creator id through every forwarded-damage apply, so aggro/last-attacker bookkeeping sees who hit it | [peer-damage-ledger.md §8](research/peer-damage-ledger.md) |
+| `threat_retarget` | ON (since 2026-09-03; was OFF) | HOST only: order a creature onto the peer whose forwarded damage clearly outweighs its current target's | [peer-damage-ledger.md §9, §11](research/peer-damage-ledger.md) |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
-| `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |
-| `dialogue_auto_join` | `off` (mode: off/near/always) | auto-pull the other player into an ORDINARY conversation you start (`near`/`always`); a FORCED conversation — an ambush, a scripted cutscene — always auto-joins regardless of this setting | [dialogue-sync.md](research/dialogue-sync.md) |
-| `dialogue_auto_join_range` | `20` | distance for `near` auto-join mode | [dialogue-sync.md](research/dialogue-sync.md) |
-| `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
+| `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
+| `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |
 | `liveness_sync` | ON (since 2026-09-03; was OFF) | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
-| `map_reveal_sync` | ON¹⁰ | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
+| `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |
 | `enemy_materialise` | ON | build a mirror body for an enemy the mirror has none for yet | [enemy-materialisation.md](research/enemy-materialisation.md) |
+| `mirror_smooth_ms` | `150` | smoothing window for enemy/party mirroring, ms, clamped 0-600 | [lag-audit.md](research/lag-audit.md) |
 | `movement` | direct placement unless `walk` | phantom movement: direct placement (seamless) or pathfinding walk | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
 | `smooth_ms` | `60` | phantom position-smoothing time constant, ms, clamped 0-400 | [phantom-locomotion.md](research/phantom-locomotion.md) |
-| `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers (plugin's own copy) | [cinematics.md](research/cinematics.md) |
+
+### Companions & party roster
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |
+| `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
+| `companion_damage_sync` | ON | forward damage taken by a released companion to the host | [companion-state-sync.md §13](research/companion-state-sync.md) |
+| `companion_gear_sync` | ON | dress a mirrored companion in its real equipped gear | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_xp_sync` | OFF³ | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
+| `party_roster_sync` | ON | mirror the party roster (recruited, active two) across instances | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
+| `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
+| `galaxy_map_host_only` | ON (NEEDS-LIVE) | on a CLIENT under `follow_lead=host`, refuse the galaxy map's own accept-button click | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
+| `dialogue_recruit_sync` | OFF³ | recruit a companion through the real network path on the peer | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `map_reveal_sync` | ON¹⁰ | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
+| `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
+| `minimap_peers` | ON | show peers on the minimap | [minimap-peers.md](research/minimap-peers.md) |
+| `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_fast_pump` | ON | pump the party channel on the real-time path, not the 150ms cadence | [lag-audit.md](research/lag-audit.md) |
+
+#### Companion follow-AI fix candidates
+
+Two of these (`party_follow_stall_recovery` and its method) are ON by default and live-verified; the rest are OFF and kept for a future live A/B — see [party-reconciliation.md](research/party-reconciliation.md).
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
 | `party_follow` | ON | host-driven companion follow-AI | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_finelog` | OFF | verbose per-write follow-AI diagnostic logging | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_pokestep` | ON | follow-AI fix: poke the step accumulator | [party-reconciliation.md](research/party-reconciliation.md) |
@@ -160,48 +197,108 @@ player should set. Each exists to make an otherwise-unreachable code path reacha
 | `party_follow_accept_final_node` | OFF | follow-AI fix candidate: accept the final path node early | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_refresh_final_node` | OFF | follow-AI fix candidate, live-refuted (no effect) | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_follow_extend_final_node` | OFF | follow-AI fix candidate, unconfirmed live | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_follow_phase2_kick` | OFF | follow-AI fix candidate: force TeleportForward out of a phase=2 idle stall, not yet live-tested | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_follow_phase7_release` | OFF | follow-AI fix candidate: reset a mirrored companion's frozen follow-FSM record on unmirror — Round 100 (2026-08-28, rig): control clean, treatment produced no observable effect; Round 101 (static) root-caused the silence to `party_together_fix` hiding the companion from the lookup, fixed with a retry against the true count; Round 102 (rig, 3 reps/leg) confirmed the fix now genuinely EXECUTES but never once caught a genuinely stuck phase (always the engine's own reset sentinel, -1); its corrective branch has never had anything to correct in any rig rep run so far | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_follow_stall_recovery` | ON | follow-AI fix: the RUNTIME stall detector — recovers a companion wedged in phase 7/6 (`PathWaitDest`) with `pathNode == destNode` and a degenerate `Target`/`Prior` tie the engine's own strict accept test can never pass. Targets the wedge rounds 96/97 reproduced 5/5 and every earlier candidate structurally misses (they gate on phase 2, `attempts > 0`, a `gap >= 2`, or a >3-unit separation; this stall is phase 7, `attempts 0`, `gap 1`, ~1.1 units). Rate-limited to one fire per companion per 3s and 5 per module without an observed recovery | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_follow_stall_recovery_method` | `3` | which recovery `party_follow_stall_recovery` applies. All six were run live against the same reproduced wedge (round 105) and only `3` ended with the companion back beside its leader — 16.5 units behind to 0.88 units, in one call — so it is the default. `1` phasereset (engine watchdog sentinel + pathNode/destNode re-point; live: re-wedged identically, no movement), `2` followleader (unconditional `ActionFollowLeader` through the VM; live: no effect), `3` positionparty (`CSWPartyTable::PositionParty`, the call a module transition makes — resets all follow data and re-snaps formation; it relocates the companion and also clears solo mode/unstealths the party, hence the 2s + separation + cooldown + per-module-budget gating), `4` priortie (companion's own position into the cached prior field; live: real walking but converges onto the tie the strict compare rejects), `5` destnode (repoint `DestNode` so the forward search reaches its unconditional accept branch; live: moved 0.76u the wrong way), `6` priorpush (prior pushed a fixed multiple past the node away from the target; live: 1.6u of progress then a new frozen shape). The dev-only `followstall <slot> [method]` verb applies any of them on demand | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_drive` | ON | drive companion positions every frame | [party-reconciliation.md](research/party-reconciliation.md) |
-| `companion_gear_sync` | ON (see the agent-side row above) | dress a mirrored companion in its real equipped gear (plugin's own copy) | [companion-state-sync.md](research/companion-state-sync.md) |
-| `companion_local_combat` | OFF³ | release a nearby companion to fight a client through its own engine | [party-reconciliation.md](research/party-reconciliation.md) |
-| `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_roster_sync` | ON | mirror the party roster across instances | [party-reconciliation.md](research/party-reconciliation.md) |
-| `dialogue_recruit_sync` | OFF³ | recruit a companion through the real network path on the peer | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
-| `galaxy_map_host_only` | ON (NEEDS-LIVE) | on a CLIENT under `follow_lead=host`, refuse the galaxy map's own accept-button click and post "only the host can choose a destination"; the host's own confirm is always let through untouched | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
-| `pause_button_hook` | ON | hook the in-game pause button | — |
-| `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
-| `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag (`CGuiInGame+0xB4`), to find why a wedged instance's conversation flag comes straight back | [dialogue-sync.md](research/dialogue-sync.md) |
-| `minimap_peers` | ON | show peers on the minimap | [minimap-peers.md](research/minimap-peers.md) |
-| `frame_stats` | OFF | frame-time histogram diagnostic (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |
-| `transition_close_client_world` | ON | BISECT LEVER: close the client's world in the transition window where the server's module is already gone. 0 restores the pre-fix behaviour, and with it that document's own map-init fault - it exists so the deterministic host warp crash at `CSWGuiInGameEquip::UpdatePortraits+0x48E` can be A/B'd against this call rather than argued about | [travel-map-init-crash.md](research/travel-map-init-crash.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
-| `log_max_mb` | `8` | plugin log rotation cap, MB | — |
-| `log_keep` | `3` | rotated generations kept (`*.1.log`..`*.N.log`) before the oldest is dropped, clamped 1-10; before 2026-09-02 a rotation kept only one generation and a mid-session rotation could overwrite the evidence for a real bug before anyone read it | — |
-| `hide_party_portraits` | ON | hide companion portraits (control lock) | [client-control-lock.md](research/client-control-lock.md) |
-| `spectate_on_down` | ON | hand the camera to a partner while downed | [spectate-camera.md](research/spectate-camera.md) |
-| `client_temp_death_suppress` | OFF (verified live on the rig 2026-09-02, 3/3 wipe cycles, death-handling.md §6.6–§6.7; still to run in real combat) | on a CLIENT instance, early-return the engine's own `TempDeathUpdate` entirely (game-over, auto-revive, gather-teleport all become host-authoritative decisions instead) | [death-handling.md](research/death-handling.md) |
-| `transition_announce_fade` | OFF | fade during an announced transition | [transition-smoothness.md](research/transition-smoothness.md) |
-| `transition_announce_scripted` | ON | also announce non-door transitions (galaxy-map departures, Leviathan/Star Forge stage changes, any other scripted `StartNewModule()`) through the same channel, tagged `Script`/`GalaxyMap` for the log only (NEEDS-LIVE) | [transition-smoothness.md](research/transition-smoothness.md) §11 |
-| `trigger_relay` | ON⁵ | relay a generic trigger's `OnEnter` to peers | [trigger-relay.md](research/trigger-relay.md) |
-| `trigger_relay_patterns` | `k_p*_*` | comma-separated globs matched against a trigger's OnEnter script | [trigger-relay.md](research/trigger-relay.md) |
+| `party_follow_phase2_kick` | OFF | follow-AI fix candidate: force TeleportForward out of a phase=2 idle stall | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_follow_phase7_release` | OFF | follow-AI fix candidate: reset a mirrored companion's frozen follow-FSM record on unmirror | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_follow_stall_recovery` | ON | the RUNTIME stall detector, live-verified against the phase-7 `PathWaitDest` wedge | [party-reconciliation.md](research/party-reconciliation.md) |
+| `party_follow_stall_recovery_method` | `3` | which recovery `party_follow_stall_recovery` applies (1-6, see the doc) | [party-reconciliation.md](research/party-reconciliation.md) |
+
+### Dialogue & conversations
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `script_item_sync` | OFF³ | forward a script (OnEnter/OnDeath/heartbeat) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
-| `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
-| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing the race where two near-simultaneous clicks both proceed before the eventually-consistent claim lands; fails safe to the pre-arbitration behaviour after a 1000ms host-answer timeout (raised from 300ms 2026-08-28 — the real plugin→agent→host round trip never fit in the original budget; live-verified 2026-08-28, correct outcome AND fast-path resolution both confirmed) | [container-sync.md](research/container-sync.md) |
-| `pazaak_detect` | ON⁹ | plugin's own copy: gates the in-process Pazaak edge log/`MinigameKind`, not the wire flag | [minigames.md](research/minigames.md) |
-| `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
-| `delay_probe` | OFF | DIAGNOSTIC-only: install `DelayEventProbeHook`'s five read-only splices on the delayed-script-situation path (`DelayCommand`'s own two gates, `AddEventDeltaTime`, the AI master's due/discard branches, and `CSWSDialog::RunScript`). Nothing in the plugin changes behaviour when it is on — it only logs | [minigames.md](research/minigames.md) §24 |
-| `delay_probe_events` | OFF | DIAGNOSTIC-only, and only meaningful with `delay_probe` on: ALSO log the two high-volume channels (every delayed-event enqueue and every dispatch). Measured ~2300 log lines in a few minutes of ordinary play and 500-750 ms main-thread stalls — leave it off unless the question is specifically about the queue | [minigames.md](research/minigames.md) §24 |
-| `solo_segment_spectate` | ON¹¹ | plugin's own copy: gates both `SoloSegmentController` (owner-side detection) and `SoloSegmentSpectateController` (spectator-side input lock/camera/damage gate) | [star-forge-finale.md](research/star-forge-finale.md) |
-| `solo_segment_modules` | unset (base set only) | comma-separated extra module resrefs appended to `SoloSegmentCatalogue`'s base set (`sta_m45ac`, `sta_m45ad`) | [star-forge-finale.md](research/star-forge-finale.md) |
-| `solo_segment_any_module` | OFF | plugin-only: drops the module gate on `RemovePartyMemberHook`'s own burst trigger ONLY (≥2 `RemovePartyMember` calls within ~1s begins a segment in ANY module, not just the catalogue) — the roster-drop-edge trigger stays catalogue-gated regardless | [star-forge-finale.md](research/star-forge-finale.md) §11 |
-| `removeparty_hook` | ON¹³ | DIAGNOSTIC-only kill key: install `RemovePartyMemberHook`'s mid-function detour on `RemovePartyMember` at all. Off means no script-agnostic solo-segment trigger and no `removeparty` dev verb; `SoloSegmentController`'s own roster-count poll (`solo_segment_spectate`) is unaffected | [transition-crashes.md](research/transition-crashes.md) |
-| `behaviour_override_reader` | ON¹³ | DIAGNOSTIC-only kill key: whether `EffectiveBehaviourFlag.Resolve` (used by all five host-adoptable controllers — `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`) reads `SharedBlock.OffsetBehaviourOverrideMask`/`Values` at all. Off means every one of the five always uses its own local coop.ini value, never the host-adopted one, and the override region of the shared block goes unread | [transition-crashes.md](research/transition-crashes.md) |
+| `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag | [dialogue-sync.md](research/dialogue-sync.md) |
+| `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers | [cinematics.md](research/cinematics.md) |
+| `item_template_spawn_sync` | ON | capture the real blueprint resref of every item `CreateItemOnObject` creates, for `script_item_sync` | [item-identity.md §13](research/item-identity.md) |
 
+### Transitions & world state
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `transition_announce` | ON | a follower acts on an announced transition immediately | [transition-smoothness.md](research/transition-smoothness.md) |
+| `transition_announce_fade` | OFF | fade during an announced transition | [transition-smoothness.md](research/transition-smoothness.md) |
+| `transition_announce_scripted` | ON | also announce non-door transitions (galaxy-map departures, Leviathan/Star Forge stage changes) | [transition-smoothness.md §11](research/transition-smoothness.md) |
+| `transition_close_client_world` | ON | BISECT LEVER: close the client's world in the transition window where the server's module is already gone | [travel-map-init-crash.md](research/travel-map-init-crash.md) |
+| `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
+| `client_load_rejoin` | ON | a client's own Load Game tears down and rejoins the session | [session-save.md](research/session-save.md) |
+| `host_load_readopt` | ON | a host's own Load Game has every client rejoin instead of disconnecting | [session-save.md](research/session-save.md) |
+| `session_save_host_refusal` | OFF | tear the session down when the host's own save-load watch fires | [session-save.md](research/session-save.md) |
+
+### Minigames (swoop races, turrets, Pazaak)
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `minigame_hide_peer` | ON | park a peer's phantom while they race/man a turret | [minigames.md](research/minigames.md) |
+| `minigame_lock_peers` | ON | one player races, everybody else waits, and cannot be follow-warped onto the track | [minigames.md](research/minigames.md) §24 |
+| `minigame_lock_timeout_s` | `600` | seconds a minigame lock may stand before releasing itself (0 = no timeout) | [minigames.md](research/minigames.md) §24 |
+| `minigame_modules` | unset (four stock tracks only) | extra module resrefs to treat as single-seat minigame tracks | [minigames.md](research/minigames.md) §24 |
+| `minigame_spectate` | OFF | hand the camera to a racing/turret peer (not yet wired) | [minigames.md](research/minigames.md) |
+| `minigame_wait_notice` | ON | "&lt;name&gt; is in a minigame - waiting" HUD line for a parked peer | [minigames.md](research/minigames.md) |
+| `pazaak_detect` | ON⁹ | treat a running Pazaak hand as "in a minigame" too | [minigames.md](research/minigames.md) |
+| `solo_segment_spectate` | ON¹¹ | the OWNER's fight, the other player spectates during a story-forced solo segment | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_modules` | unset (base set only) | extra module resrefs appended to the solo-segment catalogue | [star-forge-finale.md](research/star-forge-finale.md) |
+| `solo_segment_any_module` | OFF | drop the module gate on the script-agnostic solo-segment burst trigger | [star-forge-finale.md §11](research/star-forge-finale.md) |
+
+### Shared inventory (party pool / stores)
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `party_pool_sync` | `2` (ON — flipped 2026-08-29) | sync the shared party item pool both ways — `0` off, `1` the disqualified op-log (kept for config compatibility), `2` the host-authoritative redesign and shipped default | [party-pool-sync.md](research/party-pool-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
+| `party_pool_trace` | OFF | rig-only per-tick diagnostics for both mode-2 shared-inventory pumps | [shared-inventory-v2.md §12](research/shared-inventory-v2.md) |
+| `store_sync` | `2` (ON — flipped 2026-08-29) | sync merchant store stock both ways — same `0`/`1`/`2` shape as `party_pool_sync` | [store-sync.md](research/store-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
+
+### Interaction & world objects
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `interaction_locks` | ON | container/corpse open-close animation + use-lock | [container-sync.md](research/container-sync.md) |
+| `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
+| `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing a same-RTT double-open race | [container-sync.md](research/container-sync.md) |
+| `container_fast_pump` | OFF | pump placeable open/lock state on the real-time path | [container-sync.md](research/container-sync.md) |
+| `trigger_relay` | ON⁵ | relay a generic trigger's `OnEnter` to peers | [trigger-relay.md](research/trigger-relay.md) |
+| `trigger_relay_patterns` | `k_p*_*` | comma-separated globs matched against a trigger's OnEnter script | [trigger-relay.md](research/trigger-relay.md) |
+| `removeparty_hook` | ON¹³ | DIAGNOSTIC-only kill key: install the `RemovePartyMember` detour at all | [transition-crashes.md](research/transition-crashes.md) |
+| `behaviour_override_reader` | ON¹³ | DIAGNOSTIC-only kill key: whether the five host-adoptable controllers read the shared block's override region at all | [transition-crashes.md](research/transition-crashes.md) |
+
+### Always-on plumbing
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `activate_render_on_start` | ON | force-activate rendering when the plugin starts | — |
+| `bark_replay` | ON | replay a peer's captured NPC bark line | [bark-replay.md](research/bark-replay.md) |
+| `bark_sync` | ON | capture and publish this instance's own barks | [bark-replay.md](research/bark-replay.md) |
+| `pause_button_hook` | ON | let the mod own the HUD pause button | — |
+| `client_temp_death_suppress` | OFF (verified live 2026-09-02) | on a CLIENT, make game-over/auto-revive/gather-teleport host-authoritative decisions | [death-handling.md](research/death-handling.md) |
+
+### Diagnostics (rig-only)
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `frame_stats` | OFF | frame-time histogram diagnostic (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |
+| `delay_probe` | OFF | DIAGNOSTIC-only: install `DelayEventProbeHook`'s read-only splices, log-only | [minigames.md §24](research/minigames.md) |
+| `delay_probe_events` | OFF | DIAGNOSTIC-only, with `delay_probe`: also log every delayed-event enqueue/dispatch (high volume) | [minigames.md §24](research/minigames.md) |
+| `gui_probe` | OFF | DIAGNOSTIC-only: splice Show/HideSWInGameGui and watch `CGuiInGame+0x30`, log-only | [minigames.md §24](research/minigames.md) |
+
+## Debug / test-only keys
+
+Not part of normal play — omitted from the tables above so they never look like something a
+player should set. Each exists to make an otherwise-unreachable code path reachable on the rig.
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `debug_hello_version` (added 2026-09-02) | `0` (off) | CLIENT only: overrides the version byte written into this client's Hello packet, and that packet alone | [disconnect-reconnect.md §12](research/disconnect-reconnect.md) |
+
+¹ The property's own C# doc comment used to claim this was OFF by default while the actual
+parse logic (`!ContainsKey(...) || IsTruthy(...)`) already defaulted it ON, matching the
+shipped `coop.ini.example`; the comment has since been corrected to say ON.
+² The plugin reads the same key independently and also defaults it ON (see below). Until this
+was fixed, the agent's own copy (`CoopConfig.MovieRelayEnabled`) defaulted OFF when the key was
+absent, so the two readers disagreed the moment `movie_relay` was removed from `coop.ini`
+entirely; both now default ON, matching each other and the shipped file's explicit `=1`.
 ³ The code fallback (used whenever the key itself is absent — whether `coop.ini` is missing
 entirely or just that one line is) is OFF for `companion_local_combat`, `dialogue_recruit_sync`,
 `script_item_sync` and `companion_xp_sync`. For the latter two this is a real inconsistency

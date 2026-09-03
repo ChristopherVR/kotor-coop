@@ -686,7 +686,6 @@ internal static unsafe partial class PluginHost
         _placeables?.OnFrame();
         _loot?.OnFrame();
         _pause?.OnFrame();
-        _combatState?.OnFrame();
         _pauseKey?.OnFrame();
         _journal?.OnFrame();
         _mapMarkers?.OnFrame();

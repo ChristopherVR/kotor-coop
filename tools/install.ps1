@@ -149,7 +149,7 @@ if (-not $Uninstall -and $iniExistedBefore) {
         ''
         "your coop.ini predates this version and still has $($drift.Drifted.Count) default(s) that changed:"
         foreach ($entry in $drift.Drifted) {
-            Write-Warning "  $($entry.Key) = $($entry.OldValue)  (new shipped default: $($entry.NewValue) - $($entry.Meaning))"
+            Write-Warning "  $($entry.Key) = $($entry.OldValue)  (new shipped default since $($entry.Date): $($entry.NewValue) - $($entry.Meaning))"
         }
 
         if ($UpdateDefaults) {
@@ -168,5 +168,27 @@ if (-not $Uninstall -and $iniExistedBefore) {
             "see docs/CONFIG.md):"
         $missingHeader
         "  $($drift.MissingKeys -join ', ')"
+    }
+
+    if ($drift.RemovableDeveloperKeys.Count -gt 0) {
+        ''
+        $removableKeys = $drift.RemovableDeveloperKeys | ForEach-Object { $_.Key }
+        "your coop.ini also still sets $($drift.RemovableDeveloperKeys.Count) developer switch(es) " +
+            "explicitly, each already at its own current default - noise, since the shipped " +
+            "coop.ini no longer lists developer switches at all (see docs/CONFIG.md's " +
+            "`"Developer switches`" table):"
+        foreach ($entry in $drift.RemovableDeveloperKeys) {
+            "  $($entry.Key) = $($entry.Value)"
+        }
+
+        if ($UpdateDefaults) {
+            $removedCount = Remove-CoopIniKeys -Path $iniPath -Keys $removableKeys
+            "removed $removedCount noise line(s) from $iniPath"
+        }
+        else {
+            "run with -UpdateDefaults to remove just those lines (a developer switch set to " +
+                "anything OTHER than its current default is left untouched - that is a " +
+                "deliberate choice, not noise)."
+        }
     }
 }

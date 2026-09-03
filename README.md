@@ -222,8 +222,11 @@ Tab-completes (including the game's own verbs), Up/Down recalls history. A handf
 ## Configuration
 
 Everything lives in one `coop.ini` beside the game, parsed by two independent halves — the external agent and the
-in-process plugin each read their own keys from it. Full table of every key, its shipped default and what it does:
-[docs/CONFIG.md](docs/CONFIG.md).
+in-process plugin each read their own keys from it. The shipped file (`profiles/coop.ini.example`) is short by
+design — every player setting there is, in plain language: connecting, your character, screen, internet play and a
+few advanced switches. The mod has a lot more internal tuning/bisect switches for development; they aren't in
+`coop.ini` on purpose, and setting one by hand is unsupported. Full table of every key, player-facing or not, its
+shipped default and what it does: [docs/CONFIG.md](docs/CONFIG.md).
 
 ## How it works
 

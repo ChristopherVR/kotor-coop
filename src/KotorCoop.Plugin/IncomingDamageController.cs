@@ -547,9 +547,9 @@ internal sealed class IncomingDamageController(SharedBlockView block)
         // this is working. If the local enemies do not in fact engage, this branch is
         // total invulnerability — and "absorbing while the engine says we are not in
         // combat" is exactly that smell. The engine's in-combat field is DERIVED from
-        // being fought rather than settable (a written flag is reverted in 0-2 ms, see
-        // CombatStateController), so it is honest evidence rather than our own belief
-        // echoed back.
+        // being fought rather than settable (a written flag is reverted in 0-2 ms —
+        // docs/research/combat-participation.md's 2026-08-27 section), so it is honest
+        // evidence rather than our own belief echoed back.
         if (DateTime.UtcNow - _lastAbsorbLog >= AbsorbLogInterval)
         {
             _lastAbsorbLog = DateTime.UtcNow;

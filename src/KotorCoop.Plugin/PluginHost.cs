@@ -63,7 +63,6 @@ internal static unsafe partial class PluginHost
     private static LootController? _loot;
     private static TravelController? _travel;
     private static PauseController? _pause;
-    private static CombatStateController? _combatState;
     private static PauseKeyController? _pauseKey;
     private static JournalController? _journal;
     private static MapMarkerController? _mapMarkers;
@@ -144,6 +143,11 @@ internal static unsafe partial class PluginHost
             RotateLogsIfNeeded(directory);
 
             Log($"=== KotorCoop plugin loaded into pid {NativeMethods.GetCurrentProcessId()} ===");
+
+            // One-time diagnostic: name any coop.ini key that is not a player setting (a
+            // developer switch, or something no reader recognises at all) — see
+            // PluginConfig.LogNonPlayerKeys and docs/CONFIG.md's "Developer switches" table.
+            PluginConfig.LogNonPlayerKeys(Log);
 
             // So a subscriber exception PluginEvents catches on a later raise still reaches
             // the log instead of being dropped silently. Wired before a single hook or

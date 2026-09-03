@@ -201,7 +201,6 @@ internal static unsafe partial class PluginHost
         _loot?.Invalidate();
         _travel?.Invalidate();
         _pause?.Invalidate();
-        _combatState?.Invalidate();
         _journal?.Invalidate();
         _mapMarkers?.Invalidate();
         _mapReveal?.Invalidate();

@@ -47,8 +47,10 @@ internal static unsafe partial class Odyssey
     /// re-assertion.
     ///
     /// ⚠ RETIRED, NO PRODUCTION CALLER as of 2026-08-27 (docs/research/combat-participation.md's
-    /// dated section; see <see cref="CombatStateController"/>'s own remarks for the full
-    /// story). The engine reverts a written +0x4E0 in 0-2 ms — this setter is not wrong, the
+    /// dated section — the retired <c>combat_state_sync</c> key and its controller that used to
+    /// call this were removed entirely once the "restrict coop.ini to player settings" pass
+    /// dropped every documented no-op key). The engine reverts a written +0x4E0 in 0-2 ms — this
+    /// setter is not wrong, the
     /// premise of calling it on a timer was: the field is continuously re-derived from
     /// whether the creature is actually being fought, not a latch this can hold. Kept,
     /// unused, the same way <c>Odyssey.QueueAttackAction</c> was kept after its own

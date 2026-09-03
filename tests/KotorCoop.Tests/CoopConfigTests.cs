@@ -631,4 +631,54 @@ public class CoopConfigTests
             File.Delete(path);
         }
     }
+
+    // ---- player-facing vs. developer-switch classification (see CoopConfig.cs's own remarks
+    // and docs/CONFIG.md's "Developer switches" table) --------------------------------------
+
+    [Theory]
+    [InlineData("mode")]
+    [InlineData("host")]
+    [InlineData("port")]
+    [InlineData("chat_overlay_fade_ms")]
+    [InlineData("dinput8_next")]
+    [InlineData("MENU_BUTTON")] // case-insensitive
+    public void PlayerFacingKeysAreRecognisedAsPlayerFacing(string key)
+    {
+        Assert.True(CoopConfig.IsPlayerFacingKey(key));
+        Assert.False(CoopConfig.IsKnownDeveloperKey(key));
+    }
+
+    [Theory]
+    [InlineData("local_combat")]
+    [InlineData("party_pool_sync")]
+    [InlineData("threat_retarget")]
+    [InlineData("party_follow_stall_recovery_method")]
+    [InlineData("DEJITTER")] // case-insensitive
+    public void KnownDeveloperKeysAreRecognisedAsDeveloperSwitches(string key)
+    {
+        Assert.False(CoopConfig.IsPlayerFacingKey(key));
+        Assert.True(CoopConfig.IsKnownDeveloperKey(key));
+    }
+
+    [Fact]
+    public void CombatStateSyncIsNoLongerKnownToEitherSet()
+    {
+        // Retired 2026-08-27, removed entirely during the player-settings cleanup: a coop.ini
+        // that still has this line (an old hand-edited or pre-cleanup file) must classify as
+        // "unknown", not "developer switch" — nothing reads it any more.
+        Assert.False(CoopConfig.IsPlayerFacingKey("combat_state_sync"));
+        Assert.False(CoopConfig.IsKnownDeveloperKey("combat_state_sync"));
+    }
+
+    [Fact]
+    public void ClassifyNonPlayerKeysSplitsDeveloperSwitchesFromUnknownKeys()
+    {
+        (List<string> developer, List<string> unknown) = CoopConfig.ClassifyNonPlayerKeys(
+            ["mode", "local_combat", "not_a_real_key", "chat_overlay", "threat_retarget"]);
+
+        // Player-facing keys (mode, chat_overlay) are silently skipped by the classifier —
+        // they show up in neither list.
+        Assert.Equal(["local_combat", "threat_retarget"], developer);
+        Assert.Equal(["not_a_real_key"], unknown);
+    }
 }
