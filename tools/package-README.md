@@ -153,16 +153,28 @@ The mod is two Windows programs that live inside the game's own Wine/Proton pref
 you. Neither needs anything installed into the prefix (the agent carries its own .NET). What
 you need to do differently from Windows is two things:
 
-1. **Put the files in the game folder.** Easiest: extract this zip straight into it —
-   Steam: `~/.local/share/Steam/steamapps/common/swkotor/` (or `~/.steam/steam/...`; on a Steam
-   Deck do this in Desktop Mode, or right-click the game → Manage → Browse local files);
-   Heroic / Lutris (GOG copy): the game's folder from the launcher's "Open install folder".
-   If another mod already owns `dinput8.dll` (ReShade, an ASI loader, a widescreen fix), run
-   the installer inside the prefix instead so it can chain them: Steam →
-   `protontricks-launch --appid 32370 KotorCoop.Agent.exe`, Heroic → the game's
-   settings → "Run EXE on prefix", Lutris → "Run EXE inside Wine prefix". The installer finds
-   the game under `Z:\home\...` (Steam libraries, Heroic and Lutris folders) — or pass the
-   path.
+1. **Put the files in the game folder.** Get the Linux package
+   (`kotor-coop-<version>-linux.tar.gz`; the Windows zip has the same files minus the script)
+   and run its installer — it runs natively, no Wine involved:
+
+   ```bash
+   tar -xzf kotor-coop-<version>-linux.tar.gz
+   ./kotor-coop-<version>/install.sh           # finds the game, installs, prints step 2
+   ```
+
+   It looks in every Steam library (including a Steam Deck's SD card and the Flatpak client),
+   `~/Games/Heroic` and `~/Games`; pass `--game-dir /path/to/swkotor` if it finds none or
+   several. It does exactly what the Windows installer does: if another mod already owns
+   `dinput8.dll` (ReShade, an ASI loader, a widescreen fix) it keeps that mod and chains it
+   behind kotor-coop (see **Sharing `dinput8.dll` with another mod**), it never overwrites an
+   existing `coop.ini`, and `install.sh --check` / `install.sh --uninstall` report and undo.
+   Manual alternative: extract the archive straight into the game folder — Steam:
+   `~/.local/share/Steam/steamapps/common/swkotor/` (on a Steam Deck in Desktop Mode, or
+   right-click the game → Manage → Browse local files); Heroic / Lutris: "Open install
+   folder" — which is a plain install with no chaining. The Windows installer also works from
+   inside the prefix (`protontricks-launch --appid 32370 KotorCoop.Agent.exe`, Heroic's
+   "Run EXE on prefix", Lutris' "Run EXE inside Wine prefix"); it finds the game under
+   `Z:\home\...` the same way.
 2. **Tell Wine to load *our* `dinput8.dll`, not its own.** Wine ships a built-in DirectInput
    and prefers it over a DLL beside the exe unless told otherwise:
    - Steam / Steam Deck: right-click the game → Properties → Launch Options:

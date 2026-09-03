@@ -84,11 +84,11 @@ notes — a mismatched module only drops that module's channels, a different sav
 
 ## Quick start (players)
 
-Download `kotor-coop-<version>.zip` from the
-[releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a tagged release, or `latest`, rebuilt from
-every push to `main` that passes build and test. The zip is a game-folder image: **extract it straight into the
-folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** — it finds
-the GOG install (or asks), copies everything in, and offers to launch.
+Download `kotor-coop-<version>-windows.zip` (or, on Linux / Steam Deck, `kotor-coop-<version>-linux.tar.gz`)
+from the [releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a tagged release, or `latest`,
+rebuilt from every push to `main` that passes build and test. The zip is a game-folder image: **extract it straight
+into the folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** —
+it finds the GOG install (or asks), copies everything in, and offers to launch.
 
 No scripts, nothing to configure. If another mod already owns `dinput8.dll` (ReShade, an ASI loader, ...), both
 install paths notice and set kotor-coop up to run alongside it automatically — see
@@ -213,13 +213,20 @@ packaged agent is one self-contained `KotorCoop.Agent.exe` with the .NET runtime
 Windows player no longer needs .NET installed). The installer recognises Wine and looks for the game where Proton,
 Heroic and Lutris put it (`Z:\home\…` Steam libraries, `Games\Heroic`, `Games`, `STEAM_COMPAT_INSTALL_PATH`).
 
-What a Linux player does differently, in short: extract the zip into the game folder (or run the installer inside
-the prefix — `protontricks-launch --appid 32370 KotorCoop.Agent.exe`, Heroic's *Run EXE on prefix*, Lutris' *Run EXE
-inside Wine prefix*), and add the DLL override that makes Wine load our `dinput8.dll` instead of its built-in one:
+What a Linux player does differently, in short: take the Linux package from the releases page and run its
+installer — a bash port of the C# installer (`tools/install.sh`) that runs natively, finds the game in the Steam
+libraries / Heroic / Lutris, chains an existing `dinput8.dll` mod the same way, and has the same `--check` and
+`--uninstall` — then add the DLL override that makes Wine load our `dinput8.dll` instead of its built-in one:
 
-```
+```bash
+tar -xzf kotor-coop-<version>-linux.tar.gz && ./kotor-coop-<version>/install.sh
 WINEDLLOVERRIDES="dinput8=n,b" %command%        # Steam / Steam Deck launch options
 ```
+
+(The Windows installer also works from inside the prefix — `protontricks-launch --appid 32370 KotorCoop.Agent.exe`,
+Heroic's *Run EXE on prefix*, Lutris' *Run EXE inside Wine prefix* — and extracting either archive straight into
+the game folder is a plain install.) CI installs the tarball on an Ubuntu runner against a stand-in game folder on
+every push (plain, chain, upgrade, uninstall), so the installer itself is exercised even though the game is not.
 
 (Heroic: game settings → environment variable `WINEDLLOVERRIDES=dinput8=n,b`; Lutris: runner options → DLL
 overrides `dinput8` → `n,b`.) Everything after that — hosting, joining, `coop.ini`, the controller layer with the
@@ -237,7 +244,7 @@ dotnet build KotorCoop.slnx                     # agent, session, protocol, memo
 dotnet test  tests\KotorCoop.Tests
 pwsh src\KotorCoop.Plugin\build.ps1 -Install    # plugin (NativeAOT x86) + agent + overrides -> the GOG default dir
 pwsh src\KotorCoop.Loader\build.ps1             # the chain loader (only needed for chain mode)
-pwsh tools\package.ps1                          # everything, zipped: dist\kotor-coop-<version>.zip
+pwsh tools\package.ps1                          # dist\kotor-coop-<version>-windows.zip + -linux.tar.gz
 ```
 
 `build.ps1 -Install` deploys into `C:\GOG Games\Star Wars KOTOR (GOG)` by default (`-GameDir` for another copy);

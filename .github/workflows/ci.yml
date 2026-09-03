@@ -30,18 +30,101 @@ jobs:
           dotnet test tests/KotorCoop.Tests --no-build
           --filter "FullyQualifiedName!~HeavyPacketLossStillConverges"
 
-      # Builds the NativeAOT win-x86 plugin, the C chain loader and the agent, and zips them
-      # with the installer and README exactly as a release would. -WarnAsError: an analyzer
-      # warning in the plugin (a CA2014 stackalloc-in-loop, say) fails the job rather than
-      # scrolling past in a log. The MSVC x86 toolset the native builds need ships on
-      # windows-latest; tools/devenv.ps1 finds it through vswhere.
-      - name: Package release zip
+      # Builds the NativeAOT win-x86 plugin, the C chain loader and the agent, and packages
+      # them with the installers and README exactly as a release would: the Windows zip and
+      # the Linux tarball (same game binaries, install.sh instead of install.ps1). -WarnAsError:
+      # an analyzer warning in the plugin (a CA2014 stackalloc-in-loop, say) fails the job
+      # rather than scrolling past in a log. The MSVC x86 toolset the native builds need ships
+      # on windows-latest; tools/devenv.ps1 finds it through vswhere.
+      - name: Package releases (Windows zip + Linux tarball)
         shell: pwsh
         run: pwsh tools/package.ps1 -WarnAsError -OutDir dist
 
-      - name: Upload package
+      - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
           name: kotor-coop
-          path: dist/kotor-coop-*.zip
+          path: |
+            dist/kotor-coop-*-windows.zip
+            dist/kotor-coop-*-linux.tar.gz
           if-no-files-found: error
+
+  # The Linux package is installed on Linux by install.sh, a bash port of the C# installer
+  # that the tests above never execute. This job runs it against a stand-in game directory
+  # (a stub swkotor.exe; the game itself is never on a runner) through every path a player
+  # can hit: plain install, --check, chaining behind a foreign dinput8.dll, the in-place
+  # upgrade, and --uninstall restoring the foreign DLL. It also proves the tarball itself:
+  # install.sh must arrive executable and LF (package.ps1 writes the tar on Windows).
+  linux-install:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: kotor-coop
+          path: dist
+
+      - name: Extract the Linux package
+        run: |
+          set -euo pipefail
+          ls -l dist
+          tar -xzf dist/kotor-coop-*-linux.tar.gz
+          pkg=$(ls -d kotor-coop-*/ | head -n1)
+          echo "pkg=$pkg" >> "$GITHUB_ENV"
+          test -x "$pkg/install.sh" || { echo "install.sh is not executable in the tarball"; exit 1; }
+          if grep -q $'\r' "$pkg/install.sh"; then echo "install.sh has CRLF line endings"; exit 1; fi
+          test ! -e "$pkg/install.ps1" || { echo "install.ps1 leaked into the Linux tarball"; exit 1; }
+          test -s "$pkg/dinput8.dll" && test -s "$pkg/chain-loader/dinput8.dll" && test -s "$pkg/KotorCoop.Agent.exe"
+
+      - name: Plain install, check, uninstall
+        run: |
+          set -euo pipefail
+          game=$RUNNER_TEMP/swkotor
+          mkdir -p "$game" && printf 'MZ' > "$game/swkotor.exe"
+          "$pkg/install.sh" --game-dir "$game"
+          "$pkg/install.sh" --check --game-dir "$game" | tee check.txt
+          grep -q '^layout: plain' check.txt
+          if grep -q '^FAIL' check.txt; then exit 1; fi   # (a bare `! grep` is exempt from set -e)
+          cmp "$pkg/dinput8.dll" "$game/dinput8.dll"
+          test -f "$game/KotorCoop.Agent.exe" && test -f "$game/coop.ini" && test -f "$game/Override/k_coop_phantom.utc"
+          "$pkg/install.sh" --uninstall --game-dir "$game"
+          test ! -e "$game/dinput8.dll" && test ! -e "$game/KotorCoop.Agent.exe" && test ! -e "$game/Override/k_coop_phantom.utc"
+          test -f "$game/coop.ini"   # kept on purpose
+
+      - name: Chain behind a foreign dinput8.dll, upgrade in place, uninstall restores it
+        run: |
+          set -euo pipefail
+          game=$RUNNER_TEMP/swkotor
+          printf 'MZ fake ReShade build' > "$game/dinput8.dll"
+          "$pkg/install.sh" --game-dir "$game" | tee out.txt
+          grep -q 'installing as a chain' out.txt
+          cmp "$pkg/chain-loader/dinput8.dll" "$game/dinput8.dll"
+          cmp "$pkg/dinput8.dll" "$game/KotorCoop.Plugin.dll"
+          test "$(cat "$game/dinput8.prev.dll")" = 'MZ fake ReShade build'
+          test "$(grep -v '^#' "$game/dinput8.chain" | tr '\n' ' ')" = 'KotorCoop.Plugin.dll dinput8.prev.dll '
+          "$pkg/install.sh" --check --game-dir "$game" | tee check.txt
+          grep -q '^layout: chain' check.txt
+          if grep -q '^FAIL' check.txt; then exit 1; fi   # (a bare `! grep` is exempt from set -e)
+          # a second run is an upgrade: same layout, no second prev, no duplicate entries
+          "$pkg/install.sh" --game-dir "$game" | grep -q 'upgrading the plugin and loader in place'
+          test "$(grep -v '^#' "$game/dinput8.chain" | tr '\n' ' ')" = 'KotorCoop.Plugin.dll dinput8.prev.dll '
+          "$pkg/install.sh" --uninstall --game-dir "$game"
+          test "$(cat "$game/dinput8.dll")" = 'MZ fake ReShade build'
+          test ! -e "$game/dinput8.chain" && test ! -e "$game/dinput8.prev.dll" && test ! -e "$game/KotorCoop.Plugin.dll"
+
+      - name: Auto-detect through a Steam library and replace a system dinput8.dll
+        run: |
+          set -euo pipefail
+          export HOME=$RUNNER_TEMP/home
+          lib=$HOME/sd/steamapps/common/swkotor
+          mkdir -p "$HOME/.local/share/Steam/steamapps" "$lib"
+          printf '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' "$HOME/sd" > "$HOME/.local/share/Steam/steamapps/libraryfolders.vdf"
+          printf 'MZ' > "$lib/swkotor.exe"
+          printf 'M\0i\0c\0r\0o\0s\0o\0f\0t\0 \0C\0o\0r\0p\0o\0r\0a\0t\0i\0o\0n\0' > "$lib/dinput8.dll"
+          "$pkg/install.sh" --yes | tee out.txt
+          grep -q "found the game: $lib" out.txt
+          grep -q 'system dinput8.dll' out.txt
+          grep -q 'WINEDLLOVERRIDES="dinput8=n,b" %command%' out.txt
+          cmp "$pkg/dinput8.dll" "$lib/dinput8.dll"
+          test ! -e "$lib/dinput8.prev.dll"

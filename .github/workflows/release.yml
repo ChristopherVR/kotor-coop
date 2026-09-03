@@ -1,10 +1,11 @@
 # Publishes the build CI just validated. Runs AFTER the CI workflow completes successfully
-# and reuses its packaged zip — the release is the exact artifact that passed the tests,
-# never a second build.
+# and reuses its packages — the release is the exact pair of artifacts that passed the tests
+# (and whose Linux tarball CI's linux-install job installed), never a second build.
 #
 #   push to main            -> CI green -> rolling pre-release "latest" (replaced every time)
-#   git push origin v0.1.0  -> CI green -> full release "v0.1.0" with kotor-coop-0.1.0.zip
-#   Actions tab (dispatch)  -> publishes the newest successful CI zip for the chosen ref as "latest"
+#   git push origin v0.1.0  -> CI green -> full release "v0.1.0" with
+#                              kotor-coop-0.1.0-windows.zip + kotor-coop-0.1.0-linux.tar.gz
+#   Actions tab (dispatch)  -> publishes the newest successful CI packages for the chosen ref as "latest"
 name: Release
 
 on:
@@ -56,45 +57,63 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "kind=$kind"     >> "$GITHUB_OUTPUT"
 
-      - name: Download the CI package
+      - name: Download the CI packages
         if: steps.what.outputs.kind != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist
           ls -l dist
+          test -f dist/kotor-coop-*-windows.zip && test -f dist/kotor-coop-*-linux.tar.gz
 
       - name: Publish release
         if: steps.what.outputs.kind != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          zip=$(ls dist/kotor-coop-*.zip | head -n1)
-          name=$(basename "$zip")
+          zip=$(ls dist/kotor-coop-*-windows.zip | head -n1)
+          tgz=$(ls dist/kotor-coop-*-linux.tar.gz | head -n1)
+          zip_name=$(basename "$zip")
+          tgz_name=$(basename "$tgz")
           ref='${{ steps.what.outputs.ref }}'
           sha='${{ steps.what.outputs.sha }}'
           kind='${{ steps.what.outputs.kind }}'
-          size=$(du -k "$zip" | cut -f1)
-          sha256=$(sha256sum "$zip" | cut -d' ' -f1)
+          zip_size=$(du -k "$zip" | cut -f1)
+          tgz_size=$(du -k "$tgz" | cut -f1)
+          zip_sha256=$(sha256sum "$zip" | cut -d' ' -f1)
+          tgz_sha256=$(sha256sum "$tgz" | cut -d' ' -f1)
           tag=$([ "$kind" = tag ] && echo "$ref" || echo latest)
-          url="https://github.com/${{ github.repository }}/releases/download/$tag/$name"
+          base="https://github.com/${{ github.repository }}/releases/download/$tag"
+          version=${zip_name#kotor-coop-}; version=${version%-windows.zip}
 
-          # The notes lead with the one thing a visitor is here for: the zip, a direct link
-          # to it, and how to install it. GitHub lists assets below the notes, but nothing
-          # there says which file is the build or what to do with it.
+          # The notes lead with the one thing a visitor is here for: which file is for their
+          # machine, a direct link to it, and how to install it. GitHub lists assets below the
+          # notes, but nothing there says which file is which or what to do with it.
           {
             echo "## Download"
             echo
-            echo "**[$name]($url)** — ${size} KB, ready to install. No SDK or toolchain needed."
+            echo "| Platform | File | Install |"
+            echo "| --- | --- | --- |"
+            echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract, double-click \`KotorCoop.Agent.exe\` (or \`pwsh .\\install.ps1\`) |"
+            echo "| Linux / Steam Deck (Proton) | **[$tgz_name]($base/$tgz_name)** (${tgz_size} KB) | extract, run \`install.sh\`, add the launch option below |"
+            echo
+            echo "No SDK, runtime or toolchain needed on either. The same mod is inside both: KOTOR is a Windows program on every platform, only the installer differs."
             echo
             echo '```powershell'
-            echo "# extract the zip, then from inside it:"
+            echo "# Windows: extract the zip, then from inside it (or just double-click KotorCoop.Agent.exe):"
             echo "pwsh .\\install.ps1 -GameDir 'C:\\GOG Games\\Star Wars KOTOR (GOG)'"
             echo '```'
             echo
-            echo "Contains the plugin (\`dinput8.dll\`), the chain loader, the agent, the override assets, \`coop.ini\`, \`install.ps1\` and a README that covers install, play, sharing \`dinput8.dll\` with another mod, and troubleshooting."
+            echo '```bash'
+            echo "# Linux / Steam Deck (Desktop Mode): finds the Steam, Heroic or Lutris install itself"
+            echo "tar -xzf $tgz_name && ./kotor-coop-$version/install.sh"
+            echo '# then in Steam: game -> Properties -> Launch Options (Heroic/Lutris: DLL override dinput8=n,b)'
+            echo 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
+            echo '```'
             echo
-            echo "SHA-256 \`$sha256\` · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
+            echo "Each contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting. Linux support is new and awaiting its first field report: [docs/research/proton.md](https://github.com/${{ github.repository }}/blob/$sha/docs/research/proton.md)."
+            echo
+            echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
             echo
             if [ "$kind" = latest ]; then
               echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Tagged releases are the stable ones."
@@ -104,12 +123,12 @@ jobs:
 
           if [ "$kind" = tag ]; then
             # --generate-notes appends the auto-generated changelog after --notes-file.
-            gh release create "$ref" "$zip" --title "$ref" --notes-file notes.md --generate-notes --verify-tag
+            gh release create "$ref" "$zip" "$tgz" --title "$ref" --notes-file notes.md --generate-notes --verify-tag
           else
             # One rolling pre-release that always points at the newest green main build.
             # Delete + recreate rather than upload --clobber so the tag moves to the new sha
             # and the notes say which commit it is.
             gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-            gh release create latest "$zip" --prerelease --target "$sha" \
+            gh release create latest "$zip" "$tgz" --prerelease --target "$sha" \
               --title "latest (main @ ${sha:0:7})" --notes-file notes.md
           fi

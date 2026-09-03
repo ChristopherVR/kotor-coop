@@ -87,15 +87,22 @@ the test suite (minus the known-flaky `HeavyPacketLossStillConverges`), then
 agent (a self-contained single-file `win-x64` publish — the runtime is inside the exe, so a
 player needs no .NET and a Proton prefix needs nothing added; `dotnet build` and the rig stay
 framework-dependent, see `KotorCoop.Agent.csproj` and [research/proton.md](research/proton.md)
-§2) and uploads `kotor-coop-<git describe>.zip` (~33 MB) as the run's artifact — so every green
-run has a ready-to-use build attached.
+§2) and uploads two packages (~33 MB each) as the run's artifact — `kotor-coop-<git describe>-windows.zip`
+and `kotor-coop-<git describe>-linux.tar.gz`, the same game-folder image with `install.ps1` or
+`install.sh` respectively (the tarball is written through `System.Formats.Tar` so `install.sh`
+arrives `0755`; `*.sh` is `eol=lf` in `.gitattributes`) — so every green run has a ready-to-use
+build attached. A second job, `linux-install`, runs on Ubuntu, extracts the tarball and puts
+`install.sh` through plain install, `--check`, chaining behind a foreign `dinput8.dll`, the
+in-place upgrade, `--uninstall` and Steam-library auto-detection against a stub game folder;
+`install.sh` is a bash port of `PackageInstaller.cs`, so a change to the installer's layout
+rules belongs in both.
 
 `.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes
-the very zip that run produced — it never rebuilds. Every green push to `main` replaces the
+the very two packages that run produced — it never rebuilds. Every green push to `main` replaces the
 rolling `latest` pre-release; a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) goes
 through the same CI run and then becomes a full release named after the tag, with
-auto-generated notes. A manual dispatch publishes the newest successful CI zip for the chosen
-ref. The zip contains `install.ps1` and a `README.md` (`tools/package-README.md`,
+auto-generated notes. A manual dispatch publishes the newest successful CI packages for the chosen
+ref. Both contain a `README.md` (`tools/package-README.md`,
 version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
 to someone who has never seen this repo.
 

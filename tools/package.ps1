@@ -1,6 +1,7 @@
-# Builds the release zip: a GAME-DIRECTORY IMAGE. Extracting it straight into the KOTOR folder
-# is a complete install; double-clicking KotorCoop.Agent.exe from anywhere else finds the
-# game and copies everything in. Layout of the zip root:
+# Builds the release packages. Both are the same GAME-DIRECTORY IMAGE: extracting one straight
+# into the KOTOR folder is a complete install; the Windows zip can also be double-clicked
+# (KotorCoop.Agent.exe finds the game and copies everything in), the Linux tarball ships
+# install.sh for the same job on the Linux side of a Proton/Wine setup. Layout of the image:
 #
 #   dinput8.dll                 the NativeAOT plugin (the proxy the game loads itself)
 #   KotorCoop.*                 the agent: one self-contained exe (runtime inside) + pdbs
@@ -9,14 +10,19 @@
 #   chain-loader\dinput8.dll    the C wrapper for sharing the dinput8 slot with another mod
 #   dinput8.chain.example       the annotated chain list
 #   README.md                   install / play / configure / troubleshoot, version-stamped
-#   install.ps1                 optional command-line wrapper over `KotorCoop.Agent.exe install`
-#   CoopIniDefaults.ps1         the coop.ini upgrade-drift table install.ps1 dot-sources
+#   install.ps1                 [zip only] command-line wrapper over `KotorCoop.Agent.exe install`
+#   CoopIniDefaults.ps1         [zip only] the coop.ini upgrade-drift table install.ps1 dot-sources
+#   install.sh                  [tar.gz only] the native Linux installer (bash), mode 0755
+#
+# The tarball has one top-level directory (kotor-coop-<version>/) as tarballs do; the zip has
+# none, so "extract here" in Explorer is the install. The game binaries inside are identical:
+# KOTOR is a Windows program on every platform, so there is no separate Linux build of the mod.
 #
 # Does NOT touch a game install and does NOT run the game. CI runs this on every push and
-# attaches the zip to the run; a green run on main or a v* tag becomes a GitHub release
-# (.github/workflows/release.yml).
+# attaches both files to the run; a green run on main or a v* tag becomes a GitHub release
+# with both attached (.github/workflows/release.yml).
 #
-#   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>.zip
+#   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #   pwsh tools\package.ps1 -Version 1.2.3  # override the version
 #   pwsh tools\package.ps1 -WarnAsError    # what CI runs: any build warning fails the package
 param(
@@ -81,6 +87,11 @@ Copy-Item (Join-Path $repo 'src\KotorCoop.Loader\dinput8.chain.example') (Join-P
 # One KotorCoop.Agent.exe with the runtime inside: no .NET install on the player's machine,
 # and nothing to put into a Wine prefix for the Proton/Steam Deck case (docs/research/proton.md).
 $agentProject = Join-Path $repo 'src\KotorCoop.Agent'
+$agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\win-x64\publish'
+# Start from an empty publish directory: an incremental publish over a previous one skipped the
+# referenced projects' pdbs (seen 2026-09-03: the second run in a row shipped 2 KotorCoop.*
+# files instead of 6), and the package must not depend on what the last run left behind.
+if (Test-Path $agentPublishDir) { Remove-Item $agentPublishDir -Recurse -Force }
 Push-Location $agentProject
 try {
     $agentArgs = @('publish', '-c', 'Release')
@@ -92,7 +103,6 @@ finally {
     Pop-Location
 }
 
-$agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\win-x64\publish'
 if (-not (Test-Path (Join-Path $agentPublishDir 'KotorCoop.Agent.exe'))) {
     throw "agent publish succeeded but KotorCoop.Agent.exe not found in $agentPublishDir"
 }
@@ -107,6 +117,8 @@ $stray = Get-ChildItem $agentPublishDir -File | Where-Object { $_.Name -notlike 
 if ($stray) { throw "agent publish contains non-KotorCoop.* files the installer cannot track: $($stray.Name -join ', ')" }
 $agentExe = Get-Item (Join-Path $agentPublishDir 'KotorCoop.Agent.exe')
 if ($agentExe.Length -lt 20MB) { throw "KotorCoop.Agent.exe is $([math]::Round($agentExe.Length / 1MB, 1)) MB: not the self-contained single-file publish (see the _IsPublishing block in KotorCoop.Agent.csproj)" }
+$missingPdb = @('Agent', 'Memory', 'Protocol', 'Session', 'Steam') | Where-Object { -not (Test-Path (Join-Path $agentPublishDir "KotorCoop.$_.pdb")) }
+if ($missingPdb) { throw "agent publish is missing the pdb(s) of: $($missingPdb -join ', ') (crash symbolication needs them; docs/research/plugin-crash-symbolication)" }
 "staged agent: $agentPublishDir ($($agentFiles.Count) files)"
 
 # --- coop.ini template, renamed from the .example so a player can use it as-is -------------
@@ -135,12 +147,65 @@ $readme = (Get-Content (Join-Path $PSScriptRoot 'package-README.md') -Raw).Repla
 Set-Content -Path (Join-Path $staging 'README.md') -Value $readme -Encoding UTF8 -NoNewline
 "staged install.ps1 + CoopIniDefaults.ps1 + README.md"
 
-# --- zip it up -------------------------------------------------------------------------------
+# --- Windows: zip it up ----------------------------------------------------------------------
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
-$zipPath = Join-Path $OutDir "kotor-coop-$Version.zip"
+$zipPath = Join-Path $OutDir "kotor-coop-$Version-windows.zip"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath
+"packaged -> $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1KB)) KB)"
+
+# --- Linux: tar.gz with install.sh executable ------------------------------------------------
+# Written through System.Formats.Tar rather than tar.exe: Windows' bsdtar records every file
+# as 0666, so a `tar xzf` on Linux would leave install.sh without its exec bit. install.sh is
+# also normalised to LF here (the repo has *.sh eol=lf in .gitattributes; this is the belt to
+# that brace, an autocrlf checkout must not ship a script bash cannot parse).
+Remove-Item (Join-Path $staging 'install.ps1'), (Join-Path $staging 'CoopIniDefaults.ps1')
+$installSh = (Get-Content (Join-Path $PSScriptRoot 'install.sh') -Raw) -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText((Join-Path $staging 'install.sh'), $installSh, [System.Text.UTF8Encoding]::new($false))
+
+$tarPath = Join-Path $OutDir "kotor-coop-$Version-linux.tar.gz"
+if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
+$tarRoot = "kotor-coop-$Version"
+$fileStream = [System.IO.File]::Create($tarPath)
+try {
+    $gzip = [System.IO.Compression.GZipStream]::new($fileStream, [System.IO.Compression.CompressionLevel]::Optimal)
+    try {
+        $tar = [System.Formats.Tar.TarWriter]::new($gzip, [System.Formats.Tar.TarEntryFormat]::Pax, $false)
+        try {
+            $rx = [System.IO.UnixFileMode]'UserRead, GroupRead, OtherRead'
+            $rw = $rx -bor [System.IO.UnixFileMode]::UserWrite
+            $rwx = $rw -bor [System.IO.UnixFileMode]'UserExecute, GroupExecute, OtherExecute'
+            $dir = [System.Formats.Tar.PaxTarEntry]::new([System.Formats.Tar.TarEntryType]::Directory, "$tarRoot/")
+            $dir.Mode = $rwx
+            $tar.WriteEntry($dir)
+            # GetRelativePath, not a Substring on $staging: $env:TEMP is the 8.3 short form on
+            # some machines (C:\Users\CHRIST~1\...) while FullName is always the long one.
+            $stagingFull = (Get-Item $staging).FullName
+            foreach ($item in Get-ChildItem $staging -Recurse | Sort-Object FullName) {
+                $rel = [System.IO.Path]::GetRelativePath($stagingFull, $item.FullName).Replace('\', '/')
+                if ($item.PSIsContainer) {
+                    $entry = [System.Formats.Tar.PaxTarEntry]::new([System.Formats.Tar.TarEntryType]::Directory, "$tarRoot/$rel/")
+                    $entry.Mode = $rwx
+                    $tar.WriteEntry($entry)
+                    continue
+                }
+                $entry = [System.Formats.Tar.PaxTarEntry]::new([System.Formats.Tar.TarEntryType]::RegularFile, "$tarRoot/$rel")
+                $entry.Mode = if ($rel -eq 'install.sh') { $rwx } else { $rw }
+                $entry.ModificationTime = $item.LastWriteTimeUtc
+                $data = [System.IO.File]::OpenRead($item.FullName)
+                try {
+                    $entry.DataStream = $data
+                    $tar.WriteEntry($entry)
+                }
+                finally { $data.Dispose() }
+            }
+        }
+        finally { $tar.Dispose() }
+    }
+    finally { $gzip.Dispose() }
+}
+finally { $fileStream.Dispose() }
 Remove-Item $staging -Recurse -Force
 
-"packaged -> $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1KB)) KB)"
+"packaged -> $tarPath ($([math]::Round((Get-Item $tarPath).Length / 1KB)) KB)"

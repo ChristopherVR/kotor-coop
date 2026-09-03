@@ -16,3 +16,7 @@
 *.bif binary
 *.key binary
 *.db binary
+
+# install.sh ships inside the Linux tarball; bash cannot parse CRLF, so it stays LF on every
+# checkout regardless of core.autocrlf (package.ps1 normalises it again as a second guard).
+*.sh text eol=lf

@@ -157,12 +157,19 @@ In the order a Linux player would hit them:
 
 ```
 # Steam / Steam Deck (Desktop Mode)
-unzip kotor-coop-*.zip -d ~/.local/share/Steam/steamapps/common/swkotor/
+tar -xzf kotor-coop-*-linux.tar.gz && ./kotor-coop-*/install.sh    # tools/install.sh, native bash
 # Properties → Launch Options:
 WINEDLLOVERRIDES="dinput8=n,b" %command%
 # start the game, then:
 tail -f ~/.local/share/Steam/steamapps/common/swkotor/kotorcoop-plugin.log
 ```
+
+The tarball is the Windows zip's game-directory image with `install.sh` in place of
+`install.ps1` — a bash port of `PackageInstaller.cs` (same marker detection, plain/chain/
+upgrade rules, `--check` lines and `--uninstall`), because the C# installer can only run inside
+the prefix. CI's `linux-install` job installs the tarball on Ubuntu against a stub game folder
+on every push, so the Linux-side installer is VERIFIED even though everything in §6 remains
+NEEDS-LIVE.
 
 Expected first lines: the plugin version, `running under Wine <x.y> (Linux <kernel>)`, the
 hook install lines, then `agent: started KotorCoop.Agent.exe as pid N (tied to the game's
