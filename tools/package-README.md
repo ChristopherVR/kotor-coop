@@ -31,7 +31,10 @@ The full list — what works, what has a catch, and what is deliberately left to
 install (or asks), copies everything in, and offers to launch the game.
 
 Both do the same thing. Re-installing over an older version just works; your `coop.ini` is
-never overwritten.
+never overwritten. If another mod already has `dinput8.dll` (ReShade, an ASI loader, a
+widescreen fix...) both methods notice and set kotor-coop up to run alongside it automatically
+— see "Another mod already uses `dinput8.dll`" below; you don't need to know anything about it
+in advance.
 
 ## Play
 
@@ -157,24 +160,45 @@ Every other key is documented in the file itself and in the project's `docs/CONF
 
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 
-Only one file can be called `dinput8.dll`. The double-click setup notices a `dinput8.dll`
-that is not ours and asks whether to keep it; say yes and it installs the small
-`chain-loader\dinput8.dll` wrapper as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`,
-renames the other mod to `dinput8.prev.dll`, and writes `dinput8.chain`:
+Only one file can be called `dinput8.dll`. Both install methods notice when it already belongs
+to something else and set kotor-coop up to run alongside it, automatically — no prompt to
+answer, no flag to remember. What you'll see is one line naming what was found, for example:
+
+> found another mod in dinput8.dll (ReShade); installing as a chain: our loader takes
+> dinput8.dll, the other mod is kept as dinput8.prev.dll and loaded after us
+
+Concretely: the small `chain-loader\dinput8.dll` wrapper is installed as `dinput8.dll`, our
+plugin as `KotorCoop.Plugin.dll`, the other mod is renamed to `dinput8.prev.dll`, and
+`dinput8.chain` is written:
 
 ```
 KotorCoop.Plugin.dll
 dinput8.prev.dll
 ```
 
-If you installed by extracting the zip over the other mod instead, you overwrote it — put its
-`dinput8.dll` back as `dinput8.prev.dll`, copy `chain-loader\dinput8.dll` over `dinput8.dll`,
-rename our `dinput8.dll` to `KotorCoop.Plugin.dll` first, and create `dinput8.chain` as above
-(`dinput8.chain.example` is annotated). Or from a command line:
+Any `.asi` mods next to the game (or in `scripts\`/`plugins\`) are left exactly where they are
+and the summary says so — nothing about them changes. If the file already in the `dinput8.dll`
+slot turns out to be a plain copy of Windows' own `dinput8.dll` rather than a mod, that's
+detected too and it's simply replaced — there's nothing to chain.
+
+Re-installing over an existing chain install (a new version of kotor-coop, for instance) keeps
+it chained and just upgrades the plugin and loader in place; nothing above needs repeating.
+`KotorCoop.Agent.exe install --check` (or `install.ps1 -Check`) reports the install layout and
+checks it without changing anything — useful if something seems off.
+
+If you'd rather choose yourself: `--chain` forces chain mode even before anything foreign is
+there, `--force` overwrites a foreign `dinput8.dll` outright instead of chaining it, and
+`--load` adds extra DLLs to the chain:
 
 ```powershell
 KotorCoop.Agent.exe install --game-path 'C:\GOG Games\Star Wars KOTOR (GOG)' --chain --load ReShade32.dll
 ```
+
+If you installed by extracting the zip over the other mod instead, you overwrote it — put its
+`dinput8.dll` back as `dinput8.prev.dll`, copy `chain-loader\dinput8.dll` over `dinput8.dll`,
+rename our `dinput8.dll` to `KotorCoop.Plugin.dll` first, and create `dinput8.chain` as above
+(`dinput8.chain.example` is annotated), or just run the `install --chain` command above over
+it — that puts everything back in the same state.
 
 How the chain works: the wrapper loads every listed DLL and hands the game's DirectInput calls
 to the **first** one that is itself a `dinput8` proxy (ours). Our plugin then forwards to the
@@ -194,7 +218,7 @@ KotorCoop.Agent.exe uninstall --game-path 'C:\GOG Games\Star Wars KOTOR (GOG)'
 
 Removes only what was installed (it recognises its own `dinput8.dll` by a marker and leaves any
 other mod's alone, restoring `dinput8.prev.dll` to its original name) and keeps your `coop.ini`.
-`install.ps1 -GameDir ... [-Uninstall|-Chain|-Force]` is the same thing for PowerShell users.
+`install.ps1 -GameDir ... [-Uninstall|-Chain|-Force|-Check]` is the same thing for PowerShell users.
 
 ## How it works, briefly
 
@@ -215,6 +239,11 @@ player's helper. Clients talk only to the host.
 
 ## Something is wrong
 
+- **Not sure the install is right (especially with a chained mod involved):** run
+  `KotorCoop.Agent.exe install --check` (or `install.ps1 -Check`, from the extracted package).
+  It reports what's actually there — plain, chained, or nothing installed — checks that every
+  chained DLL is really present, and prints one PASS/FAIL line per check without changing
+  anything. Every ordinary install run already ends with this same report.
 - **The party's shared stash and a merchant's stock aren't shared between us:** both channels
   ship ON as of 2026-08-29 (`party_pool_sync=2`/`store_sync=2`), so the usual cause is an OLD
   `coop.ini` — the installer never overwrites that file, so an install from before then keeps its

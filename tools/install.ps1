@@ -7,10 +7,30 @@
 # dev rig) and for people who prefer a command line.
 #
 #   pwsh install.ps1 -GameDir 'C:\GOG Games\Star Wars KOTOR (GOG)'
-#   pwsh install.ps1 -GameDir '...' -Chain                         # keep another mod's dinput8.dll too
-#   pwsh install.ps1 -GameDir '...' -Chain -Load reshade.dll,x.asi # ...and load extra DLLs as well
-#   pwsh install.ps1 -GameDir '...' -Force                         # overwrite a foreign dinput8.dll
 #   pwsh install.ps1 -GameDir '...' -Uninstall
+#
+# --- another mod already owns dinput8.dll (ReShade, an ASI loader, ...) --------------------
+# Detected and installed as a chain automatically, no flag needed: the loader takes
+# dinput8.dll, the other mod is kept as dinput8.prev.dll and loaded right after kotor-coop. A
+# plain copy of Windows' own dinput8.dll is recognised as not-a-mod and simply replaced
+# instead. -Chain/-Load/-Force below only matter when you want to override that automatic
+# choice:
+#
+#   pwsh install.ps1 -GameDir '...' -Chain                         # force chain mode even if nothing foreign is there yet
+#   pwsh install.ps1 -GameDir '...' -Chain -Load reshade.dll,x.asi # ...and load extra DLLs as well
+#   pwsh install.ps1 -GameDir '...' -Force                         # overwrite a foreign dinput8.dll outright, no chain
+#
+# Re-running install (with or without these flags) over an existing install - plain or chain -
+# upgrades the plugin in place and never duplicates a dinput8.chain entry, so it's always safe
+# to just run install.ps1 again to pick up a new version.
+#
+# --- health check (-Check) ------------------------------------------------------------------
+# Reports the install layout found (plain / chain / foreign-only / none) and verifies it -
+# every dinput8.chain entry exists, the loader and KotorCoop.Plugin.dll carry their markers,
+# coop.ini exists - without changing anything. One PASS/FAIL line per check; every ordinary
+# install run prints the same report at the end.
+#
+#   pwsh install.ps1 -GameDir '...' -Check
 #
 # --- Steam installs ----------------------------------------------------------------------
 # Nothing special. -GameDir is the folder holding swkotor.exe, normally
@@ -60,6 +80,7 @@ param(
     [switch]$Chain,
     [string[]]$Load = @(),
     [switch]$Force,
+    [switch]$Check,
     [switch]$UpdateDefaults,
     [switch]$EnableCrashDumps,
     [switch]$DisableCrashDumps,
@@ -110,6 +131,14 @@ if ($EnableCrashDumps -or $DisableCrashDumps) {
             'crash dumps were already off for swkotor.exe - nothing to do.'
         }
     }
+}
+
+# --- health check (-Check): read-only, standalone - reports and exits before touching
+# anything else below. --------------------------------------------------------------------
+if ($Check) {
+    & $agent install --game-path $GameDir --check
+    if ($LASTEXITCODE -ne 0) { throw 'chain health check found a problem - see the FAIL line(s) above' }
+    return
 }
 
 if ($Uninstall) {

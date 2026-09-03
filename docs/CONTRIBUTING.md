@@ -57,16 +57,27 @@ pwsh src\KotorCoop.Loader\build.ps1     # -> src\KotorCoop.Loader\bin\dinput8.dl
 ```
 
 A single C file compiled with `cl.exe`, no CRT. It exists so a player whose `dinput8.dll`
-slot is already taken by another mod can run both: `install.ps1 -Chain` installs the loader
-as `dinput8.dll`, the plugin as `KotorCoop.Plugin.dll`, and writes `dinput8.chain`. The
-loader `LoadLibrary`s every entry and forwards the six dinput8 exports to the first entry
-that exports `DirectInput8Create`; the plugin (`Exports.cs`) reads the same file and forwards
-to the entry after itself, then the system DLL. Because of this the plugin resolves the game
-directory from `swkotor.exe`'s own path (`NativeMethods.GetGameDirectory`), never from "where
-is dinput8.dll". The forward decision is logged at the top of `kotorcoop-plugin.log`
-(`forwarding to ...`), the loader's in `dinput8-chain.log`. Live-verified 2026-08-27 with
-the loader → plugin → a renamed copy of the system DLL: every hook installed, all three
-modules visible in the process.
+slot is already taken by another mod can run both. `install.ps1`/`KotorCoop.Agent.exe install`
+detect a foreign `dinput8.dll` automatically and install as a chain with no flag needed —
+`ForeignDinputIdentity` (in `PackageInstaller`) names what was found (ReShade, Ultimate ASI
+Loader, a fallback "another dinput8 mod (<FileDescription>)", or "the system dinput8.dll" for
+a plain copy of Windows' own file, which is just overwritten instead since it isn't a mod);
+`--chain` forces chain mode explicitly and `--force` still overwrites a foreign DLL outright
+when that's wanted. The install itself: the loader goes in as `dinput8.dll`, the plugin as
+`KotorCoop.Plugin.dll`, and `dinput8.chain` is written. The loader `LoadLibrary`s every entry
+and forwards the six dinput8 exports to the first entry that exports `DirectInput8Create`; the
+plugin (`Exports.cs`) reads the same file and forwards to the entry after itself, then the
+system DLL. Because of this the plugin resolves the game directory from `swkotor.exe`'s own
+path (`NativeMethods.GetGameDirectory`), never from "where is dinput8.dll". The forward
+decision is logged at the top of `kotorcoop-plugin.log` (`forwarding to ...`), the loader's in
+`dinput8-chain.log`. Re-running install over an existing chain install upgrades the plugin and
+loader in place and merges into whatever `dinput8.chain` already lists rather than overwriting
+it wholesale, so a line a player added by hand survives a reinstall.
+`KotorCoop.Agent.exe install --check` (`install.ps1 -Check`) reports the install layout found
+(plain/chain/foreign-only/none) and verifies every chain entry exists and both markers are
+present, without changing anything; every ordinary install ends with the same report.
+Live-verified 2026-08-27 with the loader → plugin → a renamed copy of the system DLL: every
+hook installed, all three modules visible in the process.
 
 ## CI and releases
 

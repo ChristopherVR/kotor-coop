@@ -87,11 +87,13 @@ every push to `main` that passes build and test. The zip is a game-folder image:
 folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** — it finds
 the GOG install (or asks), copies everything in, and offers to launch.
 
-No scripts, nothing to configure. Launch KOTOR, click **Co-op** on the main menu, one of you presses **Host** while
-the other picks that server and presses **Connect** — the game starts the agent itself in the background.
-Everything optional lives in `coop.ini` ([docs/CONFIG.md](docs/CONFIG.md)); the zip's own `README.md` covers play,
-configuration and troubleshooting without needing this repo. CLI equivalent:
-`KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
+No scripts, nothing to configure. If another mod already owns `dinput8.dll` (ReShade, an ASI loader, ...), both
+install paths notice and set kotor-coop up to run alongside it automatically — see
+[Sharing `dinput8.dll` with another mod](#sharing-dinput8dll-with-another-mod) below; nothing extra to do. Launch
+KOTOR, click **Co-op** on the main menu, one of you presses **Host** while the other picks that server and presses
+**Connect** — the game starts the agent itself in the background. Everything optional lives in `coop.ini`
+([docs/CONFIG.md](docs/CONFIG.md)); the zip's own `README.md` covers play, configuration and troubleshooting without
+needing this repo. CLI equivalent: `KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
 
 ### Joining: which character you bring
 
@@ -116,19 +118,28 @@ See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the m
 
 ### Sharing `dinput8.dll` with another mod
 
-Only one file can be called `dinput8.dll`. If another mod already owns it (ReShade, an ASI loader, a widescreen
-fix), the setup notices and offers to keep it (the command line refuses unless told `--chain` or `--force`):
+Only one file can be called `dinput8.dll`. Every install path — the CLI, `install.ps1`, `build.ps1 -Install` and the
+double-click setup — detects a foreign one and installs as a chain automatically: no flag, no prompt beyond a single
+summary line naming what was found (`ForeignDinputIdentity` recognises ReShade, Ultimate ASI Loader and a plain copy
+of Windows' own `dinput8.dll` — the last of those isn't a mod, so it's just overwritten, no chain needed). `--force`
+still overwrites a foreign DLL outright instead of chaining it if that's what you want, and `--chain`/`--load` remain
+available to force chain mode or add extra DLLs explicitly:
 
 ```powershell
-KotorCoop.Agent.exe install --game-path '...' --chain                        # keep the other mod
-KotorCoop.Agent.exe install --game-path '...' --chain --load ReShade32.dll   # and load extra DLLs
+KotorCoop.Agent.exe install --game-path '...'                                # auto-detects and chains if needed
+KotorCoop.Agent.exe install --game-path '...' --chain --load ReShade32.dll   # force chain mode, plus an extra DLL
+KotorCoop.Agent.exe install --game-path '...' --force                       # overwrite the foreign DLL instead
 ```
 
 Chain mode installs the [`KotorCoop.Loader`](src/KotorCoop.Loader/dinput8_loader.c) wrapper — 6 KB of plain C, no
 runtime — as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`, renames the other mod to `dinput8.prev.dll`, and
 writes a `dinput8.chain` list. Each entry forwards to the next, the first proxy being ours; `coop.ini`'s
-`dinput8_next` overrides the plugin's next hop explicitly. `uninstall` restores the other mod under its original
-name.
+`dinput8_next` overrides the plugin's next hop explicitly. `.asi` mods beside the game (or in `scripts\`/`plugins\`)
+are left untouched and named in the install summary. Re-running install over an existing chain install upgrades the
+plugin in place and never duplicates a `dinput8.chain` entry — including one a player added by hand. `uninstall`
+restores the other mod under its original name, and `install --check`/`install.ps1 -Check` reports the install
+layout and verifies it (every chain entry exists, both markers are present, `coop.ini` exists) without changing
+anything.
 
 ## Steam
 

@@ -208,6 +208,10 @@ public sealed record AgentOptions
     /// <summary>install: overwrite a foreign dinput8.dll instead of refusing.</summary>
     public bool Force { get; init; }
 
+    /// <summary>install: report the install layout and verify it (chain entries, markers,
+    /// coop.ini) without changing anything.</summary>
+    public bool Check { get; init; }
+
     /// <summary>Steam app id for Knights of the Old Republic.</summary>
     public const int SteamAppId = 32370;
 
@@ -270,6 +274,7 @@ public sealed record AgentOptions
         bool chain = false;
         List<string> chainLoad = [];
         bool force = false;
+        bool check = false;
         bool windowed = false;
         bool viaSteam = false;
         int instance = 1;
@@ -365,6 +370,10 @@ public sealed record AgentOptions
 
                 case "--force":
                     force = true;
+                    break;
+
+                case "--check":
+                    check = true;
                     break;
 
                 case "--via-steam":
@@ -557,6 +566,7 @@ public sealed record AgentOptions
             Chain = chain,
             ChainLoad = chainLoad,
             Force = force,
+            Check = check,
             ViaSteam = viaSteam,
             Instance = instance,
             LoadSave = loadSave,
@@ -621,11 +631,26 @@ public sealed record AgentOptions
           (none)    Setup: find the GOG install, copy the package in, offer to launch.
                     What double-clicking KotorCoop.Agent.exe in an extracted zip does.
           install   Copy the package (--from <dir>, default: beside this exe) into the game
-                    directory (--game-path <dir>, default: auto-detect). --chain keeps a
-                    foreign dinput8.dll behind the chain loader; --load a.dll,b.asi adds
-                    entries to dinput8.chain; --force overwrites a foreign dinput8.dll.
+                    directory (--game-path <dir>, default: auto-detect). If dinput8.dll is
+                    already another mod's, this is detected and installed as a chain
+                    automatically (our loader takes dinput8.dll, the other mod is kept as
+                    dinput8.prev.dll and loaded after us) - no flag needed, and a plain copy
+                    of Windows' own dinput8.dll is recognised as not-a-mod and simply
+                    replaced. --chain forces chain mode even when nothing foreign is there yet
+                    (accepted for scripts; it is now the automatic default); --load
+                    a.dll,b.asi adds entries to dinput8.chain; --force overwrites a foreign
+                    dinput8.dll outright instead of chaining it. Re-running install over an
+                    existing install (plain or chain) upgrades the plugin in place and never
+                    duplicates chain entries. Every install ends with the same report --check
+                    prints; a non-zero exit means one of its lines said FAIL.
           uninstall Remove what install placed (--game-path); keeps coop.ini, restores a
                     kept dinput8.dll. Run from the extracted zip, not the game directory.
+          install --check
+                    Report the install layout found (plain / chain / foreign-only / none)
+                    and verify it - every dinput8.chain entry exists, the loader and
+                    KotorCoop.Plugin.dll carry their markers, coop.ini exists - without
+                    changing anything. One PASS/FAIL line per check; exits non-zero if any
+                    line is FAIL.
           launch    Start KOTOR (optionally windowed) and wait for it to come up.
           load      Drive an already-running instance from the main menu into a save.
                     Separate from launch so several instances can be started first and
