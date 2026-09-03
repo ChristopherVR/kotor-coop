@@ -220,8 +220,11 @@ replaced it, but do not delete it or treat its earlier claims as current.
 
 After writing or extending one, add or update its row in `docs/research/README.md`'s index
 (one line: doc name, subject, current status read off the doc's own most recent section) and,
-if the feature's user-facing status changed, the corresponding row in the top-level
-`README.md`'s "Status at a glance" table and (if it is a known gap) "Honest limitations".
+if the feature's user-facing status changed, its row in `docs/status-engineering.md` (the
+evidence: dates, counts, rule names — including Appendix A's feature table) AND the matching
+plain-language line in `docs/limitations.md`, which must stay free of addresses, rule names
+and dates-as-evidence; `README.md`'s "Status at a glance" only changes when the headline
+player-facing picture does.
 
 ## Parallel-session hazards
 

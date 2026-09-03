@@ -11,66 +11,63 @@ chain loader when another mod already owns that name); everything else attaches 
 
 ## Status at a glance
 
-| Area | Status | Doc |
-| --- | --- | --- |
-| Presence, appearance, animation, minimap | Live-verified. A peer rendering as a stranger or as Trask after a warp — both root causes closed 2026-08-29 (`PeerIdentityRule`, `PartyCensusRule`) | [phantom-locomotion.md](docs/research/phantom-locomotion.md), [name-plates.md](docs/research/name-plates.md) |
-| Travel — transitions, doors, triggers | Live-verified | [transition-smoothness.md](docs/research/transition-smoothness.md) |
-| Combat — mirrored enemies, damage, effects | Live-verified (a reported "client can't hit an Endar Spire Sith" was root-caused 2026-08-28 to that creature starting in a FRIENDLY faction — not a co-op defect). Non-damage effect sync (`effect_sync`): 12 kinds mapped, 12/12 live-verified both directions (2026-09-03); the replay-on-every-module-arrival the last pass exposed is closed (`PeerEffectReplayRule`) | [combat-participation.md](docs/research/combat-participation.md), [effect-sync.md](docs/research/effect-sync.md) |
-| World state — containers, items, journal | Live-verified (container-lock arbitration confirmed correct AND fast-path-fixed at a 1000ms budget; `ItemTemplateSpawnHook` confirmed live end to end, 2026-08-28) | [shared-state-audit.md](docs/research/shared-state-audit.md) |
-| Dialogue — spectate, late-join, skip-fix | Live-verified | [dialogue-sync.md](docs/research/dialogue-sync.md) |
-| Dialogue recruitment sync | Live-verified for two companions; one fix unconfirmed | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Session lifecycle — menu, connect, save/load rejoin | Live-verified; the `host_load_readopt` regression and the STUNT_00 escape-pod crash are both CLOSED — same root cause, a dangling-pointer write storm in `PartySelectSuppressionController`, fixed 2026-08-27 and reconfirmed clean across three independent live re-verifications (last 2026-08-28) | [session-save.md](docs/research/session-save.md), [galaxy-map-and-party-select.md](docs/research/galaxy-map-and-party-select.md) |
-| Joining without a save (`join_mode = newcharacter`) | Live-verified 2026-08-29 end to end — chargen, quicksave capture, arrival in the host's served world | [world-adoption.md](docs/research/world-adoption.md) |
-| Three-peer sessions (3+ players) | Live-verified — `demo3.ps1`/`verify3.ps1`, 34/34 checks passed, chat/phantoms/hit-tables all agreeing across three instances | [live-verification.md](docs/live-verification.md) |
-| Companion follow-AI | **Stall fixed and on by default, 2026-08-29** (`party_follow_stall_recovery`). Root cause named: the engine's own `PathWaitDest` accept is a STRICT compare against a recorded trail node that has collapsed onto the cached prior position, so it can never pass and the companion freezes — reproduced 4/4, including a leader teleported 16.5 units away that the companion never recovered from. A runtime wedge detector now gathers the party through the engine's own `PositionParty`; five reps, every wedge recovered on the first attempt. Still by design: a MIRRORED companion's follow-AI does not run at all | [party-reconciliation.md](docs/research/party-reconciliation.md) |
-| Companion local combat | Narrow case live-verified (release/attack); damage TAKEN by the released companion now forwards to the host and is spent as real damage on its own body (`companion_damage_sync`, ON by default), closing the "released companion is invulnerable" gap — NEEDS-LIVE | [party-reconciliation.md](docs/research/party-reconciliation.md), [companion-state-sync.md](docs/research/companion-state-sync.md) §13 |
-| Mod compatibility | Live-verified for most mismatch categories | [mod-compatibility.md](docs/research/mod-compatibility.md) |
-| Sharing `dinput8.dll` with another mod | Live-verified (chain loader) | [src/KotorCoop.Loader](src/KotorCoop.Loader/dinput8_loader.c) |
-| Minigames — swoop race | Root-caused 2026-08-29 (the blocker was the test recipe, not the mod); race runs end to end, peers locked out of the single-seat track | [minigames.md](docs/research/minigames.md) |
-| Minigames — Pazaak detection, "waiting" notice | Live-verified 2026-08-28 (a range-guard bug that silenced detection was found and fixed); `pazaak_detect` flipped ON by default | [minigames.md](docs/research/minigames.md) |
-| Creature liveness reconciliation | Live-verified 2026-09-03 (destroy/kill dispatch, 49-creature population, zero freshness disagreements), ON by default | [creature-liveness.md](docs/research/creature-liveness.md) |
-| Enemy aggro split between players (`threat_retarget`) | Live-verified 2026-09-03, ON by default — an enemy the host engaged first now splits its attacks between the host and the client (12 vs 10 hits over 98 s; 0 on the client before), re-ordered every ≥4 s because the engine's AI pulls back to the host PC on its next hit | [peer-damage-ledger.md §11](docs/research/peer-damage-ledger.md) |
-| Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) |
-| Host loss (`host_loss_release`) — a client whose host vanishes | Live-verified 2026-08-29 — every plugin-side lock releases within ~6s (`host_loss_timeout_ms` 5000, `PacketType.HostBye`), the client plays solo, and auto-rejoins when the host returns | [disconnect-reconnect.md §11](docs/research/disconnect-reconnect.md) |
-| Persistent connection indicator | Live-verified 2026-08-27 (partial — data path confirmed, on-screen render unconfirmed) | [connect-flow.md](docs/research/connect-flow.md) |
-| Protocol-version-mismatch reject (`E_PROTO`) | Live-verified 2026-09-03 (typed reject in ~1 s, no silent timeout) | [connect-flow.md](docs/research/connect-flow.md), [disconnect-reconnect.md](docs/research/disconnect-reconnect.md) §12 |
-| Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](docs/research/dialogue-consequences.md) |
-| Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Companion equipment (`companion_gear_sync`) | Live-verified 2026-08-28, ON by default — body slot, right weapon and left weapon all confirmed (the earlier weapon-slot bug, a wrong internal slot encoding, is fixed), mid-session propagation under 3s | [companion-state-sync.md](docs/research/companion-state-sync.md) |
-| Shared party item pool (`party_pool_sync`) | **On by default (mode 2), 2026-08-29.** Host-authoritative absolute snapshot + client intents: only the host publishes state, clients request. Live-verified twice on a two-instance rig with zero fabricated units - three rapid host deposits mirroring one-for-one, a client deposit and withdrawal each applied exactly once, two five-minute idles with zero publishes. Verified with `dialogue_item_sync`/`script_item_sync` ON, which caught and closed the last cross-channel echo. Mode 1 (the op-log) stays disqualified and available only at `=1` | [party-pool-sync.md](docs/research/party-pool-sync.md), [shared-inventory-v2.md](docs/research/shared-inventory-v2.md) |
-| Merchant store stock (`store_sync`) | **On by default (mode 2), 2026-08-29.** Same host-authoritative design as the party pool. Three clean live sessions in a row: a client buy, a client sell-back, a host re-buy that succeeded exactly once, a second re-buy correctly refused, and 155s of idle with zero engine writes on either side - every write accounted for, none spurious. Reads a shop only while its GUI is open (engine limitation); mode 1 stays disqualified and available only at `=1` | [store-sync.md](docs/research/store-sync.md), [shared-inventory-v2.md](docs/research/shared-inventory-v2.md) |
-| Fog-of-war reveal (`map_reveal_sync`) | Live-verified, on by default | [map-reveal.md](docs/research/map-reveal.md) |
-| Star Forge finale — Bastila/Malak duel spectate (`solo_segment_spectate`) | Live-verified 2026-08-28, ON by default — a script-agnostic `RemovePartyMemberHook` burst trigger reaches the segment without needing the Bastila dialogue: the roster genuinely empties, the peer's phantom hides, the spectator's input parks and camera follows, a real refill ends it. Only the real-physical-WASD half of the input lock remains unprovable (injected keystrokes never reach this game) | [star-forge-finale.md](docs/research/star-forge-finale.md) |
-| Internet play — public address discovery (STUN), UPnP port mapping | Built, unit-tested, not live-verified against a real router; no relay/hole-punching | [network-topology.md](docs/research/network-topology.md) |
+**You can play the whole game together.** Two people (up to eight) each run their own copy of
+KOTOR, one hosts, the other connects from a **Co-op** button on the main menu, and from then on
+you are in one world: you see each other as real characters, walk through the same doors, fly to
+the same planets, fight the same enemies with one shared health bar per enemy, loot one shared
+inventory, and watch the same conversations play out. Saving, loading, quitting to the menu and
+even the host crashing are all handled — the other side rejoins on its own.
 
-"Live-verified" means watched working on two real GOG instances; "Off by default" means built
-and unit-tested but not shipped enabled. See "Honest limitations" below and `docs/research/`
-for the dated evidence behind every row.
+What you should know before starting:
+
+- **One conversation at a time.** Whoever starts talking to someone chooses the replies; the other
+  player watches it live. That's deliberate — two people steering one dialogue would break the
+  story.
+- **The host owns the party.** Only the host swaps the active party member and picks the party
+  before a departure. Companions follow the host's game.
+- **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for the
+  other. A shop's stock is only re-read while someone has it open, and a shop that has an infinite
+  supply of something will never show it changing (harmless).
+- **Minigames are single-seat.** One of you plays Pazaak or races; the other is told they're waiting.
+- **Enemies alternate between you rather than sticking to whoever hurt them most** — the game's own
+  AI keeps pulling them back to the host.
+- **Mouse and keyboard only.** No controller support for the co-op menus.
+- **Internet play works for most home routers** (the address is found and the port opened
+  automatically), but this has only been tested on a local network so far, and very restrictive
+  networks can't be reached — there is no relay server.
+
+The full list, activity by activity, is [docs/limitations.md](docs/limitations.md). Every line
+there has been watched on two real copies of the game unless it says otherwise; the dates, counts
+and research behind each one are in [docs/status-engineering.md](docs/status-engineering.md).
 
 ## What works today
 
 Both players, each in their own full game:
 
-- **See each other** as a real engine creature ("phantom") with real appearance, armor and weapons, walking/running
-  on the real walkmesh, and on the minimap/M-screen map.
-- **Travel together, either player leading**, through the engine's own transition path; loading screens overlap.
+- **See each other** as a real in-game character with your real appearance, armour and weapons,
+  walking on the real floor, on the minimap and on the map screen.
+- **Travel together, either player leading** — doors, area transitions and the galaxy map. The
+  other player follows through the same loading screen (or the same take-off movie).
   `follow_lead=host` restores host-only leading, `--no-follow` opts out.
-- **Fight the same fight**: enemy health/death are host-authoritative and mirrored live; a hit on your partner's
-  phantom lands for real, and non-damage effects (stun, slow, choke, ...) follow.
-- **Share the world.** Dropped items, doors, containers/locks, story triggers, and quest/journal state all merge
-  upward. **Pause** and **downed/revive** (spectate camera, `spectate_on_down=0` to opt out) work the same way.
-- **Share one party**, host-driven AI mirrored to clients (`--no-party-sync` opts out), and **start from the game's
-  own menu** — a "Co-op" button, password-protected, auto-reconnect.
-- **Type commands in-game** (`~` — see [docs/CONSOLE.md](docs/CONSOLE.md)) and **hold one conversation at a time**,
-  Baldur's Gate 3-style: the other player spectates live (clicks AND skips both swallowed) with a late joiner
-  catching up instantly; auto-join only pulls someone in when the *engine* forces it.
+- **Fight the same fight**: enemy health and deaths come from the host's game and are mirrored
+  live; your hits land, your own game really fights up to three enemies at once, and stuns, slows,
+  chokes and heals reach your partner's real body. Going down puts you in a spectator camera until
+  you're revived; a full party wipe reloads and rejoins automatically.
+- **Share the world.** Dropped items, doors, containers and locks, story triggers, quests, the
+  journal, credits, the party's inventory and merchant stock all stay in step. **Pause** pauses
+  both games.
+- **Share one party**, driven by the host's game and mirrored to everyone (`--no-party-sync` opts
+  out), including a companion's equipment, experience and recruitment.
+- **Start from the game's own menu** — a "Co-op" button, password-protected, auto-reconnect — and
+  **type commands in-game** (`~`, see [docs/CONSOLE.md](docs/CONSOLE.md)) or **chat** (Enter).
+- **Hold one conversation at a time**, Baldur's Gate 3-style: the other player spectates live and a
+  late joiner catches up instantly.
 
-An unfocused or minimised instance keeps simulating, which is what makes one-machine testing practical. **Mods
-don't have to match**: at join time each side fingerprints its install (executable, override folder,
-`appearance.2da`, journal, string table) and the two compare notes **per channel** — a mismatched module only drops
-that module's channels, a different save asks you to rejoin (or refuses, with `--require-identical-save`), and
-every decision is said on screen with a code (`E_EXE`, `W_GIT`, `W_SAVE`, ...). See
-[mod-compatibility.md](docs/research/mod-compatibility.md).
+An unfocused or minimised copy keeps running, which is what makes one-machine testing practical.
+**Mods don't have to match**: at join time each side fingerprints its install and the two compare
+notes — a mismatched module only drops that module's channels, a different save asks you to rejoin
+(or refuses, with `--require-identical-save`), and every decision is said on screen with a code
+(`E_EXE`, `W_GIT`, `W_SAVE`, ...). See [mod-compatibility.md](docs/research/mod-compatibility.md).
 
 ## Requirements
 
@@ -261,36 +258,21 @@ tools/                   package/install scripts, demo rig, RE helpers, the koto
 
 ## Honest limitations
 
-**Full player-facing status list:** [docs/limitations.md](docs/limitations.md) (2026-09-02) —
-what works, what's partial, and what's not supported, ordered the way you'd actually hit it
-(joining/rejoining, travel, combat/downed/revive, dialogue, party management, stores/minigames,
-3+ peers, input), plus a list of things that look like bugs on the test rig but aren't real
-limitations. The bullets below remain the short-form summary; the linked doc is the one to check
-before planning a start-to-end run — biggest current blockers are the galaxy-map/escape-pod party
-picks needing a human, and a few input-lock features that are built but never watched live (the
-vendor-purchase gold ledger was verified 2026-09-03 — it found and fixed a stale store-panel
-gold cache that could wrap the purse to a fortune; damage attribution and the threat retarget
-built on it were live-verified the same day, see the status table).
+Two documents, for two readers:
 
-- **Only the host can switch party character**, mirrored to everyone else; control returns to your own character automatically on connect (`control_return=0` opts out). A mirrored companion's follow-AI never runs at all while mirroring holds, by design (the reclaim that keeps local AI from contesting a driven position also blocks the engine's own follow dispatcher). Where follow-AI DOES run, its long-standing "companion stands still and never catches up" stall is fixed and on by default (`party_follow_stall_recovery`, 2026-08-29): a runtime detector spots the exact wedged follow record and gathers the party through the engine's own routine, the same one a module transition uses — five reps, every wedge recovered on the first attempt. It relocates the companion rather than walking it back; the long-distance pathfinding limit underneath is real and still unfixed, so a companion left far behind is gathered, not walked. `disconnect` then `reconnect` reliably re-mirrors a companion. A mirrored companion can't fight for a client except through `companion_local_combat` (on by default); a companion it releases now forwards the damage it actually takes back to the host, which spends it as real damage on its own authoritative body (`companion_damage_sync`, on by default, NEEDS-LIVE) — before this, a released companion's damage went nowhere and the host's own mirror write overwrote it on the very next pass, making it effectively invulnerable. See [control-return.md](docs/research/control-return.md), [party-reconciliation.md](docs/research/party-reconciliation.md) and [companion-state-sync.md](docs/research/companion-state-sync.md) §13.
-- **One conversation at a time**, by design — the other player spectates rather than a separate copy; any peer may start one (initiator-led replies), and (2026-08-29) a spectator's SKIP is swallowed the same way clicks already were (`DialogueSkipHook`). See [dialogue-sync.md](docs/research/dialogue-sync.md).
-- **Losing the host doesn't lock you out, live-verified.** A client whose host crashes, quits, or drops off the network releases every co-op lock within `host_loss_timeout_ms` (default 5000ms — measured live at 6.1s) and keeps playing solo — companions, doors and dialogue all keep working — while re-Helloing automatically in the background; the host coming back re-mirrors everything with no player action needed (`host_loss_release`, on by default, `PacketType.HostBye` fast path). See [disconnect-reconnect.md §11](docs/research/disconnect-reconnect.md).
-- **Companion experience and equipment sync are both live-verified and on by default** (`companion_xp_sync`, `companion_gear_sync` — see the status table); **dialogue recruitment sync is live-confirmed for two companions** (`dialogue_recruit_sync`, on by default), though a fix for a stale pre-recruit body isn't yet confirmed live. See [companion-state-sync.md](docs/research/companion-state-sync.md), [dialogue-consequences.md](docs/research/dialogue-consequences.md).
-- **Mod-compatibility mismatch handling is live-verified for most categories**, but module-GIT/globals-catalogue mismatches are unforced in testing and a same-resref, differently-modded item isn't detected. See [mod-compatibility.md](docs/research/mod-compatibility.md).
-- **Swoop racing works, but only one player at a time.** The "the race never starts" report turned out to be a wrong test recipe, not the mod: the race branch of Gadon's dialogue needs the `Tar_SummonGadon` global and three real reply picks, and with those it runs end to end. A KOTOR track is a single-seat area, so `minigame_lock_peers` (on by default, `minigame_lock_timeout_s=600`) holds the other players still with a "&lt;name&gt; is racing - waiting" notice and refuses to warp them onto the track; rewards (gold, journal, the `Tar_Swoop*` globals) reach everyone through the ordinary channels. The keyboard half of that peer lock stays NEEDS-LIVE (injected keystrokes never reach this game); the `delay_probe` diagnostic ships OFF. **Creature liveness reconciliation** (a body alive on one screen, dead on the other) ships ON by default since 2026-09-03 — destroy/kill dispatch and a 49-creature freshness probe all verified live; the one known cosmetic is up to ~1.5 s of budgeted `liveness ANOMALY` log lines on a client right after a kill on the host's authority, before the census drops the id. See [minigames.md](docs/research/minigames.md) §24 and [creature-liveness.md](docs/research/creature-liveness.md).
-- **A peer could render as the wrong character (a stranger, or Trask) after a warp — both root causes closed, 2026-08-29.** The phantom's client twin is now re-dressed after re-spawn (`PeerIdentityRule`), and a host companion no longer leaks into the enemy census during the ~5s its follow pointer is null after a transition (`PartyCensusRule`, roster-based) — stand-ins built for a genuine enemy are dressed too. See [name-plates.md](docs/research/name-plates.md) and [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
-- **Chain mode serialises `dinput8` proxies, it doesn't merge them** — a proxy that always loads the system DLL itself must be last in `dinput8.chain`; "load me" DLLs (`.asi`) go anywhere.
-- **Each player really fights up to 3 enemies at a time (`local_combat_slots`, default 3, NEEDS-LIVE).** `local_combat` hands a client up to `local_combat_slots` hostiles to its own engine at once (1 reproduces the original single-fight behaviour); every other engaged enemy beyond that count stays mirrored (damage still lands), and the damage wire names only the last attacker. Built and unit-tested 2026-09-02; live confirmation of N simultaneous fights is still open. See [combat-participation.md §11](docs/research/combat-participation.md).
-- **An enemy shares its attention between both players, but does not stay pulled.** `threat_retarget` (ON by default since 2026-09-03) orders an enemy the host engaged first onto the client once the client's forwarded damage clearly leads; the order lands every time, but KOTOR's own AI re-picks the host PC on its next landed hit, so in a shared fight the enemy alternates (measured 12 hits on the host's PC vs 10 on the client's phantom over 98 s — 0 on the client without it). Only tracks the ONE remote peer's damage — with 3+ players it is inert. See [peer-damage-ledger.md §11](docs/research/peer-damage-ledger.md).
-- **The party's shared item pool and merchant store stock are synced, at mode 2** (`party_pool_sync`/`store_sync`, both ON by default since 2026-08-29 — see the status table). Two live-verified limitations remain: a shop's stock can only be READ while some player has that shop's GUI open (an engine limitation, unchanged from mode 1), and an infinite-stock item's buys never replicate because the engine's own stock never changes for one. Mode 1's bidirectional op-log stays disqualified and is reachable only by writing `=1` explicitly. See [party-pool-sync.md](docs/research/party-pool-sync.md), [store-sync.md](docs/research/store-sync.md) and [shared-inventory-v2.md](docs/research/shared-inventory-v2.md).
-- **The Star Forge's Bastila and Malak duels spectate, ON by default and live-verified** (`solo_segment_spectate`), except the input lock is only confirmed to engage its own mechanism, never confirmed to stop a real PHYSICAL WASD press (injected keystrokes never reach this game — same limit as the swoop peer lock above).
-- **Chaining the console `warp` verb rapidly can crash the game** — a pre-existing, unfixed `swkotor.exe` defect, not co-op-specific and not gated by any `coop.ini` setting. A 12-transition real-doors-only soak found zero crashes on the same build a `warp`-driven soak crashed by transition 2-3 on. See [transition-crashes.md](docs/research/transition-crashes.md) and [docs/CONSOLE.md](docs/CONSOLE.md)'s `warp` row.
-- **A real door crossing used to cost the client a needless rejoin — fixed 2026-09-03.** The engine autosaves through every module transition, and each side's autosave carries its own runtime-id counters, so the two "save identities" disagreed for good after the first door and the client auto-rejoined mid-cutscene (`W_SAVE`). A save-identity mismatch is now honoured only when the two sides never agreed or one of them has loaded a save since; a mismatch that can only have come from a save is the same world. See [session-save.md](docs/research/session-save.md) and [cinematics.md](docs/research/cinematics.md) §8.3c.
-- **`coop.ini` divergence is negotiated, not silent.** Every behaviour flag rides a digest compared at join; a difference always warns on both screens (`W_CFG`), and nine host-authoritative keys are additionally adopted by a disagreeing client at runtime. See [mod-compatibility.md](docs/research/mod-compatibility.md)'s "Behaviour-flag negotiation".
-- **The other player's movement should look continuous, not bursty.** Until 2026-08-29 it did not: the agent's item cache was forcing a full ~180 MiB scan of the game's memory once a second on the same thread that writes remote players' positions, so the pump ran at 12.8 Hz instead of 30 with individual ticks up to 2.4 seconds. Every world scan now runs on a background thread and serves its previous result while refreshing; measured on the rig, the worst tick went from 2,409 ms to 8.4 ms and the pump holds 30 Hz. If a peer still moves in bursts, that is a bug worth reporting — turn on `perf_trace` and send the agent log. See [lag-audit.md](docs/research/lag-audit.md).
-- **The Endar Spire's command deck floors damage at 1 hp for everyone** — KOTOR's own tutorial script, not this mod ([min-one-hitpoint.md](docs/research/min-one-hitpoint.md)).
-- **No gamepad/controller support.** The server browser, password entry and `~` console take typed/clicked input only — a co-op-added limitation, not a change to the base game's input.
-- **Internet play works without a relay for most home routers, not all.** A host's public address is found automatically (STUN) and the port forwarded via UPnP (manual otherwise, named in `status`/`public_address`); no relay/hole-punching, so a restrictive ("symmetric") NAT with UPnP off can't be reached. Built and unit-tested, not yet watched against a real router. See [network-topology.md](docs/research/network-topology.md).
+- **[docs/limitations.md](docs/limitations.md)** — for players. What works, what works with a
+  catch, what is deliberately not shared, and what nobody has been able to test on real hardware
+  yet, in everyday words, ordered the way you'll hit it (joining, moving, fighting, talking, party
+  and shops, minigames, controls). Read this before planning a start-to-end run.
+- **[docs/status-engineering.md](docs/status-engineering.md)** — for developers. The same list
+  with the dates, counts, rule names and research links behind each status, plus the full feature
+  table and detailed engineering notes that used to live on this page.
+
+The things most likely to surprise a first-time pair are already in "Status at a glance" above:
+one conversation at a time, the host owns the party, minigames are single-seat, no controller, and
+internet play is untested against a real router. Things that *look* like bugs but aren't — the
+1-hp floor on the Endar Spire, an old `coop.ini` keeping a stale default — are listed at the end of
+docs/limitations.md.
 
 ## Documentation map
 
@@ -298,6 +280,8 @@ built on it were live-verified the same day, see the status table).
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — build, test, the live rig, CI/release pipeline, repo layout, code conventions, and how to add a feature end-to-end.
 - [docs/CONFIG.md](docs/CONFIG.md) — every `coop.ini` key and CLI flag, with defaults.
 - [docs/CONSOLE.md](docs/CONSOLE.md) — every in-game console verb.
+- [docs/limitations.md](docs/limitations.md) — what works and what doesn't, in plain language, for players.
+- [docs/status-engineering.md](docs/status-engineering.md) — the same list with the evidence behind every status, plus the full feature table, for developers.
 - [docs/roadmap-seamless.md](docs/roadmap-seamless.md) — what's left before "seamless," tiered by priority.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common problems and their causes.
 - [docs/live-verification.md](docs/live-verification.md) — the two-instance checklist that turns "built" into "live-verified" here.

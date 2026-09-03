@@ -7,20 +7,19 @@ characters, travel, fight, loot, talk and pause together.
 
 No game file is modified. Everything lives beside `swkotor.exe` and can be removed again.
 
-**New this release (2026-08-29):** a companion that stalls partway through a leg while following
-now recovers on its own instead of standing frozen forever (`party_follow_stall_recovery`, on by
-default); losing the host no longer locks you out — every co-op lock releases within a few
-seconds, you keep playing solo, and rejoining is automatic when the host comes back
-(`host_loss_release`, on by default); the swoop race now runs end to end, with every other
-player held safely off the single-seat track and told who is racing instead of being dragged in
-behind them; if you never played this game before you can now join with `join_mode =
-newcharacter` — connect, create a character through the game's own New Game screen as normal,
-and the mod carries you into the host's world with it; a spectator's skip during someone else's
-conversation is swallowed the same way clicks already were; and a peer or companion that used to
-render as a stranger (or as Trask) right after a warp is fixed. All are on by default. **Not yet
-shared between players**: the party's stash pool and a merchant's buy/sell stock still run
-per-instance — every wire-sync design tried for either has been disqualified in live testing, so
-both stay off by decision rather than by caution; see "Something is wrong" below.
+**What to expect.** You can play the whole game together, start to finish. Either player can
+lead through doors and area changes, and either player can pick the destination on the galaxy
+map — the other one is taken along automatically, take-off movie and all. Enemies have one
+shared health bar, your hits land, and stuns, slows and heals reach your partner for real. The
+party's inventory, credits, merchant stock, doors, chests, quests and the journal are all one
+shared copy. Companions follow the host's game, and a companion can fight for the client. One
+conversation runs at a time: whoever starts it picks the replies and the other player watches
+it live. Pazaak and the swoop race are single-seat — the other player is told they're waiting.
+If somebody saves, loads, quits to the menu, or the host's game crashes, the other side notices
+and rejoins on its own. If you have never played the game, `join_mode = newcharacter` lets you
+create a character through the normal New Game screen and join with it. Mouse and keyboard only.
+The full list — what works, what has a catch, and what is deliberately left to the host — is
+`docs/limitations.md` in the full repository (link at the bottom).
 
 ## Install — pick one
 

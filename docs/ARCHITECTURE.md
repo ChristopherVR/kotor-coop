@@ -354,6 +354,6 @@ port is a fresh reverse-engineering pass, not a config change.
 
 Within KOTOR 1, what remains open — party-character switching, follow-AI stalls, local
 companion combat, dialogue recruitment sync, swoop racing, creature-liveness
-reconciliation — is tracked live in `README.md`'s "Honest limitations" section rather than
-duplicated here, since that list changes with nearly every round of live testing; each item
-links a dated write-up in `docs/research/`.
+reconciliation — is tracked live in `docs/status-engineering.md` (and, in plain language, in
+`docs/limitations.md`) rather than duplicated here, since that list changes with nearly every
+round of live testing; each item links a dated write-up in `docs/research/`.
