@@ -181,6 +181,11 @@ public class StorePendingApplyQueueConcurrencyTests
                 {
                     observed.Enqueue(next);
                 }
+                else
+                {
+                    // A two-core CI runner: a hard spin starves the producer. Yield instead.
+                    Thread.Yield();
+                }
             }
         })
         { IsBackground = true };

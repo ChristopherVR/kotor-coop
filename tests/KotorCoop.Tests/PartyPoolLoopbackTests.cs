@@ -1476,12 +1476,20 @@ public class PartyPoolLoopbackTests
                         observed.Enqueue(next);
                         host.PartyPool.Record(PartyPoolOpKind.Remove, next.Key, next.Count);
                     }
+                    else
+                    {
+                        // A two-core CI runner: a hard spin here starves the producer, and
+                        // the backlog the producer then builds is what the throttle below
+                        // guards. Yield instead of burning the core.
+                        Thread.Yield();
+                    }
                 }
             })
             { IsBackground = true };
             consumer.Start();
 
             const int Iterations = 8_000;
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
 
             try
             {
@@ -1489,14 +1497,28 @@ public class PartyPoolLoopbackTests
                 {
                     PartyPoolStackKey key = new($"g_i_stress{i:D6}", 0, 0, 0, ItemIdentity.FlagKnown);
 
+                    // Keep the backlog under PartyPoolStore's own MaxPartyPoolStacks (256) cap:
+                    // Record(Add) REFUSES a brand-new key silently once that many keys are
+                    // held, so a consumer descheduled for long enough (GitHub's two-core
+                    // runner lost 591 of 8000 this way, 2026-09-03 — with zero "dropping
+                    // apply" lines, because the loss was upstream of the queue) makes the
+                    // producer skip keys the queue never saw. That is the cap doing its job,
+                    // not the torn-read race this test exists for. The two threads still
+                    // overlap on every enqueue/dequeue; only the backlog is bounded — same
+                    // shape as StorePendingApplyQueueConcurrencyTests.
+                    while (i - observed.Count >= 128 && DateTime.UtcNow < deadline)
+                    {
+                        Thread.Sleep(1);
+                    }
+
                     // Simulates a peer op landing in the store — exactly what
                     // CoopHost/CoopClient's own HandlePartyPoolOp does, immediately before the
                     // pump's own reconcile step notices the gap and enqueues an apply for it.
-                    host.PartyPool.Record(PartyPoolOpKind.Add, key, 1);
+                    Assert.True(host.PartyPool.Record(PartyPoolOpKind.Add, key, 1), $"store refused '{key.Resref}' at backlog {i - observed.Count}");
                     agent.PumpOnce();
                 }
 
-                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+                deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
                 while (observed.Count < Iterations && DateTime.UtcNow < deadline)
                 {
                     Thread.Sleep(15);
