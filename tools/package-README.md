@@ -250,18 +250,14 @@ player's helper. Clients talk only to the host.
   It reports what's actually there — plain, chained, or nothing installed — checks that every
   chained DLL is really present, and prints one PASS/FAIL line per check without changing
   anything. Every ordinary install run already ends with this same report.
-- **The party's shared stash and a merchant's stock aren't shared between us:** both channels
-  ship ON as of 2026-08-29 (`party_pool_sync=2`/`store_sync=2`), so the usual cause is an OLD
-  `coop.ini` — the installer never overwrites that file, so an install from before then keeps its
-  own `=0` lines. Set them to `2`, or run `install.ps1 -GameDir '...' -UpdateDefaults`. Two real
-  limitations remain even when on: a shop's stock is only READ while somebody has that shop's GUI
-  open, and an infinite-stock item's buys never replicate (the engine's own stock never changes
-  for one). See `docs/CONFIG.md` and `docs/research/shared-inventory-v2.md` in the full repo.
-- **No Co-op button:** `menu_button = 1` in `coop.ini`. Upgrading over an install from before
-  2026-08-27 keeps that file's OLD default (`0`) because `coop.ini` is never overwritten —
-  `install.ps1` now warns about this after every install and `install.ps1 -GameDir '...'
-  -UpdateDefaults` rewrites just that line (and the other defaults that changed the same day,
-  `effect_sync`/`trigger_relay`) without touching anything else in the file.
+- **Upgraded from an older version and something that should be on isn't** (no Co-op button,
+  the party's shared stash or a shop's stock not shared, ...): the installer never overwrites
+  your `coop.ini`, so a file from an older version keeps that version's settings. Every install
+  ends by listing what's out of date; `install.ps1 -GameDir '...' -UpdateDefaults` rewrites just
+  those lines (and removes leftover developer switches from older, longer templates) without
+  touching anything else in the file. Two shop limitations remain even when on: a shop's stock
+  is only read while somebody has that shop open, and an infinite-stock item's purchases never
+  replicate.
 - **Partner never appears / "no reply from host":** ports must match and the host's UDP port
   must be open; passwords must match exactly.
 - **Nothing happens at all:** look for `kotorcoop-plugin.log` beside the game. If it does
