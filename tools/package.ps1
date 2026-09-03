@@ -10,6 +10,7 @@
 #   dinput8.chain.example       the annotated chain list
 #   README.md                   install / play / configure / troubleshoot, version-stamped
 #   install.ps1                 optional command-line wrapper over `KotorCoop.Agent.exe install`
+#   CoopIniDefaults.ps1         the coop.ini upgrade-drift table install.ps1 dot-sources
 #
 # Does NOT touch a game install and does NOT run the game. CI runs this on every push and
 # attaches the zip to the run; a green run on main or a v* tag becomes a GitHub release
@@ -119,10 +120,14 @@ foreach ($asset in $overrideFiles) { Copy-Item $asset.FullName (Join-Path $stagi
 
 # --- installer wrapper + README ------------------------------------------------------------
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
+# install.ps1 dot-sources this for the coop.ini drift check on a re-install; without it the
+# wrapper failed AFTER placing every file (found live 2026-09-03 running the zip against a
+# game dir that already had a coop.ini).
+Copy-Item (Join-Path $PSScriptRoot 'CoopIniDefaults.ps1') (Join-Path $staging 'CoopIniDefaults.ps1')
 
 $readme = (Get-Content (Join-Path $PSScriptRoot 'package-README.md') -Raw).Replace('{{VERSION}}', $Version)
 Set-Content -Path (Join-Path $staging 'README.md') -Value $readme -Encoding UTF8 -NoNewline
-"staged install.ps1 + README.md"
+"staged install.ps1 + CoopIniDefaults.ps1 + README.md"
 
 # --- zip it up -------------------------------------------------------------------------------
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }

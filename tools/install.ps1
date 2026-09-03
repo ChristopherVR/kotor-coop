@@ -162,8 +162,14 @@ if ($LASTEXITCODE -ne 0) { throw "KotorCoop.Agent.exe exited with code $LASTEXIT
 
 # --- coop.ini upgrade-drift check: only for a plain (non-uninstall) run, and only when the
 # player's coop.ini predates this install ------------------------------------------------------
-if (-not $Uninstall -and $iniExistedBefore) {
-    . (Join-Path $PSScriptRoot 'CoopIniDefaults.ps1')
+$defaultsTable = Join-Path $PSScriptRoot 'CoopIniDefaults.ps1'
+if (-not $Uninstall -and $iniExistedBefore -and -not (Test-Path -LiteralPath $defaultsTable)) {
+    # The install itself is complete at this point; a missing drift table (a hand-assembled
+    # package) must not turn a finished install into a failed one.
+    Write-Warning "CoopIniDefaults.ps1 is not beside install.ps1 - skipping the coop.ini upgrade-drift check"
+}
+elseif (-not $Uninstall -and $iniExistedBefore) {
+    . $defaultsTable
 
     $playerIni = ConvertFrom-CoopIni -Path $iniPath
     # The reference is whatever coop.ini SHIPPED beside this install.ps1 in the current
