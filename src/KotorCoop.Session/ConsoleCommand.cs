@@ -143,6 +143,26 @@ public enum CoopCommandKind
     /// </summary>
     PublicAddress,
 
+    /// <summary>
+    /// Reports whether Steam invites are usable right now: the redistributable loaded, Steam
+    /// init succeeded, this account's own SteamID64, and — while hosting — the rich-presence
+    /// connect string a friend's "Join Game" click will carry. A no-op verdict ("steam_invites
+    /// is off in coop.ini" / "no steam_api64.dll beside the agent" / "Steam is not up") rather
+    /// than a session action — see docs/research/steam-support.md §12.
+    /// </summary>
+    SteamStatus,
+
+    /// <summary>
+    /// Explicitly invites one friend by their SteamID64 (in <see cref="CoopCommand.Address"/>)
+    /// to the session this install is currently hosting, via
+    /// <c>ISteamFriends::InviteUserToGame</c>. The passive route — a friend simply sees "Join
+    /// Game" on your entry once rich presence is published — needs no command at all; this is
+    /// for reaching a friend who is not looking at your profile right now. Refuses when not
+    /// hosting, when Steam is not up, or when the SteamID does not parse. See
+    /// docs/research/steam-support.md §10.
+    /// </summary>
+    SteamInvite,
+
     // ---- staging cheats ---------------------------------------------------------
     //
     // Only the verbs whose ANSWER DEPENDS ON WHO TYPED THEM, plus the two that stage a
@@ -996,6 +1016,8 @@ public static partial class ConsoleCommand
         new(["status", "stat"], ParseStatus),
         new(["lagstats"], ParseLagStats),
         new(["public_address", "publicaddress", "pubaddr"], ParsePublicAddress),
+        new(["steamstatus", "steam_status"], ParseSteamStatus),
+        new(["steaminvite", "steam_invite"], ParseSteamInvite),
         new(["help", "?", "commands"], ParseHelp),
         new(["warp"], ParseWarp),
         new(["netsim", "net"], ParseNetSim),
@@ -1116,5 +1138,5 @@ public static partial class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | public_address | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | public_address | steamstatus | steaminvite <steamid64> | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
 }

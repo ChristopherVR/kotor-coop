@@ -37,6 +37,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.NetSim] = "netsim status",
         [CoopCommandKind.LagStats] = "lagstats",
         [CoopCommandKind.PublicAddress] = "public_address",
+        [CoopCommandKind.SteamStatus] = "steamstatus",
+        [CoopCommandKind.SteamInvite] = "steaminvite 76561198000000000",
         [CoopCommandKind.God] = "god on",
         [CoopCommandKind.TopUp] = "topup",
         [CoopCommandKind.StandUp] = "standup",

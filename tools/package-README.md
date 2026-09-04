@@ -65,7 +65,11 @@ party stop being shared — the two of you are in worlds that disagree about whi
 which. Neither setting ever writes your own saves.
 
 Press `~` in game for the console: `connect <ip> [password]`, `disconnect`, `reconnect`,
-`say <message>`. Tab completes, Up/Down recalls history.
+`say <message>`. Tab completes, Up/Down recalls history. You don't need the console just to
+see what your partner said, though: messages and status lines show up on their own in a screen
+corner, fading out after a few seconds — Page Up/Page Down scrolls back through them. Both the
+console and the chat readout are configurable (position, size, how long lines last) in
+`coop.ini`.
 
 The host is authoritative for enemies and the party; each player owns their own character.
 Only one conversation runs at a time — the other player watches it live. If your partner
@@ -127,26 +131,34 @@ see `docs/research/network-topology.md` if you want the full picture.
 
 Steam's KOTOR is retail 1.0.3 wrapped in Valve's DRM. The wrapper only encrypts the code
 section on disk and unpacks it before the game starts, so this mod's engine addresses are
-correct on the Steam copy too and `dinput8.dll` loads the same way. Three caveats:
+correct on the Steam copy too and `dinput8.dll` loads the same way, live-verified end to end
+including a Steam player and a GOG player sharing a session (module transitions, world
+transfer and all — see [steam-support.md](research/steam-support.md) if you want the evidence).
+Two caveats remain:
 
-- **Both players should be on the same store.** A Steam install and a DRM-free one currently
-  refuse each other: the compatibility check compares the exe *file*, and the wrapped and
-  unwrapped files differ even though the code is identical. Steam + Steam is fine.
 - **Two copies on one PC needs a DRM-free build.** The Steam copy always goes through the
   Steam client, which will not run it twice.
-- **If the Steam overlay is in the way**, `kotorcoop-plugin.log` will say
+- **If the Steam overlay is in the way** (not seen in testing, but the fallback if a future
+  overlay build ever changes this), `kotorcoop-plugin.log` will say
   `frame hook NOT installed: ... something else already hooked it`. Turn the overlay off for
   KOTOR (right-click the game → Properties → General) and relaunch.
-
-None of the above has been verified on a live Steam install yet — it is read off the binaries.
 
 **Friends-list invites** ("Join Game", `steam_invites` in `coop.ini`) let a friend join without
 being told an IP. Optional and off unless you set it up: copy a `steam_api64.dll` next to
 `KotorCoop.Agent.exe` (from the Steamworks SDK, or from any Steam game you own — this mod is
 not allowed to ship Valve's). Without that file you get one line in the log and everything else
 works exactly as before. Both players need to own KOTOR on Steam, and while the agent runs
-Steam will show you as playing KOTOR. Set `steam_invites = 0` to stop the agent talking to
-Steam at all.
+Steam will show you as playing KOTOR. Once it's active:
+
+- Type `steamstatus` at the `~` console any time to check it's working — it prints your own
+  SteamID64 and, while hosting, the exact string a friend's "Join Game" carries.
+- A friend just needs to click **Join Game** on your entry in their Steam friends list; nothing
+  else to do on either side.
+- To invite someone who isn't looking at your profile right now, type
+  `steaminvite <their SteamID64>` while hosting (their SteamID64 is on their Steam profile:
+  "Copy Player ID", or the digits at the end of the profile URL).
+
+Set `steam_invites = 0` to stop the agent talking to Steam at all.
 
 ## Linux and Steam Deck
 

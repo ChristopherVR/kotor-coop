@@ -181,11 +181,20 @@ What that leaves is a much shorter list of real limitations:
 
 ### Friends-list invites ("Join Game")
 
-Optional and off unless you set it up. Verified live on 2026-08-29 as far as a single machine can take it: the
-library loads, Steam accepts the agent as app 32370, and the `connect` string is published. When it is on, hosting publishes a Steam
-rich-presence `connect` string so friends can join from the friends list without being told an IP, and accepting an
-invite dials it through the normal join path (password included, so you are never asked for one you were never
-given).
+Optional and off unless you set it up. When it is on, hosting publishes a Steam rich-presence `connect` string so
+friends can join from the friends list without being told an IP, and accepting an invite dials it through the normal
+join path (password included, so you are never asked for one you were never given). Two console verbs make this
+visible and reachable from in-game rather than only from a log file: `steamstatus` (is it active, your SteamID64, and
+— while hosting — the exact string a friend receives) and `steaminvite <steamid64>` (push an invite to one friend
+explicitly, for when they are not looking at your profile — see [docs/CONSOLE.md](docs/CONSOLE.md)).
+
+Verified live on 2026-08-29 as far as a single machine can take it: the library loads, Steam accepts the agent as app
+32370, and the `connect` string is published. **Re-verified and extended 2026-09-04**
+(docs/research/steam-support.md §19): `ISteamUser::GetSteamID` is now bound too (this is what makes `steamstatus`
+possible), `InviteUserToGame` was called for the first time and returned success, and `--steam-join` was driven
+against a real second instance — not just decoded — ending in a normal connected session (the one address it
+couldn't reach, its own public IP from inside the same LAN, is ordinary NAT hairpinning, not a Steam-invite bug). What
+still needs a second Steam account is unchanged: a distinct friend actually receiving and accepting an invite.
 
 It needs `steam_api64.dll` beside `KotorCoop.Agent.exe`, and **this project cannot ship one** — Valve licenses the
 Steamworks redistributable to Steam partners, not to mod authors. Copy one from the Steamworks SDK or from any Steam

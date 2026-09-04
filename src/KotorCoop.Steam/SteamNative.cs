@@ -51,8 +51,23 @@ public sealed unsafe class SteamNative : IDisposable
         "SteamAPI_SteamFriends_v017",
     ];
 
+    /// <summary>
+    /// Version-suffixed accessor names for <c>ISteamUser</c>, newest first, the same reasoning
+    /// as <see cref="FriendsAccessors"/>. <c>GetSteamID</c> itself has been stable since the
+    /// SDK's earliest public versions, so a build too old to have any of these is not expected
+    /// in practice — the probe still exists so a mismatch fails soft (one log line) rather than
+    /// refusing to load Steam support outright.
+    /// </summary>
+    private static readonly string[] UserAccessors =
+    [
+        "SteamAPI_SteamUser_v023",
+        "SteamAPI_SteamUser_v021",
+        "SteamAPI_SteamUser_v020",
+    ];
+
     private nint _library;
     private nint _friends;
+    private nint _user;
 
     private delegate* unmanaged[Cdecl]<void> _shutdown;
     private delegate* unmanaged[Cdecl]<int> _getPipe;
@@ -62,10 +77,17 @@ public sealed unsafe class SteamNative : IDisposable
     private delegate* unmanaged[Cdecl]<nint, byte*, byte*, byte> _setRichPresence;
     private delegate* unmanaged[Cdecl]<nint, void> _clearRichPresence;
     private delegate* unmanaged[Cdecl]<nint, ulong, byte*, byte> _inviteUserToGame;
+    private delegate* unmanaged[Cdecl]<nint, ulong> _getSteamId;
 
     /// <summary>Whether the library loaded, initialised, and bound everything needed. False
     /// means every other member is a no-op.</summary>
     public bool IsReady { get; private set; }
+
+    /// <summary>This account's own SteamID64 once <see cref="IsReady"/>, else 0. Useful on its
+    /// own for a status line — "am I logged in, as whom" — and it is what a player would hand
+    /// a friend so the friend can <c>steaminvite</c> back, since this build has no
+    /// friends-list/name lookup (see <see cref="UserAccessors"/>'s doc comment).</summary>
+    public ulong SteamId { get; private set; }
 
     /// <summary>
     /// Steam's own callback message header. Layout fixed by the SDK; on x64 the pointer is
@@ -149,7 +171,8 @@ public sealed unsafe class SteamNative : IDisposable
             || !TryGet("SteamAPI_ManualDispatch_FreeLastCallback", out nint free, log)
             || !TryGet("SteamAPI_ISteamFriends_SetRichPresence", out nint setPresence, log)
             || !TryGet("SteamAPI_ISteamFriends_ClearRichPresence", out nint clearPresence, log)
-            || !TryGet("SteamAPI_ISteamFriends_InviteUserToGame", out nint invite, log))
+            || !TryGet("SteamAPI_ISteamFriends_InviteUserToGame", out nint invite, log)
+            || !TryGet("SteamAPI_ISteamUser_GetSteamID", out nint getSteamId, log))
         {
             return false;
         }
@@ -162,6 +185,7 @@ public sealed unsafe class SteamNative : IDisposable
         _setRichPresence = (delegate* unmanaged[Cdecl]<nint, byte*, byte*, byte>)setPresence;
         _clearRichPresence = (delegate* unmanaged[Cdecl]<nint, void>)clearPresence;
         _inviteUserToGame = (delegate* unmanaged[Cdecl]<nint, ulong, byte*, byte>)invite;
+        _getSteamId = (delegate* unmanaged[Cdecl]<nint, ulong>)getSteamId;
         return true;
     }
 
@@ -212,6 +236,7 @@ public sealed unsafe class SteamNative : IDisposable
             ((delegate* unmanaged[Cdecl]<void>)dispatchInit)();
         }
 
+        string? friendsAccessor = null;
         foreach (string accessor in FriendsAccessors)
         {
             if (NativeLibrary.TryGetExport(_library, accessor, out nint get))
@@ -219,16 +244,50 @@ public sealed unsafe class SteamNative : IDisposable
                 _friends = ((delegate* unmanaged[Cdecl]<nint>)get)();
                 if (_friends != 0)
                 {
-                    log($"steam: ready as app {appId} (ISteamFriends via {accessor})");
-                    return true;
+                    friendsAccessor = accessor;
+                    break;
                 }
             }
         }
 
-        log("steam: could not obtain ISteamFriends - the redistributable is a version this "
-            + $"build does not know ({string.Join(", ", FriendsAccessors)})");
-        _shutdown();
-        return false;
+        if (friendsAccessor is null)
+        {
+            log("steam: could not obtain ISteamFriends - the redistributable is a version this "
+                + $"build does not know ({string.Join(", ", FriendsAccessors)})");
+            _shutdown();
+            return false;
+        }
+
+        // ISteamUser, the same probe shape. Not fatal on its own if it fails: rich presence and
+        // receiving an invite (both driven off ISteamFriends alone) still work without it, so
+        // this only costs the SteamID a status line and an explicit steaminvite would report.
+        string? userAccessor = null;
+        foreach (string accessor in UserAccessors)
+        {
+            if (NativeLibrary.TryGetExport(_library, accessor, out nint get))
+            {
+                _user = ((delegate* unmanaged[Cdecl]<nint>)get)();
+                if (_user != 0)
+                {
+                    userAccessor = accessor;
+                    break;
+                }
+            }
+        }
+
+        if (userAccessor is not null)
+        {
+            SteamId = _getSteamId(_user);
+            log($"steam: ready as app {appId}, SteamID {SteamId} (ISteamFriends via {friendsAccessor}, "
+                + $"ISteamUser via {userAccessor})");
+        }
+        else
+        {
+            log($"steam: ready as app {appId} (ISteamFriends via {friendsAccessor}); could not obtain "
+                + $"ISteamUser ({string.Join(", ", UserAccessors)}) - steamstatus will not show a SteamID");
+        }
+
+        return true;
     }
 
     private bool TryGet(string name, out nint address, Action<string> log)

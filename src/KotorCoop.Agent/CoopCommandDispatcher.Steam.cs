@@ -37,16 +37,31 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        if (manager.Current is not CoopHost host)
+        if (CurrentSteamConnectString() is not { } connectString)
         {
             steam.Publish(null);
             return;
         }
 
-        System.Net.IPEndPoint endpoint = host.PublicEndPoint ?? host.ListenEndPoint;
+        steam.Publish(connectString);
+    }
 
-        steam.Publish(SteamConnectStringRule.Format(
-            endpoint.Address.ToString(), endpoint.Port, _password));
+    /// <summary>
+    /// The rich-presence <c>connect</c> string for whatever this install is hosting right now,
+    /// or null when it is not hosting. Shared by the passive publish (<see
+    /// cref="MaintainSteamPresence"/>) and the explicit <c>steaminvite</c> command
+    /// (<see cref="SteamInviteCommand"/>) so both always agree with each other and with
+    /// <see cref="HandleSteamJoinRequest"/>'s own parser on what a friend actually receives.
+    /// </summary>
+    private string? CurrentSteamConnectString()
+    {
+        if (manager.Current is not CoopHost host)
+        {
+            return null;
+        }
+
+        System.Net.IPEndPoint endpoint = host.PublicEndPoint ?? host.ListenEndPoint;
+        return SteamConnectStringRule.Format(endpoint.Address.ToString(), endpoint.Port, _password);
     }
 
     /// <summary>
@@ -80,5 +95,78 @@ public sealed partial class CoopCommandDispatcher
             CoopCommandKind.Connect,
             Address: $"{host}:{port}",
             Password: password.Length > 0 ? password : null));
+    }
+
+    /// <summary>
+    /// <c>steamstatus</c>: the one place a player can see whether the whole feature is actually
+    /// working, rather than reading log lines. Every branch is a plain state report, never an
+    /// error — off/absent/inactive are all normal for the large majority of players (see the
+    /// class doc comment's three-things-must-be-true list).
+    /// </summary>
+    private void SteamStatusCommand(CoopCommand _)
+    {
+        if (steam is null)
+        {
+            Reply("steam: steam_invites is off in coop.ini");
+            return;
+        }
+
+        if (!steam.IsActive)
+        {
+            // TryActivate() already logged the specific reason (no DLL / Steam not running /
+            // app not owned) the first time something asked; repeat the one-line summary here
+            // rather than the detail, since that log line already told the full story once.
+            Reply("steam: not active - see kotorcoop-agent.log for why (no steam_api64.dll, "
+                + "Steam not running, or this account does not own KOTOR on Steam are the "
+                + "normal reasons)");
+            return;
+        }
+
+        string who = steam.SteamId64 == 0 ? "unknown (ISteamUser did not bind)" : steam.SteamId64.ToString();
+
+        Reply(CurrentSteamConnectString() is { } connectString
+            ? $"steam: active, SteamID {who}, hosting - friends can Join Game or steaminvite this connect string: {connectString}"
+            : $"steam: active, SteamID {who}, not hosting - nothing to invite anyone to yet");
+    }
+
+    /// <summary>
+    /// <c>steaminvite &lt;steamid64&gt;</c>: the explicit push, for a friend who is not looking
+    /// at your profile right now. Reuses exactly the connect string the passive publish would
+    /// show them (<see cref="CurrentSteamConnectString"/>), so the two paths can never disagree
+    /// about what a friend ends up connecting to.
+    /// </summary>
+    private void SteamInviteCommand(CoopCommand command)
+    {
+        if (steam is null)
+        {
+            Reply("steam: steam_invites is off in coop.ini");
+            return;
+        }
+
+        if (!steam.IsActive)
+        {
+            Reply("steam: not active - see kotorcoop-agent.log for why");
+            return;
+        }
+
+        if (CurrentSteamConnectString() is not { } connectString)
+        {
+            Reply("steam: not hosting - host first, then steaminvite");
+            return;
+        }
+
+        if (!ulong.TryParse(command.Address, out ulong steamId) || steamId == 0)
+        {
+            // The console parser (ConsoleCommand.ParseSteamInvite) already validates this, so
+            // reaching here with a bad value means a caller other than the console (blockpoke,
+            // a future dashboard button) skipped that check - report rather than throw.
+            Reply($"steam: '{command.Address}' is not a SteamID64");
+            return;
+        }
+
+        Reply(steam.Invite(steamId, connectString)
+            ? $"steam: invited {steamId}"
+            : $"steam: could not invite {steamId} (Steam refused the invite - check the SteamID, "
+                + "and that you are both friends on Steam)");
     }
 }

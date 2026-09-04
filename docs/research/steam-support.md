@@ -806,3 +806,133 @@ delivering `GameRichPresenceJoinRequested_t` (callback 337) into `OnConnectReque
 | §4 runtime `.text` parity | INFERRED | **VERIFIED** — identical image digest from two processes (§18.1) |
 | A real DOOR crossing with a Steam client | — | **NEEDS-LIVE** — `usedoor`'s walk stalls on this module for rig reasons, on either build (§18.4) |
 | `InviteUserToGame` and callback 337 | NEEDS-LIVE | **still NEEDS-LIVE** — needs a second machine and account (§18.6) |
+
+## 19. Closing the reachability gap, and re-verifying against current code (2026-09-04)
+
+Prompted by a request to make sure "the Steam invite approach works properly". Two problems,
+found by reading the code rather than by guessing: `InviteUserToGame` had been implemented in
+`SteamNative`/`SteamInviteService` since the original wave but **nothing in the codebase ever
+called it** — no console verb, no CLI verb, no button. A player had no way to trigger the
+explicit invite at all; the *only* working path was the passive one (a friend notices "Join
+Game" on your entry because rich presence is published). And there was no way for a player, or
+this mod, to learn a SteamID at all — `ISteamUser::GetSteamID` was never bound, so even a status
+line could not say "you are logged in as ...".
+
+**Both fixed this wave:**
+
+- `SteamNative` now also binds `ISteamUser` (probing `SteamAPI_SteamUser_v023` → `_v021` →
+  `_v020`, the same newest-first shape §10 already uses for `ISteamFriends`) and calls
+  `GetSteamID`, exposed as `SteamNative.SteamId` / `SteamInviteService.SteamId64`.
+- Two new console verbs (`ConsoleCommand.Steam.cs`, `CoopCommandDispatcher.Steam.cs`):
+  - **`steamstatus`** — read-only: is the feature active, this account's SteamID64, and (while
+    hosting) the exact connect string a friend receives. The one place a player can actually see
+    whether the feature is working, instead of reading a log file.
+  - **`steaminvite <steamid64>`** — the explicit push `InviteUserToGame` was always meant to
+    reach (§10). No friend-list enumeration is bound (`ISteamFriends::GetFriendByIndex` etc.
+    were never in scope), so a player types the number, copied from a friend's Steam profile
+    ("Copy Player ID" or the URL's trailing digits) — a real limitation, noted in the verb's own
+    error text rather than hidden.
+  - Both share one `CurrentSteamConnectString()` helper with the passive publish, so the passive
+    "Join Game" route and the explicit `steaminvite` route can never disagree about what a
+    friend ends up connecting to.
+- Tab completion (`ConsoleVerbCatalog.cs`) and the console help text list both verbs;
+  `docs/CONSOLE.md`'s existing verb table now includes the connection-and-session and
+  read-only rows for them (with a link to this section for the SteamID-typing limitation).
+
+### 19.1 Live re-verification, this session, one machine/account (as before, §18.6)
+
+`steam_api64.dll` (a current SDK build, copied locally from another owned Steam game for the
+test only — not committed, not packaged, removed afterward, same as §18.6's own precedent) was
+dropped beside the agent on the GOG install. Every native call this build makes was exercised:
+
+```
+steam: wrote steam_appid.txt (32370) beside the agent
+steam: ready as app 32370, SteamID 76561197993781479 (ISteamFriends via SteamAPI_SteamFriends_v018,
+       ISteamUser via SteamAPI_SteamUser_v023)
+```
+
+`SteamAPI_SteamUser_v023` — the first candidate in the new probe list — bound on the first live
+attempt. `steamstatus` before and after `host`:
+
+```
+> steamstatus
+steam: active, SteamID 76561197993781479, not hosting - nothing to invite anyone to yet
+> host
+steam: friends can now join this session (kc1/103.95.113.80:27140)
+> steamstatus
+steam: active, SteamID 76561197993781479, hosting - friends can Join Game or steaminvite this
+       connect string: kc1/103.95.113.80:27140
+```
+
+**`InviteUserToGame` called for the first time ever in this project**, self-invited (the only
+account available):
+
+```
+> steaminvite 76561197993781479
+steam: invited 76561197993781479
+```
+
+The call reached Steam and returned success — no crash, no interop fault, the `byte` return
+correctly marshalled and non-zero. This proves the ABI, the function-pointer resolution, and the
+argument packing are all correct, which is everything this mod's side of the feature is
+responsible for; whether a *distinct* friend's client actually receives and can act on the
+invite still needs a second account (unchanged from §18.6 — see §19.3).
+
+Disconnecting cleared the presence correctly (`steam: cleared the join-me presence`), matching
+§18's original design.
+
+### 19.2 The receive path, driven end to end (not just the CLI decode)
+
+§18.6 called `--steam-join` "the only tested path", but that had only ever been checked as CLI
+parsing (`SteamJoinOptionTests.cs`), never against a second, live instance actually connecting.
+This time a second instance was launched with NO auto-started agent
+(`auto_start_agent = 0`, restored after) and driven by hand exactly as Steam's own cold-start
+launch would drive it:
+
+```
+KotorCoop.Agent.exe run --pid <p2> --kotor --steam-join 'kc1/103.95.113.80:27140'
+
+steam: joining from an invite (kc1/103.95.113.80:27140)
+* co-op: connecting...
+connecting to 103.95.113.80:27140...
+* no reply from 103.95.113.80:27140 - is UDP port 27140 forwarded on the host?
+```
+
+The connect string decoded to the exact right host and port and a real connection attempt was
+made — the entirety of what this feature's code is responsible for. The failure that followed is
+**NAT hairpinning, not a Steam-invite bug**: `103.95.113.80` is this same machine's own STUN-found
+public address, and connecting *to your own public IP from inside your own LAN* is a router
+capability most consumer routers do not have, wholly unrelated to Steam (`--join` on a hand-typed
+public IP from the same LAN would fail identically). Proven by immediately repeating the exact
+same `run --kotor` against the LISTEN endpoint instead:
+
+```
+KotorCoop.Agent.exe run --pid <p2> --kotor --join 127.0.0.1:27140
+
+* connected - connected to 127.0.0.1:27140 as peer 2
+* co-op: connected, 1 player
+```
+
+Clean connect, `peers-here 1`. So the whole pipeline a real cross-network invite depends on —
+decode the connect string → resolve the address → dial → join the session — is now **verified
+end to end** on current code, with the single remaining unknown being the same NAT/port-forwarding
+question every internet game on this mod already has (`docs/research/network-topology.md`), not
+anything specific to Steam.
+
+### 19.3 What is still, honestly, NEEDS-LIVE
+
+Only the thing that has needed two machines since §18.6 still needs two machines: **a distinct
+Steam account receiving `GameRichPresenceJoinRequested_t` (callback 337) from a real friend's
+"Join Game" click**, and (new this wave) **a distinct account being the target of `steaminvite`**
+and seeing it arrive as an actual invite notification, not a same-account self-call. Nothing in
+this session's testing could exercise either — there is one Steam account on this machine. If a
+second tester with their own Steam account and a copy of KOTOR ever runs this build, that pairing
+is the one thing left on the list.
+
+### 19.4 Full regression check
+
+`dotnet test` (whole suite, the one documented flaky exclusion aside): all green, no change from
+before this wave's edits — the new `SteamId`/`ISteamUser` binding, the two console verbs, and
+their verb-table/catalog/help-text wiring introduced no regressions elsewhere. New tests added:
+`ConsoleCommandSteamTests` (parsing `steamstatus`/`steaminvite`, every malformed-SteamID shape)
+and two new rows in `ConsoleCommandVerbTableCoverageTests`.

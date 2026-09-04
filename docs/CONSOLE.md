@@ -40,6 +40,8 @@ with a trailing `...` rather than running off the edge of the screen.
 | `status` / `stat` | — | any player | connection state, player count |
 | `lagstats` | — | any player | interpolation delay, real send/recv intervals, agent pump cost |
 | `public_address` / `publicaddress` / `pubaddr` | — | host only | this host's public IP:port (STUN) and UPnP mapping verdict, for sharing with a joiner over the internet — see [network-topology.md](research/network-topology.md) |
+| `steamstatus` / `steam_status` | — | any player | whether Steam invites are active, this account's SteamID64, and (while hosting) the exact connect string a friend receives — see [steam-support.md](research/steam-support.md) |
+| `steaminvite` / `steam_invite` | `<steamid64>` | host only | invites one friend by their SteamID64 (from their Steam profile's "Copy Player ID", or the digits at the end of their profile URL — this build has no friends-list lookup) to the session you're hosting; a friend can also just click **Join Game** on your entry without this — see [steam-support.md](research/steam-support.md) |
 | `who` / `peers` | — | any player | list connected peers |
 | `where` | — | any player | print your own coordinates |
 | `servers` / `browse` / `list` | — | any player | list discovered servers |

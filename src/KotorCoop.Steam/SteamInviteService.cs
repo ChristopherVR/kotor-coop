@@ -55,6 +55,9 @@ public sealed class SteamInviteService : IDisposable
     /// it and the attempt succeeded.</summary>
     public bool IsActive => _native is { IsReady: true };
 
+    /// <summary>This account's own SteamID64 while <see cref="IsActive"/>, else 0.</summary>
+    public ulong SteamId64 => _native?.SteamId ?? 0;
+
     /// <summary>
     /// Brings Steam up if it is not already, exactly once per process. A failed attempt is
     /// remembered: retrying every tick would mean a `LoadLibrary` per tick for the large

@@ -290,6 +290,8 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Census] = c => Census(c.Address),
         [CoopCommandKind.LagStats] = _ => LagStats(manager),
         [CoopCommandKind.PublicAddress] = _ => PublicAddressCommand(),
+        [CoopCommandKind.SteamStatus] = SteamStatusCommand,
+        [CoopCommandKind.SteamInvite] = SteamInviteCommand,
 
         // Straight to the plugin: these questions can only be answered on the game thread,
         // and the value of the answer is that it is taken in ONE frame.
