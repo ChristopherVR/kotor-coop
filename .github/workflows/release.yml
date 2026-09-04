@@ -94,15 +94,16 @@ jobs:
             echo
             echo "| Platform | File | Install |"
             echo "| --- | --- | --- |"
-            echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract, double-click \`KotorCoop.Agent.exe\` (or \`pwsh .\\install.ps1\`) |"
+            echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into your KOTOR folder, or double-click \`KotorCoop.Agent.exe\` from anywhere |"
             echo "| Linux / Steam Deck (Proton) | **[$tgz_name]($base/$tgz_name)** (${tgz_size} KB) | extract, run \`install.sh\`, add the launch option below |"
             echo
             echo "No SDK, runtime or toolchain needed on either. The same mod is inside both: KOTOR is a Windows program on every platform, only the installer differs."
             echo
-            echo '```powershell'
-            echo "# Windows: extract the zip, then from inside it (or just double-click KotorCoop.Agent.exe):"
-            echo "pwsh .\\install.ps1 -GameDir 'C:\\GOG Games\\Star Wars KOTOR (GOG)'"
-            echo '```'
+            echo "**Windows, pick one:**"
+            echo "- **Portable:** extract the zip straight into the folder that has \`swkotor.exe\` (for GOG usually \`C:\\GOG Games\\Star Wars KOTOR (GOG)\`) and start the game. The zip *is* the install."
+            echo "- **Installer:** extract anywhere and double-click \`KotorCoop.Agent.exe\`. It finds your GOG install (or asks you to pick the folder), copies everything in, and offers to launch. No PowerShell needed."
+            echo
+            echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs, but neither of the two options above needs it.)"
             echo
             echo '```bash'
             echo "# Linux / Steam Deck (Desktop Mode): finds the Steam, Heroic or Lutris install itself"
