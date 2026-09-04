@@ -9,6 +9,24 @@ spawned body is flushed before the module unloads, and the peer follows). See
 [console-cheats.md](research/console-cheats.md) for the full authority reasoning, the wire
 format, and the live-verification checklist — this page is the short reference.
 
+## Chat overlay
+
+Your partner's messages and status lines (`say`, connection changes, "hosting on port...")
+show up on screen **on their own, without opening the console** — a small always-on readout
+(`chat_overlay` in `coop.ini`, on by default) drawn in a screen corner
+(`chat_overlay_anchor`, default bottom-left). Each line fades out after a few seconds
+(`chat_overlay_fade_ms`) so it never sits over gameplay for long; a very long line is shortened
+with a trailing `...` rather than running off the edge of the screen.
+
+- **Page Up / Page Down** scroll it back through everything said this session (up to the last
+  16 lines), even after a line has faded. A small `#`/`:` bar appears one column to the side
+  while scrolling — the filled `#` section marks roughly where in the history you're looking;
+  it disappears again once you page back down to the live view.
+- It keeps running with the console closed; you never need to press `~` just to see whether
+  someone said something.
+- Every setting (position, opacity, how many lines, how long they last) is in `coop.ini` — see
+  [CONFIG.md](CONFIG.md).
+
 ## Session and connection
 
 | Verb | Args | Authority | What it does |

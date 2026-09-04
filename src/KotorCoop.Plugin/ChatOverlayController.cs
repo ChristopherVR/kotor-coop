@@ -11,6 +11,12 @@ namespace KotorCoop.Plugin;
 /// which the engine flushes every frame while the font is bound — so an always-on overlay
 /// renders even with the console closed, and the enqueue never touches the font (no crash).
 /// Opacity is applied through the queued path's alpha (docs/research/text-render-queued.md).
+///
+/// <see cref="PrepareLine"/> caps how much of a line is actually posted (see <see cref="Anchor"/>):
+/// the engine never clips or wraps text that runs past the true edge of the viewport-derived
+/// grid, so a long enough message (or one posted from the never-live-verified right anchors)
+/// runs off screen instead — reported as the overlay "clipping". The stored line always keeps
+/// the full message; only the on-screen copy is shortened.
 /// </summary>
 internal sealed unsafe class ChatOverlayController
 {
@@ -32,6 +38,10 @@ internal sealed unsafe class ChatOverlayController
 
     // A short, reusable scratch buffer for the one-cell scrollbar glyphs.
     private readonly byte[] _barCell = new byte[2];
+
+    // Reusable scratch buffer PrepareLine() writes the (possibly truncated) line into before
+    // posting, so truncation costs no per-frame allocation. Sized to the largest stored line.
+    private readonly byte[] _drawScratch = new byte[SharedBlock.ChatLineLength];
 
     public ChatOverlayController(SharedBlockView block)
     {
@@ -162,7 +172,7 @@ internal sealed unsafe class ChatOverlayController
             return;
         }
 
-        (int column, int baseRow, bool fromBottom) = Anchor(_block.ChatOverlayAnchor);
+        (int column, int baseRow, bool fromBottom, int maxChars) = Anchor(_block.ChatOverlayAnchor);
 
         // Configured opacity as a real alpha, floored so an enabled overlay is never fully
         // invisible. Restore afterwards so the game's own subtitles/feedback text are opaque.
@@ -177,7 +187,8 @@ internal sealed unsafe class ChatOverlayController
                 ? baseRow - (vcount - 1 - j) // newest sits at the bottom row
                 : baseRow + j;               // oldest sits at the top row
 
-            fixed (byte* p = _lines[slot])
+            PrepareLine(_lines[slot], maxChars);
+            fixed (byte* p = _drawScratch)
             {
                 Odyssey.PostTextLine(p, column, row, 0.5f);
             }
@@ -226,20 +237,70 @@ internal sealed unsafe class ChatOverlayController
     }
 
     /// <summary>
-    /// Screen anchor as a text-grid cell (column, base row). The engine uses rows 0-2 for the
-    /// console prompt/line (reliably visible near the top), so the overlay sits just below.
-    /// "Bottom" uses a conservative mid-lower row rather than the screen edge, because the grid
-    /// height is viewport-derived and a large row can fall off-screen — which is exactly what
-    /// hid the overlay before. Wants one live calibration pass; a wrong value only mis-places.
+    /// Screen anchor as a text-grid cell (column, base row, whether newest sits at the bottom
+    /// row, and how many characters of a line are safe to post from that column). The engine
+    /// uses rows 0-2 for the console prompt/line (reliably visible near the top), so the
+    /// overlay sits just below. "Bottom" uses a conservative mid-lower row rather than the
+    /// screen edge, because the grid height is viewport-derived and a large row can fall
+    /// off-screen — which is exactly what hid the overlay before. Wants one live calibration
+    /// pass; a wrong value only mis-places (docs/research/console-overlay.md's 2026-09-04
+    /// addendum: this rig's own default resolution is 800x600 — no Width/Height set in
+    /// swkotor.ini — a smaller viewport than whatever the original anchors were eyeballed
+    /// against, and the likeliest source of a reported "clipping" overlay).
     /// </summary>
-    private static (int Column, int BaseRow, bool FromBottom) Anchor(uint anchor) => anchor switch
+    private static (int Column, int BaseRow, bool FromBottom, int MaxChars) Anchor(uint anchor) => anchor switch
     {
         // Columns/rows are a text grid derived from the viewport (verified live: left column
         // 3 clears the screen edge; the minimap fills the top-left corner and the party
-        // portraits the bottom-left, so the overlay sits in the clear band between them).
-        1 => (60, 11, false),  // top-right
-        2 => (3, 14, true),    // bottom-left
-        3 => (60, 14, true),   // bottom-right
-        _ => (3, 11, false),   // top-left (default)
+        // portraits the bottom-left, so the overlay sits in the clear band between them). The
+        // right-side column was NEVER live-verified the same way (no on-screen landmark to
+        // check it against) — tightened from an earlier guess of 60 to 50, and given a much
+        // smaller character budget than the left anchors, purely as a conservative margin
+        // until a future session can calibrate it against a real screen.
+        1 => (50, 11, false, RightMaxChars),  // top-right
+        2 => (3, 14, true, LeftMaxChars),     // bottom-left
+        3 => (50, 14, true, RightMaxChars),   // bottom-right
+        _ => (3, 11, false, LeftMaxChars),    // top-left (default)
     };
+
+    // Nothing in the engine's queued-text path clips or wraps a line that runs past the true
+    // right edge of the viewport-derived grid (docs/research/text-render-queued.md) — it just
+    // draws invisible off-screen glyphs, which is what "clipping" looks like to a player. These
+    // caps are a resolution-independent safety net (a shorter line is never MORE likely to run
+    // off an edge than a longer one, at any resolution), not a pixel-accurate fix: PrepareLine
+    // truncates the ON-SCREEN copy only, never the stored line, so scrollback/history keep the
+    // full message.
+    private const int LeftMaxChars = 60;
+    private const int RightMaxChars = 32;
+
+    /// <summary>
+    /// Copies at most <paramref name="maxChars"/> characters of <paramref name="source"/> (a
+    /// nul-terminated line up to <see cref="SharedBlock.ChatLineLength"/> bytes) into
+    /// <see cref="_drawScratch"/>, nul-terminated, replacing the last three characters with
+    /// <c>"..."</c> when the line had to be cut short. Allocation-free: reuses the same scratch
+    /// buffer every call, which is safe because <see cref="Odyssey.PostTextLine"/> copies the
+    /// bytes into the engine's own node before this is called again next frame.
+    /// </summary>
+    private void PrepareLine(byte[] source, int maxChars)
+    {
+        int len = 0;
+        while (len < source.Length && len < _drawScratch.Length - 1 && source[len] != 0)
+        {
+            len++;
+        }
+
+        if (len <= maxChars)
+        {
+            Array.Copy(source, _drawScratch, len);
+            _drawScratch[len] = 0;
+            return;
+        }
+
+        int keep = Math.Max(0, maxChars - 3);
+        Array.Copy(source, _drawScratch, keep);
+        _drawScratch[keep] = (byte)'.';
+        _drawScratch[keep + 1] = (byte)'.';
+        _drawScratch[keep + 2] = (byte)'.';
+        _drawScratch[keep + 3] = 0;
+    }
 }

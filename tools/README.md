@@ -34,6 +34,7 @@ channel without playing through a whole scenario.
 | `pausestate.ps1` | Reads the server's pause bitmask (a byte of reasons, not a bool). |
 | `sethp.ps1` | Reads or writes a creature's current hit points by object id, for testing enemy-health mirroring without a real fight. |
 | `creatures.ps1` | Enumerates live `CSWSCreature` objects using the public Ghidra address database. |
+| `textqueue.ps1` | Dumps the engine's own on-screen text queue (column, row, text — `Global::AurPostString`'s list) directly from process memory: proves what every overlay controller actually asked the game to draw, without needing a working screenshot (`shot.ps1` can show a stale or, on some machines, a black frame — see docs/research/console-overlay.md's 2026-09-04 addendum). |
 | `teleport.ps1` | Writes a player's world position directly (`CSWSObject.position`) — test-only, since nothing else contests an idle player's position. |
 | `crashlog.ps1` | Shows how the game last died, from the plugin log (access violations, managed exceptions), the .NET NativeAOT fail-fast path the plugin log can't cover, and points at `kotorcoop-crash.bin` (below) when a game directory has one. |
 | `crashbin.ps1` | Decodes `kotorcoop-crash.bin`: the last first-chance fault written straight to disk by `CrashProbe`'s vectored stub, so it survives a process TERMINATED before the plugin's worker thread ever turns the same record into a log line — see `CrashProbe.cs`'s top-of-file doc comment (2026-09-02). |

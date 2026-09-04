@@ -184,10 +184,19 @@ both joiners' overlays. See this doc's own "Rig pass (2026-08-27, round 2)" and 
   `slay <decimal id>`) fires the same channel, and the bare `cheat` prints the status AND the
   plugin's detail sentence. Only the console-UI checks above need a human at the keys.
 
-## Chat overlay (NEEDS-LIVE: anchor coordinates, font alpha)
+## Chat overlay (NEEDS-LIVE: anchor coordinates at a real resolution, font alpha)
 - After a `say`, the message appears bottom-left, semi-transparent, and fades after ~9 s.
 - If it's off-screen → adjust `chat_overlay_anchor` / calibrate the coords in ChatOverlayController.
 - If it's fully opaque → the font texture-env is GL_REPLACE (alpha no-op); note it.
+- A long line should now end in `...` well before the edge of the screen rather than trailing
+  off it (2026-09-04: `ChatOverlayController.PrepareLine`, see console-overlay.md's dated
+  addendum) — if a line still visibly runs off-screen even after being cut, the `LeftMaxChars`/
+  `RightMaxChars` budgets there need tightening further, at whatever resolution reproduced it.
+- Structural check even without working screen capture: `tools\textqueue.ps1 -ProcId <pid>`
+  prints the exact column/row/text the engine queued for every on-screen controller, which is
+  how the 2026-09-04 pass confirmed the truncation and anchor columns land correctly on THIS
+  rig (default 800x600) without a single screenshot — pair it with a real screenshot on a
+  machine where `shot.ps1` shows actual pixels to finish the pixel-accurate calibration.
 
 ## Doors & placeables (Logs + Screen)
 - Open a door / a chest / disarm a trapped container on ONE side.

@@ -74,6 +74,59 @@ writes status/replies back into the block; the plugin paints the last few reply 
 - Confirm the native console renders at the **main menu** as well as in-world (the present
   path `UpdateScreen 0x00401C10` is universal; its gate is expected-true at the menu).
 
+## 2026-09-04 addendum: chat-overlay clipping, and a screenshot-free way to check placement
+
+A player-facing complaint ("the console overlay clips sometimes, not clear how it works")
+prompted a live session against this rig's own GOG install. Findings:
+
+- **This rig's own default resolution is 800×600.** Neither game dir's `swkotor.ini` sets
+  `Width`/`Height` under `[Graphics Options]`, confirmed live by reading the engine's own
+  `Global::ScreenWidth`/`ScreenHeight` globals (`0x0078D1D4`/`0x0078D1D8`) out of a running
+  process: both read exactly `800`/`600`. That is almost certainly smaller than whatever
+  resolution `ChatOverlayController`'s anchors were originally eyeballed against, and the
+  text-render-queued grid is viewport-derived (`cols≈w/N`, §5 above) — so a column chosen at a
+  larger resolution has much less headroom at 800×600.
+- **The right-side anchors' column (`60`) was never actually live-verified**, unlike column `3`
+  (confirmed against the screen edge) and the rows tied to the minimap/portraits — the source
+  comment already said so. It is the most likely single cause of a reported "clipping" overlay,
+  compounded by there being **no width-aware truncation anywhere**: `ChatLineLength` allows a
+  128-byte line, and nothing capped what actually got posted. `AurPostString` does not clip or
+  wrap a line that runs past the true edge of the viewport-derived grid — it just draws
+  off-screen, invisible glyphs, which is exactly what a player would describe as the overlay
+  "clipping".
+- **Fix shipped:** `ChatOverlayController.PrepareLine` now truncates the on-screen copy of a
+  line to a conservative, resolution-independent character budget before posting (60 chars for
+  the verified-safe left anchors, 32 for the right ones), appending `...` when it had to cut.
+  This is a safety net, not a pixel-accurate fix — a shorter line is never *more* likely to run
+  off an edge than a longer one at any resolution, so it is safe to ship without a further
+  calibration pass. The stored line is never shortened, only what gets drawn — scrollback keeps
+  the full message. The right anchors' column was also tightened from the unverified `60` down
+  to `50`, purely as extra margin.
+- **`tools\shot.ps1` could not be used to confirm any of this on this machine**: it returned a
+  solid black frame for the game window on every attempt, even though (a) the desktop session is
+  a real, active local console session (not RDP, not locked — confirmed via `qwinsta`/
+  `TerminalServerSession`) with a genuine 2560×1440 monitor, and (b) the plugin log and the
+  engine's own frame counter (`blockpoke.ps1 state`'s `frames`) proved the game was genuinely
+  in-world and rendering continuously (~700 fps uncapped) the whole time. This looks like a
+  machine-specific GDI/compositor quirk unrelated to the plugin — the render path itself is
+  proven live-correct below without needing a single pixel.
+- **New technique: read the engine's own text queue directly instead of screenshotting it.**
+  `Global::AurPostString`'s node list (`[0x007B90FC]`/`[0x007B9100]`, §1 above) is a plain
+  in-process data structure — reading it from outside needs nothing more than the same
+  `ReadProcessMemory` primitive `blockpoke.ps1`/`pluginstate.ps1` already use, no ASLR to defeat.
+  `tools\textqueue.ps1` dumps every currently-queued node's column, row and text. Live 2026-09-04
+  against this fix: posting a 91-character line at the default (bottom-left) anchor produced a
+  queued node reading exactly `col=3 row=14` with the text cut to 60 characters ending `...`;
+  switching `chat_overlay_anchor = bottom-right` and reposting produced `col=50` with the text
+  cut to 32 characters ending `...` — both anchors, both budgets, confirmed structurally correct
+  end to end (config → capture → truncate → post), independent of the screenshot problem above.
+- **Still NEEDS-LIVE:** the actual pixel/column mapping (`cols≈w/N` in §5) remains uncalibrated —
+  a future session with working screen capture on this rig (or any other machine) should confirm
+  visually that column 50/60 and rows 11/14 land where intended at 800×600 and at a couple of
+  larger resolutions, and tune the two `MaxChars` constants and the right anchor's column with
+  real numbers instead of conservative guesses. `textqueue.ps1` is the fast way to correlate
+  "what got posted" with a screenshot once one is available.
+
 ## Reference addresses (from the deep-dive)
 
 Toggle/handlers: `HandleWMCharMessage 0x00402240` · `DoConsole 0x00401F00` · execute path
