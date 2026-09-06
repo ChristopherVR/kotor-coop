@@ -14,7 +14,7 @@ internal static class InstallCommand
 {
     public static int Install(AgentOptions options)
     {
-        string? game = ResolveGameDirectory(options, interactive: false);
+        string? game = ResolveGameDirectory(options, interactive: false, options.Rescan);
         if (game is null)
         {
             return 1;
@@ -48,7 +48,7 @@ internal static class InstallCommand
 
     public static int Uninstall(AgentOptions options)
     {
-        string? game = ResolveGameDirectory(options, interactive: false);
+        string? game = ResolveGameDirectory(options, interactive: false, options.Rescan);
         if (game is null)
         {
             return 1;
@@ -58,7 +58,7 @@ internal static class InstallCommand
         return 0;
     }
 
-    public static int Setup()
+    public static int Setup(AgentOptions options)
     {
         string here = AppContext.BaseDirectory.TrimEnd('\\');
         bool interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
@@ -101,7 +101,7 @@ internal static class InstallCommand
                 return Pause(interactive, 1);
             }
 
-            string? game = ChooseGameDirectory(interactive);
+            string? game = ChooseGameDirectory(interactive, options.Rescan);
             if (game is null)
             {
                 return Pause(interactive, 1);
@@ -181,15 +181,18 @@ internal static class InstallCommand
         }
     }
 
-    private static string? ChooseGameDirectory(bool interactive)
+    private static string? ChooseGameDirectory(bool interactive, bool rescan)
     {
+        // Cli.Spinner is a no-op flash when InstallScanCache already has the answer - it only
+        // matters when there's no cache yet, or --rescan is forcing the full sweep back on.
         IReadOnlyList<PackageInstaller.Candidate> found =
-            Cli.Spinner("scanning for a KOTOR install...", PackageInstaller.FindGameDirectories);
+            Cli.Spinner("scanning for a KOTOR install...", () => PackageInstaller.FindGameDirectories(rescan));
         List<PackageInstaller.Candidate> supported = found.Where(c => c.Supported).ToList();
 
         foreach (PackageInstaller.Candidate c in found)
         {
-            Cli.Log($"  {(c.Supported ? "found" : "skipped")}: {c.Directory}   [{c.Source}]");
+            string installed = c.InstalledVersion is null ? string.Empty : $" - kotor-coop {c.InstalledVersion} installed";
+            Cli.Log($"  {(c.Supported ? "found" : "skipped")}: {c.Directory}   [{c.Source}]{installed}");
         }
 
         if (supported.Count == 1 && !interactive)
@@ -232,12 +235,27 @@ internal static class InstallCommand
         // not necessarily the one the player meant, and there's no undo once files are
         // copied. A single candidate still accepts a bare Enter (matches the non-interactive
         // default a few lines up, which picks the lone candidate outright).
+        //
+        // The prompt (and any warning above it) is redrawn in the same spot on every retry -
+        // mashing Enter through an ambiguous choice must not fill the screen with repeated
+        // copies of the same question.
+        var region = new Cli.RedrawRegion();
+        string? warning = null;
+
         while (true)
         {
             Cli.FlushInput();
-            Cli.Prompt(supported.Count == 1
-                ? "Install into which? [1], a number, or type another folder: "
-                : $"Install into which? 1-{supported.Count}, or type another folder: ");
+            region.Rewrite(() =>
+            {
+                if (warning is not null)
+                {
+                    Cli.Warn(warning);
+                }
+
+                Cli.Prompt(supported.Count == 1
+                    ? "Install into which? [1], a number, or type another folder: "
+                    : $"Install into which? 1-{supported.Count}, or type another folder: ");
+            });
 
             string answer = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
 
@@ -248,8 +266,8 @@ internal static class InstallCommand
                     return supported[0].Directory;
                 }
 
-                Cli.Warn($"Type a number from 1 to {supported.Count}, or a folder path - "
-                    + "pressing Enter alone doesn't pick one when more than one install was found.");
+                warning = $"Type a number from 1 to {supported.Count}, or a folder path - "
+                    + "pressing Enter alone doesn't pick one when more than one install was found.";
                 continue;
             }
 
@@ -263,14 +281,18 @@ internal static class InstallCommand
                 return Path.GetFullPath(answer);
             }
 
-            Cli.Error($"No swkotor.exe in {answer}, and not a valid number (1-{supported.Count}). Try again.");
+            warning = $"No swkotor.exe in {answer}, and not a valid number (1-{supported.Count}). Try again.";
         }
     }
 
     private static int OfferLaunch(string game, bool interactive)
     {
-        // A script that ran setup non-interactively gets an install, not a surprise game window.
-        if (!Ask("Launch KOTOR now?", defaultYes: interactive, interactive))
+        // Defaults to no either way: a non-interactive script gets an install, not a surprise
+        // game window, and an interactive player has to type y - launching is the one action
+        // in this whole flow that can't be undone by re-running setup, so a stray/impatient
+        // Enter must never trigger it (unlike every other prompt here, where the safe default
+        // is "do the obviously-intended thing").
+        if (!Ask("Launch KOTOR now?", defaultYes: false, interactive))
         {
             return Pause(interactive, 0);
         }
@@ -315,7 +337,7 @@ internal static class InstallCommand
         return code;
     }
 
-    private static string? ResolveGameDirectory(AgentOptions options, bool interactive)
+    private static string? ResolveGameDirectory(AgentOptions options, bool interactive, bool rescan)
     {
         if (options.HasGamePath)
         {
@@ -331,7 +353,7 @@ internal static class InstallCommand
         }
 
         List<PackageInstaller.Candidate> supported = Cli
-            .Spinner("scanning for a KOTOR install...", PackageInstaller.FindGameDirectories)
+            .Spinner("scanning for a KOTOR install...", () => PackageInstaller.FindGameDirectories(rescan))
             .Where(c => c.Supported).ToList();
         if (supported.Count == 1)
         {

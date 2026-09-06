@@ -212,6 +212,10 @@ public sealed record AgentOptions
     /// coop.ini) without changing anything.</summary>
     public bool Check { get; init; }
 
+    /// <summary>install/setup: skip InstallScanCache and do a full drive/registry/Steam-library
+    /// sweep, e.g. after installing a new copy of the game the cache does not know about yet.</summary>
+    public bool Rescan { get; init; }
+
     /// <summary>Steam app id for Knights of the Old Republic.</summary>
     public const int SteamAppId = 32370;
 
@@ -275,6 +279,7 @@ public sealed record AgentOptions
         List<string> chainLoad = [];
         bool force = false;
         bool check = false;
+        bool rescan = false;
         bool windowed = false;
         bool viaSteam = false;
         int instance = 1;
@@ -374,6 +379,10 @@ public sealed record AgentOptions
 
                 case "--check":
                     check = true;
+                    break;
+
+                case "--rescan":
+                    rescan = true;
                     break;
 
                 case "--via-steam":
@@ -567,6 +576,7 @@ public sealed record AgentOptions
             ChainLoad = chainLoad,
             Force = force,
             Check = check,
+            Rescan = rescan,
             ViaSteam = viaSteam,
             Instance = instance,
             LoadSave = loadSave,
@@ -630,6 +640,7 @@ public sealed record AgentOptions
 
           (none)    Setup: find the GOG install, copy the package in, offer to launch.
                     What double-clicking KotorCoop.Agent.exe in an extracted zip does.
+                    `setup --rescan` forces a fresh drive sweep instead of the per-user cache.
           install   Copy the package (--from <dir>, default: beside this exe) into the game
                     directory (--game-path <dir>, default: auto-detect). If dinput8.dll is
                     already another mod's, this is detected and installed as a chain
@@ -642,7 +653,10 @@ public sealed record AgentOptions
                     dinput8.dll outright instead of chaining it. Re-running install over an
                     existing install (plain or chain) upgrades the plugin in place and never
                     duplicates chain entries. Every install ends with the same report --check
-                    prints; a non-zero exit means one of its lines said FAIL.
+                    prints; a non-zero exit means one of its lines said FAIL. Without
+                    --game-path, auto-detect reads a per-user cache of where installs were
+                    found last time instead of sweeping every drive again; --rescan forces a
+                    fresh sweep (needed after installing a new copy of the game).
           uninstall Remove what install placed (--game-path); keeps coop.ini, restores a
                     kept dinput8.dll. Run from the extracted zip, not the game directory.
           install --check

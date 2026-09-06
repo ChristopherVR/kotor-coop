@@ -164,6 +164,55 @@ internal static class Cli
     public static void Spinner(string message, Action work) => Spinner(message, () => { work(); return true; });
 
     /// <summary>
+    /// One console line region that gets overwritten in place on every subsequent
+    /// <see cref="Rewrite"/> instead of stacking new output below it - for a prompt that may
+    /// loop on bad input, so mashing Enter through a re-asked question doesn't fill the
+    /// screen with repeated copies of it. Falls back to plain sequential printing the moment
+    /// cursor positioning fails (redirected output, some CI terminals) rather than throwing.
+    /// </summary>
+    public sealed class RedrawRegion
+    {
+        private int _row = -1;
+        private bool _capable = true;
+
+        public void Rewrite(Action print)
+        {
+            if (!_capable)
+            {
+                print();
+                return;
+            }
+
+            try
+            {
+                if (_row < 0)
+                {
+                    _row = Console.CursorTop;
+                }
+                else
+                {
+                    int bottom = Console.CursorTop;
+                    for (int r = _row; r <= bottom; r++)
+                    {
+                        Console.SetCursorPosition(0, r);
+                        Console.Write(new string(' ', Math.Max(0, Console.WindowWidth - 1)));
+                    }
+
+                    Console.SetCursorPosition(0, _row);
+                }
+            }
+            catch (Exception)
+            {
+                // Redirected output, a console host that refuses cursor moves, or a window
+                // resize mid-prompt - stop trying and just let output scroll normally.
+                _capable = false;
+            }
+
+            print();
+        }
+    }
+
+    /// <summary>
     /// Discards any keystrokes already sitting in the input buffer. Call right before every
     /// prompt that reads a line: without it, an impatient Enter (or two) pressed while a scan
     /// or copy was running silently becomes the answer to whichever prompt appears next,

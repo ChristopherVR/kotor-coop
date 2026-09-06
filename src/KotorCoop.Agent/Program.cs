@@ -41,7 +41,7 @@ internal static class Program
                 AgentCommand.Run => await RunCommand.RunAsync(options).ConfigureAwait(false),
                 AgentCommand.Install => InstallCommand.Install(options),
                 AgentCommand.Uninstall => InstallCommand.Uninstall(options),
-                AgentCommand.Setup => InstallCommand.Setup(),
+                AgentCommand.Setup => InstallCommand.Setup(options),
                 _ => Help(),
             };
         }

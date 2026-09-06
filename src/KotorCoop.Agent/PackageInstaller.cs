@@ -606,12 +606,59 @@ public static partial class PackageInstaller
         }
     }
 
-    /// <summary>A game install found on this machine and whether it is one we support.</summary>
-    public sealed record Candidate(string Directory, string Source, bool Supported);
+    /// <summary>A game install found on this machine, whether it is one we support, and the
+    /// kotor-coop version already installed there (null when nothing is installed yet).</summary>
+    public sealed record Candidate(string Directory, string Source, bool Supported, string? InstalledVersion = null);
 
     /// <summary>
-    /// Finds KOTOR installs: GOG's registry entry first, then every fixed drive's usual
-    /// GOG/Galaxy folders, then every Steam library on the machine.
+    /// Builds one <see cref="Candidate"/> for an already-confirmed game directory: the
+    /// executable form (<see cref="SteamBuild"/>) and the installed kotor-coop version
+    /// (<see cref="ReadVersion"/>), if any. Both are single small file reads, not a directory
+    /// scan, so re-deriving them for a cached directory on every run - rather than trusting a
+    /// stale cached label - costs nothing worth avoiding.
+    /// </summary>
+    internal static Candidate DescribeCandidate(string directory, string rawSource, bool supported)
+    {
+        string full = Path.GetFullPath(directory).TrimEnd('\\');
+        KotorExecutableForm form = SteamBuild.InspectFile(Path.Combine(full, GameExecutable), out _);
+        string formLabel = form switch
+        {
+            KotorExecutableForm.SteamStub => "SteamStub-wrapped 1.0.3",
+            KotorExecutableForm.DrmFree => "DRM-free 1.0.3",
+            _ => "unrecognised build",
+        };
+
+        return new Candidate(full, $"{rawSource}, {formLabel}", supported, ReadVersion(full));
+    }
+
+    /// <summary>
+    /// Finds KOTOR installs: <see cref="InstallScanCache"/> first (a handful of cheap file
+    /// checks - no drive enumeration) when it has anything left standing, a full
+    /// <see cref="ScanGameDirectories"/> otherwise. The cache is refreshed from whatever a
+    /// full scan just found, so the very next run is the fast path again; pass
+    /// <paramref name="forceRescan"/> (<c>install --rescan</c>) to skip straight to a full
+    /// scan, e.g. after installing a new copy of the game the cache does not know about yet.
+    /// </summary>
+    public static IReadOnlyList<Candidate> FindGameDirectories(bool forceRescan = false)
+    {
+        if (!forceRescan)
+        {
+            IReadOnlyList<Candidate>? cached = InstallScanCache.TryLoad();
+            if (cached is { Count: > 0 })
+            {
+                return cached;
+            }
+        }
+
+        return ScanGameDirectories();
+    }
+
+    /// <summary>
+    /// The full, uncached machine sweep behind <see cref="FindGameDirectories"/>: GOG's
+    /// registry entry first, then every fixed drive's usual GOG/Galaxy folders, then every
+    /// Steam library on the machine. Checking every fixed drive can take a few seconds on a
+    /// machine with several of them - <see cref="InstallScanCache"/> exists specifically to
+    /// avoid paying that cost on every run.
     ///
     /// ⚠ STEAM IS SUPPORTED, and used not to be. The Steam copy is the same link as the
     /// DRM-free one wrapped in Valve's SteamStub v3, which decrypts <c>.text</c> in place
@@ -629,9 +676,13 @@ public static partial class PackageInstaller
     /// holding an unwrapped Steam exe is a real thing on this very machine, and the label
     /// should say what is there rather than what the path suggests.
     /// </summary>
-    public static IReadOnlyList<Candidate> FindGameDirectories()
+    private static IReadOnlyList<Candidate> ScanGameDirectories()
     {
         List<Candidate> found = [];
+        // Same directories as `found`, but with the source label BEFORE DescribeCandidate
+        // combined in the form label - what InstallScanCache needs so a reload can re-derive
+        // a fresh form label/version later instead of trusting a stale cached one.
+        List<InstallScanCache.Entry> raw = [];
 
         void Add(string? directory, string source, bool supported)
         {
@@ -646,15 +697,8 @@ public static partial class PackageInstaller
                 return;
             }
 
-            KotorExecutableForm form = SteamBuild.InspectFile(Path.Combine(full, GameExecutable), out _);
-            string formLabel = form switch
-            {
-                KotorExecutableForm.SteamStub => "SteamStub-wrapped 1.0.3",
-                KotorExecutableForm.DrmFree => "DRM-free 1.0.3",
-                _ => "unrecognised build",
-            };
-
-            found.Add(new Candidate(full, $"{source}, {formLabel}", supported));
+            found.Add(DescribeCandidate(full, source, supported));
+            raw.Add(new InstallScanCache.Entry(full, source, supported));
         }
 
         if (OperatingSystem.IsWindows())
@@ -742,6 +786,7 @@ public static partial class PackageInstaller
             }
         }
 
+        InstallScanCache.Save(raw);
         return found;
     }
 
