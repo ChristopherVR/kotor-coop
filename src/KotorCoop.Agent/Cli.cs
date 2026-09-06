@@ -12,6 +12,46 @@ internal static class Cli
 {
     private static readonly bool Enabled = !Console.IsOutputRedirected;
 
+    private const string BannerRule = "---------------------------------";
+
+    private static readonly string[] BannerKotor =
+    [
+        "  #   #  ###  #####  ###  ####",
+        "  #  #  #   #   #   #   # #   #",
+        "  ###   #   #   #   #   # ####",
+        "  #  #  #   #   #   #   # #  #",
+        "  #   #  ###    #    ###  #   #",
+    ];
+
+    private static readonly string[] BannerCoop =
+    [
+        "      ####  ###   ###  ####",
+        "     #     #   # #   # #   #",
+        "     #     #   # #   # ####",
+        "     #     #   # #   # #",
+        "      ####  ###   ###  #",
+    ];
+
+    /// <summary>The block-letter "KOTOR / COOP" splash, printed once when the exe first opens
+    /// so a double-click gets an immediate sign of life before any (possibly slow) disk work.</summary>
+    public static void Banner()
+    {
+        WriteLine(BannerRule, ConsoleColor.DarkGray);
+        foreach (string line in BannerKotor)
+        {
+            WriteLine(line, ConsoleColor.Cyan);
+        }
+
+        Console.WriteLine();
+        foreach (string line in BannerCoop)
+        {
+            WriteLine(line, ConsoleColor.Yellow);
+        }
+
+        WriteLine(BannerRule, ConsoleColor.DarkGray);
+        Console.WriteLine();
+    }
+
     /// <summary>A short section title, e.g. "kotor-coop setup".</summary>
     public static void Heading(string text)
     {
@@ -82,6 +122,72 @@ internal static class Cli
 
     /// <summary>A problem worth the player's attention that isn't a hard failure (stdout, not stderr).</summary>
     public static void Warn(string text) => WriteLine(text, ConsoleColor.Yellow);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with a spinning "message ..." on the current console line,
+    /// so a scan across every fixed drive (a few seconds is normal) shows something is
+    /// happening instead of sitting silent - which is exactly the kind of pause that makes a
+    /// player mash Enter, and <see cref="FlushInput"/> exists to stop that mashing from
+    /// silently answering whatever prompt shows up next.
+    /// </summary>
+    public static T Spinner<T>(string message, Func<T> work)
+    {
+        if (!Enabled)
+        {
+            Console.WriteLine(message);
+            return work();
+        }
+
+        using var stop = new ManualResetEventSlim(false);
+        char[] frames = ['|', '/', '-', '\\'];
+        var spin = Task.Run(() =>
+        {
+            int i = 0;
+            while (!stop.Wait(120))
+            {
+                Console.Write($"\r{message} {frames[i++ % frames.Length]}");
+            }
+        });
+
+        try
+        {
+            return work();
+        }
+        finally
+        {
+            stop.Set();
+            spin.Wait();
+            Console.Write($"\r{new string(' ', message.Length + 2)}\r");
+        }
+    }
+
+    public static void Spinner(string message, Action work) => Spinner(message, () => { work(); return true; });
+
+    /// <summary>
+    /// Discards any keystrokes already sitting in the input buffer. Call right before every
+    /// prompt that reads a line: without it, an impatient Enter (or two) pressed while a scan
+    /// or copy was running silently becomes the answer to whichever prompt appears next,
+    /// which reads as "the tool ignored what I typed" - it didn't, it answered too early.
+    /// </summary>
+    public static void FlushInput()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return;
+        }
+
+        try
+        {
+            while (Console.KeyAvailable)
+            {
+                Console.ReadKey(intercept: true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // KeyAvailable/ReadKey unsupported on this host; nothing to drain.
+        }
+    }
 
     private static void WritePrefixed(string indent, string prefix, string rest, ConsoleColor color)
     {

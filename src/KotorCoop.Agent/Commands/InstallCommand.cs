@@ -61,6 +61,7 @@ internal static class InstallCommand
         string here = AppContext.BaseDirectory.TrimEnd('\\');
         bool interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
+        Cli.Banner();
         Cli.Heading("kotor-coop setup");
         Console.WriteLine();
 
@@ -68,10 +69,27 @@ internal static class InstallCommand
         {
             if (PackageInstaller.IsGameDirectory(here))
             {
-                // Extracted straight into the game folder, or already installed: nothing to
-                // copy, just play.
-                Console.WriteLine($"This is the game directory ({here}) and kotor-coop is in place.");
-                return OfferLaunch(here, interactive);
+                // Extracted straight into the game folder, or already installed: verify
+                // rather than assume, so a broken/partial install - most importantly a
+                // foreign dinput8.dll still sitting in the slot - is reported instead of
+                // silently offering a launch that will not actually be co-op.
+                if (PackageInstaller.Check(here, Cli.Log))
+                {
+                    return OfferLaunch(here, interactive);
+                }
+
+                Console.WriteLine();
+                Cli.Warn("kotor-coop is not fully installed here (see the FAIL line above).");
+                if (PackageInstaller.Identify(Path.Combine(here, PackageInstaller.PluginFileName)) == PackageInstaller.DinputKind.Foreign)
+                {
+                    Cli.Warn("Another mod already owns dinput8.dll here. Self-repair from inside an already-");
+                    Cli.Warn("extracted install can't chain it (there's no separate copy of our plugin left to");
+                    Cli.Warn("install from) - extract a fresh copy of the kotor-coop zip into a DIFFERENT folder");
+                    Cli.Warn("and run its KotorCoop.Agent.exe (or install.ps1) again, pointing it at:");
+                    Cli.Warn($"  {here}");
+                }
+
+                return Pause(interactive, 1);
             }
 
             if (!PackageInstaller.IsPackageDirectory(here))
@@ -132,7 +150,8 @@ internal static class InstallCommand
 
     private static string? ChooseGameDirectory(bool interactive)
     {
-        IReadOnlyList<PackageInstaller.Candidate> found = PackageInstaller.FindGameDirectories();
+        IReadOnlyList<PackageInstaller.Candidate> found =
+            Cli.Spinner("scanning for a KOTOR install...", PackageInstaller.FindGameDirectories);
         List<PackageInstaller.Candidate> supported = found.Where(c => c.Supported).ToList();
 
         foreach (PackageInstaller.Candidate c in found)
@@ -162,10 +181,12 @@ internal static class InstallCommand
             }
 
             Console.WriteLine();
+            Cli.FlushInput();
             Cli.Prompt("Install into which? [1], a number, or type another folder: ");
         }
         else
         {
+            Cli.FlushInput();
             Cli.Prompt("No GOG KOTOR install was found. Type the folder that contains swkotor.exe: ");
         }
 
@@ -218,6 +239,7 @@ internal static class InstallCommand
             return defaultYes;
         }
 
+        Cli.FlushInput();
         Cli.Prompt($"{question} [{(defaultYes ? "Y/n" : "y/N")}] ");
         string answer = (Console.ReadLine() ?? string.Empty).Trim();
         return answer.Length == 0 ? defaultYes : answer.StartsWith('y') || answer.StartsWith('Y');
@@ -251,7 +273,9 @@ internal static class InstallCommand
             return directory;
         }
 
-        List<PackageInstaller.Candidate> supported = PackageInstaller.FindGameDirectories().Where(c => c.Supported).ToList();
+        List<PackageInstaller.Candidate> supported = Cli
+            .Spinner("scanning for a KOTOR install...", PackageInstaller.FindGameDirectories)
+            .Where(c => c.Supported).ToList();
         if (supported.Count == 1)
         {
             Console.WriteLine($"game directory: {supported[0].Directory} [{supported[0].Source}]");
