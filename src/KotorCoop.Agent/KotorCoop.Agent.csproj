@@ -5,6 +5,19 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Placeholder art (tools/generate-icon.ps1); swap the .ico for real artwork whenever it exists. -->
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <!--
+      tools/package.ps1 overrides this with -p:InformationalVersion=<git describe> on every
+      packaged publish, so PackageInstaller.ReadVersion (FileVersionInfo.ProductVersion) can
+      tell a player which release is already installed vs. the one about to go in. A plain
+      `dotnet build` dev binary (demo.ps1, build.ps1 -Install) keeps this literal placeholder
+      instead - a command-line -p: value is a global property the project file cannot
+      override, so this only ever applies when nothing else set it.
+    -->
+    <InformationalVersion>0.0.0-dev</InformationalVersion>
+    <!-- Otherwise the SDK appends "+<full git sha>" to InformationalVersion automatically,
+         turning the clean git-describe string above into unreadable noise in the player-
+         facing "kotor-coop X is already installed" message. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!--

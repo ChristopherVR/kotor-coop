@@ -27,6 +27,8 @@ internal static class InstallCommand
         }
 
         string package = options.PackageDirectory ?? AppContext.BaseDirectory;
+        ReportVersion(package, game);
+
         bool ok;
         try
         {
@@ -105,6 +107,8 @@ internal static class InstallCommand
                 return Pause(interactive, 1);
             }
 
+            ReportVersion(here, game);
+
             bool chain = false;
             bool force = false;
             string proxyPath = Path.Combine(game, PackageInstaller.PluginFileName);
@@ -148,6 +152,35 @@ internal static class InstallCommand
         }
     }
 
+    /// <summary>
+    /// Compares the version already installed in <paramref name="game"/> against the one
+    /// this running package (<paramref name="package"/>) carries, and says so before any
+    /// files are touched — the player asked "does it even check what's already there?", and
+    /// silently overwriting an existing install (same version or not) without saying so is
+    /// exactly what prompted that question.
+    /// </summary>
+    private static void ReportVersion(string package, string game)
+    {
+        string? installed = PackageInstaller.ReadVersion(game);
+        if (installed is null)
+        {
+            // Nothing there yet (or it's not a KotorCoop.Agent.exe at all) - a fresh install,
+            // nothing to compare against.
+            return;
+        }
+
+        string? incoming = PackageInstaller.ReadVersion(package);
+        if (incoming is not null && string.Equals(installed, incoming, StringComparison.OrdinalIgnoreCase))
+        {
+            Cli.Dim($"kotor-coop {installed} is already installed here and up to date.");
+        }
+        else
+        {
+            Cli.Heading($"kotor-coop {installed} is installed here; this package is "
+                + $"{incoming ?? "an unversioned dev build"} - upgrading.");
+        }
+    }
+
     private static string? ChooseGameDirectory(bool interactive)
     {
         IReadOnlyList<PackageInstaller.Candidate> found =
@@ -173,41 +206,65 @@ internal static class InstallCommand
         }
 
         Console.WriteLine();
-        if (supported.Count > 0)
-        {
-            for (int i = 0; i < supported.Count; i++)
-            {
-                Cli.Choice(i + 1, supported[i].Directory);
-            }
-
-            Console.WriteLine();
-            Cli.FlushInput();
-            Cli.Prompt("Install into which? [1], a number, or type another folder: ");
-        }
-        else
+        if (supported.Count == 0)
         {
             Cli.FlushInput();
             Cli.Prompt("No GOG KOTOR install was found. Type the folder that contains swkotor.exe: ");
+            string typed = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
+            if (typed.Length > 0 && PackageInstaller.IsGameDirectory(typed))
+            {
+                return Path.GetFullPath(typed);
+            }
+
+            Cli.Error(typed.Length == 0 ? "Nothing chosen." : $"No swkotor.exe in {typed}.");
+            return null;
         }
 
-        string answer = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
-        if (answer.Length == 0 && supported.Count > 0)
+        for (int i = 0; i < supported.Count; i++)
         {
-            return supported[0].Directory;
+            Cli.Choice(i + 1, supported[i].Directory);
         }
 
-        if (int.TryParse(answer, out int index) && index >= 1 && index <= supported.Count)
+        Console.WriteLine();
+
+        // More than one candidate is exactly the case where silently defaulting on a bare
+        // Enter is dangerous - it installs into whichever one happens to be listed first,
+        // not necessarily the one the player meant, and there's no undo once files are
+        // copied. A single candidate still accepts a bare Enter (matches the non-interactive
+        // default a few lines up, which picks the lone candidate outright).
+        while (true)
         {
-            return supported[index - 1].Directory;
-        }
+            Cli.FlushInput();
+            Cli.Prompt(supported.Count == 1
+                ? "Install into which? [1], a number, or type another folder: "
+                : $"Install into which? 1-{supported.Count}, or type another folder: ");
 
-        if (answer.Length > 0 && PackageInstaller.IsGameDirectory(answer))
-        {
-            return Path.GetFullPath(answer);
-        }
+            string answer = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
 
-        Cli.Error(answer.Length == 0 ? "Nothing chosen." : $"No swkotor.exe in {answer}.");
-        return null;
+            if (answer.Length == 0)
+            {
+                if (supported.Count == 1)
+                {
+                    return supported[0].Directory;
+                }
+
+                Cli.Warn($"Type a number from 1 to {supported.Count}, or a folder path - "
+                    + "pressing Enter alone doesn't pick one when more than one install was found.");
+                continue;
+            }
+
+            if (int.TryParse(answer, out int index) && index >= 1 && index <= supported.Count)
+            {
+                return supported[index - 1].Directory;
+            }
+
+            if (PackageInstaller.IsGameDirectory(answer))
+            {
+                return Path.GetFullPath(answer);
+            }
+
+            Cli.Error($"No swkotor.exe in {answer}, and not a valid number (1-{supported.Count}). Try again.");
+        }
     }
 
     private static int OfferLaunch(string game, bool interactive)

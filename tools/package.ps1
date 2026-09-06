@@ -101,7 +101,10 @@ $agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\win-x64\
 if (Test-Path $agentPublishDir) { Remove-Item $agentPublishDir -Recurse -Force }
 Push-Location $agentProject
 try {
-    $agentArgs = @('publish', '-c', 'Release')
+    # Stamped into KotorCoop.Agent.exe's version resource (InformationalVersion / FileVersionInfo
+    # .ProductVersion) so a later install/setup run can tell a player what's already there vs.
+    # what this package would put in (PackageInstaller.ReadVersion, InstallCommand.ReportVersion).
+    $agentArgs = @('publish', '-c', 'Release', "-p:InformationalVersion=$Version")
     if ($WarnAsError) { $agentArgs += '-warnaserror' }
     dotnet @agentArgs
     if ($LASTEXITCODE -ne 0) { throw "agent publish failed with exit code $LASTEXITCODE" }

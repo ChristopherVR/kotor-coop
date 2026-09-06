@@ -114,6 +114,32 @@ public static partial class PackageInstaller
         return ForeignDinputIdentity.Identify(image, fileDescription);
     }
 
+    /// <summary>
+    /// The mod's own version, read from <c>KotorCoop.Agent.exe</c>'s version resource in
+    /// <paramref name="directory"/> — <c>tools/package.ps1</c> stamps it at publish time
+    /// (<c>-p:InformationalVersion</c>) from <c>git describe</c>; a plain <c>dotnet build</c>
+    /// dev binary reports the csproj's own placeholder instead. Null when there's no
+    /// <c>KotorCoop.Agent.exe</c> there at all (nothing installed, or not a package/game dir).
+    /// </summary>
+    public static string? ReadVersion(string directory)
+    {
+        string path = Path.Combine(directory, "KotorCoop.Agent.exe");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            string? version = FileVersionInfo.GetVersionInfo(path).ProductVersion?.Trim();
+            return string.IsNullOrEmpty(version) ? null : version;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>True when <paramref name="directory"/> looks like an extracted package (or a
     /// game directory the package was extracted into).</summary>
     public static bool IsPackageDirectory(string directory) =>
@@ -453,6 +479,11 @@ public static partial class PackageInstaller
         };
 
         log($"layout: {layout} ({proxy})");
+
+        string? installedVersion = ReadVersion(game);
+        log(installedVersion is null
+            ? "version: KotorCoop.Agent.exe not found - version unknown"
+            : $"version: {installedVersion}");
 
         switch (kind)
         {
