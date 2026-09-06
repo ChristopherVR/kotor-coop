@@ -361,4 +361,4 @@ docs/limitations.md.
 - [docs/FINDING-OFFSETS.md](docs/FINDING-OFFSETS.md) and [docs/re/](docs/re/) — how engine addresses were found, and the core RE independent of any one feature.
 - [docs/research/README.md](docs/research/README.md) — the full per-feature research index.
 - [tools/README.md](tools/README.md) — what every helper script in `tools/` does.
-- [tools/package-README.md](tools/package-README.md) — the README that ships inside the zip.
+- [tools/package-README.txt](tools/package-README.txt) — the README that ships inside the zip.

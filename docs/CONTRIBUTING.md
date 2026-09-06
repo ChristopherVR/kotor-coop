@@ -102,7 +102,7 @@ the very two packages that run produced — it never rebuilds. Every green push 
 rolling `latest` pre-release; a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) goes
 through the same CI run and then becomes a full release named after the tag, with
 auto-generated notes. A manual dispatch publishes the newest successful CI packages for the chosen
-ref. Both contain a `README.md` (`tools/package-README.md`,
+ref. Both contain a `README.txt` (`tools/package-README.txt`,
 version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
 to someone who has never seen this repo.
 

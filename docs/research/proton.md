@@ -41,7 +41,10 @@ and `PackageInstaller.cs`, whose uninstall rule is "every `KotorCoop.*` file in 
 directory is ours": a plain self-contained publish would have dropped ~200 `System.*.dll`
 beside `swkotor.exe` and tripped the stray-file check; single-file keeps the layout to one
 file. `package.ps1` now also refuses an agent exe under 20 MB, so a regression to a
-framework-dependent publish cannot ship silently.
+framework-dependent publish cannot ship silently. The pdbs themselves are held back from the
+player package — they're staged into a separate `kotor-coop-<version>-symbols.zip` (CI
+artifact only, never attached to a release) so a maintainer can still symbolicate a crash
+report's managed stack trace without a player having to carry the dead weight.
 
 Things checked while choosing this:
 

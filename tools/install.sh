@@ -258,7 +258,7 @@ if [ $chain = 1 ]; then
         echo '# One path per line, relative to this directory. # and ; start a comment.'
         echo '# The first entry that exports DirectInput8Create receives the game'"'"'s DirectInput'
         echo '# calls; the kotor-coop plugin forwards them to the entry after itself, then to'
-        echo '# the system dinput8.dll. See README.md in the package.'
+        echo '# the system dinput8.dll. See README.txt in the package.'
         for e in "${entries[@]}"; do [ -n "$e" ] && echo "$e"; done
     } > "$chain_file"
     echo "wrote $chain_file ($(printf '%s, ' "${entries[@]}" | sed 's/, $//'))"

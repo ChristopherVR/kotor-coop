@@ -4,12 +4,12 @@
 # install.sh for the same job on the Linux side of a Proton/Wine setup. Layout of the image:
 #
 #   dinput8.dll                 the NativeAOT plugin (the proxy the game loads itself)
-#   KotorCoop.*                 the agent: one self-contained exe (runtime inside) + pdbs
+#   KotorCoop.*                 the agent: one self-contained exe (runtime inside), no pdbs
 #   coop.ini                    the config template
 #   Override\k_coop_*           the override assets the plugin needs
 #   chain-loader\dinput8.dll    the C wrapper for sharing the dinput8 slot with another mod
 #   dinput8.chain.example       the annotated chain list
-#   README.md                   install / play / configure / troubleshoot, version-stamped
+#   README.txt                  install / play / configure / troubleshoot, version-stamped
 #   install.ps1                 [zip only] command-line wrapper over `KotorCoop.Agent.exe install`
 #   CoopIniDefaults.ps1         [zip only] the coop.ini upgrade-drift table install.ps1 dot-sources
 #   install.sh                  [tar.gz only] the native Linux installer (bash), mode 0755
@@ -18,9 +18,16 @@
 # none, so "extract here" in Explorer is the install. The game binaries inside are identical:
 # KOTOR is a Windows program on every platform, so there is no separate Linux build of the mod.
 #
+# The agent's own pdbs are NOT in either player package (dead weight for a player - they carry
+# no runtime behaviour, only debug symbols) but ARE kept, separately, as
+# dist\kotor-coop-<version>-symbols.zip: a maintainer needs them to turn a managed stack trace
+# from a bug report back into file/line, and a publish only produces them alongside a fresh
+# build, not on demand later. See docs/research/proton.md for why the exe is self-contained.
+#
 # Does NOT touch a game install and does NOT run the game. CI runs this on every push and
 # attaches both files to the run; a green run on main or a v* tag becomes a GitHub release
-# with both attached (.github/workflows/release.yml).
+# with both attached (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
+# it is never attached to a GitHub release, only kept for maintainers to pull off a CI run.
 #
 #   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #   pwsh tools\package.ps1 -Version 1.2.3  # override the version
@@ -112,14 +119,23 @@ if (-not (Test-Path (Join-Path $agentPublishDir 'KotorCoop.Agent.exe'))) {
 # single-file publish is what keeps a bundled runtime inside that rule (a plain self-contained
 # publish drops ~200 System.*.dll beside the game and trips the check below).
 $agentFiles = Get-ChildItem $agentPublishDir -File -Filter 'KotorCoop.*'
-foreach ($file in $agentFiles) { Copy-Item $file.FullName (Join-Path $staging $file.Name) }
+$agentPdbs = $agentFiles | Where-Object { $_.Extension -eq '.pdb' }
+$agentBinaries = $agentFiles | Where-Object { $_.Extension -ne '.pdb' }
+foreach ($file in $agentBinaries) { Copy-Item $file.FullName (Join-Path $staging $file.Name) }
 $stray = Get-ChildItem $agentPublishDir -File | Where-Object { $_.Name -notlike 'KotorCoop.*' }
 if ($stray) { throw "agent publish contains non-KotorCoop.* files the installer cannot track: $($stray.Name -join ', ')" }
 $agentExe = Get-Item (Join-Path $agentPublishDir 'KotorCoop.Agent.exe')
 if ($agentExe.Length -lt 20MB) { throw "KotorCoop.Agent.exe is $([math]::Round($agentExe.Length / 1MB, 1)) MB: not the self-contained single-file publish (see the _IsPublishing block in KotorCoop.Agent.csproj)" }
 $missingPdb = @('Agent', 'Memory', 'Protocol', 'Session', 'Steam') | Where-Object { -not (Test-Path (Join-Path $agentPublishDir "KotorCoop.$_.pdb")) }
-if ($missingPdb) { throw "agent publish is missing the pdb(s) of: $($missingPdb -join ', ') (crash symbolication needs them; docs/research/plugin-crash-symbolication)" }
-"staged agent: $agentPublishDir ($($agentFiles.Count) files)"
+if ($missingPdb) { throw "agent publish is missing the pdb(s) of: $($missingPdb -join ', ') (crash symbolication needs them - see the symbols zip below)" }
+"staged agent: $agentPublishDir ($($agentBinaries.Count) files, $($agentPdbs.Count) pdbs held back for the symbols zip)"
+
+# --- symbols: the pdbs a player never needs, kept for turning a bug report's stack trace ---
+# back into file/line. Its own zip, never inside the player package or a GitHub release.
+$symbolsDir = Join-Path $env:TEMP "kotorcoop-symbols-$Version"
+if (Test-Path $symbolsDir) { Remove-Item $symbolsDir -Recurse -Force }
+New-Item -ItemType Directory -Path $symbolsDir | Out-Null
+foreach ($pdb in $agentPdbs) { Copy-Item $pdb.FullName (Join-Path $symbolsDir $pdb.Name) }
 
 # --- coop.ini template, renamed from the .example so a player can use it as-is -------------
 $iniSource = Join-Path $repo 'profiles\coop.ini.example'
@@ -143,9 +159,9 @@ Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.p
 # game dir that already had a coop.ini).
 Copy-Item (Join-Path $PSScriptRoot 'CoopIniDefaults.ps1') (Join-Path $staging 'CoopIniDefaults.ps1')
 
-$readme = (Get-Content (Join-Path $PSScriptRoot 'package-README.md') -Raw).Replace('{{VERSION}}', $Version)
-Set-Content -Path (Join-Path $staging 'README.md') -Value $readme -Encoding UTF8 -NoNewline
-"staged install.ps1 + CoopIniDefaults.ps1 + README.md"
+$readme = (Get-Content (Join-Path $PSScriptRoot 'package-README.txt') -Raw).Replace('{{VERSION}}', $Version)
+Set-Content -Path (Join-Path $staging 'README.txt') -Value $readme -Encoding UTF8 -NoNewline
+"staged install.ps1 + CoopIniDefaults.ps1 + README.txt"
 
 # --- Windows: zip it up ----------------------------------------------------------------------
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
@@ -154,6 +170,12 @@ if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath
 "packaged -> $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1KB)) KB)"
+
+# --- symbols zip: CI-artifact-only, never attached to a release -----------------------------
+$symbolsZipPath = Join-Path $OutDir "kotor-coop-$Version-symbols.zip"
+if (Test-Path $symbolsZipPath) { Remove-Item $symbolsZipPath -Force }
+Compress-Archive -Path (Join-Path $symbolsDir '*') -DestinationPath $symbolsZipPath
+"packaged -> $symbolsZipPath ($([math]::Round((Get-Item $symbolsZipPath).Length / 1KB)) KB)"
 
 # --- Linux: tar.gz with install.sh executable ------------------------------------------------
 # Written through System.Formats.Tar rather than tar.exe: Windows' bsdtar records every file
@@ -207,5 +229,6 @@ try {
 }
 finally { $fileStream.Dispose() }
 Remove-Item $staging -Recurse -Force
+Remove-Item $symbolsDir -Recurse -Force
 
 "packaged -> $tarPath ($([math]::Round((Get-Item $tarPath).Length / 1KB)) KB)"

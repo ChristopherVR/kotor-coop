@@ -49,6 +49,16 @@ jobs:
             dist/kotor-coop-*-linux.tar.gz
           if-no-files-found: error
 
+      # Debug symbols for the agent's own pdbs: never shipped to a player or attached to a
+      # release (see tools/package.ps1), kept only so a maintainer can pull them off a CI run
+      # to symbolicate a crash report's managed stack trace.
+      - name: Upload symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: kotor-coop-symbols
+          path: dist/kotor-coop-*-symbols.zip
+          if-no-files-found: error
+
   # The Linux package is installed on Linux by install.sh, a bash port of the C# installer
   # that the tests above never execute. This job runs it against a stand-in game directory
   # (a stub swkotor.exe; the game itself is never on a runner) through every path a player
