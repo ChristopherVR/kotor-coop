@@ -112,39 +112,104 @@ public static class GameLauncher
             }
         }
 
-        // "swkotor" is 7 characters and the replacement is written in place, so the name
-        // has to stay within that. "kcoopN" is unique per instance and safely shorter.
-        string mutexName = $"kcoop{options.Instance}";
-
         Console.WriteLine($"launching instance {options.Instance}: {options.GamePath}");
-        Process? game = InstanceLauncher.Launch(options.GamePath, mutexName, out string diagnostic);
 
-        if (game is null)
+        if (!TryStartAsInstance(options.GamePath, options.Instance, out Process? game, out string diagnostic))
         {
-            Console.Error.WriteLine($"launch failed: {diagnostic}");
+            Console.Error.WriteLine(diagnostic);
             return 1;
         }
 
         Console.WriteLine(diagnostic);
 
-        // A guard that still fires shows up as an immediate exit -1, which is worth
-        // reporting plainly rather than leaving the caller to wonder where the window is.
+        int result = AwaitAutoLoad(options, game!);
+        game!.Dispose();
+        return result;
+    }
+
+    /// <summary>
+    /// Launches the game for the interactive setup flow (<see cref="InstallCommand.Setup"/>),
+    /// which never asks the player about instance numbers up front. If another copy of the
+    /// same executable is already running - typically the first player's game, still up while
+    /// the second player runs setup against their own copy - this becomes an extra instance
+    /// (its own mutex name, see <see cref="InstanceLauncher"/>) automatically instead of trying
+    /// a plain launch that the retail single-instance guard would silently kill.
+    /// </summary>
+    public static bool LaunchForSetup(string gamePath, out string message)
+    {
+        string processName = Path.GetFileNameWithoutExtension(gamePath);
+        int running = Process.GetProcessesByName(processName).Length;
+
+        if (running == 0)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(gamePath)
+                {
+                    WorkingDirectory = Path.GetDirectoryName(gamePath),
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                message = $"launch failed: {ex.Message}";
+                return false;
+            }
+
+            message = $"started {gamePath}";
+            return true;
+        }
+
+        // AgentOptions clamps --instance the same way; "kcoop9" is the last name that still
+        // fits the 7-byte "swkotor" slot InstanceLauncher patches in place.
+        int instance = Math.Min(running + 1, 9);
+        bool ok = TryStartAsInstance(gamePath, instance, out Process? game, out string diagnostic);
+
+        if (!ok)
+        {
+            message = $"another copy of {processName} is already running, so this one was started "
+                + $"as a separate instance - which failed: {diagnostic} This only works against the "
+                + "DRM-free (GOG) build; a Steam-wrapped copy blocks a second instance on its own.";
+            return false;
+        }
+
+        message = $"another copy of {processName} was already running, so this one was started as "
+            + $"instance {instance} (pid {game!.Id}) alongside it.";
+        game.Dispose();
+        return true;
+    }
+
+    /// <summary>
+    /// Starts <paramref name="gamePath"/> as instance <paramref name="instance"/> (2+; instance
+    /// 1 is always the plain launch above and never comes through here) via
+    /// <see cref="InstanceLauncher"/> for a private mutex name, and waits 3s to catch the guard
+    /// still firing, which shows up as an immediate exit rather than an error return - worth
+    /// reporting plainly instead of leaving a silent dead window.
+    /// </summary>
+    private static bool TryStartAsInstance(string gamePath, int instance, out Process? game, out string diagnostic)
+    {
+        // "swkotor" is 7 characters and the replacement is written in place, so the name has
+        // to stay within that. "kcoopN" is unique per instance and safely shorter.
+        game = InstanceLauncher.Launch(gamePath, $"kcoop{instance}", out diagnostic);
+
+        if (game is null)
+        {
+            return false;
+        }
+
         Thread.Sleep(3000);
         game.Refresh();
 
         if (game.HasExited)
         {
-            Console.Error.WriteLine(
-                $"instance {options.Instance} exited immediately with code {game.ExitCode}.");
+            diagnostic = $"instance {instance} exited immediately with code {game.ExitCode}.";
             game.Dispose();
-            return 1;
+            game = null;
+            return false;
         }
 
-        Console.WriteLine($"instance {options.Instance} is running as pid {game.Id}.");
-
-        int result = AwaitAutoLoad(options, game);
-        game.Dispose();
-        return result;
+        diagnostic = $"instance {instance} is running as pid {game.Id}.";
+        return true;
     }
 
     /// <summary>

@@ -2,7 +2,9 @@
 ;
 ; The agent reads this when run with --menu, and connects when you press the in-game Co-op
 ; button. You can also connect at any time from the game's own console: press ~ and type
-; connect <ip> [password] | disconnect | reconnect (see docs/research/console-overlay.md).
+; connect <ip> [password] | disconnect | reconnect. The full list of console commands, and
+; which ones are host-only/client-only/either, is in README.txt's "Console commands" section
+; (see also docs/research/console-overlay.md for how the console itself works).
 ; The password can be typed after connect, or kept here.
 ;
 ; This file lists every setting a PLAYER would ever want to change; the mod's many internal

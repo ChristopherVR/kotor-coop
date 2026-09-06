@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace KotorCoop.Agent;
 
 /// <summary>
@@ -25,18 +23,18 @@ internal static class InstallCommand
         if (options.Check)
         {
             // Read-only report: nothing else below applies.
-            return PackageInstaller.Check(game, Console.WriteLine) ? 0 : 1;
+            return PackageInstaller.Check(game, Cli.Log) ? 0 : 1;
         }
 
         string package = options.PackageDirectory ?? AppContext.BaseDirectory;
         bool ok;
         try
         {
-            ok = PackageInstaller.Install(new PackageInstaller.Options(package, game, options.Chain, options.ChainLoad, options.Force), Console.WriteLine);
+            ok = PackageInstaller.Install(new PackageInstaller.Options(package, game, options.Chain, options.ChainLoad, options.Force), Cli.Log);
         }
         catch (PackageInstaller.RefusedException ex)
         {
-            Console.Error.WriteLine(ex.Message.Replace("  chain ", "  --chain ").Replace("  force ", "  --force "));
+            Cli.Error(ex.Message.Replace("  chain ", "  --chain ").Replace("  force ", "  --force "));
             return 2;
         }
 
@@ -54,7 +52,7 @@ internal static class InstallCommand
             return 1;
         }
 
-        PackageInstaller.Uninstall(game, Console.WriteLine);
+        PackageInstaller.Uninstall(game, Cli.Log);
         return 0;
     }
 
@@ -63,7 +61,7 @@ internal static class InstallCommand
         string here = AppContext.BaseDirectory.TrimEnd('\\');
         bool interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
-        Console.WriteLine("kotor-coop setup");
+        Cli.Heading("kotor-coop setup");
         Console.WriteLine();
 
         try
@@ -78,8 +76,8 @@ internal static class InstallCommand
 
             if (!PackageInstaller.IsPackageDirectory(here))
             {
-                Console.Error.WriteLine($"{here} is neither an extracted kotor-coop package nor a game directory.");
-                Console.Error.WriteLine("Extract the whole zip somewhere and run KotorCoop.Agent.exe from there.");
+                Cli.Error($"{here} is neither an extracted kotor-coop package nor a game directory.");
+                Cli.Error("Extract the whole zip somewhere and run KotorCoop.Agent.exe from there.");
                 return Pause(interactive, 1);
             }
 
@@ -111,23 +109,23 @@ internal static class InstallCommand
             }
 
             Console.WriteLine();
-            bool ok = PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, force), Console.WriteLine);
+            bool ok = PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, force), Cli.Log);
             Console.WriteLine();
             if (ok)
             {
-                Console.WriteLine("Installed. From now on just start the game: the Co-op button is on the main menu.");
+                Cli.Success("Installed. From now on just start the game: the Co-op button is on the main menu.");
             }
             else
             {
-                Console.WriteLine("Installed, but the check above found a problem (a FAIL line). Run");
-                Console.WriteLine("KotorCoop.Agent.exe install --check for the details, or try setup again.");
+                Cli.Warn("Installed, but the check above found a problem (a FAIL line). Run");
+                Cli.Warn("KotorCoop.Agent.exe install --check for the details, or try setup again.");
             }
 
             return OfferLaunch(game, interactive);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"error: {ex.Message}");
+            Cli.Error($"error: {ex.Message}");
             return Pause(interactive, 1);
         }
     }
@@ -139,7 +137,7 @@ internal static class InstallCommand
 
         foreach (PackageInstaller.Candidate c in found)
         {
-            Console.WriteLine($"  {(c.Supported ? "found" : "skipped")}: {c.Directory}   [{c.Source}]");
+            Cli.Log($"  {(c.Supported ? "found" : "skipped")}: {c.Directory}   [{c.Source}]");
         }
 
         if (supported.Count == 1 && !interactive)
@@ -149,7 +147,7 @@ internal static class InstallCommand
 
         if (!interactive)
         {
-            Console.Error.WriteLine(supported.Count == 0
+            Cli.Error(supported.Count == 0
                 ? "No GOG KOTOR install found. Run: KotorCoop.Agent.exe install --game-path <folder with swkotor.exe>"
                 : "More than one install found. Run: KotorCoop.Agent.exe install --game-path <one of the above>");
             return null;
@@ -160,15 +158,15 @@ internal static class InstallCommand
         {
             for (int i = 0; i < supported.Count; i++)
             {
-                Console.WriteLine($"  [{i + 1}] {supported[i].Directory}");
+                Cli.Choice(i + 1, supported[i].Directory);
             }
 
             Console.WriteLine();
-            Console.Write($"Install into which? [1], a number, or type another folder: ");
+            Cli.Prompt("Install into which? [1], a number, or type another folder: ");
         }
         else
         {
-            Console.Write("No GOG KOTOR install was found. Type the folder that contains swkotor.exe: ");
+            Cli.Prompt("No GOG KOTOR install was found. Type the folder that contains swkotor.exe: ");
         }
 
         string answer = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
@@ -187,7 +185,7 @@ internal static class InstallCommand
             return Path.GetFullPath(answer);
         }
 
-        Console.Error.WriteLine(answer.Length == 0 ? "Nothing chosen." : $"No swkotor.exe in {answer}.");
+        Cli.Error(answer.Length == 0 ? "Nothing chosen." : $"No swkotor.exe in {answer}.");
         return null;
     }
 
@@ -200,9 +198,17 @@ internal static class InstallCommand
         }
 
         string exe = Path.Combine(game, PackageInstaller.GameExecutable);
-        Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = game, UseShellExecute = true });
-        Console.WriteLine($"started {exe}");
-        return 0;
+        bool ok = GameLauncher.LaunchForSetup(exe, out string message);
+        if (ok)
+        {
+            Cli.Success(message);
+        }
+        else
+        {
+            Cli.Error(message);
+        }
+
+        return ok ? 0 : 1;
     }
 
     private static bool Ask(string question, bool defaultYes, bool interactive)
@@ -212,7 +218,7 @@ internal static class InstallCommand
             return defaultYes;
         }
 
-        Console.Write($"{question} [{(defaultYes ? "Y/n" : "y/N")}] ");
+        Cli.Prompt($"{question} [{(defaultYes ? "Y/n" : "y/N")}] ");
         string answer = (Console.ReadLine() ?? string.Empty).Trim();
         return answer.Length == 0 ? defaultYes : answer.StartsWith('y') || answer.StartsWith('Y');
     }
@@ -238,7 +244,7 @@ internal static class InstallCommand
             string? directory = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
             if (directory is null || !Directory.Exists(directory))
             {
-                Console.Error.WriteLine($"game directory not found: {path}");
+                Cli.Error($"game directory not found: {path}");
                 return null;
             }
 
@@ -252,7 +258,7 @@ internal static class InstallCommand
             return supported[0].Directory;
         }
 
-        Console.Error.WriteLine(supported.Count == 0
+        Cli.Error(supported.Count == 0
             ? "no GOG KOTOR install found; pass --game-path <folder with swkotor.exe>"
             : "more than one KOTOR install found; pass --game-path:\n  " + string.Join("\n  ", supported.Select(c => c.Directory)));
         _ = interactive;
