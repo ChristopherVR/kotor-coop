@@ -2304,6 +2304,101 @@ bombardment `05`, per §10.7's own inventory) remain untested live, same as befo
 
 ---
 
+## 11. A first-time joiner's OWN Endar Spire intro movie — not a bug (2026-09-10)
+
+**The report.** A live cross-machine test (docs/research/network-topology.md's "New findings
+from the same session", 2026-09-10) had a player join with `join_mode = newcharacter` — a
+genuine first-time join, through the game's own character creation — while the host was already
+deep into an existing session, nowhere near the Endar Spire. The joiner's log showed the Endar
+Spire intro cinematic (`01a.bik`) play once, at the very start, before the two installs'
+state/appearance had converged.
+
+**Verdict: expected retail behaviour, not a synchronisation defect.** Every KOTOR playthrough
+shows `01a.bik` once, unconditionally, the moment the Endar Spire's first area loads — and this
+join path runs the player through a genuine, ordinary chunk of single-player KOTOR before this
+mod's world-adoption logic touches anything at all. Traced end to end, in order:
+
+1. `JoinFlow.CreateCharacterThenAdoptAsync` (`src/KotorCoop.Agent/JoinFlow.cs:205-325`) arms the
+   capture and presses New Game, then says so in its own doc comment: *"The player creates their
+   character and lands in the Endar Spire as any new game does. Nothing of ours runs during it."*
+   Adoption (`SessionManager.AdoptWithNewCharacterAsync`) is step 4 of 5 — strictly AFTER chargen,
+   AFTER the world comes up, AFTER a save is captured.
+2. `01a.bik` is not a queued transition movie at all — cinematics.md §4.2's own inventory has it
+   as an **in-place mid-module `PlayMovie`**, fired by `k_pend_area01`, the `OnEnter` of
+   `m01aa.are` (the Endar Spire's very first area). It plays as soon as that area's opening script
+   pass runs, which is before anything downstream of "a world exists" can happen.
+3. `NewCharacterCaptureController` (`src/KotorCoop.Plugin/NewCharacterCaptureController.cs`) is
+   the plugin's own gate on when it is safe to lift the character out: it waits for
+   `Odyssey.HasPlayer`, then an additional `WorldSettleMs` = **4000 ms** before even asking the
+   engine for a quicksave (`:56-60`, `:181-221`) — and its own doc comment states the intent
+   plainly: *"WHAT THE PLAYER DOES: character creation, and nothing else. The Endar Spire intro
+   is cut short by the adoption load that follows, which is a full server teardown and rebuild."*
+   Because `WaitForMovie` blocks the ENTIRE main thread (§1.3) — including this controller's own
+   `MenuFrame`/`MainLoopHook` poll — the movie is unconditionally over, and the 4-second settle
+   has not even started counting, by the time this controller can take its next step. The
+   adoption teardown that follows only begins minutes later, after the save round-trips through
+   the agent.
+
+So the ordering is airtight: **chargen → Endar Spire loads → `01a.bik` plays and finishes → (4 s
+settle) → quicksave → sidecar write → `AdoptWithNewCharacterAsync` (the actual world-transfer to
+the host's world) → reconnect.** The movie is 100% over before any co-op adoption/session logic
+has anything to say about this instance's world. It is exactly the same intro every solo
+playthrough shows, playing for the same reason, on an instance that is — at that exact moment —
+running an ordinary, disconnected-from-the-host single-player game that the mod is about to tear
+down and replace. There was nothing here for the movie-relay design in §3/§10 to gate, because
+that design exists to keep two players who ARE sharing a world watching the same film; this
+player was not sharing a world with anyone yet.
+
+**A secondary, genuinely-related fact, checked because the task asked whether the relay
+mechanism could be "misfiring mid-adoption" — it can fire, and today it is harmless by
+accident rather than by design.** `MidModuleMovieController.OnFrame` (`MidModuleMovieController.cs
+:92-112`) gates its capture/publish on `block.Command == SharedBlock.CommandSpawnAndDrive` only —
+there is no "has this instance's world actually been adopted into the shared session" gate
+anywhere in this path, and there is no reason there would be: `CommandSpawnAndDrive` is written by
+`KotorGameBridge.TryWriteRemotePeers` (`KotorGameBridge.PluginBlock.cs:983`) unconditionally,
+the moment the external agent process can read *any* local player and write phantoms — which is
+true the instant the freshly-created character exists in the Endar Spire, movie or no movie,
+adopted or not (the agent is a separate process reading memory directly; it does not wait for the
+plugin's own frame hook). `MoviePlayHook` (`MoviePlayHook.cs`) is a raw detour on
+`CClientExoAppInternal::PlayMovie 0x00602CF0` itself, so it captures `01a`'s resref synchronously,
+at the instant the script calls it — before, during, or after the settle timer, it does not
+matter. So on the very next frame the main thread is free (i.e., the instant the movie ends),
+`MidModuleMovieController.HandleCapture` sees `block.Command` already `CommandSpawnAndDrive`, reads
+the hook's capture, and **does publish `01a` onto the mid-module-movie wire channel**
+(`block.PublishMidModuleMovie`) — `TransitionPump.PumpMidModuleMovies`
+(`src/KotorCoop.Session/Pumps/TransitionPump.Movies.cs:12-58`) then sends a `MidModuleMovie`
+packet to the host carrying `local.Module` = the joiner's own solo `end_m01aa`, not anything the
+host recognises.
+
+**Why it caused no observable defect, live.** Every receiver of that packet — in this test, only
+the host — applies the ordinary per-channel module filter before acting on anything
+(`TransitionPump.Movies.cs:48-51`: `if (!string.Equals(packet.Module, local.Module, ...)) continue;`
+and, redundantly, `MovieRelayQueue.Decide`'s own `sameModule` check on the receiving plugin side).
+The host was nowhere near `end_m01aa`, so the announcement was silently dropped exactly where
+every other module-scoped channel already expects a stranger's traffic to be dropped. No
+double-play, no stall, no log line anyone would mistake for a defect on the host — just one
+inert packet.
+
+**Filed, not fixed: the one theoretical edge case this exposes.** The `sameModule` filter is
+what saves this scenario, not any deliberate "this peer is still mid-adoption, ignore it" gate —
+so the narrow case where it would NOT be inert is two players who both happen to use
+`join_mode = newcharacter` and land in chargen at close enough to the same moment that BOTH are
+independently sitting in their own, entirely unrelated, solo copies of `end_m01aa` when the
+`01a` announcement crosses the wire. `packet.Module == local.Module` would then be true for two
+players who are not sharing anything at all. In practice this is expected to still be a no-op —
+the resref is the identical, universal opening movie either player would already be running (or
+about to run) natively, and `MovieRelayQueue.Decide`'s own `alreadyQueued`/`isIdle` checks exist
+for exactly this kind of redundant request — but it has never been exercised live and is recorded
+here as a lead for whoever next touches `JoinFlow`/`MidModuleMovieController`, not as a bug to
+chase now.
+
+**No code changed by this pass.** The join flow, `MoviePlayHook` and `MidModuleMovieController`
+all behave as designed; the "bug" was the ordinary opening minutes of solo KOTOR, correctly
+outside this mod's authority, and the one artifact it produces on the wire is already inert for
+the reason every other pre-adoption/off-module announcement is inert in this codebase.
+
+---
+
 ## Key addresses
 
 | Address | Symbol / meaning |
