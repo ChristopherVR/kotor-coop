@@ -80,11 +80,20 @@ internal static unsafe partial class Odyssey
         DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning), bisectMask);
     }
 
+    /// <summary>CSWCObject::SetOrientation vtable slot (0x0063C110, VERIFIED
+    /// docs/re/rendering.md §9.2/§7.3 — the same low-level twin setter the engine itself
+    /// calls at construction time to write the twin's rendered orientation directly). See
+    /// the call site below for why the twin needs this in addition to
+    /// <see cref="SetOrientationFn"/>.</summary>
+    private const int TwinOrientationSetSlot = 0x88;
+
     private static void DriveBody(nint creature, Vec3 position, float facing, float speed, bool moving, int want, bool run, uint bisectMask = 0)
     {
+        // Computed unconditionally (two cheap trig calls): the twin-orientation write
+        // further down needs it even on a pass where bit 5 leaves the SERVER write alone.
+        Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
         if ((bisectMask & BisectBitDriveFacing) == 0)
         {
-            Vec3 direction = new() { X = MathF.Cos(facing), Y = MathF.Sin(facing), Z = 0f };
             SetOrientationFn(creature, &direction);
         }
 
@@ -123,6 +132,40 @@ internal static unsafe partial class Odyssey
 
             if (*(nint*)twin == ClientCreatureVtable)
             {
+                // ⚠ FACING RENDERS THROUGH A SEPARATE, STILL-EASED PATH — position does not.
+                // The server-side SetOrientationFn write above (0x004CD170) always raises
+                // dirty bit 2 (CSWSObject + 0x1FC), and CServerAIMaster::UpdateState's
+                // per-frame sync consumes it through the twin's own dirty-bit handler,
+                // ClientServerSyncHandler_Orientation (vtable +0x130, 0x00611EC0), which
+                // calls RotateCreatureToOrientation (0x00611850) — a RATE-LIMITED TURN, not
+                // a snap (docs/research/realtime-creature-movement.md §4.4, long flagged
+                // NEEDS-LIVE and never actually addressed). Position gets a genuine snap
+                // because ITS dirty-bit handler (+0x12C, just above) takes an instant branch
+                // when TwinDesiredPositionBudget reads 0; orientation's handler has no such
+                // budget to zero — §4.4 confirms it always eases. So a mirrored NPC/companion
+                // that snaps to a new heading (a follow-AI recovery's positionparty
+                // reformation, any sharp turn) renders on a peer with its body still turning
+                // toward the real facing for a visible stretch, even though the position it
+                // stands at is already exact — "pointing" the wrong way while correctly
+                // placed. Confirmed live 2026-09-10: docs/research/network-topology.md's
+                // 2026-09-10 follow-up.
+                //
+                // The fix bypasses +0x130 instead of trying to budget it: call the twin's
+                // own low-level orientation setter, CSWCObject::SetOrientation (vtable +0x88,
+                // 0x0063C110, VERIFIED docs/re/rendering.md §9.2/§7.3 — the exact call the
+                // engine itself uses to write a fresh twin's orientation at construction
+                // time), directly, every frame. This runs from the SwapBuffers hook, which
+                // is the last word before the next frame's AIUpdate — so whatever partial
+                // turn +0x130 already took this frame gets overwritten with the true target
+                // right here, and next frame's +0x130 step starts from (and lands on) that
+                // same target, i.e. a zero-length "turn" with nothing left to visibly ease.
+                if ((bisectMask & BisectBitDriveFacing) == 0)
+                {
+                    var setTwinOrientation =
+                        (delegate* unmanaged[Thiscall]<nint, Vec3*, void>)(*(nint*)(*(nint*)twin + TwinOrientationSetSlot));
+                    setTwinOrientation(twin, &direction);
+                }
+
                 // ⚠ The gait must be set on the TWIN as well, and specifically through the
                 // server→client animation sync handler (twin vtable +0x134) — the entry the
                 // engine's own dirty-push uses. It dispatches looping animations (run/walk/

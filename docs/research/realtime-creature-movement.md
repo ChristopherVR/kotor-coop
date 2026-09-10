@@ -343,14 +343,26 @@ Two further consequences worth naming:
   phantom lands exactly on the right spot after ~half a second — matching "a stopped peer's
   phantom stands almost exactly on the true spot".
 
-### 4.4 Facing is eased too — VERIFIED code, NEEDS-LIVE for whether it matters
+### 4.4 Facing is eased too — VERIFIED, confirmed to matter, and fixed 2026-09-10
 
 `ClientServerSyncHandler_Orientation` (`0x00611EC0`) writes `twin + 0x1D0` (desired orientation,
 normalized via `0x004AB180`) and `twin + 0x1C4` (`moving_orientation`, in the DB), and
 `CSWCCreature::AnimationUpdate` calls `RotateCreatureToOrientation` (`0x00611850`) with
 `+0x1D0` when the animation is stationary and `+0x1C4` when it is moving (`0x0061AA04` /
-`0x0061AA0D`, VERIFIED). That is a rate-limited turn, not a snap. Expect facing to trail
-slightly; measure before adding a second fix.
+`0x0061AA0D`, VERIFIED). That is a rate-limited turn, not a snap, and it turned out to matter:
+this is the root cause of the live-reported "NPC position indicator" bug — a mirrored
+NPC/companion that snapped position (a `positionparty` follow-recovery reformation, or any sharp
+turn) rendered correctly PLACED on a peer's screen but kept visibly turning toward its real
+facing for a stretch afterward, i.e. placed right, pointing wrong.
+
+**Fixed** in `src/KotorCoop.Plugin/Odyssey.Phantom.cs`'s `DriveBody`: the twin's own low-level
+`CSWCObject::SetOrientation` (vtable +0x88) is now called directly every frame — the same call
+the engine itself uses to set a fresh twin's orientation at construction. This overwrites
+whatever partial turn the eased handler already took that frame, so the next frame's eased step
+starts (and lands) on the true target with nothing left to visibly ease. See
+`docs/research/network-topology.md`'s 2026-09-10 follow-up for the full write-up.
+`tools/facingtrace.ps1` measures server-vs-twin orientation drift live for anyone re-verifying
+this.
 
 ---
 
