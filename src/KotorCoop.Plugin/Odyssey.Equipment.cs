@@ -479,4 +479,220 @@ internal static unsafe partial class Odyssey
 
         return true;
     }
+
+    /// <summary>How many starting-gear equips this process has logged — bounded, the same
+    /// convention <see cref="EquipItemFromTemplateDirect"/>'s own unlink logging and every
+    /// other equip logger in this project already follows.</summary>
+    private static int _startingGearEquipsLogged;
+
+    /// <summary>How wide a net <see cref="EquipUnequippedStartingGear"/> casts around the
+    /// creature's own object id for a starting item that is not linked into either
+    /// <c>CItemRepository</c> it already checks — LIVE-MEASURED 2026-09-10: chargen mints a
+    /// character's starting items in the same creation burst as the creature itself (ids handed
+    /// out sequentially), and every candidate this project's live rig has seen sat within a
+    /// handful of ids of the creature's own. Generous rather than tight on purpose: every
+    /// candidate this window produces is still vetted by <see cref="ResolveItemBase"/> (vtable
+    /// AND id re-checked before it is trusted at all) and by its own Possessor field matching
+    /// this exact creature before anything is touched, so a wider window costs a few wasted
+    /// reads, never a wrong write.</summary>
+    private const uint StartingGearIdWindow = 32;
+
+    /// <summary>
+    /// Repairs a first-time joiner's OWN starting gear: finds the items chargen granted that are
+    /// not yet in an equip slot, and equips each one whose blueprint prefix
+    /// <see cref="StartingGearSlotRule"/> recognises through the same direct, readback-verified
+    /// primitive <see cref="EquipItemFromTemplateDirect"/> uses — never the queued VM action
+    /// (<c>ActionEquipItem</c>), which is exactly the mechanism suspected of leaving these items
+    /// unequipped in the first place: <c>ActionEquipItem</c>'s VM dispatch only APPENDS a node
+    /// onto the creature's own combat-round pending list (see <see cref="EquipItemFn"/>'s own
+    /// doc comment) and nothing observed in this project's `join_mode = newcharacter` path ever
+    /// drains it before <c>NewCharacterCaptureController</c> quicksaves the character —
+    /// LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum): a fresh
+    /// character's own <c>CSWInventory</c> body/right-weapon slot dwords read zero, unchanged,
+    /// 90+ seconds after joining, while the exact items the class package granted sat possessed
+    /// (not equipped) the whole time.
+    ///
+    /// Candidates come from THREE places, because chargen's own items were not consistently
+    /// findable in any one of them across this round's live passes: the creature's own personal
+    /// backpack (<c>CreatureItemRepo</c>, +0xA30 — LIVE-MEASURED empty every single run), the
+    /// repository <see cref="ResolveCreatureItemRepo"/>'s engine accessor returns (which, per
+    /// <see cref="GiveItemToInventory"/>'s own doc comment, is the SHARED PARTY POOL for a live
+    /// party member — the local player always is one), and a bounded id-window scan
+    /// (<see cref="StartingGearIdWindow"/>) around the creature's own id for a straggler linked
+    /// into neither.
+    ///
+    /// ⚠ PARTIAL FIX, LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum,
+    /// six live joins against one class package): the starting WEAPON is reliably found — every
+    /// single run — through the party-pool accessor repository, and this method equips it
+    /// correctly (readback-verified). The starting CLOTHES item was NEVER found by any of the
+    /// three candidate sources in any run, including with <see cref="StartingGearIdWindow"/>
+    /// widened and <c>NewCharacterCaptureController.EquipRepairExtraMs</c> extended to 15
+    /// seconds — despite the SAME item being confirmed genuinely possessed by this same creature
+    /// moments later (the `items` console verb's own committed-memory scan finds it, tag
+    /// "g_a_clothes01", every time). Ruled out: item-tag caching (the agent-side sweep this
+    /// mirrors resolves it fine once possible), classification (this rule handles the exact tag
+    /// string — see <see cref="StartingGearSlotRule"/>'s own tests), and pure timing (widening
+    /// the retry window past ~6s changed nothing). NOT yet identified: what actually creates or
+    /// links the clothing item, or why it differs from the weapon's own path. A host still sees
+    /// the joiner's phantom carrying its weapon but wearing default/bare clothing until this is
+    /// closed.
+    ///
+    /// Deliberately conservative: a slot that already holds an item is never displaced (this
+    /// only ever fills an EMPTY slot), a candidate whose own Possessor field is not this exact
+    /// creature is ignored (the window scan's own safety net), and a tag
+    /// <see cref="StartingGearSlotRule"/> does not recognise is left exactly where it sat. Meant
+    /// to be called every poll for a bounded window right before the quicksave
+    /// <c>NewCharacterCaptureController</c> captures for carrying: a normal (already-established)
+    /// character's own populated equip slots are never touched, because every candidate this
+    /// loop finds already occupies its slot and the emptiness guard skips it.
+    ///
+    /// MAIN THREAD ONLY. NEEDS-LIVE: the body/clothing gap above, and — beyond the one class
+    /// package this round's own live rig exercised — a package that grants more than one weapon,
+    /// a shield, or an off-hand item; see <see cref="StartingGearSlotRule"/>'s own doc comment
+    /// for why the off hand is not attempted at all.
+    /// </summary>
+    public static int EquipUnequippedStartingGear(uint creatureObjectId)
+    {
+        nint creature = ResolveServerObject(creatureObjectId);
+        if (creature == 0)
+        {
+            return 0;
+        }
+
+        nint inventory = *(nint*)(creature + 0xA2C);
+        if (inventory == 0)
+        {
+            return 0;
+        }
+
+        HashSet<uint> candidates = [];
+
+        CollectRepositoryCandidates(*(nint*)(creature + CreatureItemRepo), candidates);
+        CollectRepositoryCandidates(ResolveCreatureItemRepo(creature), candidates);
+
+        for (uint delta = 1; delta <= StartingGearIdWindow; delta++)
+        {
+            uint above = creatureObjectId + delta;
+            if (above < 0x7F000000)
+            {
+                candidates.Add(above);
+            }
+
+            if (creatureObjectId > delta)
+            {
+                candidates.Add(creatureObjectId - delta);
+            }
+        }
+
+        int equipped = 0;
+        foreach (uint itemId in candidates)
+        {
+            nint item = ResolveItemBase(itemId);
+            if (item == 0 || *(uint*)(item + ItemPossessor) != creatureObjectId)
+            {
+                // Not a live item, or a live item this creature does not actually possess (the
+                // id-window scan's own candidates are frequently this — vetted, never trusted).
+                continue;
+            }
+
+            int nwscriptSlot = StartingGearSlotRule.Classify(ReadTagUpperBound(item));
+            if (nwscriptSlot < 0)
+            {
+                continue;
+            }
+
+            int internalSlot = EquipSlotMap.ToInternalSlot(nwscriptSlot);
+            int slotByteOffset = EquipSlotMap.ToSlotByteOffset(nwscriptSlot);
+            if (internalSlot < 0 || slotByteOffset < 0
+                || *(uint*)(inventory + slotByteOffset) != 0)
+            {
+                // Already occupied (or an unrecognised slot) - never displace what is there.
+                continue;
+            }
+
+            SetPossessorFn(item, creatureObjectId, 0, 0, ObjectInvalid);
+
+            // Whichever repository (if any) this item is actually linked into — a safe no-op
+            // for the ones the id-window scan found that are not linked into either (see
+            // RepositoryRemoveItemFn's own doc comment: zero return, nothing touched, when the
+            // item was never in the repository passed).
+            nint personalRepo = *(nint*)(creature + CreatureItemRepo);
+            if (personalRepo != 0)
+            {
+                RepositoryRemoveItemFn(personalRepo, item);
+            }
+
+            nint poolRepo = ResolveCreatureItemRepo(creature);
+            if (poolRepo != 0 && poolRepo != personalRepo)
+            {
+                RepositoryRemoveItemFn(poolRepo, item);
+            }
+
+            if (EquipItemFn(creature, internalSlot, item, 1, 0, 0) == 0)
+            {
+                continue;
+            }
+
+            if (*(uint*)(inventory + slotByteOffset) != itemId)
+            {
+                continue;
+            }
+
+            equipped++;
+            if (_startingGearEquipsLogged < 8)
+            {
+                _startingGearEquipsLogged++;
+                PluginHost.Log(
+                    $"newchar: equipped starting item 0x{itemId:X} into nwscript slot {nwscriptSlot} "
+                    + "(was sitting unequipped in the fresh character's own inventory)");
+            }
+        }
+
+        return equipped;
+    }
+
+    /// <summary>Adds every id a <c>CItemRepository</c>'s own array currently holds to
+    /// <paramref name="candidates"/>. A no-op for a null or empty repository.</summary>
+    private static void CollectRepositoryCandidates(nint repo, HashSet<uint> candidates)
+    {
+        if (repo == 0)
+        {
+            return;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint idsArray = *(nint*)(repo + RepositoryItemArray);
+        if (idsArray == 0 || count is <= 0 or > 4096)
+        {
+            return;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            candidates.Add(*(uint*)(idsArray + (nint)(i * 4)));
+        }
+    }
+
+    /// <summary>The item's Tag, cut at the first null (the CExoString length trap this project
+    /// has hit before — a reported length routinely includes the terminator), capped the same
+    /// 64 bytes <see cref="TagEqualsIgnoreCase"/> already caps at.</summary>
+    private static string ReadTagUpperBound(nint item)
+    {
+        nint text = *(nint*)(item + ItemTag);
+        uint length = *(uint*)(item + ItemTag + 4);
+        if (text == 0 || length == 0)
+        {
+            return string.Empty;
+        }
+
+        byte* tagBytes = (byte*)text;
+        int cap = (int)Math.Min(length, 64u);
+        int tagLength = 0;
+        while (tagLength < cap && tagBytes[tagLength] != 0)
+        {
+            tagLength++;
+        }
+
+        return System.Text.Encoding.ASCII.GetString(tagBytes, tagLength);
+    }
 }
