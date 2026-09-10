@@ -96,7 +96,7 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// which point nothing in this controller can make further progress anyway. Idempotent per
     /// slot regardless (EquipUnequippedStartingGear never re-touches an already-filled one), so
     /// extra attempts cost a few wasted reads per tick, never a double-equip.</summary>
-    private const int EquipRepairMaxAttempts = 100;
+    private const int EquipRepairMaxAttempts = 400;
 
     /// <summary>Safety ceiling on the equip-repair phase, wall-clock, independent of
     /// <see cref="EquipRepairMaxAttempts"/> — reached only if polling itself has effectively

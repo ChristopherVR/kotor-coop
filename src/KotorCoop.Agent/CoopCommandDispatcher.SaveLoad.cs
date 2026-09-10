@@ -12,6 +12,16 @@ namespace KotorCoop.Agent;
 /// </summary>
 public sealed partial class CoopCommandDispatcher
 {
+    /// <summary>Mirrors <c>SharedBlock.JoinChargenStateArmed</c>. Duplicated rather than
+    /// referenced because the plugin is a separate x86 NativeAOT assembly this one cannot see —
+    /// the same convention <c>JoinFlow.cs</c>'s own <c>CaptureStateCaptured</c>/
+    /// <c>CaptureStateFailed</c>/<c>CaptureStateSaving</c> already use for the same block field.
+    /// </summary>
+    private const uint ChargenStateArmed = 1;
+
+    /// <summary>Mirrors <c>SharedBlock.JoinChargenStateSaving</c>.</summary>
+    private const uint ChargenStateSaving = 4;
+
     /// <summary>Roadmap item 14 phase 1's live wiring — null when no game directory was
     /// supplied, which every existing caller/test that omits the trailing constructor
     /// parameter falls back to: <see cref="MaintainSessionSave"/> and
@@ -280,6 +290,28 @@ public sealed partial class CoopCommandDispatcher
             {
                 Reply("the host's world was reloaded - rejoining their world");
                 TriggerRejoin(RejoinTrigger.HostReload);
+            }
+            else if (bridge.TryGetNewCharacterCapture(out uint chargenState, out _, out _)
+                && chargenState is ChargenStateArmed or ChargenStateSaving)
+            {
+                // ⚠ CRASHED LIVE 2026-09-10 (docs/research/world-adoption.md's addendum) before
+                // this guard existed: a first-time joiner's own freshly-created chargen module
+                // NEVER matches the host's world — that is expected and exactly what the
+                // NewCharacterCaptureController/JoinFlow.CreateCharacterThenAdoptAsync pair (the
+                // plugin's in-process capture + the agent's own OWN adoption once it captures)
+                // is already, actively resolving. This rule's edge/level detection cannot tell
+                // "a mismatch nothing is doing anything about" from "a mismatch the OTHER flow
+                // owns and is mid-flight on" — racing the two produced two independent
+                // DestroyServer/CreateServer teardowns on the same session and an access
+                // violation the game's own crash handler caught as EXITPROCESS(0xC0000005).
+                // Suppressed here rather than in PersistentSaveMismatchRule itself: the rule is
+                // pure and correctly pinned for the case it WAS built for (an established
+                // player's world drifting out of sync), and deliberately does not know about a
+                // second, unrelated adoption path. Not calling Observe() at all (rather than
+                // calling it with a forced-false mismatch) leaves _mismatchRejoinState exactly
+                // as an untouched tick would, so the very next tick after the capture leaves
+                // this window reads as a fresh edge if a mismatch still genuinely persists
+                // (the capture failed) — the ordinary fallback this rule already provides.
             }
             else
             {
