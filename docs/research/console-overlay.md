@@ -127,6 +127,55 @@ prompted a live session against this rig's own GOG install. Findings:
   real numbers instead of conservative guesses. `textqueue.ps1` is the fast way to correlate
   "what got posted" with a screenshot once one is available.
 
+## 2026-09-10 addendum: connection-indicator/minimap overlap, and confirming the fade-out
+
+Player-reported: the new persistent connection indicator (`ConnectionIndicatorController`,
+item 18 roadmap-seamless.md) visually overlapped the minimap. It was posting at `(3, 6)`,
+which sits inside the minimap's own top-left footprint (docs/research/minimap-peers.md).
+
+Moved to `(8, 3)` and live-verified against this rig's own two-instance demo
+(`tools\demo.ps1`, both GOG installs, 800x600) with `tools\textqueue.ps1` reading the
+engine's own posted-text queue directly (no screenshot needed — `tools\shot.ps1` is not
+reliable on this machine per the 2026-09-04 addendum above). Captured 2026-09-10 ~14:50,
+right after both instances connected:
+
+```
+instance 1 (host, pid 38580):
+  [0] col=3  row=11  'co-op [W_SAVE] different save: enemies, doors, items and ...'   (x3, stacked)
+  [3] col=3  row=13  'co-op: connected, alone'
+  [4] col=3  row=14  'co-op: connected, 1 player'
+  [5] col=8  row=3   'co-op: connected, 1 player'   <- ConnectionIndicatorController
+
+instance 2 (joiner, pid 21596):
+  [0] col=3  row=10  'your world still differs from the host's - rejoining auto...'
+  [1] col=3  row=11  'session-saved character: ...'
+  [2] col=3  row=12  'disconnected'
+  [3] col=3  row=13  'rejoined 'END_M01AA''
+  [4] col=3  row=14  'party is chosen by the host'
+  (indicator not in this particular sample; see below)
+```
+
+Column 8 never collided with any of the column-3 toast/chat lines in either instance during
+the connect burst, confirming the column-not-row fix. A moment later (3 more samples, ~800ms
+apart), all the transient connect-burst lines above had disappeared from **both** instances'
+queues, leaving only:
+
+```
+  [0] col=8  row=3  'co-op: connected, 1 player'
+```
+
+That is the fade-out working as designed: the one-shot toasts (including the duplicated
+`W_SAVE` warning, which posts once per frame it's asserted true but expires on its own
+`life` like everything else here) age out on their own countdown, and only the
+per-frame-reposted persistent indicator survives. The one sample where instance 2's indicator
+line was momentarily absent from the dump (caught between `ShouldRedraw` and the next
+`Draw()`, both call sites in the same frame) was a single-sample timing artifact, not a bug —
+three follow-up samples all showed it present and stable at `(8, 3)`.
+
+**NEEDS-LIVE going forward:** only the *pixel* position of column 8 at other resolutions
+remains unconfirmed (no working screenshot tool on this rig) — the structural
+placement/collision-avoidance claim above is textqueue-verified, not a screenshot.
+
 ## Reference addresses (from the deep-dive)
 
 Toggle/handlers: `HandleWMCharMessage 0x00402240` · `DoConsole 0x00401F00` · execute path

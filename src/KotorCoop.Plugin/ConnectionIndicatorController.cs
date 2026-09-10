@@ -26,17 +26,45 @@ namespace KotorCoop.Plugin;
 internal sealed unsafe class ConnectionIndicatorController(SharedBlockView block)
 {
     // Row/column choice, so a future controller does not have to re-derive this by grepping
-    // every PostTextLine call site: console prompt/line own rows 0-2; ConsoleAssistController's
-    // hint sits at (3, 3); AgentLivenessController's stale/failed-to-start warning sits at
-    // (3, 5) — directly above this, which is deliberate (both are connectivity-flavoured
-    // one-liners, so they read as a stack rather than scattered text); ServerBrowserController
-    // uses column 8 (title row 6, entries from row 8) and DialogueSpectateController /
-    // InteractionLockController use column 8 rows 4/6/7 — all a different column, so even a
-    // same-numbered row never collides. ChatOverlayController's shallowest anchor starts at row
-    // 11 (top-left/top-right) or 14 (bottom-left/bottom-right), well below this. Column 3, row 6
-    // is otherwise unused by any controller in this plugin.
-    private const int MessageColumn = 3;
-    private const int MessageRow = 6;
+    // every PostTextLine call site.
+    //
+    // 2026-09-10: moved from (3, 6) to (8, 3) — row 6 at column 3 sits inside the minimap's own
+    // on-screen footprint (the minimap fills the top-left corner; see
+    // docs/research/minimap-peers.md), so the persistent indicator was drawing directly over it
+    // every frame (player-reported: the two visually overlap).
+    //
+    // The first fix tried was (3, 11) — reusing ChatOverlayController's top-left anchor row, on
+    // the theory that a row already documented as clearing the minimap must be safe. Live-tested
+    // with tools\textqueue.ps1 and rejected: at session connect, several toasts
+    // (compatibility/peer-join notices) legitimately stack up to ChatOverlayController's default
+    // `chat_overlay_lines = 5`, and even under the DEFAULT `chat_overlay_anchor = bottom-left`
+    // that stack reaches up to row 14-(5-1) = row 10, one above 11 — the queue dump below caught
+    // both this controller's line and a compatibility-notice line sharing (3, 11) at once:
+    //   [0] col=3 row=11 'co-op [W_GIT] module END_M01AA is modded differently on t...'
+    //   [3] col=3 row=11 'co-op: connected, 1 player'
+    // (2026-09-10 live session, docs/research/console-overlay.md's addendum has the rest.) Column
+    // 3 is exactly the column every chat anchor's LEFT variant uses, so any row in that column is
+    // only ever one bad connect-burst away from this exact collision — swapping columns, not
+    // hunting for a taller gap, is what actually avoids it.
+    //
+    // Column 8 is the fix: ChatOverlayController only ever posts at column 3 (left anchors) or
+    // column 50 (right anchors) — never column 8, by construction, regardless of the player's
+    // `chat_overlay_anchor` setting. So column 8 cannot collide with chat/toasts no matter how a
+    // player configures it, which is a stronger guarantee than "clears the minimap" alone gave
+    // (3, 11). Row 3 is shallow (near the top, as requested); live-verified with
+    // tools\textqueue.ps1 against a running two-instance demo (no working screenshot tool on
+    // this rig — see docs/research/console-overlay.md's 2026-09-10 addendum for the actual
+    // queue dumps): (8, 3) never collided with the column-3 toast burst on connect, and the
+    // burst itself faded out on its own life countdown a few seconds later, leaving only this
+    // controller's line.
+    //
+    // Other reserved slots, so a future controller does not collide either: console prompt/line
+    // own rows 0-2; ConsoleAssistController's hint sits at (3, 3); AgentLivenessController's
+    // stale/failed-to-start warning sits at (3, 5); ServerBrowserController uses column 8 (title
+    // row 6, entries from row 8) and DialogueSpectateController / InteractionLockController use
+    // column 8 rows 4/6/7, SoloSegmentSpectateController row 10 — all below this row 3.
+    private const int MessageColumn = 8;
+    private const int MessageRow = 3;
     private const float MessageAlpha = 0.9f;
 
     // Re-posted every frame this controller runs (see the class doc comment), so a short life
