@@ -354,7 +354,7 @@ internal static unsafe partial class Odyssey
     // 2    CreMovePermitted |= 2 ; CreRunFlag = 0                     ClaimCreature
     // 3    CreMovePermitted |= CreAttackPermittedBit (0x04)           PermitAttacking
     // 4    PlayOneShotAnimation replay                                EnemyPresenceController.DriveOne
-    // 5    SetOrientationFn (facing write)                            DriveBody
+    // 5    SetOrientationFn (facing write, server AND twin-snap half)  DriveBody
     // 6    CreRunFlag / CreMoveState destructive assignment           DriveBody
     // 7    SetAnimation vtable call (server animation field)          DriveBody
     // 8    SetPositionFn (engine's own SetPosition, suppress-dirty)   DriveBody
