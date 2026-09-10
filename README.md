@@ -33,10 +33,10 @@ What you should know before starting:
   AI keeps pulling them back to the host.
 - **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works every menu;
   the address/password box, chat and the console still need a keyboard.
-- **Internet play has only been tested on a local network so far.** The pieces that should make it
-  work on a typical home router are built (the host's address is found and the port opened
-  automatically), but nobody has yet watched them against a real router; very restrictive networks
-  can't be reached at all — there is no relay server.
+- **Internet play works** — confirmed end-to-end over a tunnel tool (playit.gg) on 2026-09-10. A
+  real home router's own automatic port-opening (UPnP) is still unverified, and very restrictive
+  networks can't be reached at all since there is no relay server. Current status in
+  [docs/limitations.md](docs/limitations.md).
 
 The full list, activity by activity, is [docs/limitations.md](docs/limitations.md). Every line
 there has been watched on two real copies of the game unless it says otherwise; the dates, counts
@@ -86,8 +86,8 @@ notes — a mismatched module only drops that module's channels, a different sav
 ## Quick start (players)
 
 Download `kotor-coop-<version>-windows.zip` (or, on Linux / Steam Deck, `kotor-coop-<version>-linux.tar.gz`)
-from the [releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a tagged release, or `latest`,
-rebuilt from every push to `main` that passes build and test. The zip is a game-folder image: **extract it straight
+from the [releases page](https://github.com/ChristopherVR/kotor-coop/releases). Pick a numbered version for the
+most stable build, or `latest` for the newest one that's passed its automated checks. The zip is a game-folder image: **extract it straight
 into the folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** —
 it finds the GOG install (or asks), copies everything in, and offers to launch.
 
@@ -107,13 +107,13 @@ single-player game on the same install: the mod makes it with you the first time
 
 | `join_mode` | what happens |
 | --- | --- |
-| `auto` (the default) | **First join:** connect, and the game's own character-creation screens open; make your character exactly as you normally would. Your game starts as usual; a few seconds later the mod quicksaves it and pulls you into the **host's** world with the character you just made (live-verified: 2 min 10 s, the player does nothing but chargen; arrival is at the module entry, ~5 units from the host). **Every later join:** that same character is carried straight into the host's world, whatever single-player saves you have — it keeps everything you earned in co-op, refreshed on every in-game save you make while connected |
+| `auto` (the default) | **First join:** connect, and the game's own character-creation screens open; make your character exactly as you normally would. Your game starts as usual; a few seconds later the mod quicksaves it and pulls you into the **host's** world with the character you just made (live-verified: 2 min 10 s, the player does nothing but character creation; you arrive right next to the host). **Every later join:** that same character is carried straight into the host's world, whatever single-player saves you have — it keeps everything you earned in co-op, refreshed on every in-game save you make while connected |
 | `newcharacter` | make a new co-op character on this join even though you already have one (it replaces the old one) |
 | `save` | the old way: the character from your own most recent save is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
 
 Either way **your own saves are never touched** — only the autosave slot is written — so leaving the session and
 loading your own game again costs nothing. What you give up when the worlds differ is the world you were playing:
-party, inventory, companions, globals and journal all come from the host (your party is inherited cosmetically),
+party, inventory, companions, story progress and journal all come from the host (your party is inherited cosmetically),
 because in co-op those are shared. You bring your character; the host brings the world. A mismatched save
 auto-adopts the host's world (`auto_adopt_world`, on by default), and a host serves its own world by default too.
 
@@ -123,7 +123,7 @@ See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the m
 
 Only one file can be called `dinput8.dll`. Every install path — the CLI, `install.ps1`, `build.ps1 -Install` and the
 double-click setup — detects a foreign one and installs as a chain automatically: no flag, no prompt beyond a single
-summary line naming what was found (`ForeignDinputIdentity` recognises ReShade, Ultimate ASI Loader and a plain copy
+summary line naming what was found (the detector recognises ReShade, Ultimate ASI Loader and a plain copy
 of Windows' own `dinput8.dll` — the last of those isn't a mod, so it's just overwritten, no chain needed). `--force`
 still overwrites a foreign DLL outright instead of chaining it if that's what you want, and `--chain`/`--load` remain
 available to force chain mode or add extra DLLs explicitly:
@@ -343,7 +343,7 @@ Two documents, for two readers:
 
 The things most likely to surprise a first-time pair are already in "Status at a glance" above:
 one conversation at a time, the host owns the party, minigames are single-seat, a controller can't type, and
-internet play is untested against a real router. Things that *look* like bugs but aren't — the
+a real home router's automatic port-opening for internet play is still unverified. Things that *look* like bugs but aren't — the
 1-hp floor on the Endar Spire, an old `coop.ini` keeping a stale default — are listed at the end of
 docs/limitations.md.
 
