@@ -95,6 +95,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Party.cs" Link="Plugin\SharedBlockView.Party.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NewCharacterCaptureRule.cs" Link="Plugin\NewCharacterCaptureRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PostAdoptEquipRepairRule.cs" Link="Plugin\PostAdoptEquipRepairRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Phase2StallRule.cs" Link="Plugin\Phase2StallRule.cs" />

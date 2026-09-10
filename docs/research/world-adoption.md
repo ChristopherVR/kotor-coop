@@ -1188,3 +1188,142 @@ run post-adopt, in the host's own session, against the real post-load id).
    the search against a placeholder id.
 3. Any future capture must isolate `party_pool_sync` (temporarily 0, restored after) to avoid
    repeating the round 1/2 misattribution.
+
+## Round 2026-09-10e — the timing question answered (and it was the wrong question), the repair
+## relocated post-adopt, and the weapon fix shipped and live-verified 4/4
+
+Rig: two-GOG-copy (`demo.ps1 -ClientNewCharacter`, `chargen newgame`/`quick <n>`/`accept`
+blockpoke verbs), `rig.lock` held as `clothing-fix-round-4`. `party_pool_sync` isolated to `0`
+on both installs for every capture below, restored to `2` (the shipped default) at the end.
+
+### 1. Settling round 3's own open question — and finding the question itself was malformed
+
+Per round 3's plan, `NewCharacterCaptureController.EquipRepairMaxWallClockMs` was pushed from
+90000 to **150000 ms** (diagnostic only, `EquipRepairMaxAttempts` widened to 650 to match) and a
+clean live capture run end to end. Result: `Odyssey.GetPlayerObjectId()` and
+`GetControlledCreatureObjectId()` read `0x7FFFFFFF` on **every single one of ~600 polls**, for
+the entire 150-second window, right up to the wall-clock ceiling firing
+(`newchar: equip-repair wall-clock ceiling reached (150000 ms) with 49 poll(s) still budgeted`).
+So: no, the real id never appears inside the original chargen module, confirming round 3's
+suspicion — but the SECOND half of the diagnostic is the actual finding this round turned on.
+
+**The same accessor was queried on the HOST's own character** — a long-established, fully-played,
+fully-equipped save, nothing to do with chargen (`blockpoke console 'resolve party'` on the host
+instance): `server player: 0x19891D08 id 0x7FFFFFFF is_pc=True hp 12`. **Identical placeholder.**
+Rounds 1-3's whole framing — "`0x7FFFFFFF` means no real player is registered yet; wait for a
+real one" — was wrong. `0x7FFFFFFF` is the engine's PERMANENT, reserved self-id for whichever
+creature a client's `CSWSPlayer` currently drives, on every client, in every session, forever.
+It is not a sentinel that eventually resolves to something like the low three-digit hex ids
+(`0x120`s) a companion or an item gets; it never will, for anyone. `Odyssey.ResolveServerObject`
+resolves it through the engine's own `GetGameObject` exactly like any other id — confirmed this
+round: the resolve succeeds, and the resolved creature's own `+0x04` field reads back the same
+`0x7FFFFFFF`, so the object table is entirely self-consistent about it. There is no real numeric
+id to wait for, and there never was — three rounds spent hunting for one were chasing a mirage.
+
+### 2. So why did the repair never find anything? The actual gap
+
+Re-reading round 3's own capture with this correction in hand: for the WHOLE original
+chargen-module window, `EquipUnequippedStartingGear`'s two candidate repositories (the creature's
+personal backpack and the party-pool repository) read `count=0`, every single poll
+(`newchar-diag: poll N ... personal repo ... count=0, pool repo ... count=0`). The items chargen
+grants are simply **never linked into either repository at all** while still inside the isolated,
+hand-rolled in-process chargen replay (`CharGenDriveController`) — regardless of what id is used
+to address them, and regardless of how long the wait. The bounded id-window scan
+(`StartingGearIdWindow`, ±32 around `creatureObjectId`) was ALSO never going to help for this
+specific id: `0x7FFFFFFF` is nowhere near the normal dynamic-pool id space every other object
+(Trask, the items themselves) actually gets handed out of — measured this round, low three-digit
+hex, e.g. `0x121`/`0x123`/`0x125`/`0x12A`-`0x12C`. Scanning ±32 around a reserved sentinel can
+only ever find more of the same sentinel-adjacent nothing (confirmed: all 32 window-scan
+candidates, every capture, logged `did NOT resolve`).
+
+### 3. The fix: relocate the repair, not the id
+
+`EquipUnequippedStartingGear`'s own logic was never the bug and is unchanged. What moved is WHEN
+it runs: a new `PostAdoptEquipRepairController` calls it exactly once, after a first-time
+joiner's adopted-world load finishes — a genuine, ordinary engine module load
+(`CreateServer`, real character login, normal inventory linking), the SAME kind of load every
+other join type already goes through — instead of `NewCharacterCaptureController` calling it
+repeatedly, for up to 150 seconds, from inside the isolated chargen module. `PostAdoptEquipRepairController.Arm()`
+is called by `NewCharacterCaptureController` the instant it captures a fresh chargen character
+(before the quicksave even completes), recording the shared block's current `MenuLoadApplied` as
+a baseline; a small state machine (extracted as `PostAdoptEquipRepairRule.Decide`, unit-tested)
+then watches for that field to move to a new serial with `MenuLoadStatus == 0` —
+`MenuLoadController`'s own "the world is up and on screen" ack — and polls the repair (bounded,
+20 attempts at 250 ms) from there.
+
+`NewCharacterCaptureController` no longer runs any repair before the save: since the repair
+structurally cannot succeed inside the isolated chargen module (per §2 above), the pre-save wait
+was pure dead weight — up to two and a half minutes of a first-time joiner's very first join,
+spent on a repair that could never find anything. Removed entirely; the controller now saves
+`WorldSettleMs` (4 s) after world-up, exactly as it always did before the repair loop was added.
+
+### 4. Live verification — four independent joins, four different chargen classes, 4/4
+
+Each capture: `demo.ps1 -ClientNewCharacter`, drive `chargen newgame` (auto-pressed by the join
+flow) / `chargen quick <n>` / `chargen accept` by hand, watch `kotorcoop-plugin.log` for
+`post-adopt equip repair:` and the `newchar-diag: candidate` lines underneath it. The first three
+captures ran against the functional fix; the fourth ran against the final committed build, AFTER
+the pure code-organisation refactor that split `PostAdoptEquipRepairRule` out of the controller
+for unit testing — confirming the refactor changed nothing observable.
+
+| Class index | Candidates found (personal+pool, fully enumerated) | Weapon equipped | Clothes candidate seen |
+| --- | --- | --- | --- |
+| 0 | `g_i_adrnaline003` (stim), `g_i_medeqpmnt01` (medpac), `g_w_blstrrfl001` (blaster rifle) | Yes — 1 poll after world-up | No |
+| 2 | same three | Yes — 1 poll after world-up | No |
+| 4 | same three | Yes — 1 poll after world-up | No |
+| 1 (final, against the committed refactor) | same three | Yes — 1 poll after world-up | No |
+
+Every run: `post-adopt equip repair: equipped 1 starting item(s) the joiner's chargen left
+unequipped (player id 0x7FFFFFFF, 1 poll(s) after the adopted world came up)` — i.e. the
+repository was ALREADY populated by the time the world-up ack landed; the fix never needed more
+than its first poll in any of the four captures. The weapon's own candidate line every time:
+`newchar-diag: candidate 0x12C tag='g_w_blstrrfl001' possessor=0x7FFFFFFF (creature is
+0x7FFFFFFF) classify=4` — a genuine match (not the round-1 `party_pool_sync` collision: isolated
+to `0` for every capture here), correctly classified, correctly equipped, readback-verified by
+`EquipUnequippedStartingGear`'s own inline slot-content check (it reads the raw `CSWInventory`
+slot back after the write and only counts the item as equipped if it lands). Process stayed
+responsive and the session stayed live (`resolve party` answered normally) after every capture —
+no crash, no regression.
+
+Save-to-adopt timing also improved as a direct consequence of removing the dead pre-save wait:
+`newchar: asked the engine to save` now fires promptly once `MenuFrame` is actually ticking (the
+Endar Spire's own opening-cinematic stall — unrelated, pre-existing, main-thread-blocking,
+independently measured this round at 88-122 seconds depending on the run — is the only remaining
+source of delay between world-up and the save, not this controller's own logic).
+
+### 5. The clothes half: very likely never a real bug
+
+**Not one of the three classes tested (indices 0, 2, 4) ever produced a `g_a_`-prefixed candidate
+from any of the three search sources**, with the search now provably working (it finds the
+weapon every time). All three classes granted the exact same three items — a stim, a medpac, and
+a weapon — nothing else. The working conclusion: KOTOR's premade "Quick Character" chargen
+packages do not grant a separate wearable clothes item at all; the class's own default appearance
+already renders as dressed without one. If true, the "clothes" half of the original player-facing
+report was never a missing-equip bug — there was never an item to equip. This is NOT exhaustively
+confirmed (only 3 of the 6 quick-chargen portraits tested, and a full/custom chargen — as opposed
+to the Quick Character button this rig automates — was not tested at all), but three consistent,
+independent, byte-identical results across what should be three different underlying classes is
+strong evidence, not a guess.
+
+### 6. What was verified this round
+
+- `dotnet build -warnaserror` (full solution, including the new `PostAdoptEquipRepairRuleTests`)
+  and `src/KotorCoop.Plugin/build.ps1 -WarnAsError` (native plugin) both build clean after every
+  change.
+- `dotnet test` — 8 new tests for `PostAdoptEquipRepairRule`, all passing.
+- Four live captures end to end on the two-GOG-copy rig (classes 0, 2, 4, then 1 again against
+  the final committed build after the pure code-organisation refactor that split
+  `PostAdoptEquipRepairRule` out of the controller) — see the table above and its addendum below.
+- `party_pool_sync` isolated to `0` on both installs for every capture, restored to `2` and
+  confirmed via direct `coop.ini` reads afterward.
+
+### Still open for a future round
+
+1. Confirm (or refute) §5's clothes theory exhaustively: the remaining 3 quick-chargen portraits,
+   and a full/custom (non-Quick) character creation, which this round's automation does not
+   drive. If any package IS found to grant a `g_a_`-prefixed item, the fix here should find and
+   equip it with no further code changes (`StartingGearSlotRule.Classify` already handles the
+   prefix generically, and it is unit-tested) — this is a verification gap, not a known code gap.
+2. §4's process-stability checks were "still responding, session still live" — not a full
+   multi-hour soak. Nothing this round found suggests instability, but a longer play session
+   after a `newcharacter` join has not been specifically exercised.

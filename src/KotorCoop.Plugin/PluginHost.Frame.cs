@@ -188,6 +188,13 @@ internal static unsafe partial class PluginHost
         // MainLoop fires at the menu and in-world alike, on the same game thread.
         _menuLoad?.OnFrame();
 
+        // The post-adopt starting-gear repair, right after: it watches block.MenuLoadApplied for
+        // the adopted-world load's own "world is up" ack, which _menuLoad.OnFrame() just wrote
+        // (if it was going to this frame) — reading it here rather than on a later hook means at
+        // most one MenuFrame tick of latency, not a whole SwapBuffers-dormant menu-load screen's
+        // worth. See PostAdoptEquipRepairController's own doc comment.
+        _postAdoptEquipRepair?.OnFrame();
+
         // The new-character capture, for the same reason and in the same place: it watches for
         // the character retail chargen writes, which happens between the main menu and the very
         // first world — the whole span where the swap hook is dormant. A no-op unless the agent

@@ -46,67 +46,43 @@ namespace KotorCoop.Plugin;
 /// spaced by <see cref="SaveRetryMs"/>, and the whole phase gives up rather than asking
 /// forever.
 ///
+/// ⚠ NO EQUIP REPAIR HAPPENS HERE ANY MORE — ROUND 4, 2026-09-10e. Rounds 1-3 ran the starting-
+/// gear equip repair (<see cref="Odyssey.EquipUnequippedStartingGear"/>) from right here, right
+/// before the save, for up to 90 (then round 4's own diagnostic, 150) seconds. Round 4 pushed
+/// that ceiling to 150 SECONDS and captured a live join end to end: <c>Odyssey.
+/// GetPlayerObjectId()</c> read the engine's <c>0x7FFFFFFF</c> value on every single poll of the
+/// whole window, AND — this is the round 4 correction — that same accessor reads the IDENTICAL
+/// <c>0x7FFFFFFF</c> for the HOST's own long-established, fully-equipped character, nothing to do
+/// with chargen. It is not a "no real player yet" placeholder that eventually resolves (rounds
+/// 1-3's framing, and this controller's own now-removed <c>EquipRepairMaxWallClockMs</c>/
+/// <c>EquipRepairMaxAttempts</c>); it is the engine's permanent, reserved self-id for whichever
+/// creature a client currently drives, on every client, forever. The actual reason the repair
+/// never found anything here: round 4's same capture showed both candidate repositories
+/// <c>EquipUnequippedStartingGear</c> checks read <c>count=0</c> for the ENTIRE original chargen-
+/// module window — chargen's own starting items are simply never linked into either repository
+/// while still inside the isolated, hand-rolled in-process chargen replay
+/// (<see cref="CharGenDriveController"/>), no matter which id is used to address them or how long
+/// the wait. So this controller now saves promptly (<see cref="WorldSettleMs"/> alone, no repair
+/// loop eating up to two and a half extra minutes of a player's first join for nothing) and
+/// <see cref="PostAdoptEquipRepairController"/> runs the SAME repair exactly once, after the
+/// adopted-world load that follows — a genuine, ordinary engine module load, which round 4
+/// live-verified DOES link the items into a checked repository. See that class's own doc comment
+/// for the full mechanism, and docs/research/world-adoption.md's "Round 2026-09-10e" for the live
+/// evidence trail.
+///
 /// Runs from <c>PluginHost.MenuFrame</c> — the MainLoop hook, which fires at the main menu AND
 /// in-world, so one schedule covers both halves of this flow. The SwapBuffers hook would miss
 /// the first half entirely (dormant behind the menu movie), which is the same reason
 /// <see cref="MenuLoadController"/> lives there.
 /// </summary>
-internal sealed class NewCharacterCaptureController(SharedBlockView block)
+internal sealed class NewCharacterCaptureController(
+    SharedBlockView block, PostAdoptEquipRepairController postAdoptEquipRepair)
 {
     /// <summary>How long a world must have been up before the save is asked for. The module
     /// load itself is over by the time a player creature answers, but the opening script pass
     /// (spawns, party assembly, the first cutscene arming) is not, and asking mid-way is how a
     /// save gets refused for reasons nothing reports.</summary>
     private const int WorldSettleMs = 4000;
-
-    /// <summary>How many REAL polls (not wall-clock ms) the starting-gear equip repair
-    /// (<see cref="Odyssey.EquipUnequippedStartingGear"/>) gets before the quicksave is requested
-    /// anyway. ⚠ REPLACES a wall-clock deadline (<c>EquipRepairExtraMs</c>, the 2026-09-10 first
-    /// pass's own constant) that this round's own live diagnostics (docs/research/world-adoption.md's
-    /// addendum) proved was being silently gutted two different ways:
-    ///
-    /// 1. A wall-clock deadline set ONCE, relative to whatever poll happens to be running when
-    ///    <see cref="WorldSettleMs"/> first expires, is consumed WHOLESALE by a single main-thread
-    ///    stall straddling that moment — LIVE-MEASURED this round: one join's world-up-to-next-poll
-    ///    gap was 122 SECONDS (the Endar Spire's opening cinematic holding <c>MenuFrame</c>, this
-    ///    project's own long-documented "main thread was gone for N ms" symptom), so the deadline
-    ///    was already blown through by the time a second poll ever landed — the repair got exactly
-    ///    ONE real attempt, at whatever random instant that happened to be, no matter how large the
-    ///    ms constant was. Widening the constant (0 -&gt; 6000 -&gt; 15000, the prior round's own
-    ///    experiment) could never fix this, because none of those extra milliseconds were ever
-    ///    spent polling — they were spent inside a stall the constant has no way to detect or
-    ///    compensate for.
-    /// 2. Even with ZERO stalls and clean back-to-back 250 ms polling — LIVE-MEASURED this round,
-    ///    a run with 25 real, evenly-spaced samples across a full 6 s window — the party-pool and
-    ///    personal-backpack repository counts never changed even once: the character's own saved
-    ///    <c>INVENTORY.res</c> afterwards held exactly one item (an adrenaline stim from its class
-    ///    package), no weapon, no clothes. So a real, unstalled 6 s budget was ALSO, separately,
-    ///    just not long enough on this pass for the engine's own starting-package grant to run at
-    ///    all — a genuine "needs more real time" gap distinct from the stall problem above, and the
-    ///    reason the prior round's "widening past 6 s changed nothing" observation for clothing
-    ///    specifically is now understood differently: extra wall-clock ms bought nothing either way
-    ///    it was spent, stalled or not.
-    ///
-    /// A budget counted in REAL POLLS survives both failure modes: a stall simply delays when the
-    /// budget's polls land, it can never consume them, and the count is large enough
-    /// (<see cref="EquipRepairMaxAttempts"/> at the existing 250 ms cadence spans several times
-    /// longer than the wall-clock budget this replaces) to cover the slower-than-6s grant timing
-    /// item 2 above measured directly. <see cref="EquipRepairMaxWallClockMs"/> is the sole safety
-    /// ceiling now — reached only if <c>MenuFrame</c> itself has effectively stopped ticking, at
-    /// which point nothing in this controller can make further progress anyway. Idempotent per
-    /// slot regardless (EquipUnequippedStartingGear never re-touches an already-filled one), so
-    /// extra attempts cost a few wasted reads per tick, never a double-equip.</summary>
-    private const int EquipRepairMaxAttempts = 400;
-
-    /// <summary>Safety ceiling on the equip-repair phase, wall-clock, independent of
-    /// <see cref="EquipRepairMaxAttempts"/> — reached only if polling itself has effectively
-    /// stalled out entirely (in which case no amount of waiting helps) rather than the ordinary
-    /// case of a few long-but-finite stalls. Generous on purpose: this flow's own live passes have
-    /// already measured a healthy join taking over two minutes end to end (docs/research/world-
-    /// adoption.md, "Wall clock from chargen accept to standing in host's world: 2 minutes 10
-    /// seconds"), so a ceiling in that same order of magnitude costs nothing a real join was not
-    /// already going to spend.</summary>
-    private const int EquipRepairMaxWallClockMs = 90000;
 
     /// <summary>Gap between save requests. Long enough that a refusal caused by an opening
     /// cutscene has a chance to stop being true.</summary>
@@ -133,16 +109,6 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// there is no world. Reset to 0 if the world goes away again, so a chargen that was
     /// cancelled back to the menu does not leave a half-started save phase behind.</summary>
     private long _worldUpAtMs;
-
-    /// <summary>Real polls of the starting-gear repair still owed before the quicksave is
-    /// requested anyway, or -1 until <see cref="WorldSettleMs"/> first expires and the budget is
-    /// armed to <see cref="EquipRepairMaxAttempts"/>. Counts REAL calls, not wall-clock ms — see
-    /// <see cref="EquipRepairMaxAttempts"/>'s own doc comment for why.</summary>
-    private int _equipRepairAttemptsLeft = -1;
-
-    /// <summary><c>Environment.TickCount64</c> when the equip-repair budget was armed, for
-    /// <see cref="EquipRepairMaxWallClockMs"/>'s safety ceiling. 0 until armed.</summary>
-    private long _equipRepairArmedAtMs;
 
     /// <summary>UTC ticks at the same moment, for comparing against file timestamps. A save
     /// older than this belongs to a world that is not the one the player just created.</summary>
@@ -200,8 +166,6 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         _nextWaitingLogMs = Environment.TickCount64 + 15000;
         _worldUpAtMs = 0;
         _worldUpAtTicksUtc = 0;
-        _equipRepairAttemptsLeft = -1;
-        _equipRepairArmedAtMs = 0;
         _saveRequests = 0;
         _lastSaveRequestMs = 0;
         _candidate = null;
@@ -278,86 +242,13 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
             return;
         }
 
-        // ⚠ LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum): the class
-        // package chargen just granted sits POSSESSED but UNEQUIPPED in the fresh character's
-        // own inventory around this point — the body/right-weapon CSWInventory slot dwords read
-        // zero even 90+ seconds after the character went on to join a host's world, while the
-        // items themselves were confirmed present the whole time. ActionEquipItem (whatever
-        // chargen's own template application uses internally) only QUEUES an equip onto the
-        // creature's combat round (see Odyssey.EquipItemFn's own doc comment); nothing in this
-        // window drains that queue. Retried every REAL poll, up to EquipRepairMaxAttempts of them
-        // (see its own doc comment for why this is counted in polls rather than wall-clock ms),
-        // before the quicksave below captures this character for carrying, so the phantom a host
-        // sees is dressed instead of bare. A no-op for every slot that already holds an item, so
-        // an already-equipped character is never touched.
-        if (_equipRepairAttemptsLeft < 0)
-        {
-            _equipRepairAttemptsLeft = EquipRepairMaxAttempts;
-            _equipRepairArmedAtMs = nowMs;
-        }
-
-        // ⚠ Cross-check against the 0x7FFFFFFF "no real player registered yet" bug
-        // (docs/research/world-adoption.md's "Round 2026-09-10b"; CONFIRMED STRUCTURAL, not
-        // intermittent, in round 3 - fires on 3/3 live captures, every single poll of the whole
-        // window). GetPlayerObjectId() (CServerExoApp::GetPlayerCreature) reports the engine's
-        // own placeholder for the WHOLE repair window for a first-time `join_mode =
-        // newcharacter` joiner, because the only thing that ever re-points that field
-        // (CSWSPlayer::SetGameObject, via CSWParty::SetLeader/CSWPartyTable::
-        // SwitchPlayerCharacter/module init - see Odyssey.ControlSwitch.cs's
-        // SetPlayerGameObjectFn doc comment) needs a PRIOR leader to switch FROM, which a
-        // first-time joiner does not have.
-        //
-        // ⚠ ROUND 3 ALSO TRIED AND FALSIFIED the obvious fallback: Odyssey.
-        // GetControlledCreatureObjectId() (CSWParty, CLIENT-side, member[0]) was hypothesised to
-        // hold the real id independently of the server-side wiring gap above. LIVE-CONFIRMED
-        // WRONG, twice: it reads the SAME class of placeholder (0x7FFFFFFF, or OBJECT_INVALID
-        // 0x7F000000 before any client party exists at all) for the entire repair window too. A
-        // THIRD independent source - the chargen-time creature pointer's own id field, read
-        // directly in CharGenDriveController.Accept() before BeginPlayGame even runs - was also
-        // tried and also reads 0x7F000000. So NEITHER accessor this project has, nor the
-        // earliest possible read of the creature object itself, names a real numeric id during
-        // this window: the joiner's creature appears to hold no real, queryable id AT ALL until
-        // something well past this repair's own 90-second wall-clock ceiling (measured: the real
-        // id, e.g. 0x128, first appears in CSWPartyTable ~93+ seconds after world-up, close to or
-        // after the ceiling fires) - see docs/research/world-adoption.md's round 3 section for
-        // the full timing evidence and the still-open question of whether that id ever appears
-        // inside the ORIGINAL chargen module at all, or only after the save/adopt round-trip into
-        // the host's world. Kept here as a logged cross-check only (never substituted for the
-        // repair id): a real fix needs to either wait for a real id to exist, or move this
-        // repair to run post-adopt against the host-world id instead of pre-save here.
-        uint playerObjectId = Odyssey.GetPlayerObjectId();
-        uint controlledObjectId = Odyssey.GetControlledCreatureObjectId();
-        uint? lastRegistered = Odyssey.LastKnownServerPlayerRegistered;
-        PluginHost.Log(
-            "newchar-diag: GetPlayerObjectId()="
-            + $"0x{playerObjectId:X}, GetControlledCreatureObjectId()=0x{controlledObjectId:X} "
-            + "vs SyncServerPlayerToLeader last registered="
-            + (lastRegistered.HasValue ? $"0x{lastRegistered.Value:X}" : "never logged"));
-
-        int repaired = Odyssey.EquipUnequippedStartingGear(playerObjectId);
-        if (repaired > 0)
-        {
-            PluginHost.Log(
-                $"newchar: equipped {repaired} starting item(s) that chargen left unequipped, "
-                + "before capturing the character");
-        }
-
-        _equipRepairAttemptsLeft--;
-
-        bool wallClockCeilingReached = nowMs - _equipRepairArmedAtMs >= EquipRepairMaxWallClockMs;
-        if (_equipRepairAttemptsLeft > 0 && !wallClockCeilingReached)
-        {
-            return;
-        }
-
-        if (wallClockCeilingReached && _equipRepairAttemptsLeft > 0)
-        {
-            PluginHost.Log(
-                "newchar: equip-repair wall-clock ceiling reached "
-                + $"({EquipRepairMaxWallClockMs} ms) with {_equipRepairAttemptsLeft} poll(s) still "
-                + "budgeted - saving whatever is equipped now rather than waiting further");
-        }
-
+        // ⚠ NO EQUIP REPAIR HERE ANY MORE — see this class's own doc comment ("ROUND 4, 2026-
+        // 09-10e"). Round 4 live-confirmed the starting-gear repair can never find anything
+        // inside this isolated chargen module (both candidate repositories read count=0 for the
+        // WHOLE window, regardless of id or how long the wait), so this controller now saves
+        // promptly rather than burning up to two and a half extra minutes of the player's first
+        // join on a repair that cannot succeed here. PostAdoptEquipRepairController runs the
+        // same repair once, after the adopted-world load that follows.
         RequestSave(nowMs);
     }
 
@@ -424,6 +315,14 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         }
 
         _armed = false;
+
+        // Arm the post-adopt repair BEFORE publishing the capture — the agent (JoinFlow.cs's
+        // CreateCharacterThenAdoptAsync) polls block.JoinChargenState and can request the
+        // adopted-world load (bumping block.MenuLoadSerial) essentially the instant it sees
+        // JoinChargenStateCaptured below, so PostAdoptEquipRepairController must already be
+        // watching block.MenuLoadApplied's baseline before that happens. See its own doc
+        // comment for the whole mechanism and why this repair no longer runs here.
+        postAdoptEquipRepair.Arm();
 
         // NAME FIRST, STATE LAST — the same ordering every request region here uses, mirrored
         // for a reply: the agent must never read "captured" and then find the name still empty.

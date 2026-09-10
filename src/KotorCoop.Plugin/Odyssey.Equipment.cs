@@ -492,8 +492,8 @@ internal static unsafe partial class Odyssey
 
     /// <summary>Candidate ids already dumped for <see cref="_diagnosticCreatureId"/>, so the
     /// verbose per-candidate line below fires once per NEW id discovered across the whole retry
-    /// window (<c>NewCharacterCaptureController.EquipRepairMaxAttempts</c>) instead of once per poll
-    /// (every <c>NewCharacterCaptureRule.PollIntervalMs</c>) for the whole set every time.</summary>
+    /// window (<c>PostAdoptEquipRepairController.MaxPolls</c>) instead of once per poll for the
+    /// whole set every time.</summary>
     private static readonly HashSet<uint> _diagnosedCandidateIds = [];
 
     /// <summary>Hard cap on <see cref="DiagnoseCandidates"/>'s own log lines, the same bounded-log
@@ -621,54 +621,62 @@ internal static unsafe partial class Odyssey
     /// not yet in an equip slot, and equips each one whose blueprint prefix
     /// <see cref="StartingGearSlotRule"/> recognises through the same direct, readback-verified
     /// primitive <see cref="EquipItemFromTemplateDirect"/> uses — never the queued VM action
-    /// (<c>ActionEquipItem</c>), which is exactly the mechanism suspected of leaving these items
+    /// (<c>ActionEquipItem</c>), which is exactly the mechanism that leaves these items
     /// unequipped in the first place: <c>ActionEquipItem</c>'s VM dispatch only APPENDS a node
     /// onto the creature's own combat-round pending list (see <see cref="EquipItemFn"/>'s own
-    /// doc comment) and nothing observed in this project's `join_mode = newcharacter` path ever
-    /// drains it before <c>NewCharacterCaptureController</c> quicksaves the character —
-    /// LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum): a fresh
-    /// character's own <c>CSWInventory</c> body/right-weapon slot dwords read zero, unchanged,
-    /// 90+ seconds after joining, while the exact items the class package granted sat possessed
-    /// (not equipped) the whole time.
+    /// doc comment) and nothing in this project's `join_mode = newcharacter` path ever drains it.
     ///
-    /// Candidates come from THREE places, because chargen's own items were not consistently
-    /// findable in any one of them across this round's live passes: the creature's own personal
-    /// backpack (<c>CreatureItemRepo</c>, +0xA30 — LIVE-MEASURED empty every single run), the
-    /// repository <see cref="ResolveCreatureItemRepo"/>'s engine accessor returns (which, per
-    /// <see cref="GiveItemToInventory"/>'s own doc comment, is the SHARED PARTY POOL for a live
-    /// party member — the local player always is one), and a bounded id-window scan
-    /// (<see cref="StartingGearIdWindow"/>) around the creature's own id for a straggler linked
-    /// into neither.
+    /// Candidates come from THREE places: the creature's own personal backpack
+    /// (<c>CreatureItemRepo</c>, +0xA30), the repository <see cref="ResolveCreatureItemRepo"/>'s
+    /// engine accessor returns (the SHARED PARTY POOL for a live party member — the local player
+    /// always is one, per <see cref="GiveItemToInventory"/>'s own doc comment), and a bounded
+    /// id-window scan (<see cref="StartingGearIdWindow"/>) around the creature's own id for a
+    /// straggler linked into neither.
     ///
-    /// ⚠ PARTIAL FIX, LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum,
-    /// six live joins against one class package): the starting WEAPON is reliably found — every
-    /// single run — through the party-pool accessor repository, and this method equips it
-    /// correctly (readback-verified). The starting CLOTHES item was NEVER found by any of the
-    /// three candidate sources in any run, including with <see cref="StartingGearIdWindow"/>
-    /// widened and <c>NewCharacterCaptureController.EquipRepairExtraMs</c> extended to 15
-    /// seconds — despite the SAME item being confirmed genuinely possessed by this same creature
-    /// moments later (the `items` console verb's own committed-memory scan finds it, tag
-    /// "g_a_clothes01", every time). Ruled out: item-tag caching (the agent-side sweep this
-    /// mirrors resolves it fine once possible), classification (this rule handles the exact tag
-    /// string — see <see cref="StartingGearSlotRule"/>'s own tests), and pure timing (widening
-    /// the retry window past ~6s changed nothing). NOT yet identified: what actually creates or
-    /// links the clothing item, or why it differs from the weapon's own path. A host still sees
-    /// the joiner's phantom carrying its weapon but wearing default/bare clothing until this is
-    /// closed.
+    /// ⚠ CALLER MATTERS MORE THAN THIS METHOD DOES — ROUND 4, 2026-09-10e. This method's own
+    /// logic has not changed since round 1 and was never the bug. What changed is WHEN it gets
+    /// called: <c>PostAdoptEquipRepairController</c> now calls it once, after a first-time
+    /// joiner's adopted-world load finishes (a genuine, ordinary engine module load), instead of
+    /// <c>NewCharacterCaptureController</c> calling it repeatedly, for up to 150 seconds, INSIDE
+    /// the isolated single-player chargen module <c>CharGenDriveController</c> replays. Round 4
+    /// LIVE-CONFIRMED both repository sources here read <c>count=0</c> for the WHOLE original
+    /// chargen-module window regardless of the id or how long the wait — chargen's own granted
+    /// items are simply never linked into either repository while still inside that isolated
+    /// session — and separately confirmed <see cref="Odyssey.GetPlayerObjectId"/>'s
+    /// <c>0x7FFFFFFF</c> return (what <paramref name="creatureObjectId"/> always is for the local
+    /// player, including post-adopt) is the engine's PERMANENT, correctly-resolving player self-id,
+    /// not an unassigned placeholder — items genuinely possessed by the player get their own
+    /// <c>Possessor</c> stamped with that SAME value, so the exact-match check below was always
+    /// correct; it just never had a populated repository to search inside the old caller's window.
+    /// See <c>PostAdoptEquipRepairController</c>'s own doc comment for the full mechanism and
+    /// docs/research/world-adoption.md's "Round 2026-09-10e" for the live evidence trail.
+    ///
+    /// LIVE-CONFIRMED 2026-09-10e, four independent joins against four different `quick`
+    /// chargen classes (indices 0, 1, 2, 4): in every run the starting WEAPON
+    /// (`g_w_blstrrfl001`, classify 4) was found through the party-pool repository (post-adopt,
+    /// populated) and equipped correctly (readback-verified) — 4/4. NO run, in any of the four
+    /// classes tested, ever produced a clothes-prefixed (`g_a_`) candidate from any of the three
+    /// sources — only the same three items every time (an adrenaline stim, a medpac, and the
+    /// weapon), across classes that should differ. The working theory, not yet exhaustively
+    /// confirmed across all six quick-chargen portraits: KOTOR's premade "Quick Character"
+    /// packages do not grant a separate wearable clothes item at all — the class's default
+    /// appearance already looks dressed without one — which would mean the original "clothes"
+    /// half of this bug report was never a missing-equip bug to begin with. See
+    /// world-adoption-clothes-notes.md for the short version.
     ///
     /// Deliberately conservative: a slot that already holds an item is never displaced (this
     /// only ever fills an EMPTY slot), a candidate whose own Possessor field is not this exact
     /// creature is ignored (the window scan's own safety net), and a tag
-    /// <see cref="StartingGearSlotRule"/> does not recognise is left exactly where it sat. Meant
-    /// to be called every poll for a bounded window right before the quicksave
-    /// <c>NewCharacterCaptureController</c> captures for carrying: a normal (already-established)
-    /// character's own populated equip slots are never touched, because every candidate this
-    /// loop finds already occupies its slot and the emptiness guard skips it.
+    /// <see cref="StartingGearSlotRule"/> does not recognise is left exactly where it sat. A
+    /// normal (already-established) character's own populated equip slots are never touched,
+    /// because every candidate this loop finds already occupies its slot and the emptiness guard
+    /// skips it — safe to call after ANY module load, not just a first-time joiner's.
     ///
-    /// MAIN THREAD ONLY. NEEDS-LIVE: the body/clothing gap above, and — beyond the one class
-    /// package this round's own live rig exercised — a package that grants more than one weapon,
-    /// a shield, or an off-hand item; see <see cref="StartingGearSlotRule"/>'s own doc comment
-    /// for why the off hand is not attempted at all.
+    /// MAIN THREAD ONLY. NEEDS-LIVE: beyond the four class packages round 4's own live rig
+    /// exercised, a package that grants more than one weapon, a shield, an off-hand item, or
+    /// (per the theory above) genuinely does grant a separate clothes item; see
+    /// <see cref="StartingGearSlotRule"/>'s own doc comment for why the off hand is not attempted
+    /// at all.
     /// </summary>
     public static int EquipUnequippedStartingGear(uint creatureObjectId)
     {
