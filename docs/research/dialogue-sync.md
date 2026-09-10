@@ -1812,3 +1812,117 @@ Watch for in the plugin log: `startdialog:` lines from `CheatController.Dialogue
 guards fired — 1 no VM, 2 routine table mismatch, 4 VM mid-script, 5 stack push failed, 6
 dispatch returned nonzero, 9 stack not neutral after the call), and `DialogueGateHook`'s own
 existing `StartDialog` log line for confirmation the real engine chain actually ran.
+
+---
+
+## A `join_mode=newcharacter` joiner could not click Trask (2026-09-10, audited, NOT root-caused
+## live — interrupted by a rig collision)
+
+Reported from a real cross-machine session: a player joined with `join_mode=newcharacter`
+(fresh chargen in `END_M01AA`, then adopted into the host's already-running world, where Trask
+is both a party member and the tutorial's GIT-placed NPC) and could not click Trask in-world to
+talk to him. See `docs/research/network-topology.md`'s 2026-09-10 "New findings" entry for the
+sibling bugs found the same session (missing clothing, a wrong portrait, a movie replay) — those
+are separate subsystems and separate assignments; this entry is click-to-talk only.
+
+### Mechanisms audited and RULED OUT as the cause, by code reading
+
+1. **A stuck `DialogueGateHook` peer-holds-token lease is not possible across the adoption
+   boundary.** The lease (`PeerHoldsConversation`, 2 s, renewed every frame from
+   `block.RemoteDialogueActive` in `DialogueSpectateController.FollowRemote`) is driven by a
+   block field that is itself in `KotorGameBridge.SessionScopedBlockLevels` ("remote dialogue"),
+   zeroed by `ClearCoopState()` on disconnect. `SessionManager`'s adoption path
+   (`AdoptWithNewCharacterAsync`/`TryAdoptWithCharacterAsync`, both reached from
+   `JoinFlow`/`CoopCommandDispatcher`) calls `Disconnect()` *before* `WorldAdoption.TryAdopt...`
+   and only calls `Reconnect()` (a fresh `Connect()`) after it succeeds — so there is no window
+   where a stale "peer is talking" value from before the adoption could survive into the
+   post-adoption world. `DialogueSpectateController` also self-invalidates on the `WorldEpoch`
+   change the adoption's `DestroyServer`/`CreateServer` produces (`OnFrame`'s own
+   `Odyssey.TryGetWorldEpoch` check → `Invalidate()`, which explicitly calls
+   `DialogueGateHook.ReleaseForPeer()`), and is *also* now included in `PluginHost.InvalidateAll`
+   (see this file's 2026-08-11 "Still open" item 1, closed since).
+2. **The historic "click-to-join annulled one frame later" defect
+   (`docs/research/click-to-join-and-vo.md`) is already fixed and present in this build.**
+   `DialogueFollowMachine.StepUnjoined` waits up to `LocalOpenGraceMs` (15 s) for
+   `LocalPartnerKnown` before treating an unidentified local conversation as a competitor — so a
+   fresh click's own conversation is not torn down while `gui+0x170/+0x174` are still resolving.
+   This path is only reachable at all when `PeerActive` is true (the host holds the token); when
+   it is false, `Step()` returns `Idle` immediately and never touches the local conversation.
+3. **`PartyRosterBodyReuseRule`'s GIT-identical-body reuse for Trask is working, again, live.**
+   Separately verified 2026-08-24/2026-09-03 (this file and `party-reconciliation.md`), and
+   reproduced again tonight (see below): Trask resolves to the SAME object id (`0x127`) via
+   `PartyRosterController.Reconcile`'s reuse path on a joiner that never recruited him through
+   any dialogue of its own, GIT-placed-body-identical to the host's. Object-id mismatch between
+   the two installs' Trask is not the explanation.
+4. **`InteractionLockController`'s `InteractionKind.Conversation` claim does not gate a click.**
+   It only holds the claimed creature still (`Odyssey.HoldCreatureStill`) and drives
+   `dialogue_auto_join`'s force-open; the actual start-refusal mechanism is `DialogueGateHook`
+   alone, patched onto `CSWSObject::StartDialog` itself.
+
+### What tonight's live pass got through, and where it was cut off
+
+Built and installed a fresh plugin/agent on both rig installs (dinput8.dll byte-for-byte
+matching the build output on both sides, confirmed before trusting anything), ran
+`tools\demo.ps1 -ClientNewCharacter` (host on save 1 in `END_M01AA`, client at the main menu),
+and drove the ENTIRE first-join flow unattended through the console verbs
+(`blockpoke chargen newgame` / `quick 2` / `accept` — no mouse), so a real click was never the
+gap tonight. The client install (`D:\Games\swkotor-gog-p2`)'s own `kotorcoop-plugin.log` shows
+this run reached: chargen accepted → `newchar: the engine saved the new character into
+saves\000000 - QUICKSAVE (568758 bytes)` → `menu: adopting a world - login left on TEMP:pifo` →
+party-roster reconciliation resumed, with **Trask again resolving to the same id (`0x127`) on
+both installs**' `party table probe` lines. The host's log agrees: `agent reports 0 remote
+peer(s)` (the adoption's disconnect) → `agent reports 1 remote peer(s)` (reconnected) — i.e. the
+whole newcharacter-adoption pipeline this session completed successfully, end to end, exactly as
+`world-adoption.md`'s 2026-08-29/2026-09-03 passes found.
+
+**Both `swkotor.exe` processes then vanished simultaneously, ~90 s later, before the click test
+itself could be run.** Neither install's `kotorcoop-crash.bin` updated (both still carry their
+pre-test timestamp) and no Windows Application-Error event appeared in that window — the
+signature of an external `Stop-Process`/`demo.ps1 -Stop`, not an engine crash. This lines up
+exactly with the moment `rig.lock` was overwritten by a concurrent agent
+(`trask-click-investigation` — a name that suggests the same bug is being investigated in
+parallel, possibly a duplicate dispatch). This entry's own live pass is therefore **incomplete**:
+the one measurement that would settle root cause — whether the client's click even reaches
+`CSWSObject::StartDialog` after adoption — was not taken.
+
+One thing worth noting for whoever owns the movie-replay bug from the same session (not this
+entry's assignment): in this run, the moment the client's own fresh chargen played its Endar
+Spire intro movie, the HOST's log recorded `movie-relay: playing '01A' now - a peer's mid-module
+movie` — the client's *own, unrelated, single-player* intro cinematic got relayed onto the host
+— while the client was still mid-adoption/reconnect. Whether that is the same mechanism as the
+"the Endar Spire intro cinematic also played once at the start" symptom network-topology.md's
+2026-09-10 entry lists, or a distinct interaction between movie-relay and the adoption reconnect
+window, is unclear and not chased further here.
+
+Also worth recording: this same client install's `kotorcoop-plugin.log` shows what appear to be
+at least 13 EARLIER `join_mode=newcharacter` attempts in the hour before this one (12:08 through
+12:26, presumably the concurrent `clothing-bug-fix` agent's own rig time), and not one of them
+logs a `reconnecting`/post-adopt continuation either before the next relaunch — this exact
+rig/recipe may have a standing difficulty completing this scenario cleanly on the first or even
+several tries, independent of anything this entry changed.
+
+### Recommended next measurement (unchanged by anything above; nothing was fixed this round)
+
+Immediately after adoption completes, run `blockpoke talk end_trask` (exactly what a real click
+sends, per `TestDriveController`'s own doc comment) on the client and read
+`kotorcoop-plugin.log`:
+
+- **Nothing at all** (`DialogueGateHook.StartAttempts` never increments — no `dialogue: engine
+  reached StartDialog` line) → the click is dropped upstream of `StartDialog` entirely. Next
+  step is the dialog branch of `HandlePlayerToServerInputMessage` (`0x00525F2E`), per this file's
+  own 2026-08-07 entry (later corrected for a *different* trigger — the correction does not rule
+  this back in, but does not rule it out for THIS trigger either).
+- **`dialogue: blocked a local conversation start; a peer holds the token`** (plus the on-screen
+  "Another player is in a conversation - click the same character to join" notice) → the
+  ordinary `dialogue_exclusive` one-conversation rule did its job because the HOST was, at that
+  moment, genuinely in some conversation (Trask's own scripted Endar-Spire re-initiate is a
+  strong candidate for "genuinely, but the player never saw it"). If so, this is arguably not a
+  bug to fix in code — it is a UX/documentation gap (the notice exists; whether the reporting
+  player saw and understood it is unknown) — and the fix may be "document this is expected", per
+  this task's own framing.
+- **`dialogue: engine reached StartDialog (N so far, forced=False)`** with no immediate
+  `test: could not open` → the conversation opened; look for whatever closed it a moment later
+  (a `Yielding`/`GaveUp*` note from `DialogueFollowMachine`).
+
+No production code was changed this round — everything above is elimination by reading, plus one
+interrupted live pass. `dotnet test` was not re-run (no source changed).

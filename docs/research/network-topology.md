@@ -1050,3 +1050,17 @@ through this exact path, not the rejoin one.
 ### New findings from the same session, unrelated to the UDP fallback (NOT investigated further this round)
 
 Observed after the UDP-fallback join completed and the session was stable: the joiner's own reported appearance showed no clothing (a bare/default body model rather than the equipped starting gear a fresh `join_mode=newcharacter` chargen should have), and the host's screen briefly showed Trask's portrait rather than the joining player's before it corrected itself a short time later. The Endar Spire intro cinematic also played once at the start before the two installs' state converged. The joiner also could not click Trask in-world to start a conversation with him. None of these touch the world-transfer channel this section is about — appearance/equipment sync, party-roster portraits, conversation targeting and movie relay are separate existing subsystems (see their own docs: companion-state-sync.md, party-reconciliation.md, dialogue-sync.md, cinematics.md) — and the phantom-spawn log line's own `portrait 0` field has read `0` at every spawn across this whole project's history, not just this session, so it may be an unrelated pre-existing quirk rather than something this round's changes caused. Deliberately NOT investigated this round (a genuinely new fresh-character join over a real, higher-latency internet path may simply be exercising a timing corner case no earlier LAN-only test hit) — filed here as a reproduction lead for whoever picks this up next, not a diagnosis.
+
+**Click-to-talk specifically was picked up and audited (2026-09-10) — see dialogue-sync.md's
+own dated section for the full write-up.** Several plausible causes (a stuck `DialogueGateHook`
+lease across the adoption's disconnect/reconnect, the historic click-to-join-annulled-a-frame-
+later defect, a Trask object-id mismatch from the GIT-body reuse path) were ruled out by reading
+the code; a live pass rebuilt and reinstalled both sides, drove an unattended
+`join_mode=newcharacter` join end to end through chargen and adoption (which completed
+successfully — Trask resolved to the same id, `0x127`, on both installs, matching earlier
+verified passes) but was cut short before the actual click test by both `swkotor.exe` processes
+being killed externally (not crashed — no crash-probe record, no Application-Error event) at the
+exact moment a concurrent agent (`trask-click-investigation`) overwrote the shared rig lock,
+suggesting a duplicate/parallel investigation of the same report. Root cause is still open; the
+next diagnostic step (watch `DialogueGateHook.StartAttempts`/`BlockedCount` right after a
+post-adoption click) is written up in full in dialogue-sync.md.
