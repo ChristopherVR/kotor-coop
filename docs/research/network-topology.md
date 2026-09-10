@@ -1050,3 +1050,18 @@ through this exact path, not the rejoin one.
 ### New findings from the same session, unrelated to the UDP fallback (NOT investigated further this round)
 
 Observed after the UDP-fallback join completed and the session was stable: the joiner's own reported appearance showed no clothing (a bare/default body model rather than the equipped starting gear a fresh `join_mode=newcharacter` chargen should have), and the host's screen briefly showed Trask's portrait rather than the joining player's before it corrected itself a short time later. The Endar Spire intro cinematic also played once at the start before the two installs' state converged. The joiner also could not click Trask in-world to start a conversation with him. None of these touch the world-transfer channel this section is about — appearance/equipment sync, party-roster portraits, conversation targeting and movie relay are separate existing subsystems (see their own docs: companion-state-sync.md, party-reconciliation.md, dialogue-sync.md, cinematics.md) — and the phantom-spawn log line's own `portrait 0` field has read `0` at every spawn across this whole project's history, not just this session, so it may be an unrelated pre-existing quirk rather than something this round's changes caused. Deliberately NOT investigated this round (a genuinely new fresh-character join over a real, higher-latency internet path may simply be exercising a timing corner case no earlier LAN-only test hit) — filed here as a reproduction lead for whoever picks this up next, not a diagnosis.
+
+⚠ **The cinematic item is now investigated — see `docs/research/cinematics.md` §11 (2026-09-10).**
+Verdict: **not a bug.** `01a.bik` is the ordinary Endar Spire intro every solo playthrough shows,
+fired by the area's own `OnEnter` script during `JoinFlow.CreateCharacterThenAdoptAsync`'s chargen
+step (`src/KotorCoop.Agent/JoinFlow.cs:205-325`) — which runs, by its own doc comment, *"as any new
+game does"* and completes, movie included, well before step 4's
+`AdoptWithNewCharacterAsync` (world-transfer) ever starts;
+`NewCharacterCaptureController`'s own 4-second post-world-up settle timer cannot even begin
+counting until the movie (which blocks the whole main thread) has already ended. `cinematics.md`
+§11 also traces a secondary, harmless fact this round's fix did not need to touch: the mid-module
+movie relay (`MoviePlayHook` + `MidModuleMovieController`) DOES capture and publish this intro
+movie onto the wire, because its gate is "the agent can write phantoms"
+(`SharedBlock.CommandSpawnAndDrive`), not "this world has been adopted" — but every receiver's
+ordinary per-channel module filter discards it, since nobody else is standing in the joiner's own
+solo `end_m01aa`. No code changed for this item.
