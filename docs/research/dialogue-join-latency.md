@@ -712,3 +712,159 @@ single sample: this rig's `dialogue_join_teleport=1` default removes the follow 
 behind the flag is untouched by this finding — a genuine distance FOLLOW (teleport off, or a real
 walked click) remains the only configuration that could confirm or refute it live, and remains
 unexercised.
+
+⚠ **This verdict is superseded.** `docs/research/dialogue-skip-desync.md`'s Round 79
+(2026-08-23) found a *different* failure mode this flag closes — mid-conversation skip-burst
+coalescing, not join latency — and measured it live as a real, reproducible content-loss bug.
+The coordinator flipped `dialogue_fast_join` to `1` by default the same day on the strength of
+that finding, not this one. As of this session (2026-09-10) `dialogue_fast_join=1` and
+`dialogue_join_teleport=1` are both the shipped default, confirmed directly in
+`AgentSettings.cs`, `CoopConfig.cs`, and `PluginHost.Startup.cs` below.
+
+---
+
+## Follow-up (2026-09-10): re-verified against current HEAD after tonight's other dialogue fixes; conclusion unchanged — no new fix, gap narrowed to walk time
+
+### The report
+
+Verbatim from the project owner tonight: *"There is also still dialogue issues where the
+subtitles don't display immediately when joining a conversation - we are forced to wait a few
+seconds."* Several other dialogue/interaction-lock/rig fixes landed on `main` earlier the same
+evening (`b40d117` fixing an asymmetric skip desync rooted in a false interaction-lock claim from
+a follower's mirrored conversation, `f4094dc`/`5cef4b7` settling a Trask-portrait control-return
+race, plus unrelated clothing/chargen/NPC-indicator fixes) — this pass's job was to determine
+whether the report is the already-documented engine audio gag, one of this doc's own known
+untested gaps, a genuine regression from tonight's work, or something new, and to live-verify
+rather than guess.
+
+### What was confirmed unchanged, first
+
+Before assuming anything from this doc's 2026-08-21/22 text still applies, both claimed defaults
+were re-checked directly against current source, not taken on faith:
+
+* `AgentSettings.DialogueFastJoin` and `CoopConfig.DialogueFastJoin` both default `true`
+  (`src/KotorCoop.Session/AgentSettings.cs:182`, `CoopConfig.cs:327`).
+* `Odyssey.DialogueJoinTeleportEnabled = PluginConfig.ReadBool("dialogue_join_teleport", true)`
+  (`src/KotorCoop.Plugin/PluginHost.Startup.cs:229`).
+* Both rig installs' own `coop.ini` (left untouched by the installer on this pass — "already
+  exists ... left untouched") independently carry `dialogue_fast_join=1`,
+  `dialogue_join_teleport=1`, and `dialogue_auto_join=off` explicitly, matching the code
+  defaults exactly.
+
+So the two controllable mitigations this doc already designed are confirmed live-installed and
+active, not merely default-true in source with a stale `coop.ini` somewhere overriding them.
+
+### Whether tonight's interaction-lock fix (`b40d117`) touches join latency: read, and now
+### live-checked — it does not, and structurally could not have
+
+`docs/research/dialogue-skip-desync.md`'s 2026-09-10 section root-causes a *different* bug: a
+follower's locally-adopted mirror conversation gets read by its own `InteractionLockController`
+as "I am now interacting with this NPC," which can win the interaction-lock race against the
+true (remote) owner's refreshed claim and then have `DialogueArbiter.Apply`'s lock veto silently
+refuse every one of the true owner's *subsequent* `DialogueRequestPacket` updates for the rest of
+the conversation. That is a mid-conversation **stall**, gated on losing a lock race that can only
+be lost *after* a follow has already adopted and is already receiving content — it has no code
+path that runs before or during the very first line's delivery, which is the join-latency window
+this document is about. The fix itself (`DialogueArbiter.Apply` only vetoes the grant branch,
+never an update from the already-fair owner) changes nothing about how fast the first content
+arrives; it changes whether the 2nd/3rd/Nth update still arrives.
+
+Live-checked directly rather than left as a read-only inference: both join directions were run
+fresh against current HEAD (which includes `b40d117`) with `tools\dlgjoinlatency.ps1`, two-GOG
+rig (`C:\GOG Games\Star Wars KOTOR (GOG)` host, `D:\Games\swkotor-gog-p2` client), `END_M01AA`,
+`end_trask`, both installs rebuilt and reinstalled from current HEAD (`dotnet build
+KotorCoop.slnx -warnaserror` clean; `src\KotorCoop.Plugin\build.ps1 -Install -WarnAsError` clean
+on both installs):
+
+| Direction | owner `StartDialog` → joiner `StartDialog` | joiner content latency (self-reported) |
+|---|---:|---:|
+| Host owns, client joins | 10037 ms (harness `-JoinAfter` wait, not mod latency — see below) | **0 ms** after opening, 0 ms after the request |
+| Client owns, host joins | 5693 ms (same harness artifact) | **15 ms** after opening, 15 ms after the request |
+
+Both numbers match this doc's own 2026-08-21/22 passes (0–16 ms band) to within noise. `dlgprobe`'s
+own node-agreement verdict read `11 of 11` and `15 of 15` paired samples on the same entry in the
+two runs respectively — no coalescing, no stall, in either direction. **No regression from
+tonight's other fixes was found; the interaction-lock fix is orthogonal to this report, exactly as
+the code read predicted, now confirmed live rather than left as an inference.**
+
+(The 5.7–10 s "GUI open" gap in the table is `dlgprobe.ps1`'s own scripted `-JoinAfter`
+wait plus PowerShell subprocess start-up, identical in kind and rough magnitude to what the
+2026-08-21 pass already flagged as a harness constant, not something this mod controls — it does
+not represent real player-experienced latency and should not be read as such.)
+
+### The `f4094dc`/`5cef4b7` portrait/control-return work: checked, and out of scope by its own
+### reproduction requirements
+
+`docs/research/party-reconciliation.md`'s control-return sections (read in full for this pass)
+describe a race that requires a **fresh join** — `GetControlledCreaturePointer()` briefly
+resolving to the wrong creature in the few seconds right after a `join_mode=newcharacter`
+adoption — and is explicitly about a joiner's *first click failing silently*, not about content
+latency for an *already-connected* player joining an *ongoing* conversation. The task brief's own
+repro scenario is explicit that the joiner here is "already connected, not freshly joining the
+session," which is exactly the condition this race needs to NOT be present (`ControlReturnRule`
+self-corrects within its own budget once the connect-time window has passed). Ruled out by
+scenario mismatch, not by live-testing a race this pass's own repro conditions cannot trigger.
+
+### The one genuinely new finding this pass adds: `dialogue_join_teleport` never covers a real
+### click, confirmed by code, not just cited from the existing doc text
+
+This document's 2026-08-21 far-join section already flagged this once ("a genuine click on a
+distant NPC already walks the player there via local input... this change does not touch and did
+not need to"), but it was not re-confirmed against current HEAD until this pass. It still holds,
+literally: `Odyssey.StartDialogueWith` (the one function that reads `dialogue_join_teleport` and
+can snap a joiner into range) has exactly two callers in the current source —
+`InteractionLockController.cs:759` (the `dialogue_auto_join` decision) and
+`TestDriveController.cs:362` (the dev-only `talk`/blockpoke hook this doc's own live tests use).
+Grepped directly, not assumed. **A real engine mouse click never reaches this function at all** —
+it runs through the vanilla `CSWCCreature::ActionInitiateDialog → ActionStartConversation` path,
+which is the engine's own action-queue walk, unrelated to anything this mod publishes or reads.
+
+Combined with `dialogue_auto_join`'s own shipped default (`off` — confirmed in
+`profiles/coop.ini.example`, `docs/CONFIG.md`, and both rig installs' live `coop.ini`), this means
+the join path an actual player exercises **by default**, when they are not already standing next
+to the NPC, is: notice a peer's ongoing conversation (there is no auto-pull under `off`) → walk
+over, using ordinary KOTOR movement, at ordinary KOTOR walk speed → click the NPC once in range →
+`ActionInitiateDialog` fires, `StartDialog` reaches the engine, and from that instant the measured
+numbers above apply (0–16 ms to content). **The walk itself is not measured or mitigated by
+anything in this document's own toolkit, because it is not a co-op-specific delay at all — it is
+identical to what the same click would cost in single-player KOTOR**, and it is the single most
+plausible source of a genuinely multi-second, "we are forced to wait," experience that this pass's
+adjacent-player rig setup cannot reproduce (exactly the same rig limitation the 2026-08-21 pass's
+own "What remains" section already named as unexercised: "a real mouse-driven click on a distant
+NPC").
+
+### Conclusion
+
+No regression, no new fixable bottleneck found, and no fix shipped this pass. The remaining
+candidates for the reported "a few seconds," in order of how well they fit the report's own
+wording and this session's evidence:
+
+1. **Ordinary engine walk time before the click can even register**, when the joiner was not
+   already adjacent to the NPC — vanilla behaviour, untouched by `dialogue_join_teleport` (which
+   never sees a real click, confirmed above), and not something this mod should silently override
+   with a teleport a player did not ask for (the existing doc's own caution about this — "what it
+   does to a real mouse click... has not had a live pass" — is deliberate, not an oversight).
+2. **The engine's own up-to-1000 ms `CanSendDialog` audio gag** on the first line after
+   `StartDialog`, which this document's original table already priced in and which is explicitly
+   documented elsewhere as unsafe to bypass (`Odyssey.SetCanSendDialog`'s own "DO NOT CALL — NOT
+   EVEN WITH true"). On its own this reads as "up to a second," which rounds up to "a few seconds"
+   in a player's own account of it, especially layered on top of (1).
+3. Genuinely new regression: **not found**. Fresh live numbers on current HEAD (including every
+   fix that shipped tonight) match the 2026-08-21/22 baseline to within measurement noise, in both
+   ownership directions.
+
+`docs/limitations.md`'s "Conversations" row caveat is tightened, not removed, to reflect this: the
+delay is not fully closed (walk time and the engine's own audio gag remain), but it is now scoped
+to "distance and the engine's own brief pause on the very first line" rather than left as an open,
+unexplained "under investigation" — the investigation is, as far as this mod's own controllable
+surface goes, complete.
+
+**What remains, honestly, still unclosed**: a genuine mouse-driven click-and-walk to a distant NPC
+remains impossible to reproduce with this rig's tooling (OS input injection to `swkotor.exe` does
+not register even with confirmed foreground focus — `docs/research/dialogue-skip-desync.md`'s
+Round 77/79 already document this in detail for a different verb, and nothing about that changed
+this pass); a trigger/cutscene-started conversation was not re-verified live this pass either
+(unchanged from the 2026-08-21 pass's own note, structurally the same `BeginConversation →
+StartDialog` entry point as every already-tested path, but still an inference, not an
+observation). A future pass with real input access, or a human at the keyboard, remains the only
+way to close either gap.

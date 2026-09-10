@@ -69,7 +69,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 
 | | Status | What to expect |
 | --- | --- | --- |
-| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests, rewards, recruits. If you join late you catch up instantly, but the subtitles specifically can take a few seconds to start showing up after you join — under investigation. This is by design: two people driving one dialogue at once would break the story. |
+| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests, rewards, recruits. Once you click the NPC to join, the subtitles catch up in well under a second — measured repeatedly, close range or far. If it still feels like a few seconds, that's normal walking time to reach the NPC (same as it would be solo) plus the game's own brief pause on the very first line of any conversation, not a co-op sync delay. This is by design: two people driving one dialogue at once would break the story. |
 | Recruiting companions through dialogue | **Works** | When one of you recruits someone, the other gets them too. |
 | Cutscenes | **Works** | They play on both screens. If a cutscene moves one player to a new area, the other follows. |
 | The Star Forge's solo duels (Bastila, Malak) | **Works, with a catch** | The player not in the duel is parked and watches. Whether that lock physically stops keyboard input has not been provable in testing — nothing suggests it doesn't. |
