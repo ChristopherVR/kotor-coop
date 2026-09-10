@@ -85,6 +85,20 @@ public sealed record CoopConfig
     /// </summary>
     public bool AutoAdoptWorld { get; init; } = true;
 
+    /// <summary>
+    /// Whether a client whose world-transfer TCP connect fails outright falls back to a
+    /// UDP-only path for the same fetch — coop.ini <c>world_transfer_udp_fallback</c>, OFF by
+    /// default, NEEDS-LIVE. Only ever tried after a fast, dedicated connect probe finds the TCP
+    /// listener genuinely unreachable (not a slow link, not an app-level refusal like a wrong
+    /// password — those still surface exactly as before); the ordinary TCP path
+    /// (<see cref="KotorCoop.Session.WorldTransfer"/>) is unchanged either way. Found live
+    /// 2026-09-10: a UDP-only tunnel/NAT path forwards the co-op session's own UDP traffic fine
+    /// but silently drops the separate TCP world-transfer listener, so <see cref="AutoAdoptWorld"/>
+    /// could never complete over such a path. See docs/research/network-topology.md's UDP
+    /// world-transfer section.
+    /// </summary>
+    public bool WorldTransferUdpFallback { get; init; }
+
     public string HostAddress { get; init; } = "127.0.0.1";
 
     /// <summary>
@@ -691,7 +705,8 @@ public sealed record CoopConfig
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
-        "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp", "log_max_mb",
+        "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp",
+        "world_transfer_udp_fallback", "log_max_mb",
         "log_keep", "auto_start_agent", "dinput8_next", "gamepad", "gamepad_cursor_speed",
     ];
 
@@ -828,6 +843,7 @@ public sealed record CoopConfig
             JoinMode = JoinModeRule.Parse(kv.GetValueOrDefault("join_mode")),
             AutoAdoptWorld = !kv.ContainsKey("auto_adopt_world")
                 || IsTruthy(kv.GetValueOrDefault("auto_adopt_world")),
+            WorldTransferUdpFallback = IsTruthy(kv.GetValueOrDefault("world_transfer_udp_fallback")),
             HostAddress = kv.GetValueOrDefault("host", "127.0.0.1"),
             HasHostAddress = kv.TryGetValue("host", out string? hostValue) && hostValue.Length > 0,
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,

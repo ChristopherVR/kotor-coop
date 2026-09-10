@@ -446,6 +446,118 @@ public static class WorldTransfer
         return name;
     }
 
+    /// <summary>
+    /// Serialises <paramref name="world"/> into the flat byte layout the TCP path already
+    /// streams (count, then per file <c>[name-len, size, name, bytes]</c>) — the payload
+    /// <see cref="KotorCoop.Session.WorldTransferUdpSender"/> cuts into
+    /// <see cref="Protocol.ProtocolConstants.WorldTransferChunkPayloadSize"/>-sized chunks. No
+    /// request/reply framing (magic, version, status, save identity) — that travels on the
+    /// UDP header packet instead, since it is one-shot control state, not part of the bulk
+    /// payload the chunk channel exists to move.
+    /// </summary>
+    public static byte[] SerializePayload(IReadOnlyList<WorldFile> world)
+    {
+        long total = 2; // count
+        foreach (WorldFile file in world)
+        {
+            total += 6 + Encoding.Latin1.GetByteCount(file.Name) + file.Data.Length;
+        }
+
+        byte[] buffer = new byte[total];
+        int pos = 0;
+        buffer[pos++] = (byte)world.Count;
+        buffer[pos++] = (byte)(world.Count >> 8);
+
+        foreach (WorldFile file in world)
+        {
+            byte[] name = Encoding.Latin1.GetBytes(file.Name);
+            buffer[pos++] = (byte)name.Length;
+            buffer[pos++] = (byte)(name.Length >> 8);
+            WriteU32(buffer, pos, (uint)file.Data.Length);
+            pos += 4;
+            name.CopyTo(buffer, pos);
+            pos += name.Length;
+            file.Data.CopyTo(buffer, pos);
+            pos += file.Data.Length;
+        }
+
+        return buffer;
+    }
+
+    /// <summary>
+    /// The inverse of <see cref="SerializePayload"/> — reassembled by
+    /// <see cref="KotorCoop.Session.WorldTransferUdpReceiver"/> from its chunk buffer once every
+    /// chunk has arrived. Applies the SAME bounds <see cref="FetchAsync"/>'s TCP path already
+    /// enforces (<see cref="MaxFiles"/>/<see cref="MaxNameLength"/>/<see cref="MaxFileBytes"/>/
+    /// <see cref="MaxTotalBytes"/>) — a receiver must never trust a peer's claimed sizes any
+    /// more over UDP than it does over TCP.
+    /// </summary>
+    public static IReadOnlyList<WorldFile> ParsePayload(byte[] payload)
+    {
+        int pos = 0;
+        int Left() => payload.Length - pos;
+
+        if (Left() < 2)
+        {
+            throw new InvalidDataException("world transfer: payload too short for a file count");
+        }
+
+        int count = payload[pos] | (payload[pos + 1] << 8);
+        pos += 2;
+
+        if (count is <= 0 or > MaxFiles)
+        {
+            throw new InvalidDataException($"world transfer: implausible file count {count}");
+        }
+
+        List<WorldFile> files = new(count);
+        long totalBytes = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (Left() < 6)
+            {
+                throw new InvalidDataException("world transfer: payload truncated mid-file-header");
+            }
+
+            int nameLength = payload[pos] | (payload[pos + 1] << 8);
+            uint size = ReadU32(payload, pos + 2);
+            pos += 6;
+
+            if (nameLength is <= 0 or > MaxNameLength)
+            {
+                throw new InvalidDataException($"world transfer: implausible name length {nameLength}");
+            }
+
+            if (size > MaxFileBytes)
+            {
+                throw new InvalidDataException($"world transfer: file {i} claims {size:N0} bytes");
+            }
+
+            totalBytes += size;
+            if (totalBytes > MaxTotalBytes)
+            {
+                throw new InvalidDataException($"world transfer: total exceeds {MaxTotalBytes:N0} bytes");
+            }
+
+            if (Left() < nameLength + size)
+            {
+                throw new InvalidDataException("world transfer: payload truncated mid-file");
+            }
+
+            string name = SafeName(Encoding.Latin1.GetString(payload, pos, nameLength));
+            pos += nameLength;
+
+            byte[] data = new byte[size];
+            Array.Copy(payload, pos, data, 0, (int)size);
+            pos += (int)size;
+
+            files.Add(new WorldFile(name, data));
+        }
+
+        return files;
+    }
+
     private static long TotalBytes(IReadOnlyList<WorldFile> world)
     {
         long total = 0;

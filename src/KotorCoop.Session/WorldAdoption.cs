@@ -68,10 +68,11 @@ public static class WorldAdoption
         uint passwordHash,
         uint expectedSaveIdentity,
         Action<string>? log,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        bool udpFallback = false) =>
         TryAdoptAsync(
             gameDirectory, ownSaveDirectory, sidecar: null, host, passwordHash, expectedSaveIdentity, log,
-            cancellationToken);
+            cancellationToken, udpFallback);
 
     /// <summary>
     /// Roadmap item 14 phase 1 overload: also considers a "resume tomorrow" sidecar
@@ -94,7 +95,8 @@ public static class WorldAdoption
         uint passwordHash,
         uint expectedSaveIdentity,
         Action<string>? log,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool udpFallback = false)
     {
         // 1. Our own character, before anything is touched. Always extracted, whether or not
         //    a sidecar is in play: it is the fallback the moment the sidecar turns out not to
@@ -147,7 +149,7 @@ public static class WorldAdoption
                 log?.Invoke($"world adoption: session-saved character not used — {reason}");
                 return (ownPlayer, ownSource);
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, udpFallback).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -185,13 +187,46 @@ public static class WorldAdoption
         uint passwordHash,
         uint expectedSaveIdentity,
         Action<string>? log,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool udpFallback = false)
     {
         ArgumentNullException.ThrowIfNull(carriedPlayer);
 
         return FetchStageAndVerifyAsync(
             gameDirectory, host, passwordHash, expectedSaveIdentity, log,
-            _ => (carriedPlayer, characterSource), cancellationToken);
+            _ => (carriedPlayer, characterSource), cancellationToken, udpFallback);
+    }
+
+    /// <summary>How long <see cref="ProbeTcpReachableAsync"/> waits for a bare connect before
+    /// concluding the port is not reachable at all — far short of a real transfer's own
+    /// generous timeout, since this only ever answers one question ("does anything answer a
+    /// SYN here"), not "how slow is the link". Chosen from the live 2026-09-10 failure this
+    /// exists for: a UDP-only tunnel path left the SYN with no reply at all, which a real host
+    /// answers within one RTT — even a slow one.</summary>
+    private const int TcpProbeTimeoutMs = 5_000;
+
+    /// <summary>
+    /// A bare TCP connect, immediately closed — answers only "does the transfer port take a
+    /// connection at all", never reading or writing a single protocol byte. Used to decide
+    /// between <see cref="WorldTransfer.FetchAsync"/> and <see cref="WorldTransferUdp.FetchAsync"/>
+    /// without risking a slow real transfer racing against this probe's own short timeout.
+    /// </summary>
+    private static async Task<bool> ProbeTcpReachableAsync(IPEndPoint host, CancellationToken cancellationToken)
+    {
+        using System.Net.Sockets.TcpClient probe = new();
+        using CancellationTokenSource timeoutCts =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TcpProbeTimeoutMs);
+
+        try
+        {
+            await probe.ConnectAsync(host, timeoutCts.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -210,13 +245,29 @@ public static class WorldAdoption
         uint expectedSaveIdentity,
         Action<string>? log,
         Func<uint, (GffStruct Player, string Source)> chooseCharacter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool udpFallback = false)
     {
-        // 2. The host's world.
+        // 2. The host's world. A bare connect probe first when the UDP fallback is enabled, so
+        //    a genuinely unreachable TCP listener (found live 2026-09-10: a UDP-only tunnel/NAT
+        //    path forwards the co-op session's own UDP traffic fine but silently drops this
+        //    channel) is answered by WorldTransferUdp instead of the ordinary 60s TCP timeout.
+        //    Skipped entirely when the fallback is off, so a build/coop.ini that has not opted
+        //    in pays no extra round trip and behaves exactly as before.
         FetchedWorld fetched;
         try
         {
-            fetched = await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
+            bool useUdp = udpFallback && !await ProbeTcpReachableAsync(host, cancellationToken).ConfigureAwait(false);
+            if (useUdp)
+            {
+                log?.Invoke(
+                    "world adoption: the world-transfer port did not answer TCP - "
+                    + "falling back to the UDP path (world_transfer_udp_fallback)");
+            }
+
+            fetched = useUdp
+                ? await WorldTransferUdp.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false)
+                : await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
         }
         catch (WorldTransferRefusedException ex) when (ex.NoWorldAvailable)
         {

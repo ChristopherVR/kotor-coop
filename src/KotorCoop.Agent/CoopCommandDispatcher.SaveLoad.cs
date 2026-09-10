@@ -66,6 +66,14 @@ public sealed partial class CoopCommandDispatcher
     private bool AutoAdoptWorldEnabled =>
         _autoAdoptWorldEnabled ??= loadConfig?.Invoke()?.AutoAdoptWorld ?? true;
 
+    /// <summary>coop.ini <c>world_transfer_udp_fallback</c> — see
+    /// <see cref="CoopConfig.WorldTransferUdpFallback"/>'s own doc comment. OFF by default,
+    /// NEEDS-LIVE.</summary>
+    private bool? _worldTransferUdpFallbackEnabled;
+
+    private bool WorldTransferUdpFallbackEnabled =>
+        _worldTransferUdpFallbackEnabled ??= loadConfig?.Invoke()?.WorldTransferUdpFallback ?? false;
+
     /// <summary>coop.ini <c>join_mode</c> — see <see cref="JoinModeRule"/>. In the default
     /// <see cref="JoinMode.Auto"/> the sidecar is THE co-op character, so a rejoin carries it
     /// unconditionally instead of weighing it against this install's own most recent save.</summary>
@@ -344,11 +352,6 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        if (_worldServeTask is not null)
-        {
-            return; // already running for this host session
-        }
-
         if (manager.CurrentSettings is not { } settings)
         {
             return; // should not happen once Current is a CoopHost, but never assume it
@@ -356,6 +359,21 @@ public sealed partial class CoopCommandDispatcher
 
         string capturedGameDirectory = gameDirectory;
         uint passwordHash = SessionPassword.Hash(settings.Password);
+
+        // Wires the UDP world-transfer fallback (KotorCoop.Session.CoopHost.WorldTransferUdp.cs)
+        // to the SAME provider and password the TCP listener below uses. Idempotent and cheap —
+        // safe to call every time this method runs (MaintainWorldServing is itself called on
+        // every tick), unlike the TCP listener's Task.Run just below, which only ever starts once.
+        if (manager.Current is CoopHost host)
+        {
+            host.SetWorldTransferProvider(() => BuildWorldSnapshot(capturedGameDirectory), passwordHash);
+        }
+
+        if (_worldServeTask is not null)
+        {
+            return; // TCP listener already running for this host session
+        }
+
         CancellationTokenSource cts = new();
         _worldServeCts = cts;
 
@@ -474,7 +492,8 @@ public sealed partial class CoopCommandDispatcher
                 AdoptedWorld? adopted = await manager
                     .RejoinAfterLoadAsync(
                         bridge, gameDirectory, carried, CancellationToken.None,
-                        carriedIsAuthoritative: JoinModeSetting == JoinMode.Auto)
+                        carriedIsAuthoritative: JoinModeSetting == JoinMode.Auto,
+                        worldTransferUdpFallback: WorldTransferUdpFallbackEnabled)
                     .ConfigureAwait(false);
 
                 if (adopted is null)

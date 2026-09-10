@@ -143,6 +143,15 @@ stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302
 ; means "forward the port yourself" in the status line, not an error. 0 disables the attempt.
 upnp = 1
 
+; A CLIENT'S own fallback for auto_adopt_world: if adopting the host's world can't reach it
+; over TCP at all (a UDP-only tunnel or NAT path forwards the co-op session's own UDP traffic
+; fine but drops the separate TCP world-transfer connection - found live 2026-09-10 testing a
+; playit.gg tunnel), retry the same fetch over a UDP-only channel instead. Only engages after a
+; fast, dedicated connect probe finds TCP genuinely unreachable - a slow link or an app-level
+; refusal (wrong password, host has no world) is unaffected either way. OFF by default,
+; NEEDS-LIVE - see docs/research/network-topology.md's UDP world-transfer section.
+world_transfer_udp_fallback = 0
+
 ; ------------------------------------------------------------------------------------------
 ; Advanced
 ; ------------------------------------------------------------------------------------------

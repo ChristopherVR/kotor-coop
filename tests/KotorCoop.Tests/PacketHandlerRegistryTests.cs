@@ -37,6 +37,12 @@ public class PacketHandlerRegistryTests
         // Galaxy-map departure relay (docs/research/galaxy-map-and-party-select.md, 2026-09-03):
         // any peer's accept click travels to the host, which rebroadcasts it to the others.
         PacketType.GalaxyDeparture,
+        // The UDP world-transfer fallback (docs/research/network-topology.md's UDP
+        // world-transfer section, world_transfer_udp_fallback): a client-side-only requester
+        // that is deliberately NOT a connected session peer (see WorldAdoption), so these ride
+        // the host's ordinary receive loop rather than a per-peer channel.
+        PacketType.WorldTransferRequest, PacketType.WorldTransferChunkStatus,
+        PacketType.WorldTransferComplete,
         PacketType.None,
     ];
 

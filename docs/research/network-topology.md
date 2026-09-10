@@ -941,3 +941,112 @@ UPnP off) that neither STUN nor UPnP can reach on their own. That is a materiall
 project — a hosted or peer-elected rendezvous point, plus the fallback relay for when punching
 fails — and is left for a future round, not attempted here. Roadmap item 24 is updated to
 reflect exactly this split.
+
+## 16. First real internet test, and a UDP world-transfer fallback (2026-09-10)
+
+Two independent physical machines, genuinely on the public internet (not loopback, not the same
+LAN address — one host on a home connection, one joiner reaching it from outside), for the
+first time since §15 shipped.
+
+### internet-2/internet-3/internet-4, partially answered — and the answer is a real gap
+
+The direct STUN+UPnP path FAILED against a real second machine. The host's own status line
+reported success throughout — `public address 103.95.113.80:51429 (UPnP mapped)` — but a
+joiner's real `connect 103.95.113.80:51429` timed out completely: `no reply from
+103.95.113.80:51429 - is UDP port 51429 forwarded on the host?`. This is the SESSION's own UDP
+channel failing to arrive at all, not merely the world-transfer TCP channel — a more
+fundamental result than §15 anticipated. `AddPortMapping` reporting success is evidently not
+sufficient evidence that the mapped address is actually reachable from the wider internet: the
+likeliest explanations are CGNAT (this ISP connection's "public" address is itself behind a
+carrier-level NAT the mapped router can never see through) or a double-NAT (an ISP modem in
+front of the mapped router, itself unmapped). Neither was isolated further this round — doing
+so needs access to the ISP-side equipment, out of scope for a two-machine test. Filed as a real,
+reproducible negative result rather than left as merely "untested": a host behind either
+topology cannot rely on UPnP+STUN alone, whatever the status line says, and needs a genuine
+external relay instead (exactly what item 15 above already named as future work).
+
+### The relay path worked — and found a narrower, more specific gap
+
+A playit.gg tunnel (a third-party TCP/UDP relay, unrelated to this project — used here only as
+a stand-in for "some relay exists between the two machines") carried the co-op session's own UDP
+traffic cleanly: a real handshake, ~36-41ms RTT, party-pool sync observed correctly crossing in
+both directions. The base protocol works over a genuine internet path when SOMETHING relays it.
+
+What broke: the joiner's world did not match the host's, so `auto_adopt_world` tried to fetch
+the host's world — over `WorldTransfer.cs`'s separate TCP listener, sharing the session's port
+number but a distinct protocol. The playit tunnel used for this test carried UDP only, so that
+TCP connection attempt got no reply at all (confirmed from the host side: zero trace of an
+incoming TCP attempt in the agent log at the moment the fetch failed) and the joiner's session
+cycled connect → mismatch detected → fetch times out → disconnect → reconnect, repeatedly.
+Switching the client to `auto_adopt_world = 0` (the pre-existing degraded-session fallback)
+confirmed the diagnosis directly: with no world-transfer attempted at all, the SAME tunnel held
+a stable connection indefinitely.
+
+The practical lesson for a player relaying through a third-party UDP+TCP tunnel service: check
+that BOTH protocols are actually enabled on the SAME mapped port, the same requirement §15's own
+UPnP mapping already names for a router forwarded by hand — a UDP-only tunnel silently drops
+world adoption the same way a UDP-only manual port-forward would.
+
+### `world_transfer_udp_fallback` — a UDP path for world-transfer itself (NEEDS-LIVE)
+
+Rather than only document the gap, a genuine UDP-only alternative now exists for the cases
+where nothing will ever carry TCP to the host on that port (a UDP-only tunnel/relay, or a NAT
+pairing that happens to punch UDP but not TCP) — coop.ini `world_transfer_udp_fallback`, OFF by
+default.
+
+**Why not just reuse the session's own reliable channels.** `WorldTransfer.cs`'s own doc
+comment already explains why the original design chose TCP: a save is ~654 KB, three orders of
+magnitude past a datagram, and the one payload in this protocol that must arrive exactly once,
+complete, before anything else can happen — "reusing the retransmit-until-acked machinery would
+mean reinventing ordering, windowing and flow control on top of it for a transfer that happens
+once per session." That tradeoff is unchanged and still correct for the common case (this
+fallback is OFF by default for exactly that reason); today's finding is that a real, not
+hypothetical, network shape now exists where TCP genuinely cannot be used at all, and playing a
+permanently degraded session is a worse trade than the added complexity below.
+
+**Shape.** Five new packet types (`PacketType.WorldTransferRequest` through
+`WorldTransferComplete`, protocol version 52), multiplexed onto the ordinary session UDP socket
+— a second UDP socket cannot share `WorldTransfer.cs`'s TCP listener's port the way TCP and UDP
+namespaces coexist for free, so this rides `CoopHost`'s existing receive loop
+(`CoopHost.WorldTransferUdp.cs`) instead of opening a second listener. The client half
+(`WorldTransferUdp.cs`) is fully standalone, like `WorldTransfer.FetchAsync` already is — by the
+time `WorldAdoption` fetches, the joiner's own co-op socket has already been closed
+(`SessionManager.RejoinAfterLoadAsync`'s own remarks), so there is no live session channel to
+ride on the client side even if one were still open.
+
+The transfer itself: the SAME flat byte layout `WorldTransfer.cs`'s TCP stream already sends
+(`WorldTransfer.SerializePayload`/`ParsePayload`, shared by both paths so the file-manifest
+parsing and its bounds checks are not duplicated), cut into
+`ProtocolConstants.WorldTransferChunkPayloadSize`-byte (1 KB) chunks, capped at
+`ProtocolConstants.MaxWorldTransferBytes` (8 MiB — over 12x the ~654 KB a real save measures).
+The host blasts every chunk once on the first pass without waiting for feedback, then the
+client's periodic `WorldTransferChunkStatus` (a missing-chunk bitmap, small enough at this cap
+to always fit one datagram) drives retransmission of whatever is still missing — the same
+"republish the level every cycle" idiom this protocol already uses elsewhere (party-pool/store
+V2 snapshots), applied to a one-shot bulk transfer instead of continuously-changing state.
+
+**Wiring.** `WorldAdoption.FetchStageAndVerifyAsync` tries a bare TCP connect probe first
+(`ProbeTcpReachableAsync`, a 5s timeout — short enough not to eat into a real transfer's own 60s
+budget, long enough that a real host answers within one RTT even on a slow link) only when the
+fallback is enabled; a probe failure switches to `WorldTransferUdp.FetchAsync` for the whole
+fetch, a probe success (or the fallback being off) behaves exactly as before. Threaded through
+`SessionManager.RejoinAfterLoadAsync`/`AdoptWithNewCharacterAsync` as an opt-in parameter (default
+off, so every existing caller is unaffected) and wired live in `CoopCommandDispatcher` for the
+mid-session rejoin path (`RejoinTrigger.SaveMismatch`/`TriggerRejoin` — the exact path today's
+live failure went through). The first-join `join_mode=newcharacter` path (`JoinFlow.cs` →
+`SessionManager.AdoptWithNewCharacterAsync`) is now threaded through too, added once today's live
+retest needed it: the joining machine was mid-chargen on the same UDP-only tunnel, which goes
+through this exact path, not the rejoin one.
+
+### NEEDS-LIVE — added by this section
+
+| Id | Check |
+| --- | --- |
+| internet-7 | ~~`world_transfer_udp_fallback` end to end against a real UDP-only tunnel/NAT path~~ **LIVE-VERIFIED same day**: probe correctly detected TCP unreachable (`the world-transfer port did not answer TCP - falling back to the UDP path`), the full 654,006-byte transfer completed, and the staged world's identity matched the host's (`0x155107BD`) — confirmed independently from both machines' logs, followed by a stable reconnect (peers 1, 36-37ms RTT, 90+ seconds with no drops). |
+| internet-8 | The probe's 5s timeout does not misfire on a genuinely slow-but-working TCP path (a real host that is merely slow to answer, rather than unreachable), which would wrongly prefer the UDP path over a TCP one that would have succeeded. |
+| internet-9 | A transfer at or near `ProtocolConstants.MaxWorldTransferBytes` (8 MiB) — this round only ever measured a ~654 KB save, two orders of magnitude under the cap. |
+| internet-10 | Whether this host's own CGNAT/double-NAT (found this round, internet-2/3/4) is confirmed as one or the other, and whether a manual port-forward on the ISP-side equipment (where reachable at all) resolves it — out of scope for this round's two-machine test. |
+
+### New findings from the same session, unrelated to the UDP fallback (NOT investigated further this round)
+
+Observed after the UDP-fallback join completed and the session was stable: the joiner's own reported appearance showed no clothing (a bare/default body model rather than the equipped starting gear a fresh `join_mode=newcharacter` chargen should have), and the host's screen briefly showed Trask's portrait rather than the joining player's before it corrected itself a short time later. The Endar Spire intro cinematic also played once at the start before the two installs' state converged. The joiner also could not click Trask in-world to start a conversation with him. None of these touch the world-transfer channel this section is about — appearance/equipment sync, party-roster portraits, conversation targeting and movie relay are separate existing subsystems (see their own docs: companion-state-sync.md, party-reconciliation.md, dialogue-sync.md, cinematics.md) — and the phantom-spawn log line's own `portrait 0` field has read `0` at every spawn across this whole project's history, not just this session, so it may be an unrelated pre-existing quirk rather than something this round's changes caused. Deliberately NOT investigated this round (a genuinely new fresh-character join over a real, higher-latency internet path may simply be exercising a timing corner case no earlier LAN-only test hit) — filed here as a reproduction lead for whoever picks this up next, not a diagnosis.

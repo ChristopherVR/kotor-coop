@@ -298,7 +298,8 @@ internal static class AgentComposition
                 current?.AutoAdoptWorld ?? true,
                 loadOwnSave: () => LoadIntoTheWorld(memory),
                 SayJoin,
-                cts.Token).ConfigureAwait(false);
+                cts.Token,
+                current?.WorldTransferUdpFallback ?? false).ConfigureAwait(false);
         }
 
         // Roadmap item 14 phase 1's "OR on clean disconnect" trigger: the dispatcher's own
@@ -391,7 +392,8 @@ internal static class AgentComposition
 
                             _ = JoinFlow.RunAsync(
                                 manager, bridge, joinDirectory, joinMode, autoAdopt,
-                                loadOwnSave: null, SayJoin, cts.Token);
+                                loadOwnSave: null, SayJoin, cts.Token,
+                                config?.WorldTransferUdpFallback ?? false);
                         },
                         cts.Token,
                         SayJoin),

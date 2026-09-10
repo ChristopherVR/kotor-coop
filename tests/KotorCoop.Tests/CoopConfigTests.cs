@@ -644,6 +644,7 @@ public class CoopConfigTests
     [InlineData("dinput8_next")]
     [InlineData("gamepad")]
     [InlineData("gamepad_cursor_speed")]
+    [InlineData("world_transfer_udp_fallback")]
     [InlineData("MENU_BUTTON")] // case-insensitive
     public void PlayerFacingKeysAreRecognisedAsPlayerFacing(string key)
     {

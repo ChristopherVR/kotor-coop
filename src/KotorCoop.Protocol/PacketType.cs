@@ -640,7 +640,58 @@ public enum PacketType : byte
     /// </summary>
     GalaxyDeparture = 72,
 
-    // 72 remains reserved for concurrent work on this tree (the same numbering discipline as
-    // the 39/47/48 skips above) — see the HOSTLOSS wave note on HostBye's own block: 70 and 71
-    // are both now used (HostBye, CompanionDamage), 72 alone is still open.
+    /// <summary>
+    /// client -&gt; host: begin a UDP-only world-transfer (roadmap item 24's internet-play gap,
+    /// found live 2026-09-10: a UDP-only tunnel/NAT path forwards the session's UDP traffic
+    /// fine but silently drops <c>KotorCoop.Session.WorldTransfer</c>'s separate TCP
+    /// listener, so <c>auto_adopt_world</c> could never complete over such a path). Carries a
+    /// client-minted <c>RequestId</c> (so a resent request is distinguishable from a stale one)
+    /// and the session password hash, exactly like <c>WorldTransfer</c>'s TCP request
+    /// header. Multiplexed onto the SAME UDP socket the ordinary session already owns — unlike
+    /// the TCP channel, a second UDP socket cannot share its port — so this rides the host's
+    /// existing <c>CoopHost</c> receive loop rather than a separate listener. See
+    /// docs/research/network-topology.md's UDP world-transfer section.
+    /// </summary>
+    WorldTransferRequest = 73,
+
+    /// <summary>
+    /// host -&gt; client: answers a <see cref="WorldTransferRequest"/> — status (ok / no world /
+    /// bad password), the host's save-identity digest, and the flat payload's total size and
+    /// chunk count. Retransmitted until the client's first <see cref="WorldTransferChunkStatus"/>
+    /// arrives (proof it was received), the same "resend until acked" shape every reliable
+    /// channel here uses.
+    /// </summary>
+    WorldTransferHeader = 74,
+
+    /// <summary>
+    /// host -&gt; client: one <see cref="ProtocolConstants.WorldTransferChunkPayloadSize"/>
+    /// slice of the flat save payload (the same byte layout <c>WorldTransfer</c>'s TCP
+    /// stream already sends — file count, then per-file name+size+bytes — just cut into
+    /// datagram-sized pieces instead of one ordered stream). The last chunk is whatever is left
+    /// over, its length implied by the datagram's own size rather than an extra field. Sent
+    /// once for every chunk on the first pass, then only for whatever a
+    /// <see cref="WorldTransferChunkStatus"/> still reports missing.
+    /// </summary>
+    WorldTransferChunk = 75,
+
+    /// <summary>
+    /// client -&gt; host: which chunks (out of the count <see cref="WorldTransferHeader"/>
+    /// announced) are still missing, as a bitmap — one bit per chunk index, sent periodically
+    /// while a transfer is in progress. A LEVEL, not an ack-per-chunk: re-sending the whole
+    /// missing set every cycle costs nothing (a save-sized transfer's bitmap is at most
+    /// <see cref="ProtocolConstants.MaxWorldTransferChunks"/>/8 bytes) and needs no per-chunk
+    /// bookkeeping on either side — the host simply resends whatever bit is still set.
+    /// </summary>
+    WorldTransferChunkStatus = 76,
+
+    /// <summary>
+    /// client -&gt; host: every chunk arrived and the reassembled payload passed the same
+    /// bounds/parsing checks <c>WorldTransfer</c>'s TCP path already applies. Lets the
+    /// host free its per-client transfer buffer instead of holding it until the transfer's own
+    /// timeout expires.
+    /// </summary>
+    WorldTransferComplete = 77,
+
+    // 73-77 are this stream's own reservation (the same numbering discipline as the 39/47/48
+    // skips above) — see PacketTypeTests, which fails the build on any collision regardless.
 }

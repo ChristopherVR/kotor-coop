@@ -398,7 +398,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         string gameDirectory,
         (GffStruct Player, SidecarMetadata Metadata)? carriedCharacter,
         CancellationToken cancellationToken,
-        bool carriedIsAuthoritative = false)
+        bool carriedIsAuthoritative = false,
+        bool worldTransferUdpFallback = false)
     {
         bool host;
         IPEndPoint? endpoint;
@@ -429,7 +430,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 SessionPassword.Hash(settings.Password),
                 expectedSaveIdentity: 0,
                 Log,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                worldTransferUdpFallback).ConfigureAwait(false);
         }
         else
         {
@@ -447,7 +449,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 SessionPassword.Hash(settings.Password),
                 expectedSaveIdentity: 0,
                 Log,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                worldTransferUdpFallback).ConfigureAwait(false);
         }
 
         if (adopted is null)
@@ -497,7 +500,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         string gameDirectory,
         GffStruct carriedPlayer,
         string characterSource,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool worldTransferUdpFallback = false)
     {
         bool host;
         IPEndPoint? endpoint;
@@ -525,7 +529,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             SessionPassword.Hash(settings.Password),
             expectedSaveIdentity: 0,
             Log,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            worldTransferUdpFallback).ConfigureAwait(false);
 
         if (adopted is null)
         {

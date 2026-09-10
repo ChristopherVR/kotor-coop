@@ -80,11 +80,14 @@ internal static class JoinFlow
         bool autoAdoptEnabled,
         Action? loadOwnSave,
         Action<string> say,
-        CancellationToken token)
+        CancellationToken token,
+        bool worldTransferUdpFallback = false)
     {
         try
         {
-            await RunCoreAsync(manager, bridge, gameDirectory, mode, autoAdoptEnabled, loadOwnSave, say, token)
+            await RunCoreAsync(
+                    manager, bridge, gameDirectory, mode, autoAdoptEnabled, loadOwnSave, say, token,
+                    worldTransferUdpFallback)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -133,7 +136,8 @@ internal static class JoinFlow
         bool autoAdoptEnabled,
         Action? loadOwnSave,
         Action<string> say,
-        CancellationToken token)
+        CancellationToken token,
+        bool worldTransferUdpFallback)
     {
         if (string.IsNullOrEmpty(gameDirectory))
         {
@@ -160,11 +164,13 @@ internal static class JoinFlow
                 return;
 
             case JoinAction.AdoptWithCoopCharacter:
-                await AdoptWithCoopCharacterAsync(manager, bridge, gameDirectory, say, token).ConfigureAwait(false);
+                await AdoptWithCoopCharacterAsync(
+                    manager, bridge, gameDirectory, say, token, worldTransferUdpFallback).ConfigureAwait(false);
                 return;
 
             default:
-                await CreateCharacterThenAdoptAsync(manager, bridge, gameDirectory, say, token).ConfigureAwait(false);
+                await CreateCharacterThenAdoptAsync(
+                    manager, bridge, gameDirectory, say, token, worldTransferUdpFallback).ConfigureAwait(false);
                 return;
         }
     }
@@ -176,7 +182,8 @@ internal static class JoinFlow
         IGameBridge bridge,
         string gameDirectory,
         Action<string> say,
-        CancellationToken token)
+        CancellationToken token,
+        bool worldTransferUdpFallback)
     {
         string savesDirectory = Path.Combine(gameDirectory, "saves");
 
@@ -190,7 +197,7 @@ internal static class JoinFlow
         await AdoptAndReconnectAsync(
             manager, bridge, gameDirectory, player,
             $"your co-op character (captured {metadata.CapturedAtUtc:u})",
-            "co-op character", say, token).ConfigureAwait(false);
+            "co-op character", say, token, worldTransferUdpFallback: worldTransferUdpFallback).ConfigureAwait(false);
     }
 
     /// <summary>The first join (or a forced reroll): chargen, then the sidecar, then the
@@ -200,7 +207,8 @@ internal static class JoinFlow
         IGameBridge bridge,
         string gameDirectory,
         Action<string> say,
-        CancellationToken token)
+        CancellationToken token,
+        bool worldTransferUdpFallback)
     {
         if (!bridge.TryArmNewCharacterCapture(out string armed))
         {
@@ -312,7 +320,8 @@ internal static class JoinFlow
             manager, bridge, gameDirectory, player, "the character you just created",
             "new character", say, token,
             afterAdopt: adopted => ClientCharacterPersistence.TryWriteSidecar(
-                savesDirectory, player, adopted.SaveIdentity, DateTime.UtcNow, out _)).ConfigureAwait(false);
+                savesDirectory, player, adopted.SaveIdentity, DateTime.UtcNow, out _),
+            worldTransferUdpFallback: worldTransferUdpFallback).ConfigureAwait(false);
     }
 
     /// <summary>Steps 4-5, shared by both paths: adopt the host's world carrying
@@ -327,10 +336,12 @@ internal static class JoinFlow
         string voice,
         Action<string> say,
         CancellationToken token,
-        Action<AdoptedWorld>? afterAdopt = null)
+        Action<AdoptedWorld>? afterAdopt = null,
+        bool worldTransferUdpFallback = false)
     {
         AdoptedWorld? adopted = await manager.AdoptWithNewCharacterAsync(
-            bridge, gameDirectory, player, characterSource, token).ConfigureAwait(false);
+            bridge, gameDirectory, player, characterSource, token, worldTransferUdpFallback)
+            .ConfigureAwait(false);
 
         if (adopted is null)
         {

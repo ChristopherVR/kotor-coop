@@ -205,6 +205,9 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
             [PacketType.Ping] = HandlePing,
             [PacketType.Bye] = HandleBye,
+            [PacketType.WorldTransferRequest] = HandleWorldTransferRequest,
+            [PacketType.WorldTransferChunkStatus] = HandleWorldTransferChunkStatus,
+            [PacketType.WorldTransferComplete] = HandleWorldTransferComplete,
             [PacketType.None] = HandleNone,
         };
     }
@@ -466,6 +469,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastInteractionLocks(recipients);
         BroadcastWorldDigest(now, recipients);
         FlushChat(recipients);
+        PumpWorldTransferUdp(now);
         _buffer.PruneStale(now, _settings.PeerTimeoutMs);
     }
 
