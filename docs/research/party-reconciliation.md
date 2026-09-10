@@ -5701,3 +5701,87 @@ persistent case, not a re-assertion of the code-reading argument above.
 
 - `docs/research/party-reconciliation.md` — this entry (no source changes; a ruled-out
   investigation, not a fix — see the conclusion above for why).
+
+## Round 106 (2026-09-10) — "solo mode is broken, companions keep following and flickering":
+## root-caused to `positionparty`'s undocumented-for-restoration solo-mode clear, fixed
+
+Reported live, same overall session as `docs/research/network-topology.md`'s 2026-09-10 UDP-
+fallback entry: the host observed its own companions repeatedly resume following and jitter/
+teleport when they should have been static — described by the reporting task as "solo mode
+appears broken." No rig access for this round; this is a static root-cause pass against the
+existing round-105 evidence, closed with a minimal, targeted fix and the full test suite green.
+
+### Root cause
+
+Round 105 (above) shipped `party_follow_stall_recovery` ON by default, with
+`FollowStallRule.DefaultMethod = MethodPositionParty` — the follow-AI wedge detector's
+heaviest recovery, `GatherParty` (`Odyssey.DoorTransitions.PartyCount.cs`), which calls the
+engine's own `CSWPartyTable::PositionParty` (0x00565B00). That function's own doc comment
+already recorded, in round 105's own write-up, that PositionParty "also clears `pt_solomode`
+and unstealths the party" — but nothing downstream of the call ever restored it. `GatherParty`
+returned straight after the (possibly double) `PositionPartyFn` call with solo mode left at 0.
+
+This reopens exactly the failure mode `KotorGameBridge.TryWritePartyMembers`'s own "Hold solo
+mode every pass" comment (`KotorGameBridge.Party.cs:613`) exists to prevent, and this project's
+2026-07-31 engine findings already named the mechanism precisely: **party following is
+SCRIPT-DRIVEN, and un-suppression self-heals** — the instant solo mode reads 0, the party AI
+script can queue a real `ActionFollowLeader` (action id 61), and that queued action then keeps
+dispatching through `RunActions` every subsequent frame regardless of solo mode's state a moment
+later (the same "queued once, runs until finished" behaviour Trap 5 already established for this
+exact action). `KotorGameBridge`'s own external reassert (every ~16-150 ms depending on
+`party_fast_pump`) is a cross-process pump, not something the native call itself can rely on to
+close the gap before the next frame runs — and `PositionParty` is party-wide (it "teleports every
+party companion into formation," per `GatherParty`'s own doc comment), so the self-heal is not
+scoped to just the one companion the detector was trying to recover. A companion this instance
+only MIRRORS (not owns) getting caught by a reactivated native follow-AI is a second, independent
+position driver landing on the same body the mod's own per-frame absolute mirror-write already
+drives — two sources of truth for one creature's position, updating out of step with each other.
+That is the flicker/teleport the report describes, and "keeps following" is the native follow-AI
+genuinely being re-armed, not a display artifact.
+
+Given the anti-spin budget round 105 shipped (one fire per companion per 3 s, up to 5 per module
+without a confirmed recovery), and that ordinary play regularly produces the wedge shape this
+recovery answers (a stationary or teleported leader with the companion >1 unit away — not a rare
+condition; it does not require any Star-Forge-specific forced-solo story beat), `positionparty`
+firing at all during normal co-op play was enough to trigger this, independent of any
+`solo_segment_spectate`-style story sequence (`docs/research/star-forge-finale.md`) — consistent
+with the report surfacing early in a session, not at a late-game forced-solo beat.
+
+### Fix
+
+`Odyssey.DoorTransitions.PartyCount.cs`'s `GatherParty`: after the (possibly double)
+`PositionPartyFn(table)` call, write `*(byte*)(table + PartyTableSoloMode) = 1` before
+returning — restoring the exact field the same native call just cleared, synchronously, in the
+same frame, rather than depending on the agent's next external pump. This closes the window to
+zero instead of a frame or more. No other write, no protocol change; `PartyTableSoloMode = 0x190`
+is the same offset `PartyFollowController` and `PartyPresenceController` already each keep their
+own copy of (the established per-file-constant convention in this codebase).
+
+This is a narrower, more defensible write than the 2026-08-21 "solo mode deliberately NOT
+released by the roster-freeze guard" ruling earlier in this document — that entry's reasoning was
+about NOT taking on ownership of a field for an unrelated purpose; this fix is the plugin
+restoring its OWN call's own documented side effect, in the same function, before the function
+returns. Nothing about the two-companion drift risk this document spent rounds 82-85
+characterising is reopened: the write here is solo mode ONLY, never the party table's own
+member/id fields, and it fires only on the existing `GatherParty` call path (the follow-stall
+recovery and the `usedoor`/door-transition gather helper), not a new call site.
+
+### What was NOT changed, and NEEDS-LIVE
+
+- The follow-stall detector's own anti-spin, gating and default method are unchanged — this is
+  purely a "restore what our own call just cleared" fix, not a change to when/whether
+  `positionparty` fires.
+- `dotnet build KotorCoop.slnx -warnaserror` clean, `src/KotorCoop.Plugin/build.ps1 -WarnAsError`
+  clean (x86 confirmed), `dotnet test tests/KotorCoop.Tests`: 3473/3473 passed. No rig was
+  available for this round (see `rig.lock`, held by a concurrent session for most of it) —
+  **NEEDS-LIVE**: reproduce round 105's own wedge repro (`END_M01AA`, `tp 20 22 -1.3` then a
+  bare-point `walk 10 15`) with a SECOND, non-recovering companion mirrored nearby, confirm the
+  second companion no longer shows a `party drive: companion 0x.. released ...`-style spurious
+  self-driven follow line or position drift during/after a `positionparty` recovery, and confirm
+  `soloMode` sampled immediately after a recovery (e.g. via the existing release-diagnostic log
+  line or a fresh probe) never reads 0 on either side. If a live pass finds the flicker persists
+  even with this fix, the next place to look is whether the party AI script can latch a follow
+  action DURING the single native call itself (i.e. inside `PositionPartyFn`'s own execution,
+  before this method's restore write ever runs) rather than only in the gap after it returns —
+  which would need a different fix (e.g. suppressing/clearing any freshly-queued follow action on
+  the affected companions after the restore, not just restoring the flag).

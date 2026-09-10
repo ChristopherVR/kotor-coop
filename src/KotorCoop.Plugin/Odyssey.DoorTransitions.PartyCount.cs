@@ -116,6 +116,15 @@ internal static unsafe partial class Odyssey
     /// and <c>lea ebp,[ebx+4]</c> at 0x00565BAC).</summary>
     private const int PartyTableMemberCount = 0x00;
 
+    /// <summary>CSWPartyTable + this = solo mode (<c>pt_solomode</c>), the party-wide "no
+    /// script issues ActionFollowLeader" switch <c>KotorGameBridge.TryWritePartyMembers</c>
+    /// holds at 1 for the whole session (same offset <c>PartyFollowController</c> and
+    /// <c>PartyPresenceController</c> each keep their own copy of). <see cref="PositionPartyFn"/>
+    /// clears this as one of its own side effects (this file's own doc comment on it) —
+    /// <see cref="GatherParty"/> restores it before returning; see that method's own remarks
+    /// for why the restore cannot wait for the agent's next external pump.</summary>
+    private const int PartyTableSoloMode = 0x190;
+
     /// <summary>How many members the party table currently holds, or 0.</summary>
     public static int GetPartyMemberCount()
     {
@@ -365,6 +374,25 @@ internal static unsafe partial class Odyssey
     /// Returns false, without calling anything, when the preconditions PositionParty
     /// dereferences are not met.
     ///
+    /// ⚠ 2026-09-10 — <c>PositionPartyFn</c>'s own doc comment already records that it "clears
+    /// <c>pt_solomode</c>" on its way out; nothing downstream of this call was ever restoring
+    /// that before this fix. <c>KotorGameBridge.TryWritePartyMembers</c> re-asserts solo mode
+    /// every pass ("Hold solo mode every pass"), but that is an external agent pump — a
+    /// cross-process write that only runs every ~16-150 ms (`party_fast_pump`) — not something
+    /// this call can rely on to close the gap before the NEXT frame. Party following is
+    /// SCRIPT-DRIVEN and un-suppression self-heals (docs/research/party-reconciliation.md's
+    /// 2026-07-31 engine findings): the instant solo mode reads 0, the party AI script can queue
+    /// a real <c>ActionFollowLeader</c> on EVERY party member (this call is party-wide, not
+    /// scoped to the one companion being recovered), and that queued action then keeps
+    /// dispatching through <c>RunActions</c> every frame after, regardless of solo mode's state
+    /// a moment later — the same "queued once, runs forever until finished" behaviour Trap 5
+    /// already established for the follow action. On a companion this instance mirrors from a
+    /// peer (not owns), that reactivated native follow-AI becomes a second, independent driver
+    /// fighting the mod's own per-frame absolute position write — the flicker/teleport symptom
+    /// this fix closes. Restoring solo mode HERE, synchronously, in the same native call that
+    /// cleared it, closes the window to zero rather than a frame or more.
+    /// See docs/research/party-reconciliation.md's 2026-09-10 entry.
+    ///
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool GatherParty(out int members, out bool skipFlagWasSet)
@@ -407,6 +435,12 @@ internal static unsafe partial class Odyssey
         {
             PositionPartyFn(table);
         }
+
+        // PositionParty clears pt_solomode on its own way out (this method's own ⚠ note above) —
+        // restore it immediately, synchronously, rather than leaving even one frame where the
+        // party AI script could see it as 0 and self-heal into a real, party-wide
+        // ActionFollowLeader that would otherwise keep dispatching long after this call returns.
+        *(byte*)(table + PartyTableSoloMode) = 1;
 
         return true;
     }
