@@ -10,7 +10,9 @@
       "Bash(python fixbell.py)",
       "Bash(rm fixbell.py)",
       "Bash(python fixctl.py)",
-      "Bash(rm fixctl.py)"
+      "Bash(rm fixctl.py)",
+      "Bash(powershell -Command \"Get-Content 'C:\\\\GOG Games\\\\Star Wars KOTOR \\(GOG\\)\\\\kotorcoop-agent.log' | Select-String -Pattern '11:0[3-5]:' \")",
+      "Skill(update-config)"
     ]
   }
 }
