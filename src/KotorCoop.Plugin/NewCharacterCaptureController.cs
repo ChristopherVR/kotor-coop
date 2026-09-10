@@ -296,7 +296,45 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
             _equipRepairArmedAtMs = nowMs;
         }
 
-        int repaired = Odyssey.EquipUnequippedStartingGear(Odyssey.GetPlayerObjectId());
+        // ⚠ Cross-check against the 0x7FFFFFFF "no real player registered yet" bug
+        // (docs/research/world-adoption.md's "Round 2026-09-10b"; CONFIRMED STRUCTURAL, not
+        // intermittent, in round 3 - fires on 3/3 live captures, every single poll of the whole
+        // window). GetPlayerObjectId() (CServerExoApp::GetPlayerCreature) reports the engine's
+        // own placeholder for the WHOLE repair window for a first-time `join_mode =
+        // newcharacter` joiner, because the only thing that ever re-points that field
+        // (CSWSPlayer::SetGameObject, via CSWParty::SetLeader/CSWPartyTable::
+        // SwitchPlayerCharacter/module init - see Odyssey.ControlSwitch.cs's
+        // SetPlayerGameObjectFn doc comment) needs a PRIOR leader to switch FROM, which a
+        // first-time joiner does not have.
+        //
+        // ⚠ ROUND 3 ALSO TRIED AND FALSIFIED the obvious fallback: Odyssey.
+        // GetControlledCreatureObjectId() (CSWParty, CLIENT-side, member[0]) was hypothesised to
+        // hold the real id independently of the server-side wiring gap above. LIVE-CONFIRMED
+        // WRONG, twice: it reads the SAME class of placeholder (0x7FFFFFFF, or OBJECT_INVALID
+        // 0x7F000000 before any client party exists at all) for the entire repair window too. A
+        // THIRD independent source - the chargen-time creature pointer's own id field, read
+        // directly in CharGenDriveController.Accept() before BeginPlayGame even runs - was also
+        // tried and also reads 0x7F000000. So NEITHER accessor this project has, nor the
+        // earliest possible read of the creature object itself, names a real numeric id during
+        // this window: the joiner's creature appears to hold no real, queryable id AT ALL until
+        // something well past this repair's own 90-second wall-clock ceiling (measured: the real
+        // id, e.g. 0x128, first appears in CSWPartyTable ~93+ seconds after world-up, close to or
+        // after the ceiling fires) - see docs/research/world-adoption.md's round 3 section for
+        // the full timing evidence and the still-open question of whether that id ever appears
+        // inside the ORIGINAL chargen module at all, or only after the save/adopt round-trip into
+        // the host's world. Kept here as a logged cross-check only (never substituted for the
+        // repair id): a real fix needs to either wait for a real id to exist, or move this
+        // repair to run post-adopt against the host-world id instead of pre-save here.
+        uint playerObjectId = Odyssey.GetPlayerObjectId();
+        uint controlledObjectId = Odyssey.GetControlledCreatureObjectId();
+        uint? lastRegistered = Odyssey.LastKnownServerPlayerRegistered;
+        PluginHost.Log(
+            "newchar-diag: GetPlayerObjectId()="
+            + $"0x{playerObjectId:X}, GetControlledCreatureObjectId()=0x{controlledObjectId:X} "
+            + "vs SyncServerPlayerToLeader last registered="
+            + (lastRegistered.HasValue ? $"0x{lastRegistered.Value:X}" : "never logged"));
+
+        int repaired = Odyssey.EquipUnequippedStartingGear(playerObjectId);
         if (repaired > 0)
         {
             PluginHost.Log(

@@ -1058,3 +1058,133 @@ enough real polls land.
 Both changes are unit-covered and build-clean; **NEEDS-LIVE** for whether the crash fix holds
 across further chargen joins — this round's rig time was spent on the crash itself once it was
 found, not on re-running the clothes capture.
+
+## Round 2026-09-10d — the 0x7FFFFFFF bug confirmed structural, and the weapon "fix" retracted
+
+Short version in `docs/research/world-adoption-clothes-notes.md`; this is the full derivation.
+Three live captures, two-GOG-copy rig (`demo.ps1 -ClientNewCharacter`, `chargen newgame`/
+`quick 2`/`accept` blockpoke verbs, `rig.lock` held as `clothing-fix-round-3`).
+
+### 1. The requested cross-check log, and what it immediately showed
+
+Added at the `EquipUnequippedStartingGear` call site (`NewCharacterCaptureController.cs`):
+`GetPlayerObjectId()`'s raw value next to `SyncServerPlayerToLeader`'s last-known `registered`
+(exposed as `Odyssey.ControlSwitch.cs`'s new `LastKnownServerPlayerRegistered`). First live
+capture fired it immediately:
+
+```
+newchar-diag: GetPlayerObjectId()=0x7FFFFFFF vs SyncServerPlayerToLeader last registered=never logged
+```
+
+...on EVERY poll, for the entire repair window (measured: 116+ consecutive polls). Round 2b had
+seen this once and could not tell if it was a fluke. Round 3 ran it three times, isolated any
+way it could think of, and it fired identically every time: **the 0x7FFFFFFF placeholder is not
+intermittent — it is the value `GetPlayerObjectId()` reports for the WHOLE equip-repair window
+on every first-time `join_mode = newcharacter` join.** `SyncServerPlayerToLeader` never ran even
+once in any of the three captures (no `registered` value to compare against) — consistent with
+its own doc comment: it only fires on an actual leader SWITCH, and a first-time joiner has no
+prior leader to switch FROM.
+
+### 2. Two hypothesised fixes, tried live, both falsified
+
+**Fix attempt A — client-side fallback.** Added `Odyssey.GetControlledCreatureObjectId()`
+(`Odyssey.Menu.cs`): reads `CSWParty` (client-side) member[0]'s own id directly, the same field
+`GetControlledCreaturePointer()` already resolves through `ResolveServerObject`, but returned as
+the bare id. Reasoning: this field is driven by client-side input authority, not the
+server-side `CSWSPlayer::SetGameObject` wiring `GetPlayerObjectId()` depends on, so it seemed
+like a plausible independent source of truth. Wired it in as the PRIMARY repair id (falling back
+to `GetPlayerObjectId()` only if it read 0), rebuilt, redeployed, ran a second live capture.
+
+**Live result: falsified.** `GetControlledCreatureObjectId()` read `0x7FFFFFFF` too (or
+`0x7F000000` — `OBJECT_INVALID` — in the very first poll or two, before any client-side party
+exists yet) for the entire second capture's repair window. Reverted the substitution: the actual
+repair still calls `EquipUnequippedStartingGear(Odyssey.GetPlayerObjectId())` unchanged from
+round 2's baseline; the new accessor is kept only as a logged cross-check.
+
+**Fix attempt B (diagnostic probe) — read the id even earlier.** Before concluding no accessor
+works, added one more diagnostic: `CharGenDriveController.Accept()` now logs
+`*(uint*)(creature + 0x04)` — the chargen-time creature pointer's OWN id field, read directly,
+before `BeginPlayGame` even runs. This is the earliest possible point in the whole flow to ask
+the object what its own id is.
+
+**Live result: also `0x7F000000`.** Third capture. So from class selection through at least 90
+seconds into the new module, THREE independent reads (server player slot, client party
+member[0], the object's own id field at chargen time) all agree: this creature has no real,
+assigned numeric id yet. This is not a read-side bug in any one accessor — the object itself
+appears not to be registered into the engine's normal id space during this whole window.
+
+### 3. The weapon "fix" from round 1 is retracted — it was `party_pool_sync` colliding with the same bug
+
+This rig's shipped `coop.ini` default is `party_pool_sync=2` (host-authoritative). Re-reading the
+first capture's own log with fresh eyes: right before the "successful" weapon equip, the log
+shows
+
+```
+party pool: add diag - repo 0x34A9B20, item_count 1->2, 0x12B links 1->1, fresh body (linked by the engine, stack 2)
+party pool: added 'g_i_medeqpmnt01' (0x12B) x2, charges 0/0, upgrades 0x0
+cheat: added 'g_i_medeqpmnt01' x2 to the party pool (status 1)
+...
+cheat: added 'g_w_blstrrfl001' x1 to the party pool (status 1)
+newchar-diag: candidate 0x12C tag='g_w_blstrrfl001' possessor=0x7FFFFFFF (creature is 0x7FFFFFFF) classify=4
+newchar: equipped starting item 0x12C into nwscript slot 4 (was sitting unequipped in the fresh character's own inventory)
+```
+
+`cheat: added '...' to the party pool` is `CheatController.PartyPool.cs`'s `PartyPoolAdd` —
+"the automatic apply half of the [party-pool] sync channel" per its own doc comment: this is the
+HOST syncing an item from ITS OWN inventory into the joiner's shared pool, nothing to do with
+chargen. The synced item's `Possessor` gets stamped with whatever `GetPlayerCreature()` reports
+at link time — which round 3 has now shown is ALSO `0x7FFFFFFF` — so
+`EquipUnequippedStartingGear`'s `possessor == creatureObjectId` check matches by coincidence
+(wrong equals wrong) and a weapon synced from the HOST's own inventory gets equipped onto the
+joiner. This looks exactly like "the joiner's own starting weapon worked" and was reported as
+such in round 1's six-join table, but it demonstrably is not that.
+
+**Isolated live test, round 3:** set `party_pool_sync=0` on both installs (temporary, restored to
+`2` afterward — this was never meant to be a shipped-default change), cleared the plugin log, ran
+a clean third capture. Result: **zero candidates found for the entire repair window** —
+`personal repo ... count=0` and `pool repo ... count=0` on every one of 80 polls, and all 32
+distinct ids the ±32 window scan produced (built around the placeholder `0x7FFFFFFF`/`0x7F000000`,
+not any real id) failed to resolve to anything (`did NOT resolve` on every one). Neither the
+weapon nor the clothes item was ever a genuine candidate in this clean run. This means: **the
+equip-repair mechanism has not been confirmed to have ever equipped a joiner's own genuine
+starting gear, in any round's testing to date** — every previously reported "success" was the
+sync collision above. `Odyssey.EquipUnequippedStartingGear`'s own doc comment (the
+"⚠ PARTIAL FIX, LIVE-CONFIRMED" paragraph above) is now known to overstate what was actually
+demonstrated and should be read with this correction in mind pending a genuinely isolated,
+id-correct re-verification.
+
+### 4. A timing clue for the real root cause
+
+Across all three captures, the real numeric id (`CSWPartyTable`'s "party table probe" diagnostic
+log first showing e.g. `id 0x128 creature` instead of `id 0x7F000000 none`) appeared **2-3
+seconds AFTER** the equip-repair's own forced save fired — i.e. right around when the AGENT picks
+up the saved character and starts adopting it into the HOST's world (a fresh module load, which
+assigns object ids from scratch, starting low). This is a real, repeated pattern (3/3 captures)
+but not yet proof of causation: it has not been established whether the joiner's creature ever
+receives a real id inside the ORIGINAL Endar Spire chargen module at all (in which case the fix
+is to wait for it, however long that takes), or whether it only ever gets one as a side effect of
+being loaded fresh into a different module during adoption (in which case the equip-repair is
+structurally in the wrong place — pre-save in the original module — and would need to move to
+run post-adopt, in the host's own session, against the real post-load id).
+
+### What was verified this round
+
+- `dotnet build -warnaserror` (full solution) and `src/KotorCoop.Plugin/build.ps1
+  -WarnAsError` (native plugin) both build clean after every change this round.
+- Three live captures on the two-GOG-copy rig, each ending in a successful save/adopt
+  (no crash) — the round c fixes held.
+- `party_pool_sync` isolation and restoration confirmed via direct `coop.ini` reads before and
+  after (not just assumed from the diff).
+
+### Still open (round 3's own list)
+
+1. Does the joiner's creature ever get a real numeric id inside the ORIGINAL chargen module, or
+   only after the save/adopt round-trip? Needs a diagnostic-only run with
+   `EquipRepairMaxWallClockMs` pushed well past 90s (150000+, NOT for shipping) to see whether
+   `GetPlayerObjectId()`/`GetControlledCreatureObjectId()` ever stop reading a placeholder before
+   the module itself ends.
+2. The original round 1/2 question — does the clothes item ever appear as a candidate, given a
+   CORRECT id — is still completely unanswered; every capture to date, in every round, has run
+   the search against a placeholder id.
+3. Any future capture must isolate `party_pool_sync` (temporarily 0, restored after) to avoid
+   repeating the round 1/2 misattribution.

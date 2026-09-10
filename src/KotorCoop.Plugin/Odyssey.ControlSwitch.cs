@@ -255,6 +255,17 @@ internal static unsafe partial class Odyssey
     private const int CreaturePrimaryRange = 0x914;
     private const int CreatureSecondaryRange = 0x918;
 
+    /// <summary>The server "player slot" id last read at <c>player+0x28</c> inside
+    /// <see cref="SyncServerPlayerToLeader"/>, and when. Exists so other call sites (e.g. the
+    /// newcharacter capture's equip-repair, which independently reads
+    /// <see cref="GetPlayerObjectId"/>) can log the two values side by side and tell, without a
+    /// live debugger, whether a given run saw the engine's server player slot agree with what
+    /// this function last observed there — see docs/research/world-adoption-clothes-notes.md's
+    /// "concrete next steps" #1. Null until this function has run at least once; a first-time
+    /// joiner's chargen module may never trigger a leader switch at all before the equip-repair
+    /// window runs, in which case this stays null and that itself is diagnostic.</summary>
+    internal static uint? LastKnownServerPlayerRegistered { get; private set; }
+
     /// <summary>
     /// The half of a real control switch the array rotation above does NOT do, and that this
     /// file's round-70 remarks wrongly believed did not exist: <c>CSWParty::SetLeader</c>
@@ -310,6 +321,7 @@ internal static unsafe partial class Odyssey
         }
 
         uint registered = *(uint*)(player + 0x28);
+        LastKnownServerPlayerRegistered = registered;
         uint engineSays = GetPlayerObjectId();
         if (registered != engineSays)
         {

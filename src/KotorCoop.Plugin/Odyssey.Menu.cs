@@ -66,6 +66,49 @@ internal static unsafe partial class Odyssey
         return id == 0 ? 0 : ResolveServerObject(id);
     }
 
+    /// <summary>The bare numeric id behind <see cref="GetControlledCreaturePointer"/> — CSWParty
+    /// (client-side) member[0]'s own id, with the party-npc flag bit masked, WITHOUT resolving it
+    /// to a pointer. 0 if there is no client-side party yet.
+    ///
+    /// Added 2026-09-10 (round 3) as a HYPOTHESISED fallback for <see cref="GetPlayerObjectId"/>
+    /// (<c>CServerExoApp::GetPlayerCreature</c>) during a first-time `join_mode = newcharacter`
+    /// joiner's equip-repair window, where that accessor is LIVE-CONFIRMED to read the engine's
+    /// own <c>0x7FFFFFFF</c> "no real player yet" placeholder for the WHOLE window, every poll
+    /// (there is no prior leader to switch FROM, so nothing ever calls
+    /// <c>CSWSPlayer::SetGameObject</c> — see <see cref="SyncServerPlayerToLeader"/>'s own doc
+    /// comment for the real callers). The reasoning was: this field is driven by CLIENT-side
+    /// input authority, not the server-side wiring the placeholder above depends on, so it should
+    /// be independent.
+    ///
+    /// ⚠ LIVE-FALSIFIED, twice, same round: this reads the SAME class of placeholder
+    /// (<c>0x7FFFFFFF</c>, or <c>0x7F000000</c> — <c>OBJECT_INVALID</c> — before any client-side
+    /// party exists yet) for the entire repair window too. A THIRD independent read — the
+    /// chargen-time creature pointer's own id field, taken directly in
+    /// <c>CharGenDriveController.Accept()</c> before <c>BeginPlayGame</c> even runs — was also
+    /// tried and also came back <c>0x7F000000</c>. So this accessor is NOT currently used as the
+    /// repair id (<c>NewCharacterCaptureController</c> still calls
+    /// <see cref="GetPlayerObjectId"/> only); it is kept as a logged cross-check for a future
+    /// pass. See docs/research/world-adoption.md's "Round 2026-09-10d" for the full timing
+    /// evidence and the still-open question of whether this creature ever gets a real numeric id
+    /// inside the original chargen module at all.
+    /// </summary>
+    public static uint GetControlledCreatureObjectId()
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return 0;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return 0;
+        }
+
+        return *(uint*)(party + SwPartyMember0ClientId) & ~ControlPartyNpcFlag;
+    }
+
     /// <summary>
     /// Identifies the currently loaded world. Returns false while there is no world or a
     /// module transition is mid-flight — every cached object pointer and object id is (or

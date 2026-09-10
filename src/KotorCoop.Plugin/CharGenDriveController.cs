@@ -410,6 +410,22 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
             return 7;
         }
 
+        // ⚠ DIAGNOSTIC ONLY 2026-09-10 (round 3, docs/research/world-adoption-clothes-notes.md):
+        // does the chargen-time creature object already carry a real, small numeric id at its
+        // own +0x04 (the same convention every other id read in this codebase uses), before
+        // BeginPlayGame/SaveCharGenCreature ever run - independent of Odyssey.GetPlayerObjectId
+        // (CServerExoApp::GetPlayerCreature), which LIVE-CONFIRMED round 3 reads the engine's own
+        // 0x7FFFFFFF "no real player yet" placeholder for the entire post-BeginPlayGame repair
+        // window on every first-time `join_mode = newcharacter` join tested. If this id is real
+        // here and still names the same live creature later, it is a candidate for a repair-time
+        // fallback that does not depend on either of the two "current player" accessors already
+        // shown broken in that same window (see Odyssey.GetControlledCreatureObjectId's own doc
+        // comment for the client-side one).
+        uint chargenCreatureId = *(uint*)(creature + 0x04);
+        PluginHost.Log(
+            $"chargen-diag: creature panel-pointer 0x{creature:X} own id field (+0x04) = "
+            + $"0x{chargenCreatureId:X}");
+
         PluginHost.Log($"chargen: accept - BeginPlayGame on panel 0x{mainCharGen:X}");
         BeginPlayGame(mainCharGen);
         return 0;
