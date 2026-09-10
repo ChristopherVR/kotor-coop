@@ -80,6 +80,8 @@ internal static unsafe partial class PluginHost
     /// to carry one out of (coop.ini <c>join_mode = newcharacter</c>).</summary>
     private static NewCharacterCaptureController? _newCharacterCapture;
 
+    private static PostAdoptEquipRepairController? _postAdoptEquipRepair;
+
     /// <summary>The `newgame` / `chargen quick` / `chargen accept` verbs — the engine's own
     /// character-creation button handlers, called rather than clicked.</summary>
     private static CharGenDriveController? _chargenDrive;

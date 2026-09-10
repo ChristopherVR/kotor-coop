@@ -1,102 +1,76 @@
-# Clothing bug — scratch handoff notes (2026-09-10, round 3)
+# Clothing bug — scratch handoff notes (2026-09-10, round 4)
 
-Status: NOT FIXED. The bug is now understood far more precisely than rounds 1-2 believed, and
-the headline claim from round 1 ("the starting weapon reliably equips") is **RETRACTED** — see
-below. Read `docs/research/world-adoption.md`'s "Round 2026-09-10d" section for the full
-derivation; this is the short version plus concrete next steps.
+Status: **The weapon half is FIXED and live-verified, 3/3 independent joins across 3 different
+chargen classes.** The clothes half looks like it was never a real bug — see below. Read
+`docs/research/world-adoption.md`'s "Round 2026-09-10e" section for the full derivation; this is
+the short version.
 
 ## The one-line summary
 
-For a first-time `join_mode = newcharacter` joiner, the freshly-created character's creature
-object carries NO real, queryable numeric id anywhere this plugin can read one — not through
-`Odyssey.GetPlayerObjectId()`, not through the client-side party (`GetControlledCreatureObjectId()`,
-added this round), not even read directly off the chargen panel's own creature pointer before
-`BeginPlayGame` runs — for the ENTIRE equip-repair window (measured: 90+ seconds, bounded only by
-the repair's own wall-clock ceiling). `EquipUnequippedStartingGear`'s candidate search is
-entirely id-based, so it can never find genuine starting gear (weapon OR clothes) during this
-window: there is no real id yet to match a Possessor field against.
+Rounds 1-3 misread `Odyssey.GetPlayerObjectId()`'s `0x7FFFFFFF` return as "no real player
+registered yet, wait for a real one." Round 4 pushed the wait to 150 seconds (it never changed)
+and then checked the SAME accessor on the HOST's own long-established character: also
+`0x7FFFFFFF`. It is the engine's PERMANENT, correct player self-id, not a placeholder — there was
+never a "real" numeric id to wait for. The actual reason the repair never found the starting
+gear: while still inside the isolated, hand-rolled chargen replay, the granted items are never
+linked into either repository the repair searches, no matter how long you wait. Moving the SAME
+repair to run once, after the adoption's own (ordinary, real) module load finishes, fixes it —
+by that point the repository is populated. Live-verified: the starting WEAPON now equips
+correctly on every one of four independent test joins.
 
-## What rounds 1-2 got wrong
+## What round 4 did
 
-Round 1's "the weapon reliably equips across six clean joins" was **a misattribution**. This
-rig's shipped default is `party_pool_sync=2` (host-authoritative co-op inventory sync). When a
-joiner connects, the HOST's own inventory items get synced into the joiner's shared party-pool
-repository automatically (`CheatController.PartyPool.cs`'s `PartyPoolAdd`, logged as
-`cheat: added '<resref>' x<n> to the party pool`). The engine stamps a freshly-linked synced
-item's `Possessor` field with whatever `GetPlayerCreature()` currently reports — which, per this
-round's finding, is ALSO the broken placeholder. `EquipUnequippedStartingGear`'s candidacy check
-(`possessor == creatureObjectId`) then matches by COINCIDENCE — both sides equal the same wrong
-placeholder — and a weapon synced from the HOST's own inventory gets equipped onto the joiner's
-creature, which looks exactly like "the joiner's own starting weapon worked." **Live-isolated
-this round** (`party_pool_sync` temporarily set to `0` on both installs, restored to `2`
-afterward): with the sync confound removed, a clean capture found **zero** real candidates for
-the entire repair window — personal repo count=0, pool repo count=0, all 32 of the id-window
-scan's candidates unresolvable. Neither weapon nor clothes was ever a genuine candidate.
+1. **Settled the timing question round 3 left open**, live: pushed
+   `NewCharacterCaptureController`'s old pre-save equip-repair wall-clock ceiling to 150 seconds
+   (temporary, diagnostic only) and ran a clean capture. `GetPlayerObjectId()` read `0x7FFFFFFF`
+   on every one of ~600 polls, right up to the ceiling firing. Then, separately, queried the same
+   accessor on the HOST's own fully-equipped, hours-old character: identical `0x7FFFFFFF`. This
+   is the round's key correction — see world-adoption.md's round 4 section, part 1.
+2. **Found the real gap**: both candidate repositories `EquipUnequippedStartingGear` checks read
+   `count=0` for the ENTIRE original chargen-module window, every poll, regardless of id. The
+   items are never linked into either repository while still inside the isolated chargen module.
+3. **Relocated the repair**: a new `PostAdoptEquipRepairController` (armed by
+   `NewCharacterCaptureController` at capture time, before the quicksave even fires) runs the
+   SAME `EquipUnequippedStartingGear` call once, after the adopted-world load's own "world is up"
+   ack — a genuine, ordinary module load, not the hand-rolled chargen replay. The pre-save repair
+   loop was removed entirely from `NewCharacterCaptureController` (it could never succeed there,
+   and was burning up to 2.5 extra minutes of the player's first join for nothing).
+4. **Live-verified the fix, four times**: classes 0, 2, 4 (against the functional fix before a
+   pure code-organisation refactor), then class 1 again (against the final committed build,
+   after `PostAdoptEquipRepairRule` was extracted out of the controller for testability). Every
+   run: the starting weapon (`g_w_blstrrfl001`) found via the now-populated party-pool
+   repository, classified correctly, equipped correctly (readback-verified), on the very first
+   poll after the world-up ack. `party_pool_sync` isolated to `0` for every capture, so this is
+   NOT the round-1 sync collision — it is the joiner's own genuine starting weapon.
 
-This means the equip-repair mechanism may never have actually equipped a joiner's own genuine
-chargen-granted starting gear, in any round's testing — every prior "success" was the sync
-collision above.
+## The clothes half: probably never a bug
 
-## What round 3 tried, live, and falsified
+None of the three classes tested (0, 2, 4) ever produced a `g_a_`-prefixed (clothes) candidate,
+from any of the three search sources, with the search mechanism now provably working (it finds
+the weapon every time). All three granted the exact same three items: a stim, a medpac, and a
+weapon — nothing else, no clothing item, ever. Working conclusion: KOTOR's premade "Quick
+Character" chargen packages simply do not include a separate wearable clothes item — the class's
+own default appearance already looks dressed. If that holds, the original bug report's "clothes"
+half was never really about a missing/unequipped item.
 
-1. Added the requested cross-check log line (`NewCharacterCaptureController.cs`, at the
-   `EquipUnequippedStartingGear` call site): prints `GetPlayerObjectId()` next to
-   `SyncServerPlayerToLeader`'s last-known `registered` value. **Confirmed the 0x7FFFFFFF bug is
-   STRUCTURAL, not intermittent**: it fired on 3/3 live captures this round, every single poll
-   of the whole window (previously seen once, in round 2). `SyncServerPlayerToLeader` never ran
-   even once in any of these captures — a first-time joiner has no prior leader to switch FROM,
-   so the mechanism that would otherwise keep the server's player slot in step never has a
-   reason to fire.
-2. Hypothesised a fix: `Odyssey.GetControlledCreatureObjectId()` (new this round,
-   `Odyssey.Menu.cs`) reads the CLIENT-side `CSWParty` member[0] id directly, independent of the
-   server-side wiring gap above. **LIVE-FALSIFIED, twice**: it reads the exact same class of
-   placeholder (`0x7FFFFFFF`, or `0x7F000000` — `OBJECT_INVALID` — before any client party even
-   exists) for the entire repair window too. Reverted to a diagnostic-only cross-check; the
-   actual repair still uses `GetPlayerObjectId()` (no behavioural change from round 2's
-   baseline).
-3. Went one step further: added a diagnostic read of the chargen-time creature pointer's own id
-   field (`CharGenDriveController.Accept()`, before `BeginPlayGame` even runs — the earliest
-   possible read of the object). **Also `0x7F000000`.** So no accessor this project has, at any
-   point from class selection through 90+ seconds into the new module, ever sees a real numeric
-   id for this creature.
-4. Timing correlation across all 3 captures: the real numeric id (`0x127`/`0x128`-style, seen via
-   `CSWPartyTable`, the "party table probe" log line) first appears **2-3 seconds AFTER** the
-   equip-repair's own save fires — i.e., right around when the AGENT picks up the save and starts
-   adopting the character into the HOST's world (a fresh module load, which assigns ids from
-   scratch). This is suggestive, not proven: it is NOT yet established whether the joiner's
-   creature ever gets a real id inside the ORIGINAL Endar Spire module at all, or only receives
-   one as a side effect of the save/adopt round-trip into a different module entirely.
+**Not exhaustively confirmed**: only 3 of the 6 quick-chargen portraits were tested, and a
+full/custom (non-Quick) character creation was not tested at all (this rig's automation only
+drives the Quick Character button). If a future round finds a package that DOES grant a `g_a_`
+item, the fix here should equip it with zero code changes — `StartingGearSlotRule.Classify`
+already handles the prefix generically and is unit-tested; this is a verification gap, not a
+known code gap.
 
-## Concrete next steps (in order)
+## Concrete next steps for a future round
 
-1. **Settle the timing question above.** Extend `EquipRepairMaxWallClockMs` past 90s (try
-   150000+) for one diagnostic-only capture (do not ship this — it would make every join take
-   that much longer) and watch whether `GetPlayerObjectId()`/`GetControlledCreatureObjectId()`
-   EVER stop reading a placeholder before the module ends, or whether they stay wrong for the
-   entire Endar Spire prologue regardless of how long you wait. This is the fork in the road:
-   - If a real id eventually appears in the original module: the fix is to make the repair
-     actually wait for it (poll for a real id rather than counting a fixed budget), not to widen
-     `StartingGearIdWindow` or improve classification, both of which are moot while
-     `creatureObjectId` itself is a placeholder.
-   - If it never appears there: the whole "capture and repair equip pre-save" design is
-     structurally wrong for this join path. The repair would need to move to AFTER adoption,
-     running in the HOST's own session against the joiner's real post-load id, not before the
-     character is ever saved out of the chargen module.
-2. Once a real id is obtainable (by whichever path #1 settles), THEN revisit the original
-   questions: does clothes appear as a candidate at all (the original round 1/2 question), and if
-   not, widen the id-window/repo scan; if it appears but misclassifies, check
-   `StartingGearSlotRule.Classify` against its real tag. Both are still completely unanswered —
-   every capture to date has run against a placeholder id, so the "personal repo empty, pool
-   repo empty" reads from this round say nothing about whether a CORRECTLY-ADDRESSED search would
-   find the items; they only prove the id used so far was never correct.
-3. Any future live pass MUST isolate `party_pool_sync` (set to `0` for the duration of the test,
-   restore to whatever the shipped default is afterward — do not commit a changed default) to
-   avoid re-introducing the round-1/2 misattribution. A "success" without this isolation proves
-   nothing about the joiner's own starting gear.
+1. Test the remaining 3 quick-chargen portraits (classes 3, 5, and whichever of 0/2/4 wasn't
+   already covered by symmetry) and, ideally, a full/custom character creation, to either close
+   or reopen the clothes question definitively.
+2. A longer post-join play session has not been specifically soak-tested; nothing found this
+   round suggests instability, but it is worth a look before calling this fully closed.
 
 ## Rig status at time of writing
 
-Rig was free at the start of this round (`clothing-fix-round-3` claimed it via `rig.lock`), used
-for three live captures, released at the end (`demo.ps1 -Stop`, lock file removed).
+Rig was free at the start of this round (`clothing-fix-round-4` claimed it via `rig.lock`), used
+for four live captures, released at the end (`demo.ps1 -Stop`, lock file removed).
 `party_pool_sync` was restored to `2` (the shipped default) on both installs after the isolated
-test in step 3 above.
+tests above.
