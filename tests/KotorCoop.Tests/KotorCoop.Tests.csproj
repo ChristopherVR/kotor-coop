@@ -59,6 +59,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightActivityRule.cs" Link="Plugin\LocalFightActivityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipApplyDecision.cs" Link="Plugin\EquipApplyDecision.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipSlotMap.cs" Link="Plugin\EquipSlotMap.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\StartingGearSlotRule.cs" Link="Plugin\StartingGearSlotRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\AgentLiveness.cs" Link="Plugin\AgentLiveness.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConnectionIndicatorRule.cs" Link="Plugin\ConnectionIndicatorRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MinigameNoticeRule.cs" Link="Plugin\MinigameNoticeRule.cs" />

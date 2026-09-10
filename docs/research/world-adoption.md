@@ -808,3 +808,154 @@ fallback so a newer plugin still works with an older agent. That is the differen
 3. **Arrival position.** The joiner lands at `ModEntryArea`, ~5 units from the host in
    `END_M01AA`. Fine here; in a large module it would be a walk. No snap-to-host exists and none
    was added this round.
+
+# A fresh `join_mode = newcharacter`'s starting gear sits unequipped (2026-09-10)
+
+**Symptom, from a real cross-machine test.** After a first-time joiner (`join_mode =
+newcharacter`) finished chargen and was adopted into the host's world, the HOST's screen showed
+the joiner's phantom with NO CLOTHING — a bare/default body model instead of the light
+robes/starting weapon retail chargen grants. Filed as a reproduction lead in
+docs/research/network-topology.md's 2026-09-10 "New findings" section, alongside three
+unrelated bugs (a wrong portrait, a movie replay, a dialogue-click issue) that this round did
+not touch.
+
+## What it is not
+
+The wire and the receiving side both behave correctly and were RULED OUT first:
+
+- `PlayerState.EquippedBody`/`EquippedRightWeapon`/`EquippedLeftWeapon` publish exactly what
+  `KotorGameBridge.ReadEquippedResref` (KotorGameBridge.Items.cs) reads off
+  `creature+0xA2C`'s slot dwords — verified by reading the SAME dwords directly out of the live
+  process with a throwaway script and comparing.
+- `EquipApplyDecision`/`PartyPresenceController.ApplyEquipment`'s "empty length = leave it
+  alone, never invent an unequip" convention is exactly right and was not the bug — an empty
+  value here means "the source has nothing to report", not "actively strip this slot".
+- The item-tag/address cache (`KotorGameBridge.Items.cs`'s `ServiceItemTagCache` /
+  `ItemSweepProvenanceRule`) is not stale or slow: the `items` console verb, run on the live
+  joining install, reported "57 item bodies, 57 with a readable tag" — including the exact
+  starting items — while the equip-slot dwords still read zero.
+- It is **not** a "read too early, wait for non-empty" timing race in the sense the original
+  task hypothesis suggested. Waiting does not fix it: read directly with a throwaway
+  memory-poke script (below), the joining character's own `CSWInventory` slot dwords
+  (`inventory+0x08` body, `+0x14` right weapon, `+0x18` left weapon) still read **zero 90+
+  seconds after the character had already joined and stabilised** in the host's session. A
+  longer wait never turns that into a real resref; there is nothing to eventually read.
+
+```powershell
+# creature address from the plugin block (BlockEnginePlayerPointer, +0x2260), then:
+$inv = Read-UInt32 $creature+0xA2C          # CSWInventory*
+Read-UInt32 $inv+0x08   # body    -> 0
+Read-UInt32 $inv+0x14   # right   -> 0
+Read-UInt32 $inv+0x18   # left    -> 0
+```
+
+## What it actually is
+
+The starting gear chargen grants is created (`CreateItemOnObject`, synchronous, confirmed —
+the items exist, are tagged, and their `Possessor` field names the right creature) but never
+gets **linked into the creature's own equip-slot array**. `Odyssey.Equipment.cs`'s own existing
+doc comment on `EquipItemFn`/`ActionEquipItem` already documents the general mechanism this
+matches: `ActionEquipItem`'s VM dispatch does not equip synchronously at all — it appends a
+node onto the creature's own `CSWSCombatRound` pending list, and nothing arms that round to
+drain it unless the caller is an actively-simulated party member being driven through the
+engine's ordinary per-frame processing. Whatever chargen's own "Quick Character" template
+application uses internally to grant + equip the starting package apparently hits the same
+class of gap for a character created through this path.
+
+This is compounded by (and made much harder to reproduce reliably by) a fact this document
+already recorded in the section above: `MenuFrame`/`OnFrame` does not run at all while the
+Endar Spire's opening cinematic holds the main thread — the same round measured a 122-second
+gap between world-up and the save request landing. Whether the starting items are even
+findable at all, and where, is genuinely NOT a constant across runs — see the live-measurement
+table below.
+
+## The fix — `Odyssey.EquipUnequippedStartingGear`
+
+Added to `Odyssey.Equipment.cs`, called once per poll from `NewCharacterCaptureController`
+(NewCharacterCaptureController.cs) for a bounded window (`EquipRepairExtraMs`, 6000 ms) right
+before the character is quicksaved for carrying — i.e. it repairs the character's own equip
+slots BEFORE the save that `PlayerIfo`'s "verbatim GFF copy" faithfully carries into the host's
+world, rather than trying to fix anything after the fact.
+
+It looks for a starting item in three places, because live testing found the items do not
+consistently sit in the same one:
+
+1. The creature's own personal backpack (`CreatureItemRepo`, `creature+0xA30`) — LIVE-MEASURED
+   **empty in every single run**; the starting items are never linked here at repair time.
+2. The repository `Odyssey.PartyPool.cs`'s `ResolveCreatureItemRepo` returns via the engine's
+   own `GetItemRepository(1)` accessor — per `GiveItemToInventory`'s own doc comment this is the
+   SHARED PARTY POOL for a live party member, which the local player always is. LIVE-MEASURED:
+   this is where the starting WEAPON reliably turns out to be.
+3. A bounded id-window scan (±32) around the creature's own object id, for a straggler linked
+   into neither repository — chargen mints a character's starting items in the same creation
+   burst as the creature itself (ids handed out sequentially), so a live item whose own
+   `Possessor` field names this exact creature is a safe, vetted candidate
+   (`ResolveItemBase`'s existing vtable+id check, plus this method's own Possessor re-check,
+   gate every candidate before anything is touched — a wider window costs wasted reads, never a
+   wrong write).
+
+Classification (`StartingGearSlotRule.cs`, unit-tested) uses the same resref-prefix convention
+every equip decision in this project already assumes for a stock blueprint (`g_a_` = body/
+armour/clothing, `g_w_` = weapon) rather than a live baseitem-type read — this project has no
+verified offset for `CSWSItem`'s BaseItem field, and inventing one blind under this round's time
+budget was rejected as exactly the kind of unverified engine write docs/ARCHITECTURE.md's
+engine-write rules warn against. The actual equip uses the SAME direct, readback-verified
+primitive `EquipItemFromTemplateDirect` already uses (`SetPossessorFn` + `RepositoryRemoveItemFn`
++ the synchronous `CSWSCreature::EquipItem` call + a slot-dword readback) — never the queued VM
+action, which is the mechanism suspected of causing the gap in the first place. A slot that
+already holds an item is never displaced.
+
+## ⚠ Partial fix — LIVE-CONFIRMED 2026-09-10, six joins, one class package
+
+| Run | Repo/window fix present | Retry window | Weapon slot | Clothes slot |
+| --- | --- | --- | --- | --- |
+| 1 (baseline, no fix) | — | — | empty | empty |
+| 2 (`ResolveCreatureItemRepo` only, wrong repo for the personal-backpack case) | partial | none | not found (0 repaired) | not found |
+| 3 (raw `CreatureItemRepo` field only) | partial | none | not found (0 repaired — repo real but empty) | not found |
+| 4 (repo fallback: personal, then pool accessor) | yes | none | **found & equipped** (pool accessor) | not found |
+| 5 (+ id-window scan, single attempt at settle) | yes | none | not found this run | not found |
+| 6 (+ 6s retry window) | yes | 6000 ms | **found & equipped** | not found |
+| 7 (+ 15s retry window) | yes | 15000 ms | **found & equipped** | not found |
+
+The starting **WEAPON is now reliably equipped** — confirmed via the readback check inside
+`EquipUnequippedStartingGear` (it will not log/count a "success" unless the raw
+`CSWInventory` slot dword afterwards actually equals the item's own id) and independently via
+`readslot.ps1`-style direct memory reads showing the right-weapon slot populated after
+adoption.
+
+The starting **CLOTHES item was never found or equipped, in any run**, despite:
+
+- Being confirmed genuinely possessed by the same creature (`items` console verb, tag
+  `g_a_clothes01`, `held by 0x<creature id>`) moments after the repair ran and failed to find
+  it.
+- The id-window scan covering the exact id gap observed between the creature and its clothes
+  item in every run where both were visible via `items` (+1, sometimes +7/+9 for a stale
+  duplicate copy — well inside the ±32 window).
+- Extending the retry window from 0 → 6000 → 15000 ms changing nothing: the outcome was
+  identical at all three, which rules out "just needs more time" as the explanation for
+  clothing specifically (it did not rule out timing for the weapon, which needed the retry
+  window to be reliable at all).
+
+**NEEDS-LIVE, unresolved:** what actually creates or links a fresh character's starting
+CLOTHES item, and why its path differs from the starting weapon's. Candidate theories not yet
+tested: the clothes item is genuinely created later than the weapon (by a different, as-yet
+unidentified script or system) and 15 extra seconds still is not enough; the `items` console
+verb's own broad committed-memory scan is finding a **duplicate/stale copy** of the item body
+that only exists after the observed 0x129/0x131-style id duplication (this project's own
+scanner code already documents that class of artifact — freed memory reused, an old and new
+copy both briefly visible) rather than the same object my repair could have reached; or the
+clothes item is attached to the creature through a mechanism (a body-model/appearance
+attachment rather than a true `CSWInventory` equip slot) this repair does not model at all. A
+host still sees a first-time joiner's phantom carrying its correct starting weapon while
+wearing default/bare clothing until this is closed.
+
+## What was verified
+
+- `dotnet build -warnaserror` (full solution) and `src/KotorCoop.Plugin/build.ps1
+  -WarnAsError` (NativeAOT plugin) both build clean.
+- `cd tests/KotorCoop.Tests && dotnet test`: 3481/3481 passing (includes 8 new
+  `StartingGearSlotRuleTests` covering the prefix classification both ways).
+- Live, six times, against the two-GOG-copy rig (`demo.ps1 -ClientNewCharacter`, chargen driven
+  with the `chargen newgame`/`quick 2`/`accept` blockpoke verbs — no mouse/keyboard input): the
+  weapon fix reproduces reliably at a 6-second retry window; the clothes gap reproduces (fails
+  to close) with total consistency.

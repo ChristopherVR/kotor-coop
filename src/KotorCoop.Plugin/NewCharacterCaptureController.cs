@@ -59,6 +59,33 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// save gets refused for reasons nothing reports.</summary>
     private const int WorldSettleMs = 4000;
 
+    /// <summary>Extra time, ON TOP OF <see cref="WorldSettleMs"/>, spent retrying the
+    /// starting-gear equip repair (<see cref="Odyssey.EquipUnequippedStartingGear"/>) before the
+    /// quicksave is requested. LIVE-MEASURED 2026-09-10 (docs/research/world-adoption.md's
+    /// addendum): whether the starting WEAPON exists anywhere this repair can find it at the
+    /// single instant <see cref="WorldSettleMs"/> expires is a race, not a constant — <c>OnFrame</c>
+    /// is main-thread-driven and does not tick at all while a cinematic holds the game (this
+    /// project's own "main thread was gone for N ms" warning, seen at exactly this join stage
+    /// every round so far), so <see cref="WorldSettleMs"/>'s own deadline is frequently blown
+    /// straight through the instant a stall ends rather than reached by ordinary polling — the
+    /// repair got exactly one try, at whatever moment that happened to be. Retrying every poll
+    /// for this much longer, now that frames are confirmed flowing again, gives the engine's own
+    /// item-creation script room to finish even when it is still running as the cinematic ends.
+    /// Idempotent per slot (EquipUnequippedStartingGear never re-touches an already-filled one),
+    /// so retrying costs a few wasted reads per tick, never a double-equip.
+    ///
+    /// ⚠ THIS DOES NOT CLOSE THE GAP FOR THE BODY/CLOTHING SLOT. Across every live pass this
+    /// round (six joins, one class package, varying this constant from 0 to 15000): the starting
+    /// WEAPON was found and equipped in every run that reached this window at all, while the
+    /// starting CLOTHES item — confirmed genuinely possessed by the same creature by the time the
+    /// `items` console verb ran moments later — was never found by this repair regardless of how
+    /// long it kept retrying. Widening this window stopped changing the outcome well before 6000,
+    /// which rules out "just needs more time" as the explanation for clothing specifically; see
+    /// <see cref="Odyssey.EquipUnequippedStartingGear"/>'s own doc comment for what is and is not
+    /// understood about why. NEEDS-LIVE: the actual mechanism that creates/links a fresh
+    /// character's starting clothing item is still unidentified.</summary>
+    private const int EquipRepairExtraMs = 6000;
+
     /// <summary>Gap between save requests. Long enough that a refusal caused by an opening
     /// cutscene has a chance to stop being true.</summary>
     private const int SaveRetryMs = 8000;
@@ -84,6 +111,11 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// there is no world. Reset to 0 if the world goes away again, so a chargen that was
     /// cancelled back to the menu does not leave a half-started save phase behind.</summary>
     private long _worldUpAtMs;
+
+    /// <summary>Deadline for the extra starting-gear repair retry window
+    /// (<see cref="EquipRepairExtraMs"/>), or 0 until <see cref="WorldSettleMs"/> first expires
+    /// and the window is armed.</summary>
+    private long _equipRepairDeadlineMs;
 
     /// <summary>UTC ticks at the same moment, for comparing against file timestamps. A save
     /// older than this belongs to a world that is not the one the player just created.</summary>
@@ -141,6 +173,7 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         _nextWaitingLogMs = Environment.TickCount64 + 15000;
         _worldUpAtMs = 0;
         _worldUpAtTicksUtc = 0;
+        _equipRepairDeadlineMs = 0;
         _saveRequests = 0;
         _lastSaveRequestMs = 0;
         _candidate = null;
@@ -213,6 +246,37 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         }
 
         if (nowMs - _worldUpAtMs < WorldSettleMs)
+        {
+            return;
+        }
+
+        // ⚠ LIVE-CONFIRMED 2026-09-10 (docs/research/world-adoption.md's addendum): the class
+        // package chargen just granted sits POSSESSED but UNEQUIPPED in the fresh character's
+        // own inventory around this point — the body/right-weapon CSWInventory slot dwords read
+        // zero even 90+ seconds after the character went on to join a host's world, while the
+        // items themselves were confirmed present the whole time. ActionEquipItem (whatever
+        // chargen's own template application uses internally) only QUEUES an equip onto the
+        // creature's combat round (see Odyssey.EquipItemFn's own doc comment); nothing in this
+        // window drains that queue. Retried every poll for EquipRepairExtraMs (see its own doc
+        // comment for why one attempt right at WorldSettleMs's expiry is not reliable — the
+        // items are not always there yet, even by this point) before the quicksave below
+        // captures this character for carrying, so the phantom a host sees is dressed instead of
+        // bare. A no-op for every slot that already holds an item, so an already-equipped
+        // character is never touched.
+        if (_equipRepairDeadlineMs == 0)
+        {
+            _equipRepairDeadlineMs = nowMs + EquipRepairExtraMs;
+        }
+
+        int repaired = Odyssey.EquipUnequippedStartingGear(Odyssey.GetPlayerObjectId());
+        if (repaired > 0)
+        {
+            PluginHost.Log(
+                $"newchar: equipped {repaired} starting item(s) that chargen left unequipped, "
+                + "before capturing the character");
+        }
+
+        if (nowMs < _equipRepairDeadlineMs)
         {
             return;
         }
