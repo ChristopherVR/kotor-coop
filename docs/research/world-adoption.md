@@ -1021,3 +1021,40 @@ so a joiner could end up with neither weapon nor clothes, not just bare clothing
 No fix landed this round — instrumentation and this finding only. The diagnostic code is
 inert (logs only, vetted the same way every other read in this file is) and safe to leave in
 for the next live pass.
+
+## Round 2026-09-10c — a live crash found and fixed (unrelated to the clothes gap itself)
+
+Not a clothes finding, but landed in the same investigation: a first-time joiner's own
+freshly-created chargen module crashed the game outright (`EXITPROCESS 0xC0000005`) during this
+round's rig time. Root cause was a race between two flows that both react to the joiner's
+module not matching the host's world:
+
+- `NewCharacterCaptureController`/`JoinFlow.CreateCharacterThenAdoptAsync` — the capture+adopt
+  path this document is about, already actively resolving the mismatch by design.
+- `PersistentSaveMismatchRule` (`docs/research/session-save.md` §"Rule") — the general
+  established-player world-drift detector, which cannot tell "nothing is handling this
+  mismatch yet" from "the chargen capture flow already owns it and is mid-flight."
+
+Both raced to tear down/rebuild the same session, and the two independent `DestroyServer`/
+`CreateServer` calls hit an access violation. **Fixed** in
+`src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs`: the mismatch rule's `Observe()` call is
+now skipped entirely (not called with a forced-false result — that would still touch
+`_mismatchRejoinState`) for the duration of an in-flight chargen capture, detected via
+`bridge.TryGetNewCharacterCapture` reporting `ChargenStateArmed` or `ChargenStateSaving` (local
+mirrors of `SharedBlock.JoinChargenStateArmed`/`JoinChargenStateSaving`, duplicated across the
+plugin/agent assembly boundary the same way `JoinFlow.cs` already does for the same field). This
+leaves the very next tick after the capture window closes free to read as a fresh edge if a
+mismatch still genuinely persists (i.e. the capture itself failed) — the rule's ordinary
+fallback still applies once neither flow owns the mismatch.
+
+Same commit also widened `EquipRepairMaxAttempts` from 100 to 400 polls, based on further live
+observation (this round's own capture) that the smaller poll-count budget introduced in the
+prior round wasn't consistently enough — a single main-thread stall from the Endar Spire intro
+cinematic can run past 120 seconds and consume most of a smaller budget's wall-clock window
+before the poll count itself is exhausted. This widening is unrelated to the clothes-specific
+gap (still open — see the round above) but reduces the chance the repair window closes before
+enough real polls land.
+
+Both changes are unit-covered and build-clean; **NEEDS-LIVE** for whether the crash fix holds
+across further chargen joins — this round's rig time was spent on the crash itself once it was
+found, not on re-running the clothes capture.

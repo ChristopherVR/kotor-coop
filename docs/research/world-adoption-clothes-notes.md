@@ -37,16 +37,18 @@ the WHOLE repair silently no-ops, so a joiner could end up with neither weapon n
 ## Also landed this round (real fix, unverified live)
 
 `NewCharacterCaptureController.cs`: replaced the wall-clock `EquipRepairExtraMs` retry
-deadline with a REAL-POLL-COUNTED budget (`EquipRepairMaxAttempts = 100` polls,
-`EquipRepairMaxWallClockMs = 90000` safety ceiling). Reasoning (see the doc comment in the
-diff): a wall-clock deadline armed once, relative to whatever poll is running when
-`WorldSettleMs` first expires, gets silently consumed whole by a single main-thread stall
-straddling that moment (measured this round: a 122-SECOND stall from the Endar Spire opening
-cinematic). A poll-count budget survives stalls — they delay when polls land but can't consume
-them. This is a plausible general fix for "the repair only gets one real attempt," but it has
-**not been live-verified this round** (the only live capture hit the 0x7FFFFFFF bug above
-instead, before this logic could be meaningfully exercised) and does not by itself explain or
-fix the clothes-specific gap.
+deadline with a REAL-POLL-COUNTED budget (`EquipRepairMaxAttempts`, `EquipRepairMaxWallClockMs
+= 90000` safety ceiling). Reasoning (see the doc comment in the diff): a wall-clock deadline
+armed once, relative to whatever poll is running when `WorldSettleMs` first expires, gets
+silently consumed whole by a single main-thread stall straddling that moment (measured this
+round: a 122-SECOND stall from the Endar Spire opening cinematic). A poll-count budget survives
+stalls — they delay when polls land but can't consume them. Widened again later this round,
+100 → 400, after further live observation that 100 wasn't consistently enough (see
+`docs/research/world-adoption.md`'s "Round 2026-09-10c" — same commit that fixed the
+`PersistentSaveMismatchRule` chargen-race crash, `37d7c18`). This is a plausible general fix for
+"the repair only gets one real attempt," but it has **not been live-verified this round** (the
+only live capture hit the 0x7FFFFFFF bug above instead, before this logic could be meaningfully
+exercised) and does not by itself explain or fix the clothes-specific gap.
 
 ## What is NOT done
 
