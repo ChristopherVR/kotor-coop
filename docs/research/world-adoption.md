@@ -959,3 +959,102 @@ wearing default/bare clothing until this is closed.
   with the `chargen newgame`/`quick 2`/`accept` blockpoke verbs — no mouse/keyboard input): the
   weapon fix reproduces reliably at a 6-second retry window; the clothes gap reproduces (fails
   to close) with total consistency.
+
+## Round 2026-09-10b — diagnostic instrumentation, and a SEPARATE bug it caught (open)
+
+Added `DiagnoseCandidates`/`DiagnosePollSummary` to `Odyssey.Equipment.cs` (diagnostic-only,
+never equips/touches anything, bounded logging, `newchar-diag:` prefix) to answer the addendum's
+open question directly: does the clothes item's id ever appear among
+`EquipUnequippedStartingGear`'s own three candidate sources at all?
+
+One live joiner-chargen capture (two-GOG-copy rig, `-ClientNewCharacter`) landed on something
+upstream of that question instead. `EquipUnequippedStartingGear` is called as
+`Odyssey.EquipUnequippedStartingGear(Odyssey.GetPlayerObjectId())`
+(`NewCharacterCaptureController.cs:271`). In this capture, `GetPlayerObjectId()` returned
+**`0x7FFFFFFF`** for the entire 6-second/25-poll repair window — not the joiner's real new
+creature id. `ResolveServerObject(0x7FFFFFFF)` still resolved to *something* (a valid,
+non-null object with a real inventory), so the repair function never early-outs; it just runs
+its whole candidate search — both repositories, the ±32 id-window scan, everything — against
+the WRONG object the entire time. Its pool repo held exactly one item that whole run
+(`g_i_adrnaline003`, an adrenaline stim, `possessor=0x7FFFFFFF`); neither the weapon nor the
+clothes item was ever a candidate, because neither is possessed by `0x7FFFFFFF` — they belong
+to the real creature. `newchar-diag: candidate 0x122 tag='g_i_adrnaline003' possessor=0x7FFFFFFF
+(creature is 0x7FFFFFFF) classify=-1` plus 25 polls of `personal repo ... count=0, pool repo
+... count=1` are the log lines (`kotorcoop-plugin.log`, `D:\Games\swkotor-gog-p2`,
+16:23:10–16:23:16 on 2026-09-10).
+
+`0x7FFFFFFF` is not random garbage — it is a value this project's own `Odyssey.ControlSwitch.cs`
+has logged before as the engine's OWN placeholder for "no real player creature registered yet"
+(`kotorcoop-general.log`, same install, 14:18:41: `control: server player re-pointed
+0x7FFFFFFF -> 0x128`). `GetPlayerObjectId()` (`Odyssey.Phantom.Gait.cs:236`) reads
+`CServerExoApp::GetPlayerCreature()` and then that returned object's own id field
+(`+0x04`/`+0x28`, same field `SyncServerPlayerToLeader` calls `registered`) — i.e. it reports
+whatever the engine's server-side "player" slot is CURRENTLY POINTING AT, not necessarily the
+locally-controlled PC. For an ordinary game this slot is set once, early, and stays right. For a
+first-time joiner going through mandatory `join_mode = newcharacter` chargen, nothing in this
+capture ever re-pointed that slot to the freshly minted creature before the repair window ran
+out — it sat on the placeholder the whole time.
+
+**This does not by itself explain the weapon-vs-clothes asymmetry** the previous round
+established across six clean joins (weapon reliably equips, clothes never does) — if
+`creatureObjectId` were wrong in those six runs too, the weapon could not have been found either
+(its candidacy also requires `possessor == creatureObjectId`). So this capture's
+`GetPlayerObjectId()` failure looks like a SEPARATE, intermittent race — the server's "player"
+slot not yet re-pointed to the new creature by the time `NewCharacterCaptureController` calls in
+— layered on top of, not a replacement for, the still-open clothes question. It is a genuine
+bug in its own right: when it fires, the WHOLE repair silently no-ops (0 repaired, no log line),
+so a joiner could end up with neither weapon nor clothes, not just bare clothing.
+
+**NEEDS-LIVE, unresolved (both, now):**
+1. The original question — does the clothes item's id ever appear among the three candidate
+   sources when `creatureObjectId` IS correct? This capture could not answer it; the
+   diagnostic logging is in place (`Odyssey.Equipment.cs`, `DiagnoseCandidates`/
+   `DiagnosePollSummary`, uncommitted-behavior-safe) and needs a run where `GetPlayerObjectId()`
+   is confirmed correct at call time (e.g. log its value next to `registered` from
+   `SyncServerPlayerToLeader`, or cross-check against the `items` verb's creature id) to get a
+   clean read.
+2. What actually re-points the engine's server "player" slot to a first-time joiner's freshly
+   created creature, and why that did not happen (or happened too late) in this capture —
+   candidate: whatever wiring a genuine "New Game" flow does that this project's own join path
+   does not reproduce for `join_mode = newcharacter`.
+
+No fix landed this round — instrumentation and this finding only. The diagnostic code is
+inert (logs only, vetted the same way every other read in this file is) and safe to leave in
+for the next live pass.
+
+## Round 2026-09-10c — a live crash found and fixed (unrelated to the clothes gap itself)
+
+Not a clothes finding, but landed in the same investigation: a first-time joiner's own
+freshly-created chargen module crashed the game outright (`EXITPROCESS 0xC0000005`) during this
+round's rig time. Root cause was a race between two flows that both react to the joiner's
+module not matching the host's world:
+
+- `NewCharacterCaptureController`/`JoinFlow.CreateCharacterThenAdoptAsync` — the capture+adopt
+  path this document is about, already actively resolving the mismatch by design.
+- `PersistentSaveMismatchRule` (`docs/research/session-save.md` §"Rule") — the general
+  established-player world-drift detector, which cannot tell "nothing is handling this
+  mismatch yet" from "the chargen capture flow already owns it and is mid-flight."
+
+Both raced to tear down/rebuild the same session, and the two independent `DestroyServer`/
+`CreateServer` calls hit an access violation. **Fixed** in
+`src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs`: the mismatch rule's `Observe()` call is
+now skipped entirely (not called with a forced-false result — that would still touch
+`_mismatchRejoinState`) for the duration of an in-flight chargen capture, detected via
+`bridge.TryGetNewCharacterCapture` reporting `ChargenStateArmed` or `ChargenStateSaving` (local
+mirrors of `SharedBlock.JoinChargenStateArmed`/`JoinChargenStateSaving`, duplicated across the
+plugin/agent assembly boundary the same way `JoinFlow.cs` already does for the same field). This
+leaves the very next tick after the capture window closes free to read as a fresh edge if a
+mismatch still genuinely persists (i.e. the capture itself failed) — the rule's ordinary
+fallback still applies once neither flow owns the mismatch.
+
+Same commit also widened `EquipRepairMaxAttempts` from 100 to 400 polls, based on further live
+observation (this round's own capture) that the smaller poll-count budget introduced in the
+prior round wasn't consistently enough — a single main-thread stall from the Endar Spire intro
+cinematic can run past 120 seconds and consume most of a smaller budget's wall-clock window
+before the poll count itself is exhausted. This widening is unrelated to the clothes-specific
+gap (still open — see the round above) but reduces the chance the repair window closes before
+enough real polls land.
+
+Both changes are unit-covered and build-clean; **NEEDS-LIVE** for whether the crash fix holds
+across further chargen joins — this round's rig time was spent on the crash itself once it was
+found, not on re-running the clothes capture.

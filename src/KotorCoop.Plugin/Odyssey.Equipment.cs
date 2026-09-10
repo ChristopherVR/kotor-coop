@@ -485,6 +485,125 @@ internal static unsafe partial class Odyssey
     /// other equip logger in this project already follows.</summary>
     private static int _startingGearEquipsLogged;
 
+    /// <summary>Which creature <see cref="DiagnoseCandidates"/> is currently reporting on — a
+    /// second chargen in the same process (a second join inside one test session) gets its own
+    /// clean dump rather than being silently swallowed by the first one's already-logged set.</summary>
+    private static uint _diagnosticCreatureId;
+
+    /// <summary>Candidate ids already dumped for <see cref="_diagnosticCreatureId"/>, so the
+    /// verbose per-candidate line below fires once per NEW id discovered across the whole retry
+    /// window (<c>NewCharacterCaptureController.EquipRepairMaxAttempts</c>) instead of once per poll
+    /// (every <c>NewCharacterCaptureRule.PollIntervalMs</c>) for the whole set every time.</summary>
+    private static readonly HashSet<uint> _diagnosedCandidateIds = [];
+
+    /// <summary>Hard cap on <see cref="DiagnoseCandidates"/>'s own log lines, the same bounded-log
+    /// convention every other logger in this file already follows.</summary>
+    private static int _diagnosticLinesLogged;
+
+    /// <summary>How many <see cref="DiagnosePollSummary"/> lines have been logged for
+    /// <see cref="_diagnosticCreatureId"/> — separate budget from
+    /// <see cref="_diagnosticLinesLogged"/> since this one is meant to fire on EVERY poll (to show
+    /// the repository-population TIMELINE across the retry window, which the once-per-id dedup in
+    /// <see cref="DiagnoseCandidates"/> cannot show), not just once per new id.</summary>
+    private static int _diagnosticPollsLogged;
+
+    private static long _diagnosticFirstPollMs;
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY — logs one line per poll (bounded) giving the repository-population
+    /// TIMELINE the id-dedup'd <see cref="DiagnoseCandidates"/> log cannot show: how many ids each
+    /// of the personal backpack and party-pool repositories held, and the elapsed time since the
+    /// first poll for this creature, every single call. Exists to answer a question
+    /// <see cref="DiagnoseCandidates"/> alone leaves open: whether the starting items simply have
+    /// not been created/linked YET at a given poll (repo counts climb over the window) or whether
+    /// the repositories never hold them at all during the whole retry window (counts stay flat),
+    /// which "did this id ever appear" cannot distinguish once a poll's candidate set repeats.
+    /// </summary>
+    private static void DiagnosePollSummary(uint creatureObjectId, nint personalRepo, nint poolRepo, int candidateCount)
+    {
+        if (creatureObjectId != _diagnosticCreatureId)
+        {
+            // DiagnoseCandidates resets its own state for a new creature above; this mirrors it
+            // for the poll-summary budget so a second chargen in one process gets a fresh timeline.
+            _diagnosticPollsLogged = 0;
+            _diagnosticFirstPollMs = 0;
+        }
+
+        if (_diagnosticPollsLogged >= 80)
+        {
+            return;
+        }
+
+        long nowMs = Environment.TickCount64;
+        if (_diagnosticFirstPollMs == 0)
+        {
+            _diagnosticFirstPollMs = nowMs;
+        }
+
+        int personalCount = personalRepo != 0 ? *(int*)(personalRepo + RepositoryItemCount) : -1;
+        int poolCount = poolRepo != 0 ? *(int*)(poolRepo + RepositoryItemCount) : -1;
+
+        _diagnosticPollsLogged++;
+        PluginHost.Log(
+            $"newchar-diag: poll {_diagnosticPollsLogged} at +{nowMs - _diagnosticFirstPollMs}ms - "
+            + $"personal repo 0x{personalRepo:X} count={personalCount}, pool repo 0x{poolRepo:X} "
+            + $"count={poolCount}, total distinct candidates so far={candidateCount}");
+    }
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY — never touches an item, never equips anything, exists purely to answer
+    /// docs/research/world-adoption.md's open question: does the starting CLOTHES item's id ever
+    /// show up among <see cref="EquipUnequippedStartingGear"/>'s own candidates at all, or does
+    /// the search itself never find it? Logs every NEW candidate id this call's three sources
+    /// produced (bounded, once per id per creature): whether it resolves to a live
+    /// <c>CSWSItem</c> at all (and <see cref="LastItemResolveNote"/> if not), its Tag, its
+    /// Possessor, and what <see cref="StartingGearSlotRule"/> would classify it as. Cross-
+    /// reference against the `items` console verb's independent memory-scan-based listing (run on
+    /// the AGENT side) taken at roughly the same moment: an id this logs as "did not resolve"
+    /// but that `items` reports as live and possessed by this exact creature means the plugin's
+    /// own id-indexed lookup (<c>GetGameObjectFn</c>/<see cref="ResolveItemBase"/>) and the
+    /// agent's committed-memory vtable sweep disagree about the SAME object — the one distinction
+    /// nothing before this round could make. An id that never appears in this log at all, ever,
+    /// across the whole retry window, while `items` reports it the whole time, means none of the
+    /// three candidate SOURCES ever produce it — a search-coverage gap rather than a resolve or
+    /// classify failure.
+    /// </summary>
+    private static void DiagnoseCandidates(uint creatureObjectId, HashSet<uint> candidates)
+    {
+        if (creatureObjectId != _diagnosticCreatureId)
+        {
+            _diagnosticCreatureId = creatureObjectId;
+            _diagnosedCandidateIds.Clear();
+            _diagnosticLinesLogged = 0;
+        }
+
+        foreach (uint candidateId in candidates)
+        {
+            if (_diagnosticLinesLogged >= 64 || !_diagnosedCandidateIds.Add(candidateId))
+            {
+                continue;
+            }
+
+            _diagnosticLinesLogged++;
+
+            nint item = ResolveItemBase(candidateId);
+            if (item == 0)
+            {
+                PluginHost.Log(
+                    $"newchar-diag: candidate 0x{candidateId:X} did NOT resolve "
+                    + $"({LastItemResolveNote})");
+                continue;
+            }
+
+            uint possessor = *(uint*)(item + ItemPossessor);
+            string tag = ReadTagUpperBound(item);
+            int classified = StartingGearSlotRule.Classify(tag);
+            PluginHost.Log(
+                $"newchar-diag: candidate 0x{candidateId:X} tag='{tag}' possessor=0x{possessor:X} "
+                + $"(creature is 0x{creatureObjectId:X}) classify={classified}");
+        }
+    }
+
     /// <summary>How wide a net <see cref="EquipUnequippedStartingGear"/> casts around the
     /// creature's own object id for a starting item that is not linked into either
     /// <c>CItemRepository</c> it already checks — LIVE-MEASURED 2026-09-10: chargen mints a
@@ -567,8 +686,11 @@ internal static unsafe partial class Odyssey
 
         HashSet<uint> candidates = [];
 
-        CollectRepositoryCandidates(*(nint*)(creature + CreatureItemRepo), candidates);
-        CollectRepositoryCandidates(ResolveCreatureItemRepo(creature), candidates);
+        nint personalRepoForDiag = *(nint*)(creature + CreatureItemRepo);
+        nint poolRepoForDiag = ResolveCreatureItemRepo(creature);
+
+        CollectRepositoryCandidates(personalRepoForDiag, candidates);
+        CollectRepositoryCandidates(poolRepoForDiag, candidates);
 
         for (uint delta = 1; delta <= StartingGearIdWindow; delta++)
         {
@@ -583,6 +705,9 @@ internal static unsafe partial class Odyssey
                 candidates.Add(creatureObjectId - delta);
             }
         }
+
+        DiagnoseCandidates(creatureObjectId, candidates);
+        DiagnosePollSummary(creatureObjectId, personalRepoForDiag, poolRepoForDiag, candidates.Count);
 
         int equipped = 0;
         foreach (uint itemId in candidates)
