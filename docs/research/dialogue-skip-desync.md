@@ -855,3 +855,171 @@ round. The assertion is symmetric, so this does not weaken it, but it is worth k
 scripting the mirror-image test: the client's Trask is a solo-mode companion driven by the host
 (`partystate`: client `soloMode 1`, companion `0x127`), and a companion the local engine is not
 driving is not something the local player can start a conversation with.
+
+---
+
+# 2026-09-10: the ACTUAL client-owns/host-follows direction, live — "only the first skip
+# propagates", root-caused to a stale INTERACTION LOCK, not to anything in the node-sync
+# path this whole document has been examining
+
+## The report
+
+User, distinct from every finding above: dialogue-skip sync is asymmetric.
+
+1. **Client owns a conversation, host spectates: only the FIRST skip reaches the host.** Every
+   skip after that does nothing visible on the host's screen — the host's followed copy simply
+   stops advancing for the rest of the conversation.
+2. **Host owns, client spectates: mostly works, except "the last dialogue stretch"** — it breaks
+   down again specifically near the end of a conversation.
+
+## Where this document's own prior rounds could not have caught it
+
+Every round above (79, the 2026-08-29 addendum, `skipkey`) exercises the NODE-SYNC path — the
+owner's `dialogue-node-pub` and the follower's `dialogue-node-drive`, both purely PLUGIN-side —
+and every one of them found that path sound. It still is. **The defect this round found lives
+one layer up, in the SESSION layer's conversation-token arbiter, and specifically in a channel
+this document has never once mentioned: the per-NPC interaction lock.** Nothing in the plugin,
+`DialogueFollowMachine`, or `DialogueNodeFollower` needed to change.
+
+## Root cause, read straight off the code (no live probe needed to find it, only to confirm it)
+
+Three facts, each individually already documented elsewhere in this repo, that combine into the
+bug when read together:
+
+1. **`InteractionLockController.PublishLocalClaim()` (the plugin) cannot tell "I started this
+   conversation" from "I am mirroring a peer's".** It reads `block.LocalDialoguePartnerTag` —
+   set by `DialogueSpectateController.PublishLocal()` whenever `Odyssey.TryReadActiveDialogue()`
+   is true — and publishes an `InteractionKind.Conversation` claim on that tag, active, every
+   single tick. `TryReadActiveDialogue` is true for a FOLLOWER'S locally adopted mirror copy of
+   the conversation exactly as much as for the real owner's: the follower really does have a live
+   `CSWSDialog` running locally (that is the whole mechanism `DriveDialogueToNode` depends on),
+   and the plugin has no way to know from inside the engine that this copy is a mirror rather
+   than the original.
+2. **`InteractionLockStore.Claim` is first-fresh-claim-wins**, and per `DialogueArbiter`'s own
+   pre-existing doc comment, that race was never fair: "the host's own claim runs this arbiter
+   in-process at zero latency, while a client's has to cross the network first." That asymmetry
+   was known and deliberately accepted for the ORIGINAL race it was built for (two players
+   clicking the same NPC at the start of a conversation) — nobody had connected it to a
+   FOLLOWER'S claim on an NPC someone else is ALREADY, legitimately, mid-conversation with.
+3. **`DialogueArbiter.Apply`'s lock veto ran unconditionally**, ahead of every other branch —
+   including an UPDATE from the peer who already, fairly, owns the live token. So the veto was
+   never just "who gets to start talking" (its own stated purpose); it silently re-adjudicated
+   EVERY update for as long as the conversation ran.
+
+Put together: a client opens a conversation with Trask (claims the token fairly — the lock is
+free at that instant, so the grant succeeds). The host, following, adopts a local mirror of the
+same conversation to visually drive it — and that mirror is read by the host's OWN
+`InteractionLockController` as "the host is now interacting with Trask", which the host's own
+agent publishes as an interaction claim reaching the SAME lock store the host itself owns, at
+zero latency. The client's own (rightful, but network-latency) claim refresh loses that race the
+very next tick. From that tick on, `DialogueArbiter.Apply` sees `lockHolder == HostPeerId !=
+requesterPeerId (the client)` on every subsequent `DialogueRequestPacket` the client sends — and
+refuses every one of them, forever, even though the client never stopped legitimately owning the
+token. The very FIRST skip already happened before the host's adopt-claim could win the race,
+which is exactly why it alone got through.
+
+**Why direction 2 (host owns) mostly works, and only breaks "near the end":** the asymmetry is
+about which side is physically the HOST PROCESS, not who owns the conversation. When the HOST is
+the owner, the host's OWN interaction claim for that NPC is the one reaching the lock store at
+zero latency — so it will almost always keep re-winning the race against the client's own
+(mirror-driven) competing claim, and `lockHolder == requesterPeerId` stays true for the host's
+own updates throughout. It is not IMMUNE, though: the false claim is only suppressed while the
+local `LocalDialoguePartnerTag` is actually published (i.e. while `_hadDialogue` reads true), and
+a genuinely longer between-entries gap — more plausible near a conversation's closing stretch,
+where a scripted fade/end-transition can outlast the ordinary flicker debounce
+(`PublishLingerMs`) — opens exactly the window the client's persistently-refreshed claim needs to
+sneak in and take the lock. From that point the SAME veto-on-every-update bug applies to the
+host's own further skips. Two directions, one mechanism; the asymmetry is a difference in HOW
+OFTEN the race is lost, not a second bug.
+
+## The fix
+
+Two changes, defense in depth — either alone would have closed the reported symptom, but each
+closes a different half of the same defect:
+
+1. **`DialogueArbiter.Apply`** (`src/KotorCoop.Session/DialogueArbiter.cs`): the lock-holder veto
+   now only gates the `!current.Active` branch (the GRANT) — never an update from
+   `current.OwnerPeerId == requesterPeerId`. Once a claimant has fairly won the token, no lock
+   check run afterward can produce a MORE correct owner than the one who already won the race
+   that matters. This is the fix that actually stops the desync: even if the lock keeps
+   flip-flopping to a follower's mirror claim for the rest of the conversation, the legitimate
+   owner's updates are never vetoed again.
+2. **`WorldStatePump.PumpInteractionLocks`** (`src/KotorCoop.Session/Pumps/WorldStatePump.cs`):
+   suppresses the false claim at its source. The AGENT layer is the one place that actually knows
+   which side of the token this instance is on (`session.GetDialogue()`), so before forwarding
+   the plugin's raw interaction read, it checks whether this is a `Conversation`-kind claim on
+   the SAME partner tag a peer's token already names US as following
+   (`token.IsHeldByAnotherThan(session.LocalPeerId)`) — and if so, publishes nothing (kind=0,
+   inactive) instead of a competing claim. This is the more complete fix: without it, item 1's
+   fix alone still leaves a stale lock entry naming the WRONG peer, which would incorrectly make
+   `HoldCreatureStill` run against Trask's body on the true owner's OWN screen (the "peer holds
+   this NPC, keep it still" mechanism `InteractionLockController.ApplyPeerLocks` drives) — a
+   second-order symptom this document never got a report for, but which the code read made
+   clearly possible and worth closing alongside the primary one.
+
+Two new unit tests in `tests/KotorCoop.Tests/DialogueArbiterTests.cs`:
+`AnOwnersUpdateSurvivesTheInteractionLockChangingHandsUnderIt` (asserts the exact fixed defect:
+an owner's second update succeeds even though the lock has since moved to a third peer) and
+`ALockHeldByTheContenderDoesNotStealAnAlreadyActiveToken` (confirms the grant-time veto still
+works exactly as before — a contender pointing at a lock it holds still cannot steal an
+already-active token from its real owner).
+
+## Live verification (2026-09-10, rig)
+
+Two-GOG-install rig (`tools\demo.ps1`, END_M01AA, both installs rebuilt with the fix and
+reinstalled), Trask (`end_trask`), navigated with `selectreply <slot>` (past this save's
+reply-driven Q&A stretch — node 29 and node 21 both read `isDialogDelay 0`, confirming they are
+reply screens where `skipline` is correctly an inert no-op, exactly as the 2026-08-23 round
+found) and `skipline` (fired against genuine narration entries, `isDialogDelay 1`) via
+`tools\blockpoke.ps1 -ProcId <pid> console '<verb>'`.
+
+**Direction 1 (client owns, host spectates) — the reported failure, fixed and confirmed:**
+navigated the client through nodes 29→19→20→21→22→23→24→25, mixing real `skipline` skips and
+`selectreply` picks (the wire path is identical either way — a node-index change, not a
+picked-slot replay). Every single one of the 8 consecutive transitions was followed by the host,
+1:1, with matching `dialogue-node-drive: ... arrived=True` entries:
+
+```
+CLIENT (owner)                                      HOST (follower)
+[14:32:21.778] node-pub #2  node 29 -> 19            [14:32:21.880] node-drive #2 wanted 19 landed 19 arrived=True
+[14:32:41.648] node-pub #3  node 19 -> 20            [14:32:41.749] node-drive #3 wanted 20 landed 20 arrived=True
+[14:32:58.676] node-pub #4  node 20 -> 21            [14:32:58.743] node-drive #4 wanted 21 landed 21 arrived=True
+[14:34:18.255] node-pub #5  node 21 -> 22            [14:34:18.323] node-drive #5 wanted 22 landed 22 arrived=True
+[14:34:32.513] node-pub #6  node 22 -> 23            [14:34:32.591] node-drive #6 wanted 23 landed 23 arrived=True
+[14:34:34.923] node-pub #7  node 23 -> 24            [14:34:34.992] node-drive #7 wanted 24 landed 24 arrived=True
+[14:34:37.321] node-pub #8  node 24 -> 25            [14:34:37.406] node-drive #8 wanted 25 landed 25 arrived=True
+```
+
+This is the exact sequence (entries 22→23→24→25, the SAME narration run round 79 used) that was
+never able to get past its first hop under the bug — node 19→20 is where round 79's own
+equivalent test would have stuck under the pre-fix arbiter, since that is the first update after
+the host's adopt would have had a chance to win the interaction-lock race. Under the fix it did
+not stick anywhere.
+
+**Direction 2 (host owns, client spectates) — re-run for regression, then pushed through a
+mid-conversation close:** the same topic loop (22→23→24→25→22→23→24...) was driven from the HOST
+side instead, for 30 consecutive node transitions across roughly two minutes of wall clock, every
+one followed by the client 1:1 with no coalescing and no stall — confirming the fix does not
+regress the direction that was already mostly working. The host then closed the conversation
+mid-line (`talk close`) while the client was actively following: the client's own log shows the
+LAST node (`25`) was driven and landed (`arrived=True`) BEFORE the close was even issued, and the
+close itself propagated cleanly (`dialogue: the owner ended the conversation; closing`), with the
+client's dialogue state fully reset afterward. No stuck node, no stale partner tag.
+
+**What this round did NOT manage to reproduce directly:** the specific "last dialogue stretch"
+failure for direction 2, because this save's `end_trask01.dlg` state is a long reply-driven topic
+loop that this round's automated navigation (`selectreply`/`skipline` via `blockpoke.ps1`) could
+not reliably steer to the conversation's true final (74th) entry inside a reasonable session —
+the same reply-loop-navigation limitation `selectreply`'s own known robustness gap (2026-08-23
+addendum) already documents. The mechanism section above explains why direction 2's failure would
+be timing-dependent on a longer-than-usual between-entries gap rather than guaranteed every time,
+which is consistent with a live report of "sometimes, near the end" rather than "every single
+conversation". **NEEDS-LIVE**: a run that reaches Trask's actual final entry (or any other
+NPC's) and specifically times a real close-approaching gap against a still-following peer's
+competing claim, to catch the direction-2 failure in the act rather than by mechanism alone. The
+fix itself does not depend on catching it this way — it closes the SAME veto-on-every-update bug
+regardless of which direction's timing triggers the lock hand-off — but an in-the-act capture
+would be the stronger evidence a future round could add.
+
+**Full regression**: 3475/3475 unit tests green after the fix (including the two new
+`DialogueArbiterTests`), both installs rebuilt and reinstalled clean.
