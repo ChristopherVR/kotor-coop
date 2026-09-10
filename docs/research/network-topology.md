@@ -1051,6 +1051,21 @@ through this exact path, not the rejoin one.
 
 Observed after the UDP-fallback join completed and the session was stable: the joiner's own reported appearance showed no clothing (a bare/default body model rather than the equipped starting gear a fresh `join_mode=newcharacter` chargen should have), and the host's screen briefly showed Trask's portrait rather than the joining player's before it corrected itself a short time later. The Endar Spire intro cinematic also played once at the start before the two installs' state converged. The joiner also could not click Trask in-world to start a conversation with him. None of these touch the world-transfer channel this section is about — appearance/equipment sync, party-roster portraits, conversation targeting and movie relay are separate existing subsystems (see their own docs: companion-state-sync.md, party-reconciliation.md, dialogue-sync.md, cinematics.md) — and the phantom-spawn log line's own `portrait 0` field has read `0` at every spawn across this whole project's history, not just this session, so it may be an unrelated pre-existing quirk rather than something this round's changes caused. Deliberately NOT investigated this round (a genuinely new fresh-character join over a real, higher-latency internet path may simply be exercising a timing corner case no earlier LAN-only test hit) — filed here as a reproduction lead for whoever picks this up next, not a diagnosis.
 
+**UPDATE (2026-09-10, same day, later): the "could not click Trask" symptom is root-caused** —
+see `docs/research/dialogue-sync.md`'s "Continued and root-caused" entry. It is
+`docs/research/control-return.md`'s already-known connect-time control-return race (Round 70,
+2026-08-22), reproducing through a trigger this project had not previously tied to it —
+an ordinary `join_mode=newcharacter` adoption, reproduced live on a plain LOCAL LAN session with
+no internet/UDP fallback involved at all. `GetControlledCreaturePointer()` briefly resolves to
+Trask's own object id instead of the joiner's PC; a real click's `ActionInitiateDialog` wrapper
+dispatches with that same (wrong) creature as the acting party, so the engine is asked to make
+Trask converse with himself and silently does nothing. Self-heals within
+`ControlReturnController`'s ~5s budget by default — no fix shipped, root cause and live evidence
+only. The wrong-portrait symptom above was separately traced to the same general control-return
+family of races by a sibling investigation (`docs/research/party-reconciliation.md`, commit
+`2707b62`) — plausibly the same underlying connect-time window producing two visible symptoms,
+though this was not independently confirmed this round.
+
 **Click-to-talk specifically was picked up and audited (2026-09-10) — see dialogue-sync.md's
 own dated section for the full write-up.** Several plausible causes (a stuck `DialogueGateHook`
 lease across the adoption's disconnect/reconnect, the historic click-to-join-annulled-a-frame-

@@ -1926,3 +1926,139 @@ sends, per `TestDriveController`'s own doc comment) on the client and read
 
 No production code was changed this round — everything above is elimination by reading, plus one
 interrupted live pass. `dotnet test` was not re-run (no source changed).
+
+## Continued and root-caused (2026-09-10, later the same day): the click IS driven through Trask
+## himself — the connect-time `control-return` race, a new trigger surface for an already-known bug
+
+Picked back up after the rig collision above cleared. Same rig, same recipe
+(`tools\demo.ps1 -ClientNewCharacter` + `blockpoke chargen newgame`/`quick 2`/`accept`, no mouse
+for chargen), repeated several times end to end.
+
+### The reproduction: `control-return.md`'s own race, on a plain LOCAL join, no internet needed
+
+`ControlReturnController`'s own diagnostic line — `control: you are driving companion 0x...,
+which this session owns` — fired on the CLIENT install on **2 of roughly 6** fresh
+`join_mode=newcharacter` adoptions run today (both by a sibling agent earlier, before this entry,
+and again on this entry's own rig time), every time naming the SAME id, `0x127` — `end_trask`.
+This is `docs/research/control-return.md`'s already-documented, already-partially-mitigated
+connect-time race (Round 70, 2026-08-22: the client's `CSWParty` member-array clamp
+(`SyncClientPartyTogetherState`) trims the wrong end of the array when the player is already
+driving a companion at the moment of connect), reproducing through a **different** trigger this
+project had not previously tied to it: an ordinary `join_mode=newcharacter` adoption, over a
+plain loopback LAN session — no real internet latency, no UDP world-transfer fallback, nothing
+exotic. `Odyssey.GetControlledCreaturePointer()` (the field this whole class reads and
+corrects — "the creature CLIENT INPUT currently drives", `CSWParty` member[0]) reads `0x127`
+(Trask) instead of the joiner's own PC for a window that self-heals within
+`ControlReturnController`'s own ~5s retry budget by default.
+
+### A rig-only diagnostic added to hold the window open (`control_return_diag_only`)
+
+The default self-heal window is too short and too irregular to reliably click-test by hand or by
+scripted `SendInput`: several catch attempts this round found the race, then it was gone again
+before a follow-up screenshot landed. `ControlReturnController.cs` gained a second coop.ini key,
+`control_return_diag_only` (default off, same shape as this codebase's existing
+`party_pool_trace`/`frame_stats` rig levers — zero effect on an ordinary session): when set, the
+controller still detects and logs exactly as usual, but skips the actual
+`Odyssey.SwitchControlToPc()` hand-back call, so a caught race stays latched indefinitely instead
+of self-correcting. With this on, the race was caught and held open on demand, repeatedly, for as
+long as needed to inspect it.
+
+### What a real click does while the race is held open — live-observed
+
+With the window held open (`control: you are driving companion 0x127 ... (DIAG-ONLY: hand-back
+deliberately skipped)` in the log), real `SendInput`-driven mouse clicks (`tools\click.ps1`, the
+same DirectInput-visible input path an actual player uses — not a synthetic test hook) were fired
+at the client's game window, several times, at different points in the scene near the confirmed
+positions of the PC (`tools\creatures.ps1`: object `0x7FFFFFFF`, `isPc=1`), Trask
+(`end_trask`, `0x127`) and the host's own mirrored phantom (`coop_phantom`, `0x12F`/`0x12D`), all
+within a few units of each other in the Endar Spire starting compartment. Across every one of
+those clicks, for the entire duration the race was held open:
+
+- **`dialogue: engine reached StartDialog` never appeared once** — `DialogueGateHook.StartAttempts`
+  stayed at its pre-click value every time (confirmed by diffing the plugin log's own tail before
+  and after each click).
+- One click did visibly queue a normal walk/approach (a third-person camera swing consistent with
+  the drive-controlled body moving toward the click's target) — i.e. input is clearly live and
+  being acted on by SOMETHING, it just never turns into a dialogue open.
+- No `dialogue: blocked a local conversation start; a peer holds the token` line appeared, and no
+  on-screen "Another player is in a conversation" notice was seen at any point.
+
+This **positively rules out this file's own leading hypothesis from earlier rounds**
+(`DialogueGateHook` wrongly refusing because of a stray peer-conversation flag during the
+adoption-transient window) for this trigger: that requires `StartDialog` to be reached first, and
+across a genuinely-held-open race, it never was, on any click. The failure is upstream of
+`StartDialog` entirely, exactly as this file's own 2026-08-07 "22 refusal sites" audit found for
+the unrelated click-to-join defect it root-caused that day — but this time the upstream cause is
+identified, not just located.
+
+### Why: a real click resolves the acting creature through the SAME corrupted field
+
+`docs/research/click-to-join-and-vo.md` already establishes that a real mouse click runs through
+`CSWCCreature::ActionInitiateDialog` (0x0060F620) — "the wrapper... a mouse click runs", per
+`Odyssey.StartDialogueWith`'s own comment (`Odyssey.Dialogue.Follow.cs:211`). That call is a
+thiscall whose `this` is whichever creature client input currently drives — the exact field
+`Odyssey.GetControlledCreaturePointer()` reads and `ControlReturnController` exists to correct
+(`CSWParty` member[0]). While the connect-time race has that field pointing at Trask instead of
+the PC, a click aimed at the NPC the player believes is Trask dispatches as
+`Trask->ActionInitiateDialog(target=Trask, ...)` — Trask being asked to open a conversation with
+himself. The retail engine has no path for a creature to converse with itself; nothing refuses it
+with a message, it simply never queues, which is exactly the observed shape: no error, no notice,
+`StartAttempts` never moves. This also matches `ControlReturnController`'s own class remarks,
+which separate control-authority (the array reorder) from the camera (a SEPARATE
+`SetCameraFollow` reassert, needed because nothing else repoints it) — consistent with a player
+whose VIEW still looks completely normal (their own camera, their own portrait) while their
+CLICKS, underneath, are being dispatched as Trask's own.
+
+### A correction to this file's own earlier-recommended test
+
+The "Recommended next measurement" above (`blockpoke talk end_trask`, i.e.
+`Odyssey.StartDialogueWith`) is **not capable of reproducing this specific failure**, and running
+it during a held-open race confirmed why: `StartDialogueWith`'s own comment says it sends the
+request "DIRECTLY rather than through `CSWCCreature::ActionInitiateDialog`" — deliberately
+bypassing the exact wrapper a real click uses, for its own, unrelated, already-documented reason
+(a message-only send left a real click's conversation half-started when driven from a wrapper
+call). Because it never touches `ActionInitiateDialog`'s `this`, `blockpoke talk` cannot observe
+what a corrupted control-authority field does to a real click — it can succeed cleanly while the
+underlying race is fully active, which would read as a false "everything's fine". Recorded here so
+the next round does not spend time re-confirming a negative that test path can never give a
+positive answer to. A faithful scripted reproduction would need a NEW test-drive verb that goes
+through `ActionInitiateDialog` itself (the exact call `click-to-join-and-vo.md` already
+disassembled), not the message-send shortcut.
+
+### Status: root cause identified and live-supported, not click-pixel-certified, no fix shipped
+
+Honest limits of this round: clicks were fired at screen coordinates based on visual
+identification of the PC/Trask/phantom cluster in a cramped starting room, on a machine shared
+with a live human working in other foreground windows at the same time (confirmed mid-session —
+`SendInput`/`SetForegroundWindow` twice landed on the wrong window, caught and re-verified each
+time via `GetForegroundWindow`/`GetWindowText` before trusting a screenshot). No single click in
+this round is 100%-certified to have landed pixel-precisely on Trask's own model rather than
+adjacent geometry or another body in the cluster. What IS certain, from the log alone, independent
+of exactly which pixel was clicked: for the entire duration `GetControlledCreaturePointer()` read
+Trask's id, `StartDialog` was never reached by anything clicked. Combined with the disassembly-
+grounded mechanism above (already verified in this codebase for `ActionInitiateDialog`'s calling
+convention and `this` resolution), this is root-caused to a high confidence, not merely a
+correlation.
+
+**No fix was written or shipped this round.** The underlying array-corruption defect
+(`SyncClientPartyTogetherState`'s clamp) is `control-return.md`'s own long-running, separately-
+tracked investigation with its own history of attempted engine-level fixes that did not survive
+contact with a live test (see that file's Round 70 "Part 3"); reopening that fix attempt was
+judged out of scope for this entry, which exists to answer "why does Trask specifically become
+unclickable", not to re-attempt the underlying array fix. The one code change this round made is
+the rig-only diagnostic lever described above (`control_return_diag_only`, default off, no
+behavioural change to a real session) — kept for the next live round rather than reverted, the
+same way this codebase already keeps `party_pool_trace`/`frame_stats`.
+
+**Practical takeaway for now**: the existing `ControlReturnController` mitigation already
+self-heals this within ~5 seconds by default in the common case, so a player who retries the click
+a few seconds after joining should succeed — the reported failure is very likely a player's FIRST,
+most natural click landing inside that narrow, self-healing window, not a permanent block. A
+genuinely tighter fix (shrinking `IntervalFrames` so the window is at most 1-2 frames on a healthy
+switch, and/or a real ship-worthy version of the new test-drive verb above for a next round's
+click-pixel-certified confirmation) is recommended follow-up, not attempted here.
+
+`cd tests\KotorCoop.Tests && dotnet test` re-run this round: see the commit for the pass/fail
+count — `ControlReturnController`'s own behaviour when `control_return_diag_only` is unset is
+byte-for-byte unchanged (the new field defaults false and only ever short-circuits one boolean
+inside the already-existing `NoteClaim` branch), so no regression was expected or found.

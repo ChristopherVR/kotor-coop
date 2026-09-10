@@ -84,6 +84,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `dialogue_auto_join_range` | `20` | the range (game units) `dialogue_auto_join = near` auto-joins within | [dialogue-sync.md](research/dialogue-sync.md) |
 | `spectate_on_down` | ON | hand your camera to the other player while you are downed | [spectate-camera.md](research/spectate-camera.md) |
 | `control_return` | ON | return control to your own character the moment you connect | [control-return.md](research/control-return.md) |
+| `control_return_diag_only` | OFF | rig-only: keep `control_return`'s detection/logging live but skip the actual hand-back, so a caught race stays latched instead of self-correcting | [dialogue-sync.md](research/dialogue-sync.md) |
 
 ### Screen
 

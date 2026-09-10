@@ -47,6 +47,17 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
 {
     private readonly bool _enabled = PluginConfig.ReadBool("control_return", true);
 
+    /// <summary>RIG-ONLY DIAGNOSTIC (added 2026-09-10 for the Trask click-to-talk
+    /// investigation, docs/research/dialogue-sync.md): detect and log exactly as usual, but
+    /// never call <see cref="Odyssey.SwitchControlToPc"/> — so if the connect-time race
+    /// (docs/research/control-return.md) latches control onto a companion, it stays latched
+    /// instead of self-correcting within its ~5s budget, long enough to click-test what a
+    /// stuck-open window actually does to a real dialogue click. Same idea as
+    /// <c>party_pool_trace</c>/<c>frame_stats</c> elsewhere in this codebase: OFF by default
+    /// (coop.ini <c>control_return_diag_only</c>), zero effect on an ordinary session, kept
+    /// as a lever for the next live round rather than thrown away.</summary>
+    private readonly bool _diagOnlyNoHandBack = PluginConfig.ReadBool("control_return_diag_only", false);
+
     /// <summary>Frames between passes. Control changes on a human timescale and the agent's
     /// revert lands within a tick, so this is cadence, not a race.</summary>
     private const int IntervalFrames = 10;
@@ -163,7 +174,10 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
                 // toward. Safe to call every pass while this is true: on an already-correct
                 // array, Odyssey.SwitchControlToPc's own index lookup finds the PC already at
                 // member[0] and the rotate is a genuine no-op.
-                bool switched = Odyssey.SwitchControlToPc();
+                //
+                // TEMP (diag-only, see field remarks): the call itself is skipped so a caught
+                // race stays open instead of self-correcting.
+                bool switched = _diagOnlyNoHandBack ? false : Odyssey.SwitchControlToPc();
 
                 if (_claimLogged != controlledId)
                 {
@@ -177,7 +191,9 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
                     PluginHost.Log(
                         $"control: you are driving companion 0x{controlledId:X}, which this "
                         + "session owns — handing you back your own character"
-                        + (switched ? " - array reordered and camera pointed at your PC" : " (switch not ready yet, retrying)"));
+                        + (switched ? " - array reordered and camera pointed at your PC"
+                            : _diagOnlyNoHandBack ? " (DIAG-ONLY: hand-back deliberately skipped)"
+                            : " (switch not ready yet, retrying)"));
                 }
 
                 break;
