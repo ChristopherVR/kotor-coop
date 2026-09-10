@@ -13,7 +13,7 @@ lead through doors and area changes, and either player can pick the destination 
 map -- the other one is taken along automatically, take-off movie and all. Enemies have one
 shared health bar, your hits land, and stuns, slows and heals reach your partner for real. The
 party's inventory, credits, merchant stock, doors, chests, quests and the journal are all one
-shared copy. Companions follow the host's game, and a companion can fight for the client. One
+shared copy. Companions follow the host's game, and a companion can fight for the other player. One
 conversation runs at a time: whoever starts it picks the replies and the other player watches
 it live. Pazaak and the swoop race are single-seat -- the other player is told they're waiting.
 If somebody saves, loads, quits to the menu, or the host's game crashes, the other side notices
@@ -52,7 +52,7 @@ Play
    to do; your co-op character is taken straight into the host's world.
 
 What the join actually does: the host must have a save on disk (any manual save, or the
-game's own first autosave) -- that save is what the client receives. The client's co-op
+game's own first autosave) -- that save is what the joining player receives. Their co-op
 character is separate from any single-player game on the same install: the mod keeps it in
 saves\kotorcoop-character.*, refreshes it whenever you save while connected, and drops it into
 the host's world at the area entrance; your own save files are never written. To start a
@@ -74,7 +74,7 @@ corner, fading out after a few seconds -- Page Up/Page Down scrolls back through
 console and the chat readout are configurable (position, size, how long lines last) in
 coop.ini.
 
-The host is authoritative for enemies and the party; each player owns their own character.
+The host's game decides what happens with enemies and the party; each player owns their own character.
 Only one conversation runs at a time -- the other player watches it live. If your partner
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
@@ -105,8 +105,8 @@ whoever joined; "Both" behaves the same on either side.
   status                     Both    Show the connection state. While hosting, also shows your
                                      public address and UPnP status (see "Play over the
                                      internet" below).
-  who                        Both    List connected players and which module each is in.
-  where                      Both    Show your own module and position.
+  who                        Both    List connected players and which area each is in.
+  where                      Both    Show your own area and position.
   public_address             Host    Show the address/port to share for an internet game.
                                      Answers "not hosting" on a client.
   steamstatus                Both    Report whether Steam invites are working. While hosting,
