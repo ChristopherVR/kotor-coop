@@ -5697,10 +5697,77 @@ the hand-back would never fire and the portrait would stay wrong indefinitely, e
 reported. This needs a real live check of whether the deferral condition ever clears in the
 persistent case, not a re-assertion of the code-reading argument above.
 
+**SETTLED 2026-09-10, live-verified: self-corrects always, but "~5 seconds" was wrong — real
+recovery took up to 120.6 seconds in this project's own log tonight, and a fix shipped.**
+
+Four fresh `join_mode=newcharacter` connects were driven end to end this round
+(`tools\demo.ps1 -ClientNewCharacter` + `tools\blockpoke.ps1 chargen quick/accept`, no mouse),
+watching the client's `kotorcoop-plugin.log` continuously for 60-120s past the connect each
+time. None of the four reproduced the race (consistent with the ~1-in-3 rate the sibling
+`dialogue-sync.md` round measured — the connect-time window is real but not guaranteed on any
+single try). What settled this was the SAME rig's own log file, which already carried the
+evidence from tonight's earlier sibling sessions: every `control: you are driving companion`
+claim logged across the whole file (five separate joins: `11:17:24`, `12:01:14`, `12:03:19`,
+`12:14:50`, `12:55:17`, all in `D:\Games\swkotor-gog-p2\kotorcoop-plugin.log`) was followed, in
+every case where the session was not externally killed first, by a real hand-back — never a
+permanent, unrecovered stuck state. But the GAP between claim and hand-back is nothing like the
+documented "~5 second retry budget":
+
+```
+[12:01:14.318] control: you are driving companion 0x125, ... (switch not ready yet, retrying)
+[12:03:14.925] cinematic: the main thread was gone for 120422 ms (in a world; ...)
+[12:03:14.955] control: putting the camera back on your own character (0x7FFFFFFF)
+```
+
+That is a **120.6-second** gap, not five. The `(switch not ready yet, retrying)` suffix is the
+controller's own admission that `Odyssey.SwitchControlToPc()` returned `false` on that pass —
+the array reorder had NOT happened yet, so control (and widget 0's portrait, which
+`PortraitController`'s own remarks confirm is driven by the same CSWParty member-0 slot the
+reorder moves) was still genuinely sitting on Trask. ~0.2s later a movie/cinematic (Trask's own
+forced intro dialogue, per `cinematics.md`) froze the ENTIRE main thread for the next 120.4
+seconds — during a freeze like that, `ControlReturnController.OnFrame` (like every other hook)
+does not run at all, so the very next retry could only happen the instant the freeze ended,
+which is exactly when the hand-back finally fired. A second, independent case in the same log
+(a fresh join at `14:17:19`, this round) measured an almost identical **120.687-second** freeze
+immediately after a `forced=True` `StartDialog`, and a third case measured **89.469 seconds**
+(`12:55:12`) with `forced=False`. So the real distribution is not "~5s"; it is "however long
+Trask's opening cinematic/dialogue happens to run" — measured at 45-120+ seconds across tonight's
+sessions, entirely outside this controller's own control once the race has already been lost,
+because the freeze that blocks the recovery is the SAME freeze that (per `cinematics.md` and
+`network-topology.md`) blocks literally everything else in the plugin too. A player who joins,
+sees Trask's portrait, and does not know to wait two full minutes has every reason to report this
+as "stuck forever" — the report was correct that "self-corrects in ~5s" does not hold, even
+though "stuck forever, no recovery ever" also does not hold in anything this round could
+reproduce or find in five hours of this rig's own prior evidence.
+
+**The fix shipped**: `ControlReturnController.cs`'s `NoteClaim` branch now sets its own
+`_countdown` to 0 (retry on the very next frame) whenever `SwitchControlToPc()` returns `false`,
+instead of waiting the ordinary `IntervalFrames` (10 frames, ~166ms) gap before trying again. This
+cannot shrink an already-started cinematic freeze — nothing running inside the plugin can, since
+the engine owns the whole thread for that duration — but it closes the specific race that turned
+a sub-second recovery into the 120.6s one above: the failed attempt at `12:01:14.318` and the
+movie's start (~`12:01:14.50`) were only ~0.2s apart, well within one ordinary 166ms retry gap,
+so on an unlucky roll the LAST attempt before the freeze locks in whatever the array happened to
+be at that moment. Retrying every frame instead of every tenth gives roughly 10x more chances to
+land the switch in the window before a cinematic can start. Live-verified NOT to regress the
+existing, already-covered scenario: `tools\control-return-live.ps1` scenario 1 (force onto Trask,
+reconnect) still passes with the fix installed, claim-to-hand-back now measured at ~0.27s
+end-to-end in that scripted case; the full suite (`cd tests\KotorCoop.Tests && dotnet test`) is
+green, 3481/3481. This round's own four fresh join attempts did not happen to hit the race at
+all (post-fix), so the SPECIFIC size of the improvement for the 120s worst case was not
+independently re-measured live this round — only that the fix compiles, does not regress the
+existing coverage, and is grounded in the exact failure text (`switch not ready yet`) the
+project's own log already produced.
+
+**NEEDS-LIVE**: a future round that reproduces the connect-time race AND a long intro cinematic
+in the same attempt, with the fix installed, to directly measure how much of the 45-120s window
+the fast-retry actually recovers versus how much is unavoidable cinematic-freeze time.
+
 ### Files
 
-- `docs/research/party-reconciliation.md` — this entry (no source changes; a ruled-out
-  investigation, not a fix — see the conclusion above for why).
+- `docs/research/party-reconciliation.md` — this entry.
+- `src/KotorCoop.Plugin/ControlReturnController.cs` — the fast-retry-on-failed-switch fix (see
+  above; no other behavioural change — a switch that succeeds keeps the ordinary cadence).
 
 ## Round 106 (2026-09-10) — "solo mode is broken, companions keep following and flickering":
 ## root-caused to `positionparty`'s undocumented-for-restoration solo-mode clear, fixed
