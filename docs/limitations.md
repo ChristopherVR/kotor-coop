@@ -1,4 +1,4 @@
-# What works, what doesn't — in plain language (2026-09-03)
+# What works, what doesn't — in plain language (2026-09-10)
 
 This page is for someone who wants to play KOTOR 1 from the Endar Spire to the Star Forge with a
 friend, and wants to know what to expect before starting. No engine internals here; the
@@ -29,8 +29,8 @@ a couple of situations nobody has been able to test on real hardware yet.
 | --- | --- | --- |
 | Starting from the game's own menu | **Works** | A **Co-op** button on the main menu. One player presses **Host**, the other picks the server and presses **Connect**. Nothing to launch by hand. |
 | Bringing your own character | **Works** | Your character comes from your latest save and is placed next to the host. Your own save files are never changed. |
-| Joining for the first time | **Works** | Connect, and the normal New Game character-creation screen opens; make your character. About two minutes later you are in the host's world with it, and that character is your co-op character on every join after (a single-player game on the same install is never mistaken for it). `join_mode = newcharacter` makes a new one; `join_mode = save` is the old bring-your-own-save way. Both legs watched working on 2026-09-03: first join ~2 min, every later join ~5 s from Connect to standing in the host's world. If you joined on v0.9.0 and after upgrading you come up as the *host's* character, delete `saves\kotorcoop-character.pifo` and `.json` in your game folder once and join again (v0.9.0 could copy the host's character into that file when you quit; fixed). |
-| Playing on two computers over the internet | **Works, with a catch** | The host's public address is found automatically and the router port is opened for you where the router allows it (UPnP). On a router that refuses, the host forwards one port by hand. Very restrictive networks (some mobile/corporate) can't be reached at all — there is no relay server. The automatic parts have only been tested on a local network so far. |
+| Joining for the first time | **Works, with a catch** | Connect, and the normal New Game character-creation screen opens; make your character. About two minutes later you are in the host's world with it, and that character is your co-op character on every join after (a single-player game on the same install is never mistaken for it). `join_mode = newcharacter` makes a new one; `join_mode = save` is the old bring-your-own-save way. Both legs watched working on 2026-09-03: first join ~2 min, every later join ~5 s from Connect to standing in the host's world. **The catch:** your starting weapon is reliably there; your starting clothes sometimes aren't, and you may arrive without them. Under investigation — check your inventory and equip anything unequipped by hand if this happens. If you joined on v0.9.0 and after upgrading you come up as the *host's* character, delete `saves\kotorcoop-character.pifo` and `.json` in your game folder once and join again (v0.9.0 could copy the host's character into that file when you quit; fixed). |
+| Playing on two computers over the internet | **Works, with a catch** | The host's public address is found automatically and the router port is opened for you where the router allows it (UPnP). On a router that refuses, the host forwards one port by hand. Very restrictive networks (some mobile/corporate) can't be reached at all — there is no relay server. Watched working end-to-end over the public internet on 2026-09-10 using a tunnel tool (playit.gg) between two separate home networks; automatic port-opening on a real home router is still untested (see below). If your connection uses a UDP-only tunnel, turn on `world_transfer_udp_fallback = 1` in `coop.ini` — off by default — so the initial world hand-off doesn't silently stall on a TCP-only path. |
 | GOG and Steam copies playing together | **Works** | Any mix. Two copies on one PC needs at least one of them to be the GOG version. |
 | Saving and loading mid-session | **Works** | Either player can save and load. The other side notices and rejoins on its own; you don't need to reconnect. |
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
@@ -69,7 +69,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 
 | | Status | What to expect |
 | --- | --- | --- |
-| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests, rewards, recruits. If you join late you catch up instantly. This is by design: two people driving one dialogue at once would break the story. |
+| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests, rewards, recruits. If you join late you catch up instantly, but the subtitles specifically can take a few seconds to start showing up after you join — under investigation. This is by design: two people driving one dialogue at once would break the story. |
 | Recruiting companions through dialogue | **Works** | When one of you recruits someone, the other gets them too. |
 | Cutscenes | **Works** | They play on both screens. If a cutscene moves one player to a new area, the other follows. |
 | The Star Forge's solo duels (Bastila, Malak) | **Works, with a catch** | The player not in the duel is parked and watches. Whether that lock physically stops keyboard input has not been provable in testing — nothing suggests it doesn't. |
@@ -98,7 +98,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | --- | --- | --- |
 | Keyboard and mouse | **Works** | Everything the game already does, plus `~` for the console and Enter to chat. |
 | Gamepad / controller | **Works, except typing** | Any Xbox-style (XInput) pad plays the whole game — walking, combat, every menu and panel — through your own key bindings. It can't type: the address/password box, chat and the `~` console need a keyboard. Layout in the README; `gamepad = 0` turns it off. |
-| Seeing that you're connected | **Works, with a catch** | A one-line status in the top-left. The line has been confirmed in the data; the exact on-screen pixels have not been eyeballed on the test rig. |
+| Seeing that you're connected | **Works** | A one-line status in the top-left, moved off the minimap on 2026-09-10 so it no longer overlaps it; confirmed on screen, and it fades out correctly when it's no longer needed. |
 | Pausing | **Works** | Either player pauses both games. |
 
 ## Linux and Steam Deck
@@ -115,9 +115,14 @@ a couple of situations nobody has been able to test on real hardware yet.
 A few things look like bugs and aren't:
 
 - **Your partner appears for a moment as a stranger, or as Trask, right after a warp.** This was a
-  real bug and was fixed in August 2026. If you still see it, it's worth reporting.
+  real bug, fixed in August 2026, and made much faster to recover from on 2026-09-10 (it could
+  briefly persist far longer than expected before that). If you still see it, it's worth
+  reporting.
 - **"Another modal screen is up" when a shop won't open for the client.** Fixed the same way the
   galaxy-map follow was fixed (September 2026). Also worth reporting if you still see it.
+- **You can't click on a companion to talk to them right after joining.** Shares its root cause
+  with the stranger/Trask portrait bug above and should be much rarer after the 2026-09-10 fix.
+  Worth reporting if it still happens.
 - **Nobody can be knocked out on the Endar Spire.** The game's own tutorial rule.
 - **Old `coop.ini` files.** The installer never overwrites your settings file, so an install from
   before a default changed keeps its old value. If a feature this page says is on seems off, run
@@ -127,7 +132,8 @@ A few things look like bugs and aren't:
 
 Built and automatically tested, but nobody has watched them on the running game yet:
 
-- Internet play against a real home router (the address discovery and port opening).
+- Internet play through a real home router's own automatic port-opening (UPnP). Tunnel-based
+  internet play (e.g. playit.gg) has been watched working end-to-end, which is a different path.
 - Long three-player sessions crossing many doors.
 - The keyboard side of the "you're parked" locks (swoop, Star Forge duels) — injected keystrokes
   never reach this game, so it can't be tested without a person at the keyboard.
