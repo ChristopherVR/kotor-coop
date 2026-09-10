@@ -1095,3 +1095,27 @@ this file for the live persistence check this discrepancy required.
 Two further reports surfaced after the batch above (reported together, investigated together to determine whether they share a root cause): (1) "solo mode appears broken for the host: companion NPCs keep following and flickering" and (2) "a peer does not see the position an NPC is 'pointing at' correctly." Full write-up, root cause and fix for (1) is in `docs/research/party-reconciliation.md`'s "Round 106" entry (2026-09-10): the default follow-AI stall recovery (`positionparty`, `FollowStallRule.DefaultMethod`) calls the engine's own `PositionParty`, which clears `pt_solomode` as a side effect nothing was restoring — closed by having `GatherParty` restore it synchronously before returning. This is unrelated to the world-transfer-UDP-fallback work above and does not require the story-specific `solo_segment_spectate` feature (`docs/research/star-forge-finale.md`) — it reproduces from the generic party-table solo-mode flag during ordinary play. Item (2) is still open at the time of this entry — see whoever picks it up next for status; it was not conclusively identified against the minimap peer-arrow rotation, the M-screen peer-pin waypoint, or facing/orientation sync itself (all three checked statically, no clear bug found in any), and the shared two-machine rig was unavailable (held by a concurrent session) for a live repro this round.
 
 **The no-clothing item picked up 2026-09-10, later the same day — root cause found, partially fixed.** Reproduced locally (no internet needed) with the two-GOG-copy rig and `demo.ps1 -ClientNewCharacter` driven through the `chargen newgame`/`quick`/`accept` blockpoke verbs — six live joins against one class package. It is NOT a network/publish-layer bug: `KotorGameBridge.ReadEquippedResref`, the wire fields, and the receiving phantom's `EquipApplyDecision`/`ApplyEquipment` all behave correctly and report the truth. The truth, live-measured by reading the joining character's own `CSWInventory` slot dwords directly, is that the fresh character's `join_mode=newcharacter` chargen leaves its starting gear **genuinely unequipped in the live engine** — possessed (the items exist, tagged, attributed to the right creature) but never linked into the creature's equip-slot array — for as long as 90+ seconds after joining, i.e. this is not a transient read-too-early race a "wait for non-empty" delay would fix on its own; waiting alone never resolved it. Full write-up, the fix (`Odyssey.EquipUnequippedStartingGear`, called from `NewCharacterCaptureController` before the character is captured for carrying), and what remains open (the starting CLOTHES item specifically was never successfully recovered, only the starting WEAPON) are in docs/research/world-adoption.md's 2026-09-10 addendum. The Trask-portrait, intro-movie, and dialogue-click items noted above were NOT investigated as part of this pass — they remain open for whoever picks them up next.
+
+**The dialogue-click item was picked up 2026-09-10, first pass: several plausible causes ruled
+out by code audit** (a stuck `DialogueGateHook` lease across adoption's disconnect/reconnect, the
+historic click-to-join-annulled-a-frame-later defect, a Trask object-id mismatch from the
+GIT-body reuse path), **but the live pass that would have confirmed the actual click failure was
+cut short mid-test**: both `swkotor.exe` processes were killed externally (not crashed) at the
+exact moment a concurrent resumption of this same investigation overwrote the shared rig lock —
+a genuine coordination collision, not a code issue. Superseded by the follow-up pass below, which
+completed the live verification this one was interrupted before reaching.
+
+**UPDATE (2026-09-10, same day, later): the "could not click Trask" symptom is root-caused** —
+see `docs/research/dialogue-sync.md`'s "Continued and root-caused" entry. It is
+`docs/research/control-return.md`'s already-known connect-time control-return race (Round 70,
+2026-08-22), reproducing through a trigger this project had not previously tied to it —
+an ordinary `join_mode=newcharacter` adoption, reproduced live on a plain LOCAL LAN session with
+no internet/UDP fallback involved at all. `GetControlledCreaturePointer()` briefly resolves to
+Trask's own object id instead of the joiner's PC; a real click's `ActionInitiateDialog` wrapper
+dispatches with that same (wrong) creature as the acting party, so the engine is asked to make
+Trask converse with himself and silently does nothing. Self-heals within
+`ControlReturnController`'s ~5s budget by default — no fix shipped, root cause and live evidence
+only. The wrong-portrait symptom above was separately traced to the same general control-return
+family of races by a sibling investigation (`docs/research/party-reconciliation.md`, commit
+`2707b62`) — plausibly the same underlying connect-time window producing two visible symptoms,
+though this was not independently confirmed this round.
