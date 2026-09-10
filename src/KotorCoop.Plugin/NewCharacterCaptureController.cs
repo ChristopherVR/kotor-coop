@@ -59,32 +59,54 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// save gets refused for reasons nothing reports.</summary>
     private const int WorldSettleMs = 4000;
 
-    /// <summary>Extra time, ON TOP OF <see cref="WorldSettleMs"/>, spent retrying the
-    /// starting-gear equip repair (<see cref="Odyssey.EquipUnequippedStartingGear"/>) before the
-    /// quicksave is requested. LIVE-MEASURED 2026-09-10 (docs/research/world-adoption.md's
-    /// addendum): whether the starting WEAPON exists anywhere this repair can find it at the
-    /// single instant <see cref="WorldSettleMs"/> expires is a race, not a constant — <c>OnFrame</c>
-    /// is main-thread-driven and does not tick at all while a cinematic holds the game (this
-    /// project's own "main thread was gone for N ms" warning, seen at exactly this join stage
-    /// every round so far), so <see cref="WorldSettleMs"/>'s own deadline is frequently blown
-    /// straight through the instant a stall ends rather than reached by ordinary polling — the
-    /// repair got exactly one try, at whatever moment that happened to be. Retrying every poll
-    /// for this much longer, now that frames are confirmed flowing again, gives the engine's own
-    /// item-creation script room to finish even when it is still running as the cinematic ends.
-    /// Idempotent per slot (EquipUnequippedStartingGear never re-touches an already-filled one),
-    /// so retrying costs a few wasted reads per tick, never a double-equip.
+    /// <summary>How many REAL polls (not wall-clock ms) the starting-gear equip repair
+    /// (<see cref="Odyssey.EquipUnequippedStartingGear"/>) gets before the quicksave is requested
+    /// anyway. ⚠ REPLACES a wall-clock deadline (<c>EquipRepairExtraMs</c>, the 2026-09-10 first
+    /// pass's own constant) that this round's own live diagnostics (docs/research/world-adoption.md's
+    /// addendum) proved was being silently gutted two different ways:
     ///
-    /// ⚠ THIS DOES NOT CLOSE THE GAP FOR THE BODY/CLOTHING SLOT. Across every live pass this
-    /// round (six joins, one class package, varying this constant from 0 to 15000): the starting
-    /// WEAPON was found and equipped in every run that reached this window at all, while the
-    /// starting CLOTHES item — confirmed genuinely possessed by the same creature by the time the
-    /// `items` console verb ran moments later — was never found by this repair regardless of how
-    /// long it kept retrying. Widening this window stopped changing the outcome well before 6000,
-    /// which rules out "just needs more time" as the explanation for clothing specifically; see
-    /// <see cref="Odyssey.EquipUnequippedStartingGear"/>'s own doc comment for what is and is not
-    /// understood about why. NEEDS-LIVE: the actual mechanism that creates/links a fresh
-    /// character's starting clothing item is still unidentified.</summary>
-    private const int EquipRepairExtraMs = 6000;
+    /// 1. A wall-clock deadline set ONCE, relative to whatever poll happens to be running when
+    ///    <see cref="WorldSettleMs"/> first expires, is consumed WHOLESALE by a single main-thread
+    ///    stall straddling that moment — LIVE-MEASURED this round: one join's world-up-to-next-poll
+    ///    gap was 122 SECONDS (the Endar Spire's opening cinematic holding <c>MenuFrame</c>, this
+    ///    project's own long-documented "main thread was gone for N ms" symptom), so the deadline
+    ///    was already blown through by the time a second poll ever landed — the repair got exactly
+    ///    ONE real attempt, at whatever random instant that happened to be, no matter how large the
+    ///    ms constant was. Widening the constant (0 -&gt; 6000 -&gt; 15000, the prior round's own
+    ///    experiment) could never fix this, because none of those extra milliseconds were ever
+    ///    spent polling — they were spent inside a stall the constant has no way to detect or
+    ///    compensate for.
+    /// 2. Even with ZERO stalls and clean back-to-back 250 ms polling — LIVE-MEASURED this round,
+    ///    a run with 25 real, evenly-spaced samples across a full 6 s window — the party-pool and
+    ///    personal-backpack repository counts never changed even once: the character's own saved
+    ///    <c>INVENTORY.res</c> afterwards held exactly one item (an adrenaline stim from its class
+    ///    package), no weapon, no clothes. So a real, unstalled 6 s budget was ALSO, separately,
+    ///    just not long enough on this pass for the engine's own starting-package grant to run at
+    ///    all — a genuine "needs more real time" gap distinct from the stall problem above, and the
+    ///    reason the prior round's "widening past 6 s changed nothing" observation for clothing
+    ///    specifically is now understood differently: extra wall-clock ms bought nothing either way
+    ///    it was spent, stalled or not.
+    ///
+    /// A budget counted in REAL POLLS survives both failure modes: a stall simply delays when the
+    /// budget's polls land, it can never consume them, and the count is large enough
+    /// (<see cref="EquipRepairMaxAttempts"/> at the existing 250 ms cadence spans several times
+    /// longer than the wall-clock budget this replaces) to cover the slower-than-6s grant timing
+    /// item 2 above measured directly. <see cref="EquipRepairMaxWallClockMs"/> is the sole safety
+    /// ceiling now — reached only if <c>MenuFrame</c> itself has effectively stopped ticking, at
+    /// which point nothing in this controller can make further progress anyway. Idempotent per
+    /// slot regardless (EquipUnequippedStartingGear never re-touches an already-filled one), so
+    /// extra attempts cost a few wasted reads per tick, never a double-equip.</summary>
+    private const int EquipRepairMaxAttempts = 100;
+
+    /// <summary>Safety ceiling on the equip-repair phase, wall-clock, independent of
+    /// <see cref="EquipRepairMaxAttempts"/> — reached only if polling itself has effectively
+    /// stalled out entirely (in which case no amount of waiting helps) rather than the ordinary
+    /// case of a few long-but-finite stalls. Generous on purpose: this flow's own live passes have
+    /// already measured a healthy join taking over two minutes end to end (docs/research/world-
+    /// adoption.md, "Wall clock from chargen accept to standing in host's world: 2 minutes 10
+    /// seconds"), so a ceiling in that same order of magnitude costs nothing a real join was not
+    /// already going to spend.</summary>
+    private const int EquipRepairMaxWallClockMs = 90000;
 
     /// <summary>Gap between save requests. Long enough that a refusal caused by an opening
     /// cutscene has a chance to stop being true.</summary>
@@ -112,10 +134,15 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
     /// cancelled back to the menu does not leave a half-started save phase behind.</summary>
     private long _worldUpAtMs;
 
-    /// <summary>Deadline for the extra starting-gear repair retry window
-    /// (<see cref="EquipRepairExtraMs"/>), or 0 until <see cref="WorldSettleMs"/> first expires
-    /// and the window is armed.</summary>
-    private long _equipRepairDeadlineMs;
+    /// <summary>Real polls of the starting-gear repair still owed before the quicksave is
+    /// requested anyway, or -1 until <see cref="WorldSettleMs"/> first expires and the budget is
+    /// armed to <see cref="EquipRepairMaxAttempts"/>. Counts REAL calls, not wall-clock ms — see
+    /// <see cref="EquipRepairMaxAttempts"/>'s own doc comment for why.</summary>
+    private int _equipRepairAttemptsLeft = -1;
+
+    /// <summary><c>Environment.TickCount64</c> when the equip-repair budget was armed, for
+    /// <see cref="EquipRepairMaxWallClockMs"/>'s safety ceiling. 0 until armed.</summary>
+    private long _equipRepairArmedAtMs;
 
     /// <summary>UTC ticks at the same moment, for comparing against file timestamps. A save
     /// older than this belongs to a world that is not the one the player just created.</summary>
@@ -173,7 +200,8 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         _nextWaitingLogMs = Environment.TickCount64 + 15000;
         _worldUpAtMs = 0;
         _worldUpAtTicksUtc = 0;
-        _equipRepairDeadlineMs = 0;
+        _equipRepairAttemptsLeft = -1;
+        _equipRepairArmedAtMs = 0;
         _saveRequests = 0;
         _lastSaveRequestMs = 0;
         _candidate = null;
@@ -257,15 +285,15 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
         // items themselves were confirmed present the whole time. ActionEquipItem (whatever
         // chargen's own template application uses internally) only QUEUES an equip onto the
         // creature's combat round (see Odyssey.EquipItemFn's own doc comment); nothing in this
-        // window drains that queue. Retried every poll for EquipRepairExtraMs (see its own doc
-        // comment for why one attempt right at WorldSettleMs's expiry is not reliable — the
-        // items are not always there yet, even by this point) before the quicksave below
-        // captures this character for carrying, so the phantom a host sees is dressed instead of
-        // bare. A no-op for every slot that already holds an item, so an already-equipped
-        // character is never touched.
-        if (_equipRepairDeadlineMs == 0)
+        // window drains that queue. Retried every REAL poll, up to EquipRepairMaxAttempts of them
+        // (see its own doc comment for why this is counted in polls rather than wall-clock ms),
+        // before the quicksave below captures this character for carrying, so the phantom a host
+        // sees is dressed instead of bare. A no-op for every slot that already holds an item, so
+        // an already-equipped character is never touched.
+        if (_equipRepairAttemptsLeft < 0)
         {
-            _equipRepairDeadlineMs = nowMs + EquipRepairExtraMs;
+            _equipRepairAttemptsLeft = EquipRepairMaxAttempts;
+            _equipRepairArmedAtMs = nowMs;
         }
 
         int repaired = Odyssey.EquipUnequippedStartingGear(Odyssey.GetPlayerObjectId());
@@ -276,9 +304,20 @@ internal sealed class NewCharacterCaptureController(SharedBlockView block)
                 + "before capturing the character");
         }
 
-        if (nowMs < _equipRepairDeadlineMs)
+        _equipRepairAttemptsLeft--;
+
+        bool wallClockCeilingReached = nowMs - _equipRepairArmedAtMs >= EquipRepairMaxWallClockMs;
+        if (_equipRepairAttemptsLeft > 0 && !wallClockCeilingReached)
         {
             return;
+        }
+
+        if (wallClockCeilingReached && _equipRepairAttemptsLeft > 0)
+        {
+            PluginHost.Log(
+                "newchar: equip-repair wall-clock ceiling reached "
+                + $"({EquipRepairMaxWallClockMs} ms) with {_equipRepairAttemptsLeft} poll(s) still "
+                + "budgeted - saving whatever is equipped now rather than waiting further");
         }
 
         RequestSave(nowMs);
