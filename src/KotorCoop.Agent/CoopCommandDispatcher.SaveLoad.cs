@@ -77,8 +77,8 @@ public sealed partial class CoopCommandDispatcher
         _autoAdoptWorldEnabled ??= loadConfig?.Invoke()?.AutoAdoptWorld ?? true;
 
     /// <summary>coop.ini <c>world_transfer_udp_fallback</c> — see
-    /// <see cref="CoopConfig.WorldTransferUdpFallback"/>'s own doc comment. OFF by default,
-    /// NEEDS-LIVE.</summary>
+    /// <see cref="CoopConfig.WorldTransferUdpFallback"/>'s own doc comment. OFF by default;
+    /// live-verified 2026-09-10.</summary>
     private bool? _worldTransferUdpFallbackEnabled;
 
     private bool WorldTransferUdpFallbackEnabled =>

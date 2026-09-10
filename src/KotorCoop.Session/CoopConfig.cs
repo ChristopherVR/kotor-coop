@@ -88,7 +88,8 @@ public sealed record CoopConfig
     /// <summary>
     /// Whether a client whose world-transfer TCP connect fails outright falls back to a
     /// UDP-only path for the same fetch — coop.ini <c>world_transfer_udp_fallback</c>, OFF by
-    /// default, NEEDS-LIVE. Only ever tried after a fast, dedicated connect probe finds the TCP
+    /// default; live-verified end to end 2026-09-10 across two real machines over a public-
+    /// internet tunnel. Only ever tried after a fast, dedicated connect probe finds the TCP
     /// listener genuinely unreachable (not a slow link, not an app-level refusal like a wrong
     /// password — those still surface exactly as before); the ordinary TCP path
     /// (<see cref="KotorCoop.Session.WorldTransfer"/>) is unchanged either way. Found live
