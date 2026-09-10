@@ -43,6 +43,52 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// </summary>
     private readonly DialogueTickGate _dialogueTickGate = new(heartbeatIntervalMs: 150);
 
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // Session-layer node-sync diagnostics (docs/research/dialogue-skip-desync.md, 2026-09-10):
+    // the plugin's own dialogue-node-pub/dialogue-node-drive logs are PLUGIN-side only — they
+    // show what THIS instance's engine read locally and what it was asked to drive to, but
+    // nothing about what actually crossed the wire in between. That gap is exactly where the
+    // reported asymmetry (client-owns-host-follows losing everything after the first skip;
+    // host-owns-client-follows losing the last stretch) had to be isolated: "the plugin never
+    // advanced again" (plugin bug), "the wire/arbiter never accepted or relayed the change"
+    // (session/arbiter bug), and "the wire delivered it but the plugin never consumed it"
+    // (follower drive bug) all look identical from the plugin log alone. The root cause turned
+    // out to be a stale interaction lock (see DialogueArbiter's own dated fix) rather than
+    // anything in this pump, but the gap in the evidence trail this closes is real and cheap
+    // (capped and dedup'd, same discipline as DialogueSpectateController's own node logs) — kept
+    // for the next round that needs to tell these three failure shapes apart quickly.
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    private uint _loggedLocalNodeSerial;
+    private uint _loggedTokenNodeSerial;
+    private int _wireLogBudget = 500;
+
+    private void LogWireNodeIfChanged(
+        bool active, int localNode, uint localNodeSerial, bool published,
+        bool followingPeer, DialogueState token)
+    {
+        if (_wireLogBudget <= 0)
+        {
+            return;
+        }
+
+        if (active && localNodeSerial != _loggedLocalNodeSerial)
+        {
+            _loggedLocalNodeSerial = localNodeSerial;
+            _wireLogBudget--;
+            log($"dialogue-wire: OWNER local node -> {localNode} serial {localNodeSerial} "
+                + $"published={published} at {Environment.TickCount64}");
+        }
+
+        if (followingPeer && token.NodeSerial != _loggedTokenNodeSerial)
+        {
+            _loggedTokenNodeSerial = token.NodeSerial;
+            _wireLogBudget--;
+            log($"dialogue-wire: FOLLOWER token now node {token.NodeIndex} serial "
+                + $"{token.NodeSerial} owner {token.OwnerPeerId} tokenSerial {token.Serial} "
+                + $"at {Environment.TickCount64}");
+        }
+    }
+
     /// <summary>
     /// How long a conversation may read inactive before it is reported over.
     ///
@@ -219,6 +265,7 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         // beyond the reads already taken above — see DialogueTickGate. Off the fast path this
         // is a no-op (the flag guards it), so the legacy cadence in PumpOnce is the only gate
         // and turning dialogue_fast_join off is a true rollback.
+        bool willPump = true;
         if (settings.DialogueFastJoin)
         {
             long fingerprint = HashCode.Combine(
@@ -228,10 +275,19 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
                 fingerprint, active ? _dialogueHeldNodeSerial : 0u, followingPeer,
                 token.Serial, token.NodeSerial, token.ReplySerial, active && _dialogueHeldForced);
 
-            if (!_dialogueTickGate.ShouldPump(nowMs, fingerprint))
-            {
-                return;
-            }
+            willPump = _dialogueTickGate.ShouldPump(nowMs, fingerprint);
+        }
+
+        // TEMPORARY diagnostic (see _wireLogBudget's own doc): logged BEFORE the possible
+        // early return below, so a tick the fast-join gate suppresses still shows up as
+        // "published=false" rather than vanishing from the trail entirely.
+        LogWireNodeIfChanged(
+            active, active ? _dialogueHeldNode : DialogueState.NoNode,
+            active ? _dialogueHeldNodeSerial : 0, willPump, followingPeer, token);
+
+        if (!willPump)
+        {
+            return;
         }
 
         session.PublishDialogue(

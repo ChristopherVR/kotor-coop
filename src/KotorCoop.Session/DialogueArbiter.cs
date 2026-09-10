@@ -15,8 +15,8 @@ namespace KotorCoop.Session;
 ///   * A claim by anyone else while the token is held is ignored — first speaker wins; the
 ///     loser's instance learns it lost from the next broadcast and backs off.
 ///   * A release by the current owner frees the token; a release by a non-owner is ignored.
-///   * A claim on an NPC someone ELSE has an interaction lock on is refused, even when the
-///     token is free (<paramref name="lockHolder"/>).
+///   * A claim on an NPC someone ELSE has an interaction lock on is refused ONLY AT THE
+///     MOMENT THE TOKEN IS GRANTED, even when the token is free (<paramref name="lockHolder"/>).
 ///
 /// ⚠ That last rule is what stops the host winning every contested conversation BY
 /// CONSTRUCTION. "First speaker wins" is only fair if both claims race on equal terms, and
@@ -25,6 +25,27 @@ namespace KotorCoop.Session;
 /// instant therefore resolved to the host every single time, however early the client
 /// clicked. The interaction lock is claimed from the moment a player STARTS interacting —
 /// before a conversation exists — so it records who actually got there first.
+///
+/// ⚠ FIX (docs/research/dialogue-skip-desync.md, 2026-09-10): the lock veto USED TO run
+/// unconditionally, ahead of every branch below — including an UPDATE from the peer who
+/// ALREADY legitimately owns the token. That is a different question from "who gets to
+/// START talking", and conflating them broke a live conversation outright: the interaction
+/// lock's OWN claim is republished every tick by the local player's CURRENT interaction
+/// target (<c>InteractionLockController.PublishLocalClaim</c>), and a FOLLOWER'S locally
+/// adopted mirror of the very conversation it is spectating reads as "interacting with this
+/// NPC" exactly the same as the real owner's — there is nothing in that read that
+/// distinguishes "I started this" from "I am mirroring it". Once the follower's own claim
+/// reaches the lock store (in-process, zero latency, when the follower happens to be the
+/// host) it can win the "first fresh claim" race for an NPC the OTHER peer is genuinely,
+/// already, legitimately talking to — and from that tick on, EVERY SUBSEQUENT update from the
+/// true owner was silently vetoed here, forever, because the lock had quietly changed hands
+/// under a conversation that never stopped being valid. Measured live: a client's conversation
+/// with the host spectating stopped advancing on the host's screen after exactly one skip,
+/// every time — the host's own follow-adopt claimed the interaction lock out from under the
+/// client's already-granted token on the very next tick. Once a claimant already owns the
+/// token (<c>current.OwnerPeerId == requesterPeerId</c>), no lock check can ever produce a
+/// MORE correct owner than the one who already fairly won the grant — so the veto has no
+/// business running again.
 /// </summary>
 public static class DialogueArbiter
 {
@@ -53,20 +74,24 @@ public static class DialogueArbiter
 
         if (active)
         {
-            // Somebody else got to this NPC first. Refuse before the grant below, so a free
-            // token is no help — the lock, not the token, is what settles a race.
-            //
-            // A claim with no partner tag is NOT refused: the tag is empty for a real window
-            // at the start of every conversation (the participant ids stay OBJECT_INVALID
-            // until the server resolves them), and refusing then would refuse every
-            // conversation in the game for its first few hundred milliseconds.
-            if (lockHolder != 0 && lockHolder != requesterPeerId && partnerTag.Length > 0)
-            {
-                return current;
-            }
-
             if (!current.Active)
             {
+                // Somebody else got to this NPC first. Refuse the GRANT, so a free token is
+                // no help — the lock, not the token, is what settles a race. This check must
+                // never run again once a token is live (see the class remarks' dated note):
+                // it decides who gets to START talking, not who gets to keep updating a
+                // conversation someone already fairly won.
+                //
+                // A claim with no partner tag is NOT refused: the tag is empty for a real
+                // window at the start of every conversation (the participant ids stay
+                // OBJECT_INVALID until the server resolves them), and refusing then would
+                // refuse every conversation in the game for its first few hundred
+                // milliseconds.
+                if (lockHolder != 0 && lockHolder != requesterPeerId && partnerTag.Length > 0)
+                {
+                    return current;
+                }
+
                 // Grant.
                 return new DialogueState(
                     true, requesterPeerId, current.Serial + 1, speaker, line, partnerTag, replySerial, replyIndex,

@@ -40,12 +40,38 @@ internal sealed class WorldStatePump(
 
         bridge.TryReadLocalInteraction(out string tag, out uint kind, out bool active, out uint targetId);
 
+        // ⚠ FIX (docs/research/dialogue-skip-desync.md, 2026-09-10): a FOLLOWER'S locally
+        // adopted mirror of a peer's conversation reads, from the plugin's own interaction
+        // read, EXACTLY like a real local conversation — there is nothing in
+        // IGameBridge.TryReadLocalInteraction that can tell "I started this" from "I am
+        // mirroring the peer's token", because both are a genuine local CSWSDialog as far as
+        // the engine (and the plugin) can see. Forwarding that as a Conversation-kind claim
+        // let a follower's own claim win the per-NPC interaction lock out from under the
+        // TRUE owner — in-process and instantly when the follower happened to be the host,
+        // since the host's own claim never crosses the network — which then made
+        // DialogueArbiter refuse every further update from the real owner (see that class's
+        // own dated fix). The session layer is the one place that actually knows which side
+        // of the token this instance is on (<see cref="ICoopSession.GetDialogue"/>), so this
+        // is where the false claim is caught before it ever reaches the lock store, on top of
+        // (not instead of) the arbiter's own fix — belt and braces, since either alone leaves
+        // the other half of the defect (a stale lock still wrongly holding the true owner's
+        // OWN NPC still on this instance's screen) live.
+        bool isFollowedConversation = kind == (uint)InteractionKind.Conversation && active
+            && tag is { Length: > 0 }
+            && session.GetDialogue() is { Active: true } token
+            && token.IsHeldByAnotherThan(session.LocalPeerId)
+            && string.Equals(token.PartnerTag, tag, StringComparison.OrdinalIgnoreCase);
+
         // Sent even when the tag is empty: that is how the session learns which module the
         // locks are scoped to, and a lock names a tag (or, for InteractionKind.Container, a
         // target id instead — see InteractionLockStore's remarks), which only means anything
         // in one.
         session.PublishInteractionClaim(
-            local.Module, tag ?? string.Empty, (InteractionKind)kind, active, targetId);
+            local.Module,
+            isFollowedConversation ? string.Empty : tag ?? string.Empty,
+            isFollowedConversation ? 0 : (InteractionKind)kind,
+            !isFollowedConversation && active,
+            targetId);
 
         // ⚠ OUR OWN LOCK IS FILTERED OUT HERE, so the plugin can hold everything it is given
         // without needing to know its own peer id.

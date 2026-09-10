@@ -225,4 +225,59 @@ public class DialogueArbiterTests
 
         Assert.Equal(granted, again);
     }
+
+    /// <summary>
+    /// docs/research/dialogue-skip-desync.md, 2026-09-10: the exact live bug. The interaction
+    /// lock's own claim is republished every tick by whatever the local player is currently
+    /// "interacting with" — and a FOLLOWER'S locally adopted mirror of the owner's own
+    /// conversation reads as "interacting with this NPC" too, indistinguishably from the real
+    /// owner. If that follower's claim later wins the per-NPC interaction lock (plausible any
+    /// time the follower is the host, whose own claim reaches the lock store at zero latency),
+    /// the lock veto must NOT then start refusing the owner's own further updates — the token
+    /// was already fairly granted, and a lock that changes hands under a conversation which
+    /// never stopped being valid must not retroactively undo that grant. Before the fix, this
+    /// asserted the owner's second skip stuck at node 4 forever; it must now succeed.
+    /// </summary>
+    [Fact]
+    public void AnOwnersUpdateSurvivesTheInteractionLockChangingHandsUnderIt()
+    {
+        DialogueState granted = DialogueArbiter.Apply(
+            DialogueState.Idle, requesterPeerId: 2, active: true, "Trask", "Line one.",
+            "trask", 0, 0, null, 4, 1, lockHolder: 2);
+        Assert.True(granted.Active);
+        Assert.Equal(2u, granted.OwnerPeerId);
+
+        // The interaction lock has now (wrongly, or otherwise) changed hands to peer 3 — e.g.
+        // a follower's own adopted mirror of this same conversation won the per-NPC lock race.
+        // The owner (2) skips to the next node regardless.
+        DialogueState updated = DialogueArbiter.Apply(
+            granted, requesterPeerId: 2, active: true, "Trask", "Line two.",
+            "trask", 0, 0, null, 5, 2, lockHolder: 3);
+
+        Assert.True(updated.Active);
+        Assert.Equal(2u, updated.OwnerPeerId);
+        Assert.Equal(5, updated.NodeIndex);
+        Assert.Equal(2u, updated.NodeSerial);
+        Assert.Equal(granted.Serial + 1, updated.Serial);
+    }
+
+    /// <summary>The flip side of the fix above: the lock veto still gates a fresh GRANT exactly
+    /// as before — <see cref="AClaimIsRefusedWhenAnotherPeerHoldsTheObject"/> already covers the
+    /// simple case; this covers a peer trying to steal an ALREADY-ACTIVE conversation's token by
+    /// pointing at a lock it holds. The current owner keeps the token regardless of who holds
+    /// the interaction lock, because ownership (not the lock) decides a contender.</summary>
+    [Fact]
+    public void ALockHeldByTheContenderDoesNotStealAnAlreadyActiveToken()
+    {
+        DialogueState granted = DialogueArbiter.Apply(
+            DialogueState.Idle, requesterPeerId: 2, active: true, "Trask", "Mine.",
+            "trask", lockHolder: 2);
+
+        DialogueState contended = DialogueArbiter.Apply(
+            granted, requesterPeerId: 3, active: true, "Carth", "No, mine.",
+            "trask", lockHolder: 3);
+
+        Assert.Equal(granted, contended);
+        Assert.Equal(2u, contended.OwnerPeerId);
+    }
 }
