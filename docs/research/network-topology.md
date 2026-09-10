@@ -1065,3 +1065,27 @@ movie onto the wire, because its gate is "the agent can write phantoms"
 (`SharedBlock.CommandSpawnAndDrive`), not "this world has been adopted" — but every receiver's
 ordinary per-channel module filter discards it, since nobody else is standing in the joiner's own
 solo `end_m01aa`. No code changed for this item.
+
+⚠ **The "Trask's portrait" item was picked up 2026-09-10 — see docs/research/party-reconciliation.md's
+dated entry "The 'host's screen shows Trask's portrait' report."** Short version: `portrait 0` is
+confirmed, by static analysis, as an unrelated red herring — a phantom's own `PortraitId` field is
+write-once from the blueprint (always 0) and has exactly one reader anywhere in this codebase
+(the server-browser's own party-portrait list, which never looks at a phantom). Every mechanism
+capable of moving the HOST's own portrait/control state (`PortraitController`,
+`ControlReturnController`, `PartyPresenceController`, `PartyRosterController.Reconcile`) is
+confirmed host-inert by construction (each gates on a predicate that is only ever true on a
+mirroring client) and, this round, empirically: a same-day local rig session reproducing this
+exact scenario never wrote one of those controllers' log lines to the HOST install's log, while
+the CLIENT install's log shows `ControlReturnController` actually firing at the moment of a fresh
+`join_mode=newcharacter` connect (`control: you are driving companion 0x127 ... switch not ready
+yet, retrying` — Trask's own object id). That is widget 0 ("the controlled character's own
+slot") briefly reading Trask on the JOINING PLAYER's own screen, CLAIMED to self-correct once
+`ControlReturnController`'s existing hand-back succeeds — plausibly held open by whatever kept
+the intro cinematic/Trask's own dialogue on screen, tying it to this same list's cinematic
+finding. No host-side code path was changed for this item.
+⚠⚠ **DISPUTED 2026-09-10, same day:** the user directly observed this portrait staying on Trask
+persistently in at least one live session, not self-correcting within any short window — the
+"self-correcting" claim above rests on reading `ControlReturnController`'s own retry code and a
+*different* concurrent rig session, not a direct confirmation that recovery actually completes in
+the exact scenario reported. Do not treat this as closed; see the dated follow-up entry lower in
+this file for the live persistence check this discrepancy required.
