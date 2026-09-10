@@ -1090,6 +1090,35 @@ persistently in at least one live session, not self-correcting within any short 
 the exact scenario reported. Do not treat this as closed; see the dated follow-up entry lower in
 this file for the live persistence check this discrepancy required.
 
+✅ **SETTLED 2026-09-10, later the same day — live-verified: it does self-correct, but "~5
+seconds" was never true; this project's own log already had a 120.6-second live case.** Full
+write-up and the fix are in `docs/research/party-reconciliation.md`'s dated "SETTLED" entry
+(same section as the "host's screen shows Trask's portrait" report above); summary here for this
+file's own audit trail. Four fresh `join_mode=newcharacter` joins were driven live this round
+watching the client's plugin log continuously for 60-120s past connect; none happened to hit the
+connect-time race (consistent with the ~1-in-3 rate `dialogue-sync.md` measured), but this same
+rig's own log already contained five prior claims from tonight's earlier sibling sessions, one of
+which is a directly-measured, fully-explained 120.6-second stuck window:
+`[12:01:14.318] control: you are driving companion 0x125 ... (switch not ready yet, retrying)`
+followed 120.6s later by `[12:03:14.955] control: putting the camera back on your own character`,
+with the log's own `[12:03:14.925] cinematic: the main thread was gone for 120422 ms` line
+explaining why — a connect-time cinematic/dialogue froze the entire main thread (this controller
+included; nothing runs during that freeze) for that whole span, immediately after a failed switch
+attempt. So: the user's dispute was right that "~5 seconds" does not hold — real recovery took
+over two minutes in a case this project's own log already had — and wrong that it never
+recovers at all — every claim this round could trace to a live, uninterrupted session eventually
+got a hand-back, none stayed wrong forever. A fix shipped anyway
+(`src/KotorCoop.Plugin/ControlReturnController.cs`): a failed switch now retries on the very next
+frame instead of waiting the ordinary ~166ms interval, closing the specific race that let an
+imminent cinematic lock in a still-wrong array (the failed attempt and the movie's start were
+only ~0.2s apart in the case above — well within the old retry gap). This cannot shrink the
+cinematic itself; recovery in the worst case is still bounded by however long Trask's intro
+happens to run (45-120+ seconds measured across tonight's sessions), not by this controller.
+Live-verified not to regress the existing `tools\control-return-live.ps1` scenario 1 (still
+passes, ~0.27s claim-to-hand-back) and the full suite (3481/3481 green); NOT independently
+re-measured against a freshly-caught 120s case this round, since none of this round's own four
+attempts reproduced the race post-fix.
+
 ### 2026-09-10 follow-up — two more reports from the same overall test session, investigated separately
 
 Two further reports surfaced after the batch above (reported together, investigated together to determine whether they share a root cause): (1) "solo mode appears broken for the host: companion NPCs keep following and flickering" and (2) "a peer does not see the position an NPC is 'pointing at' correctly." Full write-up, root cause and fix for (1) is in `docs/research/party-reconciliation.md`'s "Round 106" entry (2026-09-10): the default follow-AI stall recovery (`positionparty`, `FollowStallRule.DefaultMethod`) calls the engine's own `PositionParty`, which clears `pt_solomode` as a side effect nothing was restoring — closed by having `GatherParty` restore it synchronously before returning. This is unrelated to the world-transfer-UDP-fallback work above and does not require the story-specific `solo_segment_spectate` feature (`docs/research/star-forge-finale.md`) — it reproduces from the generic party-table solo-mode flag during ordinary play. Item (2) is still open at the time of this entry — see whoever picks it up next for status; it was not conclusively identified against the minimap peer-arrow rotation, the M-screen peer-pin waypoint, or facing/orientation sync itself (all three checked statically, no clear bug found in any), and the shared two-machine rig was unavailable (held by a concurrent session) for a live repro this round.
@@ -1113,9 +1142,12 @@ an ordinary `join_mode=newcharacter` adoption, reproduced live on a plain LOCAL 
 no internet/UDP fallback involved at all. `GetControlledCreaturePointer()` briefly resolves to
 Trask's own object id instead of the joiner's PC; a real click's `ActionInitiateDialog` wrapper
 dispatches with that same (wrong) creature as the acting party, so the engine is asked to make
-Trask converse with himself and silently does nothing. Self-heals within
-`ControlReturnController`'s ~5s budget by default — no fix shipped, root cause and live evidence
-only. The wrong-portrait symptom above was separately traced to the same general control-return
+Trask converse with himself and silently does nothing. Self-heals — see this file's own
+"SETTLED 2026-09-10" entry above and `docs/research/party-reconciliation.md`'s dated SETTLED
+entry: NOT within a ~5s budget as originally claimed here, but within however long whatever is
+holding `cameraOwnedElsewhere` true happens to last, live-measured up to 120.6 seconds when a
+connect-time cinematic overlaps. A fast-retry fix shipped in `ControlReturnController.cs` this
+same round to close the specific race that let an imminent cinematic lock in a still-wrong
+switch. The wrong-portrait symptom above was separately traced to the same general control-return
 family of races by a sibling investigation (`docs/research/party-reconciliation.md`, commit
-`2707b62`) — plausibly the same underlying connect-time window producing two visible symptoms,
-though this was not independently confirmed this round.
+`2707b62`) — confirmed the same underlying connect-time window this round.

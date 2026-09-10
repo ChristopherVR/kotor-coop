@@ -179,6 +179,27 @@ internal sealed unsafe class ControlReturnController(SharedBlockView block)
                 // race stays open instead of self-correcting.
                 bool switched = _diagOnlyNoHandBack ? false : Odyssey.SwitchControlToPc();
 
+                // ⚠ LIVE-MEASURED 2026-09-10 (docs/research/party-reconciliation.md): a failed
+                // switch ("not ready yet") normally clears within a frame or two, but the
+                // NEXT attempt was scheduled the ordinary IntervalFrames (10 frames, ~166ms)
+                // later — and a connect-time intro cinematic/dialogue can start in that same
+                // gap and freeze the ENTIRE main thread (no frame callback at all, this
+                // controller included) for as long as the movie runs. Measured live, twice:
+                // once landing an 89s freeze, once a 120.6s freeze, each starting within
+                // ~200ms of a failed attempt — turning a race that should lose in under a
+                // second into one that stays lost for the whole cinematic, which is
+                // indistinguishable from "stuck" to a player watching their own portrait.
+                // Retrying on the VERY NEXT FRAME instead of waiting out the full interval
+                // does not shrink the cinematic itself (nothing can, while the engine owns
+                // the thread) but gives every attempt before a movie starts roughly 10x more
+                // chances to land first. Only while a switch is actively failing: once it
+                // succeeds this falls back to the ordinary cadence via the unconditional
+                // assignment above.
+                if (!switched && !_diagOnlyNoHandBack)
+                {
+                    _countdown = 0;
+                }
+
                 if (_claimLogged != controlledId)
                 {
                     _claimLogged = controlledId;
