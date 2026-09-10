@@ -162,9 +162,11 @@ are testing-rig quirks, not things a real playthrough will hit:
   sizes before trusting a negative result.
 - **The `movenear`/`movenear <id>` console verb** resolves a stale id against Trask in `tar_m10aa`,
   snapping him to (0,0,0) — a dev-verb quirk, not a gameplay bug; move the host's PC instead.
-- **Screenshot/screen-capture tooling on the rig has been unreliable**, which is why a few
-  on-screen-only checks (the connection indicator's render, the M-key map appearance) are marked
-  Unverified even though their underlying data path is confirmed working.
+- **Screenshot/screen-capture tooling on the rig has been unreliable**, which is why the M-key map
+  appearance is still marked Unverified even though its underlying data path is confirmed working.
+  The connection indicator's own render/collision-avoidance was confirmed a different way
+  (`tools/textqueue.ps1`, 2026-09-10) without needing a screenshot — only its exact pixel position
+  at other resolutions remains open.
 
 ## Unverified — implemented but never observed live
 
@@ -198,7 +200,10 @@ rig yet. Good targets for the next live-test pass:
     unblocked it was a hardware watchpoint finding that a save-joined client's `ShowGalaxyMapGui`
     silently no-ops because the engine's post-load Status Summary box left the input class at
     "GUI" — see the table above and the research doc's 2026-09-03 relay addendum.)*
-14. The persistent connection indicator's actual on-screen render (data path confirmed, pixels not).
+14. *(done 2026-09-10 via `tools/textqueue.ps1`: renders at its new position (8, 3) on both GOG
+    installs with no minimap collision, and transient toasts fade out on their own countdown — see
+    the table. Exact pixel-column mapping at resolutions other than the tested one is still
+    unconfirmed, no working screenshot tool on this rig.)*
 
 ## Appendix A — feature status table (moved from README.md, 2026-09-03)
 
@@ -228,7 +233,7 @@ but not yet watched on the running game.
 | Enemy aggro split between players (`threat_retarget`) | Live-verified 2026-09-03, ON by default — an enemy the host engaged first now splits its attacks between the host and the client (12 vs 10 hits over 98 s; 0 on the client before), re-ordered every ≥4 s because the engine's AI pulls back to the host PC on its next hit | [peer-damage-ledger.md §11](research/peer-damage-ledger.md) |
 | Peer-away detection (`FlagAway`) when a partner quits to the main menu | Live-verified 2026-08-27 (an initial pass failed; the fix landed and re-verified the same day) | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | Host loss (`host_loss_release`) — a client whose host vanishes | Live-verified 2026-08-29 — every plugin-side lock releases within ~6s (`host_loss_timeout_ms` 5000, `PacketType.HostBye`), the client plays solo, and auto-rejoins when the host returns | [disconnect-reconnect.md §11](research/disconnect-reconnect.md) |
-| Persistent connection indicator | Live-verified 2026-08-27 (partial — data path confirmed, on-screen render unconfirmed) | [connect-flow.md](research/connect-flow.md) |
+| Persistent connection indicator | Live-verified 2026-08-27 (data path) and 2026-09-10 (on-screen render, repositioned off the minimap, fade-out confirmed via `tools/textqueue.ps1`) — exact pixel position at other resolutions still unconfirmed | [connect-flow.md](research/connect-flow.md), [console-overlay.md](research/console-overlay.md) |
 | Protocol-version-mismatch reject (`E_PROTO`) | Live-verified 2026-09-03 (typed reject in ~1 s, no silent timeout) | [connect-flow.md](research/connect-flow.md), [disconnect-reconnect.md](research/disconnect-reconnect.md) §12 |
 | Script-granted items outside dialogue (`script_item_sync`) | Built, live-verified, ON by default | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | Companion experience (`companion_xp_sync`) | Live-verified, ON by default | [companion-state-sync.md](research/companion-state-sync.md) |
