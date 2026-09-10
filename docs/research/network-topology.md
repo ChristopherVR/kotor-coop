@@ -1050,3 +1050,23 @@ through this exact path, not the rejoin one.
 ### New findings from the same session, unrelated to the UDP fallback (NOT investigated further this round)
 
 Observed after the UDP-fallback join completed and the session was stable: the joiner's own reported appearance showed no clothing (a bare/default body model rather than the equipped starting gear a fresh `join_mode=newcharacter` chargen should have), and the host's screen briefly showed Trask's portrait rather than the joining player's before it corrected itself a short time later. The Endar Spire intro cinematic also played once at the start before the two installs' state converged. The joiner also could not click Trask in-world to start a conversation with him. None of these touch the world-transfer channel this section is about — appearance/equipment sync, party-roster portraits, conversation targeting and movie relay are separate existing subsystems (see their own docs: companion-state-sync.md, party-reconciliation.md, dialogue-sync.md, cinematics.md) — and the phantom-spawn log line's own `portrait 0` field has read `0` at every spawn across this whole project's history, not just this session, so it may be an unrelated pre-existing quirk rather than something this round's changes caused. Deliberately NOT investigated this round (a genuinely new fresh-character join over a real, higher-latency internet path may simply be exercising a timing corner case no earlier LAN-only test hit) — filed here as a reproduction lead for whoever picks this up next, not a diagnosis.
+
+**The "Trask's portrait" item was picked up 2026-09-10 — see docs/research/party-reconciliation.md's
+dated entry "The 'host's screen shows Trask's portrait' report."** Short version: `portrait 0` is
+confirmed, by static analysis, as an unrelated red herring — a phantom's own `PortraitId` field is
+write-once from the blueprint (always 0) and has exactly one reader anywhere in this codebase
+(the server-browser's own party-portrait list, which never looks at a phantom). Every mechanism
+capable of moving the HOST's own portrait/control state (`PortraitController`,
+`ControlReturnController`, `PartyPresenceController`, `PartyRosterController.Reconcile`) is
+confirmed host-inert by construction (each gates on a predicate that is only ever true on a
+mirroring client) and, this round, empirically: a same-day local rig session reproducing this
+exact scenario never wrote one of those controllers' log lines to the HOST install's log, while
+the CLIENT install's log shows `ControlReturnController` actually firing at the moment of a fresh
+`join_mode=newcharacter` connect (`control: you are driving companion 0x127 ... switch not ready
+yet, retrying` — Trask's own object id). That is widget 0 ("the controlled character's own
+slot") briefly reading Trask on the JOINING PLAYER's own screen, self-correcting once
+`ControlReturnController`'s existing hand-back succeeds — plausibly held open by whatever kept
+the intro cinematic/Trask's own dialogue on screen, tying it to this same list's cinematic
+finding. No host-side code path exists to fix, so none was changed; see that entry for the full
+chain of evidence and the NEEDS-LIVE item it leaves open (a two-machine retest watching BOTH
+screens).

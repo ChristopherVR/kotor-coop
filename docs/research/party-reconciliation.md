@@ -5594,3 +5594,99 @@ slots — the same defect that crashed the host's own warps (transition-crashes.
 One line, one body, and the client then followed the host through four module moves with both
 companions rebuilt each time (`avail 0x005 members [0:slot 0 id 0x13D creature, 1:slot 2 id
 0x140 creature]` in tar_m10aa at 02:25).
+
+## The "host's screen shows Trask's portrait" report — ruled out as a host defect, most likely
+## the joiner's own widget-0 control-return race deferred behind Trask's own intro dialogue
+## (2026-09-10)
+
+Filed from network-topology.md §16's "New findings" (2026-09-10 internet test): during a
+`join_mode=newcharacter` first join, with the host in `END_M01AA` and Trask in the party, the
+**host's** screen was reported to briefly show Trask's portrait "instead of the joining player's
+own portrait," self-correcting a short time later with nobody doing anything. The same log line
+at the phantom spawn read `portrait 0` (`PhantomController.Lifecycle.cs`'s own diagnostic).
+
+**"portrait 0" is a proven, unrelated red herring.** It is `CSWSObject+0x30`
+(`PhantomController.Drive.cs`'s `ObjPortraitId`) on the SERVER object the phantom spawner just
+created. `PhantomBlueprint.cs` ships `PortraitId=0` in `k_coop_phantom.utc` and nothing — not
+`PhantomController.Lifecycle.cs`'s `ApplyAppearance` (appearance only), not any packet in
+`KotorCoop.Protocol` (no `Portrait` field exists on any peer/presence packet), not any other
+call site in the plugin — ever writes a peer's own portrait id onto a phantom, on any instance,
+ever. A grep for every read of that offset in the whole solution finds exactly one consumer:
+`KotorGameBridge.Party.ReadPartyPortraits`, and it only ever walks THIS instance's own real
+party table (for the in-game server-browser lobby screen, docs/research/server-browser.md) —
+never a phantom. A phantom's own portrait id is therefore write-once-blueprint, read-by-nothing;
+it has read 0 at every spawn across this whole project's history for exactly that reason, and it
+is not wired to anything a screen could show. Confirmed by static analysis, not assumed.
+
+**Every mod-authored mechanism that could move the HOST's own portrait/control state is
+host-inert, confirmed two ways.** `PortraitController` (hides party widgets 1/2) and
+`ControlReturnController` (hands control back to the PC when it is on a party-roster companion)
+both gate on the SAME `mirroring` predicate — `block.Command ==
+SharedBlock.CommandSpawnAndDrive && block.DamageDealtEnabled` — and `DamageDealtEnabled` is
+written ONLY by `KotorGameBridge.ReadDamageDealt`, itself gated on "an instance that mirrors
+ENEMIES" (`IncomingDamageController`'s own comment: "the same test PortraitController uses for
+'am I the client here'"). A host never mirrors enemies, so `mirroring` is always false there,
+regardless of `CommandSpawnAndDrive` (which IS set on a host too — a host also spawns phantoms
+for other peers, `WriteToPlugin`). `PartyPresenceController` (drives mirrored companion bodies)
+gates on the same `CommandSpawnAndDrive` alone at its `OnFrame` entry, and mirrors nothing when
+this instance is the fight/party authority. `PartyRosterController.Reconcile` — the one
+mechanism that calls the engine's own `AddPartyMemberBySlot`/`RemovePartyMemberBySlot` — reads
+`block.TryGetHostPartyRoster`, and `PartyPump.PumpPartyRoster` (`KotorCoop.Session`) ALWAYS
+writes `bridge.WriteHostPartyRoster(false, PartyRoster.Empty)` on the branch taken when
+`session.IsEnemyAuthority` (the host) — so `Reconcile` unconditionally no-ops on a host with "no
+peer roster to reconcile against." None of the four controllers capable of touching a party
+table, a portrait widget or the controlled-creature pointer can fire on a host, by construction.
+
+Confirmed live, not just by reading the code: a concurrently-running rig session on this same
+machine (2026-09-10, another stream reproducing the sibling appearance/clothing bug against the
+identical `join_mode=newcharacter`/`END_M01AA`/Trask scenario) never once wrote a `portraits:`
+or `control:` line to the HOST install's `kotorcoop-plugin.log` across the whole multi-day file,
+while the CLIENT install's log carries both — e.g. `[11:16:10.790] portraits: hiding the party
+widgets (client; hide_party_portraits=0 opts out)` and, at the moment of a fresh
+`join_mode=newcharacter` connect, `[11:17:24.812] control: you are driving companion 0x127,
+which this session owns — handing you back your own character (switch not ready yet,
+retrying)` — `0x127` being Trask's own party-table object id in that save. That is
+`ControlReturnController`'s own Round 70 mechanism (`docs/research/control-return.md`) firing
+exactly where this report's symptom lives: widget 0 is documented (`PortraitController`'s own
+class comment) as "the CONTROLLED character's own slot," and a fresh `join_mode=newcharacter`
+adoption loads the HOST's `PARTYTABLE.res` verbatim (§9/§12 above) — Trask already a member —
+so until the engine's own control-switch machinery inserts the brand-new PC as the controlled
+creature, `GetControlledCreaturePointer` can read Trask for a few frames, and widget 0 renders
+his portrait. `ControlReturnController` exists precisely to correct this ("a player who was
+playing AS Trask at the moment they connected must get their own PC's controls... back"); the
+"switch not ready yet, retrying" line is that correction in flight, not a failure.
+
+**Why it can look like it takes "a short time" rather than one frame: `ControlReturnRule.Decide`
+checks `cameraOwnedElsewhere` (a conversation on screen, or the player down) BEFORE
+`controlledIsSessionOwned`, and returns `Nothing` — skipping the `SwitchControlToPc` call
+entirely — for as long as a conversation is active, by design** (the class doc: dialogue and the
+hand-back must never fight over the camera). Trask has his own scripted opening lines at the
+very start of `END_M01AA`, and this same live session independently reported the intro cinematic
+replaying at the moment of this exact join (network-topology.md §16). If a conversation/cutscene
+is open across the whole window control sits on Trask, the hand-back is deferred until it closes
+— and closes ON ITS OWN, which is exactly "self-corrected... without anyone doing anything." This
+was not confirmed against the two-machine session's own logs (only the local single-machine
+rig's were available this round — see below) but is consistent with every mechanism this round
+could inspect, and would tie this report to the SAME session's "movie replay" finding rather than
+a fourth, independent defect.
+
+**Conclusion.** No code in this project can make the HOST's own portrait/control state move when
+a peer joins — confirmed by construction (every candidate controller gates on a predicate that
+is false on a host) and empirically (a live session reproducing the identical scenario tonight
+never wrote one of those controllers' log lines to the host's log). The mechanism that DOES
+reproduce this exact shape — widget 0 briefly reading Trask, self-correcting once the intro
+dialogue/cutscene ends — runs on the JOINING PLAYER's own client, is already implemented
+(`ControlReturnController`), and fired live in this session's local repro. The most likely
+explanation for the original report is that the observation was attributed to the wrong
+machine during a live two-tester, two-machine session with three OTHER bugs surfacing in the
+same few seconds (missing clothing, the movie replay, the dialogue-click issue) — an easy mix-up
+under those conditions. **NEEDS-LIVE**: a repeat two-machine test that specifically watches BOTH
+screens (not just the one that was watched last time) at the moment of a fresh
+`join_mode=newcharacter` connect, to settle definitively whether the host's screen genuinely
+does anything at all. No code change is made against the host in the meantime, because no code
+path exists for one to fix.
+
+### Files
+
+- `docs/research/party-reconciliation.md` — this entry (no source changes; a ruled-out
+  investigation, not a fix — see the conclusion above for why).
