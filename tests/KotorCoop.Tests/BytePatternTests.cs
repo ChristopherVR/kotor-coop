@@ -6,6 +6,30 @@ namespace KotorCoop.Tests;
 public class BytePatternTests
 {
     [Fact]
+    public void EmptyLiteralPatternIsRejected() =>
+        Assert.Throws<ArgumentException>(() => BytePattern.FromBytes([]));
+
+    [Fact]
+    public void ExtremeIndicesDoNotOverflow()
+    {
+        BytePattern pattern = BytePattern.Parse("AA BB");
+        Assert.False(pattern.MatchesAt([0xAA, 0xBB], int.MaxValue));
+        Assert.Equal(-1, pattern.IndexIn([0xAA, 0xBB], int.MaxValue));
+        Assert.Equal(0, pattern.IndexIn([0xAA, 0xBB], int.MinValue));
+    }
+
+    [Fact]
+    public void VectorSearchRetainsOverlapsAndSkipsNearMisses()
+    {
+        BytePattern pattern = BytePattern.Parse("AA ?? AA");
+        byte[] bytes = new byte[1000];
+        bytes[63] = 0xAA; // near miss across a vector boundary
+        bytes.AsSpan(127, 5).Fill(0xAA);
+        bytes.AsSpan(997, 3).Fill(0xAA); // final possible start
+        Assert.Equal([127, 128, 129, 997], pattern.AllIndicesIn(bytes));
+    }
+
+    [Fact]
     public void FindsLiteralSequence()
     {
         BytePattern pattern = BytePattern.Parse("DE AD BE EF");

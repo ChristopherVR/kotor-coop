@@ -103,13 +103,13 @@ internal static unsafe class DirectInputKeyboardHook
     {
         try
         {
-            if (output == 0)
+            if (!NativeMethods.IsWritable(output, (nuint)sizeof(nint)))
             {
                 return;
             }
 
             nint real = *(nint*)output;
-            if (real == 0 || !NativeMethods.IsReadable(real) || !NativeMethods.IsReadable(*(nint*)real))
+            if (real == 0 || !NativeMethods.IsReadable(real) || !NativeMethods.IsReadable(*(nint*)real, (nuint)(DirectInput8Slots * sizeof(nint))))
             {
                 LastDiagnostic = "IDirectInput8 pointer not readable; not wrapped";
                 return;
@@ -192,7 +192,7 @@ internal static unsafe class DirectInputKeyboardHook
     // GUID_SysKeyboard {6F1D2B61-D5A0-11CF-BFC7-444553540000}
     private static bool IsSystemKeyboard(nint guid)
     {
-        if (guid == 0 || !NativeMethods.IsReadable(guid))
+        if (guid == 0 || !NativeMethods.IsReadable(guid, 16))
         {
             return false;
         }
@@ -203,9 +203,16 @@ internal static unsafe class DirectInputKeyboardHook
 
     private static void WrapKeyboard(nint* device)
     {
+        if (!NativeMethods.IsWritable((nint)device, (nuint)sizeof(nint))
+            || !NativeMethods.IsReadable(*device, (nuint)sizeof(nint)))
+        {
+            LastDiagnostic = "keyboard device pointer not accessible; not wrapped";
+            return;
+        }
+
         nint real = *device;
         nint realTable = *(nint*)real;
-        if (!NativeMethods.IsReadable(realTable))
+        if (!NativeMethods.IsReadable(realTable, (nuint)(DeviceSlots * sizeof(nint))))
         {
             LastDiagnostic = "keyboard device vtable not readable; not wrapped";
             return;

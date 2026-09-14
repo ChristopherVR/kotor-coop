@@ -11,11 +11,16 @@ public sealed class BytePattern
 {
     private readonly byte[] _bytes;
     private readonly bool[] _mask;
+    private readonly int _literalPrefixLength;
 
     private BytePattern(byte[] bytes, bool[] mask, string text)
     {
         _bytes = bytes;
         _mask = mask;
+        while (_literalPrefixLength < mask.Length && mask[_literalPrefixLength])
+        {
+            _literalPrefixLength++;
+        }
         Text = text;
     }
 
@@ -88,6 +93,11 @@ public sealed class BytePattern
     /// <summary>Builds a fully literal pattern from raw bytes, e.g. a magic marker.</summary>
     public static BytePattern FromBytes(ReadOnlySpan<byte> bytes)
     {
+        if (bytes.IsEmpty)
+        {
+            throw new ArgumentException("Pattern must contain at least one byte.", nameof(bytes));
+        }
+
         byte[] copy = bytes.ToArray();
         bool[] mask = new bool[copy.Length];
         Array.Fill(mask, true);
@@ -96,7 +106,7 @@ public sealed class BytePattern
 
     public bool MatchesAt(ReadOnlySpan<byte> haystack, int index)
     {
-        if (index < 0 || index + _bytes.Length > haystack.Length)
+        if (index < 0 || index > haystack.Length - _bytes.Length)
         {
             return false;
         }
@@ -120,21 +130,27 @@ public sealed class BytePattern
             return -1;
         }
 
-        byte first = _bytes[0];
+        ReadOnlySpan<byte> prefix = _bytes.AsSpan(0, _literalPrefixLength);
         int last = haystack.Length - _bytes.Length;
 
-        for (int i = Math.Max(0, startIndex); i <= last; i++)
+        int i = Math.Max(0, startIndex);
+        while (i <= last)
         {
-            // The parser forbids a leading wildcard precisely so this fast reject is valid.
-            if (haystack[i] != first)
+            // Search the literal prefix together so repeated first-byte near misses do
+            // not turn into a separate vector search and full comparison at every byte.
+            int candidate = haystack.Slice(i, last - i + prefix.Length).IndexOf(prefix);
+            if (candidate < 0)
             {
-                continue;
+                return -1;
             }
 
-            if (MatchesAt(haystack, i))
+            i += candidate;
+            if (_literalPrefixLength == _bytes.Length || MatchesAt(haystack, i))
             {
                 return i;
             }
+
+            i++;
         }
 
         return -1;

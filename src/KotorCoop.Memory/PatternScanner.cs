@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace KotorCoop.Memory;
 
 /// <summary>
@@ -19,6 +21,11 @@ public sealed class PatternScanner(ProcessMemory memory)
     public List<nint> ScanAll(BytePattern pattern, ScanScope scope, int limit = 64, CancellationToken cancellationToken = default)
     {
         List<nint> hits = [];
+        cancellationToken.ThrowIfCancellationRequested();
+        if (limit <= 0)
+        {
+            return hits;
+        }
 
         foreach (MemoryRegion region in _memory.EnumerateRegions(scope))
         {
@@ -29,7 +36,7 @@ public sealed class PatternScanner(ProcessMemory memory)
                 continue;
             }
 
-            ScanRegion(region.BaseAddress, region.Size, pattern, hits, limit);
+            ScanRegion(region.BaseAddress, region.Size, pattern, hits, limit, cancellationToken);
 
             if (hits.Count >= limit)
             {
@@ -60,39 +67,56 @@ public sealed class PatternScanner(ProcessMemory memory)
         return hits;
     }
 
-    private void ScanRegion(nint baseAddress, long size, BytePattern pattern, List<nint> hits, int limit)
+    internal void ScanRegion(nint baseAddress, long size, BytePattern pattern, List<nint> hits, int limit,
+        CancellationToken cancellationToken = default)
     {
+        if (size < pattern.Length || hits.Count >= limit)
+        {
+            return;
+        }
+
         // Overlap consecutive chunks so a match straddling a boundary is not missed.
         int overlap = pattern.Length - 1;
-        byte[] buffer = new byte[Math.Min(size, ChunkSize) + overlap];
+        int capacity = checked(ChunkSize + overlap);
+        byte[] buffer = ArrayPool<byte>.Shared.Rent((int)Math.Min(size, capacity));
 
-        long offset = 0;
-        while (offset < size && hits.Count < limit)
+        try
         {
-            int toRead = (int)Math.Min(ChunkSize + overlap, size - offset);
-            Span<byte> window = buffer.AsSpan(0, toRead);
-
-            if (!_memory.TryRead(baseAddress + (nint)offset, window))
+            long offset = 0;
+            while (offset < size && hits.Count < limit)
             {
-                // Regions can be unmapped underneath us; skip and continue.
-                offset += ChunkSize;
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                int toRead = (int)Math.Min(capacity, size - offset);
+                Span<byte> window = buffer.AsSpan(0, toRead);
 
-            int index = 0;
-            while (hits.Count < limit)
-            {
-                int found = pattern.IndexIn(window, index);
-                if (found < 0)
+                if (!_memory.TryRead(baseAddress + (nint)offset, window))
                 {
-                    break;
+                    // Regions can be unmapped underneath us; skip and continue.
+                    offset += ChunkSize;
+                    continue;
                 }
 
-                hits.Add(baseAddress + (nint)(offset + found));
-                index = found + 1;
-            }
+                int index = 0;
+                while (hits.Count < limit)
+                {
+                    int found = pattern.IndexIn(window, index);
+                    // Each chunk owns only starts in its first ChunkSize bytes. This also
+                    // avoids duplicate hits when a pattern is longer than a chunk.
+                    if (found < 0 || found >= ChunkSize)
+                    {
+                        break;
+                    }
 
-            offset += ChunkSize;
+                    hits.Add(baseAddress + (nint)(offset + found));
+                    index = found + 1;
+                }
+
+                offset += ChunkSize;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }

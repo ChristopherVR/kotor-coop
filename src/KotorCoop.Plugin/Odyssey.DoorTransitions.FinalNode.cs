@@ -30,17 +30,27 @@ internal static unsafe partial class Odyssey
         }
 
         nint record = party + 0x24 + (index * 0x88);
+        if (!NativeMethods.IsWritable(record, 0x88))
+        {
+            return false;
+        }
+
         int phase = *(int*)(record + 4);
         int pathNode = *(int*)(record + 0x24);
         int destNode = *(int*)(record + 0x34);
 
         nint followData = party + 0x2DC;
-        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        if (!NativeMethods.IsWritable(followData + 0xFA4))
         {
             return true;
         }
 
         int writeCursor = *(int*)(followData + 0xFA4);
+        if (writeCursor is < 0 or >= 100 || pathNode is < 0 or >= 100)
+        {
+            return false;
+        }
+
         int gap = writeCursor - pathNode;
         if (gap < 0)
         {
@@ -129,17 +139,27 @@ internal static unsafe partial class Odyssey
         }
 
         nint record = party + 0x24 + (index * 0x88);
+        if (!NativeMethods.IsWritable(record, 0x88))
+        {
+            return false;
+        }
+
         int phase = *(int*)(record + 4);
         int pathNode = *(int*)(record + 0x24);
         int destNode = *(int*)(record + 0x34);
 
         nint followData = party + 0x2DC;
-        if (!NativeMethods.IsReadable(followData + 0xFA4))
+        if (!NativeMethods.IsWritable(followData + 0xFA4))
         {
             return true;
         }
 
         int writeCursor = *(int*)(followData + 0xFA4);
+        if (writeCursor is < 0 or >= 100 || pathNode is < 0 or >= 100)
+        {
+            return false;
+        }
+
         int gap = writeCursor - pathNode;
         if (gap < 0)
         {
@@ -160,7 +180,7 @@ internal static unsafe partial class Odyssey
         // engine's own recorder has not yet filled.
         int newNodeIndex = writeCursor;
         nint newNodeAddress = followData + (newNodeIndex * 40);
-        if (!NativeMethods.IsReadable(newNodeAddress + 8))
+        if (!NativeMethods.IsWritable(newNodeAddress, (nuint)sizeof(Vec3)))
         {
             return true; // out-of-range/unmapped slot — should not happen for a valid 0..99
                           // index into a live followData array, but never write blind.

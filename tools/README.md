@@ -5,6 +5,10 @@ database (`kotor1_0_3.db`) most of the Python tools query. PowerShell scripts ta
 running `swkotor.exe`; the Python scripts are offline, static analysis against the binary and
 game files — no running game needed.
 
+`dotnet run --project tools/MemoryBench -c Release` runs the local memory-search and
+ASCII-allocation microbenchmarks. It needs no game instance; see
+[the performance review](../docs/performance-review-2026-09-15.md) for methodology and limits.
+
 ## Rig: bring up, verify, package
 
 | Script | What it does |

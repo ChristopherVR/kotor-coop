@@ -60,38 +60,6 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     public static partial nuint VirtualQuery(nint address, out MemoryBasicInformation buffer, nuint length);
 
-    /// <summary>
-    /// Whether an address is committed and readable RIGHT NOW. The plugin runs inside the
-    /// game, so a bad dereference is an access violation in the game's own process — this
-    /// is how a pointer that came from a researched offset gets checked before it is
-    /// handed to an engine function that does no checking of its own.
-    ///
-    /// Not a correctness proof: readable memory can still hold the wrong thing. It only
-    /// rules out the wild-pointer case, which is the one that crashes.
-    /// </summary>
-    public static bool IsReadable(nint address)
-    {
-        if (address <= 0 || address >= 0x7FFF_0000)
-        {
-            return false;
-        }
-
-        nuint size = (nuint)Marshal.SizeOf<MemoryBasicInformation>();
-        if (VirtualQuery(address, out MemoryBasicInformation info, size) == 0)
-        {
-            return false;
-        }
-
-        const uint memCommit = 0x1000;
-        const uint pageGuard = 0x100;
-        const uint pageNoAccess = 0x01;
-        const uint readableMask = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
-
-        return info.State == memCommit
-            && (info.Protect & (pageGuard | pageNoAccess)) == 0
-            && (info.Protect & readableMask) != 0;
-    }
-
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool VirtualProtect(nint address, nuint size, uint newProtect, out uint oldProtect);

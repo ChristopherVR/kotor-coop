@@ -152,47 +152,26 @@ internal static unsafe partial class Odyssey
         //
         // { SJournalEntry* data; int size; int capacity }, entries 0x3C bytes (the caller's
         // own stride at 0x005C5B11), tag CExoString at +0x18 (its `lea ecx,[eax+edx+0x18]`).
-        if (!NativeMethods.IsReadable(journal))
+        if (!JournalMemoryGuard.TryValidate(journal, out nint data, out int size, out failure))
         {
-            failure = 4;
             return false;
         }
 
-        nint data = *(nint*)journal;
-        int size = *(int*)(journal + 4);
-        int capacity = *(int*)(journal + 8);
-
-        if (size < 0 || capacity < size || capacity > 4096
-            || (size > 0 && (data == 0 || !NativeMethods.IsReadable(data))))
-        {
-            failure = 4;
-            return false;
-        }
-
-        // Every entry the engine will walk must have a readable tag, or the walk faults
-        // before it ever reaches our string. Cheap: journals hold tens of entries. The same
-        // walk also answers "does the journal already have this tag, and at what state?" —
-        // <see cref="JournalApplyRule.Decide"/>'s own inputs.
+        // Validate the complete list first: remove-then-add can walk entries beyond the
+        // matching tag. This second pass finds JournalApplyRule.Decide's current state.
         ReadOnlySpan<byte> requestTag = new(tagAscii, tagLength);
 
         for (int i = 0; i < size; i++)
         {
             nint entry = data + (i * JournalEntryStride);
             nint entryTag = *(nint*)(entry + JournalEntryTag);
-            if (entryTag != 0 && !NativeMethods.IsReadable(entryTag))
-            {
-                failure = 5;
-                return false;
-            }
-
             if (entryTag == 0)
             {
                 continue;
             }
 
             // CExoString { char* @0, len @4 }; the length INCLUDES the null (the length
-            // trap), and EqualsNoCase cuts at the first null, so a sane length bound is
-            // all this needs. A garbage length is clamped: tags are resrefs, <= 32 chars.
+            // trap). JournalMemoryGuard already checked the bounded range and terminator.
             uint entryTagLength = *(uint*)(entry + JournalEntryTag + 4);
             int bounded = (int)Math.Min(entryTagLength, 64);
 
@@ -245,10 +224,10 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>SJournalEntry stride, from SetState's own walk (add ecx,0x3C).</summary>
-    private const int JournalEntryStride = 0x3C;
+    private const int JournalEntryStride = JournalMemoryGuard.JournalEntryStride;
 
     /// <summary>SJournalEntry + this = the tag CExoString (lea ecx,[eax+edx+0x18]).</summary>
-    private const int JournalEntryTag = 0x18;
+    private const int JournalEntryTag = JournalMemoryGuard.JournalEntryTag;
 
     /// <summary>SJournalEntry + this = the quest state. VERIFIED twice over: SetState
     /// itself compares and stores its state argument at [entry+0x20] (the cmp/mov pair at
@@ -314,20 +293,8 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        if (!NativeMethods.IsReadable(journal))
+        if (!JournalMemoryGuard.TryValidate(journal, out nint data, out int size, out failure))
         {
-            failure = 4;
-            return false;
-        }
-
-        nint data = *(nint*)journal;
-        int size = *(int*)(journal + 4);
-        int capacity = *(int*)(journal + 8);
-
-        if (size < 0 || capacity < size || capacity > 4096
-            || (size > 0 && (data == 0 || !NativeMethods.IsReadable(data))))
-        {
-            failure = 4;
             return false;
         }
 
@@ -338,12 +305,6 @@ internal static unsafe partial class Odyssey
         {
             nint entry = data + (i * JournalEntryStride);
             nint entryTag = *(nint*)(entry + JournalEntryTag);
-            if (entryTag != 0 && !NativeMethods.IsReadable(entryTag))
-            {
-                failure = 5;
-                return false;
-            }
-
             if (entryTag == 0)
             {
                 continue;

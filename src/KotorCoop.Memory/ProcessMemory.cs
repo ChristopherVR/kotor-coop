@@ -69,8 +69,21 @@ public sealed class ProcessMemory : IDisposable
                 throw new Win32Exception(error, $"OpenProcess failed for pid {processId}{hint}.");
             }
 
-            bool is32Bit = NativeMethods.IsWow64Process(handle, out int wow64) && wow64 != 0;
-            return new ProcessMemory(handle, processId, process.ProcessName, is32Bit);
+            try
+            {
+                if (!NativeMethods.IsWow64Process(handle, out int wow64))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot determine target pointer width.");
+                }
+
+                bool is32Bit = !Environment.Is64BitOperatingSystem || wow64 != 0;
+                return new ProcessMemory(handle, processId, process.ProcessName, is32Bit);
+            }
+            catch
+            {
+                NativeMethods.CloseHandle(handle);
+                throw;
+            }
         }
     }
 
@@ -124,13 +137,14 @@ public sealed class ProcessMemory : IDisposable
     public bool TryRead<T>(nint address, out T value) where T : unmanaged
     {
         value = default;
-        Span<byte> buffer = stackalloc byte[Marshal.SizeOf<T>()];
+        T candidate = default;
+        Span<byte> buffer = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref candidate, 1));
         if (!TryRead(address, buffer))
         {
             return false;
         }
 
-        value = MemoryMarshal.Read<T>(buffer);
+        value = candidate;
         return true;
     }
 
@@ -179,13 +193,13 @@ public sealed class ProcessMemory : IDisposable
             return false;
         }
 
-        byte[] buffer = new byte[maxLength];
+        Span<byte> buffer = stackalloc byte[maxLength];
         if (!TryRead(address, buffer))
         {
             return false;
         }
 
-        int end = Array.IndexOf(buffer, (byte)0);
+        int end = buffer.IndexOf((byte)0);
         if (end < 0)
         {
             end = maxLength;
@@ -200,7 +214,7 @@ public sealed class ProcessMemory : IDisposable
             }
         }
 
-        value = Encoding.ASCII.GetString(buffer, 0, end);
+        value = Encoding.ASCII.GetString(buffer[..end]);
         return true;
     }
 
@@ -223,8 +237,7 @@ public sealed class ProcessMemory : IDisposable
 
     public bool TryWrite<T>(nint address, in T value) where T : unmanaged
     {
-        Span<byte> buffer = stackalloc byte[Marshal.SizeOf<T>()];
-        MemoryMarshal.Write(buffer, in value);
+        ReadOnlySpan<byte> buffer = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in value, 1));
         return TryWrite(address, buffer);
     }
 
@@ -241,13 +254,18 @@ public sealed class ProcessMemory : IDisposable
     /// <c>g_w_blstrpstl00</c> and was refused by <c>CreateItemOnObject</c> (failure 8) as an
     /// unknown blueprint. <see cref="TryReadAsciiString"/> already tolerates a buffer with no
     /// null in it at all (falls back to reading the full field), so nothing on the read side
-    /// needed to change — only this reservation was wrong. The buffer is a freshly allocated
-    /// zero-initialised array, so anything past the written content is still correctly
-    /// null-padded.
+    /// needed to change — only this reservation was wrong. The buffer is explicitly cleared
+    /// so anything past the written content is correctly null-padded.
     /// </summary>
     public bool TryWriteAsciiString(nint address, string value, int fieldLength)
     {
-        byte[] buffer = new byte[fieldLength];
+        if (fieldLength <= 0)
+        {
+            return false;
+        }
+
+        Span<byte> buffer = fieldLength <= 1024 ? stackalloc byte[fieldLength] : new byte[fieldLength];
+        buffer.Clear();
         int count = Math.Min(value.Length, fieldLength);
         for (int i = 0; i < count; i++)
         {

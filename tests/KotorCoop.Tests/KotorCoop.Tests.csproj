@@ -22,6 +22,11 @@
     unsafe engine pointers will not compile in a 64-bit test host.
   -->
   <ItemGroup>
+    <!-- These Win32 guards are tested against dedicated unmanaged pages, never the GC heap.
+         The engine-specific address ceiling is preserved using low-address allocations. -->
+    <Compile Include="..\..\src\KotorCoop.Plugin\NativeMethods.cs" Link="Plugin\NativeMethods.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\NativeMemoryAccess.cs" Link="Plugin\NativeMemoryAccess.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\JournalMemoryGuard.cs" Link="Plugin\JournalMemoryGuard.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageDealtTable.cs" Link="Plugin\DamageDealtTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
