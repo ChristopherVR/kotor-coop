@@ -503,6 +503,16 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationFireAndForgetFn =
         (delegate* unmanaged[Thiscall]<nint, ushort, int>)0x0063C380;
 
+    /// <summary>CSWCObject::InsertFireForgetAnimation(u16 anim, int durationMs, float speed,
+    /// int, int) — 0x0063C760, the one choke point every fire-and-forget passes through and
+    /// the function <see cref="AnimationHook"/> detours (docs/research/animation-sync.md §2).
+    /// Called here only for an id that is ALREADY a model animation index (below
+    /// <see cref="AnimIdle"/>): the engine's own attack paths resolve those before inserting,
+    /// so <c>AddFireForgetAnimation</c>'s 10000-based classifier has no row for them. The
+    /// argument shape is the engine's own default-arm call (<c>0x5DC</c> ms, speed 1.0, 0, 0).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, float, int, int, void> InsertFireForgetAnimationFn =
+        (delegate* unmanaged[Thiscall]<nint, int, int, float, int, int, void>)0x0063C760;
+
     /// <summary>CSWCObject::AnimationOverlay(u16) — the same classifier for the third class,
     /// which has no object field at all and can only be applied through the animbase.</summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, ushort, int> AnimationOverlayFn =

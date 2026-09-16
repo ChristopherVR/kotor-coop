@@ -323,6 +323,35 @@ internal static unsafe partial class Odyssey
                 return PlayOverlayAnimation(twin, animation);
             }
 
+            // LIVE 2026-09-17: three Sith soldiers and Trask trading blaster fire with the host
+            // arrived on the joiner as 0x116, three times, and every one was dropped here — the
+            // "not all the animations are synced" the user saw. 0x116 is not a 10000-based
+            // server id; it is a MODEL animation index the engine's ranged-attack path had
+            // already resolved before it called InsertFireForgetAnimation on the owner's twin
+            // (which is exactly where the hook caught it), so the classifier above, which only
+            // knows the 0x27xx rows, has no opinion on it. Replay it the way the owner's engine
+            // played it: straight into the twin's fire-and-forget queue with the engine's own
+            // default arm (1500 ms, speed 1). The stand-in wears the owner's appearance row, so
+            // the index names the same clip. Anything at or above the server-id base that the
+            // classifier refused is still dropped: those are looping/overlay ids, and pushing
+            // one down this path parks in the twin's current-animation field with no expiry.
+            if (animation != 0 && animation < AnimIdle)
+            {
+                AnimationHook.Suppress = true;
+                try
+                {
+                    InsertFireForgetAnimationFn(twin, animation, 0x5DC, 1.0f, 0, 0);
+                }
+                finally
+                {
+                    AnimationHook.Suppress = false;
+                }
+
+                LogAnimationClassOnce(
+                    $"animation: 0x{animation:X} is a model index below the server ids; replayed through InsertFireForgetAnimation");
+                return true;
+            }
+
             LogAnimationClassOnce($"animation: 0x{animation:X} is in no playable class; dropped");
             return false;
         }

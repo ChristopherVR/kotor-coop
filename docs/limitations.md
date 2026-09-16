@@ -157,6 +157,10 @@ A few things look like bugs and aren't:
   teleport them into place five times, and leave the host's party in solo mode, which is the
   game's own "companions do not act" switch. Fixed on 2026-09-17: a companion within three units
   of a standing host is left alone, and the recovery puts solo mode back the way it found it.
+- **Blaster fire from enemies and companions did not play on the other screen.** Melee swings
+  did. The ranged attack animation arrives as a model-level animation number rather than one of
+  the game's named animations, and the mod was throwing those away. Fixed on 2026-09-17: they are
+  replayed the same way the firing player's own game played them.
 - **Nobody can be knocked out on the Endar Spire.** The game's own tutorial rule.
 - **Old `coop.ini` files.** The installer never overwrites your settings file, so an install from
   before a default changed keeps its old value. If a feature this page says is on seems off, run
