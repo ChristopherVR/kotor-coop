@@ -44,6 +44,13 @@ public sealed partial class CoopCommandDispatcher(
     /// </summary>
     private uint _pendingCheatSerial;
 
+    /// <summary>Whether the cheat in flight was filed by an automatic drain rather than a
+    /// human's console line, so its answer belongs in the log and NOT on the player's
+    /// screen. Live 2026-09-17: every materialised-loot give ("gave 'g_w_blstrpstl001' to
+    /// 0x13B") was landing in the joiner's chat overlay mid-fight, one line per item per
+    /// enemy stand-in — the plugin's answer to a request the player never typed.</summary>
+    private bool _pendingCheatQuiet;
+
     /// <summary>
     /// When that cheat was filed, so an answer that never comes is reported as such.
     ///
@@ -108,7 +115,7 @@ public sealed partial class CoopCommandDispatcher(
 
     /// <summary>One request still waiting for its turn at the single shared slot, plus the
     /// follow-up it was filed with — see root cause 7's remarks above.</summary>
-    private readonly record struct QueuedCheat(CheatRequest Request, Action? OnApplied, Action? OnRefused);
+    private readonly record struct QueuedCheat(CheatRequest Request, Action? OnApplied, Action? OnRefused, bool Quiet);
 
     /// <summary>
     /// What to do once the pending cheat has been answered, and what to do instead if it was
@@ -417,7 +424,7 @@ public sealed partial class CoopCommandDispatcher(
     /// range-checked 0-8 by <c>ParseHurt</c>/<c>ParseDown</c>) crosses as-is.</summary>
     private static uint HurtDownTarget(float slot) => slot < 0 ? CheatKinds.LocalPlayerTarget : (uint)slot;
 
-    private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null)
+    private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null, bool quiet = false)
     {
         if (!bridge.SupportsCheats)
         {
@@ -435,11 +442,11 @@ public sealed partial class CoopCommandDispatcher(
                 dropped.OnRefused?.Invoke();
             }
 
-            _queuedCheats.Enqueue(new QueuedCheat(request, onApplied, onRefused));
+            _queuedCheats.Enqueue(new QueuedCheat(request, onApplied, onRefused, quiet));
             return;
         }
 
-        FireCheat(request, onApplied, onRefused);
+        FireCheat(request, onApplied, onRefused, quiet);
     }
 
     /// <summary>
@@ -448,7 +455,7 @@ public sealed partial class CoopCommandDispatcher(
     /// <see cref="ReflectCheatAnswer"/> handing the slot to the next queued request the instant
     /// the current one resolves).
     /// </summary>
-    private void FireCheat(CheatRequest request, Action? onApplied, Action? onRefused)
+    private void FireCheat(CheatRequest request, Action? onApplied, Action? onRefused, bool quiet)
     {
         // Whatever the previous cheat was going to do next, it is not going to do it now — but
         // by construction (see SendCheat/ReflectCheatAnswer) that follow-up was already taken
@@ -461,6 +468,7 @@ public sealed partial class CoopCommandDispatcher(
         {
             _pendingCheatSerial = serial;
             _pendingCheatFiled = DateTime.UtcNow;
+            _pendingCheatQuiet = quiet;
             _afterCheat.Arm(onApplied, onRefused);
         }
         else
@@ -477,8 +485,23 @@ public sealed partial class CoopCommandDispatcher(
     {
         if (_queuedCheats.TryDequeue(out QueuedCheat next))
         {
-            FireCheat(next.Request, next.OnApplied, next.OnRefused);
+            FireCheat(next.Request, next.OnApplied, next.OnRefused, next.Quiet);
         }
+    }
+
+    /// <summary>The plugin's answer to the cheat in flight: on screen for a request the player
+    /// typed, log-only for one an automatic drain filed (<see cref="_pendingCheatQuiet"/>).
+    /// The log line keeps the "cheat:" prefix the plugin's own log uses, so a materialised
+    /// give is still traceable end to end from the agent log alone.</summary>
+    private void Answer(string text)
+    {
+        if (_pendingCheatQuiet)
+        {
+            Log?.Invoke($"cheat (automatic): {text}");
+            return;
+        }
+
+        Reply(text);
     }
 
     /// <summary>
@@ -499,7 +522,7 @@ public sealed partial class CoopCommandDispatcher(
             if (DateTime.UtcNow - _pendingCheatFiled > CheatAnswerTimeout)
             {
                 _pendingCheatSerial = 0;
-                Reply("the game never answered that - is a world loaded? (cheats run on the game's frame)");
+                Answer("the game never answered that - is a world loaded? (cheats run on the game's frame)");
                 _afterCheat.Take(applied: false)?.Invoke();
 
                 // The slot is free again - hand it to whatever lost the race for it, rather
@@ -524,7 +547,7 @@ public sealed partial class CoopCommandDispatcher(
             _ => $"status {status}: ",
         };
 
-        Reply(detail.Length > 0 ? prefix + detail : $"the plugin answered with status {status} and no detail");
+        Answer(detail.Length > 0 ? prefix + detail : $"the plugin answered with status {status} and no detail");
 
         // The follow-up runs AFTER the plugin's own sentence is on screen, so a reader sees
         // what the game said before what we did about it.

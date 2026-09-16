@@ -385,10 +385,29 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        int index = FindPlayerCharacterMemberIndex(party, out uint pcId);
+        int index = FindPlayerCharacterMemberIndex(party, withinLiveCount: true, out uint pcId);
         if (index < 0)
         {
-            return false;
+            // ⚠ LIVE 2026-09-17, a first join through the shipped auto-chargen path: the
+            // joiner's CSWParty read [0x80000127 Trask, 0x80000128 (stale, not a creature),
+            // 0xFFFFFFFF PC] with COUNT 2 — the PC's own entry sits BEYOND the count, so the
+            // live-count scan above never finds it, ControlReturnController logs "switch not
+            // ready yet, retrying" once and then retries forever, and the HUD's leftmost
+            // portrait (widget 0 = member[0]) shows TRASK's face and TRASK's health as the
+            // joiner's own for the whole session (the hover tooltip read "Trask Vitality 1/36").
+            // Same shape SwitchControlToPartySlot already handles for a companion: the array's
+            // DATA is there, only the count excludes it. Scan the full capacity; a hit is still
+            // verified by is_pc on the resolved creature, never taken on faith. The count is
+            // left alone: rotating the PC to the front gives [PC, Trask, stale] and the same
+            // count 2 now covers exactly the members it should.
+            index = FindPlayerCharacterMemberIndex(party, withinLiveCount: false, out pcId);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            PluginHost.Log($"control: your PC sits at member[{index}], beyond CSWParty's count of "
+                + $"{*(int*)(party + SwPartyMemberCount)} — rotating it to the front");
         }
 
         uint previousLeaderId = *(uint*)(party + SwPartyMember0ClientId);
@@ -400,8 +419,9 @@ internal static unsafe partial class Odyssey
 
     /// <summary>The index (and client-space id) of the CSWParty member whose server creature
     /// is the player character by its own stats (<see cref="IsPlayerCharacter"/>), scanning
-    /// the live count; -1 when none resolves as one. Independent of every "player" slot the
-    /// engine moves on a switch — see <see cref="SwitchControlToPc"/>.</summary>
+    /// the live count (<paramref name="withinLiveCount"/>) or the whole
+    /// <see cref="SwPartyMemberCapacity"/>; -1 when none resolves as one. Independent of every
+    /// "player" slot the engine moves on a switch — see <see cref="SwitchControlToPc"/>.</summary>
     /// <summary>One line naming every CSWParty member slot as the engine holds it right now —
     /// the raw id, what it resolves to (vtable, is_pc, hit points) — next to the server's own
     /// player creature and CSWPartyTable's count. The `resolve party` console verb. Written
@@ -452,9 +472,9 @@ internal static unsafe partial class Odyssey
         return text.ToString();
     }
 
-    private static int FindPlayerCharacterMemberIndex(nint party, out uint memberId)
+    private static int FindPlayerCharacterMemberIndex(nint party, bool withinLiveCount, out uint memberId)
     {
-        int count = *(int*)(party + SwPartyMemberCount);
+        int count = withinLiveCount ? *(int*)(party + SwPartyMemberCount) : SwPartyMemberCapacity;
         if (count is <= 0 or > SwPartyMemberCapacity)
         {
             count = SwPartyMemberCapacity;

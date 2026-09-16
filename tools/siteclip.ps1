@@ -73,7 +73,7 @@ Write-Host ("capturing {0}x{1} at ({2},{3}) from {4} window(s) for {5}s" -f $w, 
 New-Item -ItemType Directory -Force $WorkDir, $OutDir | Out-Null
 $mp4 = Join-Path $WorkDir "$Name.raw.mp4"
 $out = Join-Path $OutDir "$Name.mp4"
-$gif = Join-Path $OutDir "$Name.gif"
+$gifPath = Join-Path $OutDir "$Name.gif"
 Remove-Item $mp4 -ErrorAction SilentlyContinue
 
 $rec = Start-Process -FilePath $Ffmpeg -PassThru -NoNewWindow -RedirectStandardError (Join-Path $WorkDir "$Name.ffmpeg.log") -ArgumentList @(
@@ -109,7 +109,7 @@ Write-Host ("wrote {0} ({1:N1} MB); raw recording kept at {2}" -f $out, ((Get-It
 if ($Gif) {
     # Two-pass palette: one palette for the whole clip keeps the UI colours stable frame to frame.
     $palette = "${layout}fps=$Fps,scale=${Width}:-1:flags=lanczos,split[p0][p1];[p0]palettegen=max_colors=192:stats_mode=diff[pal];[p1][pal]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle"
-    & $Ffmpeg -y -loglevel error @trim -i $mp4 -filter_complex $palette -loop 0 $gif
+    & $Ffmpeg -y -loglevel error @trim -i $mp4 -filter_complex $palette -loop 0 $gifPath
     if ($LASTEXITCODE -ne 0) { throw 'ffmpeg gif conversion failed' }
-    Write-Host ("wrote {0} ({1:N1} MB)" -f $gif, ((Get-Item $gif).Length / 1MB))
+    Write-Host ("wrote {0} ({1:N1} MB)" -f $gifPath, ((Get-Item $gifPath).Length / 1MB))
 }

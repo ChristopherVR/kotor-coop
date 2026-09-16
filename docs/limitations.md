@@ -139,6 +139,15 @@ A few things look like bugs and aren't:
 - **You can't click on a companion to talk to them right after joining.** Shares its root cause
   with the stranger/Trask portrait bug above and should be much rarer after the 2026-09-10 fix.
   Worth reporting if it still happens.
+- **Your own portrait and health bar showed Trask's face after you joined.** On a first join through
+  the character-creation path, the joiner's party list came up with Trask first and the joiner's own
+  character past the end of the list, so the HUD's left portrait drew Trask, with Trask's health, for
+  the whole session (hovering it read "Trask, Vitality 1/36"). Fixed on 2026-09-17: the hand-back that
+  puts your own character first now finds it wherever the list left it.
+- **Lines like `gave 'g_w_blstrpstl001' to 0x13B` on the joiner's screen during a fight.** That was
+  the mod's own bookkeeping (handing an enemy stand-in its loot) answering onto the chat overlay.
+  Fixed on 2026-09-17: those answers go to the log only. A command you type yourself still answers on
+  screen.
 - **Nobody can be knocked out on the Endar Spire.** The game's own tutorial rule.
 - **Old `coop.ini` files.** The installer never overwrites your settings file, so an install from
   before a default changed keeps its old value. If a feature this page says is on seems off, run

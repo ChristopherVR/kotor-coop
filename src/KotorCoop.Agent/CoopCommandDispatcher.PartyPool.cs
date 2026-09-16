@@ -48,6 +48,6 @@ public sealed partial class CoopCommandDispatcher
             Charges: next.Key.Charges,
             MaxCharges: next.Key.MaxCharges,
             Upgrades: next.Key.Upgrades,
-            ItemFlags: next.Key.Flags));
+            ItemFlags: next.Key.Flags), quiet: true);
     }
 }

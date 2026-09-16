@@ -338,6 +338,6 @@ public sealed partial class CoopCommandDispatcher
             Charges: identity.Charges,
             MaxCharges: identity.MaxCharges,
             Upgrades: identity.Upgrades,
-            ItemFlags: identity.Flags));
+            ItemFlags: identity.Flags), quiet: true);
     }
 }
