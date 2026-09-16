@@ -57,17 +57,26 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "kind=$kind"     >> "$GITHUB_OUTPUT"
 
+      # CI's upload step is continue-on-error (a full artifact store must not fail a green
+      # build), so the packages may simply not be there. In that case say so and publish
+      # nothing rather than failing the run.
       - name: Download the CI packages
+        id: download
         if: steps.what.outputs.kind != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist
+          if ! gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist; then
+            echo "CI run ${{ steps.what.outputs.run_id }} stored no packages (artifact quota?); nothing to publish"
+            echo "have=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ls -l dist
           test -f dist/kotor-coop-*-windows.zip && test -f dist/kotor-coop-*-linux.tar.gz
+          echo "have=yes" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        if: steps.what.outputs.kind != 'skip'
+        if: steps.what.outputs.kind != 'skip' && steps.download.outputs.have == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

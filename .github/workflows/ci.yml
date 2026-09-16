@@ -57,6 +57,10 @@ jobs:
             dist/kotor-coop-*-linux.tar.gz
           if-no-files-found: error
           retention-days: 3
+        # Build and tests are the signal; a full artifact store (recalculated only every
+        # 6-12 hours after old artifacts are deleted) must not paint a green build red.
+        # release.yml checks whether the download succeeded and skips publishing if not.
+        continue-on-error: true
 
       # Debug symbols for the agent's own pdbs: never shipped to a player or attached to a
       # release (see tools/package.ps1), kept only so a maintainer can pull them off a CI run
@@ -68,6 +72,7 @@ jobs:
           path: dist/kotor-coop-*-symbols.zip
           if-no-files-found: error
           retention-days: 30
+        continue-on-error: true
 
   # The Linux package is installed on Linux by install.sh, a bash port of the C# installer
   # that the tests above never execute. This job runs it against a stand-in game directory
