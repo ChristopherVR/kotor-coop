@@ -47,7 +47,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | | Status | What to expect |
 | --- | --- | --- |
 | Walking through doors and area transitions together | **Works** | Either player can lead; the other follows through the same loading screen. `follow_lead = host` if you want only the host to lead. |
-| Flying to another planet on the galaxy map | **Works** | Either player can choose the destination at the map. The other player is taken along automatically — take-off movie, cutscene and landing on both screens — and you both arrive in the same Ebon Hawk. |
+| Flying to another planet on the galaxy map | **Works** | Either player can choose the destination at the map. The other player is taken along automatically — take-off movie, cutscene and landing on both screens — and you both arrive in the same Ebon Hawk. If you set `follow_lead = host`, the joining player's own choice at the map is politely refused instead ("only the host can choose a destination") and nothing moves; verified 2026-09-17. |
 | Seeing each other | **Works** | Your partner is a real in-game character with their real face, armour and weapons, walking on the real floor, visible on the minimap and the map screen. |
 | Companions following the party | **Works, with a catch** | Companions follow the host's game. A companion that got stuck behind (an old game bug) is now gathered back to the party automatically rather than left standing. A companion controlled by the *other* player doesn't move around on its own on your screen — it just moves exactly the way the other player's game says it does. |
 | Fog-of-war map reveal | **Works, with a catch** | The map reveals for both. Whether the M-key map *draws* the shared reveal has never been checked on screen — only confirmed behind the scenes, not by watching it happen. |
@@ -63,7 +63,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Really fighting, not just watching | **Works** | Each player's own game runs up to three fights at once for real (your own dice rolls, your own animations). Enemies beyond that are mirrored — your hits still land. |
 | Enemies splitting attention between you | **Works, with a catch** | An enemy the host attacked first will turn on you once you've clearly out-damaged the host. The game's own AI keeps pulling it back to the host, so in practice it alternates between you rather than sticking. With three or more players only one partner is tracked. |
 | Stun, slow, choke, heal and other effects | **Works** | All twelve kinds of non-damage effect land on your partner's real body in both directions. |
-| Companions in combat | **Works** | A companion can fight for the other player; damage it takes is real, and its equipment and experience stay in step on both sides. |
+| Companions in combat | **Works, with a catch** | A companion's equipment and experience stay in step on both sides. A companion fighting *for the other player specifically* (through their own copy of the game, in a fight away from the host) is off by default — set `companion_local_combat = 1` in `coop.ini` to turn it on; once on, damage it takes is real. |
 | Going down, being revived, the party wipe | **Works** | A downed player watches from a spectator camera and can be rescued by their partner (or a companion). If everyone falls, the host reloads and the other player rejoins on its own. |
 | Experience and levelling | **Works** | Kill experience and story experience end up the same on both sides. |
 | The Endar Spire / early Taris duels | **Not a mod limitation** | The game's own tutorial script stops anyone dropping below 1 hit point there, so nobody can be downed in those fights — co-op or not. |
@@ -72,8 +72,8 @@ a couple of situations nobody has been able to test on real hardware yet.
 
 | | Status | What to expect |
 | --- | --- | --- |
-| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests, rewards, recruits. Once you click the NPC to join, the subtitles catch up in well under a second — measured repeatedly, close range or far. If it still feels like a few seconds, that's normal walking time to reach the NPC (same as it would be solo) plus the game's own brief pause on the very first line of any conversation, not a co-op sync delay. This is by design: two people driving one dialogue at once would break the story. |
-| Recruiting companions through dialogue | **Works** | When one of you recruits someone, the other gets them too. |
+| Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests and rewards (a recruit is a separate catch, below). Once you click the NPC to join, the subtitles catch up in well under a second — measured repeatedly, close range or far. If it still feels like a few seconds, that's normal walking time to reach the NPC (same as it would be solo) plus the game's own brief pause on the very first line of any conversation, not a co-op sync delay. This is by design: two people driving one dialogue at once would break the story. |
+| Recruiting companions through dialogue | **Works, with a catch** | Off by default: unless `dialogue_recruit_sync = 1` is set in `coop.ini`, only whoever ran the conversation keeps the new companion — the other player does not automatically get them too. Turn the setting on before recruiting if you want it shared. |
 | Cutscenes | **Works** | They play on both screens. If a cutscene moves one player to a new area, the other follows. |
 | The Star Forge's solo duels (Bastila, Malak) | **Works, with a catch** | The player not in the duel is parked and watches. We haven't been able to prove in testing whether that lock actually stops the keyboard from working — but nothing suggests it doesn't. |
 
@@ -118,9 +118,22 @@ a couple of situations nobody has been able to test on real hardware yet.
 A few things look like bugs and aren't:
 
 - **Your partner appears for a moment as a stranger, or as Trask, right after a warp.** This was a
-  real bug, fixed in August 2026, and made much faster to recover from on 2026-09-10 (it could
-  briefly persist far longer than expected before that). If you still see it, it's worth
-  reporting.
+  real bug. Most of it was fixed in August 2026 and it was made much faster to recover from on
+  2026-09-10 — but the August fix did not finish the job, and saying so here was wrong. Two more
+  faults in the same area were found and fixed on 2026-09-17, both of which looked to a player
+  like "the other person is a stranger, or isn't there at all":
+  - **Your partner had no clothes, or no body at all.** Putting their outfit onto their stand-in
+    character was failing outright, and once it had failed it was never tried again for the rest
+    of that area. On a character whose look is built out of what they are wearing, that left
+    nothing to draw.
+  - **Your partner was simply invisible, all session, while everything else about them worked.**
+    When you join, your game reloads to pick up the host's world, and their stand-in was being
+    created in the split second before your game had finished building the part of the world that
+    draws characters. It ended up in limbo: it followed them around perfectly, it had the right
+    face and the right clothes, and it was never drawn on your screen. Disconnecting and
+    reconnecting used to be the only cure. Their stand-in now waits for your world to be ready.
+
+  If you still see any of this after 2026-09-17, it's worth reporting.
 - **"Another modal screen is up" when a shop won't open for the other player.** Fixed the same way the
   galaxy-map follow was fixed (September 2026). Also worth reporting if you still see it.
 - **You can't click on a companion to talk to them right after joining.** Shares its root cause
@@ -141,8 +154,6 @@ Built and automatically tested, but nobody has watched them on the running game 
 - The keyboard side of the "you're parked" locks (swoop, Star Forge duels) — injected keystrokes
   never reach this game, so it can't be tested without a person at the keyboard.
 - The exact on-screen look of the connection line and of the shared map reveal.
-- Refusing the other player's galaxy-map choice when `follow_lead = host` is set (the default lets anyone
-  choose, and that path is verified).
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
 - A physical gamepad (the controller support was verified with a simulated one).

@@ -13,12 +13,14 @@ lead through doors and area changes, and either player can pick the destination 
 map -- the other one is taken along automatically, take-off movie and all. Enemies have one
 shared health bar, your hits land, and stuns, slows and heals reach your partner for real. The
 party's inventory, credits, merchant stock, doors, chests, quests and the journal are all one
-shared copy. Companions follow the host's game, and a companion can fight for the other player. One
-conversation runs at a time: whoever starts it picks the replies and the other player watches
+shared copy. Companions follow the host's game; set companion_local_combat = 1 in coop.ini
+(off by default) to let one also fight for the other player through their own copy of the game.
+One conversation runs at a time: whoever starts it picks the replies and the other player watches
 it live. Pazaak and the swoop race are single-seat -- the other player is told they're waiting.
 If somebody saves, loads, quits to the menu, or the host's game crashes, the other side notices
 and rejoins on its own. The first time you join you create a co-op character through the normal
-New Game screen; the mod keeps it and uses it on every join after. Mouse and keyboard only.
+New Game screen; the mod keeps it and uses it on every join after. Mouse and keyboard, or any
+Xbox-style controller -- see "Controller" below.
 The full list -- what works, what has a catch, and what is deliberately left to the host -- is
 docs/limitations.md in the full repository (link at the bottom).
 
@@ -29,8 +31,9 @@ A. Extract into the game folder. Unzip this whole archive into the folder that c
 swkotor.exe (for GOG usually C:\GOG Games\Star Wars KOTOR (GOG)). That's it -- the zip *is*
 the install. Start the game.
 
-B. Double-click KotorCoop.Agent.exe. Unzip anywhere, run the exe. It finds your GOG install
-(or asks), copies everything in, and offers to launch the game.
+B. Double-click KotorCoop.Agent.exe. Unzip anywhere, run the exe. It finds your KOTOR install
+(GOG or Steam, or asks if it finds none or several), copies everything in, and offers to launch
+the game.
 
 Both do the same thing. Re-installing over an older version just works; your coop.ini is
 never overwritten. If another mod already has dinput8.dll (ReShade, an ASI loader, a
@@ -79,6 +82,10 @@ Only one conversation runs at a time -- the other player watches it live. If you
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
 
+Recruiting a companion in conversation is, by default, kept by whoever ran that conversation --
+the other player does not automatically get them too. Set dialogue_recruit_sync = 1 in coop.ini
+(off by default) before recruiting if you want a new companion to reach both of you.
+
 Controller: plug in any Xbox-style (XInput) pad and it works, in the menus and in the
 world -- left stick walks and turns, right stick is the cursor, A is the default action / click,
 B is Escape, X cancels combat / right-clicks, Y switches character, LB/RB cycle targets or
@@ -112,6 +119,9 @@ whoever joined; "Both" behaves the same on either side.
   steamstatus                Both    Report whether Steam invites are working. While hosting,
                                      also prints the exact string a friend's Join Game carries.
   steaminvite <steamid64>    Host    Invite one friend by SteamID64. Refused when not hosting.
+  gamepad status             Both    Report what the controller support is doing (pad found,
+                                     mode, held keys). gamepad on/off toggles it without editing
+                                     coop.ini.
   clear                      Both    Clear the on-screen chat/status overlay.
   help                       Both    List every console command, including internal diagnostic/
                                      testing verbs not covered here (see `cheats` for those) -

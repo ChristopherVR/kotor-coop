@@ -45,6 +45,10 @@ jobs:
         shell: pwsh
         run: pwsh tools/package.ps1 -WarnAsError -OutDir dist
 
+      # Short retention on purpose: release.yml downloads this artifact within minutes of a
+      # green run, and a private repository's artifact storage quota is small (the 2026-09-16
+      # pushes failed at this step with "Artifact storage quota has been hit" after two
+      # weeks of 68 MB packages piled up under the default 90-day retention).
       - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
@@ -53,6 +57,11 @@ jobs:
             dist/kotor-coop-*-windows.zip
             dist/kotor-coop-*-linux.tar.gz
           if-no-files-found: error
+          retention-days: 3
+        # Build and tests are the signal; a full artifact store (recalculated only every
+        # 6-12 hours after old artifacts are deleted) must not paint a green build red.
+        # release.yml checks whether the download succeeded and skips publishing if not.
+        continue-on-error: true
 
       # Debug symbols for the agent's own pdbs: never shipped to a player or attached to a
       # release (see tools/package.ps1), kept only so a maintainer can pull them off a CI run
@@ -63,6 +72,8 @@ jobs:
           name: kotor-coop-symbols
           path: dist/kotor-coop-*-symbols.zip
           if-no-files-found: error
+          retention-days: 30
+        continue-on-error: true
 
   # The Linux package is installed on Linux by install.sh, a bash port of the C# installer
   # that the tests above never execute. This job runs it against a stand-in game directory

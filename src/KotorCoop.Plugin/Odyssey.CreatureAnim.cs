@@ -213,6 +213,43 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    /// <summary>
+    /// True once this creature has a BODY ON SCREEN: a client twin, with an animbase, with a
+    /// loaded <c>Gob*</c> (the render/scene node). All three together are the cheapest honest
+    /// answer to "is the client half of the world actually built for this object", and none of
+    /// them calls into the engine — three pointer reads.
+    ///
+    /// ⚠ WHY THIS EXISTS (live, 2026-09-17): the SERVER world comes up before the CLIENT world
+    /// does, and <see cref="TryGetWorldEpoch"/> — which is what gates the whole frame pass —
+    /// only looks at the SERVER (its <c>loading</c> flag at <c>CServerExoAppInternal+0x100B4</c>
+    /// and its mode word). So there is a window, right after a Load Game or a world adoption,
+    /// in which the epoch reads valid, <c>GetPlayerCreaturePointer</c> resolves, the player's
+    /// position is plausible — and the local player has NO CLIENT TWIN AT ALL. A phantom
+    /// created inside that window comes out permanently invisible: its own twin is built a
+    /// moment later and reads back perfectly (right appearance row, right model resref, a
+    /// non-null Gob, a position that tracks its peer live) yet the renderer never draws it,
+    /// because it was never attached to the client area that was still being built underneath
+    /// it. Measured: client <c>kotorcoop-plugin.log</c> 22:45:20.47, the gait diagnostic one
+    /// frame after the adoption re-spawn, reporting <c>player-&gt; name='' len=-1 model=''
+    /// weaponClass=255 animBase=0x0</c> — the LOCAL player, not the phantom. The phantom
+    /// spawned in that frame was still invisible three and a half hours later; a re-spawn of
+    /// the same peer into the settled world (02:23:43, forced with disconnect/reconnect)
+    /// rendered immediately. See docs/research/name-plates.md.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool HasRenderedBody(nint creature)
+    {
+        nint twin = GetClientTwin(creature);
+        if (twin == 0 || *(nint*)twin != ClientCreatureVtable)
+        {
+            return false;
+        }
+
+        nint animBase = *(nint*)(twin + TwinAnimBase);
+        return animBase != 0 && *(nint*)(animBase + AnimBaseGob) != 0;
+    }
+
     /// <summary>CSWCAnimBase + this = Gob* (the render/scene node this animbase drives).
     /// Null until the model has finished loading. tools/kotor1_0_3.db: CSWCAnimBase.gob,
     /// offset 184 (0xB8). <see cref="AnimationExistsFn"/> refuses everything while this is

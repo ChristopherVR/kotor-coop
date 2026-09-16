@@ -187,8 +187,8 @@ happening.
 Both are by design, not bugs: only the host can switch party character
 ([client-control-lock.md](research/client-control-lock.md),
 [control-return.md](research/control-return.md)), and a mirrored companion can't swing on a
-client except through `companion_local_combat`, which is off by default in the code (the
-shipped `coop.ini.example` turns it on) — see
+client except through `companion_local_combat`, which is **off by default in the code AND in the
+shipped `coop.ini.example`** — set `companion_local_combat = 1` yourself if you want it. See
 [party-reconciliation.md](research/party-reconciliation.md).
 
 ## My damage numbers look wrong in a swarm
@@ -217,11 +217,20 @@ not quite matching what is on screen has a visible explanation instead of lookin
 
 ## A feature that "should" be on isn't doing anything
 
-Two `coop.ini` keys (`companion_local_combat`, `dialogue_recruit_sync`) default OFF in the
-code but ON in the shipped file, and a `coop.ini` installed before 2026-08-27 shipped
-`effect_sync`, `trigger_relay` and `menu_button` OFF — see the footnotes in
-[CONFIG.md](CONFIG.md). The installer never overwrites an existing `coop.ini`, so check your
-actual file against that table rather than assuming either side's "default" applies.
+Two `coop.ini` keys — `companion_local_combat` (a companion fighting for the OTHER player
+through their own engine) and `dialogue_recruit_sync` (a companion recruited on one instance
+being made available on the other at all) — default **OFF in the code, and are absent from the
+shipped file too**, so a fresh install genuinely ships with both off. This is the documented,
+on-purpose state, not a stale template: set `companion_local_combat = 1` / `dialogue_recruit_sync
+= 1` in `coop.ini` by hand if you want either. Without `dialogue_recruit_sync`, recruiting a
+companion in conversation only keeps it for whoever ran that conversation — the other player does
+not get it. See the footnotes in [CONFIG.md](CONFIG.md).
+
+Separately, a `coop.ini` installed before 2026-08-27 shipped `effect_sync`, `trigger_relay` and
+`menu_button` OFF, where the current template ships all three ON — that one IS a stale-template
+issue (see the same footnotes), unlike the two keys above. The installer never overwrites an
+existing `coop.ini`, so check your actual file against CONFIG.md's table rather than assuming
+either side's "default" applies.
 
 ## Companion stalls partway through a leg while following
 

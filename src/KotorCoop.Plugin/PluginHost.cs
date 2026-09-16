@@ -519,17 +519,41 @@ internal static unsafe partial class PluginHost
         }
     }
 
+    /// <summary><see cref="Environment.TickCount64"/> as of the worker thread's last pass
+    /// (it sleeps 16 ms between passes, so this is never more than a few tens of milliseconds
+    /// old while the worker is healthy). Read from the GAME thread by the frame hook's own
+    /// half of the stall watchdog — see <c>PluginHost.Frame</c>'s <c>WatchWorkerThread</c> —
+    /// so that "the worker died" and "the worker is fine and quiet" are distinguishable in the
+    /// log instead of looking identical. 0 until the worker's first pass.
+    ///
+    /// ⚠ ALWAYS ACCESSED THROUGH <see cref="Interlocked"/>, never a plain read/write. This is
+    /// an 8-byte field crossing threads on an x86 (32-bit) process, where a bare read/write of
+    /// a <c>long</c> is not atomic — a plain read on the game thread could observe a torn value
+    /// (half the old tick, half the new one) while the worker is mid-write. The two threads are
+    /// otherwise strictly divided (the worker only touches the shared block; see
+    /// docs/ARCHITECTURE.md); this field is the one exception, so the access itself has to be
+    /// safe rather than relying on the division.</summary>
+    internal static long WorkerLastTickMs;
+
     private static void WorkerLoop()
     {
         uint lastRemoteCount = 0;
         uint lastPhantomCount = 0;
         long lastFrames = 0;
         int quietTicks = 0;
+        long quietSinceMs = 0;
 
         while (_running)
         {
             try
             {
+                // The other half of the two-sided stall watchdog: the frame hook reads this to
+                // tell "the worker stopped" apart from "the worker is running and has nothing
+                // to say". Written before anything below can throw, so a worker that is alive
+                // but erroring still counts as alive. Interlocked.Exchange, not a plain store —
+                // see the field's own doc comment: a bare 64-bit write is not atomic on x86.
+                Interlocked.Exchange(ref WorkerLastTickMs, Environment.TickCount64);
+
                 _block->Heartbeat++;
 
                 // The crash probe's handler is machine code and cannot format a log line
@@ -572,12 +596,35 @@ internal static unsafe partial class PluginHost
                     {
                         if (++quietTicks == 120)
                         {
+                            quietSinceMs = Environment.TickCount64 - 2000;
                             Log("WARNING: frame hook installed but has not fired for ~2s "
-                                + "(normal while a movie or a module load holds the main thread)");
+                                + "(normal while a movie or a module load holds the main "
+                                + "thread, or while the game's window is inactive and the "
+                                + "engine has parked its own main loop)");
                         }
                     }
                     else
                     {
+                        // ⚠ SAY WHEN IT CAME BACK, AND FOR HOW LONG IT WAS GONE. The warning
+                        // above used to be the whole story, and a one-shot line with no
+                        // closing bracket cannot answer the question anyone actually asks of
+                        // it — "was the plugin dead, or was there simply nothing to log?".
+                        // 2026-09-16 that ambiguity cost a live session: this file went
+                        // completely silent from 23:10 to 02:09 (the machine's displays slept
+                        // and the engine parked its main loop), and the silence was read as a
+                        // stalled or crashed plugin worker, which it was not — the console
+                        // still answered and the peer's phantom was still being driven the
+                        // moment the window came back. A resume line with a duration makes
+                        // that a one-grep answer instead of a reproduction attempt.
+                        if (quietSinceMs != 0)
+                        {
+                            Log("frame hook: firing again after "
+                                + $"{(Environment.TickCount64 - quietSinceMs) / 1000.0:F1}s "
+                                + "of silence (the plugin worker never stopped; nothing below "
+                                + "this gap ran on the game thread while it lasted)");
+                            quietSinceMs = 0;
+                        }
+
                         quietTicks = 0;
                         lastFrames = frames;
                     }

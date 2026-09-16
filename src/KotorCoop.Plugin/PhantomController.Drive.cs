@@ -190,6 +190,27 @@ internal sealed unsafe partial class PhantomController
 
             nint phantom = _phantoms[i];
 
+            // A body spawned before the client half of the world existed can be permanently
+            // invisible with every readable field correct (PhantomSpawnReadinessRule). The
+            // wait budget only expires when the world is unusually slow, so this is rare —
+            // but when it does happen, replacing the body is the only repair there is.
+            if (PhantomSpawnReadinessRule.ShouldReplaceProvisional(
+                    _provisional[i],
+                    Odyssey.HasRenderedBody(player),
+                    _provisionalReplacements[i],
+                    PhantomSpawnReadinessRule.MaxProvisionalReplacements)
+                && _spawnCooldownFrames == 0)
+            {
+                _provisionalReplacements[i]++;
+                PluginHost.Log(
+                    $"phantom slot {i}: the client world has come up since this body was "
+                    + "spawned provisionally - replacing it so the peer is drawn");
+                DestroySlot(i, "provisional body replaced");
+                PublishPhantomCount();
+                _spawnCooldownFrames = 30;
+                continue;
+            }
+
             ApplyAppearance(i, phantom, remote.Appearance);
             ApplyEquipment(i);
             ApplyName(i, phantom);
@@ -400,9 +421,13 @@ internal sealed unsafe partial class PhantomController
     /// resref changed, create the item on the phantom and equip it through the engine.
     /// One engine mutation per 30 frames — an equip is as heavy as a spawn.
     ///
-    /// An empty desired resref is left alone (the phantom keeps what it wears); a resref
-    /// this install cannot resolve is remembered as applied so a missing mod does not
-    /// retry forever.
+    /// An empty desired resref is left alone (the phantom keeps what it wears). Whether a
+    /// resref is remembered as applied after the attempt is <see cref="EquipRetryRule"/>'s
+    /// call, not this method's: a resref this install truly cannot resolve (failure 7) is
+    /// latched so a missing mod does not retry forever, but every OTHER failure is transient
+    /// and must retry — see that rule's doc comment for the live bug this fixed (a phantom
+    /// whose first equip attempt failed because the engine's routine table had not resolved
+    /// yet, right at connect, never got dressed for the rest of the module).
     /// </summary>
     private void ApplyEquipment(int slot)
     {
@@ -429,11 +454,47 @@ internal sealed unsafe partial class PhantomController
                 continue;
             }
 
-            _appliedEquip[slot, j] = hash;
             _equipCooldownFrames = 30;
 
-            bool ok = Odyssey.EquipItemFromTemplate(
+            // The synchronous engine path (CSWSCreature::EquipItem), the same one
+            // PartyPresenceController uses for companions and CheatController for `equip`.
+            // The VM-routine path this used to call (EquipItemFromTemplate) failed with
+            // failure 3 - CreateItemOnObject/ActionEquipItem not found in the commands table -
+            // on EVERY attempt across two live sessions on 2026-09-16 (12/12 retries once the
+            // latch bug below was fixed), so a peer whose appearance row needs clothing to
+            // build a body model (row 114, pfbalb01) was invisible on the other side for the
+            // whole session. See EquipRetryRule.
+            bool ok = Odyssey.EquipItemFromTemplateDirect(
                 _phantomIds[slot], resref, length, EquipInventorySlots[j], out int failure);
+
+            // See EquipRetryRule's doc comment: only a genuine success or the one PERMANENT
+            // failure (blueprint missing on this install) may skip this resref forever. Every
+            // other failure — the routine table not resolved yet at connect time being the one
+            // measured live — must be retried on a later pass, so do NOT advance the cache.
+            //
+            // ⚠ EVERY failure code past this point (Odyssey.Equipment.cs's 20-26) fires AFTER
+            // GiveItemToInventory has already created a fresh item on the phantom — so an
+            // unbounded retry here would create and orphan one new item every 30 frames for
+            // the life of the module on a PERSISTENT (not transient) failure. ShouldGiveUp
+            // bounds it: a resref latches (as failed, not as succeeded) once it has failed this
+            // many times in a row, exactly the way TrySpawnOne's own MaxSpawnFailures stops a
+            // missing blueprint from retrying forever.
+            bool latch = EquipRetryRule.ShouldLatch(ok, failure);
+            if (!latch && EquipRetryRule.ShouldGiveUp(++_equipFailures[slot, j]))
+            {
+                latch = true;
+                PluginHost.Log(
+                    $"equip: GIVING UP on phantom 0x{_phantomIds[slot]:X} slot "
+                    + $"{EquipInventorySlots[j]} after {_equipFailures[slot, j]} consecutive "
+                    + $"failures (last failure {failure}) — leaving it as last equipped rather "
+                    + "than leaking another item every attempt");
+            }
+
+            if (latch)
+            {
+                _appliedEquip[slot, j] = hash;
+                _equipFailures[slot, j] = 0;
+            }
 
             if (_equipsLogged < 12)
             {

@@ -66,6 +66,7 @@ tests compose.
 | `sendkey.ps1` | Sends keystrokes to a window. *(no header comment — undocumented one-off; behaviour inferred from its parameters: `-Keys`, `-HoldMs`, `-GapMs`.)* |
 | `wheel.ps1` | Scrolls the mouse wheel over a window (KOTOR maps it to camera zoom). |
 | `shot.ps1` | Captures a screenshot of a window or the full screen. *(no header comment — undocumented one-off.)* |
+| `siteclip.ps1` | Records every open `swkotor` window's client area as one side-by-side GIF for the player site (`site/media/`): ffmpeg `gdigrab` of the desktop region, per-window crops stacked with `hstack`, two-pass palette. Takes a `-Action` script block that runs once recording has started (drive it with `blockpoke.ps1 console ...`). The monitors must be awake or every game frame captures black; a player only walks while its own window has focus. See `site/media/README.md`. |
 | `crop.ps1` | Crops and scales an image file. *(no header comment — undocumented one-off.)* |
 | `tooltip.ps1` | Detects KOTOR's hover tooltip (a bright cyan underline) in a screenshot. |
 
