@@ -152,6 +152,11 @@ A few things look like bugs and aren't:
   points, so the game's own limping walk (which it plays below a fifth of health) never applied to
   it, even though the mod knew they were at 1 hit point. Fixed on 2026-09-17: the stand-in now
   carries your partner's current and maximum hit points, and limps when they do.
+- **The host's companion stood through a fight and did nothing.** The mod's "companion stopped
+  following" recovery could fire on a companion that had simply arrived beside a standing host,
+  teleport them into place five times, and leave the host's party in solo mode, which is the
+  game's own "companions do not act" switch. Fixed on 2026-09-17: a companion within three units
+  of a standing host is left alone, and the recovery puts solo mode back the way it found it.
 - **Nobody can be knocked out on the Endar Spire.** The game's own tutorial rule.
 - **Old `coop.ini` files.** The installer never overwrites your settings file, so an install from
   before a default changed keeps its old value. If a feature this page says is on seems off, run

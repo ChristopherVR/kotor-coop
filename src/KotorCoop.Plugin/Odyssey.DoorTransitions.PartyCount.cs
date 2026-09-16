@@ -426,6 +426,15 @@ internal static unsafe partial class Odyssey
 
         skipFlagWasSet = *(int*)(table + PartyTableSkipPositioning) != 0;
 
+        // What solo mode read BEFORE the call is what it must read after. On a client the agent
+        // holds it at 1 and this restores 1; on the HOST it is 0 - the host's companions run
+        // their own party AI - and forcing 1 here (as this did until 2026-09-17) silently turned
+        // that AI off: solo mode is the script's "do not fight" switch (party-reconciliation.md,
+        // round 83's six readers), so a host-side stall recovery left Trask standing through a
+        // whole fight. Live: host soloMode=0 at 07:34:34, 1 at 07:34:38 right after the first
+        // recovery, and never 0 again that session.
+        byte soloModeBefore = *(byte*)(table + PartyTableSoloMode);
+
         PositionPartyFn(table);
 
         // The flag was set, so that call only cleared it and moved nobody (0x00565B6E). The
@@ -440,7 +449,9 @@ internal static unsafe partial class Odyssey
         // restore it immediately, synchronously, rather than leaving even one frame where the
         // party AI script could see it as 0 and self-heal into a real, party-wide
         // ActionFollowLeader that would otherwise keep dispatching long after this call returns.
-        *(byte*)(table + PartyTableSoloMode) = 1;
+        // Restoring the PRIOR value, not a literal 1, is what keeps the host's own companions
+        // fighting (see above).
+        *(byte*)(table + PartyTableSoloMode) = soloModeBefore;
 
         return true;
     }

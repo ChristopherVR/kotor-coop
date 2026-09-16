@@ -83,7 +83,16 @@ internal static class FollowStallRule
     /// captured stall sits at <c>(10.51,16.78)</c> vs. <c>(10.78,15.70)</c> — 1.2393 squared —
     /// so the recorded shape clears this with real margin while an actually-caught-up companion
     /// does not.</summary>
-    public const float MinLeaderDistanceSquared = 1.0f;
+    /// <para>2026-09-17: was 1.0 (one unit). A companion standing in FORMATION beside a still
+    /// leader is 1.6-1.9 units away (live: leaderDistSq 2.74 and 3.60), so the old gate let the
+    /// detector fire five PositionParty teleports at a companion that had simply arrived, then
+    /// latch off for the module - and each PositionParty left the host's party in solo mode
+    /// (see Odyssey.GatherParty), which is the party AI script's "do not fight" switch. The
+    /// host's Trask stood through a whole fight because of it. Three units is the same
+    /// "caught up" range the sibling reissue check (PartyFollowController.FollowKickRangeSquared)
+    /// already uses. A leader who is WALKING AWAY still fires at any distance, which is the case
+    /// rounds 96/97 built this for.</para>
+    public const float MinLeaderDistanceSquared = 3.0f * 3.0f;
 
     /// <summary>How many consecutive fires without a confirmed recovery are allowed before this
     /// companion's detector latches off for the rest of the module.</summary>

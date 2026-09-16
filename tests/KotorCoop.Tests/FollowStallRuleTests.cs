@@ -30,8 +30,13 @@ public sealed class FollowStallRuleTests
     private const float LiveDistSqToTarget = 0.0f;
     private const float LiveDistSqToPrior = 0.0f;
 
-    /// <summary>pos=(10.51,16.78) vs leaderPos=(10.78,15.70): 0.27² + 1.08² = 1.2393.</summary>
+    /// <summary>pos=(10.51,16.78) vs leaderPos=(10.78,15.70): 0.27² + 1.08² = 1.2393 - inside
+    /// formation range, so since 2026-09-17 this shape only fires once the leader moves.</summary>
     private const float LiveLeaderDistanceSquared = 1.2393f;
+
+    /// <summary>A companion genuinely left behind (live 2026-09-17: leaderDistSq 16.29 at the
+    /// first real wedge of that session, pathNode=destNode=3, writeCursor 6).</summary>
+    private const float BehindLeaderDistanceSquared = 16.29f;
 
     private static bool ShouldRecover(
         int phase = LivePhase,
@@ -41,7 +46,7 @@ public sealed class FollowStallRuleTests
         float distSqToTarget = LiveDistSqToTarget,
         float distSqToPrior = LiveDistSqToPrior,
         double frozenSeconds = 30.0,
-        float leaderDistanceSquared = LiveLeaderDistanceSquared,
+        float leaderDistanceSquared = BehindLeaderDistanceSquared,
         bool leaderMoving = false,
         bool suppressed = false,
         int consecutiveRecoveries = 0,
@@ -72,9 +77,27 @@ public sealed class FollowStallRuleTests
     }
 
     [Fact]
-    public void Round97sOwnLiveCaptureFiresARecovery()
+    public void Round97sOwnLiveCaptureFiresARecoveryOnceTheLeaderWalksAway()
     {
-        Assert.True(ShouldRecover());
+        // "Walked away and it never resumed following" is what rounds 96/97 built this for: a
+        // companion parked 1.1 units from a STILL leader is formation, not a stall (see below);
+        // the same record with the leader in motion is recovered at once.
+        Assert.False(ShouldRecover(leaderDistanceSquared: LiveLeaderDistanceSquared));
+        Assert.True(ShouldRecover(leaderDistanceSquared: LiveLeaderDistanceSquared, leaderMoving: true));
+    }
+
+    [Fact]
+    public void ACompanionInFormationBesideAStillLeaderIsNotTeleportedFiveTimes()
+    {
+        // 2026-09-17, live on the host: formation is 1.6-1.9 units (leaderDistSq 2.74 and 3.60)
+        // and an arrived companion's record reads exactly like round 97's capture (phase 6/7,
+        // pathNode == destNode, 0 vs 0). The old one-unit gate fired five PositionParty
+        // teleports at it, latched off for the module, and left the host's party in solo mode.
+        Assert.False(ShouldRecover(leaderDistanceSquared: 2.74f));
+        Assert.False(ShouldRecover(
+            leaderDistanceSquared: 3.60f, phase: FollowStallRule.PathWaitPredecessorPhase, pathNode: 0, destNode: 0));
+        Assert.False(ShouldRecover(leaderDistanceSquared: 9.0f));
+        Assert.True(ShouldRecover(leaderDistanceSquared: 9.01f));
     }
 
     [Fact]
@@ -273,9 +296,11 @@ public sealed class FollowStallRuleTests
         //   * Phase2StallRule needs phase 2 and > 3 units — the wedge is phase 7 at ~1.11 units.
         //   * TryAdvanceStalledPathDestination needs writeCursor - pathNode >= 2 — it is 1.
         //   * PartyFollowController's reissue check needs > 3 units squared > 9 — it is 1.2393.
-        // This rule must still fire on exactly that data.
+        // This rule must still fire on exactly that data - once the leader is walking away.
+        // With a still leader that distance is formation (2026-09-17), and the gate now matches
+        // the reissue check's three units on purpose: one definition of "caught up", not two.
         Assert.True(LiveLeaderDistanceSquared < 3.0f * 3.0f);
-        Assert.True(LiveLeaderDistanceSquared > FollowStallRule.MinLeaderDistanceSquared);
-        Assert.True(ShouldRecover());
+        Assert.Equal(3.0f * 3.0f, FollowStallRule.MinLeaderDistanceSquared);
+        Assert.True(ShouldRecover(leaderDistanceSquared: LiveLeaderDistanceSquared, leaderMoving: true));
     }
 }
