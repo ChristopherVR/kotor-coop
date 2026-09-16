@@ -268,3 +268,129 @@ Item 3 (stand-ins never dressed on the client twin) is fixed with the same per-b
 document's own section added for phantoms; see enemy-materialisation.md §7.2. Item 1 — a save
 whose PC is not appearance 114 — is still not represented on this rig, but it is no longer the
 blocker it was: the Trask symptom is explained and reproduced as a mechanism without it.
+
+---
+
+## The invisible peer — the third half of "who is my partner", settled (2026-09-17, MEASURED LIVE)
+
+The two halves this document already owns are the SERVER object's identity fields and the CLIENT
+twin's copies of them (`PeerIdentityRule`, the `_twinDressed` latch). A live pass on 2026-09-16/17
+found a third, upstream of both: **whether the twin is attached to the renderer at all**. Every
+identity field can be perfect and the peer can still be nowhere on screen.
+
+The user-facing report was "Trask's portrait shows for the connected player" — which, read
+literally, sent two rounds hunting appearance rows. What the joined player was actually looking at
+was their OWN Trask companion, mirrored to the host's Trask position, and *no host character
+anywhere* — an absence being read as a substitution.
+
+### Symptom, and why every probe said it was fine
+
+Live, rig, 2026-09-17 02:11, the client's phantom of the host (object `0x1CBA5598`, id `0x12E`):
+
+| read | value | verdict |
+| --- | --- | --- |
+| server `appearance_type` (`+0xA60`) | 114 | correct (the host's own row) |
+| twin desired row (`+0x38C`) | 114 | correct |
+| twin `anim_base` (`+0x68`) | `0x19D442E8` | present |
+| animbase model resref (`+0x2C`) | `pfbbl01` | correct — byte-identical to the host's own body |
+| animbase `Gob*` (`+0xB8`) | `0x1C9293A8` | **non-null** — the model loaded |
+| animbase weapon class (`+0xC5`) | 2 | matches the host's own |
+| twin `position` (`+0x24`) / desired (`+0x1DC`) | tracked the host's walks to 2 dp | correct |
+| on screen | **nothing** | ✗ |
+
+The host's own body on the host read the same six values. So did the host's phantom OF THE CLIENT,
+which rendered perfectly — the failure was one-directional, client only. Walking the host to
+`(27,22)` and then onto the client's own position moved the phantom's server object, its twin
+position and its `where` reading exactly as expected, and drew nothing at any of them.
+
+### Cause
+
+The SERVER world comes up before the CLIENT world does, and everything gating the frame pass only
+asks the server. `Odyssey.TryGetWorldEpoch` returns true once
+`CServerExoAppInternal+0x100B4` (`loading`) is clear and the mode word is 2; by then
+`GetPlayerCreaturePointer` resolves and the player stands on a plausible position, so
+`PhantomController.TrySpawnOne`'s existing gates all pass. The client half — twins, animbases, the
+scene the renderer walks — is still being built.
+
+The one flow that hits this window every time is `auto_adopt_world`: the joiner reloads to adopt
+the host's staged autosave, and the phantom is re-spawned during that reload. Client
+`kotorcoop-plugin.log`, 2026-09-16:
+
+```
+22:45:17.721 epoch: world unloading; clearing phantom, item, combat and door state
+22:45:18.749 menu: adopting a world - login left on TEMP:pifo (the carried character)
+22:45:19.455 spawned phantom in slot 0: id 0x12D at 0x1CBA5598 (renders no twin yet)
+22:45:19.458 session released: destroyed phantom 0x12D (slot 0)
+22:45:20.442 spawned phantom in slot 0: id 0x12E at 0x1CBA5598 (renders no twin yet)
+22:45:20.453 equip: phantom 0x12E wears g_a_clothes01 (slot 1)
+22:45:20.470 identity: phantom slot 0 (0x12E) now renders appearance 114
+22:45:20.471 gait-name: id 0x2712 phantom-> ... appearanceRow=114 weaponClass=0
+             | player-> name='' len=-1 model='' weaponClass=255 animBase=0x0
+```
+
+That last line is the diagnostic this document's own live pass added, and the half that matters is
+the one nobody was reading: `player->`. **The LOCAL player had no client twin at all**, one frame
+after the spawn. `0x12E` was created into a world whose client side did not exist yet; its own twin
+was built moments later, complete and correct, and was never attached to the client area. It was
+still invisible three and a half hours later.
+
+Compare the spawn eight seconds earlier, BEFORE the adoption reload, into a settled world:
+
+```
+22:45:12.017 gait-name: ... phantom-> model='pfbalb01' appearanceRow=114
+             | player-> name='walk' len=5 model='pmbama01' animBase=0x1C950930
+```
+
+### The isolating experiment
+
+`destroyobject` refuses a peer's phantom by design ("0x12E is a peer's phantom, not an enemy"), so
+the body was replaced through the session instead: `disconnect` then `reconnect` on the client,
+02:23:37/02:23:43, which destroys slot 0 and spawns a fresh body into the now-settled world.
+Nothing else changed — same module, same host, same peer, same appearance packet, same equip
+resrefs in the log. The host appeared on the client's screen immediately, in her `g_a_clothes01`,
+at the coordinates `where` on the host reported. That is the whole proof that the cause is WHEN the
+body is created, not what is written to it.
+
+### The fix
+
+`Odyssey.HasRenderedBody(creature)` — client twin (vtable-checked), `anim_base`, non-null `Gob*`;
+three pointer reads, no engine call. `PhantomSpawnReadinessRule` turns it into the spawn decision,
+applied to the LOCAL player as the proxy for "the client half of this world is built":
+
+- rendering → spawn;
+- not rendering → defer, and start a 10-second budget;
+- budget spent → spawn anyway (a peer who might not render beats no peer at all) but flag the body
+  PROVISIONAL, and replace it once, at the first later frame the local player does render.
+
+The budget and the replacement exist only so a gate that never opens cannot mean "no peers ever" on
+some rig this one cannot represent; on this rig the gate has never needed them.
+
+### Live verification (2026-09-17, fresh rig, both game folders redeployed)
+
+```
+02:40:11.151 menu: adopting a world - login left on TEMP:pifo (the carried character)
+02:40:11.546 phantom spawn deferred: the client half of this world is not built yet
+             (the local player has no rendered body); a phantom spawned now would never be drawn
+02:40:13.407 spawned phantom in slot 0: id 0x132 at 0x19541F10 (20.01, 22.15, -1.27) appearance 114
+02:40:13.411 equip: phantom 0x132 wears g_a_clothes01 (slot 1)
+02:40:13.964 equip: phantom 0x132 wears g_w_shortswrd01 (slot 4)
+```
+
+One deferral, 1.9 s of waiting, no provisional spawn. Probe afterwards — client phantom
+`0x19541F10` → twin `0x195E1F58` → animbase `0x1B5DE760`, `model='pfbbl01'`, `gob=0x1CDB9788`,
+`weaponClass=2` — identical to the host's own body (`0x1876E590` → `0x187D7E28` → `0x1B94C0C0`).
+On screen: the host renders on the client, in her white/tan clothing, next to Trask; and the host
+still renders the joiner's `pmbama01` body. Both directions.
+
+### Two notes for whoever reads this next
+
+- **`weaponClass` now matches (2 on both).** phantom-locomotion.md §11.3 left a phantom-vs-player
+  weapon-class gap open (8 vs 2) as a still-open sync defect. On this pass, with the body dressed
+  through the synchronous equip path (36d83fc) and spawned into a built world, the phantom's
+  animbase reports the same class as the player it stands for. That does not prove the gap is
+  closed in general, but the rig no longer reproduces it.
+- **`pfbalb01` vs `pfbbl01`.** phantom-locomotion.md §11.1 recorded these as two variants of the
+  same body class. The host's own dressed body on this save is `pfbbl01`; the pre-adoption phantom
+  was `pfbalb01`. A body variant is a function of what is equipped, so a phantom whose equip has
+  not landed yet can legitimately report the other one — do not read a variant difference as an
+  appearance-row bug.
