@@ -27,7 +27,10 @@ What you should know before starting:
   player watches it live. That's deliberate — two people steering one dialogue would break the
   story.
 - **The host owns the party.** Only the host swaps the active party member and picks the party
-  before a departure. Companions follow the host's game.
+  before a departure. Companions follow the host's game. Two related switches ship OFF by
+  default: `dialogue_recruit_sync` (without it, only whoever ran a recruiting conversation keeps
+  the new companion) and `companion_local_combat` (without it, a companion doesn't fight for the
+  other player through their own copy of the game). Both are one-line `coop.ini` edits.
 - **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for the
   other. A shop's stock is only re-read while someone has it open, and a shop that has an infinite
   supply of something will never show it changing (harmless).
@@ -62,7 +65,9 @@ Both players, each in their own full game:
   journal, credits, the party's inventory and merchant stock all stay in step. **Pause** pauses
   both games.
 - **Share one party**, driven by the host's game and mirrored to everyone (`--no-party-sync` opts
-  out), including a companion's equipment, experience and recruitment.
+  out), including a companion's equipment and experience. A companion's *recruitment* is NOT
+  shared by default — see `dialogue_recruit_sync` in [docs/CONFIG.md](docs/CONFIG.md); without it,
+  only the player who ran the recruiting conversation keeps the new companion.
 - **Start from the game's own menu** — a "Co-op" button, password-protected, auto-reconnect — and
   **type commands in-game** (`~`, see [docs/CONSOLE.md](docs/CONSOLE.md)) or **chat** (Enter).
 - **Hold one conversation at a time**, Baldur's Gate 3-style: the other player spectates live and a
@@ -92,7 +97,8 @@ Download `kotor-coop-<version>-windows.zip` (or, on Linux / Steam Deck, `kotor-c
 from the [releases page](https://github.com/ChristopherVR/kotor-coop/releases). Pick a numbered version for the
 most stable build, or `latest` for the newest one that's passed its automated checks. The zip is a game-folder image: **extract it straight
 into the folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** —
-it finds the GOG install (or asks), copies everything in, and offers to launch.
+it finds your KOTOR install — GOG or Steam, including libraries on other drives — or asks if it finds none or
+several, copies everything in, and offers to launch.
 
 No scripts, nothing to configure. If another mod already owns `dinput8.dll` (ReShade, an ASI loader, ...), both
 install paths notice and set kotor-coop up to run alongside it automatically — see
