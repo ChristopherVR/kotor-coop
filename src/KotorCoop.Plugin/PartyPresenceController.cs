@@ -64,12 +64,19 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     // mid-session propagation under 3s. Default ON, same escape-hatch discipline every other
     // engine-write feature in this file follows. Dresses a mirrored companion in the gear the
     // HOST publishes (see OffsetCompanionEquipSlots' own comment), through
-    // Odyssey.EquipItemFromTemplateDirect (§7's fix — PhantomController.ApplyEquipment still
-    // uses the older EquipItemFromTemplate for a peer's phantom, unchanged).
+    // Odyssey.EquipItemFromTemplateDirect — the same primitive PhantomController.ApplyEquipment
+    // was switched onto 2026-09-16 (both channels now share it; the older VM path,
+    // EquipItemFromTemplate, has no remaining caller in this file's channel).
 
     private readonly bool _companionGearSyncEnabled = PluginConfig.ReadBool("companion_gear_sync", true);
 
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.PartyPresenceCapacity, SharedBlock.EquipCount];
+
+    /// <summary>Consecutive equip failures per (companion slot, equip slot) — the same bound
+    /// <see cref="EquipRetryRule.MaxConsecutiveFailures"/> gives PhantomController.ApplyEquipment,
+    /// so a persistent (not transient) failure here cannot leak one orphaned item per attempt
+    /// for the life of the module either.</summary>
+    private readonly int[,] _equipFailures = new int[SharedBlock.PartyPresenceCapacity, SharedBlock.EquipCount];
 
     private int _equipCooldownFrames;
 
@@ -865,6 +872,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         for (int j = 0; j < SharedBlock.EquipCount; j++)
         {
             _appliedEquip[slot, j] = 0;
+            _equipFailures[slot, j] = 0;
         }
     }
 
@@ -884,8 +892,17 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// <see cref="PhantomController.ApplyEquipment"/> already uses.
     ///
     /// An empty desired resref is left alone (companion_gear_sync off on the host, or the slot
-    /// could not be read there); a resref this install cannot resolve is remembered as applied
-    /// so a missing mod does not retry forever.
+    /// could not be read there). Whether a resref is remembered as applied after the attempt is
+    /// <see cref="EquipRetryRule"/>'s call, not this method's — see
+    /// <c>PhantomController.ApplyEquipment</c>'s identical use of the same rule: a resref this
+    /// install truly cannot resolve (blueprint missing) is latched so a missing mod does not
+    /// retry forever, but every OTHER failure is transient and must retry.
+    ///
+    /// ⚠ THIS METHOD USED TO LATCH UNCONDITIONALLY BEFORE THE CALL, exactly the bug 36d83fc
+    /// fixed in the phantom channel: a companion whose first equip attempt failed (the same
+    /// connect-time "routine table not resolved yet" race that channel hit live 2026-09-16)
+    /// never got a second attempt for the rest of the module. This channel shares the identical
+    /// engine call and was never fixed alongside it. See EquipRetryRule's own doc comment.
     /// </summary>
     private void ApplyCompanionEquipment(int slot, uint objectId)
     {
@@ -912,25 +929,44 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 continue;
             }
 
-            _appliedEquip[slot, j] = hash;
             _equipCooldownFrames = 30;
 
-            // NOT Odyssey.EquipItemFromTemplate (the phantom channel's own, proven-live call):
-            // that method equips through ActionEquipItem's VM dispatch, which does not equip
-            // synchronously — it queues the equip onto the creature's OWN CSWSCombatRound
-            // pending list (round+0x9B0, CSWSCreature::AddEquipItemActions ->
-            // CSWSCombatRound::AddEquipAction, VERIFIED by disassembly), and nothing in that
-            // call chain ever arms the round's own processing gate the way
-            // Odyssey.Combat.Attack.cs's QueueAttackAction has to for an attack. A phantom is
-            // never claimed (PhantomController never calls Odyssey.ClaimCreature), so nothing
-            // here is racing it; a MIRRORED companion is re-claimed every DriveOne pass, a few
-            // frames after the equip is queued, with no engine tick ever having drained it.
+            // NOT Odyssey.EquipItemFromTemplate: that method equips through ActionEquipItem's
+            // VM dispatch, which does not equip synchronously — it queues the equip onto the
+            // creature's OWN CSWSCombatRound pending list (round+0x9B0,
+            // CSWSCreature::AddEquipItemActions -> CSWSCombatRound::AddEquipAction, VERIFIED by
+            // disassembly), and nothing in that call chain ever arms the round's own processing
+            // gate the way Odyssey.Combat.Attack.cs's QueueAttackAction has to for an attack. A
+            // phantom is never claimed (PhantomController never calls Odyssey.ClaimCreature), so
+            // nothing here is racing it; a MIRRORED companion is re-claimed every DriveOne pass,
+            // a few frames after the equip is queued, with no engine tick ever having drained it.
             // EquipItemFromTemplateDirect equips through the engine's own synchronous
             // CSWSCreature::EquipItem (0x004FEB90) instead — no queue, nothing left pending.
             // See docs/research/companion-state-sync.md and Odyssey.Equipment.cs's own doc
             // comment on EquipItemFromTemplateDirect. NEEDS-LIVE.
             bool ok = Odyssey.EquipItemFromTemplateDirect(
                 objectId, resref, length, EquipInventorySlots[j], out int failure);
+
+            // See EquipRetryRule's doc comment (and ApplyEquipment's identical bound): every
+            // failure past the create step has already left a fresh, orphaned item on this
+            // companion, so an unbounded retry on a PERSISTENT failure leaks one every 30
+            // frames for the life of the module. ShouldGiveUp bounds it the same way.
+            bool latch = EquipRetryRule.ShouldLatch(ok, failure);
+            if (!latch && EquipRetryRule.ShouldGiveUp(++_equipFailures[slot, j]))
+            {
+                latch = true;
+                PluginHost.Log(
+                    $"party drive: GIVING UP on companion 0x{objectId:X} slot "
+                    + $"{EquipInventorySlots[j]} after {_equipFailures[slot, j]} consecutive "
+                    + $"failures (last failure {failure}) — leaving it as last equipped rather "
+                    + "than leaking another item every attempt");
+            }
+
+            if (latch)
+            {
+                _appliedEquip[slot, j] = hash;
+                _equipFailures[slot, j] = 0;
+            }
 
             if (_equipsLogged < 12)
             {

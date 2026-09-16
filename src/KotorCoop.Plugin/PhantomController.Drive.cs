@@ -471,9 +471,29 @@ internal sealed unsafe partial class PhantomController
             // failure (blueprint missing on this install) may skip this resref forever. Every
             // other failure — the routine table not resolved yet at connect time being the one
             // measured live — must be retried on a later pass, so do NOT advance the cache.
-            if (EquipRetryRule.ShouldLatch(ok, failure))
+            //
+            // ⚠ EVERY failure code past this point (Odyssey.Equipment.cs's 20-26) fires AFTER
+            // GiveItemToInventory has already created a fresh item on the phantom — so an
+            // unbounded retry here would create and orphan one new item every 30 frames for
+            // the life of the module on a PERSISTENT (not transient) failure. ShouldGiveUp
+            // bounds it: a resref latches (as failed, not as succeeded) once it has failed this
+            // many times in a row, exactly the way TrySpawnOne's own MaxSpawnFailures stops a
+            // missing blueprint from retrying forever.
+            bool latch = EquipRetryRule.ShouldLatch(ok, failure);
+            if (!latch && EquipRetryRule.ShouldGiveUp(++_equipFailures[slot, j]))
+            {
+                latch = true;
+                PluginHost.Log(
+                    $"equip: GIVING UP on phantom 0x{_phantomIds[slot]:X} slot "
+                    + $"{EquipInventorySlots[j]} after {_equipFailures[slot, j]} consecutive "
+                    + $"failures (last failure {failure}) — leaving it as last equipped rather "
+                    + "than leaking another item every attempt");
+            }
+
+            if (latch)
             {
                 _appliedEquip[slot, j] = hash;
+                _equipFailures[slot, j] = 0;
             }
 
             if (_equipsLogged < 12)

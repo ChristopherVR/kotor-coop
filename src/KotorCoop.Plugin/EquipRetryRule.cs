@@ -49,4 +49,32 @@ internal static class EquipRetryRule
     /// silently giving up forever.
     /// </summary>
     public static bool ShouldLatch(bool ok, int failure) => ok || failure == BlueprintMissing;
+
+    /// <summary>
+    /// How many consecutive non-permanent failures a single (body, slot) may accumulate before
+    /// the caller gives up and latches anyway, treating the resref as done even though it never
+    /// succeeded.
+    ///
+    /// ⚠ WHY THIS EXISTS. Every failure code <see cref="ShouldLatch"/> tells the caller to
+    /// retry occurs AFTER <c>Odyssey.GiveItemToInventory</c> has already created a brand-new
+    /// item object on the target creature — <c>EquipItemFromTemplateDirect</c>'s own 20-26 range
+    /// (slot-map miss, resolve failures, the engine's own equip call refusing, or the post-call
+    /// slot read-back not matching) all fire strictly after the create step succeeds. Retrying
+    /// forever on a genuinely PERSISTENT (not transient) failure — e.g. a slot value this
+    /// creature's inventory resolver never accepts, which the readback check exists precisely to
+    /// catch — creates and orphans one new, never-equipped, never-repository-linked item every
+    /// equip cooldown window for the rest of the module: unbounded, since nothing before this
+    /// bound ever stopped the retry. The one measured live cause of a transient failure (the VM
+    /// routine table not resolved yet, right at connect) cleared within a second in every
+    /// session recorded in ApplyEquipment's own doc comment, so a bound two orders of magnitude
+    /// past that is a defensive backstop, not a real constraint on the fix 36d83fc shipped.
+    /// </summary>
+    public const int MaxConsecutiveFailures = 20;
+
+    /// <summary>
+    /// True once a resref has failed <see cref="MaxConsecutiveFailures"/> times in a row without
+    /// ever hitting a case <see cref="ShouldLatch"/> would already accept — the caller should
+    /// latch it (loudly) rather than keep leaking one orphaned item per attempt.
+    /// </summary>
+    public static bool ShouldGiveUp(int consecutiveFailures) => consecutiveFailures >= MaxConsecutiveFailures;
 }

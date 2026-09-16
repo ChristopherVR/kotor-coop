@@ -262,7 +262,10 @@ internal static unsafe partial class PluginHost
     /// </summary>
     private static void WatchWorkerThread()
     {
-        long lastTick = WorkerLastTickMs;
+        // Interlocked.Read, not a plain load — see WorkerLastTickMs' own doc comment: a bare
+        // 64-bit read is not atomic on x86 and could observe a torn value written concurrently
+        // by the worker thread.
+        long lastTick = Interlocked.Read(ref WorkerLastTickMs);
         if (lastTick == 0)
         {
             // The worker has not had its first pass yet (startup); nothing to judge.
