@@ -26,13 +26,14 @@ jobs:
       - name: Build solution
         run: dotnet build KotorCoop.slnx -warnaserror
 
-      # HeavyPacketLossStillConverges is a known-flaky probabilistic test (see the flaky-test
-      # note in docs/CONTRIBUTING.md's "CI and releases" section) - excluded here rather than
-      # made to pass on every seed.
+      # Everything except the ten-minute soak (tests/KotorCoop.Tests/SessionSoakTests.cs),
+      # which is opt-in twice over: this filter, and an env var it also checks. No test is
+      # excluded for flakiness any more - HeavyPacketLossStillConverges used to be, and now
+      # injects a fixed loss PATTERN instead of a coin flip, so its worst case is bounded.
       - name: Run tests
         run: >
           dotnet test tests/KotorCoop.Tests --no-build
-          --filter "FullyQualifiedName!~HeavyPacketLossStillConverges"
+          --filter "Category!=Soak"
 
       # Builds the NativeAOT win-x86 plugin, the C chain loader and the agent, and packages
       # them with the installers and README exactly as a release would: the Windows zip and

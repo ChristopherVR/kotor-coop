@@ -26,6 +26,25 @@ test process; see `docs/ARCHITECTURE.md`'s Testing section for why). Some suites
 UDP ports, so two concurrent `dotnet test` runs on one machine can flake
 `CoopCommandDispatcherTests` — rerun that class alone before treating it as a regression.
 
+### The soak
+
+`tests/KotorCoop.Tests/SessionSoakTests.cs` runs a host and two clients over lossy,
+reordering, duplicating loopback sockets for ten minutes, with one client leaving and
+rejoining twice and the host vanishing for eight seconds, and then asserts every replicated
+store converges by content digest and no peer identity or serial was left inconsistent. It is
+opt-in twice over — CI filters `Category=Soak` out, and the test itself does nothing unless
+`KOTORCOOP_SOAK=1` is set:
+
+```powershell
+$env:KOTORCOOP_SOAK = '1'
+dotnet test tests/KotorCoop.Tests --filter "Category=Soak"
+$env:KOTORCOOP_SOAK_SECONDS = '120'   # shorter churn, for a change to the soak itself
+```
+
+Run it after any change to the transport, the reliable senders, the resync gates or the
+reconnect path. A failure there is a bug in `src/KotorCoop.Session`, not a flake: the link is
+repaired and the world is quiet before a single assertion runs.
+
 ## Plugin build and install
 
 ```powershell
@@ -82,7 +101,8 @@ hook installed, all three modules visible in the process.
 ## CI and releases
 
 `.github/workflows/ci.yml` runs on every push and pull request: `dotnet build -warnaserror`,
-the test suite (minus the known-flaky `HeavyPacketLossStillConverges`), then
+the test suite (`--filter "Category!=Soak"` — everything except the opt-in ten-minute soak,
+below; no test is excluded for flakiness), then
 `tools/package.ps1 -WarnAsError`, which builds the NativeAOT plugin, the C loader and the
 agent (a self-contained single-file `win-x64` publish — the runtime is inside the exe, so a
 player needs no .NET and a Proton prefix needs nothing added; `dotnet build` and the rig stay
