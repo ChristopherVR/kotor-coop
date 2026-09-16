@@ -131,6 +131,17 @@ public sealed class UdpChannel : IDisposable
             int sent = _socket.SendTo(data, SocketFlags.None, destination);
             Interlocked.Increment(ref _packetsSent);
             Interlocked.Add(ref _bytesSent, sent);
+
+            // A simulated duplicate (NetworkSim.SetDuplication): the SAME bytes a second time,
+            // which is what a retransmitting middlebox produces and what every dedup rule in
+            // the session layer is built to absorb. Judged after the send above, so a
+            // duplicate of a datagram the simulated link ate is impossible.
+            if (Sim.Armed && Sim.DuplicateOutbound())
+            {
+                int again = _socket.SendTo(data, SocketFlags.None, destination);
+                Interlocked.Increment(ref _packetsSent);
+                Interlocked.Add(ref _bytesSent, again);
+            }
         }
         catch (SocketException)
         {

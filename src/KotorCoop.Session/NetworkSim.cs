@@ -41,13 +41,15 @@ public sealed class NetworkSim
     /// reader can never see (say) a new blackout deadline against the old direction.
     /// </summary>
     private sealed record Rules(
-        double LossPercent, int LatencyMs, int JitterMs, long BlackoutUntilMs, NetSimDirection Direction)
+        double LossPercent, int LatencyMs, int JitterMs, long BlackoutUntilMs, NetSimDirection Direction,
+        int PatternDrops = 0, int PatternWindow = 0, double DuplicatePercent = 0)
     {
         public static readonly Rules None = new(0, 0, 0, 0, NetSimDirection.Both);
 
         /// <summary>True when nothing is configured and no blackout can still be running.</summary>
         public bool IsIdleAt(long nowMs) =>
-            LossPercent <= 0 && LatencyMs <= 0 && JitterMs <= 0 && nowMs >= BlackoutUntilMs;
+            LossPercent <= 0 && LatencyMs <= 0 && JitterMs <= 0 && nowMs >= BlackoutUntilMs
+            && PatternDrops <= 0 && DuplicatePercent <= 0;
 
         public bool Covers(bool outbound) => Direction switch
         {
@@ -85,6 +87,19 @@ public sealed class NetworkSim
     private long _droppedOutbound;
     private long _droppedInbound;
     private long _delayed;
+    private long _duplicated;
+
+    /// <summary>
+    /// Per-direction datagram counters, and the ONLY state <see cref="SetLossPattern"/> needs:
+    /// the pattern is a function of "how many datagrams has this direction judged", so it does
+    /// not consult <see cref="_random"/> at all and two threads racing the same direction still
+    /// get a well-defined, bounded result (each <see cref="Interlocked.Increment(ref long)"/>
+    /// hands out a distinct index; only WHICH thread gets which index is unordered, and the
+    /// pattern's guarantee — at most <c>drops</c> losses in any run of <c>window</c> — holds
+    /// either way).
+    /// </summary>
+    private long _outboundJudged;
+    private long _inboundJudged;
 
     /// <summary>Whether the channel needs to consult this at all.</summary>
     public bool Armed => _armed;
@@ -95,6 +110,9 @@ public sealed class NetworkSim
 
     public long DelayedPackets => Interlocked.Read(ref _delayed);
 
+    /// <summary>How many datagrams were sent a second time by <see cref="SetDuplication"/>.</summary>
+    public long DuplicatedPackets => Interlocked.Read(ref _duplicated);
+
     /// <summary>Percentage of packets to discard, 0..100, in whichever direction(s) the
     /// current direction covers.</summary>
     public void SetLoss(double percent)
@@ -103,8 +121,74 @@ public sealed class NetworkSim
         Update(r => r with { LossPercent = percent });
     }
 
+    /// <summary>
+    /// DETERMINISTIC loss, as an alternative to <see cref="SetLoss"/>'s coin flip: drop the
+    /// first <paramref name="dropsPerWindow"/> datagrams of every <paramref name="windowSize"/>
+    /// this end judges, counted per direction.
+    ///
+    /// ⚠ THIS EXISTS BECAUSE A PERCENTAGE HAS AN UNBOUNDED TAIL AND A TEST CANNOT HAVE ONE.
+    /// A 30% coin flip will, eventually, eat every retransmission of one op inside whatever
+    /// window a test is willing to wait — rarely, but "rarely" multiplied by every CI run is
+    /// a permanently red build nobody trusts (this is exactly what made
+    /// <c>HeavyPacketLossStillConverges</c> a known-flaky test). The same nominal loss rate
+    /// applied as a PATTERN keeps the property under test — a link that eats three datagrams
+    /// in ten, in both directions, must still converge — while capping the worst case: no run
+    /// of more than <paramref name="dropsPerWindow"/> consecutive losses is possible in one
+    /// direction, so the number of retransmit attempts an op needs is bounded rather than
+    /// merely probable.
+    ///
+    /// Pass 0 drops to go back to whatever <see cref="SetLoss"/> says. The two are exclusive:
+    /// while a pattern is set it is the only loss rule consulted, so a test cannot
+    /// accidentally stack a coin flip on top of it.
+    /// </summary>
+    public void SetLossPattern(int dropsPerWindow, int windowSize)
+    {
+        windowSize = Math.Max(1, windowSize);
+        dropsPerWindow = Math.Clamp(dropsPerWindow, 0, windowSize);
+        Update(r => r with { PatternDrops = dropsPerWindow, PatternWindow = windowSize });
+    }
+
+    /// <summary>
+    /// Sends <paramref name="percent"/> of outgoing datagrams twice. A real link duplicates
+    /// (a retransmitting NAT, a route flap, a hairpinned broadcast), and every dedup rule in
+    /// this codebase — <c>EventFlagStore</c>'s applied-op ring, the loot stores' (container,
+    /// item) pairs — exists because of it, so a soak that never duplicates never exercises
+    /// them.
+    /// </summary>
+    public void SetDuplication(double percent) =>
+        Update(r => r with { DuplicatePercent = Math.Clamp(percent, 0, 100) });
+
+    /// <summary>
+    /// Whether this outgoing datagram should also be sent a second time. Called by
+    /// <see cref="UdpChannel.Send"/> AFTER the datagram survived <see cref="DropOutbound"/>:
+    /// a duplicate of something the link ate is not a duplicate, it is a delivery.
+    /// </summary>
+    public bool DuplicateOutbound()
+    {
+        Rules rules = Volatile.Read(ref _rules);
+
+        if (rules.DuplicatePercent <= 0 || !rules.Covers(outbound: true))
+        {
+            return false;
+        }
+
+        if (_random.NextDouble() * 100.0 >= rules.DuplicatePercent)
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _duplicated);
+        return true;
+    }
+
     /// <summary>Adds a fixed delay plus up to <paramref name="jitterMs"/> of random extra.
-    /// Jitter reorders packets, which is exactly what it does on a real link.</summary>
+    /// Jitter reorders packets, which is exactly what it does on a real link.
+    ///
+    /// ⚠ ONLY THE OUTBOUND HALF REORDERS. An outbound delay hands the datagram to a
+    /// fire-and-forget task (<see cref="UdpChannel.Send"/>), so two packets held for different
+    /// amounts of time genuinely swap places. An INBOUND delay is awaited inside the single
+    /// receive loop, so it holds up everything behind it — head-of-line blocking, not
+    /// reordering. Simulate reordering with outbound jitter.</summary>
     public void SetLatency(int latencyMs, int jitterMs = 0)
     {
         latencyMs = Math.Clamp(latencyMs, 0, 60_000);
@@ -182,9 +266,19 @@ public sealed class NetworkSim
             parts.Add($"blackout {(rules.BlackoutUntilMs - now) / 1000.0:F1}s left ({Half(rules.Direction)})");
         }
 
-        if (rules.LossPercent > 0)
+        if (rules.PatternDrops > 0)
+        {
+            parts.Add(
+                $"loss {rules.PatternDrops}-in-{rules.PatternWindow} fixed pattern ({Half(rules.Direction)})");
+        }
+        else if (rules.LossPercent > 0)
         {
             parts.Add($"loss {rules.LossPercent:F0}% ({Half(rules.Direction)})");
+        }
+
+        if (rules.DuplicatePercent > 0)
+        {
+            parts.Add($"duplicate {rules.DuplicatePercent:F0}%");
         }
 
         if (rules.LatencyMs > 0 || rules.JitterMs > 0)
@@ -219,8 +313,7 @@ public sealed class NetworkSim
             return false;
         }
 
-        bool drop = nowMs < rules.BlackoutUntilMs
-            || (rules.LossPercent > 0 && _random.NextDouble() * 100.0 < rules.LossPercent);
+        bool drop = nowMs < rules.BlackoutUntilMs || LossRuleDrops(rules, outbound);
 
         if (!drop)
         {
@@ -237,6 +330,27 @@ public sealed class NetworkSim
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The loss half of <see cref="Drop"/>: the deterministic pattern when one is configured
+    /// (it wins outright — see <see cref="SetLossPattern"/>), otherwise the percentage coin
+    /// flip. The pattern's counter is advanced ONLY when a pattern is configured, so arming
+    /// one mid-session starts from a clean window rather than wherever a percentage happened
+    /// to leave things.
+    /// </summary>
+    private bool LossRuleDrops(Rules rules, bool outbound)
+    {
+        if (rules.PatternDrops > 0)
+        {
+            long index = outbound
+                ? Interlocked.Increment(ref _outboundJudged) - 1
+                : Interlocked.Increment(ref _inboundJudged) - 1;
+
+            return index % rules.PatternWindow < rules.PatternDrops;
+        }
+
+        return rules.LossPercent > 0 && _random.NextDouble() * 100.0 < rules.LossPercent;
     }
 
     /// <summary>Swaps the rules under a lock (writers are rare — a console line) and arms the

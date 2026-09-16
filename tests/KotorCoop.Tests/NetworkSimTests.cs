@@ -402,4 +402,157 @@ public class NetworkSimTests
 
         Assert.Contains("(outbound)", sim.Describe());
     }
+
+    // ---- Deterministic loss pattern ---------------------------------------------------------
+    //
+    // Why this exists at all: a percentage is a coin flip with an unbounded tail, and a test
+    // that runs on every push cannot have one. See NetworkSim.SetLossPattern.
+
+    [Fact]
+    public void ALossPatternDropsExactlyItsShareOfEveryWindow()
+    {
+        NetworkSim sim = new();
+        sim.SetLossPattern(3, 10);
+
+        int dropped = 0;
+        for (int i = 0; i < 100; i++)
+        {
+            if (sim.DropOutbound(0))
+            {
+                dropped++;
+            }
+        }
+
+        // Exactly, not approximately: three in every ten, a hundred times.
+        Assert.Equal(30, dropped);
+    }
+
+    [Fact]
+    public void ALossPatternNeverDropsMoreThanItsWindowShareInARow()
+    {
+        NetworkSim sim = new();
+        sim.SetLossPattern(3, 10);
+
+        int run = 0;
+        int worstRun = 0;
+        for (int i = 0; i < 1000; i++)
+        {
+            run = sim.DropOutbound(0) ? run + 1 : 0;
+            worstRun = Math.Max(worstRun, run);
+        }
+
+        // THE WHOLE POINT. A 30% coin flip will, given enough draws, eat ten in a row and with
+        // them every retransmission of one op inside a test's patience. A pattern cannot.
+        Assert.Equal(3, worstRun);
+    }
+
+    [Fact]
+    public void EachDirectionCountsItsOwnWindow()
+    {
+        NetworkSim sim = new();
+        sim.SetLossPattern(1, 2);
+
+        // Interleaving the two directions must not let one direction's counter advance the
+        // other's — each half of the link eats every second datagram OF ITS OWN.
+        Assert.True(sim.DropOutbound(0));
+        Assert.True(sim.DropInbound(0));
+        Assert.False(sim.DropOutbound(0));
+        Assert.False(sim.DropInbound(0));
+        Assert.True(sim.DropOutbound(0));
+        Assert.True(sim.DropInbound(0));
+    }
+
+    [Fact]
+    public void APatternWinsOverAPercentageSoTheTwoCannotStack()
+    {
+        // A FixedRandom that would drop everything if the percentage were still consulted.
+        NetworkSim sim = new(new FixedRandom(0.0));
+        sim.SetLoss(90);
+        sim.SetLossPattern(1, 4);
+
+        int dropped = 0;
+        for (int i = 0; i < 40; i++)
+        {
+            if (sim.DropOutbound(0))
+            {
+                dropped++;
+            }
+        }
+
+        Assert.Equal(10, dropped);
+        Assert.Contains("1-in-4 fixed pattern", sim.Describe());
+    }
+
+    [Fact]
+    public void ClearingThePatternGoesBackToACleanLink()
+    {
+        NetworkSim sim = new();
+        sim.SetLossPattern(1, 2);
+        Assert.True(sim.Armed);
+
+        sim.SetLossPattern(0, 2);
+
+        Assert.False(sim.DropOutbound(0));
+        Assert.Equal("netsim off (clean link)", sim.Describe());
+    }
+
+    [Fact]
+    public void ABlackoutStillBeatsAPattern()
+    {
+        NetworkSim sim = new();
+        sim.SetLossPattern(1, 10);
+        sim.StartBlackout(10_000);
+
+        // Ten in a row, which the pattern on its own could never produce.
+        for (int i = 0; i < 10; i++)
+        {
+            Assert.True(sim.DropOutbound(SessionClock.NowMs));
+        }
+    }
+
+    // ---- Duplication -------------------------------------------------------------------------
+
+    [Fact]
+    public void DuplicationIsOffUntilAskedFor()
+    {
+        NetworkSim sim = new(new FixedRandom(0.0));
+
+        Assert.False(sim.DuplicateOutbound());
+        Assert.Equal(0, sim.DuplicatedPackets);
+    }
+
+    [Fact]
+    public void DuplicationFiresBelowItsThresholdAndIsCounted()
+    {
+        NetworkSim sim = new(new FixedRandom(0.1));
+        sim.SetDuplication(20);
+
+        Assert.True(sim.Armed);
+        Assert.True(sim.DuplicateOutbound());
+        Assert.True(sim.DuplicateOutbound());
+        Assert.Equal(2, sim.DuplicatedPackets);
+        Assert.Contains("duplicate 20%", sim.Describe());
+    }
+
+    [Fact]
+    public void DuplicationDoesNotFireAtOrAboveItsThreshold()
+    {
+        NetworkSim sim = new(new FixedRandom(0.2));
+        sim.SetDuplication(20);
+
+        Assert.False(sim.DuplicateOutbound());
+        Assert.Equal(0, sim.DuplicatedPackets);
+    }
+
+    [Fact]
+    public void DuplicationFollowsTheConfiguredDirection()
+    {
+        NetworkSim sim = new(new FixedRandom(0.0));
+        sim.SetDuplication(50);
+        sim.StartBlackout(0, NetSimDirection.Inbound);
+
+        // Duplication is an outbound-only effect (UdpChannel.Send is its only caller), so a
+        // rule scoped to the inbound half must leave it alone rather than duplicating anyway.
+        Assert.False(sim.DuplicateOutbound());
+    }
 }
