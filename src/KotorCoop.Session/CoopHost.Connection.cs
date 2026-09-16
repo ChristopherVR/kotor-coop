@@ -119,15 +119,26 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
-            // Match a returning peer by its stable nonce first, then by endpoint. The nonce
-            // is what makes reconnection seamless: a client that dropped and came back —
-            // possibly from a new ephemeral port — reclaims its existing slot (same id,
-            // same name, its phantom never doubled) instead of joining as a stranger while
-            // its old slot lingers until timeout. Hello is also retransmitted until Welcome
-            // lands, so a plain repeat must return the same id too.
-            PeerConnection? existing =
-                _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce)
-                ?? _peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from));
+            // Match a returning peer BY ITS NONCE, and only by its nonce. The nonce is what
+            // makes reconnection seamless: a client that dropped and came back — possibly from
+            // a new ephemeral port — reclaims its existing slot (same id, same name, its
+            // phantom never doubled) instead of joining as a stranger while its old slot
+            // lingers until timeout. Hello is also retransmitted until Welcome lands, and a
+            // plain repeat carries the same nonce, so it returns the same id through this same
+            // line.
+            //
+            // ⚠ IT USED TO FALL BACK TO THE SOURCE ADDRESS, AND THAT HANDED OUT IDENTITIES.
+            // The nonce already covers every case the address fallback was meant to cover,
+            // because a repeat and a reconnect both carry it. The ONLY case the fallback added
+            // on top was "same address, DIFFERENT nonce" — which is not a returning player at
+            // all. It is a genuinely new client whose OS handed it an ephemeral port a
+            // departed one was using seconds ago (or, on loopback and a busy LAN, is using
+            // right now). That client was then dealt the departed player's peer id, name, and
+            // with them every cumulative total keyed on it: the damage ledger's rows, the
+            // incoming phantom-damage table, the progression ledger. A new player walking into
+            // someone else's running fight totals is exactly the double-count the nonce scheme
+            // exists to prevent, arrived at from the other direction.
+            PeerConnection? existing = _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce);
 
             if (existing is not null)
             {
@@ -138,6 +149,17 @@ public sealed partial class CoopHost
             }
             else
             {
+                // A Hello with a NEW nonce from an address an existing peer still holds proves
+                // that peer is gone: two sockets cannot share one source IP and port, so the
+                // old one was closed and its ephemeral port reissued. Retire it now instead of
+                // leaving a ghost on the roster (and in everyone's snapshot) for another peer
+                // timeout. Its identity survives in _retired, so if it really does come back
+                // with its own nonce it still reclaims its own id.
+                if (_peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from)) is { } replaced)
+                {
+                    ForgetPeer(replaced.Id, now);
+                }
+
                 if (_peers.Count + 1 >= ProtocolConstants.MaxPeers)
                 {
                     int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("session full"));
@@ -304,6 +326,34 @@ public sealed partial class CoopHost
         {
             _channel.Send(from, _replyBuffer.AsSpan(0, length));
         }
+    }
+
+    /// <summary>
+    /// Drops one peer from the roster and from everything keyed on its id, retiring its
+    /// identity first so a return is a rejoin rather than a stranger arriving. Caller holds
+    /// <see cref="_gate"/>.
+    ///
+    /// One helper rather than two hand-written lists: the timeout path and the
+    /// stale-endpoint path in <see cref="HandleHello"/> must forget exactly the same set, and
+    /// a per-field teardown written twice is a per-field teardown that will eventually miss a
+    /// field.
+    /// </summary>
+    private void ForgetPeer(uint id, long nowMs)
+    {
+        // Retire before removing: the identity has to survive the connection, or the same
+        // player comes back as a stranger (see RetiredPeer).
+        if (_peers.TryGetValue(id, out PeerConnection? gone))
+        {
+            Retire(gone, nowMs);
+        }
+
+        _peers.Remove(id);
+        _buffer.Remove(id);
+        ReleaseDialogueIfOwnedBy(id);
+        ForgetPhantomDamageFor(id);
+        _encounterTriggers.Forget(id);
+        _triggerRelay.Forget(id);
+        _interactionLocks.Forget(id);
     }
 
     /// <summary>

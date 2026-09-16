@@ -344,20 +344,7 @@ public sealed partial class CoopHost : ICoopSession
             {
                 foreach (uint id in expired)
                 {
-                    // Retire before removing: the identity has to survive the connection, or
-                    // the same player comes back as a stranger (see RetiredPeer).
-                    if (_peers.TryGetValue(id, out PeerConnection? gone))
-                    {
-                        Retire(gone, now);
-                    }
-
-                    _peers.Remove(id);
-                    _buffer.Remove(id);
-                    ReleaseDialogueIfOwnedBy(id);
-                    ForgetPhantomDamageFor(id);
-                    _encounterTriggers.Forget(id);
-                    _triggerRelay.Forget(id);
-                    _interactionLocks.Forget(id);
+                    ForgetPeer(id, now);
                 }
             }
 
