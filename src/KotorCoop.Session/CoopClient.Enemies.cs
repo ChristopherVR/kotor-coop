@@ -48,12 +48,15 @@ public sealed partial class CoopClient
         // Unreliable and re-sent every tick, like the state update it travels beside. Safe
         // precisely because the totals are cumulative: a lost datagram costs one tick of
         // staleness rather than a hit, and a duplicate applies nothing.
-        int length = PacketCodec.Write(
-            _sendBuffer, new EnemyDamagePacket(_localPeerId, module, generation, damage));
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
-        }
+        //
+        // ⚠ The caller's thread, not the tick thread — see CoopClient._apiBuffer. Sharing the
+        // tick buffer here produced a torn EnemyDamagePacket whose cumulative total decoded
+        // LOWER than the peer's true running figure; PeerDamageLedger moves its per-peer
+        // baseline to whatever it is told, so the next honest report was read as a fresh rise
+        // and the same fight was banked a second time.
+        SendFromCaller(
+            new EnemyDamagePacket(_localPeerId, module, generation, damage),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     public IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
