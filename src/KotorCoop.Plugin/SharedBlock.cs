@@ -21,7 +21,10 @@ internal struct RemoteSlot
     /// <summary>appearance.2da row of the remote player, so their phantom looks like them.</summary>
     [FieldOffset(0x38)] public uint Appearance;
 
-    /// <summary>PlayerState flags: 1 in-dialogue, 2 paused, 4 in-combat.</summary>
+    /// <summary>Low 16 bits: PlayerState flags (1 in-dialogue, 2 paused, 4 in-combat, ...).
+    /// High 16 bits: the peer's MAX hit points, so the stand-in can carry the peer's
+    /// current/max ratio and the engine's own injured-walk rule applies to it (0 = unknown,
+    /// an older agent). See RemoteView.FlagsMask.</summary>
     [FieldOffset(0x3C)] public uint Flags;
 }
 

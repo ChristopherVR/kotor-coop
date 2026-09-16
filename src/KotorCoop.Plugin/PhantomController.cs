@@ -56,6 +56,11 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
     /// zero health. Tracked so the pose is set once, not re-issued every step.</summary>
     private readonly bool[] _down = new bool[SharedBlock.SlotCapacity];
 
+    /// <summary>The current/max hit points last written onto each stand-in, so the engine
+    /// write happens on change only (per-frame engine writes are latched per object).</summary>
+    private readonly int[] _appliedHealth = new int[SharedBlock.SlotCapacity];
+    private readonly int[] _appliedMaxHealth = new int[SharedBlock.SlotCapacity];
+
     /// <summary>The peer's in-combat flag last step, so leaving combat is an edge: that
     /// is when local enemies locked onto the phantom must be released — a min-1-hp body
     /// never reads dead, so nothing lets go on its own (7.4).</summary>
@@ -120,6 +125,8 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         _lastGoal[slot] = default;
         _repathCooldown[slot] = 0;
         _down[slot] = false;
+        _appliedHealth[slot] = 0;
+        _appliedMaxHealth[slot] = 0;
         _peerInCombat[slot] = false;
         _hostileToLocals[slot] = false;
         _factionKnown[slot] = false;

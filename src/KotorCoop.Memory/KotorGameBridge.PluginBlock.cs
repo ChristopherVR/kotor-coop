@@ -965,7 +965,14 @@ public sealed partial class KotorGameBridge
             ok &= _memory.TryWriteAsciiString(slot + 0x20, peer.Name, BlockSlotNameLength);
 
             ok &= _memory.TryWrite(slot + 0x38, peer.State.Appearance);
-            ok &= _memory.TryWrite(slot + 0x3C, peer.State.Flags);
+            // The peer's MAX hit points ride in the upper half of the flags dword: the slot
+            // is 0x40 bytes with no spare field (24 of them are the name), the flag bits
+            // only ever use the low byte, and growing the slot would shift every offset
+            // the mock profiles pin. The plugin masks the halves apart (RemoteView) and
+            // mirrors current/max onto the stand-in so the engine's own IsInjured rule
+            // (current/max < 0.2 -> the limping walk) shows a hurt partner on this screen.
+            uint maxHealth = (uint)Math.Clamp(peer.State.MaxHealth, 0, ushort.MaxValue);
+            ok &= _memory.TryWrite(slot + 0x3C, (peer.State.Flags & 0xFFFFu) | (maxHealth << 16));
 
             // Visible equipment, as blueprint resrefs the plugin equips on the phantom.
             nint equip = _pluginBlock + BlockEquipSlots + (i * BlockEquipStride);

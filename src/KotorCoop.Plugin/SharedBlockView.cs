@@ -3,8 +3,14 @@ namespace KotorCoop.Plugin;
 /// <summary>One remote peer as published by the external agent.</summary>
 internal readonly record struct RemoteView(
     bool Active, uint PeerId, Vec3 Position, float Facing, int Health, uint Animation,
-    uint Appearance, uint Flags)
+    uint Appearance, uint Flags, int MaxHealth = 0)
 {
+    /// <summary>The slot's flags dword carries the peer's max hit points in its upper 16
+    /// bits (KotorGameBridge.WriteToPlugin); the flag bits live in the low half. An agent
+    /// that predates the packing writes 0 there, which reads as "max unknown" and leaves
+    /// the stand-in's hit points alone.</summary>
+    public const uint FlagsMask = 0xFFFF;
+
     public const uint FlagInDialogue = 1;
     public const uint FlagPaused = 2;
     public const uint FlagInCombat = 4;
@@ -334,7 +340,8 @@ internal sealed unsafe partial class SharedBlockView(byte* baseAddress)
             *(int*)(slot + 0x18),
             *(uint*)(slot + 0x1C),
             *(uint*)(slot + 0x38),
-            *(uint*)(slot + 0x3C));
+            *(uint*)(slot + 0x3C) & RemoteView.FlagsMask,
+            (int)(*(uint*)(slot + 0x3C) >> 16));
     }
 
     /// <summary>Pointer to a peer's null-terminated ascii name (24 bytes).</summary>

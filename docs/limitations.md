@@ -148,6 +148,10 @@ A few things look like bugs and aren't:
   the mod's own bookkeeping (handing an enemy stand-in its loot) answering onto the chat overlay.
   Fixed on 2026-09-17: those answers go to the log only. A command you type yourself still answers on
   screen.
+- **Your badly hurt partner looked fine on your screen.** Their stand-in never carried their hit
+  points, so the game's own limping walk (which it plays below a fifth of health) never applied to
+  it, even though the mod knew they were at 1 hit point. Fixed on 2026-09-17: the stand-in now
+  carries your partner's current and maximum hit points, and limps when they do.
 - **Nobody can be knocked out on the Endar Spire.** The game's own tutorial rule.
 - **Old `coop.ini` files.** The installer never overwrites your settings file, so an install from
   before a default changed keeps its old value. If a feature this page says is on seems off, run

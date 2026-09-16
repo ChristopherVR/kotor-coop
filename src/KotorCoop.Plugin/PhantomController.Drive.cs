@@ -232,6 +232,7 @@ internal sealed unsafe partial class PhantomController
             // next combat-round boundary. That release lever is what the original
             // aggro-sink design lacked entirely — see docs/research/combat-participation.md.
             ApplyTargetable(i, phantom, alive: remote.Health > 0);
+            ApplyVitals(i, phantom, remote);
 
             // Forward what this body has taken to the peer whose character it stands for.
             PhantomHitHook.ReadSlot(i, out uint watchedId, out uint cumulative, out uint attacker, out uint hitSerial);
@@ -679,6 +680,45 @@ internal sealed unsafe partial class PhantomController
         PluginHost.Log(ok
             ? $"test: applied {amount} damage to phantom 0x{_phantomIds[slot]:X}"
             : $"test: damage on phantom 0x{_phantomIds[slot]:X} refused (failure {failure})");
+    }
+
+    /// <summary>
+    /// Mirrors the peer's current/max hit points onto their stand-in. Nothing in this
+    /// plugin ever set them before, so a partner at 1/12 stood and walked on this screen as
+    /// if untouched (reported 2026-09-17 from the site's own fight clip: the host at 1 hp,
+    /// the joiner's copy of her walking normally). The point is not the numbers: the drive
+    /// above writes the walk/run gait through <c>CSWSCreature::SetAnimation</c>, which
+    /// substitutes the limping walk/run (0x2712->0x276D, 0x2714->0x276E) whenever
+    /// <c>CSWSCreature::IsInjured</c> (0x4EFF30) says current/max &lt; 0.2 - the same rule
+    /// that limps the peer on their own screen. With the fields mirrored, the engine's own
+    /// substitution does the rest, no new animation plumbing.
+    ///
+    /// Max is written first (<c>ExecuteCommandSetMaxHitPoints</c>'s order: +0xE0, then the
+    /// SetCurrentHitPoints call) and current is clamped to 1..max: a stand-in must never
+    /// reach 0 through this path - the downed pose is <see cref="_down"/>'s job and the
+    /// engine's death handling must not run on a body that stands for a living peer. A max
+    /// of 0 means the agent is older than the packing (see <see cref="RemoteView.FlagsMask"/>)
+    /// and the stand-in keeps its blueprint values. Latched per slot; the engine's own hit
+    /// path may move +0xDC between steps and the next change re-asserts it.
+    /// </summary>
+    private void ApplyVitals(int slot, nint phantom, in RemoteView remote)
+    {
+        int max = remote.MaxHealth;
+        if (max <= 0)
+        {
+            return;
+        }
+
+        int current = Math.Clamp(remote.Health, 1, max);
+        if (_appliedHealth[slot] == current && _appliedMaxHealth[slot] == max)
+        {
+            return;
+        }
+
+        _appliedHealth[slot] = current;
+        _appliedMaxHealth[slot] = max;
+        *(ushort*)(phantom + Odyssey.ObjMaxHitPoints) = (ushort)Math.Min(max, ushort.MaxValue);
+        Odyssey.SetCurrentHitPoints(phantom, current);
     }
 
     /// <summary>appearance.2da row, u16 inside CSWSCreatureAppearanceInfo at +0xA50.</summary>
