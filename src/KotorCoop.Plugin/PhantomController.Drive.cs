@@ -190,6 +190,27 @@ internal sealed unsafe partial class PhantomController
 
             nint phantom = _phantoms[i];
 
+            // A body spawned before the client half of the world existed can be permanently
+            // invisible with every readable field correct (PhantomSpawnReadinessRule). The
+            // wait budget only expires when the world is unusually slow, so this is rare —
+            // but when it does happen, replacing the body is the only repair there is.
+            if (PhantomSpawnReadinessRule.ShouldReplaceProvisional(
+                    _provisional[i],
+                    Odyssey.HasRenderedBody(player),
+                    _provisionalReplacements[i],
+                    PhantomSpawnReadinessRule.MaxProvisionalReplacements)
+                && _spawnCooldownFrames == 0)
+            {
+                _provisionalReplacements[i]++;
+                PluginHost.Log(
+                    $"phantom slot {i}: the client world has come up since this body was "
+                    + "spawned provisionally - replacing it so the peer is drawn");
+                DestroySlot(i, "provisional body replaced");
+                PublishPhantomCount();
+                _spawnCooldownFrames = 30;
+                continue;
+            }
+
             ApplyAppearance(i, phantom, remote.Appearance);
             ApplyEquipment(i);
             ApplyName(i, phantom);

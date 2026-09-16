@@ -22,6 +22,11 @@ internal sealed unsafe partial class PhantomController
 
     private int _spawnFailures;
 
+    /// <summary><see cref="Environment.TickCount64"/> when this controller first refused to
+    /// spawn because the client half of the world was not built yet; 0 while it is not
+    /// waiting. Feeds <see cref="PhantomSpawnReadinessRule"/>'s wait budget.</summary>
+    private long _clientWorldWaitingSinceMs;
+
     /// <summary>
     /// Forgets every phantom without touching the engine. Called when the module has
     /// changed (or is changing): the objects behind these pointers are freed by
@@ -41,7 +46,16 @@ internal sealed unsafe partial class PhantomController
             // start the smoothing from wherever the peer actually is rather than gliding
             // across from a stale spot. ClearSlot resets all of that.
             ClearSlot(i);
+
+            // Per WORLD, not per body: the replacement budget bounds a destroy/spawn loop
+            // inside one world, and a new world is a fresh chance for the client half to come
+            // up normally. See _provisionalReplacements' own doc comment.
+            _provisionalReplacements[i] = 0;
         }
+
+        // A new world builds its client half from scratch, so the previous world's wait says
+        // nothing about this one — and leaving it set would let the budget expire instantly.
+        _clientWorldWaitingSinceMs = 0;
 
         PublishPhantomCount();
 
@@ -169,6 +183,44 @@ internal sealed unsafe partial class PhantomController
 
         _unplacedPlayerLogged = false;
 
+        // ⚠ THE SERVER WORLD IS UP BEFORE THE CLIENT WORLD IS, AND A PHANTOM BORN IN BETWEEN
+        // IS PERMANENTLY INVISIBLE. Everything above has already passed: the epoch is valid,
+        // the player object resolves, it stands on a plausible position — and the local
+        // player can still have no client twin at all, which means the renderer's half of
+        // this world has not been built yet. See PhantomSpawnReadinessRule for the measured
+        // timeline (the 2026-09-16 "the joined player cannot see the host" report) and
+        // Odyssey.HasRenderedBody for what is actually read.
+        PhantomSpawnReadiness readiness = PhantomSpawnReadinessRule.Decide(
+            Odyssey.HasRenderedBody(player),
+            Environment.TickCount64,
+            _clientWorldWaitingSinceMs,
+            PhantomSpawnReadinessRule.ClientWorldWaitMs);
+
+        if (readiness == PhantomSpawnReadiness.Defer)
+        {
+            if (_clientWorldWaitingSinceMs == 0)
+            {
+                _clientWorldWaitingSinceMs = Environment.TickCount64;
+                PluginHost.Log(
+                    "phantom spawn deferred: the client half of this world is not built yet "
+                    + "(the local player has no rendered body); a phantom spawned now would "
+                    + "never be drawn");
+            }
+
+            return;
+        }
+
+        bool provisional = readiness == PhantomSpawnReadiness.SpawnProvisionally;
+        if (provisional)
+        {
+            PluginHost.Log(
+                $"phantom spawn: the client world still has not come up after "
+                + $"{PhantomSpawnReadinessRule.ClientWorldWaitMs / 1000}s - spawning slot {slot} "
+                + "anyway and marking it provisional, so it is replaced if the world arrives");
+        }
+
+        _clientWorldWaitingSinceMs = 0;
+
         Vec3 spawnPosition = IsPlausiblePosition(peerPosition)
             ? peerPosition
             : Offset(playerPosition, slot);
@@ -279,6 +331,7 @@ internal sealed unsafe partial class PhantomController
 
         _phantoms[slot] = creature;
         _phantomIds[slot] = objectId;
+        _provisional[slot] = provisional;
         block.SetPhantomId(slot, objectId);
         PublishPhantomCount();
 

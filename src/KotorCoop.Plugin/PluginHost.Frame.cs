@@ -238,6 +238,58 @@ internal static unsafe partial class PluginHost
         _consoleAssist?.OnFrame();
     }
 
+    /// <summary>How long the worker thread may go unseen before the game thread says so. The
+    /// worker sleeps 16 ms a pass, so two seconds is ~125 missed passes — never a scheduling
+    /// hiccup.</summary>
+    private const long WorkerStallMs = 2000;
+
+    /// <summary>Stall start, or 0 while the worker is being seen normally.</summary>
+    private static long _workerStalledSinceMs;
+
+    /// <summary>
+    /// The game-thread half of the two-sided stall watchdog (the worker owns the other half:
+    /// it watches <c>FrameHook.FrameCount</c> and reports a frame hook that has not fired for
+    /// ~2 s). Neither thread can report its OWN death, so each reports the other's.
+    ///
+    /// ⚠ WHY: a plugin log that simply STOPS is ambiguous, and 2026-09-16 that ambiguity was
+    /// read as a dead worker on the host after a <c>topup</c>. It was not — two live
+    /// reproduction attempts on 2026-09-17 (fight, both players on the 1-hp floor, <c>topup</c>,
+    /// 60 s of watching) found the console still answering and the peer's phantom still being
+    /// driven across the whole silent window. The silence was the <c>attack probe</c>
+    /// diagnostic closing its own window with nothing else due to log. With these two lines a
+    /// reader can tell the three cases apart — worker gone, game thread gone, or simply
+    /// quiet — without reproducing anything.
+    /// </summary>
+    private static void WatchWorkerThread()
+    {
+        long lastTick = WorkerLastTickMs;
+        if (lastTick == 0)
+        {
+            // The worker has not had its first pass yet (startup); nothing to judge.
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        if (now - lastTick > WorkerStallMs)
+        {
+            if (_workerStalledSinceMs == 0)
+            {
+                _workerStalledSinceMs = lastTick;
+                Log($"WARNING: the plugin worker thread has not run for {(now - lastTick) / 1000.0:F1}s "
+                    + "while the game thread keeps going - the agent channel, the crash-probe "
+                    + "drain and log rotation are all stalled");
+            }
+
+            return;
+        }
+
+        if (_workerStalledSinceMs != 0)
+        {
+            Log($"the plugin worker thread is running again after {(now - _workerStalledSinceMs) / 1000.0:F1}s");
+            _workerStalledSinceMs = 0;
+        }
+    }
+
     private static void OnFrame()
     {
         // Before absolutely everything else: whatever this frame is about to spend its time
@@ -247,6 +299,8 @@ internal static unsafe partial class PluginHost
         {
             RecordFrameTime();
         }
+
+        WatchWorkerThread();
 
         // Before the epoch gate: the delayed-event probe (coop.ini delay_probe, default OFF)
         // records on the game's thread inside four engine splices and must be turned into log

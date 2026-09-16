@@ -64,6 +64,20 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
     /// <summary>FNV hash of the resref last equipped per (phantom, equip slot); 0 = none.</summary>
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
 
+    /// <summary>True for a body that was spawned before the client half of the world had
+    /// finished building (<see cref="PhantomSpawnReadinessRule"/>'s wait budget ran out first).
+    /// Such a body may render perfectly or may be permanently invisible, and nothing readable
+    /// from memory tells the two apart — so it is replaced once the world does come up. Per
+    /// BODY: cleared with the slot.</summary>
+    private readonly bool[] _provisional = new bool[SharedBlock.SlotCapacity];
+
+    /// <summary>How many provisional bodies this slot has already had replaced. Deliberately
+    /// NOT cleared by <see cref="ClearSlot"/> — it exists to stop a destroy/spawn loop on a
+    /// rig where the client world never satisfies the gate, and clearing it with the body it
+    /// bounds would defeat the bound. Reset by <see cref="Invalidate"/>, i.e. once per
+    /// world.</summary>
+    private readonly int[] _provisionalReplacements = new int[SharedBlock.SlotCapacity];
+
     /// <summary>True once the phantom's name has been written to its CLIENT TWIN, which is
     /// what the selection band renders. Spawn writes the server locstring, but the twin
     /// does not exist yet then, so the name is re-asserted once the twin appears.</summary>
@@ -111,6 +125,7 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         _lastAnim[slot] = 0;
         _lastOneShotSerial[slot] = 0;
         _twinNamed[slot] = false;
+        _provisional[slot] = false;
 
         // Per BODY, deliberately: the next body this slot gets has a brand-new client twin,
         // built from the blueprint, that has to be dressed again. _appearanceCache is NOT
