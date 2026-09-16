@@ -38,13 +38,13 @@ public class EquipRetryRuleTests
     [InlineData(4)]  // GiveItemToInventory: the script VM is mid-call
     [InlineData(5)]  // GiveItemToInventory: a stack push failed
     [InlineData(6)]  // GiveItemToInventory: CreateItemOnObject returned non-zero
-    [InlineData(7)]  // GiveItemToInventory: stack pointer imbalance
+    [InlineData(7)]  // GiveItemToInventory: StackPopObject failed
     [InlineData(20)] // EquipItemFromTemplateDirect: slot could not be mapped
     [InlineData(21)] // EquipItemFromTemplateDirect: create returned no item and no reason
-    [InlineData(22)]
-    [InlineData(23)]
+    [InlineData(22)] // EquipItemFromTemplateDirect: creature did not resolve
+    [InlineData(23)] // EquipItemFromTemplateDirect: item did not resolve
     [InlineData(24)] // EquipItemFromTemplateDirect: the engine's equip refused
-    [InlineData(25)]
+    [InlineData(25)] // EquipItemFromTemplateDirect: no CSWInventory on the creature
     [InlineData(26)] // EquipItemFromTemplateDirect: the slot read-back did not hold the item
     public void EveryOtherFailureMustRetry(int failure)
     {
