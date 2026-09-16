@@ -23,9 +23,11 @@ public sealed class ContainerLootStore
 {
     private const int MaxRememberedOps = 4096;
 
-    /// <summary>How many removals to retain. The oldest are long since applied on the game
-    /// side, so dropping them past this bound loses nothing but keeps the set from growing
-    /// without limit over a long session.</summary>
+    /// <summary>How many removals to keep in the RE-DECLARE WINDOW (<see cref="Snapshot"/>).
+    /// The oldest are long since applied on the game side, so dropping them past this bound
+    /// loses nothing. It is not a bound on what the store KNOWS — see <see cref="Remember"/>
+    /// for why the version and the digest must describe the whole set rather than this
+    /// window.</summary>
     private const int MaxRemovals = 512;
 
     private readonly List<ContainerLootRemoval> _removals = [];
@@ -55,9 +57,11 @@ public sealed class ContainerLootStore
     /// </summary>
     public uint Version { get; private set; }
 
-    /// <summary>Order-independent content fingerprint over the retained removal window, beside
-    /// <see cref="Version"/> for the same reason <see cref="EventFlagStore.Digest"/> exists —
-    /// see <see cref="EntryDigest"/>.</summary>
+    /// <summary>Order-independent content fingerprint over every distinct removal this instance
+    /// has ever been told about — NOT over the bounded re-declare window, which is ordered by
+    /// arrival and is therefore not the same on two ends of a session (see
+    /// <see cref="Remember"/>). Beside <see cref="Version"/> for the same reason
+    /// <see cref="EventFlagStore.Digest"/> exists — see <see cref="EntryDigest"/>.</summary>
     public ulong Digest
     {
         get
@@ -130,16 +134,31 @@ public sealed class ContainerLootStore
 
         if (_removals.Count > MaxRemovals)
         {
-            ContainerLootRemoval evicted = _removals[0];
-            _set.Remove(evicted);
+            // ⚠ THE WINDOW SHRINKS; THE SET, THE VERSION AND THE DIGEST DO NOT.
+            //
+            // Eviction only trims the re-declare-to-the-game list — the entry was applied long
+            // ago and nothing needs telling again. The digest used to be trimmed with it, on
+            // the reasoning that it should describe the same window Snapshot() returns. That is
+            // exactly what made two ends of a session disagree forever.
+            //
+            // The window is ordered BY ARRIVAL, and arrival order is not a shared fact: UDP
+            // reorders, retransmits and resyncs, so once a session has passed MaxRemovals
+            // distinct removals the host and each client are holding DIFFERENT 512-element
+            // windows of the same set. A digest over the window therefore disagrees
+            // permanently, even though both ends know precisely the same removals — and the
+            // disagreement is not quiet. It is the loot tripwire, so the client asks for a
+            // resync twice a second for the rest of the session, and each ask re-offers up to
+            // 512 reliable ops (CoopHost.ResyncContainerLoot) that nothing can ever settle.
+            //
+            // A removal is a permanent fact about the world, so the version and the digest now
+            // describe every distinct pair this instance has EVER been told about, which is a
+            // SET: order-independent, eviction-independent, and identical on two ends that have
+            // heard the same things. `_set` keeping its evicted members is what makes that
+            // true, and it also stops an evicted pair re-entering the window and being
+            // re-declared to the game as though it were news. The cost is one 8-byte struct per
+            // container-item pair for the life of the session, which a whole playthrough
+            // measures in tens of thousands.
             _removals.RemoveAt(0);
-
-            // Eviction only trims the re-declare-to-the-game window (the entry was already
-            // applied, long ago), but the digest tracks the SAME window Contains()/Snapshot()
-            // do — the pair this instance would actually compare or dedup against — so its
-            // contribution has to leave too, or the digest would keep counting a removal the
-            // rest of the store has already forgotten.
-            _digest ^= EntryDigest.ContainerLootRemoval(evicted.ContainerId, evicted.ItemId);
         }
 
         Version++;
