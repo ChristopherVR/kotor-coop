@@ -64,6 +64,12 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
     /// <summary>FNV hash of the resref last equipped per (phantom, equip slot); 0 = none.</summary>
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
 
+    /// <summary>Consecutive equip failures per (phantom, equip slot) since the resref last
+    /// changed — bounds the retry <see cref="EquipRetryRule"/> otherwise runs forever on a
+    /// persistent (not transient) failure. See <see cref="EquipRetryRule.MaxConsecutiveFailures"/>'s
+    /// own doc comment for the leak this closes.</summary>
+    private readonly int[,] _equipFailures = new int[SharedBlock.SlotCapacity, SharedBlock.EquipCount];
+
     /// <summary>True for a body that was spawned before the client half of the world had
     /// finished building (<see cref="PhantomSpawnReadinessRule"/>'s wait budget ran out first).
     /// Such a body may render perfectly or may be permanently invisible, and nothing readable
@@ -136,6 +142,7 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         for (int j = 0; j < SharedBlock.EquipCount; j++)
         {
             _appliedEquip[slot, j] = 0;
+            _equipFailures[slot, j] = 0;
         }
 
         block.SetPhantomId(slot, 0);

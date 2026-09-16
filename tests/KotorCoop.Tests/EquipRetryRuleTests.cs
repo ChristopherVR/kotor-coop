@@ -56,4 +56,36 @@ public class EquipRetryRuleTests
     {
         Assert.Equal(8, EquipRetryRule.BlueprintMissing);
     }
+
+    /// <summary>
+    /// THE REGRESSION THIS GUARDS: every failure code ShouldLatch tells the caller to retry
+    /// fires AFTER GiveItemToInventory has already created a fresh item on the target creature
+    /// (EquipItemFromTemplateDirect's own 20-26 range). Retrying forever on a PERSISTENT (not
+    /// transient) failure creates and orphans one new item every attempt for the life of the
+    /// module. ShouldGiveUp is the bound that stops it — the same shape as
+    /// PhantomController.TrySpawnOne's own MaxSpawnFailures.
+    /// </summary>
+    [Fact]
+    public void BelowTheBoundKeepsRetrying()
+    {
+        Assert.False(EquipRetryRule.ShouldGiveUp(EquipRetryRule.MaxConsecutiveFailures - 1));
+    }
+
+    [Fact]
+    public void AtTheBoundGivesUp()
+    {
+        Assert.True(EquipRetryRule.ShouldGiveUp(EquipRetryRule.MaxConsecutiveFailures));
+    }
+
+    [Fact]
+    public void PastTheBoundStillGivesUp()
+    {
+        Assert.True(EquipRetryRule.ShouldGiveUp(EquipRetryRule.MaxConsecutiveFailures + 100));
+    }
+
+    [Fact]
+    public void ZeroConsecutiveFailuresNeverGivesUp()
+    {
+        Assert.False(EquipRetryRule.ShouldGiveUp(0));
+    }
 }

@@ -524,7 +524,15 @@ internal static unsafe partial class PluginHost
     /// old while the worker is healthy). Read from the GAME thread by the frame hook's own
     /// half of the stall watchdog — see <c>PluginHost.Frame</c>'s <c>WatchWorkerThread</c> —
     /// so that "the worker died" and "the worker is fine and quiet" are distinguishable in the
-    /// log instead of looking identical. 0 until the worker's first pass.</summary>
+    /// log instead of looking identical. 0 until the worker's first pass.
+    ///
+    /// ⚠ ALWAYS ACCESSED THROUGH <see cref="Interlocked"/>, never a plain read/write. This is
+    /// an 8-byte field crossing threads on an x86 (32-bit) process, where a bare read/write of
+    /// a <c>long</c> is not atomic — a plain read on the game thread could observe a torn value
+    /// (half the old tick, half the new one) while the worker is mid-write. The two threads are
+    /// otherwise strictly divided (the worker only touches the shared block; see
+    /// docs/ARCHITECTURE.md); this field is the one exception, so the access itself has to be
+    /// safe rather than relying on the division.</summary>
     internal static long WorkerLastTickMs;
 
     private static void WorkerLoop()
@@ -542,8 +550,9 @@ internal static unsafe partial class PluginHost
                 // The other half of the two-sided stall watchdog: the frame hook reads this to
                 // tell "the worker stopped" apart from "the worker is running and has nothing
                 // to say". Written before anything below can throw, so a worker that is alive
-                // but erroring still counts as alive.
-                WorkerLastTickMs = Environment.TickCount64;
+                // but erroring still counts as alive. Interlocked.Exchange, not a plain store —
+                // see the field's own doc comment: a bare 64-bit write is not atomic on x86.
+                Interlocked.Exchange(ref WorkerLastTickMs, Environment.TickCount64);
 
                 _block->Heartbeat++;
 
