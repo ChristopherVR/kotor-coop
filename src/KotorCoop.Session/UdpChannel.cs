@@ -161,6 +161,15 @@ public sealed class UdpChannel : IDisposable
         try
         {
             await Task.Delay(delayMs).ConfigureAwait(false);
+
+            // A cable pull eats what is already in flight. Re-checked after the wait rather
+            // than only before it, because these tasks queue behind the thread pool and can be
+            // held far longer than the delay they asked for — see NetworkSim.BlackedOut.
+            if (Sim.BlackedOut(SessionClock.NowMs, outbound: true))
+            {
+                return;
+            }
+
             int sent = _socket.SendTo(data, SocketFlags.None, destination);
             Interlocked.Increment(ref _packetsSent);
             Interlocked.Add(ref _bytesSent, sent);
@@ -190,21 +199,23 @@ public sealed class UdpChannel : IDisposable
                     await _socket.ReceiveFromAsync(buffer, SocketFlags.None, from, cancellationToken)
                         .ConfigureAwait(false);
 
-                if (Sim.Armed)
+                if (Sim.Armed && Sim.DropInbound(SessionClock.NowMs))
                 {
-                    long now = SessionClock.NowMs;
-                    if (Sim.DropInbound(now))
-                    {
-                        // Received by the socket, never seen by the session — a packet the
-                        // link ate on the way in.
-                        continue;
-                    }
-
-                    int delay = Sim.DelayMs();
-                    if (delay > 0)
-                    {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                    }
+                    // Received by the socket, never seen by the session — a packet the link ate
+                    // on the way in.
+                    //
+                    // ⚠ NO DELAY ON THIS SIDE, DELIBERATELY. Simulated latency is applied where
+                    // the datagram is SENT (see Send/SendLaterAsync), which already models the
+                    // whole one-way path; delaying again here would double-count it. Worse, it
+                    // would be the wrong SHAPE of delay: this is a single receive loop, so an
+                    // awaited delay holds up every datagram behind it. Measured — one end's
+                    // socket backlog took over a second to drain at 15-40 ms a packet, so a
+                    // peer went on "hearing" a host that had been cut off for a second and a
+                    // half, and an eight-second cable pull against a five-second peer timeout
+                    // produced barely any timeout at all. That is head-of-line blocking, which
+                    // a real link does not have; reordering comes from the outbound half, where
+                    // each datagram is held independently. See NetworkSim.SetLatency.
+                    continue;
                 }
 
                 // A STUN reply (see StunClient/SendStunRequestAsync) shares this socket with

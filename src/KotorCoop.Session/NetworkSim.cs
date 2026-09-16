@@ -184,11 +184,13 @@ public sealed class NetworkSim
     /// <summary>Adds a fixed delay plus up to <paramref name="jitterMs"/> of random extra.
     /// Jitter reorders packets, which is exactly what it does on a real link.
     ///
-    /// ⚠ ONLY THE OUTBOUND HALF REORDERS. An outbound delay hands the datagram to a
-    /// fire-and-forget task (<see cref="UdpChannel.Send"/>), so two packets held for different
-    /// amounts of time genuinely swap places. An INBOUND delay is awaited inside the single
-    /// receive loop, so it holds up everything behind it — head-of-line blocking, not
-    /// reordering. Simulate reordering with outbound jitter.</summary>
+    /// ⚠ APPLIED ON THE SENDING SIDE ONLY, which is the whole one-way path: each end delays
+    /// what it sends, so a round trip costs both ends' settings and nothing is counted twice.
+    /// It is also the only side that can REORDER — an outbound delay hands each datagram to
+    /// its own fire-and-forget task (<see cref="UdpChannel.Send"/>), so two held for different
+    /// amounts of time genuinely swap places, exactly as jitter does on a real link. The
+    /// receive loop deliberately applies no delay at all; see <see cref="UdpChannel"/>'s
+    /// receive path for what awaiting one there did instead.</summary>
     public void SetLatency(int latencyMs, int jitterMs = 0)
     {
         latencyMs = Math.Clamp(latencyMs, 0, 60_000);
@@ -219,6 +221,27 @@ public sealed class NetworkSim
             Volatile.Write(ref _rules, Rules.None);
             _armed = false;
         }
+    }
+
+    /// <summary>
+    /// Whether a blackout is eating this direction RIGHT NOW, with no loss draw and nothing
+    /// counted. For a datagram that was judged once already and then held (see
+    /// <see cref="UdpChannel.SendLaterAsync"/>): a cable pull eats what is in flight as well as
+    /// what has not left yet, so a packet accepted before the blackout and delivered during it
+    /// must not arrive.
+    ///
+    /// ⚠ WITHOUT THIS A BLACKOUT IS SHORTER THAN IT SAYS, BY AN AMOUNT THAT DEPENDS ON LOAD.
+    /// Simulated latency hands each datagram to a fire-and-forget task, and those tasks queue
+    /// behind whatever else is on the thread pool — measured at over a second of backlog with
+    /// three sessions on one machine, against a nominal 15-40 ms delay. All of it drained into
+    /// the far end AFTER the blackout began, so the silence a peer actually saw was a second
+    /// or more shorter than the window, and a test that blacks the host out for eight seconds
+    /// against a five-second peer timeout could see no timeout at all.
+    /// </summary>
+    public bool BlackedOut(long nowMs, bool outbound)
+    {
+        Rules rules = Volatile.Read(ref _rules);
+        return nowMs < rules.BlackoutUntilMs && rules.Covers(outbound);
     }
 
     /// <summary>Judges one outgoing datagram. True means the caller must silently discard it.</summary>

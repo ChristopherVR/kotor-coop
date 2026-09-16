@@ -510,6 +510,45 @@ public class NetworkSimTests
         }
     }
 
+    // ---- A blackout eats what is already in flight -------------------------------------------
+
+    [Fact]
+    public void BlackedOutIsTrueOnlyWhileTheWindowIsOpen()
+    {
+        NetworkSim sim = new();
+
+        Assert.False(sim.BlackedOut(SessionClock.NowMs, outbound: true));
+
+        sim.StartBlackout(10_000);
+        Assert.True(sim.BlackedOut(SessionClock.NowMs, outbound: true));
+        Assert.True(sim.BlackedOut(SessionClock.NowMs, outbound: false));
+
+        sim.EndBlackout();
+        Assert.False(sim.BlackedOut(SessionClock.NowMs, outbound: true));
+    }
+
+    [Fact]
+    public void BlackedOutFollowsTheDirectionAndIgnoresPlainLoss()
+    {
+        // A FixedRandom that would lose every packet if this consulted the loss rule at all —
+        // it must not: its only question is "is the cable out right now", asked about a
+        // datagram whose loss draw already happened. See NetworkSim.BlackedOut.
+        NetworkSim sim = new(new FixedRandom(0.0));
+        sim.SetLoss(100);
+
+        Assert.False(sim.BlackedOut(SessionClock.NowMs, outbound: true));
+
+        sim.StartBlackout(10_000, NetSimDirection.Outbound);
+
+        Assert.True(sim.BlackedOut(SessionClock.NowMs, outbound: true));
+        Assert.False(sim.BlackedOut(SessionClock.NowMs, outbound: false));
+
+        // ...and it counts nothing: the drop it represents was already counted when the
+        // datagram was first judged.
+        Assert.Equal(0, sim.DroppedOutbound);
+        Assert.Equal(0, sim.DroppedInbound);
+    }
+
     // ---- Duplication -------------------------------------------------------------------------
 
     [Fact]
