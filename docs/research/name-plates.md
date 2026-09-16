@@ -382,6 +382,32 @@ One deferral, 1.9 s of waiting, no provisional spawn. Probe afterwards — clien
 On screen: the host renders on the client, in her white/tan clothing, next to Trask; and the host
 still renders the joiner's `pmbama01` body. Both directions.
 
+### Addendum, same day: the window is EVERY module transition, not just the adoption
+
+The 2026-09-17 three-player soak (12 module transitions, three instances — see
+docs/status-engineering.md's "Multi-minute door-transition soak with 3+ peers") shows the gate
+firing on essentially every transition, on all three instances:
+
+```
+host   deferred=5  provisional=0
+peer2  deferred=9  provisional=0
+peer3  deferred=8  provisional=0
+```
+
+22 deferrals, 0 provisional spawns, across 12 transitions and three instances — i.e. after a
+door crossing or a warp the server world is routinely up and the player placed a beat before the
+client half is built, exactly as it is after the world adoption. The adoption reload is simply
+where it was FOUND (its client half takes longest, so the phantom got all the way to spawned and
+dressed inside the window). **So the invisible-peer bug was never adoption-specific** — every
+"my partner vanished after a warp" report is a candidate for the same cause, and this is the
+likeliest explanation for why the symptom was historically intermittent: whether the spawn
+attempt happened to land inside the window is a race with module load time.
+
+It also means the gate is on a hot path: it now defers a spawn on nearly every transition, and
+the cost of being wrong about it would be "no peers at all". That is what
+`PhantomSpawnReadinessRule`'s wait budget is for, and 0 provisional spawns in 22 deferrals says
+the budget has never been needed on this rig.
+
 ### Two notes for whoever reads this next
 
 - **`weaponClass` now matches (2 on both).** phantom-locomotion.md §11.3 left a phantom-vs-player

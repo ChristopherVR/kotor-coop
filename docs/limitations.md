@@ -38,7 +38,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Saving and loading mid-session | **Works** | Either player can save and load. The other side notices and rejoins on its own; you don't need to reconnect. |
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
 | The host's game crashes or drops off | **Works** | Within about six seconds you are released to keep playing solo, and the mod reconnects automatically when the host comes back. |
-| Three or more players | **Works** | Up to eight, same rules. Long sessions with three players walking through many doors have not been stress-tested. |
+| Three or more players | **Works** | Up to eight, same rules. Three players walking through many doors was stress-tested on 2026-09-17: twelve area changes in about half an hour, and every single time all three arrived in the same place and could see each other properly. Nothing crashed. |
 | Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it turned off because of it. A very different save asks you to rejoin. An item that has the same name but was changed by a mod on one side only is not detected. |
 | Wrong version of the mod on one side | **Works** | Refused in about a second with a clear message, instead of a silent timeout. |
 
@@ -152,7 +152,6 @@ Built and automatically tested, but nobody has watched them on the running game 
   router half was checked on 2026-09-17 (a real home router was asked to open the port, agreed, and
   confirmed afterwards that it had); nobody has yet come in from outside through it. Tunnel-based
   internet play (e.g. playit.gg) has been watched working end-to-end, which is a different path.
-- Long three-player sessions crossing many doors.
 - The keyboard side of the "you're parked" locks (swoop, Star Forge duels) — injected keystrokes
   never reach this game, so it can't be tested without a person at the keyboard.
 - The exact on-screen look of the connection line and of the shared map reveal.
