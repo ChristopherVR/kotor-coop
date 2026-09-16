@@ -1,8 +1,12 @@
 name: CI
 
+# A site-only change (site/, published by pages.yml) does not need a 20-minute native
+# build, and skipping CI also keeps release.yml from re-cutting "latest" for it.
 on:
   push:
+    paths-ignore: ['site/**', '.github/workflows/pages.yml']
   pull_request:
+    paths-ignore: ['site/**', '.github/workflows/pages.yml']
 
 jobs:
   build-and-test:

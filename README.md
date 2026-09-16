@@ -9,6 +9,9 @@ plugin bridge them into one shared world, the way FromSoftware's Seamless Co-op 
 No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads itself (or behind a tiny
 chain loader when another mod already owns that name); everything else attaches from outside with `OpenProcess`.
 
+**Players:** the plain-language download and install site is [christophervr.github.io/kotor-coop](https://christophervr.github.io/kotor-coop/)
+(source in [`site/`](site/), published by `.github/workflows/pages.yml`). This README is the developer-facing page.
+
 ## Status at a glance
 
 **You can play the whole game together.** Two people (up to eight) each run their own copy of
