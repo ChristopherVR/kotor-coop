@@ -123,8 +123,11 @@ public sealed partial class CoopClient
             _dialogueGrantSender.ResetBackoff();
 
             // ...and ask for the full world back, rather than trusting three version counters
-            // that an outage can leave equal-but-different. See _resyncOnConnect.
-            _resyncOnConnect = true;
+            // that an outage can leave equal-but-different. See _forceFlagResync.
+            _forceFlagResync = true;
+            _forceItemResync = true;
+            _forceJournalResync = true;
+            _forceLootResync = true;
             _lastFlagRequestMs = 0;
             _lastItemRequestMs = 0;
             _lastJournalRequestMs = 0;
@@ -243,19 +246,10 @@ public sealed partial class CoopClient
             return;
         }
 
-        // A reconnection asks for everything once, regardless of what the versions say. The
-        // request is only disarmed once all four senders are quiet, because a forced resync
-        // while our own ops are still in flight is exactly the overwrite the pending gates
-        // below exist to prevent — so it waits its turn rather than being spent unused.
-        bool forced = _resyncOnConnect;
-        if (forced
-            && _flagSender.PendingCount == 0
-            && _itemSender.PendingCount == 0
-            && _journalSender.PendingCount == 0
-            && _lootSender.PendingCount == 0)
-        {
-            _resyncOnConnect = false;
-        }
+        // A reconnection asks for everything once, regardless of what the versions say. Each
+        // channel carries its own flag and spends it when its own request actually goes out —
+        // see _forceFlagResync's remarks for why one shared flag disarmed by "all four senders
+        // are quiet" was wrong.
 
         // The version tripwire: 4 bytes per tick tells us whether our world flags still
         // match the host's, and the full set only crosses the wire when they do not.
@@ -266,14 +260,21 @@ public sealed partial class CoopClient
         // depends on content, not change count, so it still disagrees when the counter does
         // not.
         //
-        // Gated on our own ops being acked, exactly like items and journal below and for the
-        // same reason: until they land, the two sides are SUPPOSED to differ, and asking for
-        // a snapshot in that window used to be how a client's own change got overwritten.
-        if ((forced || snapshot.FlagVersion != Flags.Version || snapshot.FlagDigest != Flags.Digest)
-            && _flagSender.PendingCount == 0
-            && now - _lastFlagRequestMs >= FlagResyncIntervalMs)
+        // NOT gated on our own ops being acked: the flag merge is last-writer-wins by
+        // (Serial, OriginPeerId), so a snapshot cannot stomp a local change this host has not
+        // heard of, and waiting for an ack only means never hearing the host's own news on a
+        // lossy link. See WorldResyncRule.
+        if (WorldResyncRule.ShouldRequest(
+                _forceFlagResync,
+                snapshot.FlagVersion != Flags.Version || snapshot.FlagDigest != Flags.Digest,
+                _flagSender.PendingCount > 0,
+                snapshotReplacesLocal: false,
+                now,
+                _lastFlagRequestMs,
+                FlagResyncIntervalMs))
         {
             _lastFlagRequestMs = now;
+            _forceFlagResync = false;
             int length = PacketCodec.Write(_replyBuffer, new FlagSyncRequestPacket(_localPeerId, Flags.Version));
             if (length > 0)
             {
@@ -281,14 +282,22 @@ public sealed partial class CoopClient
             }
         }
 
-        // Same tripwire (version + digest) for ground items, but only once our own ops have
-        // all been acked: resyncing while a drop is still in flight would erase it locally,
-        // respawn it on the next snapshot, and flicker the item in and out of the world.
-        if ((forced || snapshot.ItemVersion != Items.Version || snapshot.ItemDigest != Items.Digest)
-            && _itemSender.PendingCount == 0
-            && now - _lastItemRequestMs >= ItemResyncIntervalMs)
+        // Same tripwire (version + digest) for ground items, and the ONE channel that really
+        // must wait for its own ops to be acked: the item snapshot REPLACES the store
+        // (GroundItemStore.ReplaceAll), so resyncing while a drop is still in flight would
+        // erase it locally, respawn it on the next snapshot, and flicker the item in and out
+        // of the world. See WorldResyncRule for why the other three do not share this.
+        if (WorldResyncRule.ShouldRequest(
+                _forceItemResync,
+                snapshot.ItemVersion != Items.Version || snapshot.ItemDigest != Items.Digest,
+                _itemSender.PendingCount > 0,
+                snapshotReplacesLocal: true,
+                now,
+                _lastItemRequestMs,
+                ItemResyncIntervalMs))
         {
             _lastItemRequestMs = now;
+            _forceItemResync = false;
             int length = PacketCodec.Write(_replyBuffer, new ItemSyncRequestPacket(_localPeerId, Items.Version));
             if (length > 0)
             {
@@ -296,16 +305,20 @@ public sealed partial class CoopClient
             }
         }
 
-        // Journal tripwire (version + digest), gated on our own ops being acked for the same
-        // reason as items: the merge itself is monotonic, but the version numbers only settle
-        // once in-flight ops have landed.
-        if ((forced
-                || snapshot.JournalVersion != Journal.Version
-                || snapshot.JournalDigest != Journal.Digest)
-            && _journalSender.PendingCount == 0
-            && now - _lastJournalRequestMs >= JournalResyncIntervalMs)
+        // Journal tripwire (version + digest). Ungated for the same reason as flags: the merge
+        // is per-entry last-writer-wins by (Serial, OriginPeerId) with tombstones, so there is
+        // nothing a snapshot can undo.
+        if (WorldResyncRule.ShouldRequest(
+                _forceJournalResync,
+                snapshot.JournalVersion != Journal.Version || snapshot.JournalDigest != Journal.Digest,
+                _journalSender.PendingCount > 0,
+                snapshotReplacesLocal: false,
+                now,
+                _lastJournalRequestMs,
+                JournalResyncIntervalMs))
         {
             _lastJournalRequestMs = now;
+            _forceJournalResync = false;
             int length = PacketCodec.Write(
                 _replyBuffer, new JournalSyncRequestPacket(_localPeerId, Journal.Version));
             if (length > 0)
@@ -321,11 +334,20 @@ public sealed partial class CoopClient
         // to ask for in reply — the host's "full resync" for this channel already IS
         // re-offering every removal through the reliable per-op sender
         // (CoopHost.ResyncContainerLoot), so the request just has to reach it.
-        if ((forced || snapshot.LootVersion != _lootStore.Version || snapshot.LootDigest != _lootStore.Digest)
-            && _lootSender.PendingCount == 0
-            && now - _lastLootRequestMs >= LootResyncIntervalMs)
+        //
+        // Ungated on our own pending ops: the reply is a re-offer of idempotent (container,
+        // item) removals, not a replacement, so there is nothing of ours for it to undo.
+        if (WorldResyncRule.ShouldRequest(
+                _forceLootResync,
+                snapshot.LootVersion != _lootStore.Version || snapshot.LootDigest != _lootStore.Digest,
+                _lootSender.PendingCount > 0,
+                snapshotReplacesLocal: false,
+                now,
+                _lastLootRequestMs,
+                LootResyncIntervalMs))
         {
             _lastLootRequestMs = now;
+            _forceLootResync = false;
             int length = PacketCodec.Write(
                 _replyBuffer,
                 new LootSyncRequestPacket(_localPeerId, _lootStore.Version, _lootStore.Digest));

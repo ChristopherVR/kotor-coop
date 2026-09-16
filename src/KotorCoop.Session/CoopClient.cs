@@ -142,7 +142,24 @@ public sealed partial class CoopClient : ICoopSession
     /// across an outage — but this forced flag stays: an outage is still the one window where
     /// bumping-and-breaking-the-tie cannot be relied on at all, on either side.
     /// </summary>
-    private bool _resyncOnConnect;
+    /// <remarks>
+    /// ⚠ ONE FLAG PER CHANNEL, SPENT WHERE THE REQUEST GOES OUT. There used to be a single
+    /// <c>_resyncOnConnect</c> disarmed only once all four reliable senders were quiet, on the
+    /// theory that a forced resync should "wait its turn" rather than be spent unused. Three
+    /// of the four channels have nothing to wait for (their snapshots merge rather than
+    /// replace — see <see cref="WorldResyncRule"/>), so all that rule did was tie every
+    /// channel's forced ask to the slowest sender on the link.
+    /// </remarks>
+    private bool _forceFlagResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceItemResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceJournalResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceLootResync;
 
     /// <summary>
     /// The tick rate actually driving <see cref="RunAsync"/>'s send/poll loop right now.
