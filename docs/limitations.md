@@ -33,7 +33,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Starting from the game's own menu | **Works** | A **Co-op** button on the main menu. One player presses **Host**, the other picks the server and presses **Connect**. Nothing to launch by hand. |
 | Bringing your own character | **Works** | Your character comes from your latest save and is placed next to the host. Your own save files are never changed. |
 | Joining for the first time | **Works** | Connect, and the normal New Game character-creation screen opens; make your character. Shortly after you are in the host's world with it (mostly bounded by the Endar Spire's own opening cinematic, not by the mod), and that character is your co-op character on every join after (a single-player game on the same install is never mistaken for it). `join_mode = newcharacter` makes a new one; `join_mode = save` is the old bring-your-own-save way. Your starting weapon now reliably equips (live-verified fix, 2026-09-10, across several character classes). If you still see your character in their default/bare-looking appearance, that is very likely how KOTOR renders that class's premade look, not a missing item — check your inventory and equip anything unequipped by hand if something still looks wrong. If you joined on v0.9.0 and after upgrading you come up as the *host's* character, delete `saves\kotorcoop-character.pifo` and `.json` in your game folder once and join again (v0.9.0 could copy the host's character into that file when you quit; fixed). |
-| Playing on two computers over the internet | **Works, with a catch** | The host's public address is found automatically and the router port is opened for you where the router allows it (UPnP). On a router that refuses, the host forwards one port by hand. Very restrictive networks (some mobile/corporate) can't be reached at all — there is no relay server. Watched working end-to-end over the public internet on 2026-09-10 using a tunnel tool (playit.gg) between two separate home networks; automatic port-opening on a real home router is still untested (see below). If your connection uses a UDP-only tunnel, turn on `world_transfer_udp_fallback = 1` in `coop.ini` — off by default — so the initial world hand-off doesn't silently stall on a TCP-only path. |
+| Playing on two computers over the internet | **Works, with a catch** | The host's public address is found automatically and the router port is opened for you where the router allows it (UPnP). On a router that refuses, the host forwards one port by hand. Very restrictive networks (some mobile/corporate) can't be reached at all — there is no relay server. Watched working end-to-end over the public internet on 2026-09-10 using a tunnel tool (playit.gg) between two separate home networks. On 2026-09-17 the automatic port-opening itself was checked against a real home router for the first time: the router was asked, it agreed, and it was then asked back what it had — it held the door open for the game on both kinds of traffic, with the mod's own name on it. What still has not been tried is a player on a *different* internet connection actually walking through that door; that needs a second household. If your connection uses a UDP-only tunnel, turn on `world_transfer_udp_fallback = 1` in `coop.ini` — off by default — so the initial world hand-off doesn't silently stall on a TCP-only path. |
 | GOG and Steam copies playing together | **Works** | Any mix. Two copies on one PC needs at least one of them to be the GOG version. |
 | Saving and loading mid-session | **Works** | Either player can save and load. The other side notices and rejoins on its own; you don't need to reconnect. |
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
@@ -100,7 +100,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | | Status | What to expect |
 | --- | --- | --- |
 | Keyboard and mouse | **Works** | Everything the game already does, plus `~` for the console and Enter to chat. |
-| Gamepad / controller | **Works, with a catch** | Any Xbox-style (XInput) pad plays the whole game — walking, combat, every menu and panel — through your own key bindings. It can't type: the address/password box, chat and the `~` console need a keyboard. Layout in the README; `gamepad = 0` turns it off. |
+| Gamepad / controller | **Works, with a catch** | Any Xbox-style (XInput) pad plays the whole game — walking, combat, every menu and panel — through your own key bindings. It can't type: the address/password box, chat and the `~` console need a keyboard. Layout in the README; `gamepad = 0` turns it off. Everything here was tested with a *simulated* pad; a real one has still never been held while the game was running. What was checked on 2026-09-17 is the machinery around it: the mod finds Windows' controller support on a real PC and watches for a pad every couple of seconds, so one switched on part-way through a session is picked up. Two real Xbox pads are paired to the test PC but were switched off, and the mod said so correctly — Windows itself reported exactly the same thing. |
 | Seeing that you're connected | **Works** | A one-line status in the top-left, moved off the minimap on 2026-09-10 so it no longer overlaps it; confirmed on screen, and it fades out correctly when it's no longer needed. |
 | Pausing | **Works** | Either player pauses both games. |
 
@@ -148,7 +148,9 @@ A few things look like bugs and aren't:
 
 Built and automatically tested, but nobody has watched them on the running game yet:
 
-- Internet play through a real home router's own automatic port-opening (UPnP). Tunnel-based
+- A player on a *different* internet connection joining through the automatic port-opening. The
+  router half was checked on 2026-09-17 (a real home router was asked to open the port, agreed, and
+  confirmed afterwards that it had); nobody has yet come in from outside through it. Tunnel-based
   internet play (e.g. playit.gg) has been watched working end-to-end, which is a different path.
 - Long three-player sessions crossing many doors.
 - The keyboard side of the "you're parked" locks (swoop, Star Forge duels) — injected keystrokes
@@ -156,6 +158,8 @@ Built and automatically tested, but nobody has watched them on the running game 
 - The exact on-screen look of the connection line and of the shared map reveal.
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
-- A physical gamepad (the controller support was verified with a simulated one).
+- A physical gamepad. The controller support was verified with a simulated one. On 2026-09-17 the
+  mod was confirmed to find Windows' controller support on a real PC and to correctly report "no
+  pad" for two Xbox pads that were paired but switched off — nobody was there to switch one on.
 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.
