@@ -85,12 +85,18 @@ jobs:
     needs: build-and-test
 
     steps:
+      # build-and-test's upload is continue-on-error (a full artifact store must not fail a
+      # green build, see the comment above it), so the package may simply not be there. Don't
+      # let that fail this job either - skip the rest of it instead.
       - uses: actions/download-artifact@v7
+        id: download
+        continue-on-error: true
         with:
           name: kotor-coop
           path: dist
 
       - name: Extract the Linux package
+        if: steps.download.outcome == 'success'
         run: |
           set -euo pipefail
           ls -l dist
@@ -103,6 +109,7 @@ jobs:
           test -s "$pkg/dinput8.dll" && test -s "$pkg/chain-loader/dinput8.dll" && test -s "$pkg/KotorCoop.Agent.exe"
 
       - name: Plain install, check, uninstall
+        if: steps.download.outcome == 'success'
         run: |
           set -euo pipefail
           game=$RUNNER_TEMP/swkotor
@@ -118,6 +125,7 @@ jobs:
           test -f "$game/coop.ini"   # kept on purpose
 
       - name: Chain behind a foreign dinput8.dll, upgrade in place, uninstall restores it
+        if: steps.download.outcome == 'success'
         run: |
           set -euo pipefail
           game=$RUNNER_TEMP/swkotor
@@ -142,6 +150,7 @@ jobs:
           test ! -e "$game/dinput8.chain" && test ! -e "$game/dinput8.prev.dll" && test ! -e "$game/KotorCoop.Plugin.dll"
 
       - name: Auto-detect through a Steam library and replace a system dinput8.dll
+        if: steps.download.outcome == 'success'
         run: |
           set -euo pipefail
           export HOME=$RUNNER_TEMP/home
