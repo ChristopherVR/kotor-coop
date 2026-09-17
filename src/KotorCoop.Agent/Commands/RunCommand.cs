@@ -58,14 +58,16 @@ internal static class RunCommand
             return 3;
         }
 
-        try
-        {
-            return await RunAttachedAsync(options, memory).ConfigureAwait(false);
-        }
-        finally
-        {
-            attachment.ReleaseMutex();
-        }
+        // ⚠ NO explicit ReleaseMutex here. WaitOne(TimeSpan.Zero) above runs synchronously on
+        // whatever thread called RunAsync, but RunAttachedAsync awaits socket/session teardown
+        // with ConfigureAwait(false) — by the time control returns here it is very likely
+        // running on a different thread-pool thread. Mutex ownership is thread-affine, so
+        // releasing from the wrong thread throws SynchronizationLockException ("Object
+        // synchronization method was called from an unsynchronized block of code"), which is
+        // exactly what used to print on every clean shutdown. As the field comment above says,
+        // this mutex is held for the process lifetime and released by abandonment when the
+        // process exits (normally, right after this returns) — same as the crash case.
+        return await RunAttachedAsync(options, memory).ConfigureAwait(false);
     }
 
     private static async Task<int> RunAttachedAsync(AgentOptions options, ProcessMemory memory)
