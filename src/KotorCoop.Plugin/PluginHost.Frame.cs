@@ -195,6 +195,11 @@ internal static unsafe partial class PluginHost
         // worth. See PostAdoptEquipRepairController's own doc comment.
         _postAdoptEquipRepair?.OnFrame();
 
+        // The carried min-1-hp pin release, same place and same reason: it watches the same
+        // block.MenuLoadApplied ack for EVERY plugin-serviced load (adoption, rejoin, loadgame)
+        // and clears a pin the character file carried in. See CarriedPinReleaseController.
+        _carriedPinRelease?.OnFrame();
+
         // The new-character capture, for the same reason and in the same place: it watches for
         // the character retail chargen writes, which happens between the main menu and the very
         // first world — the whole span where the swap hook is dormant. A no-op unless the agent

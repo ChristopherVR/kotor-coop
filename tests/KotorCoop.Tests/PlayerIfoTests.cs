@@ -218,6 +218,40 @@ public sealed class PlayerIfoTests : IDisposable
     }
 
     [Fact]
+    public void ThePifoNeverCarriesTheMinOneHitPointPin()
+    {
+        // docs/review-seamless-2026-09-18.md blocker #8: a character captured on the Endar
+        // Spire's command deck carries the tutorial's Min1HP pin (the rig's own joiner sidecar
+        // read Min1HP = 1), so it could never be downed anywhere. The pin is the destination
+        // module's to re-apply, never the character file's to carry.
+        GffWriter source = new("IFO ");
+        GffWriterStruct entry = source.Root.AddList("Mod_PlayerList").Add(48813);
+        PopulatePlayer(entry, "Yasuko Kaar", isPrimary: true);
+        entry.SetByte("Min1HP", 1);
+        GffStruct player = Gff.Parse(source.ToBytes()).Root.GetList("Mod_PlayerList")[0];
+
+        GffStruct carried = Gff.Parse(PlayerIfo.BuildPifo(player)).Root.GetList("Mod_PlayerList")[0];
+
+        Assert.True(carried.TryGetByte("Min1HP", out byte pin));
+        Assert.Equal(0, pin);
+        Assert.Equal("Yasuko Kaar", carried.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void AnUnpinnedCharacterIsLeftExactlyAsItWas()
+    {
+        GffWriter source = new("IFO ");
+        GffWriterStruct entry = source.Root.AddList("Mod_PlayerList").Add(48813);
+        PopulatePlayer(entry, "Yasuko Kaar", isPrimary: true);
+        entry.SetByte("Min1HP", 0);
+        GffStruct player = Gff.Parse(source.ToBytes()).Root.GetList("Mod_PlayerList")[0];
+
+        GffStruct carried = Gff.Parse(PlayerIfo.BuildPifo(player)).Root.GetList("Mod_PlayerList")[0];
+
+        AssertStructsMatch(player, carried, "player");
+    }
+
+    [Fact]
     public void StagingWritesTempPifoIfo()
     {
         string game = TempDirectory();

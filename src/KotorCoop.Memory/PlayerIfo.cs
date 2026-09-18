@@ -149,7 +149,24 @@ public static class PlayerIfo
         // The member keeps its source struct id (48813 in every save measured): list-member
         // ids are data, and renumbering them is the kind of silent change that only shows up
         // in a reader that switches on them.
-        GffCopy.CopyInto(player, writer.Root.AddList("Mod_PlayerList").Add(player.StructId));
+        GffWriterStruct member = writer.Root.AddList("Mod_PlayerList").Add(player.StructId);
+        GffCopy.CopyInto(player, member);
+
+        // ⚠ THE ONE FIELD THAT DOES NOT TRAVEL: Min1HP. It is a persistent creature field the
+        // Endar Spire's command deck sets on the PC from its area OnEnter (`k_pend_area01`:
+        // `SetMinOneHP(GetFirstPC(), TRUE)`, 0.1 s after entry) and only the starboard section
+        // clears (`k_pend_1b_area`) — docs/research/min-one-hitpoint.md. A `join_mode = auto`
+        // character is captured by quicksave moments after end_m01aa loads, and a `save`-mode
+        // character can come from the same deck, so the pin rode into every later world with
+        // them: the carried character could never be downed, and revive/wipe never engaged for
+        // it (docs/review-seamless-2026-09-18.md blocker #8; the rig's own joiner sidecar read
+        // Min1HP = 1). Stripping it here is always right: any module that wants the pin re-applies
+        // it from its own OnEnter on the engine the character logs into, and the plugin releases
+        // a pin that already rode in through an old sidecar at world-up (CarriedPinReleaseController).
+        if (player.TryGetByte("Min1HP", out byte minOneHp) && minOneHp != 0)
+        {
+            member.SetByte("Min1HP", 0);
+        }
 
         return writer.ToBytes();
     }

@@ -311,3 +311,43 @@ is the same shape as the stuck pause `Odyssey.ReconcilePause` repairs — an edg
 engine state left set across a transition — and probably wants the same treatment: a
 level-triggered reconcile that closes a conversation the client believes in but cannot show.
 The hold is now at least logged, so it can never be invisible again.
+
+## 2026-09-18 — the pin rode into every later world ON the carried character (review blocker #8)
+
+Step 3 above ("it clears on travel") is true for a character that walks off the deck. It is
+NOT true for a character that is *captured* on the deck: `Min1HP` is a persistent creature
+field, so a save taken on `end_m01aa` stores it as `1`, and anything that lifts the PC out of
+such a save carries the pin with it. Two paths do exactly that:
+
+- `join_mode = auto` (the default since 2026-09-03): `NewCharacterCaptureController` asks the
+  engine to quicksave moments after the fresh character's first module — `end_m01aa` — loads,
+  i.e. after `k_pend_area01` has run `SetMinOneHP(GetFirstPC(), TRUE)`, and
+  `PlayerIfo.TryExtractPlayer` copies the PC struct field-for-field into
+  `saves\kotorcoop-character.pifo`.
+- `join_mode = save` with a save taken anywhere on the command deck.
+
+Offline confirmation, no rig needed: the joiner install's own sidecar
+(`D:\Games\swkotor-gog-p2\saves\kotorcoop-character.pifo`, captured 2026-09-10) read
+`Min1HP = 1`, `MaxHitPoints = 9`, `ClassList = [(1, 1)]` through `tools/kotorfiles.py`'s GFF
+reader. Every world that character was ever adopted into therefore had a joiner who could not
+drop below 1 hp, so the whole downed/revive/wipe machinery (`death-handling.md`) never engaged
+for a co-op character made the default way — while the death rounds of 2026-09-02 all ran on
+`join_mode = save` characters from the rig's Taris saves and so never saw it.
+
+Fix, both halves shipped 2026-09-18:
+
+1. **`PlayerIfo.BuildPifo` strips the field** from every character file it emits (the sidecar
+   and the carried `kcoop_carried.ifo` both go through it). Always safe: a module that wants
+   the pin re-applies it from its own OnEnter on whichever engine the character logs into.
+   Pinned by `PlayerIfoTests.ThePifoNeverCarriesTheMinOneHitPointPin`.
+2. **`CarriedPinReleaseController`** (plugin) covers characters already captured: after every
+   `MenuLoadController`-serviced load (adoption, rejoin, `loadgame`) it polls until the player
+   resolves and the module name reads, then clears the flag through `Odyssey.SetMinOneHitPoint`
+   (the `god` cheat's own write) unless the module is one that pins at entry
+   (`CarriedPinReleaseRule.ModulesThatPinAtEntry` = `end_m01aa` only; the duel ring pins around
+   each duel, later than world-up). Log line: `carried pin: released the min-1-hp pin the player
+   carried into <module>`. Decision half unit-tested (`CarriedPinReleaseRuleTests`).
+
+Live check (see the "LIVE VERIFICATION 2026-09-18" entry below once run): a `join_mode = auto`
+join with the pre-fix sidecar must log the release on the client, and
+`sethp.ps1 -ObjectId 0x7FFFFFFF` on the client must read without `[min1hp]`.
