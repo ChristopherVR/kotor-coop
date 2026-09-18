@@ -91,17 +91,36 @@ public class DebugHelloVersionOverrideTests
 
         // The client's very first action once connected is SendStateUpdate (CoopClient.Tick) —
         // that is the "later packet" this test needs to see the real version on.
+        //
+        // ⚠ HELLO RETRIES ARE SKIPPED, not asserted on (2026-09-18): the client re-sends its Hello
+        // every HelloIntervalMs (500 ms) until the Welcome is PROCESSED, and under a loaded full
+        // suite run (locally with the rig up, and on CI) the Welcome sent above can land after a
+        // retry has already gone out — the fake host then received a Hello (override version)
+        // as the "packet after Welcome" and this test failed with 51 != 52. A retry is still
+        // the Hello, which the assertions above already cover; the claim here is about every
+        // NON-Hello packet, so those are the ones waited for.
         using CancellationTokenSource stateTimeout = new(Timeout);
         UdpReceiveResult afterWelcome;
-        try
+        while (true)
         {
-            afterWelcome = await fakeHost.ReceiveAsync(stateTimeout.Token);
+            try
+            {
+                afterWelcome = await fakeHost.ReceiveAsync(stateTimeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                Assert.Fail("the client never sent anything but Hello retries after Welcome");
+                throw;
+            }
+
+            if (PacketCodec.PeekTypeAnyVersion(afterWelcome.Buffer, out byte retryVersion) != PacketType.Hello)
+            {
+                break;
+            }
+
+            Assert.Equal(overrideVersion, retryVersion);
         }
-        catch (OperationCanceledException)
-        {
-            Assert.Fail("the client never sent anything after Welcome");
-            throw;
-        }
+
 
         Assert.Equal(ProtocolConstants.Version, afterWelcome.Buffer[2]);
         Assert.NotEqual(PacketType.None, PacketCodec.PeekType(afterWelcome.Buffer));
