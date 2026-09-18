@@ -313,9 +313,9 @@ public sealed partial class KotorGameBridge
     /// whole comparison is 613 bytes, so this is cheap enough to run every tick and the
     /// common case exits after two memory reads that match.
     /// </summary>
-    public List<KeyValuePair<uint, sbyte>> CollectChangedWorldState()
+    public List<KeyValuePair<ulong, sbyte>> CollectChangedWorldState()
     {
-        List<KeyValuePair<uint, sbyte>> changed = [];
+        List<KeyValuePair<ulong, sbyte>> changed = [];
 
         if (!_globals.IsResolved)
         {
@@ -365,7 +365,7 @@ public sealed partial class KotorGameBridge
                 uint flagId = GlobalVariableTable.MakeFlagId(GlobalVariableType.Boolean, index);
                 if (!_excludedFlags.Contains(flagId))
                 {
-                    changed.Add(new KeyValuePair<uint, sbyte>(flagId, now ? (sbyte)1 : (sbyte)0));
+                    changed.Add(new KeyValuePair<ulong, sbyte>(flagId, now ? (sbyte)1 : (sbyte)0));
                 }
             }
 
@@ -382,7 +382,7 @@ public sealed partial class KotorGameBridge
             uint flagId = GlobalVariableTable.MakeFlagId(GlobalVariableType.Number, index);
             if (!_excludedFlags.Contains(flagId))
             {
-                changed.Add(new KeyValuePair<uint, sbyte>(flagId, numbers[index]));
+                changed.Add(new KeyValuePair<ulong, sbyte>(flagId, numbers[index]));
             }
 
             _shadowNumbers[index] = numbers[index];
@@ -397,20 +397,30 @@ public sealed partial class KotorGameBridge
     /// see the value as a fresh local change and echo it back, and the two instances would
     /// broadcast at each other forever.
     /// </summary>
-    public bool TryApplyWorldState(uint flagId, sbyte value)
+    public bool TryApplyWorldState(ulong flagId, sbyte value)
     {
         if (!_globals.IsResolved || _shadowBooleans is null || _shadowNumbers is null)
         {
             return false;
         }
 
-        if (_excludedFlags.Contains(flagId))
+        // A door/placeable key (ObjectKeyedFlags: type tag in the TOP byte of a 64-bit id) is
+        // not a global. Refused here, before the cast below: truncating a 64-bit object key to
+        // the GlobalVariableType enum could land on Boolean/Number and write an unrelated
+        // global's slot.
+        if (ObjectKeyedFlags.IsObjectKeyed(flagId))
         {
             return false;
         }
 
-        var type = (GlobalVariableType)(flagId >> 16);
-        int index = (int)(flagId & 0xFFFF);
+        uint globalId = (uint)flagId;
+        if (_excludedFlags.Contains(globalId))
+        {
+            return false;
+        }
+
+        var type = (GlobalVariableType)(globalId >> 16);
+        int index = (int)(globalId & 0xFFFF);
 
         switch (type)
         {

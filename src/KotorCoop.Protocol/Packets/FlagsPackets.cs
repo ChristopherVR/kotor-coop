@@ -16,7 +16,7 @@ namespace KotorCoop.Protocol;
 /// (Serial, OriginPeerId) tie-break is deterministic without a second round trip.
 /// </summary>
 public sealed record FlagOpPacket(
-    uint OriginPeerId, uint OpSequence, uint FlagId, sbyte Value, uint Serial);
+    uint OriginPeerId, uint OpSequence, ulong FlagId, sbyte Value, uint Serial);
 
 public sealed record FlagAckPacket(uint OpSequence);
 
@@ -25,7 +25,7 @@ public sealed record FlagSyncRequestPacket(uint PeerId, uint KnownVersion);
 /// <summary>One entry inside a <see cref="FlagSnapshotPacket"/>: a flag's current value plus
 /// the (Serial, OriginPeerId) pair that won it, so a resyncing peer can apply the SAME
 /// last-writer-wins comparison a live op would have used rather than blindly overwriting.</summary>
-public readonly record struct FlagSnapshotEntry(uint FlagId, sbyte Value, uint Serial, uint OriginPeerId);
+public readonly record struct FlagSnapshotEntry(ulong FlagId, sbyte Value, uint Serial, uint OriginPeerId);
 
 /// <summary>
 /// Values are <c>sbyte</c>, not <c>bool</c>: KOTOR's world state is a mix of booleans and

@@ -108,7 +108,7 @@ public sealed class DialogueFastJoinPumpTests
         {
         }
 
-        public void SetFlag(uint flagId, sbyte value)
+        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 

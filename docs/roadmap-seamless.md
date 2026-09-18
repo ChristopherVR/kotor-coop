@@ -213,6 +213,6 @@ New open items, in the order a run hits them (details, evidence and effort in th
 | 44 | Mines/floor traps not synced; disguises (`OnApplyDisguise`) not mirrored; duel rings not catalogued as solo segments; client-cast crowd control on enemies is cosmetic | Missing |
 | 45 | Client-led departure through a party-select screen never observed (does the swept panel's exit script run?) | NEEDS-LIVE |
 | 46 | Host parked at the main menu leaves joiners frozen with every lock held; in-game address box built 2026-09-18 (the browser's "Connect to an address..." row, NEEDS-LIVE — `server-browser.md`); Windows Firewall prompt hidden behind the game; no reachability probe behind "UPnP mapped" | Partial |
-| 47 | Door/chest flag keys (8-bit module hash + low 16 bits of object id) can collide across a ~60-module game | Bug (long-run) |
+| 47 | Door/chest flag keys (8-bit module hash + low 16 bits of object id) can collide across a ~60-module game. **Closed 2026-09-18**: 64-bit key with the full module hash (`ObjectKeyedFlags.cs`), protocol 53, tested collision-free over all 117 shipped modules ([container-sync.md §12](research/container-sync.md)) | Bug, closed |
 | 48 | Repo private + artifact quota: no downloadable build carries anything after 2026-09-06 | Infra |
 

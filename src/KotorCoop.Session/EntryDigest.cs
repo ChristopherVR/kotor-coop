@@ -61,10 +61,12 @@ public static class EntryDigest
         return h;
     }
 
-    /// <summary>One flag: id plus its signed byte value.</summary>
-    public static ulong Flag(uint flagId, sbyte value)
+    /// <summary>One flag: its 64-bit id (protocol 53 — the low 32 bits for a global, the full
+    /// width for a door/placeable key) plus its signed byte value.</summary>
+    public static ulong Flag(ulong flagId, sbyte value)
     {
-        ulong h = MixUInt32(Offset, flagId);
+        ulong h = MixUInt32(Offset, (uint)flagId);
+        h = MixUInt32(h, (uint)(flagId >> 32));
         return MixByte(h, unchecked((byte)value));
     }
 

@@ -10,7 +10,7 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.FlagOp);
         w.WriteUInt32(packet.OriginPeerId);
         w.WriteUInt32(packet.OpSequence);
-        w.WriteUInt32(packet.FlagId);
+        w.WriteUInt64(packet.FlagId);
         w.WriteUInt8((byte)packet.Value);
         w.WriteUInt32(packet.Serial);
         return w.Failed ? 0 : w.Position;
@@ -26,7 +26,7 @@ public static partial class PacketCodec
 
         uint origin = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
-        uint flagId = r.ReadUInt32();
+        ulong flagId = r.ReadUInt64();
         sbyte value = (sbyte)r.ReadUInt8();
         uint serial = r.ReadUInt32();
         return r.Failed ? null : new FlagOpPacket(origin, opSeq, flagId, value, serial);
@@ -80,8 +80,8 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.FlagSnapshot);
         w.WriteUInt32(packet.Version);
 
-        // 13 bytes per flag (FlagId 4 + Value 1 + Serial 4 + OriginPeerId 4, protocol 31 adds
-        // the last two); stay inside one datagram.
+        // 17 bytes per flag (FlagId 8 + Value 1 + Serial 4 + OriginPeerId 4; protocol 31 added
+        // the last two, protocol 53 widened the id); stay inside one datagram.
         //
         // ⚠ THE CALLER MUST PAGE. This still clamps — a datagram is a datagram — but a clamp
         // here is now a bug in the caller, not a documented trade: see
@@ -94,7 +94,7 @@ public static partial class PacketCodec
         for (int i = 0; i < count; i++)
         {
             FlagSnapshotEntry flag = packet.Flags[i];
-            w.WriteUInt32(flag.FlagId);
+            w.WriteUInt64(flag.FlagId);
             w.WriteUInt8((byte)flag.Value);
             w.WriteUInt32(flag.Serial);
             w.WriteUInt32(flag.OriginPeerId);
@@ -121,7 +121,7 @@ public static partial class PacketCodec
         List<FlagSnapshotEntry> flags = new(count);
         for (int i = 0; i < count; i++)
         {
-            uint id = r.ReadUInt32();
+            ulong id = r.ReadUInt64();
             sbyte value = (sbyte)r.ReadUInt8();
             uint serial = r.ReadUInt32();
             uint origin = r.ReadUInt32();

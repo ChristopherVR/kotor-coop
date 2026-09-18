@@ -12,7 +12,7 @@ public sealed partial class CoopHost
 {
     public EventFlagStore Flags { get; } = new();
 
-    public void SetFlag(uint flagId, sbyte value)
+    public void SetFlag(ulong flagId, sbyte value)
     {
         // The host is authoritative, so its own changes apply immediately. Clients pick
         // them up through the version tripwire in the next world snapshot.

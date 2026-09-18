@@ -6,5 +6,5 @@ public interface IFlagSession
     EventFlagStore Flags { get; }
 
     /// <summary>Requests a world flag change. Delivered reliably.</summary>
-    void SetFlag(uint flagId, sbyte value);
+    void SetFlag(ulong flagId, sbyte value);
 }

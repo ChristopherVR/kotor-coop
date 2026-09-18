@@ -46,7 +46,7 @@ public class CoopSessionInterfaceShapeTests
 
         public IReadOnlyList<RemotePeer> GetRemotePeers() => [];
 
-        public void SetFlag(uint flagId, sbyte value)
+        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 

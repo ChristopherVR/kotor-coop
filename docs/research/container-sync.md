@@ -1355,3 +1355,67 @@ that shipped ahead of it.
 Build/test this round: `dotnet build KotorCoop.slnx -warnaserror` clean; `src/KotorCoop.Plugin
 /build.ps1 -WarnAsError -Install` clean on both GOG installs (x86 confirmed); `dotnet test
 tests/KotorCoop.Tests --no-build` 2339/2339 passing before the live pass.
+
+## 12. Protocol 53 (2026-09-18) — the 64-bit object key: module identity carried in full
+
+Closes docs/review-seamless-2026-09-18.md §2 "Door/chest keys can collide across a long game"
+and roadmap-seamless.md #47. Static fix + tests; no live pass needed (the failure was a pure
+key-space property and is now asserted over the whole shipped module list).
+
+**The bug.** `DoorFlags.MakeKey` / `PlaceableFlags.MakeKey` built a 32-bit flag id as
+`tag8 << 24 | moduleHash8 << 16 | objectId16`, with the module part an FNV-1a folded to ONE
+byte. Object ids restart on every module load, so the module byte was the only thing keeping
+"door 0x4A on `end_m01aa`" apart from "door 0x4A in `tar_m03aa`". The birthday bound over 256
+values passes 50% at 20 modules and 99% at ~60; the real list is worse than the estimate —
+`ObjectKeyedFlagsTests.TheOldEightBitFoldReallyDidCollideAcrossTheShippedModules` folds all 117
+shipped module names the old way and pins that collisions exist. Once two modules collided,
+any object id both happened to reuse shared one `EventFlagStore` entry, and the earlier
+module's "open / unlocked / searched" value (the store never prunes; a snapshot re-delivers
+everything) opened, unlocked or emptied an unrelated door or chest the moment a player walked
+into the later module. Never observed live only because no rig run crossed more than three
+modules.
+
+**The key now** (`src/KotorCoop.Memory/ObjectKeyedFlags.cs`, shared by both channels):
+
+| bits | field | width |
+| --- | --- | --- |
+| 63..56 | type tag — `0x44` 'D' door, `0x50` 'P' placeable | 8 |
+| 55..24 | FNV-1a of the module name, case-folded, **in full** | 32 |
+| 23..0 | object id (the bridge already refuses ids above 0xFFFF) | 24 |
+
+Global-variable ids are unchanged and occupy the low 32 bits only, so "is this an object key"
+is simply `flagId > uint.MaxValue` (`ObjectKeyedFlags.IsObjectKeyed`), and
+`KotorGameBridge.TryApplyWorldState` refuses such a key BEFORE its cast to
+`GlobalVariableType` — with a 64-bit id that cast would otherwise truncate a door key onto
+Boolean/Number and write an unrelated global's slot.
+
+**Wire.** `FlagId` is `ulong` in `FlagOpPacket` and `FlagSnapshotEntry`: a flag op grows from
+21 to 25 bytes, a snapshot entry from 13 to 17, and `ProtocolConstants.MaxFlagEntriesPerPacket`
+drops from 106 to 81 (pinned by `AFullSnapshotPageOfWidenedEntriesFitsOneDatagram`). The
+paged snapshot from the 2026-08 fix carries the rest. `EntryDigest.Flag` mixes all eight
+bytes. **Protocol version 52 → 53.**
+
+**Migration.** None: the store is per-session memory, no flag id is ever written to disk, and
+a peer still on the 32-bit layout is refused at Hello with `E_PROTO` before a single flag is
+exchanged.
+
+**Pruning — provided, deliberately not wired to a transition.** `EventFlagStore.Prune(Func<ulong,
+bool>)` drops entries by predicate (digest kept exact, Lamport clock and `Version` untouched;
+`ObjectKeyedFlags.BelongsToModule(key, moduleHash)` is the per-module predicate). It is NOT
+called on a module change, and the class remarks say why: peers can be in different modules
+(solo segments, a joiner catching up, split parties), and a host-side door/chest change reaches
+a peer that was not there ONLY through this store's snapshot, applied by `TryWriteDoorStates` /
+`TryWritePlaceableStates` when that peer enters the module — a "current module only" prune on
+the host would drop exactly those entries. The rejoin contract elsewhere confirms the shape:
+`ContainerLootStore` keeps a bounded window across modules, and `MaterialisedLootHistory` is
+the one store cleared per module because its owner-enemy ids are meaningless after a load —
+door/placeable keys now carry their module and so are not. With collision-free keys the whole
+playthrough is a few thousand 17-byte entries, which the paged snapshot already handles.
+
+**Tests** (`tests/KotorCoop.Tests/ObjectKeyedFlagsTests.cs`): every one of the 117 shipped
+module names (listed from the rig's GOG `modules\` folder) x object ids 1..0x400 x both
+channels — 239,616 keys — all distinct from each other and from every global-variable id; the
+32-bit hashes are pairwise distinct; the Endar Spire / Lower City same-id case is two store
+entries; prune semantics; the 81-entry page and the 25-byte op round-trip. Existing
+`DoorFlagsTests` / `PlaceableFlagsTests` re-pinned to the new signatures. Build
+`dotnet build KotorCoop.slnx -c Release -warnaserror` clean.

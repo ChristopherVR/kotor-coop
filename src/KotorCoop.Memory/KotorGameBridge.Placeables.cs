@@ -34,7 +34,7 @@ public sealed partial class KotorGameBridge
     private readonly Dictionary<uint, byte> _placeableBaselineLocked = [];
     private readonly Dictionary<uint, byte> _placeableBaselineTrapped = [];
     private string _placeableModule = string.Empty;
-    private byte _placeableModuleHash;
+    private uint _placeableModuleHash;
     private bool _placeableBaselined;
     private long _nextPlaceableScanTicks;
 
@@ -45,9 +45,9 @@ public sealed partial class KotorGameBridge
     /// (opened, unlocked) as placeable-typed world flags. First scan per module is a silent
     /// baseline; scans throttled to one per second like doors.
     /// </summary>
-    public List<KeyValuePair<uint, sbyte>> CollectChangedPlaceableState()
+    public List<KeyValuePair<ulong, sbyte>> CollectChangedPlaceableState()
     {
-        List<KeyValuePair<uint, sbyte>> changed = [];
+        List<KeyValuePair<ulong, sbyte>> changed = [];
 
         if (!EngineGlobals.TryReadModuleName(_memory, out string module))
         {
@@ -110,7 +110,7 @@ public sealed partial class KotorGameBridge
 
             bool unlockedDuringPlay = locked == 0 && _placeableBaselineLocked[objectId] != 0;
             bool disarmedDuringPlay = trapped == 0 && _placeableBaselineTrapped.GetValueOrDefault(objectId) != 0;
-            changed.Add(new KeyValuePair<uint, sbyte>(
+            changed.Add(new KeyValuePair<ulong, sbyte>(
                 PlaceableFlags.MakeKey(_placeableModuleHash, objectId),
                 PlaceableFlags.MakeValue(open != 0, unlockedDuringPlay, disarmedDuringPlay)));
         }
@@ -124,7 +124,7 @@ public sealed partial class KotorGameBridge
     /// applies each as a field write on the game's thread. Flags for other modules are held
     /// back until that module loads.
     /// </summary>
-    public bool TryWritePlaceableStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags)
+    public bool TryWritePlaceableStates(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags)
     {
         if (_pluginBlock == 0 || _placeableModule.Length == 0)
         {
@@ -134,7 +134,7 @@ public sealed partial class KotorGameBridge
         bool ok = true;
         int slot = 0;
 
-        foreach (KeyValuePair<uint, sbyte> flag in flags)
+        foreach (KeyValuePair<ulong, sbyte> flag in flags)
         {
             if (slot >= BlockPlaceableCapacity)
             {

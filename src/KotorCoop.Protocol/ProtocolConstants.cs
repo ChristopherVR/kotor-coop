@@ -184,8 +184,20 @@ public static class ProtocolConstants
     /// the existing TCP path (faster, simpler, no new failure modes of its own) is unchanged for
     /// everyone it already works for. Off by default (<c>world_transfer_udp_fallback</c>),
     /// NEEDS-LIVE. See docs/research/network-topology.md's UDP world-transfer section.
+    ///
+    /// Version 53: <c>FlagId</c> widened from 32 to 64 bits in <see cref="FlagOpPacket"/> and
+    /// <see cref="FlagSnapshotEntry"/> (+4 bytes per op, +4 per snapshot entry —
+    /// <see cref="MaxFlagEntriesPerPacket"/> drops from 106 to 81). Door and placeable keys used
+    /// to fold the module name to ONE byte beside a 16-bit object id; object ids restart on every
+    /// module load, so over a ~60-module playthrough two modules sharing that byte (a near
+    /// certainty) with a reused low id shared one store entry, and the earlier module's "open /
+    /// unlocked / searched" opened, unlocked or emptied an unrelated door or chest in the later
+    /// one. The key now carries the full 32-bit module-name hash and a 24-bit object id under
+    /// the type tag (<c>KotorCoop.Memory.ObjectKeyedFlags</c>); global-variable ids are unchanged
+    /// in the low 32 bits. No migration: the store is per-session memory, and an older peer is
+    /// refused at Hello (<c>E_PROTO</c>). docs/review-seamless-2026-09-18.md §2, roadmap #47.
     /// </summary>
-    public const byte Version = 52;
+    public const byte Version = 53;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -198,9 +210,10 @@ public static class ProtocolConstants
     public const int MaxJournalEntriesPerPacket = 28;
 
     /// <summary>
-    /// Flag entries per snapshot datagram: <c>FlagId</c> 4 + <c>Value</c> 1 + <c>Serial</c> 4 +
-    /// <c>OriginPeerId</c> 4 = 13 bytes each, after a 12-byte header, so 106 is what fits inside
-    /// <see cref="MaxPacketSize"/>. A longer store is sent as several snapshot packets in one
+    /// Flag entries per snapshot datagram: <c>FlagId</c> 8 + <c>Value</c> 1 + <c>Serial</c> 4 +
+    /// <c>OriginPeerId</c> 4 = 17 bytes each (protocol 53 widened the id from 4), after the
+    /// 10-byte header + version + count, so 81 is what fits inside <see cref="MaxPacketSize"/>
+    /// (it was 106 at 13 bytes). A longer store is sent as several snapshot packets in one
     /// burst, exactly like <see cref="MaxJournalEntriesPerPacket"/>.
     ///
     /// ⚠ THIS USED TO BE A SILENT TRUNCATION, AND IT WAS THE HOST-TO-CLIENT BACKFILL PATH FOR
@@ -214,7 +227,7 @@ public static class ProtocolConstants
     /// then re-requested the same truncated head every 500 ms for the rest of the session.
     /// Live symptom: a door OPEN on the host, CLOSED on the client, forever.
     /// </summary>
-    public const int MaxFlagEntriesPerPacket = 106;
+    public const int MaxFlagEntriesPerPacket = 81;
 
     /// <summary>Odyssey resource references are at most 16 characters.</summary>
     public const int MaxResrefLength = 16;

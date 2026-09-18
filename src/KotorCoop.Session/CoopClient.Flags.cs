@@ -14,7 +14,7 @@ public sealed partial class CoopClient
 
     public EventFlagStore Flags { get; } = new();
 
-    public void SetFlag(uint flagId, sbyte value)
+    public void SetFlag(ulong flagId, sbyte value)
     {
         // Applied locally straight away so the local player is not waiting on a round
         // trip; the host's authoritative version will confirm or correct it. Always mints a

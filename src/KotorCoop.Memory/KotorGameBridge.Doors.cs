@@ -31,7 +31,7 @@ public sealed partial class KotorGameBridge
     private readonly Dictionary<uint, byte> _doorBaselineLocked = [];
 
     private string _doorModule = string.Empty;
-    private byte _doorModuleHash;
+    private uint _doorModuleHash;
     private bool _doorBaselined;
     private long _nextDoorScanTicks;
 
@@ -45,9 +45,9 @@ public sealed partial class KotorGameBridge
     /// only changes made while the session is live. Scans are throttled to one per
     /// second, since they walk the whole address space by vtable.
     /// </summary>
-    public List<KeyValuePair<uint, sbyte>> CollectChangedDoorState()
+    public List<KeyValuePair<ulong, sbyte>> CollectChangedDoorState()
     {
-        List<KeyValuePair<uint, sbyte>> changed = [];
+        List<KeyValuePair<ulong, sbyte>> changed = [];
 
         if (!EngineGlobals.TryReadModuleName(_memory, out string module))
         {
@@ -104,7 +104,7 @@ public sealed partial class KotorGameBridge
             // The value is absolute; the store's max-merge discards anything that is not
             // an advance, so a door closing again simply produces a no-op.
             bool unlockedDuringPlay = locked == 0 && _doorBaselineLocked[objectId] != 0;
-            changed.Add(new KeyValuePair<uint, sbyte>(
+            changed.Add(new KeyValuePair<ulong, sbyte>(
                 DoorFlags.MakeKey(_doorModuleHash, objectId),
                 DoorFlags.MakeValue(open, unlockedDuringPlay)));
         }
@@ -118,7 +118,7 @@ public sealed partial class KotorGameBridge
     /// applies it through the engine's own door paths. Door flags for other modules are
     /// held back; they apply when their module is entered and this runs again.
     /// </summary>
-    public bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags)
+    public bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags)
     {
         if (_pluginBlock == 0 || _doorModule.Length == 0)
         {
@@ -128,7 +128,7 @@ public sealed partial class KotorGameBridge
         bool ok = true;
         int slot = 0;
 
-        foreach (KeyValuePair<uint, sbyte> flag in flags)
+        foreach (KeyValuePair<ulong, sbyte> flag in flags)
         {
             if (slot >= BlockDoorCapacity)
             {

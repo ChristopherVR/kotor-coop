@@ -76,7 +76,7 @@ public class DialogueGrantQueueTests
         {
         }
 
-        public void SetFlag(uint flagId, sbyte value)
+        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 

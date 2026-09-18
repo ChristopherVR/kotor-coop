@@ -120,7 +120,7 @@ public sealed class ProgressionPumpTests
 
         public IReadOnlyList<RemotePeer> GetRemotePeers() => [];
 
-        public void SetFlag(uint flagId, sbyte value) { }
+        public void SetFlag(ulong flagId, sbyte value) { }
 
         public uint DropItem(
             string resref, string module, Vector3f position, ItemIdentity identity = default) => 0;
