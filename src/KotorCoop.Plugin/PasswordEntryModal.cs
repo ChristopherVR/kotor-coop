@@ -39,9 +39,28 @@ namespace KotorCoop.Plugin;
 /// (<see cref="Available"/>), shared across both flows: a wrong assumption about the panel
 /// layout is wrong in both places, and each caller has its own fallback (the console prompt,
 /// or the old close-then-prompt flow) that was live-verified end to end.
+///
+/// SINCE 2026-09-18 the same panel also serves as the browser's ADDRESS BOX
+/// (<see cref="Ask.Address"/>): same build, same rebinds, same sweep; only the title, the
+/// prefill and the composer differ (<see cref="ConnectAddressRule"/> writes
+/// <c>connect &lt;host:port&gt;</c> instead of <c>password &lt;text&gt;</c>). Text the rule
+/// refuses does NOT close the panel — the title is re-captioned with the reason and the
+/// player edits what they typed. The name of the class is historical.
 /// </summary>
 internal sealed unsafe class PasswordEntryModal
 {
+    /// <summary>Which question the panel is asking — decides the title, the prefill's
+    /// meaning and which composer turns the typed bytes into a console line.</summary>
+    public enum Ask
+    {
+        /// <summary>A server password: composes <c>password &lt;text&gt;</c>.</summary>
+        Password,
+
+        /// <summary>A host address: composes <c>connect &lt;host:port&gt;</c>, refusing (and
+        /// staying open) for text that is not an address.</summary>
+        Address,
+    }
+
     /// <summary>What <see cref="Poll"/> observed this frame.</summary>
     public enum Outcome
     {
@@ -143,10 +162,12 @@ internal sealed unsafe class PasswordEntryModal
     private nint _guiManager;
     private bool _closing;
     private bool _okPending;
+    private Ask _ask;
 
-    /// <summary>The composed <c>password &lt;text&gt;</c> line, captured in the OK handler
-    /// while the panel is still alive, published only after the sweep has freed it. Sized to
-    /// the console channel so the composition can never exceed what the block can carry.</summary>
+    /// <summary>The composed console line (<c>password &lt;text&gt;</c> or
+    /// <c>connect &lt;address&gt;</c>), captured in the OK handler while the panel is still
+    /// alive, published only after the sweep has freed it. Sized to the console channel so
+    /// the composition can never exceed what the block can carry.</summary>
     private readonly byte[] _answer = new byte[SharedBlock.ConsoleCommandLength];
     private int _answerLength;
 
@@ -170,7 +191,12 @@ internal sealed unsafe class PasswordEntryModal
     /// while the browser flow uses the one its own panel was registered with — the main menu
     /// object is FREED while the browser is up and must not be resolved.
     /// </summary>
-    public bool TryOpen(nint guiManager)
+    /// <param name="ask">Which question this panel asks (title, prefill, composer).</param>
+    /// <param name="prefill">Text seeded into the editbox — the last address for
+    /// <see cref="Ask.Address"/>; a password is never prefilled (it renders in cleartext).
+    /// ⚠ NEEDS-LIVE: the seeding call is the one the empty-box clear already uses, but a
+    /// non-empty seed has not yet been watched rendering with the caret after it.</param>
+    public bool TryOpen(nint guiManager, Ask ask = Ask.Password, string prefill = "")
     {
         if (_broken || _panel != 0)
         {
@@ -239,32 +265,21 @@ internal sealed unsafe class PasswordEntryModal
             0x1,
             (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCancelClicked);
 
-        // Empty the editbox. panel+0x4D0 is the EDIT CONTENT (EDITBOX +0x3F0, its edit_text
+        // Seed the editbox. panel+0x4D0 is the EDIT CONTENT (EDITBOX +0x3F0, its edit_text
         // at +0xE0 — the typed CExoString at +0x548 is this object's +0x78, the same
         // arithmetic connect-flow.md spells out), NOT a caption label: stamping prompt text
-        // here would hand it straight back as the "password" on a bare OK. So the box is
-        // cleared of whatever the ctor seeded, guaranteeing +0x548 holds only the player's
+        // here would hand it straight back as the answer on a bare OK. So the box is set to
+        // exactly what an OK may return unedited — nothing for a password, the last address
+        // for the address box — guaranteeing +0x548 holds only that plus the player's
         // keystrokes. The title is captioned separately below, at the researched LBL_TITLE
         // params — never here.
-        WithExoString(string.Empty, s => EditTextSetText(panel + PanelEditText, s));
+        WithExoString(ask == Ask.Address ? prefill : string.Empty,
+            s => EditTextSetText(panel + PanelEditText, s));
 
         // Caption the title so the prompt says what it is asking, instead of savename.gui's
-        // stock "Enter name for saved game:". Guarded by the two invariants the research
-        // names — the label's vtable at +0x550 and the params' back-pointer to the label's
-        // own CSWGuiText — and on a mismatch the caption is simply SKIPPED, not latched: a
-        // shifted label layout (a GUI mod?) makes the title cosmetic-wrong, while the modal
-        // itself still works, and killing a working prompt over a caption would be the wrong
-        // trade. A write through a wrong params offset is what the guards exist to prevent.
-        if (*(nint*)(panel + PanelTitleLabel) == LabelVtable
-            && *(nint*)(panel + TitleParamsTextObject) == panel + PanelTitleText)
-        {
-            WithExoString("Enter the server password", s => TitleSetText(panel + PanelTitleParams, s));
-        }
-        else if (_logged < 32)
-        {
-            _logged++;
-            PluginHost.Log("password modal: title label not where researched; keeping the stock caption");
-        }
+        // stock "Enter name for saved game:". The address title says "keyboard" because a
+        // gamepad cannot type into this panel (docs/limitations.md's controller row).
+        TrySetTitle(panel, ask == Ask.Address ? "Host address (keyboard only)" : "Enter the server password");
 
         // Show as a MODAL over whatever is live beneath (flags2 bit0 → PushModalPanel).
         // Nothing below is marked for the sweep — see the class comment. Focus lands on the
@@ -275,8 +290,36 @@ internal sealed unsafe class PasswordEntryModal
         _guiManager = guiManager;
         _closing = false;
         _okPending = false;
+        _ask = ask;
         _active = this;
         return true;
+    }
+
+    /// <summary>
+    /// Captions LBL_TITLE. Guarded by the two invariants the research names — the label's
+    /// vtable at +0x550 and the params' back-pointer to the label's own CSWGuiText — and on a
+    /// mismatch the caption is simply SKIPPED, not latched: a shifted label layout (a GUI
+    /// mod?) makes the title cosmetic-wrong, while the modal itself still works, and killing
+    /// a working prompt over a caption would be the wrong trade. A write through a wrong
+    /// params offset is what the guards exist to prevent. Re-run per caption, never cached:
+    /// the panel address is checked against a live object each time.
+    /// </summary>
+    private static bool TrySetTitle(nint panel, string title)
+    {
+        if (*(nint*)(panel + PanelTitleLabel) == LabelVtable
+            && *(nint*)(panel + TitleParamsTextObject) == panel + PanelTitleText)
+        {
+            WithExoString(title, s => TitleSetText(panel + PanelTitleParams, s));
+            return true;
+        }
+
+        if (_logged < 32)
+        {
+            _logged++;
+            PluginHost.Log("password modal: title label not where researched; keeping the stock caption");
+        }
+
+        return false;
     }
 
     // ---- the open panel ------------------------------------------------------------
@@ -333,6 +376,21 @@ internal sealed unsafe class PasswordEntryModal
     }
 
     /// <summary>
+    /// Hands the captured line to the caller instead of the block — for a caller that must
+    /// close its own surface first and publish only once THAT sweep is confirmed (the
+    /// browser's address connect, which keeps the row-connect ordering: no agent action can
+    /// race the panel teardown). Returns the copied length; the buffer here is cleared.
+    /// </summary>
+    public int TakeAnswer(Span<byte> destination)
+    {
+        int count = Math.Min(_answerLength, destination.Length);
+        _answer.AsSpan(0, count).CopyTo(destination);
+        Array.Clear(_answer);
+        _answerLength = 0;
+        return count;
+    }
+
+    /// <summary>
     /// The surface beneath the modal is going away (the browser panel was swept under it):
     /// mark the modal for the same sweep — it is separately registered, so the manager frees
     /// it too — and drop the bookkeeping. Any half-given answer dies with it; the ask can be
@@ -384,6 +442,7 @@ internal sealed unsafe class PasswordEntryModal
             int length = *(int*)(self._panel + PanelTypedString + 4);
 
             int composed = 0;
+            string? rejection = null;
             if (data != null && length > 0)
             {
                 if (!LooksLikeReadablePointer((nint)data))
@@ -395,13 +454,24 @@ internal sealed unsafe class PasswordEntryModal
                     return;
                 }
 
-                composed = PasswordAnswer.Compose(
-                    new ReadOnlySpan<byte>(data, Math.Min(length, self._answer.Length)),
-                    self._answer);
+                ReadOnlySpan<byte> typed = new(data, Math.Min(length, self._answer.Length));
+                composed = self._ask == Ask.Address
+                    ? ConnectAddressRule.Compose(typed, self._answer, out rejection)
+                    : PasswordAnswer.Compose(typed, self._answer);
             }
 
             if (composed == 0)
             {
+                if (rejection is { Length: > 0 })
+                {
+                    // Text that is not an address: say why in the title and STAY OPEN with
+                    // the player's text still in the box, rather than dialling garbage or
+                    // closing on them. The panel is alive (we are inside its own OK dispatch),
+                    // so the same guarded caption write as at open applies.
+                    TrySetTitle(self._panel, rejection);
+                    return;
+                }
+
                 // Nothing typed: an empty OK is a cancel, not a join attempt with a
                 // zero-length password the host can only refuse.
                 self.CloseVisual();

@@ -68,7 +68,8 @@ Both players, each in their own full game:
   out), including a companion's equipment, experience and recruitment (`dialogue_recruit_sync`, on by
   default since 2026-09-18 — see [docs/CONFIG.md](docs/CONFIG.md); with it off, only the player
   who ran the recruiting conversation keeps the new companion).
-- **Start from the game's own menu** — a "Co-op" button, password-protected, auto-reconnect — and
+- **Start from the game's own menu** — a "Co-op" button, a server list with a "Connect to an
+  address..." row for internet games, password-protected, auto-reconnect — and
   **type commands in-game** (`~`, see [docs/CONSOLE.md](docs/CONSOLE.md)) or **chat** (Enter).
 - **Hold one conversation at a time**, Baldur's Gate 3-style: the other player spectates live and a
   late joiner catches up instantly.

@@ -321,3 +321,99 @@ measured, so it is dead in KOTOR 1.
 The engine's portrait walk is `esi + 0x5E4` with stride `0x140` for three faces
 (0x6C8B31..0x6C8B52), which is exactly the `PanelImageParams` this controller already had —
 `[0x224, 0x5E4, 0x724, 0x864]`, screenshot then three portraits.
+
+---
+
+## The address box (2026-09-18) — built, NEEDS-LIVE
+
+§4's "Manual IP" button, finally built — as a ROW, not a button, re-using the password panel
+wholesale. Review-2026-09-18 §2 had the site and the package README describing an address
+box that did not exist; the joiner typed `connect host:port` in the console.
+
+### What was built
+
+- **The row.** `PopulateRows` (`NativeBrowserController.Open.cs`) now appends a permanent last
+  row, caption `Connect to an address...`, after the server rows (or the scanning placeholder).
+  It is an engine-cloned row like every other (`BuildRow`: `OperatorNew` → `EntryCtor` →
+  `Initialize_2(rect, proto)` → `SetText`), with the same accept binding; nothing is hand-built.
+  Why a row and not a fourth button: `CSWGuiSaveLoad` has exactly three buttons (Load/Save →
+  Connect, Back → stock close, Delete → Host), and manufacturing a control by hand is the crash
+  register's #1 item (native-browser-panel.md). The details pane blanks for it and the caption
+  slot reads `Press Enter to type an address`. The row survives a list refresh: the highlight
+  restore keys on a marker string (`address-row`) that no published address can equal.
+- **The click.** `OnConnectClicked` (Connect button, or Enter/A on the row) sees
+  `selection == _addressRow`, records `_addressPromptPending` and returns — the modal opens on
+  the NEXT plugin frame in `OnFrameWhileOpen`, never inside the engine's event dispatch (the
+  same deferral as the locked-row password ask).
+- **The panel.** `PasswordEntryModal.TryOpen(guiManager, Ask.Address, prefill)` — the same
+  `CSWGuiSaveNamePanel` build, the same OK/Cancel rebinds (the stock OK would `WriteGame`), the
+  same modal push over the browser (`AddPanel(…, 1, 1)`), the same `PanelExists` polling. Three
+  differences: the title is `Host address (keyboard only)` (a pad cannot type into it — the
+  title says so); the editbox is SEEDED with the last address through the same
+  `CSWGuiEditText::SetText 0x00416490` the empty-box clear already used; and OK composes
+  through `ConnectAddressRule` instead of `PasswordAnswer`.
+- **The grammar** (`src/KotorCoop.Plugin/ConnectAddressRule.cs`, pure, compiled into the test
+  host). Accepts `host`, `host:port`, `[v6]:port`, `[v6]`, a bare v6 literal, and a leading
+  `connect ` typed by habit; ALWAYS emits an explicit port (`IPEndPoint.TryParse` reads a
+  bracketed literal with no port as port 0). Rejects spaces, URLs/paths, bad ports, brackets
+  around a hostname, non-DNS characters and over-long hosts, each with a short line that fits
+  the title label. `tests/KotorCoop.Tests/ConnectAddressRuleTests.cs` also pins that the
+  agent's `CoopCommand.TryResolveEndpoint`, `ConsoleCommand.Parse` and
+  `SteamConnectStringRule.TryParse` read every emitted shape back to the same endpoint — the
+  plugin cannot reference those assemblies, so agreement is a test, not a call.
+- **Rejection stays open.** Text the rule refuses does not close the panel: the OK handler
+  re-captions LBL_TITLE with the reason (the same guarded `TrySetTitle` as at open — label
+  vtable at +0x550, params back-pointer at +0x688) and returns, the player's text still in
+  the box. An empty OK is a cancel, as for the password.
+- **The connect.** On `Outcome.Answered` for an address ask the browser TAKES the composed
+  line out of the modal (`TakeAnswer`; the sweep bookkeeping clears the modal's buffer), marks
+  `_addressConnectPending` and closes itself the stock way. Only in the "panel freed" branch
+  (`PanelExists` false, fresh main menu built) is the line published through
+  `PublishConsoleCommand`, byte-for-byte `connect host:port`. That is the row-connect ordering
+  (act only after the sweep) kept for the same reason: nothing the agent does can race the GUI
+  teardown. The agent then runs exactly the path a typed `connect` takes: `Join` →
+  `TryResolveEndpoint` → `Dial(locked: false)` → on `E_PASSWORD`, `ReflectPhase` →
+  `PromptForPassword` → `RequestPasswordPrompt` → `BrowserPasswordSerial` →
+  `PasswordPromptController` floats the same modal (as a password ask) over the fresh menu.
+  No wire, block or protocol change.
+- **Memory.** The last address is kept in `kotorcoop-last-address.txt` beside the game (the
+  console history's neighbour), written on the plugin frame after the publish, never in the
+  OK handler. With no sidecar the box seeds from coop.ini `host` + `port`
+  (`ConnectAddressRule.PrefillFromConfig`). coop.ini is NOT written: nothing in the plugin or
+  the agent rewrites it after install (PackageInstaller writes it once; both readers only
+  read), and a first writer for a hand-commented player file was not worth one prefill.
+- **Fallbacks.** Modal latched off (`PasswordEntryModal.Available` false) before or during the
+  ask → close the browser and `Odyssey.OpenConsoleWith("connect <last>")` after the sweep, the
+  surface the password ask's fallback already verified at this menu. A transient open
+  refusal → the browser stays up, the row stays highlighted, the next Connect retries.
+- **Input class.** Not touched: both closes here are the retail sweep (modal) and the stock
+  Back path (`DisplayMainMenu`), at the main menu, and no `Show*Gui` follows — the in-world
+  `CGuiInGame+0x30` rule (input-class-after-gui-close) does not apply.
+
+### NEEDS-LIVE checklist
+
+1. Open the browser (Co-op / F9 at the menu): the last row reads `Connect to an address...`
+   and the details pane blanks with the hint when it is highlighted; server rows unchanged.
+2. Highlight it and press Connect (and, separately, Enter on the row): the text panel floats
+   over the browser titled `Host address (keyboard only)`. **Prefill**: with a
+   `kotorcoop-last-address.txt` (or coop.ini `host`) present, the box shows that address with
+   the caret after it and Backspace edits it — the seeding call is the one the empty clear
+   used, but a NON-EMPTY seed has never been watched.
+3. Type `not an address`, OK: the title changes to `No spaces in an address`, the panel stays
+   up, the text stays. Clear it, OK: the panel closes, the browser stays (cancel).
+4. Type the host's `ip:port`, OK: the browser closes, the agent log shows the console line
+   `connect ip:port` arriving AFTER `native browser: connecting to typed address …`, the
+   session connects, the menu auto-load fires as for a row connect.
+   `kotorcoop-last-address.txt` now holds the address; reopening the box shows it.
+5. Against a password-protected host: after the connect the password modal appears over the
+   main menu (the serial path), and the answer joins.
+6. Alt-tab with the address box up: Dismissed, the browser stays (same as the password ask).
+7. A list refresh (a second host appears) while the address row is highlighted keeps it
+   highlighted (the marker restore).
+
+### Key additions
+
+`ConnectAddressRule` (plugin, pure) · `PasswordEntryModal.Ask` / `TryOpen(gui, ask, prefill)` /
+`TakeAnswer` / `TrySetTitle` · `NativeBrowserController.Address.cs` (`_addressRow`,
+`_addressPromptPending`, `_addressConnectPending`, `_addressConsoleFallbackPending`,
+`ReadLastAddress`, `RememberAddress`) · sidecar `kotorcoop-last-address.txt`.

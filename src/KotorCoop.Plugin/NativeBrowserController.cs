@@ -29,6 +29,10 @@ namespace KotorCoop.Plugin;
 /// Connect on a locked row (with no agent-held password — <see cref="SharedBlock.BrowserEntryPasswordHeld"/>)
 /// floats the <see cref="PasswordEntryModal"/> OVER this panel before anything closes, so the
 /// player is never round-tripped through the main menu to be asked; see OnFrameWhileOpen.
+///
+/// The last row is always "Connect to an address..." — the address box for a host that is
+/// not on the LAN. Confirming it floats the same modal (as <see cref="PasswordEntryModal.Ask.Address"/>)
+/// over the panel; see NativeBrowserController.Address.cs for the flow and why it is a row.
 /// </summary>
 internal sealed unsafe partial class NativeBrowserController
 {
@@ -205,6 +209,7 @@ internal sealed unsafe partial class NativeBrowserController
             _connectPending = false;
             _openRequested = false;
             _promptOpenPending = false;
+            ResetAddressState();
             _passwordModal.Forget();
             return;
         }
@@ -248,6 +253,7 @@ internal sealed unsafe partial class NativeBrowserController
             _closing = false;
             _block.BrowserOpen = 0;
             _promptOpenPending = false;
+            _addressPromptPending = false;
 
             // If the browser died with the password modal still floating over it (an
             // engine-side close we did not initiate), the modal must not outlive its
@@ -271,6 +277,35 @@ internal sealed unsafe partial class NativeBrowserController
                 _block.RequestBrowserHost();
                 Log("native browser: hosting; handed to the agent");
             }
+            else if (_addressConnectPending)
+            {
+                // The typed address, as the console line `connect host:port` — byte-for-byte
+                // what the player would have typed after ~, so the agent's path (resolve,
+                // dial, ask for a password on E_PASSWORD via the serial) is the verified one.
+                // Published only now, with the panel freed, for the same reason the row
+                // connect waits: nothing the agent does can race the GUI teardown.
+                _addressConnectPending = false;
+                string address = ConnectAddressRule.AddressOf(_pendingLine.AsSpan(0, _pendingLineLength));
+                fixed (byte* line = _pendingLine)
+                {
+                    _block.PublishConsoleCommand(line, _pendingLineLength);
+                }
+
+                _pendingLineLength = 0;
+                Array.Clear(_pendingLine);
+                RememberAddress(address);
+                Log($"native browser: connecting to typed address {address}; handed to the agent");
+            }
+            else if (_addressConsoleFallbackPending)
+            {
+                // The native text panel is latched off: the developer console with the verb
+                // pre-typed is the surface that was live-verified for the password ask at
+                // this same menu. False means a console is already open — then the player
+                // simply has it.
+                _addressConsoleFallbackPending = false;
+                bool opened = Odyssey.OpenConsoleWith(ConnectAddressRule.Prefix + ReadLastAddress());
+                Log($"native browser: address box unavailable; console fallback {(opened ? "opened" : "not opened")}");
+            }
             else
             {
                 Log("native browser: closed");
@@ -286,6 +321,24 @@ internal sealed unsafe partial class NativeBrowserController
             case PasswordEntryModal.Outcome.StillOpen:
                 return;
 
+            case PasswordEntryModal.Outcome.Answered when _openAsk == PasswordEntryModal.Ask.Address:
+                // The address box: hold the composed `connect` line here (the modal's own
+                // buffer is cleared by the sweep bookkeeping below) and close the browser;
+                // the freed branch above publishes it.
+                _pendingLineLength = _passwordModal.TakeAnswer(_pendingLine);
+                if (_pendingLineLength > 0)
+                {
+                    _addressConnectPending = true;
+                    Close();
+                    Log("native browser: address entered; connecting once the panel closes");
+                }
+                else
+                {
+                    Log("native browser: address prompt answered with nothing; staying in the browser");
+                }
+
+                return;
+
             case PasswordEntryModal.Outcome.Answered:
                 // ORDERING: the password goes to the agent FIRST, the connect serial only
                 // after the browser sweep (the normal _connectPending handoff below) — so
@@ -296,6 +349,23 @@ internal sealed unsafe partial class NativeBrowserController
                 _connectPending = true;
                 Close();
                 Log($"native browser: password answered for row {_pendingSelection}; connecting");
+                return;
+
+            case PasswordEntryModal.Outcome.Dismissed when _openAsk == PasswordEntryModal.Ask.Address:
+                if (!PasswordEntryModal.Available)
+                {
+                    // The modal broke mid-type: close and hand the player the console with
+                    // the verb pre-typed rather than a browser whose address row now does
+                    // nothing.
+                    _addressConsoleFallbackPending = true;
+                    Close();
+                    Log("native browser: address box latched off mid-ask; using the console fallback");
+                }
+                else
+                {
+                    Log("native browser: address prompt cancelled; staying in the browser");
+                }
+
                 return;
 
             case PasswordEntryModal.Outcome.Dismissed:
@@ -328,6 +398,7 @@ internal sealed unsafe partial class NativeBrowserController
 
             if (_passwordModal.TryOpen(_guiManager))
             {
+                _openAsk = PasswordEntryModal.Ask.Password;
                 Log($"native browser: password prompt over the browser (row {_pendingSelection})");
             }
             else
@@ -338,6 +409,34 @@ internal sealed unsafe partial class NativeBrowserController
                 _connectPending = true;
                 Close();
                 Log("native browser: password modal unavailable; using the close-then-ask flow");
+            }
+
+            return;
+        }
+
+        // The address row was confirmed: float the text panel over the browser, pre-filled
+        // with the last address. Same deferral and same gui manager as the password ask.
+        if (_addressPromptPending)
+        {
+            _addressPromptPending = false;
+
+            if (PasswordEntryModal.Available
+                && _passwordModal.TryOpen(_guiManager, PasswordEntryModal.Ask.Address, ReadLastAddress()))
+            {
+                _openAsk = PasswordEntryModal.Ask.Address;
+                Log("native browser: address box over the browser");
+            }
+            else if (!PasswordEntryModal.Available)
+            {
+                _addressConsoleFallbackPending = true;
+                Close();
+                Log("native browser: address box unavailable; using the console fallback");
+            }
+            else
+            {
+                // Transient (allocator pressure, another modal): the browser stays up with
+                // the row highlighted; the next Connect press tries again.
+                Log("native browser: address box could not open this frame; press Connect again");
             }
 
             return;
@@ -379,6 +478,10 @@ internal sealed unsafe partial class NativeBrowserController
                 _selectedAddress = ReadAscii(
                     _block.BrowserEntry(selected) + SharedBlock.BrowserEntryAddress,
                     SharedBlock.BrowserEntryAddressLength);
+            }
+            else if (selected == _addressRow)
+            {
+                _selectedAddress = AddressRowMarker;
             }
         }
 
@@ -424,6 +527,18 @@ internal sealed unsafe partial class NativeBrowserController
             }
 
             short selected = *(short*)(self._panel + PanelSelection);
+            if (selected >= 0 && selected == self._addressRow)
+            {
+                // The address box. Only records; the modal opens on the next plugin frame
+                // (OnFrameWhileOpen), never inside the engine's event dispatch.
+                if (!self._passwordModal.IsOpen)
+                {
+                    self._addressPromptPending = true;
+                }
+
+                return;
+            }
+
             if (selected < 0 || selected >= self._serverRows)
             {
                 return; // nothing highlighted, or the placeholder row — stay open

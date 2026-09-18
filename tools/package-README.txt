@@ -47,8 +47,10 @@ Play
 1. Start KOTOR normally. (The mod starts its own helper process, KotorCoop.Agent.exe, in
    the background -- that is expected.)
 2. Click Co-op on the main menu.
-3. One player presses Host; the other picks that server from the list (or types the
-   host's address) and presses Connect. A password set in coop.ini is asked for.
+3. One player presses Host; the other picks that server from the list and presses Connect.
+   If the host is not on your network, pick "Connect to an address..." at the bottom of the
+   list, type the address the host gave you and press OK (the box remembers the last one).
+   If the host set a password, a box asks for it.
 4. Host: load a save. Joining for the first time: the game's character-creation screens
    open -- make your character exactly as you normally would. Your game starts as usual, and a
    few seconds later you are pulled into the host's world with it. Joining again later: nothing
@@ -92,8 +94,8 @@ world -- left stick walks and turns, right stick is the cursor, A is the default
 B is Escape, X cancels combat / right-clicks, Y switches character, LB/RB cycle targets or
 pages, LT pauses, RT clicks, the D-pad is action slots 1-4 (scrolls on a menu), Back is the
 map, RS click forces cursor mode. Your swkotor.ini bindings are respected. A pad can't type:
-the address/password box, chat and the ~ console still need a keyboard. gamepad = 0 in
-coop.ini turns it off.
+the address box and the password box (their titles say so), chat and the ~ console still
+need a keyboard. gamepad = 0 in coop.ini turns it off.
 
 Console commands
 -----------------
@@ -145,8 +147,10 @@ The server browser only finds games on your own network. To play with someone el
    automatic; if yours doesn't, forwarding by hand is the only alternative -- there's no relay.
 2. Share the address the host was given (or a hostname/DDNS address pointing at it -- connect
    accepts either) with the other player.
-3. The joiner presses Connect and types that address (or picks it from a saved shortcut --
-   there's nothing to browse for an internet game).
+3. The joiner clicks Co-op, picks "Connect to an address..." at the bottom of the server
+   list (there's nothing to browse for an internet game), types that address and presses OK.
+   The box remembers the last address. Typing connect <address> at the ~ console does the
+   same thing.
 
 If a join just sits there and eventually says "no reply... is UDP port N forwarded on the
 host?", that usually means the port really isn't reachable from outside the host's network yet
@@ -274,8 +278,10 @@ Screen, Internet play and Advanced. The most commonly-touched ones:
   password           Optional. Must match on both sides.
   port               UDP port (default 27140). The host's port must be reachable from the
                      client.
-  host / mode        Address to join and host/join mode -- the in-game menu sets these for
-                     you; they matter for the console connect.
+  host / mode        Address to join and host/join mode. Optional: the in-game server list and
+                     its address box don't need them. A host set here pre-fills the address
+                     box until you first use it; after that the box remembers what you last
+                     typed (kotorcoop-last-address.txt beside the game).
   menu_button        1 shows the Co-op button on the main menu.
   follow_lead        who may lead an area transition the other player follows automatically.
   dialogue_auto_join whether you're pulled into a conversation your partner starts.

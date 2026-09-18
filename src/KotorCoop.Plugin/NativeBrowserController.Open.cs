@@ -131,7 +131,8 @@ internal sealed unsafe partial class NativeBrowserController
         rect[2] = 0;
         rect[3] = RowHeight;
 
-        nint* rows = stackalloc nint[MaxRows > 0 ? MaxRows : 1];
+        // Every server (or the one placeholder), plus the address row last.
+        nint* rows = stackalloc nint[MaxRows + 2];
         int built = 0;
 
         if (count == 0)
@@ -155,6 +156,18 @@ internal sealed unsafe partial class NativeBrowserController
             rows[built++] = row;
         }
 
+        // The address box, always the last row: a host that is not on the LAN (an internet
+        // game, a tunnel address). Confirming it opens the text panel — see
+        // NativeBrowserController.Address.cs. An engine-cloned row like the others, because
+        // the panel has no spare button and hand-built controls are the crash register's #1.
+        _addressRow = -1;
+        nint addressRow = BuildRow(proto, (nint)rect, AddressRowCaption);
+        if (addressRow != 0)
+        {
+            _addressRow = built;
+            rows[built++] = addressRow;
+        }
+
         // The caller-stack CExoArrayList triple {data, count, capacity}; AddControls copies
         // the pointers out, so stack storage is fine for the duration of the call. Flag 1 =
         // the listbox owns (and on the next clear, frees) the rows.
@@ -170,7 +183,11 @@ internal sealed unsafe partial class NativeBrowserController
         // server that dropped off the list (restoreAddress no longer present) falls back to the
         // first row exactly like "nothing was selected before."
         int select = 0;
-        if (restoreAddress is not null)
+        if (restoreAddress == AddressRowMarker && _addressRow >= 0)
+        {
+            select = _addressRow; // the player was on the address row: keep them there
+        }
+        else if (restoreAddress is not null)
         {
             for (int i = 0; i < count; i++)
             {
@@ -190,15 +207,21 @@ internal sealed unsafe partial class NativeBrowserController
             SetSelectedControl(panel + PanelListBox, select, 1);
         }
 
-        ShowDetails(panel, built > 0 ? select : -1);
+        // The details pane describes a SERVER; the placeholder and the address row have none
+        // (blank it), and the address row gets a hint in the caption slot instead.
+        ShowDetails(panel, select < count ? select : -1);
+        if (select == _addressRow)
+        {
+            SetCaption(panel + PanelShotCaptionParams, AddressRowHint);
+        }
 
         // Re-anchor to whatever is now actually highlighted, so the NEXT refresh compares
         // against the right identity even if this one changed or lost the selection.
-        _selectedAddress = count > 0 && select < count
+        _selectedAddress = select < count
             ? ReadAscii(
                 _block.BrowserEntry(select) + SharedBlock.BrowserEntryAddress,
                 SharedBlock.BrowserEntryAddressLength)
-            : null;
+            : select == _addressRow ? AddressRowMarker : null;
     }
 
     /// <summary>

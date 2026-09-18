@@ -35,6 +35,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GaitRule.cs" Link="Plugin\GaitRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PasswordAnswer.cs" Link="Plugin\PasswordAnswer.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ConnectAddressRule.cs" Link="Plugin\ConnectAddressRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleHistoryRing.cs" Link="Plugin\ConsoleHistoryRing.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />

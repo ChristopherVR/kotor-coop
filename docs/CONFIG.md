@@ -65,7 +65,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
 | `mode` | `join` | `host` a session or `join` one | [connect-flow.md](research/connect-flow.md) |
-| `host` | example address, unset in code | for `mode = join`: the host's address | [connect-flow.md](research/connect-flow.md) |
+| `host` | example address, unset in code | for `mode = join`: the host's address. Also seeds the in-game address box (with `port`) until the box is first used; after that the last typed address wins, kept in `kotorcoop-last-address.txt` beside the game — neither side ever writes coop.ini | [connect-flow.md](research/connect-flow.md), [server-browser.md](research/server-browser.md) |
 | `port` | `27140`⁸ | UDP port; host and client must match | [network-topology.md](research/network-topology.md) |
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
 | `name` | unset | your name/character name shown to peers | — |
