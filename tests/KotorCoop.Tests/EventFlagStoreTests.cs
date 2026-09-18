@@ -61,7 +61,7 @@ public class EventFlagStoreTests
         store.Set(1, 1);
         store.Set(2, 1);
 
-        store.ReplaceAll([new KeyValuePair<uint, sbyte>(3, 1)], version: 42);
+        store.ReplaceAll([new KeyValuePair<ulong, sbyte>(3, 1)], version: 42);
 
         Assert.Equal(42u, store.Version);
         Assert.Equal(1, store.Count);
@@ -191,7 +191,7 @@ public class EventFlagStoreTests
 
         // A KOTOR catalogue is well over a thousand entries; seeding through Set would
         // bump the version once each and make every client immediately demand a resync.
-        store.Seed(Enumerable.Range(1, 1000).Select(i => new KeyValuePair<uint, sbyte>((uint)i, 1)));
+        store.Seed(Enumerable.Range(1, 1000).Select(i => new KeyValuePair<ulong, sbyte>((uint)i, 1)));
 
         Assert.Equal(0u, store.Version);
         Assert.Equal(1000, store.Count);
@@ -205,10 +205,10 @@ public class EventFlagStoreTests
         store.Set(2, 0);
         store.Set(3, 1);
 
-        List<KeyValuePair<uint, sbyte>> snapshot = store.Snapshot();
+        List<KeyValuePair<ulong, sbyte>> snapshot = store.Snapshot();
 
         Assert.Equal(3, snapshot.Count);
-        Assert.Contains(new KeyValuePair<uint, sbyte>(2, 0), snapshot);
+        Assert.Contains(new KeyValuePair<ulong, sbyte>(2, 0), snapshot);
     }
 
     // ---- digest -----------------------------------------------------------------
@@ -293,10 +293,10 @@ public class EventFlagStoreTests
         store.Set(2, 1);
         ulong beforeDigest = store.Digest;
 
-        store.ReplaceAll([new KeyValuePair<uint, sbyte>(1, 1)], version: 9);
+        store.ReplaceAll([new KeyValuePair<ulong, sbyte>(1, 1)], version: 9);
 
         EventFlagStore direct = new();
-        direct.Seed([new KeyValuePair<uint, sbyte>(1, 1)]);
+        direct.Seed([new KeyValuePair<ulong, sbyte>(1, 1)]);
 
         Assert.Equal(direct.Digest, store.Digest);
         Assert.NotEqual(beforeDigest, store.Digest);
@@ -310,7 +310,7 @@ public class EventFlagStoreTests
         EventFlagStore store = new();
         ulong empty = store.Digest;
 
-        store.Seed([new KeyValuePair<uint, sbyte>(1, 1), new KeyValuePair<uint, sbyte>(2, 2)]);
+        store.Seed([new KeyValuePair<ulong, sbyte>(1, 1), new KeyValuePair<ulong, sbyte>(2, 2)]);
 
         Assert.Equal(0u, store.Version);
         Assert.NotEqual(empty, store.Digest);

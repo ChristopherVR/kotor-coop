@@ -191,11 +191,11 @@ public interface IWorldStateBridge
     /// World-state variables that changed locally since the last call, as (flag id, value).
     /// These are the quest and story booleans and counters the whole game branches on.
     /// </summary>
-    List<KeyValuePair<uint, sbyte>> CollectChangedWorldState() => [];
+    List<KeyValuePair<ulong, sbyte>> CollectChangedWorldState() => [];
 
     /// <summary>
     /// Applies a peer's world-state value. Must also update the bridge's own shadow copy,
     /// or the next scan sees it as a local change and broadcasts it straight back.
     /// </summary>
-    bool TryApplyWorldState(uint flagId, sbyte value) => false;
+    bool TryApplyWorldState(ulong flagId, sbyte value) => false;
 }

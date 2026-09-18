@@ -143,7 +143,7 @@ public sealed class MockRenderer
 
     private static string FormatFlags(ICoopSession session)
     {
-        Dictionary<uint, sbyte> flags = session.Flags.ToDictionary();
+        Dictionary<ulong, sbyte> flags = session.Flags.ToDictionary();
         if (flags.Count == 0)
         {
             return "(none)";
@@ -265,9 +265,9 @@ public sealed class MockRenderer
 public static class DemoFlags
 {
     /// <summary>Stands in for a real world flag, e.g. "the bulkhead on the Endar Spire is open".</summary>
-    public const uint BulkheadDoor = 1001;
+    public const ulong BulkheadDoor = 1001;
 
-    public static string Describe(uint flagId) => flagId switch
+    public static string Describe(ulong flagId) => flagId switch
     {
         BulkheadDoor => "bulkhead",
         _ => $"flag{flagId}",

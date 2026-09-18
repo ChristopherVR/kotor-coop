@@ -30,6 +30,22 @@ namespace KotorCoop.Session;
 /// old max-merge had — order-independent, idempotent, a stale replay can never regress a
 /// newer value (proven by <c>ReplayedOpCannotUndoABeat</c> and its serial-aware siblings) —
 /// while finally letting a value go down when that is what genuinely happened.
+///
+/// KEYS ARE 64-BIT (protocol 53). A global variable's id lives in the low 32 bits; a door or
+/// placeable key (<c>KotorCoop.Memory.ObjectKeyedFlags</c>) carries a type tag, the FULL
+/// 32-bit module-name hash and the object id, because object ids restart on every module load
+/// and the old one-byte module fold let two modules share an entry over a long game. The store
+/// itself is key-agnostic; <see cref="Prune"/> is the hook a caller with module knowledge uses
+/// to drop the object-keyed entries of a module it KNOWS no peer will need again.
+///
+/// ⚠ NOTHING PRUNES AUTOMATICALLY ON A MODULE CHANGE, AND THAT IS DELIBERATE. Peers can be in
+/// different modules (solo segments, split parties, a joiner still catching up), and the ONLY
+/// way a host-side door/chest change reaches a peer that was not there to see it is this
+/// store's snapshot, applied by the bridge the moment that peer enters the module
+/// (<c>TryWriteDoorStates</c> holds back other modules' keys until then). A "current module
+/// only" prune on the host would silently drop exactly those entries. With collision-free keys
+/// the store's growth over a whole playthrough is a few thousand 17-byte entries, which the
+/// paged snapshot already carries.
 /// </summary>
 public sealed class EventFlagStore
 {
@@ -38,7 +54,7 @@ public sealed class EventFlagStore
     /// <summary>One flag's current value plus the (Serial, OriginPeerId) that won it.</summary>
     private readonly record struct Entry(sbyte Value, uint Serial, uint OriginPeerId);
 
-    private readonly Dictionary<uint, Entry> _flags = [];
+    private readonly Dictionary<ulong, Entry> _flags = [];
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
@@ -81,7 +97,7 @@ public sealed class EventFlagStore
     /// in the new one. The digest depends only on VALUE, not on Serial/OriginPeerId — two
     /// stores that reached the same content by different local/remote paths still agree on
     /// what they hold, which is the only thing the digest needs to answer.</summary>
-    private void ReplaceEntry(uint flagId, Entry entry)
+    private void ReplaceEntry(ulong flagId, Entry entry)
     {
         if (_flags.TryGetValue(flagId, out Entry existing))
         {
@@ -111,7 +127,7 @@ public sealed class EventFlagStore
         }
     }
 
-    public bool TryGet(uint flagId, out sbyte value)
+    public bool TryGet(ulong flagId, out sbyte value)
     {
         lock (_gate)
         {
@@ -129,7 +145,7 @@ public sealed class EventFlagStore
     /// <summary>The (Serial, OriginPeerId) currently stamped on <paramref name="flagId"/>, for
     /// a caller (<c>CoopClient.SetFlag</c>) that just wrote the entry via <see cref="Set"/> and
     /// needs its freshly-minted serial to build the outbound <see cref="FlagOpPacket"/>.</summary>
-    public bool TryGetStamp(uint flagId, out uint serial, out uint originPeerId)
+    public bool TryGetStamp(ulong flagId, out uint serial, out uint originPeerId)
     {
         lock (_gate)
         {
@@ -154,7 +170,7 @@ public sealed class EventFlagStore
     /// Returns true only when the value actually moved (nothing to mint or announce
     /// otherwise).
     /// </summary>
-    public bool Set(uint flagId, sbyte value, uint originPeerId = 0)
+    public bool Set(ulong flagId, sbyte value, uint originPeerId = 0)
     {
         lock (_gate)
         {
@@ -180,11 +196,11 @@ public sealed class EventFlagStore
     /// count, so it has to reflect whatever the store actually holds regardless of how that
     /// content arrived.
     /// </summary>
-    public void Seed(IEnumerable<KeyValuePair<uint, sbyte>> flags)
+    public void Seed(IEnumerable<KeyValuePair<ulong, sbyte>> flags)
     {
         lock (_gate)
         {
-            foreach (KeyValuePair<uint, sbyte> flag in flags)
+            foreach (KeyValuePair<ulong, sbyte> flag in flags)
             {
                 ReplaceEntry(flag.Key, new Entry(flag.Value, 0, 0));
             }
@@ -279,13 +295,13 @@ public sealed class EventFlagStore
     /// genuinely want a hard reset. Every entry is stamped with the given version as its
     /// serial and origin 0, so any subsequent real change (local or remote, serial &gt;= 1
     /// over its own clock) still outranks it correctly.</summary>
-    public void ReplaceAll(IReadOnlyList<KeyValuePair<uint, sbyte>> flags, uint version)
+    public void ReplaceAll(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags, uint version)
     {
         lock (_gate)
         {
             _flags.Clear();
             _digest = EntryDigest.Empty;
-            foreach (KeyValuePair<uint, sbyte> flag in flags)
+            foreach (KeyValuePair<ulong, sbyte> flag in flags)
             {
                 ReplaceEntry(flag.Key, new Entry(flag.Value, version, 0));
             }
@@ -294,14 +310,50 @@ public sealed class EventFlagStore
         }
     }
 
-    public List<KeyValuePair<uint, sbyte>> Snapshot()
+    /// <summary>
+    /// Drops every entry whose key <paramref name="shouldDrop"/> accepts, keeping the digest
+    /// consistent (each removed entry's contribution is XOR-ed back out, so the result equals a
+    /// store freshly built from the surviving entries). The Lamport clock is NOT lowered — it is
+    /// a high-water mark of everything ever observed, and lowering it would let a later local
+    /// change mint a serial a peer has already seen. <see cref="Version"/> therefore does not
+    /// change either: a prune is local housekeeping, not a world change to announce. Returns the
+    /// number of entries removed.
+    ///
+    /// Meant for per-module housekeeping with the <c>ObjectKeyedFlags.BelongsToModule</c>
+    /// predicate, by a caller that knows every peer is done with that module — see the class
+    /// remarks for why no caller does this on a plain transition.
+    /// </summary>
+    public int Prune(Func<ulong, bool> shouldDrop)
     {
         lock (_gate)
         {
-            List<KeyValuePair<uint, sbyte>> list = new(_flags.Count);
-            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            List<ulong> doomed = [];
+            foreach (KeyValuePair<ulong, Entry> kv in _flags)
             {
-                list.Add(new KeyValuePair<uint, sbyte>(kv.Key, kv.Value.Value));
+                if (shouldDrop(kv.Key))
+                {
+                    doomed.Add(kv.Key);
+                }
+            }
+
+            foreach (ulong key in doomed)
+            {
+                _digest ^= EntryDigest.Flag(key, _flags[key].Value);
+                _flags.Remove(key);
+            }
+
+            return doomed.Count;
+        }
+    }
+
+    public List<KeyValuePair<ulong, sbyte>> Snapshot()
+    {
+        lock (_gate)
+        {
+            List<KeyValuePair<ulong, sbyte>> list = new(_flags.Count);
+            foreach (KeyValuePair<ulong, Entry> kv in _flags)
+            {
+                list.Add(new KeyValuePair<ulong, sbyte>(kv.Key, kv.Value.Value));
             }
 
             return list;
@@ -315,7 +367,7 @@ public sealed class EventFlagStore
         lock (_gate)
         {
             List<FlagSnapshotEntry> list = new(_flags.Count);
-            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            foreach (KeyValuePair<ulong, Entry> kv in _flags)
             {
                 list.Add(new FlagSnapshotEntry(kv.Key, kv.Value.Value, kv.Value.Serial, kv.Value.OriginPeerId));
             }
@@ -324,12 +376,12 @@ public sealed class EventFlagStore
         }
     }
 
-    public Dictionary<uint, sbyte> ToDictionary()
+    public Dictionary<ulong, sbyte> ToDictionary()
     {
         lock (_gate)
         {
-            Dictionary<uint, sbyte> result = new(_flags.Count);
-            foreach (KeyValuePair<uint, Entry> kv in _flags)
+            Dictionary<ulong, sbyte> result = new(_flags.Count);
+            foreach (KeyValuePair<ulong, Entry> kv in _flags)
             {
                 result[kv.Key] = kv.Value.Value;
             }

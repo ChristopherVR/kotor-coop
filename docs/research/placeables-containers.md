@@ -2,7 +2,8 @@
 
 Goal: extend world-object interaction sync beyond doors. Doors already work
 (`DoorController` + the reliable max-merge flag channel, keyed `0x44<<24 | moduleHash8<<16 |
-objectId`, monotonic open/lock bits). This maps the same treatment onto **placeables**
+objectId` at the time — since protocol 53 (2026-09-18) a 64-bit `tag8 | moduleHash32 |
+objectId24`, see container-sync.md §12 — monotonic open/lock bits). This maps the same treatment onto **placeables**
 (chests, corpses, switches), **container loot**, **traps** and, feasibility-only, **stores**.
 
 House assumptions carried over from `object-model.md`: no ASLR (base `0x400000`, disk==memory),
@@ -81,7 +82,8 @@ truth".
 is low value and should ship last. Mirror `locked`/`open` on the existing max-merge flag
 channel with a new tag byte (e.g. `0x50`), monotonic (locked→unlocked, closed→open), keyed
 `0x50<<24 | moduleHash8<<16 | objectId`. A `PlaceableController` mirrors `DoorController`
-one-for-one.
+one-for-one. *(2026-09-18: the 8-bit module fold collided across a long game; both channels now
+use the 64-bit key in `ObjectKeyedFlags.cs` — container-sync.md §12.)*
 
 ---
 

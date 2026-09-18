@@ -12,11 +12,11 @@ public interface IDoorBridge
     /// Door states that advanced locally since the last call (opened, unlocked,
     /// destroyed), as door-typed world flags ready for the reliable flag channel.
     /// </summary>
-    List<KeyValuePair<uint, sbyte>> CollectChangedDoorState() => [];
+    List<KeyValuePair<ulong, sbyte>> CollectChangedDoorState() => [];
 
     /// <summary>
     /// Publishes the session's door truth for the local module into the game. The bridge
     /// filters: flags for doors in other modules are held back until that module loads.
     /// </summary>
-    bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<uint, sbyte>> flags) => false;
+    bool TryWriteDoorStates(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags) => false;
 }

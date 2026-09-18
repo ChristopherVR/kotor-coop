@@ -103,7 +103,7 @@ public class AwayStateTests
 
         public IReadOnlyList<RemotePeer> GetRemotePeers() => Peers;
 
-        public void SetFlag(uint flagId, sbyte value)
+        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 

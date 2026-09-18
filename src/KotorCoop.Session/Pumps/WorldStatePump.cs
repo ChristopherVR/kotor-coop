@@ -195,7 +195,7 @@ internal sealed class WorldStatePump(
             return;
         }
 
-        foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedDoorState())
+        foreach (KeyValuePair<ulong, sbyte> change in bridge.CollectChangedDoorState())
         {
             // CollectChangedDoorState already only reports a genuine local transition (its
             // own shadow-diff), so every entry here is worth announcing — no separate gate.
@@ -218,7 +218,7 @@ internal sealed class WorldStatePump(
             return;
         }
 
-        foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedPlaceableState())
+        foreach (KeyValuePair<ulong, sbyte> change in bridge.CollectChangedPlaceableState())
         {
             session.SetFlag(change.Key, change.Value);
         }
@@ -253,14 +253,14 @@ internal sealed class WorldStatePump(
             return;
         }
 
-        foreach (KeyValuePair<uint, sbyte> change in bridge.CollectChangedWorldState())
+        foreach (KeyValuePair<ulong, sbyte> change in bridge.CollectChangedWorldState())
         {
             session.SetFlag(change.Key, change.Value);
         }
 
         // Apply anything the session knows that the game does not. The bridge updates its
         // own shadow copy as it writes, so the next scan does not see this as local.
-        foreach (KeyValuePair<uint, sbyte> flag in session.Flags.Snapshot())
+        foreach (KeyValuePair<ulong, sbyte> flag in session.Flags.Snapshot())
         {
             bridge.TryApplyWorldState(flag.Key, flag.Value);
         }

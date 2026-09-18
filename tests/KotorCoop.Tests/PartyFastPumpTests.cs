@@ -81,7 +81,7 @@ public sealed class PartyFastPumpTests
         {
         }
 
-        public void SetFlag(uint flagId, sbyte value)
+        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 
