@@ -1867,3 +1867,22 @@ always going to fail (there is no body yet); the controller now treats a recruit
 `RecruitedOffStage` = "flag set, cache written, no body", and spawns from the cache (or reuses
 the GIT-placed body) on the next pass. Full disassembly and the crash this reading was hiding:
 transition-crashes.md, "The two-companion host warp crash (2026-09-03)".
+
+## 2026-09-18 — `dialogue_recruit_sync` finally ships ON (code default), and why the doc above disagreed with the code
+
+The "flipped ON by default" heading of the 2026-08-24 follow-up round above described a
+`profiles/coop.ini.example` line, not the code fallback: `PartyRosterController` kept
+`PluginConfig.ReadBool("dialogue_recruit_sync", false)`, `CoopConfig.DialogueRecruitSync` kept its
+digest default OFF, and the 2026-09 "player settings only" template cleanup then removed the
+line, so every packaged install since has shipped with recruitment sync genuinely OFF — a
+companion recruited by one player never became available on the other's roster (CONFIG.md and
+status-engineering.md said so; this file and the roadmap said the opposite). The 2026-09-18
+seamless-playthrough review (`docs/review-seamless-2026-09-18.md`, blocker #2) found the split
+and flipped the CODE default: plugin fallback, `CoopConfig` digest default, and the agent's
+null-config fallback all read `true` now, so the digest can never silently disagree with the
+plugin again. Evidence standing behind the flip: slots 2 (Carth) and 8 (Zaalbar) live-confirmed
+(rounds 75 and 2026-08-24 above), all nine slot→template entries statically verified against the
+shipped recruit scripts (`PartyRosterTemplateTable`), the stale-mirrored-body reuse confirmed
+live. Still open: the seven never-exercised slots, one per planet (Bastila tar_m03aa, T3
+tar_m02ab, Mission tar_m04aa, Canderous tar_m02aa, Juhani danm13, HK-47 tat_m17ac, Jolee
+kas_m24aa) — a live target, not a reason to ship OFF.

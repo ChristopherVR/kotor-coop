@@ -27,10 +27,10 @@ What you should know before starting:
   player watches it live. That's deliberate — two people steering one dialogue would break the
   story.
 - **The host owns the party.** Only the host swaps the active party member and picks the party
-  before a departure. Companions follow the host's game. Two related switches ship OFF by
-  default: `dialogue_recruit_sync` (without it, only whoever ran a recruiting conversation keeps
-  the new companion) and `companion_local_combat` (without it, a companion doesn't fight for the
-  other player through their own copy of the game). Both are one-line `coop.ini` edits.
+  before a departure. Companions follow the host's game, and a companion recruited in a
+  conversation reaches both players (`dialogue_recruit_sync`, on by default since 2026-09-18).
+  One related switch ships OFF: `companion_local_combat` (without it, a companion doesn't fight
+  for the other player through their own copy of the game). It is a one-line `coop.ini` edit.
 - **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for the
   other. A shop's stock is only re-read while someone has it open, and a shop that has an infinite
   supply of something will never show it changing (harmless).
@@ -65,9 +65,9 @@ Both players, each in their own full game:
   journal, credits, the party's inventory and merchant stock all stay in step. **Pause** pauses
   both games.
 - **Share one party**, driven by the host's game and mirrored to everyone (`--no-party-sync` opts
-  out), including a companion's equipment and experience. A companion's *recruitment* is NOT
-  shared by default — see `dialogue_recruit_sync` in [docs/CONFIG.md](docs/CONFIG.md); without it,
-  only the player who ran the recruiting conversation keeps the new companion.
+  out), including a companion's equipment, experience and recruitment (`dialogue_recruit_sync`, on by
+  default since 2026-09-18 — see [docs/CONFIG.md](docs/CONFIG.md); with it off, only the player
+  who ran the recruiting conversation keeps the new companion).
 - **Start from the game's own menu** — a "Co-op" button, password-protected, auto-reconnect — and
   **type commands in-game** (`~`, see [docs/CONSOLE.md](docs/CONSOLE.md)) or **chat** (Enter).
 - **Hold one conversation at a time**, Baldur's Gate 3-style: the other player spectates live and a

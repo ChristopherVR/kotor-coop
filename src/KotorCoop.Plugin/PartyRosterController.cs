@@ -22,28 +22,31 @@ namespace KotorCoop.Plugin;
 /// roster every tick and this reconciles against it every pass; the steady state is that there
 /// is nothing to do, which costs two masks and a compare.
 ///
-/// ⚠ BY DEFAULT THIS DOES NOT MAKE A COMPANION AVAILABLE. Recruitment itself
-/// (AddAvailableNPCByTemplate) needs the blueprint the script named, which is not readable from
-/// the roster afterwards — party table +0x30 is a bare flag, set to the literal 1 at
-/// 0x00564350. Availability is expected to arrive the way it already does: the same
-/// conversation running on both instances. What diverges in practice is the PARTY SEAT, which
-/// a partial or aborted conversation gets wrong on its own, and that is what this fixes by
-/// default. A slot the peer has in its party and this instance has never recruited is logged,
-/// once, and skipped — see <see cref="_unavailableLogged"/>.
+/// Recruitment itself (AddAvailableNPCByTemplate) needs the blueprint the script named, which
+/// is not readable from the roster afterwards — party table +0x30 is a bare flag, set to the
+/// literal 1 at 0x00564350. What always diverges in practice is the PARTY SEAT, which a partial
+/// or aborted conversation gets wrong on its own, and that is what this reconciles every pass.
 ///
-/// Behind <c>dialogue_recruit_sync=1</c> (docs/research/dialogue-consequences.md §4.2), the
-/// exception: since K1's nine companion slots are a fixed, game-defined mapping identical on
-/// both installs, the ALREADY-broadcast <c>hostAvailable</c> mask is itself sufficient — no
-/// wire payload needed — to recruit a peer's extra slot locally through the real engine call
-/// (<see cref="Odyssey.AddAvailableNpcByTemplate"/>) instead of only logging it. OFF by
-/// default: an EARLIER build here poked the availability flag directly
+/// AVAILABILITY is reconciled too, behind <c>dialogue_recruit_sync</c>
+/// (docs/research/dialogue-consequences.md §4.2), ON BY DEFAULT SINCE 2026-09-18: since K1's
+/// nine companion slots are a fixed, game-defined mapping identical on both installs, the
+/// ALREADY-broadcast <c>hostAvailable</c> mask is itself sufficient — no wire payload needed —
+/// to recruit a peer's extra slot locally through the real engine call
+/// (<see cref="Odyssey.AddAvailableNpcByTemplate"/>). With the flag OFF a slot the peer has and
+/// this instance never recruited is logged, once, and skipped — see
+/// <see cref="_unavailableLogged"/> — and only whoever ran the recruiting conversation keeps the
+/// companion. History of the default: an EARLIER build poked the availability flag directly
 /// (<see cref="Odyssey.TrySetSlotAvailable"/>), which docs/research/party-reconciliation.md
 /// Round 75 live-confirmed insufficient on its own (the subsequent spawn has nothing to build
 /// from — see that method's own doc comment for the disassembled root cause);
 /// <see cref="Odyssey.AddAvailableNpcByTemplate"/> replaced it, going through the same STORY
-/// template the engine's own recruitment conversations use, but the per-slot template MAPPING
-/// it relies on is cross-checked against only one live data point (slot 2 = Carth) — the
-/// remaining eight need a live check before this defaults on.
+/// template the engine's own recruitment conversations use. The flag stayed OFF while the
+/// per-slot template MAPPING had a single live data point (slot 2 = Carth); all nine entries
+/// have since been statically verified against the shipped recruit scripts
+/// (<see cref="PartyRosterTemplateTable"/>), two slots (Carth, Zaalbar) are live-confirmed, and
+/// the 2026-09-18 seamless-playthrough review (docs/review-seamless-2026-09-18.md) found that
+/// shipping OFF split every roster after Taris, so it now ships ON. The seven never-exercised
+/// slots remain a live-test target, not a reason to keep the default off.
 ///
 /// ⚠ A RECRUITED COMPANION WHO WAS ALSO A PLACED NPC CAN ALREADY BE STANDING HERE (found live
 /// 2026-08-24, Zaalbar/tar_m05aa, docs/research/dialogue-consequences.md's "stale mirrored body"
@@ -70,15 +73,15 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// <summary>
     /// Whether an availability bit the peer has and this instance lacks is RECRUITED locally
     /// through the real engine call (<see cref="Odyssey.AddAvailableNpcByTemplate"/>) rather than
-    /// only logged and skipped — docs/research/dialogue-consequences.md §4.2. OFF by default:
-    /// <see cref="Odyssey.AddAvailableNpcByTemplate"/>'s own doc comment names the one remaining
-    /// open risk (the per-slot template mapping is live-confirmed for only one of nine slots).
+    /// only logged and skipped — docs/research/dialogue-consequences.md §4.2. ON by default
+    /// since 2026-09-18 (see the class comment for the history; the per-slot template mapping is
+    /// statically verified for all nine slots and live-confirmed for two).
     /// coop.ini <c>dialogue_recruit_sync</c>, overridable per session by the host — see
     /// <see cref="EffectiveBehaviourFlag"/>.
     /// </summary>
     private readonly EffectiveBehaviourFlag _pokeAvailability = new(
         "dialogue_recruit_sync", SharedBlock.OverrideBitDialogueRecruitSync,
-        PluginConfig.ReadBool("dialogue_recruit_sync", false));
+        PluginConfig.ReadBool("dialogue_recruit_sync", true));
 
     /// <summary>
     /// docs/research/party-reconciliation.md's client-door root cause, and

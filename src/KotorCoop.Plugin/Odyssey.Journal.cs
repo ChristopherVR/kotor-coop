@@ -247,7 +247,7 @@ internal static unsafe partial class Odyssey
     /// <c>RemoveJournalQuestEntry</c>, reached here the way <see cref="SetJournalState"/>
     /// reaches <c>AddJournalQuestEntry</c>.
     ///
-    /// ⚠ NEEDS-LIVE, UNVERIFIED, OFF BY DEFAULT (see <c>JournalController</c>'s
+    /// Live-verified and ON by default (see <c>JournalController</c>'s
     /// <c>journal_remove_sync</c> gate). The call site is <c>CSWSJournal::Destroy</c> at
     /// 0x005C68B0 — found by static disassembly of
     /// <c>ExecuteCommandRemoveJournalQuestEntry</c> (0x0054AF60, the VM wrapper the symbol DB

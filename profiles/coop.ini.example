@@ -148,11 +148,12 @@ upnp = 1
 ; fine but drops the separate TCP world-transfer connection - found live 2026-09-10 testing a
 ; playit.gg tunnel), retry the same fetch over a UDP-only channel instead. Only engages after a
 ; fast, dedicated connect probe finds TCP genuinely unreachable - a slow link or an app-level
-; refusal (wrong password, host has no world) is unaffected either way. OFF by default -
-; live-verified 2026-09-10 against a real UDP-only tunnel between two machines (full transfer,
-; correct world identity, stable reconnect) - see docs/research/network-topology.md's UDP
-; world-transfer section.
-world_transfer_udp_fallback = 0
+; refusal (wrong password, host has no world) is unaffected either way. ON by default since
+; 2026-09-18 (it was the one internet path that worked in testing and players had to find and
+; flip it by hand); live-verified 2026-09-10 against a real UDP-only tunnel between two machines
+; (full transfer, correct world identity, stable reconnect) - see
+; docs/research/network-topology.md's UDP world-transfer section. 0 disables the fallback.
+world_transfer_udp_fallback = 1
 
 ; ------------------------------------------------------------------------------------------
 ; Advanced

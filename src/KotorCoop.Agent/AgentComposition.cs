@@ -202,11 +202,11 @@ internal static class AgentComposition
             triggerRelay: config?.TriggerRelay ?? true,
             clientEncounters: config?.ClientEncounters ?? true,
             dialogueItemSync: agentSettings.DialogueItemSync,
-            dialogueRecruitSync: config?.DialogueRecruitSync ?? false,
+            dialogueRecruitSync: config?.DialogueRecruitSync ?? true,
             scriptItemSync: agentSettings.ScriptItemSync,
             movieRelay: agentSettings.MovieRelayEnabled,
-            livenessSync: config?.LivenessSync ?? false,
-            mapRevealSync: config?.MapRevealSync ?? false,
+            livenessSync: config?.LivenessSync ?? true,
+            mapRevealSync: config?.MapRevealSync ?? true,
             requireIdenticalSave: options.RequireIdenticalSave,
             interpolationMs: interpolationMs,
             followLead: agentSettings.FollowLeadMode == FollowLeadMode.Host ? "host" : "any");
@@ -299,7 +299,7 @@ internal static class AgentComposition
                 loadOwnSave: () => LoadIntoTheWorld(memory),
                 SayJoin,
                 cts.Token,
-                current?.WorldTransferUdpFallback ?? false).ConfigureAwait(false);
+                current?.WorldTransferUdpFallback ?? true).ConfigureAwait(false);
         }
 
         // Roadmap item 14 phase 1's "OR on clean disconnect" trigger: the dispatcher's own
@@ -393,7 +393,7 @@ internal static class AgentComposition
                             _ = JoinFlow.RunAsync(
                                 manager, bridge, joinDirectory, joinMode, autoAdopt,
                                 loadOwnSave: null, SayJoin, cts.Token,
-                                config?.WorldTransferUdpFallback ?? false);
+                                config?.WorldTransferUdpFallback ?? true);
                         },
                         cts.Token,
                         SayJoin),

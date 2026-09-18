@@ -65,7 +65,7 @@ public interface IPartySession
     // ---- companion experience (2026-08-27, docs/research/companion-state-sync.md) ---------
     //
     // Same shape as the PC's own progression above, keyed by NPC roster slot. coop.ini
-    // companion_xp_sync, OFF by default (NEEDS-LIVE).
+    // companion_xp_sync, ON by default (live-verified 2026-08-27).
 
     /// <summary>Host only: publish each active companion's absolute experience, keyed by NPC
     /// roster slot (a set bit in <paramref name="presentMask"/> means that slot's entry in

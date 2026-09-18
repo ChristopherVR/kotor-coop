@@ -14,8 +14,13 @@ namespace KotorCoop.Plugin;
 /// writes the liveness region on the non-authority side, so <see cref="SharedBlockView.LivenessCount"/>
 /// reads 0 on the owner and <see cref="OnFrame"/> does nothing there, every pass.
 ///
-/// Kill switch: <c>liveness_sync=0</c> in coop.ini — the DEFAULT, until this channel has been
-/// live-verified (see the NEEDS-LIVE checklist in the design doc).
+/// Kill switch: <c>liveness_sync=0</c> in coop.ini. ON by default: the channel was live-verified
+/// on 2026-09-03 (the design doc's checklist) and the template line was flipped to 1 the same
+/// day, but the code fallback here stayed <c>false</c> and the template line was later removed
+/// by the "player settings only" cleanup, so every shipped install silently ran with it OFF
+/// until the code default itself was flipped on 2026-09-18
+/// (docs/review-seamless-2026-09-18.md). The agent-side digest default in CoopConfig.cs must
+/// agree with this one, or a client that sets 1 is overridden back to 0 by the host.
 /// </summary>
 internal sealed class LivenessReconcileController(SharedBlockView block, CombatController combat)
 {
@@ -35,7 +40,7 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
     /// <summary>coop.ini <c>liveness_sync</c>, overridable per session by the host — see
     /// <see cref="EffectiveBehaviourFlag"/>.</summary>
     private readonly EffectiveBehaviourFlag _livenessSync = new(
-        "liveness_sync", SharedBlock.OverrideBitLivenessSync, PluginConfig.ReadBool("liveness_sync", false));
+        "liveness_sync", SharedBlock.OverrideBitLivenessSync, PluginConfig.ReadBool("liveness_sync", true));
 
     /// <summary>Owner ids this instance has already asked the engine to destroy once, so a
     /// pending-but-not-yet-completed destroy (see <see cref="LivenessRule.Decide"/>'s own doc
@@ -77,7 +82,7 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
             if (!_offLogged)
             {
                 _offLogged = true;
-                PluginHost.Log("liveness: disabled by coop.ini (liveness_sync=0, default off until live-verified)");
+                PluginHost.Log("liveness: disabled by coop.ini (liveness_sync=0; the default has been ON since 2026-09-18)");
             }
 
             return;

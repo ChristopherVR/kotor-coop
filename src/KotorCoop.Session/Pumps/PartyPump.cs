@@ -345,7 +345,7 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// <summary>
     /// Shares each active companion's experience, keyed by NPC roster slot — the companion
     /// sibling of <see cref="PumpProgression"/>'s PC-experience half. coop.ini
-    /// <c>companion_xp_sync</c>, OFF by default (NEEDS-LIVE — see
+    /// <c>companion_xp_sync</c>, ON by default (live-verified 2026-08-27 — see
     /// docs/research/companion-state-sync.md).
     ///
     /// No ledger, unlike gold: experience only ever goes up and both engines already grant

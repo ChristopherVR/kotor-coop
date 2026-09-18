@@ -139,7 +139,12 @@ $script:CoopIniDriftedDefaults = @(
         OldValue = 'save'
         NewValue = 'auto'
         Date     = '2026-09-03'
-        Meaning  = 'the first join creates your co-op character; every join after carries it (a single-player save is no longer what you bring)'
+    [pscustomobject]@{
+        Key      = 'world_transfer_udp_fallback'
+        OldValue = '0'
+        NewValue = '1'
+        Date     = '2026-09-18'
+        Meaning  = 'retries the first world hand-off over UDP when the TCP path is unreachable (the only internet path that worked in testing)'
     }
 )
 

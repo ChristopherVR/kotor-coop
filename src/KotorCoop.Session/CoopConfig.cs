@@ -520,15 +520,21 @@ public sealed record CoopConfig
     public bool ClientEncounters { get; init; } = true;
 
     /// <summary>coop.ini <c>dialogue_recruit_sync</c> (plugin key; digest-only here). Default
-    /// OFF, matching the plugin's own code fallback (the shipped coop.ini.example sets it to
-    /// 1 — see docs/CONFIG.md footnote 3).</summary>
-    public bool DialogueRecruitSync { get; init; }
+    /// ON since 2026-09-18, matching the plugin's own code fallback
+    /// (<c>PartyRosterController</c>). ⚠ These three digest-only defaults MUST match the plugin's
+    /// <c>PluginConfig.ReadBool</c> fallbacks: the digest is what the host-authoritative override
+    /// channel compares, so a digest that says OFF while the plugin runs ON (or the reverse)
+    /// either hides a real divergence from <c>W_CFG</c> or overrides a client to the wrong
+    /// value (docs/review-seamless-2026-09-18.md, blocker #3).</summary>
+    public bool DialogueRecruitSync { get; init; } = true;
 
-    /// <summary>coop.ini <c>liveness_sync</c> (plugin key; digest-only here). Default OFF.</summary>
-    public bool LivenessSync { get; init; }
+    /// <summary>coop.ini <c>liveness_sync</c> (plugin key; digest-only here). Default ON since
+    /// 2026-09-18 (was OFF here while the plugin doc said ON — see above).</summary>
+    public bool LivenessSync { get; init; } = true;
 
-    /// <summary>coop.ini <c>map_reveal_sync</c> (plugin key; digest-only here). Default OFF.</summary>
-    public bool MapRevealSync { get; init; }
+    /// <summary>coop.ini <c>map_reveal_sync</c> (plugin key; digest-only here). Default ON,
+    /// matching <c>MapRevealController</c> (the digest said OFF until 2026-09-18).</summary>
+    public bool MapRevealSync { get; init; } = true;
 
     /// <summary>
     /// Whether each active companion's experience is shared like the PC's own —
@@ -844,7 +850,7 @@ public sealed record CoopConfig
             JoinMode = JoinModeRule.Parse(kv.GetValueOrDefault("join_mode")),
             AutoAdoptWorld = !kv.ContainsKey("auto_adopt_world")
                 || IsTruthy(kv.GetValueOrDefault("auto_adopt_world")),
-            WorldTransferUdpFallback = IsTruthy(kv.GetValueOrDefault("world_transfer_udp_fallback")),
+            WorldTransferUdpFallback = !kv.ContainsKey("world_transfer_udp_fallback") || IsTruthy(kv.GetValueOrDefault("world_transfer_udp_fallback")),
             HostAddress = kv.GetValueOrDefault("host", "127.0.0.1"),
             HasHostAddress = kv.TryGetValue("host", out string? hostValue) && hostValue.Length > 0,
             Port = int.TryParse(kv.GetValueOrDefault("port"), out int port) ? port : ProtocolConstants.DefaultPort,
@@ -936,9 +942,9 @@ public sealed record CoopConfig
             TriggerRelay = !kv.ContainsKey("trigger_relay") || IsTruthy(kv.GetValueOrDefault("trigger_relay")),
             ClientEncounters = !kv.ContainsKey("client_encounters")
                 || IsTruthy(kv.GetValueOrDefault("client_encounters")),
-            DialogueRecruitSync = IsTruthy(kv.GetValueOrDefault("dialogue_recruit_sync")),
-            LivenessSync = IsTruthy(kv.GetValueOrDefault("liveness_sync")),
-            MapRevealSync = IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
+            DialogueRecruitSync = !kv.ContainsKey("dialogue_recruit_sync") || IsTruthy(kv.GetValueOrDefault("dialogue_recruit_sync")),
+            LivenessSync = !kv.ContainsKey("liveness_sync") || IsTruthy(kv.GetValueOrDefault("liveness_sync")),
+            MapRevealSync = !kv.ContainsKey("map_reveal_sync") || IsTruthy(kv.GetValueOrDefault("map_reveal_sync")),
 
             CompanionXpSync = !kv.ContainsKey("companion_xp_sync")
                 || IsTruthy(kv.GetValueOrDefault("companion_xp_sync")),

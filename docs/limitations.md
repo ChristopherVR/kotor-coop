@@ -1,16 +1,21 @@
-# What works, what doesn't — in plain language (2026-09-10)
+# What works, what doesn't — in plain language (2026-09-18)
 
 This page is for someone who wants to play KOTOR 1 from the Endar Spire to the Star Forge with a
 friend, and wants to know what to expect before starting. No engine internals here; the
 developer-facing version with the evidence behind every line is
 [status-engineering.md](status-engineering.md).
 
-**The short version:** two people can play the whole game together. You each control your own
-character, the host's game is the "real" world, and the mod keeps the two copies in step — where
-you are, who you're fighting, what's in the chests, which doors are open, how the story has
-progressed. The things that *don't* work are mostly the game's own single-player assumptions that
-the mod has chosen not to fight (one conversation at a time, one person drives the galaxy map) and
-a couple of situations nobody has been able to test on real hardware yet.
+**The short version:** two people can play together from the Endar Spire through Taris, and that
+part has been tested many times. You each control your own character, the host's game is the
+"real" world, and the mod keeps the two copies in step — where you are, who you're fighting, what's
+in the chests, which doors are open, how the story has progressed. Past Taris the same machinery
+should carry you through most of the game, but nobody has played it that far with two people yet,
+and a few story moments are known not to work for the second player: becoming a Jedi on
+Dantooine, the Leviathan prison break, Manaan's underwater section, and seeing the ending. Those
+are listed at the bottom of this page and tracked in
+[review-seamless-2026-09-18.md](review-seamless-2026-09-18.md). The other things that *don't* work
+are mostly the game's own single-player assumptions that the mod has chosen not to fight (one
+conversation at a time, one person drives the galaxy map).
 
 **How to read the status words**
 
@@ -31,9 +36,9 @@ a couple of situations nobody has been able to test on real hardware yet.
 | | Status | What to expect |
 | --- | --- | --- |
 | Starting from the game's own menu | **Works** | A **Co-op** button on the main menu. One player presses **Host**, the other picks the server and presses **Connect**. Nothing to launch by hand. |
-| Bringing your own character | **Works** | Your character comes from your latest save and is placed next to the host. Your own save files are never changed. |
+| Bringing your own character | **Works** | Your co-op character is separate from any single-player game on the same install: the first join makes it (next row), every join after carries it, and it is refreshed whenever you save while connected. Your own save files are never changed; the game's autosave slot is the one place the mod writes the host's world while you are connected, so don't load that slot in single player expecting your own game. |
 | Joining for the first time | **Works** | Connect, and the normal New Game character-creation screen opens; make your character. Shortly after you are in the host's world with it (mostly bounded by the Endar Spire's own opening cinematic, not by the mod), and that character is your co-op character on every join after (a single-player game on the same install is never mistaken for it). `join_mode = newcharacter` makes a new one; `join_mode = save` is the old bring-your-own-save way. Your starting weapon now reliably equips (live-verified fix, 2026-09-10, across several character classes). If you still see your character in their default/bare-looking appearance, that is very likely how KOTOR renders that class's premade look, not a missing item — check your inventory and equip anything unequipped by hand if something still looks wrong. If you joined on v0.9.0 and after upgrading you come up as the *host's* character, delete `saves\kotorcoop-character.pifo` and `.json` in your game folder once and join again (v0.9.0 could copy the host's character into that file when you quit; fixed). |
-| Playing on two computers over the internet | **Works, with a catch** | The host's public address is found automatically and the router port is opened for you where the router allows it (UPnP). On a router that refuses, the host forwards one port by hand. Very restrictive networks (some mobile/corporate) can't be reached at all — there is no relay server. Watched working end-to-end over the public internet on 2026-09-10 using a tunnel tool (playit.gg) between two separate home networks; automatic port-opening on a real home router is still untested (see below). If your connection uses a UDP-only tunnel, turn on `world_transfer_udp_fallback = 1` in `coop.ini` — off by default — so the initial world hand-off doesn't silently stall on a TCP-only path. |
+| Playing on two computers over the internet | **Works, with a catch** | The reliable way is a free tunnel program such as playit.gg on the host: watched working end-to-end between two separate home networks on 2026-09-10, and since 2026-09-18 the mod handles a UDP-only tunnel on its own (`world_transfer_udp_fallback` is on by default). The built-in way, where the host's public address is found automatically and the router port opened for you (UPnP), has been tried once on a real home connection and did not work: the status line said the port was open, but nobody could reach it, most likely because the ISP puts the home behind a second layer of address sharing. Until that is fixed, treat "UPnP mapped" in the status line as a hope, not a promise, and use a tunnel if a friend can't connect. There is no relay server. The joiner types the address in the `~` console (`connect address:port`); there is no address box in the menus yet. |
 | GOG and Steam copies playing together | **Works** | Any mix. Two copies on one PC needs at least one of them to be the GOG version. |
 | Saving and loading mid-session | **Works** | Either player can save and load. The other side notices and rejoins on its own; you don't need to reconnect. |
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
@@ -52,7 +57,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Companions following the party | **Works, with a catch** | Companions follow the host's game. A companion that got stuck behind (an old game bug) is now gathered back to the party automatically rather than left standing. A companion controlled by the *other* player doesn't move around on its own on your screen — it just moves exactly the way the other player's game says it does. |
 | Fog-of-war map reveal | **Works, with a catch** | The map reveals for both. Whether the M-key map *draws* the shared reveal has never been checked on screen — only confirmed behind the scenes, not by watching it happen. |
 | Chests, doors, and "who opened it first" | **Works** | Two players clicking the same chest at once: exactly one opens it. Loot goes to one of you, never both. |
-| A door or chest locked *again* by the story | **Not shared, by design** | Doors and containers only ever move from locked to open in the shared world. If the game's own story re-locks one on the host's screen, the other player's copy stays open. Rare, and never blocks progress. |
+| A door or chest locked *again* by the story | **Not shared, by design** | Doors and containers only ever move from locked to open in the shared world. If the game's own story re-locks one on the host's screen, the other player's copy stays open. The story does this on the Sith base, the Leviathan and the Star Forge, so expect the odd door that should be shut; it never blocks the host, and the other player can always walk back to the host. |
 | The `warp` console command, used rapidly | **Not supported** | Chaining several `warp`s can crash the game. That is a bug in the original game, not the mod, and real doors don't trigger it. |
 
 ## Fighting
@@ -62,7 +67,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Fighting the same enemies | **Works** | Enemies have one health bar that both of you damage. Kills, deaths and loot agree on both screens. |
 | Really fighting, not just watching | **Works** | Each player's own game runs up to three fights at once for real (your own dice rolls, your own animations). Enemies beyond that are mirrored — your hits still land. |
 | Enemies splitting attention between you | **Works, with a catch** | An enemy the host attacked first will turn on you once you've clearly out-damaged the host. The game's own AI keeps pulling it back to the host, so in practice it alternates between you rather than sticking. With three or more players only one partner is tracked. |
-| Stun, slow, choke, heal and other effects | **Works** | All twelve kinds of non-damage effect land on your partner's real body in both directions. |
+| Stun, slow, choke, heal and other effects | **Works, with a catch** | Twelve kinds of non-damage effect that land on your partner's stand-in reach their real body, in both directions. Two catches. You cannot aim a medpac or a party-only power (Cure, Heal, Valor, Speed) at your partner, because the game does not count their stand-in as a party member. And a crowd-control power you cast on an enemy (Stasis, Horror, Whirlwind, Push) only looks like it lands on your screen; the host's copy of that enemy keeps acting. Plain damage always counts. |
 | Companions in combat | **Works, with a catch** | A companion's equipment and experience stay in step on both sides. A companion fighting *for the other player specifically* (through their own copy of the game, in a fight away from the host) is off by default — set `companion_local_combat = 1` in `coop.ini` to turn it on; once on, damage it takes is real. |
 | Going down, being revived, the party wipe | **Works** | A downed player watches from a spectator camera and can be rescued by their partner (or a companion). If everyone falls, the host reloads and the other player rejoins on its own. |
 | Experience and levelling | **Works** | Kill experience and story experience end up the same on both sides. |
@@ -73,7 +78,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | | Status | What to expect |
 | --- | --- | --- |
 | Conversations | **Works, with a catch** | Only one conversation at a time. Whoever starts it chooses the replies; the other player watches it play out live (their clicks and skips are ignored) and sees the consequences — quests and rewards (a recruit is a separate catch, below). Once you click the NPC to join, the subtitles catch up in well under a second — measured repeatedly, close range or far. If it still feels like a few seconds, that's normal walking time to reach the NPC (same as it would be solo) plus the game's own brief pause on the very first line of any conversation, not a co-op sync delay. This is by design: two people driving one dialogue at once would break the story. |
-| Recruiting companions through dialogue | **Works, with a catch** | Off by default: unless `dialogue_recruit_sync = 1` is set in `coop.ini`, only whoever ran the conversation keeps the new companion — the other player does not automatically get them too. Turn the setting on before recruiting if you want it shared. |
+| Recruiting companions through dialogue | **Works, with a catch** | Since 2026-09-18 a companion recruited in a conversation reaches both players by default (`dialogue_recruit_sync`). Two of the nine companions have been watched arriving this way on the running game; the other seven have only been checked on paper, so if one is missing on your side, leave and rejoin and they will be there. An old `coop.ini` that sets the key to 0 keeps the old behaviour, where only whoever ran the conversation gets the companion. |
 | Cutscenes | **Works** | They play on both screens. If a cutscene moves one player to a new area, the other follows. |
 | The Star Forge's solo duels (Bastila, Malak) | **Works, with a catch** | The player not in the duel is parked and watches. We haven't been able to prove in testing whether that lock actually stops the keyboard from working — but nothing suggests it doesn't. |
 
@@ -102,7 +107,7 @@ a couple of situations nobody has been able to test on real hardware yet.
 | Keyboard and mouse | **Works** | Everything the game already does, plus `~` for the console and Enter to chat. |
 | Gamepad / controller | **Works, with a catch** | Any Xbox-style (XInput) pad plays the whole game — walking, combat, every menu and panel — through your own key bindings. It can't type: the address/password box, chat and the `~` console need a keyboard. Layout in the README; `gamepad = 0` turns it off. |
 | Seeing that you're connected | **Works** | A one-line status in the top-left, moved off the minimap on 2026-09-10 so it no longer overlaps it; confirmed on screen, and it fades out correctly when it's no longer needed. |
-| Pausing | **Works** | Either player pauses both games. |
+| Pausing | **Works, with a catch** | The pause key pauses both games. Opening a menu (inventory, map, journal, character sheet) only pauses your own game: enemies on the other screen keep hitting your stand-in, and when you close the menu your character catches up in one jump. The game's own auto-pause options (enemy sighted, end of round) and the tutorial pop-ups are switched off while the mod runs. |
 
 ## Linux and Steam Deck
 
@@ -170,14 +175,19 @@ A few things look like bugs and aren't:
 
 Built and automatically tested, but nobody has watched them on the running game yet:
 
-- Internet play through a real home router's own automatic port-opening (UPnP). Tunnel-based
-  internet play (e.g. playit.gg) has been watched working end-to-end, which is a different path.
+- Internet play through a real home router's own automatic port-opening (UPnP): tried once on
+  2026-09-10 and it did not work (see the internet row above). Tunnel-based internet play
+  (e.g. playit.gg) has been watched working end-to-end, which is a different path.
 - Long three-player sessions crossing many doors.
 - The keyboard side of the "you're parked" locks (swoop, Star Forge duels) — injected keystrokes
   never reach this game, so it can't be tested without a person at the keyboard.
 - The exact on-screen look of the connection line and of the shared map reveal.
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
-- A physical gamepad (the controller support was verified with a simulated one).
+- Anything past Taris. Every test so far ran on the Endar Spire and Taris, plus single rooms on
+  later planets. Dantooine's Jedi training, the Leviathan prison break, Manaan's underwater
+  section, the Sith-fighter turret ambushes and the ending have never been played by two people,
+  and the first three are known not to work yet for the second player. The full list, with what
+  is being done about each, is in [review-seamless-2026-09-18.md](review-seamless-2026-09-18.md).
 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.

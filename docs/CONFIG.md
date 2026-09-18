@@ -72,7 +72,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `server_name` | falls back to `name` | name shown in the server browser | [server-browser.md](research/server-browser.md) |
 | `join_mode` | `auto` | how a JOINER gets a character into the host's world. `auto`: the first join opens the game's own character creation and keeps the result as your co-op character (`saves\kotorcoop-character.*`), used on every join after. `newcharacter`: make a new one even though one exists. `save`: carry the character from your own most recent save | [world-adoption.md](research/world-adoption.md) |
 | `auto_adopt_world` | ON | a joiner whose world does not match the host's adopts the host's world instead of playing degraded | [world-adoption.md](research/world-adoption.md) |
-| `world_transfer_udp_fallback` | OFF | a joiner falls back to a UDP-only world-transfer when TCP genuinely can't reach the host (a UDP-only tunnel/NAT path); live-verified 2026-09-10 across two real machines over a public-internet tunnel | [network-topology.md](research/network-topology.md) |
+| `world_transfer_udp_fallback` | ON (since 2026-09-18; was OFF) | a joiner falls back to a UDP-only world-transfer when TCP genuinely can't reach the host (a UDP-only tunnel/NAT path); live-verified 2026-09-10 across two real machines over a public-internet tunnel | [network-topology.md](research/network-topology.md) |
 | `menu_button` | ON⁷ | show the main-menu "Co-op" button | [menu-frame-hook.md](research/menu-frame-hook.md) |
 
 ### Your character
@@ -163,7 +163,7 @@ hand-editing one is unsupported.
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
 | `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |
-| `liveness_sync` | ON (since 2026-09-03; was OFF) | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
+| `liveness_sync` | ON (code default since 2026-09-18 — the 2026-09-03 flip only set the template line, which the player-settings cleanup then removed, so shipped installs ran OFF until 2026-09-18; see footnote ³) | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
 | `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |
 | `enemy_materialise` | ON | build a mirror body for an enemy the mirror has none for yet | [enemy-materialisation.md](research/enemy-materialisation.md) |
 | `mirror_smooth_ms` | `150` | smoothing window for enemy/party mirroring, ms, clamped 0-600 | [lag-audit.md](research/lag-audit.md) |
@@ -180,10 +180,10 @@ hand-editing one is unsupported.
 | `companion_gear_sync` | ON | dress a mirrored companion in its real equipped gear | [companion-state-sync.md](research/companion-state-sync.md) |
 | `companion_xp_sync` | ON (since 2026-08-28; was OFF)³ | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_roster_sync` | ON | reconcile the party's ACTIVE-TWO seats across instances so a partial/aborted conversation doesn't leave them disagreeing. Does **not** by itself make a companion the peer just recruited available on this instance — see `dialogue_recruit_sync` below | [party-reconciliation.md](research/party-reconciliation.md) |
-| `party_select_host_only` | ON (NEEDS-LIVE) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
+| `party_select_host_only` | ON (NEEDS-LIVE — in particular whether a CLIENT-led departure through the swept panel still runs its exit script; see docs/review-seamless-2026-09-18.md §2) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
 | `party_together_fix` | ON | fix for the party-together gate blocking a legitimate crossing | [party-reconciliation.md](research/party-reconciliation.md) |
 | `galaxy_map_host_only` | ON (NEEDS-LIVE) | on a CLIENT under `follow_lead=host`, refuse the galaxy map's own accept-button click | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
-| `dialogue_recruit_sync` | OFF³ | **without this, a companion recruited on one instance is never made available on the other at all** — only the recruiting player keeps it, by the plugin's own doc comment ("BY DEFAULT THIS DOES NOT MAKE A COMPANION AVAILABLE", `PartyRosterController`). Turning it on recruits the peer's extra slot locally through the real engine call (`AddAvailableNpcByTemplate`) instead of only logging and skipping it | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `dialogue_recruit_sync` | ON³ (since 2026-09-18; was OFF) | a companion recruited in a conversation on one instance is made available on every other one. **With it off, only the recruiting player keeps the companion** (the pre-2026-09-18 shipped state, which split every roster after Taris — docs/review-seamless-2026-09-18.md). On, it recruits the peer's extra slot locally through the real engine call (`AddAvailableNpcByTemplate`) instead of only logging and skipping it | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `map_reveal_sync` | ON¹⁰ | reveal fog-of-war around a peer's live position | [map-reveal.md](research/map-reveal.md) |
 | `journal_remove_sync` | ON | replicate a journal entry's removal | [quest-sync.md](research/quest-sync.md) |
 | `minimap_peers` | ON | show peers on the minimap | [minimap-peers.md](research/minimap-peers.md) |
@@ -317,14 +317,24 @@ run on whatever their own code fallback is. That fallback now differs between th
   initializers agree, and `AgentComposition.Compose` now reads `config?.ScriptItemSync ?? true` /
   `config?.CompanionXpSync ?? true`. A packaged install therefore really does ship with both ON,
   just via the code default, not an explicit `coop.ini` line.
-- `companion_local_combat` and `dialogue_recruit_sync` were never fixed the same way and still
-  default **OFF** everywhere that reads them (`PluginConfig.ReadBool("companion_local_combat",
-  false)`, `PluginConfig.ReadBool("dialogue_recruit_sync", false)`, `AgentComposition.Compose`'s
-  `?? false` for both). Since neither line is in the shipped template either, **a real packaged
-  install ships with both genuinely OFF** — this is the documented, on-purpose state (see the
-  key rows above for what that means for a player), not a bug to silently fix by editing the
-  template. Turning either on is a one-line `coop.ini` edit and is exactly what the live-verified
-  rounds cited in the status table above were run with.
+- `dialogue_recruit_sync` was fixed the same way on **2026-09-18** (plugin `ReadBool(..., true)`,
+  `CoopConfig` record default and parse, `AgentComposition.Compose`'s `?? true`): the
+  seamless-playthrough review ([review-seamless-2026-09-18.md](review-seamless-2026-09-18.md))
+  found that shipping it OFF split every roster after Taris, while the evidence the OFF default
+  was waiting for (all nine slot templates statically verified, two live) had been in hand since
+  2026-08-24. `liveness_sync` and `map_reveal_sync` had the mirror-image bug the same day: the
+  PLUGIN default was ON (or the template line said 1) while `CoopConfig`'s digest default was
+  OFF, and because both peers' digests agreed, no `W_CFG` ever fired — for `liveness_sync` that
+  meant every shipped install between 2026-09-03 and 2026-09-18 ran without it. **Rule since
+  2026-09-18: a digest-only key's default in `CoopConfig` must equal the plugin's
+  `PluginConfig.ReadBool` fallback**, and `AgentComposition.Compose`'s `??` fallback (used when
+  coop.ini is missing) must equal both.
+- `companion_local_combat` still defaults **OFF** everywhere that reads it
+  (`PluginConfig.ReadBool("companion_local_combat", false)`, `AgentComposition.Compose`'s
+  `?? false`) and is not in the shipped template, so **a real packaged install ships with it
+  genuinely OFF** — the documented, on-purpose state (see its row above). Turning it on is a
+  one-line `coop.ini` edit and is exactly what the live-verified rounds cited in the status table
+  were run with.
 ⁴ Until 2026-08-27 the shipped `coop.ini.example` set `effect_sync=0` with a stale "OFF until
 live-verified" comment; it now ships `=1`, matching the code fallback and the live-verified
 state. A `coop.ini` installed before then keeps the old value (the installer never overwrites

@@ -43,18 +43,21 @@ public sealed partial class CoopCommandDispatcher
         _sessionSaveHostRefusalEnabled ??= loadConfig?.Invoke()?.SessionSaveHostRefusal ?? false;
 
     /// <summary>coop.ini <c>client_load_rejoin</c> — see <see cref="CoopConfig.ClientLoadRejoin"/>'s
-    /// own doc comment. OFF by default.</summary>
+    /// own doc comment. ON by default. The <c>?? true</c> matters: <paramref name="loadConfig"/>
+    /// returns null when coop.ini is missing or unreadable, and until 2026-09-18 that null
+    /// silently disabled both rejoin gates (and wipe recovery with them) while CONFIG.md
+    /// promised the code default — docs/review-seamless-2026-09-18.md.</summary>
     private bool? _clientLoadRejoinEnabled;
 
     private bool ClientLoadRejoinEnabled =>
-        _clientLoadRejoinEnabled ??= loadConfig?.Invoke()?.ClientLoadRejoin ?? false;
+        _clientLoadRejoinEnabled ??= loadConfig?.Invoke()?.ClientLoadRejoin ?? true;
 
     /// <summary>coop.ini <c>host_load_readopt</c> — see <see cref="CoopConfig.HostLoadReadopt"/>'s
-    /// own doc comment. OFF by default.</summary>
+    /// own doc comment. ON by default (same missing-ini note as above).</summary>
     private bool? _hostLoadReadoptEnabled;
 
     private bool HostLoadReadoptEnabled =>
-        _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? false;
+        _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? true;
 
     /// <summary>
     /// coop.ini <c>auto_adopt_world</c> — ON by default, unlike its two neighbours above,
@@ -82,7 +85,7 @@ public sealed partial class CoopCommandDispatcher
     private bool? _worldTransferUdpFallbackEnabled;
 
     private bool WorldTransferUdpFallbackEnabled =>
-        _worldTransferUdpFallbackEnabled ??= loadConfig?.Invoke()?.WorldTransferUdpFallback ?? false;
+        _worldTransferUdpFallbackEnabled ??= loadConfig?.Invoke()?.WorldTransferUdpFallback ?? true;
 
     /// <summary>coop.ini <c>join_mode</c> — see <see cref="JoinModeRule"/>. In the default
     /// <see cref="JoinMode.Auto"/> the sidecar is THE co-op character, so a rejoin carries it
@@ -535,8 +538,14 @@ public sealed partial class CoopCommandDispatcher
                 }
 
                 // RejoinAfterLoadAsync only FIRES the local engine load (it cannot block on the
-                // game there) — poll for it to settle before reopening the coop socket.
-                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+                // game there) — poll for it to settle before reopening the coop socket. Same
+                // budget as a first join (JoinFlow.LoadTimeout, 180 s): a big module on a slow
+                // disk can take longer than the 60 s this used to allow, and until 2026-09-18 an
+                // expired poll fell straight through to the reconnect below, so the new
+                // session's first silent baseline scanned a half-built world
+                // (docs/review-seamless-2026-09-18.md). Now an unsettled load is a failed rejoin.
+                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(180);
+                bool settled = false;
                 while (DateTime.UtcNow < deadline)
                 {
                     if (bridge.TryGetAdoptedWorldLoadStatus(out uint applied, out int status) && applied != 0)
@@ -547,10 +556,18 @@ public sealed partial class CoopCommandDispatcher
                             return;
                         }
 
+                        settled = true;
                         break;
                     }
 
                     await Task.Delay(500).ConfigureAwait(false);
+                }
+
+                if (!settled)
+                {
+                    Log?.Invoke("session-save: rejoin abandoned - the local load did not settle within 180 s");
+                    Reply("rejoin: the local load did not settle in 180 s; type reconnect once the world is up");
+                    return;
                 }
 
                 // ⚠ BEFORE THE SOCKET REOPENS, AND THIS ORDER IS THE FIX. The world under the

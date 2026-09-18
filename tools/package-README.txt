@@ -82,9 +82,10 @@ Only one conversation runs at a time -- the other player watches it live. If you
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
 
-Recruiting a companion in conversation is, by default, kept by whoever ran that conversation --
-the other player does not automatically get them too. Set dialogue_recruit_sync = 1 in coop.ini
-(off by default) before recruiting if you want a new companion to reach both of you.
+Recruiting a companion in conversation gives them to both players (dialogue_recruit_sync, on by
+default). If a companion is missing on one side, leave and rejoin and they will be there. Setting
+dialogue_recruit_sync = 0 in coop.ini restores the old behaviour where only whoever ran the
+conversation keeps them.
 
 Controller: plug in any Xbox-style (XInput) pad and it works, in the menus and in the
 world -- left stick walks and turns, right stick is the cursor, A is the default action / click,
