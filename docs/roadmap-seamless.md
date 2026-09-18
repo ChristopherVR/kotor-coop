@@ -202,8 +202,8 @@ New open items, in the order a run hits them (details, evidence and effort in th
 | # | Item | Class |
 |---|---|---|
 | 35 | Joiner never becomes a Jedi: `AddMultiClass`/feat/Force-power grants run on the driver's engine only | Missing, RE |
-| 36 | Manual/quick save bakes stand-ins, materialised enemies and pins into the save (pre-store flush only runs on transitions) | Bug |
-| 37 | Joiner's co-op character captured on `end_m01aa` keeps the tutorial's `Min1HP` pin forever (needs one live check) | Bug |
+| 36 | Manual/quick save bakes stand-ins and pins into the save (pre-store flush only runs on transitions). **Load-time half closed 2026-09-18** (`GhostSweepController`, live-verified, [save-ghosts.md](research/save-ghosts.md)); the save-time flush (hook `DoQuickSave` + the save panel) is still open | Bug, half closed |
+| 37 | Joiner's co-op character captured on `end_m01aa` kept the tutorial's `Min1HP` pin forever. **Closed 2026-09-18**: confirmed on the rig sidecar, stripped at `BuildPifo`, released at world-up by `CarriedPinReleaseController`; live: the joiner went 9 → -11 hp, downed ([min-one-hitpoint.md](research/min-one-hitpoint.md)) | Bug, closed |
 | 38 | Leviathan capture/brig/escape: two engines each run the solo control-swap; unresearched | Missing, RE |
 | 39 | Manaan Hrakert Rift (envirosuit, solo by design): no surface | Missing, RE |
 | 40 | Follower refused from every STUNT module but the galaxy-map leg: visions, romance payoffs and the credits chain are never seen by the joiner | Missing |

@@ -82,6 +82,7 @@ internal static unsafe partial class PluginHost
 
     private static PostAdoptEquipRepairController? _postAdoptEquipRepair;
     private static CarriedPinReleaseController? _carriedPinRelease;
+    private static GhostSweepController? _ghostSweep;
 
     /// <summary>The `newgame` / `chargen quick` / `chargen accept` verbs — the engine's own
     /// character-creation button handlers, called rather than clicked.</summary>

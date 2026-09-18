@@ -209,6 +209,7 @@ internal static unsafe partial class PluginHost
         _spectate?.Invalidate();
         _soloSegment?.Invalidate();
         _soloSegmentSpectate?.Invalidate();
+        _ghostSweep?.Invalidate();
         _minigameLock?.Invalidate();
         _encounters?.Invalidate();
         _triggerRelay?.Invalidate();

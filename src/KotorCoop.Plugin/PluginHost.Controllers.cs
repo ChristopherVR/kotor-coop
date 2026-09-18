@@ -31,6 +31,7 @@ internal static unsafe partial class PluginHost
         _menuLoad = new MenuLoadController(_view);
         _postAdoptEquipRepair = new PostAdoptEquipRepairController(_view);
         _carriedPinRelease = new CarriedPinReleaseController(_view);
+        _ghostSweep = new GhostSweepController();
         _newCharacterCapture = new NewCharacterCaptureController(_view, _postAdoptEquipRepair);
         _chargenDrive = new CharGenDriveController(_view);
         _connectMenu = new ConnectMenuController(_view);

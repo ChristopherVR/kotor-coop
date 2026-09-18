@@ -13,7 +13,7 @@ namespace KotorCoop.Plugin;
 internal static unsafe partial class CreatureFinder
 {
     /// <summary>CSWSCreature vtable. Every 4-byte occurrence of this value is a creature.</summary>
-    private const nint CreatureVtable = 0x007470C8;
+    public const nint CreatureVtable = 0x007470C8;
 
     private const int ObjectIdOffset = 0x04;
 

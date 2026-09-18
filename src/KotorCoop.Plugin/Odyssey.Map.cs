@@ -379,6 +379,26 @@ internal static unsafe partial class Odyssey
         }
 
         WaypointCtorFn(wp, 0x7F000000);
+
+        // Tag it (2026-09-18) so a pin a MANUAL save serialised can be found again by tag and
+        // swept at the next load — docs/research/save-ghosts.md. The base-object constructor
+        // the waypoint ctor calls first (0x4CFCB0) has already initialised the tag CExoString
+        // at +0x18; constructing over it is what the engine's own SetTag does.
+        SetObjectTag(wp, GhostSweepRule.MapMarkerTag);
+
+        // Live check of the statically derived vtable (the ctor's own `mov [esi], 0x74BF80`,
+        // tools/disasm.py 0x5C7E70): the sweep collects pins by this value, so a mismatch is
+        // logged once and the live value wins.
+        nint liveVtable = *(nint*)wp;
+        if (_liveWaypointVtable == 0)
+        {
+            _liveWaypointVtable = liveVtable;
+            if (liveVtable != WaypointVtable)
+            {
+                PluginHost.Log($"map marker: waypoint vtable reads 0x{liveVtable:X}, not the expected 0x{WaypointVtable:X} - using the live value for the ghost sweep");
+            }
+        }
+
         SetPositionFn(wp, &position, 1, 1, 0);
         WaypointAddToAreaFn(wp, area, position.X, position.Y, position.Z, 0);
 
@@ -387,6 +407,85 @@ internal static unsafe partial class Odyssey
 
         waypoint = wp;
         return *(uint*)(wp + 0x04);
+    }
+
+    /// <summary>CSWSWaypoint vtable, from the constructor's own store (`mov dword ptr [esi],
+    /// 0x74BF80` at 0x5C7EB2, tools/disasm.py 0x5C7E70). <see cref="SpawnMapMarker"/> confirms it
+    /// against a live object the first time it spawns one.</summary>
+    public const nint WaypointVtable = 0x0074BF80;
+
+    private static nint _liveWaypointVtable;
+
+    /// <summary>Waypoints one module can hold; the Endar Spire deck ships 58.</summary>
+    private const int WaypointSweepCapacity = 512;
+
+    /// <summary>
+    /// Constructs <paramref name="ascii"/> into an object's tag CExoString at +0x18 — the same
+    /// engine constructor <see cref="SetControlText"/> and the bark path already use, aimed at
+    /// the field instead of a stack temporary. MAIN THREAD ONLY.
+    /// </summary>
+    private static void SetObjectTag(nint obj, string ascii)
+    {
+        byte* buf = stackalloc byte[64];
+        int count = ascii.Length < 63 ? ascii.Length : 63;
+        for (int i = 0; i < count; i++)
+        {
+            buf[i] = (byte)ascii[i];
+        }
+
+        buf[count] = 0;
+        CExoStringCtorFn((byte*)(obj + ObjTag), buf);
+    }
+
+    /// <summary>
+    /// Destroys every peer map pin a save baked into the loaded module — tagged ones, and the
+    /// untagged enabled map notes that builds before 2026-09-18 spawned
+    /// (<see cref="GhostSweepRule.IsGhostMapMarker"/>). One full address-space sweep, at
+    /// world-up only. Returns how many were destroyed. MAIN THREAD ONLY.
+    /// </summary>
+    public static int SweepGhostMapMarkers(int max)
+    {
+        nint vtable = _liveWaypointVtable != 0 ? _liveWaypointVtable : WaypointVtable;
+        nint* found = stackalloc nint[WaypointSweepCapacity];
+        int count = CreatureFinder.CollectByVtable(vtable, found, WaypointSweepCapacity);
+
+        byte* tagBuf = stackalloc byte[64];
+        int destroyed = 0;
+        for (int i = 0; i < count && destroyed < max; i++)
+        {
+            nint wp = found[i];
+
+            // Same rule as the creature sweep (GhostSweepController.Sweep): a vtable match in
+            // a freed block is not an object, and its tag pointer is garbage. Only a pointer the
+            // engine's own object table hands back for the id at +0x04 is touched.
+            if (ResolveServerObject(*(uint*)(wp + 0x04)) != wp)
+            {
+                continue;
+            }
+
+            ReadObjectTag(wp, tagBuf, 64);
+            int length = 0;
+            while (length < 64 && tagBuf[length] != 0)
+            {
+                length++;
+            }
+
+            string tag = length == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString(tagBuf, length);
+            bool hasNote = *(int*)(wp + WaypointHasMapNote) != 0;
+            bool enabled = *(int*)(wp + WaypointMapNoteEnabled) != 0;
+            if (!GhostSweepRule.IsGhostMapMarker(tag, hasNote, enabled))
+            {
+                continue;
+            }
+
+            uint id = *(uint*)(wp + 0x04);
+            DestroyMapMarker(wp);
+            _liveWaypointVtable = vtable;
+            destroyed++;
+            PluginHost.Log($"ghost sweep: destroyed baked-in map pin 0x{id:X} (tag '{tag}')");
+        }
+
+        return destroyed;
     }
 
     /// <summary>Moves a map marker; its pin follows on the next map draw. MAIN THREAD ONLY.</summary>

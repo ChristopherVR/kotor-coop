@@ -449,6 +449,12 @@ internal static unsafe partial class PluginHost
             }
 
             _epoch = epoch;
+
+            // A world just came up: sweep out any co-op stand-ins and map pins a MANUAL save
+            // baked into it (docs/research/save-ghosts.md). Armed here, before any controller
+            // has spawned anything for this epoch, so whatever carries the stand-in tag is a
+            // ghost by construction; the sweep itself runs from the tick below.
+            _ghostSweep?.Arm();
             _transitionPending = false;
             _doorTransitionAnnouncedThisEpoch = false;
             _moveToModulePendingSeen = false;
@@ -693,6 +699,10 @@ internal static unsafe partial class PluginHost
         // they overlapped on. A story-forced duel is the rarer and more fragile of the two, so
         // it goes first and this one only ever adds to what it already did.
         _minigameLock?.OnFrame();
+
+        // Before the phantom drive: a ghost the save baked in must be gone (or queued to go)
+        // before a fresh stand-in is spawned beside it. See GhostSweepController.
+        _ghostSweep?.OnFrame();
 
         _controller?.OnFrame();
 

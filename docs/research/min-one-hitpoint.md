@@ -351,3 +351,25 @@ Fix, both halves shipped 2026-09-18:
 Live check (see the "LIVE VERIFICATION 2026-09-18" entry below once run): a `join_mode = auto`
 join with the pre-fix sidecar must log the release on the client, and
 `sethp.ps1 -ObjectId 0x7FFFFFFF` on the client must read without `[min1hp]`.
+
+## LIVE VERIFICATION (2026-09-18)
+
+`join_mode = auto` joiner with the pre-fix sidecar (`Min1HP = 1`), adopting the host's Endar
+Spire deck save:
+
+1. `carried pin: END_M01AA pins the player from its own OnEnter - leaving the flag to the module`
+   on BOTH sides (the controller's skip branch; the deck is the one module that pins at entry).
+2. The joiner still came up unpinned — `sethp.ps1 -ObjectId 0x7FFFFFFF` read `hp 9 (stored max 0)`
+   with no `[min1hp]`, while the host's own save-loaded PC read `[min1hp]` — because the carried
+   pifo written for the adoption went through the stripping `BuildPifo`. (The deck's OnEnter did
+   not re-pin the joiner's PC on the client engine; not investigated further, not a co-op
+   concern.)
+3. `hurt 20` on the joiner: `you hit for 20: 9 -> -11 hp (downed)`, then `death: the local player
+   is down` and `death: game-over suppressed; the session decides`; the adjacent host's proximity
+   rescue revived it a moment later (hp back to 9). Before this fix that character could not
+   drop below 1 hp anywhere.
+
+The `Release` branch of the controller was not reachable on the rig once `BuildPifo` strips the
+field (every adoption rewrites the carried pifo from the sidecar); it stays as the safety net for
+a pin that reaches the live creature by a path not covered here, and its decision half is
+unit-tested.
