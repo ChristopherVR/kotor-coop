@@ -119,6 +119,7 @@ public sealed partial class CoopAgent
     /// <summary>See the constructor's player-count scaling remarks and
     /// <see cref="PumpPlayerCountScaling"/>.</summary>
     private readonly PlayerCountScaling _scaling;
+    private readonly PlayerCountSettleRule _playerCountSettle = new();
 
     private readonly StoreStockScaleLatch _stockLatch;
 
@@ -976,6 +977,11 @@ public sealed partial class CoopAgent
     /// </summary>
     private void PumpPlayerCountScaling(int playerCount)
     {
+        // A count that falls is trusted only after it holds for PlayerCountSettleRule.FallSettleMs:
+        // the joiner's arrival flapped 2 -> 1 -> 2 live, and a one-player reading at an enemy's
+        // first sighting would have locked it at 100% for the module.
+        playerCount = _playerCountSettle.Observe(playerCount, Environment.TickCount64);
+
         if (_scaling.Update(_session.Overrides, playerCount))
         {
             _log($"scaling: {_scaling.Describe()}");

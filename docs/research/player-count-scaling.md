@@ -77,3 +77,7 @@ new to this codebase.
 ## Live verification (2026-09-19)
 
 Two players on the Endar Spire deck, `enemy_health = auto`: `scaling: enemy health 150%, enemy damage 115%`, then `enemy 0xE 'sithsoldier' hp 15/15 -> 23/23 (150%), read back 23/23` (0x10 the same, `end_gensith` 12 -> 18) on BOTH instances; both agents logged the resolved policy (`2 player(s): enemy health 150% (auto) ...`). Watch item: the host's agent briefly resolved `1 player(s)` about 5 s after the join (12:13:52) before returning to 2; an enemy first sighted in that window keeps 100% for the module. `enemy_health` now defaults `auto`. Not exercised: the damage rewrite at the hit detour (needs a real hostile hit on a player; `hurt` is not one), XP delta scaling, store stock top-up, 3+ players.
+
+## The player-count flap, closed (2026-09-19)
+
+The live pass above saw the host's count read 2, then 1 for about five seconds, then 2 as the joiner arrived. Because health is scaled once per enemy on first sighting, an enemy first seen inside the one-player window would have kept 100% for the module. `PlayerCountSettleRule` (src/KotorCoop.Session) now sits between the agent's raw count and the curve: a rise is adopted at once, a fall only after it has held for 10 s (`FallSettleMs`). A real leave therefore relaxes the curve 10 s late; a transient dip costs nothing. Unit-tested against the measured flap (`PlayerCountSettleRuleTests`); not re-run live.
