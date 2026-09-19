@@ -82,3 +82,7 @@ Set `class_grant_sync = 1` in both installs' `coop.ini`; host + joiner in a Sold
 - Feat and Force-power grants (§1, §5).
 - Whether `UpdatePureGoodEvilPowers` and `DistributeExperience` behave on a peer whose party table differs from the host's.
 - A second live check that `handler(implementer, routine, 2)` accepts the argument count with a pushed `(object, int)` pair - modelled on `GiveItemToInventory`; NEEDS-LIVE.
+
+## Live verification (2026-09-19)
+
+Both instances, `class_grant_sync=1`: the AddMultiClass splice installs on both (`class-grant: AddMultiClass captures at 0x52DDF6`, routine 389). Host `addclass 3` (dev verb, runs the engine's own handler): `classes 1:[0@1,-1@0] -> 2:[0@1,3@0]`, then `class-grant: a script added class 3 ... published as grant #1`. Joiner: `applied a peer's class 3 to the local player (request #1); classes 1:[1,-1] -> 2:[1,3]` and `replayed ... (not republished)`; the joiner's agent logged `applying Lanik's class grant #1 (Jedi Guardian) ... (attempt 1/10)`. Capture to apply took about 100 ms and no echo came back. Not exercised: the real Dantooine conversation (Dorak's reply node), the joiner driving it, a peer already holding two classes (status 5), feats and powers. Default flipped ON.

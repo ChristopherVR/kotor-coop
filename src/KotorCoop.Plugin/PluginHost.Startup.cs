@@ -127,9 +127,9 @@ internal static unsafe partial class PluginHost
         // docs/research/class-and-power-grants.md): a mid-function splice inside
         // CSWVirtualMachineCommands::ExecuteCommandAddMultiClass that captures every
         // AddMultiClass(nClass, oTarget) a script runs, for ClassGrantController to relay.
-        // Behind class_grant_sync (default OFF, NEEDS-LIVE): the splice has never run live,
+        // Behind class_grant_sync (default ON since 2026-09-19: the splice and the relay ran live that day),
         // and with the key off nothing here reads or writes the block region either.
-        if (PluginConfig.ReadBool("class_grant_sync", false))
+        if (PluginConfig.ReadBool("class_grant_sync", true))
         {
             if (AddMultiClassHook.Install(out string addMultiClassDiagnostic))
             {

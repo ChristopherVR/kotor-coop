@@ -327,7 +327,7 @@ public sealed record CoopConfig
     /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
     /// NEEDS-LIVE; must match the plugin's own <c>PluginConfig.ReadBool("class_grant_sync",
     /// false)</c> fallback. docs/research/class-and-power-grants.md.</summary>
-    public bool ClassGrantSync { get; init; }
+    public bool ClassGrantSync { get; init; } = true;
 
     /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
@@ -489,9 +489,8 @@ public sealed record CoopConfig
     // profiles/coop.ini.example.
 
     /// <summary>coop.ini <c>enemy_health</c>: enemy hit points, percent of vanilla, or
-    /// <c>auto</c>. Default 100 (vanilla) — the max-hit-point write this drives is NEEDS-LIVE;
-    /// flips to <c>auto</c> once that pass is done.</summary>
-    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Vanilla;
+    /// <c>auto</c>. Default <c>auto</c> since 2026-09-19 (the max-hit-point write was live-verified: a Sith soldier 15 -> 23 at two players, read back on both instances).</summary>
+    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Auto;
 
     /// <summary>coop.ini <c>enemy_damage</c>: damage enemies deal to players, percent of
     /// vanilla, or <c>auto</c>. Default 100 (vanilla) — the in-hook damage rewrite this drives
@@ -972,7 +971,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             ScriptItemSync = !kv.ContainsKey("script_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
-            ClassGrantSync = IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
+            ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")
@@ -1001,7 +1000,7 @@ public sealed record CoopConfig
             // Player-count scaling: "auto", a percent (with or without %), clamped 50-400;
             // absent or unparseable -> the record's own default (see the property group).
             EnemyHealth = PlayerCountScalingRule.ParseSetting(
-                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Vanilla),
+                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Auto),
             EnemyDamage = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Vanilla),
             XpRate = PlayerCountScalingRule.ParseSetting(

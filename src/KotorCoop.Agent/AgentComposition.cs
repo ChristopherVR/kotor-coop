@@ -121,7 +121,7 @@ internal static class AgentComposition
             DialogueItemSync = config?.DialogueItemSync ?? true,
             ScriptItemSync = config?.ScriptItemSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
-            ClassGrantSync = config?.ClassGrantSync ?? false,
+            ClassGrantSync = config?.ClassGrantSync ?? true,
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
@@ -150,7 +150,7 @@ internal static class AgentComposition
             // (docs/CONFIG.md footnote ³): enemy health/damage 100 while their engine writes
             // are NEEDS-LIVE, xp/store on the auto curve.
             Scaling = new PlayerCountScalingSettings(
-                config?.EnemyHealth ?? PlayerCountScalingRule.Vanilla,
+                config?.EnemyHealth ?? PlayerCountScalingRule.Auto,
                 config?.EnemyDamage ?? PlayerCountScalingRule.Vanilla,
                 config?.XpRate ?? PlayerCountScalingRule.Auto,
                 config?.StoreStock ?? PlayerCountScalingRule.Auto),

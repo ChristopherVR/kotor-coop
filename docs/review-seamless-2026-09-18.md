@@ -141,3 +141,7 @@ Not addressed this wave: mines, duel-ring parking, client-cast crowd control on 
 or buffing the partner, per-object locals, monotonic re-locks, Pazaak cards on rejoin, Linux/Deck,
 physical pad, mod matrix, and the Artifact-quota/private-repo download blocker (needs a user
 decision).
+
+### Live proof pass (2026-09-19)
+
+One short rig session on current main (protocol 56): both instances connect and load; the class-grant, save-flush and scaling hooks install and byte-verify on both. **#7 save-time half closed**: with the joiner beside the host, `save` held 4 frames, destroyed 2 bodies, re-issued, and the file read 25 creatures / 58 waypoints with 0 ghosts (pass-through with no partner also clean); `save_flush` now defaults ON. **#1 partly proven**: host `addclass 3` -> joiner applied the same class (`[1,-1] -> [1,3]`) with no echo; `class_grant_sync` now defaults ON, feats and Force powers still open. **#9 health proven**: 15 -> 23 hp at two players on both instances; `enemy_health` now defaults `auto`, `enemy_damage` stays 100 until a hit is observed. Still unproven: STUNT follow, address box, effect kinds, companion equip, and the party-select and turret rig checks.

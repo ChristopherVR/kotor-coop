@@ -170,3 +170,7 @@ and on a client the saved world is never played except through adoption, which r
   the same save logged the identical sequence on its side (30 candidates, 4 stale).
 - Joiner `disconnect` (host: `peer left: destroyed phantom 0x138`), host `save`: the rewritten
   quicksave read **25 creatures, 58 waypoints, 0 ghosts, 0 ghost pins** — the baseline numbers.
+
+## 6. Live verification of the save-time flush (2026-09-19)
+
+`save_flush=1`, host + joiner on the Endar Spire deck, host `save`: `save flush: holding the save (slot 0, 'QUICKSAVE') while 2 body(ies) are destroyed` -> `flush, before the module is stored: destroyed phantom 0x142` -> `re-issued the save ... after 4 frame(s) - 2 body(ies) destroyed, 0 left standing` -> `released; the controllers rebuild what the flush destroyed` (a new stand-in and pin 0x144/0x145 within 250 ms). The written save: 25 creatures, 58 waypoints, 0 co-op ghosts, 0 ghost pins (tools/saveinspect.py). Joiner disconnected, host `save`: no hold line, save written clean. Not exercised: the save-panel button (same `SaveGame` entry), a save while a peer is mid-transition. Default flipped ON.

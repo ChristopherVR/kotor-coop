@@ -98,7 +98,7 @@ internal static unsafe class SaveFlushHook
     /// <summary>coop.ini <c>save_flush</c>, default OFF until the NEEDS-LIVE recipe in
     /// docs/research/save-ghosts.md §4.3 passes: a held save that is never re-issued (the frame
     /// pass returning early) would be a lost save, so an unverified hook must not ship ON.</summary>
-    public static readonly bool Wanted = PluginConfig.ReadBool("save_flush", false);
+    public static readonly bool Wanted = PluginConfig.ReadBool("save_flush", true);
 
     private static bool _installed;
 

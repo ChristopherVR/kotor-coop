@@ -188,7 +188,7 @@ public readonly record struct BehaviourDigest(
         requireIdenticalSave: false,
         interpolationMs: ProtocolConstants.DefaultInterpolationDelayMs,
         followLead: "any",
-        enemyHealth: PlayerCountScalingRule.Vanilla,
+        enemyHealth: PlayerCountScalingRule.Auto,
         enemyDamage: PlayerCountScalingRule.Vanilla,
         xpRate: PlayerCountScalingRule.Auto,
         storeStock: PlayerCountScalingRule.Auto);

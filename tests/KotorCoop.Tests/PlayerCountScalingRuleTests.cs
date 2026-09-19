@@ -144,10 +144,10 @@ public class PlayerCountScalingRuleTests
     }
 
     [Fact]
-    public void TheShippedDefaultsAreVanillaCombatAndAutoEconomy()
+    public void TheShippedDefaultsAreAutoHealthVanillaDamageAndAutoEconomy()
     {
         PlayerCountScalingSettings d = PlayerCountScalingSettings.Default;
-        Assert.Equal(100, d.EnemyHealth);
+        Assert.Equal(PlayerCountScalingRule.Auto, d.EnemyHealth); // live-verified 2026-09-19
         Assert.Equal(100, d.EnemyDamage);
         Assert.Equal(PlayerCountScalingRule.Auto, d.XpRate);
         Assert.Equal(PlayerCountScalingRule.Auto, d.StoreStock);

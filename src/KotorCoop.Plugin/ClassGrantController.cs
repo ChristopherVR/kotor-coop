@@ -34,7 +34,7 @@ internal sealed unsafe class ClassGrantController(SharedBlockView block)
 {
     /// <summary>coop.ini <c>class_grant_sync</c> — default OFF, NEEDS-LIVE (docs/CONFIG.md).
     /// The agent reads the same key for its own half (<c>CoopConfig.ClassGrantSync</c>).</summary>
-    private static readonly bool _enabled = PluginConfig.ReadBool("class_grant_sync", false);
+    private static readonly bool _enabled = PluginConfig.ReadBool("class_grant_sync", true);
 
     private uint _drainedCaptureSerial;
 

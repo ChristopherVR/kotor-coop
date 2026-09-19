@@ -73,3 +73,7 @@ new to this codebase.
 7. `openstore <tag>` on the host: `store_stock:` line, stock rises, the client sees it after
    opening; reopen and reload the save: no second top-up.
 8. Alone (1 player): every value reads 100 and nothing is written.
+
+## Live verification (2026-09-19)
+
+Two players on the Endar Spire deck, `enemy_health = auto`: `scaling: enemy health 150%, enemy damage 115%`, then `enemy 0xE 'sithsoldier' hp 15/15 -> 23/23 (150%), read back 23/23` (0x10 the same, `end_gensith` 12 -> 18) on BOTH instances; both agents logged the resolved policy (`2 player(s): enemy health 150% (auto) ...`). Watch item: the host's agent briefly resolved `1 player(s)` about 5 s after the join (12:13:52) before returning to 2; an enemy first sighted in that window keeps 100% for the module. `enemy_health` now defaults `auto`. Not exercised: the damage rewrite at the hit detour (needs a real hostile hit on a player; `hurt` is not one), XP delta scaling, store stock top-up, 3+ players.

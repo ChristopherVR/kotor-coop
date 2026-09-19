@@ -80,7 +80,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
 | `follow_lead` | `any` | who may LEAD a transition the other player follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
-| `enemy_health` | `100` (code fallback `100`; NEEDS-LIVE, then `auto`) | enemy hit points: `auto` (by player count) or a percent, clamped 50-400. Scales max + current once per enemy per module, host-authoritative | [player-count-scaling.md](research/player-count-scaling.md) |
+| `enemy_health` | `auto` (since 2026-09-19; was `100`) | enemy hit points: `auto` (by player count) or a percent, clamped 50-400. Scales max + current once per enemy per module, host-authoritative. Live-verified 2026-09-19: at two players a Sith soldier went 15 -> 23 hit points (150%), read back on both instances | [player-count-scaling.md](research/player-count-scaling.md) |
 | `enemy_damage` | `100` (code fallback `100`; NEEDS-LIVE, then `auto`) | damage enemies deal to players: `auto` or a percent, clamped 50-400. Rewritten at the `OnApplyDamage` detour, host-authoritative | [player-count-scaling.md](research/player-count-scaling.md) |
 | `xp_rate` | `auto` (code fallback `auto`; 100% at every count) | the host's own XP gains: `auto` or a percent. The DELTA is scaled before the max-merge; below 100 cannot take effect while a client is connected | [player-count-scaling.md](research/player-count-scaling.md) |
 | `store_stock` | `auto` (code fallback `auto`) | finite shop stock topped up once per store per playthrough on the host's first open: `auto` or a percent. `store_prices` is NOT built (the price lookup needs reverse engineering) | [player-count-scaling.md](research/player-count-scaling.md) |
@@ -227,7 +227,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | --- | --- | --- | --- |
 | `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `script_item_sync` | ON (since 2026-08-28; was OFF)³ | forward a script (OnEnter/OnDeath/heartbeat) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
-| `class_grant_sync` | OFF (NEEDS-LIVE) | relay a script's `AddMultiClass` (Dorak's Jedi path choice on Dantooine) to every other player's character through the same engine handler, so the joiner becomes a Jedi. Plugin, agent and `CoopConfig` all default OFF (footnote ³ rule) | [class-and-power-grants.md](research/class-and-power-grants.md) |
+| `class_grant_sync` | ON (since 2026-09-19; was OFF) | relay a script's `AddMultiClass` (Dorak's Jedi path choice on Dantooine) to every other player's character through the same engine handler, so the joiner becomes a Jedi. Plugin, agent and `CoopConfig` all default OFF (footnote ³ rule) | [class-and-power-grants.md](research/class-and-power-grants.md) |
 | `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
@@ -249,7 +249,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `character_capture_interval_min` | 10 (0 = off; agent key, code default 10, no template line) | a joined client asks the engine for a quicksave and captures its co-op character into the sidecar every N minutes while idle (not in combat, conversation or minigame); the pre-disconnect capture quicksaves first regardless | [session-save.md](research/session-save.md) |
 | `host_load_readopt` | ON | a host's own Load Game has every client rejoin instead of disconnecting | [session-save.md](research/session-save.md) |
 | `session_save_host_refusal` | OFF | tear the session down when the host's own save-load watch fires | [session-save.md](research/session-save.md) |
-| `save_flush` | OFF (NEEDS-LIVE) | hold a manual save (F4, the save panel, the `save` verb) while co-op spawns are destroyed, then re-issue it, so nothing is baked into the module | [save-ghosts.md §4](research/save-ghosts.md) |
+| `save_flush` | ON (since 2026-09-19; was OFF) | hold a manual save (F4, the save panel, the `save` verb) while co-op spawns are destroyed, then re-issue it, so nothing is baked into the module | [save-ghosts.md §4](research/save-ghosts.md) |
 
 ### Minigames (swoop races, turrets, Pazaak)
 
