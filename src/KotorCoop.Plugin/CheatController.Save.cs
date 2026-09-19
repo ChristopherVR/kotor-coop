@@ -21,7 +21,9 @@ internal sealed unsafe partial class CheatController
     /// message; the directory appears a tick or more later, and the server may still refuse it
     /// (<c>CSWSPlayer::GetIsAllowedToSave</c>). Anything that depends on the save existing must
     /// poll the filesystem — which is what the new-character capture does — rather than trust
-    /// this answer.
+    /// this answer. With a partner beside this player the request is additionally HELD by
+    /// <see cref="SaveFlushHook"/> for up to ~120 frames while the co-op spawns are destroyed
+    /// (docs/research/save-ghosts.md §4), so "a tick or two" can be a couple of seconds.
     /// </summary>
     private void QuickSave()
     {

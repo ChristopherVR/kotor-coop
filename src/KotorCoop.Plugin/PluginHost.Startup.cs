@@ -459,5 +459,19 @@ internal static unsafe partial class PluginHost
         {
             Log($"floaty null-node guard NOT installed: {floatyDiagnostic}");
         }
+
+        // Save-time flush (docs/research/save-ghosts.md §4, roadmap #36's second half): a
+        // manual save — F4, the save panel, the `save` verb — is held at the one server entry
+        // every save reaches (CServerExoAppInternal::SaveGame) while the plugin's own spawns
+        // are destroyed, then re-issued unchanged. Verify-bytes-or-refuse; coop.ini
+        // save_flush=0 opts out. NEEDS-LIVE — the recipe is in the hook's header.
+        if (SaveFlushHook.Install(out string saveFlushDiagnostic))
+        {
+            Log($"save flush: {saveFlushDiagnostic}");
+        }
+        else
+        {
+            Log($"save flush NOT installed: {saveFlushDiagnostic}");
+        }
     }
 }

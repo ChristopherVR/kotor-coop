@@ -58,6 +58,25 @@ internal sealed class MapMarkerController(SharedBlockView block)
         return false;
     }
 
+    /// <summary>How many peer pins are in the area right now — what the save-time flush asks
+    /// before deciding to hold a save.</summary>
+    public int StandingCount
+    {
+        get
+        {
+            int standing = 0;
+            for (int i = 0; i < _markers.Length; i++)
+            {
+                if (_markers[i] != 0)
+                {
+                    standing++;
+                }
+            }
+
+            return standing;
+        }
+    }
+
     /// <summary>
     /// Destroys every peer pin this controller created and reports how many are left (always
     /// zero — <c>DestroyMapMarker</c> reports no failure, so there is nothing to retry). Part

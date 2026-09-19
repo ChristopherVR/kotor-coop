@@ -119,6 +119,7 @@ are known not to be trustworthy. Both halves are useful; the second is the point
 | `0x004AEFC0` | `CServerExoApp::GetFactionManager` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004AF090` | `CServerExoApp::SetDoingStartNewModule` | Thiscall | 2 | `ret-imm 4` | MenuLoadController |
 | `0x004B2820` | `CServerExoApp::GetPlayerCreature` | Thiscall | 1 | `ret 0` | Odyssey |
+| `0x004B58A0` | `CServerExoAppInternal::SaveGame` | Thiscall | 5 | `ret-imm 16` | Odyssey (the save-time flush's re-issue; also the entry `SaveFlushHook` splices — the DB's `param_size 12` is one argument short, the binary's two `ret 0x10` exits settle it) |
 | `0x004CB4F0` | `CSWSObject::StopDialog` | Thiscall | 1 | `ret 0` | Odyssey |
 | `0x004CC250` | `CSWSObject::ClearDirtyFlag` | Thiscall | 2 | `ret-imm 4` | Odyssey |
 | `0x004CC280` | `CSWSObject::SetCurrentHitPoints` | Thiscall | 2 | `ret-imm 4` | Odyssey |

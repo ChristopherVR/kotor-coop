@@ -530,6 +530,25 @@ internal static unsafe class MaterialisedEnemies
         return false;
     }
 
+    /// <summary>How many materialised bodies are standing right now — what the save-time
+    /// flush asks before deciding to hold a save.</summary>
+    public static int StandingCount
+    {
+        get
+        {
+            int standing = 0;
+            for (int i = 0; i < OwnerIds.Length; i++)
+            {
+                if (OwnerIds[i] != 0)
+                {
+                    standing++;
+                }
+            }
+
+            return standing;
+        }
+    }
+
     /// <summary>Forgets everything WITHOUT touching the engine — the module changed and
     /// every body behind these ids is already freed memory. Also clears the spawn latch:
     /// a new module may succeed where the last one failed.</summary>
