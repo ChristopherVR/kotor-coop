@@ -61,6 +61,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [creature-liveness.md](creature-liveness.md) | Reconciling a body alive on one screen, dead on the other | Design → live-verified for the first time; OFF by default; one sub-theory open, blocked on a missing `spawncreature` verb |
 | [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented; 9/12 kinds live-verified both directions, 3 (heal, temporary hitpoints, confused — §10, 2026-09-02) built/unit-tested but NEEDS-LIVE; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
 | [partner-buffs.md](partner-buffs.md) | What the engine tests before a heal or buff can reach a stand-in (friend reputation, party roster, client targeting) | Researched; `partner_buffs` faction switch built, OFF, NEEDS-LIVE; heal mirror designed only |
+| [enemy-effects.md](enemy-effects.md) | A client's non-damage casts on a mirrored enemy, replayed on the host's real body | Built and unit-tested (2026-09-19) behind `enemy_effect_sync`, default OFF; NEEDS-LIVE (the apply half has never targeted an enemy body) |
 
 ## Dialogue
 

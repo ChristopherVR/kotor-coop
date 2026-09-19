@@ -771,6 +771,10 @@ internal static unsafe partial class PluginHost
         _incomingDamage?.OnFrame();
         _peerEffects?.OnFrame();
 
+        // The client-cast enemy-effect relay (docs/research/enemy-effects.md): a captured cast
+        // on a mirrored enemy to publish, or a client's reported one to apply on the real body.
+        _enemyEffects?.OnFrame();
+
         // After the presence passes, so the watch tests the position the player is actually
         // standing at this frame, and so a fired encounter's spawns are already in the
         // owner's census by the next pump.

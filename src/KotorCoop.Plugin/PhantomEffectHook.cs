@@ -229,6 +229,59 @@ internal static unsafe class PhantomEffectHook
     }
 
     /// <summary>
+    /// Reads an effect's allowlist identity, duration and magnitude — the half of the capture
+    /// that does not depend on WHO the target is, shared by the phantom capture above and
+    /// <see cref="EnemyEffectCapture"/>. False for anything off the allowlist. Bounded reads,
+    /// no engine calls, no allocation: it runs inside every effect application in the game.
+    /// </summary>
+    internal static bool TryClassify(nint effect, out uint kind, out uint durationMs, out uint magnitude)
+    {
+        durationMs = 0;
+        magnitude = 0;
+
+        ushort engineType = *(ushort*)(effect + EffectType);
+
+        // integer_list[0]: the SetState sub-code for type 8, the percent for type 29
+        // (MovementSpeedDecrease) — same field, different meaning per type. Bounded reads,
+        // exactly like PhantomHitHook.ReadTotal: a malformed or foreign effect must not
+        // over-read.
+        int aux = 0;
+        int count = *(int*)(effect + EffectIntCount);
+        nint ints = *(nint*)(effect + EffectInts);
+        if (ints != 0 && count > 0)
+        {
+            aux = *(int*)ints;
+        }
+
+        int subCode = engineType == 8 ? aux : 0;
+        if (!TryMapAllowlist(engineType, subCode, out kind))
+        {
+            return false;
+        }
+
+        // integer_list[0] carries the real magnitude for every single-int-parameter
+        // constructor this hook understands: percent for Slow (29), heal amount for Heal
+        // (39), hit-point amount for TemporaryHitpoints (15), the appearance.2da row for
+        // Disguise (62 — OnApplyDisguise's own `GetInteger(effect, 0)` feeds
+        // CSWSCreature::Disguise, effect-sync.md §12.2) — same field, same read, four
+        // different meanings depending on engineType, exactly like `aux` above.
+        //
+        // Poison (35) is the one whose row 0 is a VALID value (poison.2da row 0), so it
+        // is not gated on `aux > 0`: a zero magnitude for Poison means poison type 0,
+        // not "unknown". The receiver's clamp (OdysseyEffects) bounds it.
+        magnitude = engineType == 35 && aux >= 0
+            ? (uint)aux
+            : (engineType is 29 or 39 or 15 or 62) && aux > 0 ? (uint)aux : 0;
+
+        float durationSeconds = *(float*)(effect + EffectDuration);
+        durationMs = durationSeconds > 0f && durationSeconds < MaxSaneDurationSeconds
+            ? (uint)(durationSeconds * 1000f)
+            : FallbackDurationMs;
+
+        return true;
+    }
+
+    /// <summary>
     /// Runs before the engine's own effect dispatch, for EVERY effect application in the
     /// game. The id filter comes first for exactly that reason.
     /// </summary>
@@ -245,47 +298,21 @@ internal static unsafe class PhantomEffectHook
             uint targetId = *(uint*)(target + ObjId);
             if (!PhantomHitHook.IsWatchedPhantom(targetId))
             {
+                // Not a peer's stand-in. On the MIRRORING side an effect the local player cast on
+                // an enemy is the client-cast enemy-effect relay's to capture
+                // (docs/research/enemy-effects.md); everywhere else this is one comparison.
+                if (EnemyEffectCapture.Enabled && PhantomHitHook.HasAttackers)
+                {
+                    EnemyEffectCapture.Consider(target, targetId, effect);
+                }
+
                 return;
             }
 
-            ushort engineType = *(ushort*)(effect + EffectType);
-
-            // integer_list[0]: the SetState sub-code for type 8, the percent for type 29
-            // (MovementSpeedDecrease) — same field, different meaning per type. Bounded reads,
-            // exactly like PhantomHitHook.ReadTotal: a malformed or foreign effect must not
-            // over-read.
-            int aux = 0;
-            int count = *(int*)(effect + EffectIntCount);
-            nint ints = *(nint*)(effect + EffectInts);
-            if (ints != 0 && count > 0)
-            {
-                aux = *(int*)ints;
-            }
-
-            int subCode = engineType == 8 ? aux : 0;
-            if (!TryMapAllowlist(engineType, subCode, out uint kind))
+            if (!TryClassify(effect, out uint kind, out uint durationMs, out uint magnitude))
             {
                 return;
             }
-
-            // integer_list[0] carries the real magnitude for every single-int-parameter
-            // constructor this hook understands: percent for Slow (29), heal amount for Heal
-            // (39), hit-point amount for TemporaryHitpoints (15), the appearance.2da row for
-            // Disguise (62 — OnApplyDisguise's own `GetInteger(effect, 0)` feeds
-            // CSWSCreature::Disguise, effect-sync.md §12.2) — same field, same read, four
-            // different meanings depending on engineType, exactly like `aux` above.
-            //
-            // Poison (35) is the one whose row 0 is a VALID value (poison.2da row 0), so it
-            // is not gated on `aux > 0`: a zero magnitude for Poison means poison type 0,
-            // not "unknown". The receiver's clamp (OdysseyEffects) bounds it.
-            uint magnitude = engineType == 35 && aux >= 0
-                ? (uint)aux
-                : (engineType is 29 or 39 or 15 or 62) && aux > 0 ? (uint)aux : 0;
-
-            float durationSeconds = *(float*)(effect + EffectDuration);
-            uint durationMs = durationSeconds > 0f && durationSeconds < MaxSaneDurationSeconds
-                ? (uint)(durationSeconds * 1000f)
-                : FallbackDurationMs;
 
             int i = _write;
             _write = (_write + 1) % Capacity;

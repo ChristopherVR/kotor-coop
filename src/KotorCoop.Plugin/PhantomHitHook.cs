@@ -886,6 +886,25 @@ internal static unsafe class PhantomHitHook
         return true;
     }
 
+    /// <summary>True when <paramref name="objectPointer"/> is a server creature (the vtable
+    /// <see cref="IsOursToCredit"/> tests) — for a caller holding a resolved object pointer.</summary>
+    public static bool IsServerCreature(nint objectPointer) =>
+        objectPointer != 0 && *(nint*)objectPointer == ServerCreatureVtable;
+
+    /// <summary>True on the mirroring side (the attacker set is non-empty) — the cheapest
+    /// possible "should any capture on the effect dispatcher run at all" test. Empty on the
+    /// enemies' owner, exactly as the damage path's own opt-out.</summary>
+    public static bool HasAttackers => _ourAttackerCount != 0;
+
+    /// <summary>
+    /// <see cref="IsOursToCredit"/> for a NON-DAMAGE effect (docs/research/enemy-effects.md):
+    /// the same question — is the creator one of our bodies, the target a live creature that is
+    /// not one of our bodies — asked of the effect the dispatcher is about to apply. The
+    /// creator field is the same <c>CGameEffect+0x18</c> the damage path reads.
+    /// </summary>
+    public static bool IsOursOnForeignCreature(nint target, uint targetId, nint effect) =>
+        IsOursToCredit(target, targetId, effect);
+
     /// <summary>
     /// Whether this hit is one of OURS landing on someone else's creature — the thing the
     /// fight's owner needs to hear about.

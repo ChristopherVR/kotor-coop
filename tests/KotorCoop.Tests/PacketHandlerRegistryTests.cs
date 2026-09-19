@@ -19,6 +19,9 @@ public class PacketHandlerRegistryTests
     private static readonly PacketType[] HostHandledTypes =
     [
         PacketType.ClassGrant, PacketType.ClassGrantAck,
+        // Client-cast enemy effects (docs/research/enemy-effects.md): a client's report reaches
+        // the host, which acks it; the host never receives an ack.
+        PacketType.EnemyEffect,
         PacketType.Hello, PacketType.StateUpdate, PacketType.FlagOp, PacketType.FlagSyncRequest,
         PacketType.ItemOp, PacketType.ItemSyncRequest, PacketType.ContainerLoot,
         PacketType.ContainerLootAck, PacketType.LootSyncRequest, PacketType.MaterialisedLootAck,
@@ -50,6 +53,8 @@ public class PacketHandlerRegistryTests
     private static readonly PacketType[] ClientHandledTypes =
     [
         PacketType.ClassGrant, PacketType.ClassGrantAck,
+        // The host's ack of a client's enemy-effect report; a client never receives a report.
+        PacketType.EnemyEffectAck,
         PacketType.Welcome, PacketType.Reject, PacketType.WorldSnapshot, PacketType.FlagAck,
         PacketType.FlagSnapshot, PacketType.ItemAck, PacketType.JournalAck,
         PacketType.ContainerLootAck, PacketType.DialogueGrant, PacketType.DialogueGrantAck,

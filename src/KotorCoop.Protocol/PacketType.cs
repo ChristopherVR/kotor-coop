@@ -711,4 +711,21 @@ public enum PacketType : byte
     /// <see cref="ClassGrantAckPacket"/>, keyed by the op's (origin, sequence) like
     /// <see cref="DialogueGrantAck"/>.</summary>
     ClassGrantAck = 79,
+
+    // 80-83 are other streams' reservations (2026-09-19); the enemy-effect pair skips to 84/85.
+
+    /// <summary>
+    /// client -&gt; host (reliable): "a non-damage effect I cast just landed on enemy N" —
+    /// <see cref="EnemyEffectPacket"/>. Enemies are host-authoritative, so a Stasis/Stun/Fear/
+    /// Whirlwind/Force Push/Slow/Paralysis/Sleep cast by a client only ever reached its own
+    /// mirrored body and the real one kept acting (docs/review-seamless-2026-09-18.md §2). The
+    /// client's plugin captures the effect at the dispatcher and the host replays it on the real
+    /// enemy through the same constructors a peer's forwarded effect uses.
+    /// <c>enemy_effect_sync</c>, default OFF, NEEDS-LIVE. See docs/research/enemy-effects.md.
+    /// </summary>
+    EnemyEffect = 84,
+
+    /// <summary>host -&gt; client: acknowledges one <see cref="EnemyEffect"/> op —
+    /// <see cref="EnemyEffectAckPacket"/>, keyed by the op's (origin, sequence).</summary>
+    EnemyEffectAck = 85,
 }

@@ -167,6 +167,14 @@ public sealed record AgentSettings
     /// </summary>
     public bool ClassGrantSync { get; init; }
 
+    /// <summary>
+    /// Relay a non-damage effect a client casts on a mirrored enemy to the host, which replays
+    /// it on the real body — docs/research/enemy-effects.md, coop.ini <c>enemy_effect_sync</c>.
+    /// OFF by default (NEEDS-LIVE). The plugin reads the same key for its capture and apply
+    /// halves; both machines must agree.
+    /// </summary>
+    public bool EnemyEffectSync { get; init; }
+
     /// <summary>How often <see cref="Pumps.ScriptItemGrantPump"/> re-samples the local PC's
     /// inventory once it has a baseline, in milliseconds — independent of
     /// <see cref="HeavyPumpIntervalMs"/> for the same reason

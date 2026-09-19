@@ -61,4 +61,37 @@ public interface IEnemyBridge
     /// other death.
     /// </summary>
     bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed) => false;
+
+    // ---- client-cast enemy effects (docs/research/enemy-effects.md, shared block 0x4C60) ----
+
+    /// <summary>
+    /// Mirroring side: the most recent non-damage effect the local player cast on a mirrored
+    /// enemy, captured by the plugin and offered one at a time (the plugin holds the next until
+    /// <see cref="TryAckEnemyEffectOut"/> echoes this one's serial). False when nothing is
+    /// offered or there is no plugin. De-duplicate on <see cref="EnemyEffectSample.Serial"/>.
+    /// </summary>
+    bool TryReadEnemyEffectOut(out EnemyEffectSample sample)
+    {
+        sample = default;
+        return false;
+    }
+
+    /// <summary>Tells the plugin the offered effect with this serial has been taken, so it can
+    /// offer the next. False when there is no plugin.</summary>
+    bool TryAckEnemyEffectOut(uint serial) => false;
+
+    /// <summary>
+    /// Enemy-authority side: hands the plugin one effect a client reported, to apply on the real
+    /// enemy body. Only valid while <see cref="TryReadEnemyEffectApplied"/> has caught up to the
+    /// previous write. False when there is no plugin.
+    /// </summary>
+    bool TryWriteEnemyEffectIn(in EnemyEffectSample sample) => false;
+
+    /// <summary>The serial of the last inbound effect the plugin has handled (applied or
+    /// refused). False when there is no plugin.</summary>
+    bool TryReadEnemyEffectApplied(out uint serial)
+    {
+        serial = 0;
+        return false;
+    }
 }
