@@ -119,6 +119,21 @@ conversation at a time, one person drives the galaxy map).
 
 ---
 
+## Added recently, not yet watched on a running game
+
+These are built and pass the automatic tests, but nobody has watched them work in the game yet. Treat them as "probably", and tell us if one misbehaves.
+
+| | Status | What to expect |
+| --- | --- | --- |
+| Cutscenes and visions that the game plays between areas | **Untested** | If one player triggers a scripted cutscene area (a vision, an ending scene), the other player's game now plays it too instead of skipping it. The ending credits chain is the longest and least tried. |
+| Becoming a Jedi on Dantooine | **Untested, off by default** | When the story adds the Jedi class to one player, an opt-in setting (`class_grant_sync = 1` in `coop.ini`, both players) adds it to the other player too. Feats and Force powers are still not shared, so the second player may still miss those. |
+| Saving with your partner next to you | **Untested** | An opt-in setting (`save_flush = 1`) stops your partner's stand-in being written into the save at all. Without it, the mod still removes any such copy when the save loads. |
+| Harder fights with more players | **Untested** | Enemy hit points and damage can scale with the number of players (`enemy_health`, `enemy_damage`; both are off at 100 until tested), and shop stock scales by default. |
+| Fear, stun and sneaking | **Untested** | Fear and stun land on your partner's character; a partner who is sneaking is left out of enemy targeting. |
+| Equipping a companion as the joining player | **Untested** | The host's game owns companion gear, so the joining player's Equipment screen for a companion is closed with a note instead of losing the item. |
+| Typing an address in the game | **Untested** | A **Connect to an address...** row at the bottom of the server list. The `~` console `connect` command still works. |
+| Story moments still known not to work | **Not supported yet** | The Leviathan prison break, Manaan's underwater section and the dark-side temple choice have designs but no code; the second player is likely to see them go wrong. |
+
 ## Things that are *not* limitations
 
 A few things look like bugs and aren't:

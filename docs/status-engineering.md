@@ -195,6 +195,23 @@ are testing-rig quirks, not things a real playthrough will hit:
   (`tools/textqueue.ps1`, 2026-09-10) without needing a screenshot — only its exact pixel position
   at other resolutions remains open.
 
+## Wave 2 (2026-09-19) — built and unit-tested, NOT yet watched on the running game
+
+Nine parallel agents worked docs/review-seamless-2026-09-18.md; each item below is in `main` (build `-warnaserror` clean, full suite green bar one load-timing flake). Per-item detail, addresses and NEEDS-LIVE checklists are in the research doc named in the last column; the review doc's "Wave 2" table is the index. Rows move up to "Works" only after a rig pass.
+
+| Item | Status | What it does | Source |
+| --- | --- | --- | --- |
+| Follow scripted STUNT legs (`follow_stunt`, default ON) | Built, NEEDS-LIVE | A leader's announced `StartNewModule` into a STUNT module (visions, romance payoffs, ending chain) is replayed on the follower's own engine, first hop only, echo de-dup. The galaxy-map replay stays the model | `research/cinematics.md` §12 |
+| Jedi class for the joiner (`class_grant_sync`, default OFF) | Built for `AddMultiClass` only, NEEDS-LIVE | Routine 389 (handler 0x0052DDC0) captured on the driver, relayed (`ClassGrant`/`ClassGrantAck`, protocol 55), applied on the peer through the same handler; `addclass <0-8>` dev verb. Feats and Force powers are NOT covered (K1 has no GrantFeat/GrantSpell routine; they come from the level-up screen) | `research/class-and-power-grants.md` |
+| Save-time spawn flush (`save_flush`, default OFF) | Built, NEEDS-LIVE | `SaveFlushHook` on `CServerExoAppInternal::SaveGame` 0x4B58A0 (F4 and the save panel both reach it) holds a save while spawns are destroyed, then re-issues it; the load-time ghost sweep stays as the safety net | `research/save-ghosts.md` §4 |
+| Player-count scaling (`enemy_health`, `enemy_damage` default 100; `xp_rate`, `store_stock` default `auto`) | Built, NEEDS-LIVE | Curve 150/200/250 (health, stock), 115/125/135 (damage), 100 (xp) at 2/3/4+ players; digest scheme 2 (protocol 56). `store_prices` not built | `research/player-count-scaling.md` |
+| Effect kinds: Fear, general Stun, Poison, Disguise; stealth flag | Built. Fear/Stun/stealth targeting ON; `poison_sync` apply half, `disguise_sync`, `stealth_visual_sync` OFF, NEEDS-LIVE | `PeerEffectKind` 13-16, `PlayerState.FlagStealth` (protocol 54); a stealthed peer's stand-in is held out of enemy targeting | `research/effect-sync.md` §12 |
+| Companion equip host-only, heal forwarding, per-peer XP baseline, periodic character capture | Built, NEEDS-LIVE | `companion_equip_host_only` closes a client's companion Equipment screen; a client's heals on a released companion ride the companion-damage packet (bit 7 of the slot byte); a peer's first XP report never lifts the host; `character_capture_interval_min` (10) quicksaves then captures the co-op character | `research/companion-state-sync.md`, `progression-sync.md`, `session-save.md` |
+| Reachability self-probe, Windows Firewall rule, rejected-join notice, host-away release, long-session bounds | Built, NEEDS-LIVE | Status line says "reachable / NOT reachable (ISP shares your address) / could not confirm"; installer adds the firewall rule; `host_away_timeout_ms` (20 s) treats a host parked at the menu as host loss; SaveMismatch backoff capped at 5, agent log rotates mid-session | `research/network-topology.md` §17 |
+| In-game address box | Built, NEEDS-LIVE | A permanent "Connect to an address..." row at the bottom of the server browser opens the engine text panel; last address kept in `kotorcoop-last-address.txt` | `research/server-browser.md` |
+| Door/chest flag keys | Closed statically | 64-bit key with the full 32-bit module hash (protocol 53): 117 shipped modules, 239,616 keys all distinct | `research/container-sync.md` §12 |
+| Leviathan brig, Manaan Rift, dark-side branch | Researched, no code | Designs, literal routine calls and RE targets; the Leviathan rescuer swap is `SwitchPlayerCharacter` (routine 11) | `research/leviathan.md`, `manaan-hrakert-rift.md`, `dark-side-branch.md` |
+
 ## Unverified — implemented but never observed live
 
 Everything in this list is built and unit-tested; nobody has watched it run on the two-instance
