@@ -224,6 +224,10 @@ engine-side half (the stand-in becomes a friend) and stops there.
 Existing staging that already exercises the forwarding half: `applyeffect heal <phantom>` (aimed at
 a stand-in) captures and forwards for real, both directions live-verified (`effect-sync.md` 10, 11).
 
+### 7.2 Live result, faction step (2026-09-19)
+
+Recipe step 2 on the rig with `partner_buffs = 1`: the plugin logged `phantom 0x115: joined the friendly faction (partner_buffs)` and `faction 0x115 me` on the host read `0x115(faction 2) vs 0x7FFFFFFF(faction 0): GetAIStateReputation(0x115,0x7FFFFFFF)=1 GetAIStateReputation(0x7FFFFFFF,0x115)=1` - friendly both ways (the stand-in was raw faction 5 / neutral without the key). Steps 3-5 (a hostile still attacking the stand-in, the Valor cast itself, the negative controls) were NOT run: there is no console verb that casts a Force power, so they need a save with Valor and a quickbar click. `partner_buffs` stays OFF.
+
 ## 8. The design that would actually heal a partner (not built)
 
 Because Heal, Cure and the stim iterate the `CSWParty` roster, only a cast MIRROR can reach a
