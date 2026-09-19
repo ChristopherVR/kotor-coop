@@ -1151,3 +1151,34 @@ Against the four NEEDS-LIVE items above:
 
 Row "Protocol-version mismatch reject (`E_PROTO`)" in docs/limitations.md and README.md moves
 from Unverified to live-verified on this read.
+
+## 13. Host away: a host parked at the main menu is host loss too (2026-09-18, NEEDS-LIVE)
+
+§11's two triggers — silence past `host_loss_timeout_ms`, an explicit `HostBye` — both assume
+the host has stopped SENDING. A host that quits to the main menu (or sits on a load screen, or
+the character screen) has not: its agent and session keep running, every world snapshot still
+arrives, and its own `FlagAway` (§9) says exactly where it is. So neither trigger fired, and
+the joiners sat in a frozen world holding every plugin-side lock for as long as the host
+stayed parked (docs/review-seamless-2026-09-18.md §2).
+
+`HostAwayRule` is the third trigger, pure like the other two:
+
+- `CoopClient.HandleWorldSnapshot` reads the host's own entry (`CoopHost.HostPeerId`) off the
+  wire and keeps its `IsAway` in `_hostAwayNow` — the raw flag, not the interpolated buffer.
+- `CoopClient.Tick` runs `Track` (stamp the first away tick, hold it, clear on return) and
+  `ShouldDeclare` (gated by `host_loss_release`, a positive `host_away_timeout_ms`, and not
+  already lost): sustained away past the timeout sets the SAME `_hostLost` the silence path
+  sets, plus `_hostLostByAway`. `CoopAgent.PumpOnce` sees the identical rising edge and runs
+  the identical release (`ClearCoopState`), worded truthfully through the new
+  `IPeerSession.HostAway` ("Host has left the world (main menu / loading) - playing solo
+  until they return.").
+- `ShouldRestore`: only a loss THIS rule declared is lowered by the flag clearing — the host
+  coming back into the world is the falling edge, and mirroring resumes on the very next
+  tick with no reconnect, because the link never dropped. A silence- or Bye-declared loss
+  still waits for a fresh Welcome, as before. `ForgetSession` resets all three fields.
+
+Default 20 s (`HostAwayRule.DefaultTimeoutMs`): a module load on a slow disk or a save-menu
+visit is well under it; a host at the main menu is well over it. `0` disables just this
+trigger. Loopback-tested (`HostAwayRuleTests`: away past a 500 ms timeout → `HostLost` while
+still `IsConnected`; back → restored; a brief away never trips it). NEEDS-LIVE: the host
+pressing Quit to Main Menu on the rig with the joiner mid-fight, then Load Game back in.

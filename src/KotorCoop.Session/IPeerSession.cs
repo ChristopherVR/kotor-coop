@@ -24,6 +24,15 @@ public interface IPeerSession
     /// </summary>
     bool HostLost => false;
 
+    /// <summary>
+    /// True while <see cref="HostLost"/> was raised by the host being AWAY (parked at the main
+    /// menu or a load screen, still sending) rather than silent or gone — <see cref="HostAwayRule"/>.
+    /// The release is identical either way; this only lets the agent word the chat line
+    /// truthfully ("the host is at the main menu" rather than "connection lost"). Defaults
+    /// false, like <see cref="HostLost"/>, for hosts and test fakes.
+    /// </summary>
+    bool HostAway => false;
+
     string LocalName { get; }
 
     /// <summary>Publishes the local avatar. Sent on the next tick.</summary>

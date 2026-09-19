@@ -43,15 +43,30 @@ internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWind
     private readonly double _windowSeconds = windowSeconds;
     private readonly Dictionary<uint, Dictionary<uint, AttackerEntry>> _byCreature = new();
     private readonly Dictionary<uint, double> _lastRetargetSeconds = new();
+    private double _lastPruneSeconds = double.NegativeInfinity;
+
+    /// <summary>How many creatures currently hold a row — for tests and the live dump.</summary>
+    public int CreatureCount => _byCreature.Count;
 
     /// <summary>Banks <paramref name="amount"/> of threat for <paramref name="attackerId"/>
     /// against <paramref name="creatureId"/>, decaying whatever was already there first. A
-    /// zero id or non-positive amount is ignored rather than creating a dead row.</summary>
+    /// zero id or non-positive amount is ignored rather than creating a dead row. Also the
+    /// table's housekeeping moment: at most once per window it drops every creature whose
+    /// rows have all decayed to zero (<see cref="PruneDecayed"/>), so a long module with many
+    /// fights does not keep a row per creature ever hit — <see cref="Forget"/> exists for the
+    /// same purpose but nothing in the controllers calls it, and a self-bounding table needs
+    /// no caller to remember to.</summary>
     public void AddThreat(uint creatureId, uint attackerId, double amount, double nowSeconds)
     {
         if (creatureId == 0 || attackerId == 0 || amount <= 0)
         {
             return;
+        }
+
+        if (nowSeconds - _lastPruneSeconds >= _windowSeconds)
+        {
+            _lastPruneSeconds = nowSeconds;
+            PruneDecayed(nowSeconds);
         }
 
         if (!_byCreature.TryGetValue(creatureId, out Dictionary<uint, AttackerEntry>? byAttacker))
@@ -131,12 +146,56 @@ internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWind
         _lastRetargetSeconds.Remove(creatureId);
     }
 
+    /// <summary>
+    /// Drops every creature whose every attacker row has fully decayed AND whose retarget
+    /// cooldown (if it ever had one) has also run out — rows that read as 0 / "no cooldown"
+    /// anyway, so removing them changes no answer this table gives, only its size. Returns how
+    /// many creatures were dropped. Called from <see cref="AddThreat"/> at most once per
+    /// window; public so the bound is unit-tested directly.
+    /// </summary>
+    public int PruneDecayed(double nowSeconds)
+    {
+        List<uint>? dead = null;
+        foreach ((uint creatureId, Dictionary<uint, AttackerEntry> byAttacker) in _byCreature)
+        {
+            bool anyLive = false;
+            foreach (AttackerEntry entry in byAttacker.Values)
+            {
+                if (Decayed(entry.Threat, entry.LastSeconds, nowSeconds) > 0)
+                {
+                    anyLive = true;
+                    break;
+                }
+            }
+
+            if (anyLive || SecondsSinceLastRetarget(creatureId, nowSeconds) < _windowSeconds)
+            {
+                continue;
+            }
+
+            (dead ??= []).Add(creatureId);
+        }
+
+        if (dead is null)
+        {
+            return 0;
+        }
+
+        foreach (uint creatureId in dead)
+        {
+            Forget(creatureId);
+        }
+
+        return dead.Count;
+    }
+
     /// <summary>Drops everything — a module change reassigns every object id, so nothing here
     /// still refers to the creature or attacker it named.</summary>
     public void Clear()
     {
         _byCreature.Clear();
         _lastRetargetSeconds.Clear();
+        _lastPruneSeconds = double.NegativeInfinity;
     }
 
     private double Decayed(double threat, double lastSeconds, double nowSeconds)

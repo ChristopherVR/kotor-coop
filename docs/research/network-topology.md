@@ -1151,3 +1151,89 @@ same round to close the specific race that let an imminent cinematic lock in a s
 switch. The wrong-portrait symptom above was separately traced to the same general control-return
 family of races by a sibling investigation (`docs/research/party-reconciliation.md`, commit
 `2707b62`) — confirmed the same underlying connect-time window this round.
+
+## 17. Reachability self-probe behind "UPnP mapped" (2026-09-18)
+
+§16's negative result had one loose end that mattered more than the relay question: the mod
+REPORTED success ("UPnP mapped") for a port nobody could reach, so the host had no way to know
+they needed a tunnel until a friend's join timed out. This section closes that with the
+simplest honest check that needs no peer and no relay — three facts a host can gather about
+itself, and a rule that turns them into one of three status wordings.
+
+### The three facts
+
+1. **The router's own WAN address.** UPnP IGD's `GetExternalIPAddress` (new
+   `UpnpClient.GetExternalIPAddressAsync`, asked by `UpnpMappingService.TryMapAsync` right after
+   the mapping attempt, mapped or not, and exposed as `ExternalAddress`). This is the address
+   the home router THINKS it has on the internet side.
+2. **The address the internet actually sees.** STUN's XOR-MAPPED-ADDRESS, already collected by
+   `PublicAddressDiscovery` from the game socket itself (§15).
+3. **Whether a datagram sent to that public endpoint comes back in.** `UdpChannel.SendReachabilityProbeAsync`
+   opens a throwaway SECOND socket, sends a 24-byte `ReachabilityProbe` (8-byte marker
+   `KCPROBE1` + 16-byte random nonce) to the host's OWN public IP:port, and waits for the
+   session's receive loop to see it. The receive loop intercepts a probe exactly the way it
+   intercepts a STUN reply — before the packet codec, matched on the nonce, never counted as a
+   packet, dropped silently when nothing is waiting. The marker's first two bytes read as
+   `0x434B`, not `ProtocolConstants.Magic` (`0x4B43`), and its top two bits are `01`, so it can
+   be mistaken for neither a session packet nor a STUN message. Retried once, because one lost
+   datagram must not read as "unreachable".
+
+### The rule (`ReachabilityRule.Decide`, pure, unit-tested)
+
+- **Carrier NAT** — final, judged first: (1) is a private (RFC 1918) or shared (RFC 6598,
+  `100.64/10`) address, or (1) and (2) are both known and differ. Either way the home router is
+  not the last NAT on the way out and no mapping it grants can be reached from outside. A probe
+  that hairpinned through the home router's own NAT does NOT override this — it never crossed
+  the carrier's.
+- **Reachable**: no carrier-NAT evidence and the probe came back.
+- **Unconfirmed**: everything else — including the very common case of a router that does not
+  hairpin its own public address, which says nothing about whether a friend outside can reach
+  the port. The rule never turns silence into "unreachable".
+
+`ReachabilityCheck` (owned by `CoopHost`, started when STUN or UPnP is on) waits up to 30 s for
+both mechanisms to settle, gathers the three facts, and publishes `CoopHost.Reachability` plus a
+`ReachabilityDetail` evidence line (`router WAN 203.0.113.5; internet sees 198.51.100.7:27140;
+self-probe did not come back (router may not hairpin)`). Every surface — `status`,
+`public_address`, the one-time hosting announcement — shares `PublicAddressAnnouncer.UpnpNote`,
+so "UPnP mapped" is never printed bare again:
+
+| UPnP | Verdict | Line |
+| --- | --- | --- |
+| Mapped | Reachable | `UPnP mapped - reachable from the internet` |
+| Mapped | CarrierNat | `UPnP mapped but NOT reachable (your ISP shares your address - use a tunnel such as playit.gg)` |
+| Mapped | Unconfirmed | `UPnP mapped - could not confirm it is reachable; if a friend cannot connect, use a tunnel such as playit.gg` |
+| Mapped | Pending | `UPnP mapped - checking reachability...` |
+| Unavailable | CarrierNat | `UPnP unavailable and your ISP shares your address - a manual port forward will not help; use a tunnel such as playit.gg` |
+| Unavailable | Reachable | `UPnP unavailable but port N is reachable from the internet` (a manual forward that works) |
+| Unavailable | other | `UPnP unavailable - forward UDP+TCP N manually` (unchanged) |
+
+### What this would have said on 2026-09-10
+
+Not known for certain — the router's WAN address was never read that day. If the ISP
+connection is CGNAT, the router's `GetExternalIPAddress` answers a `100.64/10` address (or a
+public one that differs from STUN's `103.95.113.80`) and the line would have read "NOT
+reachable ... use a tunnel" before the joiner ever typed `connect`. If it is a double NAT (an
+ISP modem in front of the mapped router), the WAN address is `192.168.x.x` / `10.x.x.x` and the
+verdict is the same. Only a router that answers the SAME public address STUN saw and still
+drops inbound traffic would land on "could not confirm" — which is still an honest answer,
+and one that names the tunnel.
+
+### Windows Firewall (same day)
+
+A separate, dumber way for the same symptom: the agent starts windowless behind a fullscreen
+game, so Windows' "allow this app?" prompt on the first listen is never seen, and an
+unanswered prompt is a silent deny. `WindowsFirewall` (in the installer) adds one inbound
+program rule for `KotorCoop.Agent.exe` — UDP on the session port + `ServerDiscovery.DiscoveryPort`
+27016, TCP on the session port — when `install` runs elevated, prints the two `netsh` commands
+otherwise, reports it under `install --check`, removes it under `uninstall`. The self-probe
+above does NOT exercise the firewall (a hairpinned datagram is still inbound from the LAN
+interface and the rule is program-scoped, so it would be allowed or blocked the same way as a
+friend's — but nothing here has been watched live; see the NEEDS-LIVE register).
+
+### NEEDS-LIVE (added to §13's register)
+
+- internet-5: the self-probe against the 2026-09-10 router — which of the three verdicts it
+  lands on, and whether the router answers `GetExternalIPAddress` at all.
+- internet-6: a router known to hairpin, to see "reachable from the internet" once.
+- internet-7: a second PC with the firewall rule absent then present, to confirm the
+  unanswered-prompt theory and that the rule fixes it.

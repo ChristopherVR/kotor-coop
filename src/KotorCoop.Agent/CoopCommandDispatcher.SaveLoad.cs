@@ -111,6 +111,10 @@ public sealed partial class CoopCommandDispatcher
     /// cooldown timer started against a previous one.</summary>
     private MismatchRejoinWatchState _mismatchRejoinState = MismatchRejoinWatchState.Initial;
 
+    /// <summary>Whether the "gave up after N attempts" line has been said for the current
+    /// <see cref="_mismatchRejoinState"/> episode — said once, not every tick the cap holds.</summary>
+    private bool _mismatchGaveUpAnnounced;
+
     /// <summary>Edge state for the one-line <see cref="CoopClient.SaveLineageAbsorbing"/>
     /// announcement.</summary>
     private bool _saveLineageAnnounced;
@@ -330,13 +334,31 @@ public sealed partial class CoopCommandDispatcher
                 (bool shouldTrigger, MismatchRejoinWatchState nextMismatchState) =
                     PersistentSaveMismatchRule.Observe(
                         _mismatchRejoinState, saveMismatchNow,
-                        _rejoinState.Phase == RejoinPhase.InFlight, nowMs);
+                        _rejoinState.Phase == RejoinPhase.InFlight, nowMs,
+                        hostWorldKey: client.RemoteWorldDigest.SaveIdentity);
                 _mismatchRejoinState = nextMismatchState;
 
                 if (shouldTrigger)
                 {
-                    Reply("your world still differs from the host's - rejoining automatically");
+                    Reply(
+                        $"your world still differs from the host's - rejoining automatically "
+                        + $"(attempt {nextMismatchState.Attempts} of {PersistentSaveMismatchRule.MaxAttemptsPerWorld})");
                     TriggerRejoin(RejoinTrigger.SaveMismatch);
+                }
+                else if (nextMismatchState.GaveUp && _rejoinState.Phase != RejoinPhase.InFlight)
+                {
+                    if (!_mismatchGaveUpAnnounced)
+                    {
+                        _mismatchGaveUpAnnounced = true;
+                        Reply(
+                            $"auto-rejoin gave up after {PersistentSaveMismatchRule.MaxAttemptsPerWorld} attempts against "
+                            + "this host world - type reconnect to try again, or load the host's save by hand");
+                        Log?.Invoke("session-save: SaveMismatch auto-rejoin capped for this host world");
+                    }
+                }
+                else if (nextMismatchState.Attempts == 0)
+                {
+                    _mismatchGaveUpAnnounced = false;
                 }
             }
         }

@@ -1,12 +1,20 @@
 namespace KotorCoop.Session;
 
 /// <summary>Debounce state for <see cref="PersistentSaveMismatchRule"/> — whether the mismatch
-/// was already present last tick (so a re-observation is a level, not a fresh edge), and when
+/// was already present last tick (so a re-observation is a level, not a fresh edge), when
 /// this rule last actually started a rejoin (so a stuck condition retries on a cooldown instead
-/// of either spamming the network or going silent forever).</summary>
-public readonly record struct MismatchRejoinWatchState(bool WasMismatched, long? LastAttemptAtMs)
+/// of either spamming the network or going silent forever), how many attempts this host world
+/// has had (the backoff exponent and the cap), and which host world those attempts were
+/// against (<see cref="KotorCoop.Protocol.WorldDigest.SaveIdentity"/>; a new world starts the
+/// count over).</summary>
+public readonly record struct MismatchRejoinWatchState(
+    bool WasMismatched, long? LastAttemptAtMs, int Attempts = 0, uint HostWorldKey = 0)
 {
     public static MismatchRejoinWatchState Initial => new(false, null);
+
+    /// <summary>True once this world has used up every attempt and the mismatch persists — the
+    /// caller says so once and leaves the player to <c>reconnect</c> by hand.</summary>
+    public bool GaveUp => WasMismatched && Attempts >= PersistentSaveMismatchRule.MaxAttemptsPerWorld;
 }
 
 /// <summary>
@@ -57,15 +65,38 @@ public static class PersistentSaveMismatchRule
     /// player is not left sitting in a degraded session for minutes over one bad attempt.</summary>
     public const long RetryIntervalMs = 20_000;
 
+    /// <summary>
+    /// Attempts per host world before this rule stops on its own (docs/review-seamless-2026-09-18.md
+    /// §2 "long-session growth": there was no cap, so a mismatch that no fetch could ever heal —
+    /// a host whose world transfer is blocked, a save the client cannot apply — re-ran the whole
+    /// 180 s rejoin cycle every 20 s for the rest of the session). With the backoff below the
+    /// five attempts span 20 + 40 + 80 + 160 s of waiting on top of the attempts themselves:
+    /// long enough for a transient (a busy host, a dropped fetch) to clear several times over,
+    /// short enough that a genuinely stuck client is told to act within a few minutes rather
+    /// than being churned all evening. Reset when the mismatch heals (success) or the host's
+    /// world changes (a different save has a different chance).
+    /// </summary>
+    public const int MaxAttemptsPerWorld = 5;
+
+    /// <summary>The wait before attempt number <paramref name="attemptsSoFar"/> + 1:
+    /// <see cref="RetryIntervalMs"/> doubled per attempt already made (20 s, 40 s, 80 s, 160 s),
+    /// never less than the base interval.</summary>
+    public static long RetryDelayMs(int attemptsSoFar) =>
+        RetryIntervalMs << Math.Clamp(attemptsSoFar - 1, 0, MaxAttemptsPerWorld);
+
     /// <returns>Whether to start a rejoin THIS call, and the new state.</returns>
+    /// <param name="hostWorldKey">The host's current <c>WorldDigest.SaveIdentity</c> (0 when
+    /// unknown): the per-world scope of the attempt cap. A change resets the count, since the
+    /// attempts made against the old world say nothing about the new one.</param>
     public static (bool ShouldTrigger, MismatchRejoinWatchState Next) Observe(
-        MismatchRejoinWatchState current, bool mismatchedNow, bool rejoinInFlight, long nowMs)
+        MismatchRejoinWatchState current, bool mismatchedNow, bool rejoinInFlight, long nowMs, uint hostWorldKey = 0)
     {
         if (!mismatchedNow)
         {
             // Clean now — whether it just healed or was never wrong, there is nothing to
             // retry, and the next mismatch (whenever it starts) must read as a fresh edge
-            // rather than reusing a stale cooldown from an unrelated earlier episode.
+            // rather than reusing a stale cooldown from an unrelated earlier episode. This is
+            // also the "reset on success" of the attempt cap.
             return (false, MismatchRejoinWatchState.Initial);
         }
 
@@ -77,12 +108,25 @@ public static class PersistentSaveMismatchRule
             return (false, current with { WasMismatched = true });
         }
 
+        if (hostWorldKey != current.HostWorldKey)
+        {
+            // A different host world: whatever was tried against the old one does not count,
+            // and a mismatch against the new one is a fresh edge.
+            current = new MismatchRejoinWatchState(false, null, 0, hostWorldKey);
+        }
+
+        if (current.Attempts >= MaxAttemptsPerWorld)
+        {
+            return (false, current with { WasMismatched = true });
+        }
+
         bool isNewEdge = !current.WasMismatched;
-        bool cooldownElapsed = current.LastAttemptAtMs is not { } last || nowMs - last >= RetryIntervalMs;
+        bool cooldownElapsed = current.LastAttemptAtMs is not { } last
+            || nowMs - last >= RetryDelayMs(current.Attempts);
 
         if (isNewEdge || cooldownElapsed)
         {
-            return (true, new MismatchRejoinWatchState(true, nowMs));
+            return (true, new MismatchRejoinWatchState(true, nowMs, current.Attempts + 1, hostWorldKey));
         }
 
         return (false, current with { WasMismatched = true });

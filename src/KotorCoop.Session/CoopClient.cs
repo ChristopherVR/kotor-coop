@@ -71,6 +71,20 @@ public sealed partial class CoopClient : ICoopSession
     /// admission lands.</summary>
     private bool _hostLost;
 
+    /// <summary>The third host-loss trigger's bookkeeping — see <see cref="HostAwayRule"/>.
+    /// <see cref="_hostAwayNow"/> is the host's own <see cref="PlayerState.FlagAway"/> as of
+    /// the last world snapshot that carried its entry (receive-loop thread → volatile, read
+    /// by <see cref="Tick"/>); <see cref="_hostAwaySinceMs"/> is when that first went true, 0
+    /// while it is false; <see cref="_hostLostByAway"/> records that <see cref="_hostLost"/> was
+    /// raised by THIS trigger, so only this trigger's falling edge (the host coming back into
+    /// the world, no fresh Welcome involved) is allowed to lower it again.</summary>
+    private volatile bool _hostAwayNow;
+    private long _hostAwaySinceMs;
+    private bool _hostLostByAway;
+
+    /// <inheritdoc cref="IPeerSession.HostAway"/>
+    public bool HostAway => _hostLostByAway;
+
     /// <summary>Real gaps between successive <see cref="SendStateUpdate"/> calls — what
     /// <c>lagstats</c> shows so a live round can see the actual send cadence, not just the
     /// configured tick rate. See docs/research/lag-audit.md.</summary>
@@ -318,6 +332,28 @@ public sealed partial class CoopClient : ICoopSession
             if (silenceMs > _settings.PeerTimeoutMs)
             {
                 ForgetSession();
+            }
+        }
+
+        // The host is still talking, but says it is not in the world (main menu, load screen).
+        // Sustained long enough, that is host loss too — the SAME edge the silence path raises,
+        // so the agent's release pass is the one already proven live — and the host's flag
+        // clearing is the falling edge that resumes mirroring. See HostAwayRule.
+        if (IsConnected)
+        {
+            bool hostAwayNow = _hostAwayNow;
+            _hostAwaySinceMs = HostAwayRule.Track(_hostAwaySinceMs, hostAwayNow, now);
+
+            if (HostAwayRule.ShouldDeclare(
+                _settings.HostLossReleaseEnabled, _settings.HostAwayTimeoutMs, _hostLost, _hostAwaySinceMs, now))
+            {
+                _hostLost = true;
+                _hostLostByAway = true;
+            }
+            else if (HostAwayRule.ShouldRestore(_hostLostByAway, hostAwayNow))
+            {
+                _hostLost = false;
+                _hostLostByAway = false;
             }
         }
 

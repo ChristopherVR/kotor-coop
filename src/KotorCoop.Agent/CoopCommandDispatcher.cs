@@ -167,6 +167,7 @@ public sealed partial class CoopCommandDispatcher(
                     AnnounceConnectionStatus();
                     AnnounceHostSaveAvailability();
                     AnnouncePublicAddress();
+                    AnnounceRejectedJoins();
 
                     // After AnnouncePublicAddress, deliberately: the connect string a friend
                     // joins should carry the public endpoint STUN found, and this is the tick

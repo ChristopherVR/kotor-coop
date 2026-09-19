@@ -20,6 +20,12 @@ public sealed partial class CoopClient
         _lastInboundMs = 0;
         _absentFromSnapshotSinceMs = 0;
 
+        // Whatever the host last said about being away belongs to the session we just left;
+        // a silence-declared loss (or the fresh Welcome that ends it) owns _hostLost from here.
+        _hostAwayNow = false;
+        _hostAwaySinceMs = 0;
+        _hostLostByAway = false;
+
         // ⚠ DROP THE CONVERSATION TOKEN. It belongs to a session we are no longer in,
         // and it is level state the agent re-publishes every tick — so a host that
         // CRASHES mid-conversation (rather than leaving cleanly) left this client
@@ -110,6 +116,7 @@ public sealed partial class CoopClient
             // way CoopAgent.PumpOnce reads this falling edge and resumes driving the game
             // normally — see HostLost's own doc comment for the full round trip.
             _hostLost = false;
+            _hostLostByAway = false;
 
             // The link is back. Everything still unacked backed off while it was down; make
             // it all due now so the world catches up in one tick instead of over the next few
@@ -194,6 +201,14 @@ public sealed partial class CoopClient
             if (entry.PeerId == _localPeerId)
             {
                 continue;
+            }
+
+            // The host's own entry carries its AwayRule verdict — the raw wire flag, read here
+            // rather than from the interpolated buffer so a parked host is seen the tick it says
+            // so. Tick() turns a sustained reading into host loss (HostAwayRule).
+            if (entry.PeerId == CoopHost.HostPeerId)
+            {
+                _hostAwayNow = entry.State.IsAway;
             }
 
             _buffer.Push(entry.PeerId, entry.Name, entry.State, now);

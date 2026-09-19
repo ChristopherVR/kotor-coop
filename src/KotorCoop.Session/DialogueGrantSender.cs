@@ -21,8 +21,23 @@ namespace KotorCoop.Session;
 /// — two peers numbering their own ops from 1 independently would otherwise collide.
 /// </summary>
 public sealed class DialogueGrantSender(
-    int retransmitIntervalMs = 250, int maxIntervalMs = 4000, int maxPending = 256)
+    int retransmitIntervalMs = 250, int maxIntervalMs = 4000, int maxPending = DialogueGrantSender.DefaultMaxPending)
 {
+    /// <summary>
+    /// The pending-table cap, and why it is a cap rather than an unbounded queue
+    /// (docs/review-seamless-2026-09-18.md §2 "long-session growth"): every pending op is walked
+    /// by <see cref="CollectDue"/> on every tick, so the table has to stay small enough for
+    /// that walk to be free, and a grant is only ever pending while SOME recipient has not
+    /// acked it. With the link up that is milliseconds; with it down, ops accumulate one per
+    /// reward node the local player plays through solo (<c>host_loss_release</c>), which is a
+    /// handful per conversation. A full KOTOR 1 playthrough grants a few hundred items across
+    /// the whole game, so 1024 unacked grants means an outage that has outlasted the session
+    /// several times over — at which point refusing (with one logged line) loses less than
+    /// walking a thousand-entry table thirty times a second forever would. Raised from 256 the
+    /// same day, on the same arithmetic: the old figure was one long solo evening away.
+    /// </summary>
+    public const int DefaultMaxPending = 1024;
+
     private sealed class Pending
     {
         public required DialogueGrantPacket Packet;

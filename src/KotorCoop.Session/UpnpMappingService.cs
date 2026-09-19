@@ -45,7 +45,16 @@ public sealed class UpnpMappingService : IDisposable
     // PublicAddressDiscovery._publicEndPoint documents for its own identical shape.
     private volatile UpnpMappingStatus _status = UpnpMappingStatus.Pending;
 
+    // Same cross-thread shape as _status: written once by TryMapAsync, read by ReachabilityCheck.
+    private volatile System.Net.IPAddress? _externalAddress;
+
     public UpnpMappingStatus Status => _status;
+
+    /// <summary>The router's own idea of its WAN address (UPnP <c>GetExternalIPAddress</c>),
+    /// asked once the control point is found — mapped or not, since a router that refuses the
+    /// mapping can still tell us whether it is behind carrier NAT. Null until then, or when the
+    /// router would not say. See <see cref="ReachabilityRule"/>.</summary>
+    public System.Net.IPAddress? ExternalAddress => _externalAddress;
 
     public UpnpMappingService(int port, string description = "KotorCoop")
     {
@@ -103,6 +112,11 @@ public sealed class UpnpMappingService : IDisposable
             .ConfigureAwait(false);
 
         _controlPoint = found;
+
+        // Before the status flips out of Pending, so ReachabilityCheck — which waits on exactly
+        // that flip — never reads the verdict without the WAN address that belongs with it.
+        _externalAddress ??= await UpnpClient.GetExternalIPAddressAsync(found, cancellationToken).ConfigureAwait(false);
+
         _status = udpMapped || tcpMapped ? UpnpMappingStatus.Mapped : UpnpMappingStatus.Unavailable;
     }
 

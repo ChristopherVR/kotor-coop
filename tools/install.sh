@@ -19,6 +19,12 @@
 # dinput8 and prefers it over ours unless the game is launched with
 #   WINEDLLOVERRIDES="dinput8=n,b" %command%
 # It prints that at the end, tailored to where it found the game. docs/research/proton.md.
+#
+# One thing the Windows installer does that this script deliberately does not: it adds a
+# Windows Firewall inbound rule for KotorCoop.Agent.exe (WindowsFirewall.cs). There is no
+# Windows Firewall inside a Proton prefix; if your distribution runs one (ufw, firewalld), a
+# HOST has to open the session UDP port (27140 by default; plus 27016 for the LAN browser)
+# there by hand. A Steam Deck ships with no firewall.
 
 set -eu
 

@@ -138,13 +138,30 @@ The server browser only finds games on your own network. To play with someone el
 1. The host presses Host as usual, then checks status (or types public_address) at
    the ~ console. It prints something like:
 
-       public address: 203.0.113.5:27140 - UPnP mapped
+       public address: 203.0.113.5:27140 - UPnP mapped - reachable from the internet
 
-   That means it worked automatically -- nothing else to do. If it instead says
-   "UPnP unavailable - forward UDP+TCP 27140 manually", open your router's admin page and
-   forward that port (both UDP and TCP -- TCP carries the initial save transfer, UDP carries
-   the session) to this PC, for both. Most home routers support UPnP and this step is
-   automatic; if yours doesn't, forwarding by hand is the only alternative -- there's no relay.
+   That means it worked automatically -- nothing else to do. A few seconds after hosting
+   starts the mod checks its own address from outside, so the line tells you honestly:
+   - "reachable from the internet": share the address.
+   - "NOT reachable (your ISP shares your address - use a tunnel such as playit.gg)": your
+     home connection sits behind your ISP's own address sharing, and no port forward on
+     your router can get through it. A free tunnel program (playit.gg or similar, UDP AND
+     TCP on the same port) is the way; the mod copes with a UDP-only tunnel on its own.
+   - "could not confirm": nothing contradicted the mapping, but the check could not prove
+     it either (many routers don't route their own public address back inside). Try it
+     with your friend; if they can't connect, use a tunnel.
+   If it instead says "UPnP unavailable - forward UDP+TCP 27140 manually", open your router's
+   admin page and forward that port (both UDP and TCP -- TCP carries the initial save
+   transfer, UDP carries the session) to this PC, for both. Most home routers support UPnP
+   and this step is automatic; if yours doesn't, forwarding by hand is the alternative --
+   there's no relay of our own.
+
+   Windows Firewall: the installer adds an inbound rule for KotorCoop.Agent.exe when it is
+   run as Administrator (UDP on the session port plus 27016 for the LAN browser, TCP on the
+   session port); otherwise it prints the two netsh commands to run once from an
+   Administrator prompt. KotorCoop.Agent.exe install --check tells you whether the rule
+   exists. Without it Windows may silently drop your friend's traffic: the agent runs
+   behind the game, so its firewall prompt is easy to miss.
 2. Share the address the host was given (or a hostname/DDNS address pointing at it -- connect
    accepts either) with the other player.
 3. The joiner clicks Co-op, picks "Connect to an address..." at the bottom of the server

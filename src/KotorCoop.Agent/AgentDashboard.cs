@@ -48,6 +48,10 @@ public sealed class AgentDashboard(
     /// </summary>
     private readonly bool _logRotated = RotateLogIfNeeded(logFile);
 
+    /// <summary>Mid-session rotation's own clock and gate — see <see cref="RotateLogMidSessionIfDue"/>.</summary>
+    private readonly Lock _logRotationGate = new();
+    private long _lastLogSizeCheckMs;
+
     private static bool RotateLogIfNeeded(string? path)
     {
         if (path is not null)
@@ -60,7 +64,8 @@ public sealed class AgentDashboard(
                     FileInfo info = new(path);
                     if (KotorCoop.Plugin.LogRotation.ShouldRotate(info.Length, cap))
                     {
-                        File.Move(path, KotorCoop.Plugin.LogRotation.RotatedPath(path), overwrite: true);
+                        KotorCoop.Plugin.LogRotation.ApplyShiftPlan(
+                            KotorCoop.Plugin.LogRotation.ShiftPlan(path, KotorCoop.Plugin.LogRotation.DefaultKeepGenerations));
                     }
                 }
             }
@@ -71,6 +76,52 @@ public sealed class AgentDashboard(
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Rotates the log file MID-SESSION once it grows past the cap — the same periodic check
+    /// PluginHost.WorkerLoop runs for kotorcoop-plugin.log (<see cref="KotorCoop.Plugin.LogRotation.PeriodicCheckIntervalMs"/>),
+    /// missing here until 2026-09-18: rotation ran only at construction, so one long session
+    /// that outlived the cap grew unbounded until the NEXT agent start
+    /// (docs/review-seamless-2026-09-18.md §2 "long-session growth"). Every write comes
+    /// through here first; a single stat every 30 s is the whole cost. The size check and the
+    /// shift are under one gate because Note (pump thread) and WriteLogLine (dashboard thread)
+    /// both write, and a shift racing an append would lose the line.
+    /// </summary>
+    private void RotateLogMidSessionIfDue(string path)
+    {
+        long now = Environment.TickCount64;
+        if (!KotorCoop.Plugin.LogRotation.ShouldCheckPeriodically(
+            _lastLogSizeCheckMs, now, KotorCoop.Plugin.LogRotation.PeriodicCheckIntervalMs))
+        {
+            return;
+        }
+
+        lock (_logRotationGate)
+        {
+            if (!KotorCoop.Plugin.LogRotation.ShouldCheckPeriodically(
+                _lastLogSizeCheckMs, now, KotorCoop.Plugin.LogRotation.PeriodicCheckIntervalMs))
+            {
+                return;
+            }
+
+            _lastLogSizeCheckMs = now;
+            try
+            {
+                FileInfo info = new(path);
+                long cap = KotorCoop.Plugin.LogRotation.CapBytes(KotorCoop.Plugin.LogRotation.DefaultCapMb);
+                if (info.Exists && KotorCoop.Plugin.LogRotation.ShouldRotate(info.Length, cap))
+                {
+                    KotorCoop.Plugin.LogRotation.ApplyShiftPlan(
+                        KotorCoop.Plugin.LogRotation.ShiftPlan(path, KotorCoop.Plugin.LogRotation.DefaultKeepGenerations));
+                }
+            }
+            catch (Exception)
+            {
+                // Best-effort, like the construction-time rotation: a failed shift only means
+                // the file keeps growing until the next check.
+            }
+        }
     }
 
     private int _dropIndex;
@@ -293,6 +344,7 @@ public sealed class AgentDashboard(
         {
             try
             {
+                RotateLogMidSessionIfDue(logFile);
                 File.AppendAllText(logFile, entry + Environment.NewLine);
             }
             catch (IOException)
@@ -352,6 +404,7 @@ public sealed class AgentDashboard(
         {
             try
             {
+                RotateLogMidSessionIfDue(logFile);
                 File.AppendAllText(logFile, entry + Environment.NewLine);
             }
             catch (IOException)

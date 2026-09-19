@@ -24,6 +24,10 @@ public class CoopHostPublicAddressTests
 
         Assert.Null(host.PublicEndPoint);
         Assert.Equal(UpnpMappingStatus.Disabled, host.UpnpStatus);
+
+        // Nothing to probe with, so the honest answer is "unconfirmed", never "reachable".
+        Assert.Equal(ReachabilityVerdict.Unconfirmed, host.Reachability);
+        Assert.Empty(host.DrainRejectedJoinNotices());
     }
 
     [Fact]

@@ -83,6 +83,15 @@ public sealed record SessionSettings
     public int HostLossTimeoutMs { get; init; } = ProtocolConstants.PeerTimeoutMs;
 
     /// <summary>
+    /// How long a CLIENT'S host may stay flagged away (<see cref="PlayerState.FlagAway"/>: the
+    /// main menu, a load screen) while still sending before that too counts as host loss and
+    /// the same release pass fires — coop.ini <c>host_away_timeout_ms</c>, 0 disables just
+    /// this trigger. See <see cref="HostAwayRule"/>. Gated by
+    /// <see cref="HostLossReleaseEnabled"/> like the other two triggers.
+    /// </summary>
+    public int HostAwayTimeoutMs { get; init; } = HostAwayRule.DefaultTimeoutMs;
+
+    /// <summary>
     /// This install's content fingerprint, announced to the peer so a mod mismatch that
     /// would corrupt shared state is caught at join time. Defaults to
     /// <see cref="ContentDigest.Unknown"/> (agents without game-file access, and the mock

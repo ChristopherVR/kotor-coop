@@ -182,6 +182,26 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        _publicAddressAnnouncer.Observe(host.ListenEndPoint.Port, host.PublicEndPoint, host.UpnpStatus, Reply);
+        _publicAddressAnnouncer.Observe(
+            host.ListenEndPoint.Port, host.PublicEndPoint, host.UpnpStatus, host.Reachability, Reply);
+    }
+
+    /// <summary>
+    /// A HOST's side of a join it turned away — a different build (<c>E_PROTO</c>), a wrong
+    /// password — through the same trio a <c>W_CFG</c> line uses. The session queues and
+    /// rate-limits these (<see cref="RejectedJoinNotices"/>); this only drains them. Nothing
+    /// to reset on session end: the queue dies with the host.
+    /// </summary>
+    private void AnnounceRejectedJoins()
+    {
+        if (manager.Current is not CoopHost host)
+        {
+            return;
+        }
+
+        foreach (string line in host.DrainRejectedJoinNotices())
+        {
+            Reply($"co-op: {line}");
+        }
     }
 }

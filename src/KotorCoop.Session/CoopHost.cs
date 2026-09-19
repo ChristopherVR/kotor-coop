@@ -136,8 +136,23 @@ public sealed partial class CoopHost : ICoopSession
     /// <see cref="SessionSettings.UpnpEnabled"/> was off.</summary>
     public UpnpMappingStatus UpnpStatus => _upnp?.Status ?? UpnpMappingStatus.Disabled;
 
+    /// <summary>Whether a friend on the internet can actually reach this host — the peer-free
+    /// self-probe's answer (<see cref="ReachabilityCheck"/>), distinct from whether the router
+    /// merely agreed to a mapping. <see cref="ReachabilityVerdict.Unconfirmed"/> when neither
+    /// STUN nor UPnP is on, since there is then nothing to probe with.</summary>
+    public ReachabilityVerdict Reachability => _reachability?.Verdict ?? ReachabilityVerdict.Unconfirmed;
+
+    /// <summary>The evidence behind <see cref="Reachability"/>, for the <c>public_address</c> verb.</summary>
+    public string ReachabilityDetail => _reachability?.Detail ?? "no STUN server and no UPnP - nothing to probe with";
+
+    /// <summary>Lines about joins this host turned away (a different build, a wrong password),
+    /// for the agent's announcer — see <see cref="RejectedJoinNotices"/>.</summary>
+    public IReadOnlyList<string> DrainRejectedJoinNotices() => _rejectedJoins.Drain();
+
     private readonly PublicAddressDiscovery? _publicAddress;
     private readonly UpnpMappingService? _upnp;
+    private readonly ReachabilityCheck? _reachability;
+    private readonly RejectedJoinNotices _rejectedJoins = new();
 
     public CoopHost(SessionSettings settings)
     {
@@ -160,6 +175,14 @@ public sealed partial class CoopHost : ICoopSession
         {
             _upnp = new UpnpMappingService(settings.Port);
             _upnp.Start();
+        }
+
+        // The honest half of "UPnP mapped": with either mechanism on there is something to
+        // probe with (docs/research/network-topology.md §17). Same best-effort rule as above.
+        if (_publicAddress is not null || _upnp is not null)
+        {
+            _reachability = new ReachabilityCheck(_channel, _publicAddress, _upnp);
+            _reachability.Start();
         }
 
         _handlers = new Dictionary<PacketType, PacketHandler>
@@ -546,6 +569,7 @@ public sealed partial class CoopHost : ICoopSession
         // Both best-effort and independent of the channel: UpnpMappingService's own Dispose
         // deletes the router mapping (a network call) before the channel it mapped a port for
         // goes away, and PublicAddressDiscovery has no mapping to clean up, only a loop to stop.
+        _reachability?.Dispose();
         _publicAddress?.Dispose();
         _upnp?.Dispose();
         _channel.Dispose();

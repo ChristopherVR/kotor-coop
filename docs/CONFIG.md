@@ -137,6 +137,7 @@ hand-editing one is unsupported.
 | `connect_timeout_ms` | `0` (keeps the built-in 15000) | ms a connect attempt waits before giving up | [connect-flow.md](research/connect-flow.md) |
 | `host_loss_release` | ON | a CLIENT that loses its host releases every plugin-side lock and plays solo instead of staying locked out | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
 | `host_loss_timeout_ms` | `0` (keeps the built-in 5000) | ms the host may stay silent before `host_loss_release` fires | [disconnect-reconnect.md](research/disconnect-reconnect.md) |
+| `host_away_timeout_ms` | `20000` | ms the host may stay flagged AWAY (main menu, load screen — still sending) before that too counts as host loss and `host_loss_release` fires; `0` disables just this trigger (2026-09-18, `HostAwayRule`) | [disconnect-reconnect.md §13](research/disconnect-reconnect.md) |
 | `tick_rate` | `0` (keeps the built-in rate) | state send rate in Hz, clamped 5-120 | [lag-audit.md](research/lag-audit.md) |
 | `interp_ms` | `-1` (keeps the built-in delay) | how far in the past peers render, ms, clamped 0-500 | [realtime-creature-movement.md](research/realtime-creature-movement.md) |
 | `dejitter` | OFF | regularise received avatar snapshots onto a playback timeline instead of raw arrival times | [lag-audit.md](research/lag-audit.md) |

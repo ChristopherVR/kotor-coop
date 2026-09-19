@@ -25,6 +25,11 @@ public sealed partial class CoopHost
     {
         _channel.NoteVersionMismatch();
 
+        // The host's own side of this: before 2026-09-18 the joiner got a typed Reject and the
+        // host printed nothing (status-engineering.md's E_PROTO "known gap"). Queued, not
+        // announced here — the agent drains it through the same trio W_CFG lines use.
+        _rejectedJoins.NoteVersionMismatch(from, peerVersion, ProtocolConstants.Version, SessionClock.NowMs);
+
         int rejectLength = PacketCodec.Write(
             _replyBuffer,
             new RejectPacket($"E_PROTO: host is v{ProtocolConstants.Version}, you are v{peerVersion}"));
@@ -81,6 +86,8 @@ public sealed partial class CoopHost
         uint required = SessionPassword.Hash(_settings.Password);
         if (required != SessionPassword.None && hello.PasswordHash != required)
         {
+            _rejectedJoins.NoteWrongPassword(from, now);
+
             int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("E_PASSWORD: wrong password"));
             if (rejectLength > 0)
             {
