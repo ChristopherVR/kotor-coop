@@ -7,7 +7,7 @@ internal enum MineRemovalDecision
     /// <summary>Post the engine's own DestroyObject at the trigger.</summary>
     Remove = 0,
 
-    /// <summary>coop.ini <c>mine_sync</c> is off (the default).</summary>
+    /// <summary>coop.ini <c>mine_sync</c> is turned off.</summary>
     Disabled = 1,
 
     /// <summary>The id no longer resolves to a trigger here — the usual case, the mine is

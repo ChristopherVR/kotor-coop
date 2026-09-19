@@ -7,7 +7,7 @@ namespace KotorCoop.Tests;
 
 /// <summary>
 /// Floor-mine sync (docs/research/mines.md): the 0x54 key layout, the absence detector's
-/// under-reporting guards, the plugin's removal refusals, and the three-reader OFF default.
+/// under-reporting guards, the plugin's removal refusals, and the three-reader ON default.
 /// </summary>
 public class MineSyncTests
 {
@@ -286,10 +286,10 @@ public class MineSyncTests
             MineRemovalRule.Decide(true, false, true, true, true));
     }
 
-    // ---- the OFF default, three readers ------------------------------------------------------
+    // ---- the ON default, three readers ------------------------------------------------------
 
     [Fact]
-    public void MineSyncIsOffWhenTheKeyIsAbsent()
+    public void MineSyncIsOnWhenTheKeyIsAbsent()
     {
         string path = Path.Combine(Path.GetTempPath(), $"coop-mine-{Guid.NewGuid():N}.ini");
         File.WriteAllText(path, "mode = host");
@@ -297,8 +297,7 @@ public class MineSyncTests
         {
             CoopConfig? c = CoopConfig.TryLoad(path);
             Assert.NotNull(c);
-            Assert.False(c.MineSync);
-            Assert.False(new AgentSettings().MineSync);
+            Assert.True(c.MineSync);
         }
         finally
         {
@@ -307,7 +306,7 @@ public class MineSyncTests
     }
 
     [Fact]
-    public void MineSyncTurnsOnWhenTheKeyIsSet()
+    public void MineSyncTurnsOffWhenTheKeyIsZero()
     {
         string path = Path.Combine(Path.GetTempPath(), $"coop-mine-{Guid.NewGuid():N}.ini");
         File.WriteAllText(path, "mode = host\nmine_sync = 1");
@@ -322,15 +321,15 @@ public class MineSyncTests
     }
 
     [Fact]
-    public void TheAgentCompositionFallbackAgreesOnOff()
+    public void TheAgentCompositionFallbackAgreesOnOn()
     {
         string source = File.ReadAllText(Path.Combine(
             RepositoryRoot(), "src", "KotorCoop.Agent", "AgentComposition.cs"));
-        Assert.Contains("MineSync = config?.MineSync ?? false", source);
+        Assert.Contains("MineSync = config?.MineSync ?? true", source);
 
         string plugin = File.ReadAllText(Path.Combine(
             RepositoryRoot(), "src", "KotorCoop.Plugin", "MineController.cs"));
-        Assert.Contains("PluginConfig.ReadBool(\"mine_sync\", false)", plugin);
+        Assert.Contains("PluginConfig.ReadBool(\"mine_sync\", true)", plugin);
     }
 
     private static string RepositoryRoot()

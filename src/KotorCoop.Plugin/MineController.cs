@@ -21,7 +21,7 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed class MineController
 {
-    private static readonly bool Enabled = PluginConfig.ReadBool("mine_sync", false);
+    private static readonly bool Enabled = PluginConfig.ReadBool("mine_sync", true);
 
     private readonly HashSet<uint> _requested = [];
     private int _logged;

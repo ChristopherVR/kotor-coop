@@ -229,7 +229,7 @@ public sealed record AgentSettings
     /// <summary>
     /// When true, <see cref="Pumps.WorldStatePump.PumpMines"/> publishes GIT-placed floor
     /// mines that vanished locally (disarmed, recovered, detonated) as mine-typed world flags.
-    /// coop.ini <c>mine_sync</c>, default OFF, NEEDS-LIVE (docs/research/mines.md). The
+    /// coop.ini <c>mine_sync</c>, default ON since 2026-09-19 (docs/research/mines.md 9). The
     /// peer-removal APPLY half is gated separately in the plugin by the same key.
     /// </summary>
     public bool MineSync { get; init; }

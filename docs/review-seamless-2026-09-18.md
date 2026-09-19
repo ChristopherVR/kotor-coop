@@ -168,5 +168,5 @@ Three RE agents reported (branches not yet merged at the time of writing): **min
 
 **STUNT-follow trigger: VERIFIED live** (host `warp STUNT_50a`, joiner replays the leg on its own engine, echo de-dup fires, both land in `sta_m45ac`; `research/cinematics.md` 12.9). Still unproven: a multi-hop scripted chain and the other STUNT modules.
 
-**Crowd control (#2): capture round trip VERIFIED for Stunned** (client cast -> client agent -> host agent -> host plugin applies it to the enemy body; `research/enemy-effects.md` 7.1-7.2). **Mines: host-to-client removal and the no-false-positive check VERIFIED** (`research/mines.md` 9); walk-on detonation and the client-to-host direction unshown. Both keys stay OFF until a real cast / a real walk-on has been seen.
+**Crowd control (#2): capture round trip VERIFIED for Stunned** (client cast -> client agent -> host agent -> host plugin applies it to the enemy body; `research/enemy-effects.md` 7.1-7.2). **Mines: VERIFIED both directions** (destroy, walk-on detonation each way, no false removal across four warps; `research/mines.md` 9) and `mine_sync` is now ON by default; party-placed mines are still not built. `enemy_effect_sync` stays OFF until a real Force-power cast has been seen to stop an enemy.
 

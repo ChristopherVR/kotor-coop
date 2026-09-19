@@ -388,13 +388,13 @@ public sealed record CoopConfig
     /// <summary>
     /// Floor-mine / trap-trigger sync (coop.ini <c>mine_sync</c>): a GIT-placed mine that one
     /// instance disarms, recovers or detonates is removed on the peer through the engine's own
-    /// DestroyObject. OFF by default and NEEDS-LIVE — the apply half is a destructive engine
-    /// call that was verified only by disassembly (docs/research/mines.md), and the publish
-    /// half infers a removal from a trigger going absent. Gates BOTH halves on this instance
-    /// (agent publish, plugin apply); the three default readers agree on OFF (PluginConfig
-    /// fallback, this record's absent-key parse, AgentComposition's <c>?? false</c>).
+    /// DestroyObject. ON by default since 2026-09-19 (run live both ways: a walk-on detonation and a
+    /// host destroy mirrored, and four warps produced no false removal; docs/research/mines.md 9).
+    /// The publish half infers a removal from a trigger going absent. Gates BOTH halves on this instance
+    /// (agent publish, plugin apply); the three default readers agree on ON (PluginConfig
+    /// fallback, this record's absent-key parse, AgentComposition's <c>?? true</c>).
     /// </summary>
-    public bool MineSync { get; init; }
+    public bool MineSync { get; init; } = true;
 
     /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
@@ -998,7 +998,7 @@ public sealed record CoopConfig
             PartyFastPump = !kv.ContainsKey("party_fast_pump")
                 || IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
-            MineSync = IsTruthy(kv.GetValueOrDefault("mine_sync")),
+            MineSync = !kv.ContainsKey("mine_sync") || IsTruthy(kv.GetValueOrDefault("mine_sync")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")
                 || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
