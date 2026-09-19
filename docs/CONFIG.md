@@ -167,6 +167,10 @@ hand-editing one is unsupported.
 | `threat_retarget` | ON (since 2026-09-03; was OFF) | HOST only: order a creature onto the peer whose forwarded damage clearly outweighs its current target's | [peer-damage-ledger.md §9, §11](research/peer-damage-ledger.md) |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
+| `poison_sync` | OFF (NEEDS-LIVE) | apply half of poison forwarding to the peer's real character (may double-poison; the capture half always runs) | [effect-sync.md §12](research/effect-sync.md) |
+| `disguise_sync` | OFF (NEEDS-LIVE) | mirror a peer's disguise effect (Sith uniform, Sand People robes, envirosuit) onto their stand-in | [effect-sync.md §12](research/effect-sync.md) |
+| `stealth_sync` | ON | a stealthed peer's stand-in is held out of enemy target selection while the peer sneaks (`PlayerState.FlagStealth`) | [effect-sync.md §12](research/effect-sync.md) |
+| `stealth_visual_sync` | OFF (NEEDS-LIVE) | also apply the engine's stealth look to the stealthed peer's stand-in | [effect-sync.md §12](research/effect-sync.md) |
 | `client_encounters` | ON | a client's own encounter trigger fires it on the host too | [client-encounters.md](research/client-encounters.md) |
 | `liveness_sync` | ON (code default since 2026-09-18 — the 2026-09-03 flip only set the template line, which the player-settings cleanup then removed, so shipped installs ran OFF until 2026-09-18; see footnote ³) | reconcile a body alive on one screen, dead on the other | [creature-liveness.md](research/creature-liveness.md) |
 | `enemy_drive` | ON | drive a mirrored enemy copy to the owner's live position | [enemy-presence-sync.md](research/enemy-presence-sync.md) |

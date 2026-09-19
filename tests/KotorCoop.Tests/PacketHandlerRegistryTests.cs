@@ -18,6 +18,7 @@ public class PacketHandlerRegistryTests
 {
     private static readonly PacketType[] HostHandledTypes =
     [
+        PacketType.ClassGrant, PacketType.ClassGrantAck,
         PacketType.Hello, PacketType.StateUpdate, PacketType.FlagOp, PacketType.FlagSyncRequest,
         PacketType.ItemOp, PacketType.ItemSyncRequest, PacketType.ContainerLoot,
         PacketType.ContainerLootAck, PacketType.LootSyncRequest, PacketType.MaterialisedLootAck,
@@ -48,6 +49,7 @@ public class PacketHandlerRegistryTests
 
     private static readonly PacketType[] ClientHandledTypes =
     [
+        PacketType.ClassGrant, PacketType.ClassGrantAck,
         PacketType.Welcome, PacketType.Reject, PacketType.WorldSnapshot, PacketType.FlagAck,
         PacketType.FlagSnapshot, PacketType.ItemAck, PacketType.JournalAck,
         PacketType.ContainerLootAck, PacketType.DialogueGrant, PacketType.DialogueGrantAck,

@@ -72,7 +72,7 @@ public class ClassGrantRelayTests
     {
         Assert.Equal(78, (byte)PacketType.ClassGrant);
         Assert.Equal(79, (byte)PacketType.ClassGrantAck);
-        Assert.Equal(53, ProtocolConstants.Version);
+        Assert.True(ProtocolConstants.Version >= 55, "the ClassGrant packets arrived with protocol 55");
     }
 
     // ---- reliable sender ----------------------------------------------------------------
