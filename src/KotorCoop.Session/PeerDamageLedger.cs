@@ -28,6 +28,17 @@ namespace KotorCoop.Session;
 /// Module-scoped, because engine object ids are assigned per module load: a total collected
 /// in <c>tar_m02aa</c> would be spent on whatever creature holds that number in
 /// <c>end_m01aa</c>.
+///
+/// ⚠ DELIBERATELY NOT PRUNED WHEN A PEER LEAVES (docs/review-seamless-2026-09-18.md §2 asked
+/// whether <see cref="_seen"/> "grows per rejoin"). It does not: a rejoining player reclaims
+/// its peer id (<c>CoopHost.HandleHello</c>'s retired-identity reclaim, and the long argument
+/// in <c>CoopHost.HandleBye</c>), so its rows are the SAME keys, overwritten in place. Dropping
+/// a departed peer's rows would reintroduce the exact bug that argument exists to prevent: a
+/// player who quits to the menu and comes back in the same module reports the same cumulative
+/// total under the same generation, and with no baseline row left, rule 1 would bank all of it
+/// as new damage a second time. The table is bounded by (peers ever admitted this module) ×
+/// (enemies they hit this module) and cleared on every module change — a few kilobytes at the
+/// very worst — which is the right trade against a silent double-credit.
 /// </summary>
 public sealed class PeerDamageLedger
 {

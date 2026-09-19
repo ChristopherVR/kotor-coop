@@ -233,6 +233,7 @@ internal static class AgentComposition
             HostLossTimeoutMs = config is { HostLossTimeoutMs: > 0 }
                 ? config.HostLossTimeoutMs
                 : ProtocolConstants.PeerTimeoutMs,
+            HostAwayTimeoutMs = config?.HostAwayTimeoutMs ?? HostAwayRule.DefaultTimeoutMs,
 
             // Roadmap item 24: hosting over the internet without a relay. Both ignored by a
             // client (SessionSettings' own doc comments); a host with neither configured keeps

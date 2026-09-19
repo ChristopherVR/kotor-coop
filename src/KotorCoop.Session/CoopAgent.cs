@@ -461,8 +461,18 @@ public sealed partial class CoopAgent
             if (hostLost)
             {
                 _bridge.ClearCoopState();
-                _bridge.PostChatLine("Host connection lost - playing solo, will rejoin automatically.");
-                Log?.Invoke("host connection lost - released every plugin-side lock, playing solo");
+                if (_session.HostAway)
+                {
+                    // Same release, truthful wording: the link is fine, the host is parked at
+                    // the main menu or a load screen (HostAwayRule).
+                    _bridge.PostChatLine("Host has left the world (main menu / loading) - playing solo until they return.");
+                    Log?.Invoke("host away past host_away_timeout_ms - released every plugin-side lock, playing solo");
+                }
+                else
+                {
+                    _bridge.PostChatLine("Host connection lost - playing solo, will rejoin automatically.");
+                    Log?.Invoke("host connection lost - released every plugin-side lock, playing solo");
+                }
             }
             else
             {

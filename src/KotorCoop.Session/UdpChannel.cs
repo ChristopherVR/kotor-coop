@@ -37,6 +37,14 @@ public sealed class UdpChannel : IDisposable
     private TaskCompletionSource<byte[]?>? _stunWaiter;
     private byte[]? _stunTransactionId;
 
+    // Reachability self-probe interception (see ReachabilityProbe/ReachabilityCheck): the
+    // probe is sent from a throwaway SECOND socket to this host's own public address, and if
+    // the router hairpins it, it arrives here — on the game port's listener — exactly as a
+    // joiner's traffic would. Same single-slot waiter shape as STUN above, behind the same
+    // gate; a probe nobody is waiting for is dropped silently, never handed to the session.
+    private TaskCompletionSource<bool>? _probeWaiter;
+    private byte[]? _probeNonce;
+
     public UdpChannel(int listenPort)
     {
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -207,6 +215,14 @@ public sealed class UdpChannel : IDisposable
                     continue;
                 }
 
+                // Our own reachability probe coming back in (see SendReachabilityProbeAsync).
+                // Dropped whether or not anything is waiting: it is never game traffic.
+                if (ReachabilityProbe.LooksLikeProbe(buffer.AsSpan(0, result.ReceivedBytes)))
+                {
+                    TryCompleteProbeWaiter(buffer.AsSpan(0, result.ReceivedBytes));
+                    continue;
+                }
+
                 Interlocked.Increment(ref _packetsReceived);
                 Interlocked.Add(ref _bytesReceived, result.ReceivedBytes);
 
@@ -321,6 +337,81 @@ public sealed class UdpChannel : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Sends one <see cref="ReachabilityProbe"/> from a throwaway second socket to
+    /// <paramref name="target"/> — meant to be this host's OWN public IP:port as STUN reported
+    /// it — and waits for it to arrive back on THIS socket's receive loop. True: it came back
+    /// (the router hairpins, and the port is open end to end). False: nothing arrived within
+    /// <paramref name="timeoutMs"/> (many routers simply do not hairpin, so this is "unknown",
+    /// not "closed" — see <see cref="ReachabilityRule"/>). Null: the probe could not even be
+    /// sent. Never throws for any of those; bypasses <see cref="Sim"/> like a STUN request.
+    /// </summary>
+    public async Task<bool?> SendReachabilityProbeAsync(IPEndPoint target, int timeoutMs, CancellationToken cancellationToken)
+    {
+        byte[] probe = ReachabilityProbe.Build(out byte[] nonce);
+        TaskCompletionSource<bool> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_stunGate)
+        {
+            _probeWaiter = tcs;
+            _probeNonce = nonce;
+        }
+
+        try
+        {
+            try
+            {
+                using Socket second = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                second.Bind(new IPEndPoint(IPAddress.Any, 0));
+                second.SendTo(probe, SocketFlags.None, target);
+            }
+            catch (SocketException)
+            {
+                return null;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeoutMs);
+
+            using (timeoutCts.Token.Register(() => tcs.TrySetResult(false)))
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            lock (_stunGate)
+            {
+                if (ReferenceEquals(_probeWaiter, tcs))
+                {
+                    _probeWaiter = null;
+                    _probeNonce = null;
+                }
+            }
+        }
+    }
+
+    private void TryCompleteProbeWaiter(ReadOnlySpan<byte> data)
+    {
+        TaskCompletionSource<bool>? waiter;
+        lock (_stunGate)
+        {
+            if (_probeWaiter is null || _probeNonce is null || !ReachabilityProbe.Matches(data, _probeNonce))
+            {
+                return;
+            }
+
+            waiter = _probeWaiter;
+            _probeWaiter = null;
+            _probeNonce = null;
+        }
+
+        waiter.TrySetResult(true);
+    }
+
     public void Dispose()
     {
         lock (_stunGate)
@@ -328,6 +419,9 @@ public sealed class UdpChannel : IDisposable
             _stunWaiter?.TrySetResult(null);
             _stunWaiter = null;
             _stunTransactionId = null;
+            _probeWaiter?.TrySetResult(false);
+            _probeWaiter = null;
+            _probeNonce = null;
         }
 
         try

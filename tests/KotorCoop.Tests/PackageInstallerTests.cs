@@ -22,6 +22,11 @@ public sealed class PackageInstallerTests : IDisposable
     private readonly List<string> _tempDirectories = [];
     private readonly List<string> _log = [];
 
+    // Never touch the real Windows Firewall from a test: an elevated run (CI's Windows runners
+    // are) would otherwise add a genuine inbound rule for a fake exe in a temp directory. The
+    // pure halves of that step are covered by WindowsFirewallTests.
+    static PackageInstallerTests() => PackageInstaller.FirewallEnabled = false;
+
     public void Dispose()
     {
         foreach (string directory in _tempDirectories)

@@ -233,6 +233,12 @@ public static class UpnpClient
             cancellationToken);
 
     private static async Task<bool> InvokeAsync(
+        ControlPoint point, string action, string argumentsXml, CancellationToken cancellationToken) =>
+        await InvokeForBodyAsync(point, action, argumentsXml, cancellationToken).ConfigureAwait(false) is not null;
+
+    /// <summary>One SOAP action; the response body on success, null on a transport failure,
+    /// a non-success status or a SOAP Fault.</summary>
+    private static async Task<string?> InvokeForBodyAsync(
         ControlPoint point, string action, string argumentsXml, CancellationToken cancellationToken)
     {
         string envelope =
@@ -258,12 +264,51 @@ public static class UpnpClient
             // A router answers a FAILED AddPortMapping with a SOAP Fault, carried in a body it
             // still returns 500 for — so the HTTP status code alone cannot tell success apart
             // from a well-formed refusal (e.g. ConflictInMappingEntry). The body can.
-            return response.IsSuccessStatusCode && !body.Contains("Fault", StringComparison.OrdinalIgnoreCase);
+            return response.IsSuccessStatusCode && !body.Contains("Fault", StringComparison.OrdinalIgnoreCase)
+                ? body
+                : null;
         }
         catch
         {
-            return false;
+            return null;
         }
+    }
+
+    /// <summary>
+    /// Calls GetExternalIPAddress: the address the ROUTER believes it holds on its WAN side.
+    /// Compared against what STUN says the internet sees (<see cref="ReachabilityRule"/>): when
+    /// the two differ, or this one is itself a private/shared-space address, the router is not
+    /// the last NAT on the way out and no mapping it grants can be reached from outside. Null
+    /// on any failure, or when the router answers 0.0.0.0 (some do while the WAN link is down).
+    /// </summary>
+    public static async Task<IPAddress?> GetExternalIPAddressAsync(ControlPoint point, CancellationToken cancellationToken)
+    {
+        string? body = await InvokeForBodyAsync(point, "GetExternalIPAddress", string.Empty, cancellationToken)
+            .ConfigureAwait(false);
+        return body is null ? null : ParseExternalIPAddress(body);
+    }
+
+    /// <summary>The <c>NewExternalIPAddress</c> element of a GetExternalIPAddress response,
+    /// as an address; null when absent, unparsable or the all-zero placeholder. Pure, for tests.</summary>
+    public static IPAddress? ParseExternalIPAddress(string responseBody)
+    {
+        const string open = "<NewExternalIPAddress>";
+        const string close = "</NewExternalIPAddress>";
+        int start = responseBody.IndexOf(open, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        start += open.Length;
+        int end = responseBody.IndexOf(close, start, StringComparison.OrdinalIgnoreCase);
+        if (end < 0)
+        {
+            return null;
+        }
+
+        string text = responseBody[start..end].Trim();
+        return IPAddress.TryParse(text, out IPAddress? address) && !address.Equals(IPAddress.Any) ? address : null;
     }
 
     /// <summary>

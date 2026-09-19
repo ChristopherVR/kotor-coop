@@ -31,7 +31,7 @@ public sealed partial class CoopCommandDispatcher
         // from outside the LAN, not just whether the local socket bound.
         string publicSuffix = manager.Current is CoopHost host
             ? $" - {(host.PublicEndPoint is { } ep ? $"public {ep}" : "public address unknown")}"
-              + $" ({UpnpStatusLine(host.UpnpStatus, host.ListenEndPoint.Port)})"
+              + $" ({PublicAddressAnnouncer.UpnpNote(host.UpnpStatus, host.ListenEndPoint.Port, host.Reachability)})"
             : string.Empty;
 
         Reply($"{manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}{livenessSuffix}{publicSuffix}");
@@ -51,25 +51,19 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        string upnp = UpnpStatusLine(host.UpnpStatus, host.ListenEndPoint.Port);
+        string upnp = PublicAddressAnnouncer.UpnpNote(host.UpnpStatus, host.ListenEndPoint.Port, host.Reachability);
 
         if (host.PublicEndPoint is not { } endpoint)
         {
             Reply($"public address: unknown yet (STUN still discovering, or stun_servers is empty) - {upnp}");
+            Reply($"reachability: {host.ReachabilityDetail}");
             return;
         }
 
         Reply($"public address: {endpoint} - {upnp}");
+        Reply($"reachability: {host.ReachabilityDetail}");
         TryCopyToClipboard(endpoint.ToString());
     }
-
-    private static string UpnpStatusLine(UpnpMappingStatus status, int port) => status switch
-    {
-        UpnpMappingStatus.Mapped => "UPnP mapped",
-        UpnpMappingStatus.Unavailable => $"UPnP unavailable - forward UDP+TCP {port} manually",
-        UpnpMappingStatus.Pending => "UPnP still checking",
-        _ => $"UPnP disabled - forward UDP+TCP {port} manually",
-    };
 
     /// <summary>
     /// Best-effort clipboard copy via the `clip` console tool that ships with Windows.

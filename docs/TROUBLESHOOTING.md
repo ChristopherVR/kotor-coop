@@ -146,7 +146,54 @@ default was a Steam path.
 - `connect_timeout_ms` (default: the built-in 15000) is how long a client waits before
   giving up; raise it on a slow network.
 - Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
-  so the host's UDP port must be reachable from the client.
+  so the host's UDP port must be reachable from the client. See the next two sections.
+
+## Windows Firewall: the host's prompt never appeared, or was dismissed
+
+The agent starts windowless behind a fullscreen game, so Windows' "allow this app through
+the firewall?" prompt on the host's first listen lands where nobody sees it — and an
+unanswered prompt is a silent deny: the host's own status line looks fine while no joiner's
+datagram ever arrives. Since 2026-09-18 the installer handles this (`WindowsFirewall.cs`):
+
+- Run as Administrator, `KotorCoop.Agent.exe install` (and `setup`, `install.ps1`,
+  `build.ps1 -Install`) adds one inbound program rule named `KotorCoop Agent` for
+  `KotorCoop.Agent.exe`: UDP on the session `port` from `coop.ini` plus the LAN browser's
+  discovery port 27016, and TCP on the session port (the save transfer). Re-running
+  `install` after changing `port` replaces it.
+- Not elevated, it prints the two exact `netsh advfirewall firewall add rule ...` commands
+  to run once from an Administrator prompt.
+- `KotorCoop.Agent.exe install --check` prints `PASS: Windows Firewall inbound rule
+  'KotorCoop Agent' exists` or a `NOTE:` with the commands (a NOTE, not a FAIL — a LAN-only
+  host whose partner is on the same PC never needs it).
+- `uninstall` removes the rule when elevated, or prints the `delete rule` command.
+- Linux / Steam Deck: no Windows Firewall inside the Proton prefix; if your distribution
+  runs one (ufw, firewalld) open the UDP port there, as the package README says. A Deck has
+  no firewall out of the box.
+
+## Internet play: what the status line's reachability wording means
+
+`status` / `public_address` on a hosting player no longer says a bare "UPnP mapped" — on
+2026-09-10 that was reported while the port was unreachable from outside
+([network-topology.md §16](research/network-topology.md)). After the router answers, the host
+probes itself (§17 there: the router's WAN address vs the address STUN sees, plus a datagram
+sent from a second socket to its own public address to see whether it comes back in through
+the session's listener) and the line says one of:
+
+- `UPnP mapped - reachable from the internet` — the self-probe came back; share the address.
+- `UPnP mapped but NOT reachable (your ISP shares your address - use a tunnel such as
+  playit.gg)` — the router's WAN address is not the address the internet sees (or is itself
+  a private/carrier-NAT range such as 100.64.x.x). No port forward on your router can fix
+  this; a tunnel is the only path. `UPnP unavailable and your ISP shares your address ...`
+  is the same verdict with the mapping refused: do not bother forwarding by hand.
+- `UPnP mapped - could not confirm it is reachable; ...` — nothing contradicted the mapping
+  but the probe did not come back (most home routers do not "hairpin" traffic to their own
+  public address). Try it with your friend; if they cannot connect, use a tunnel.
+- `UPnP unavailable but port N is reachable from the internet` — you forwarded it by hand
+  and the probe confirms it.
+
+`public_address` prints a second `reachability:` line with the evidence (router WAN address,
+STUN address, what the probe did). The probe runs once, a few seconds after hosting starts,
+after STUN and UPnP have both answered (up to 30 s).
 
 ## Host disconnected (crashed, quit, or the network dropped)
 
@@ -172,6 +219,28 @@ happening.
 - This does not apply to the HOST losing a client — a client vanishing mid-dialogue or
   mid-interaction only ever releases what THAT client was holding; the host and every other
   connected player are unaffected either way.
+
+## Host went to the main menu (or sat on a load screen) and I'm frozen
+
+The host's agent keeps running at the main menu, so the link never goes silent and neither
+of the two triggers above fires — before 2026-09-18 a joiner sat in a frozen world holding
+every lock for as long as the host stayed parked. Now a host that stays flagged away (the
+same `FlagAway` that shows "X left the world (main menu / loading)") for longer than
+`host_away_timeout_ms` (default 20 s; `0` turns just this trigger off) counts as host loss
+too: the same release runs, the chat line reads "Host has left the world (main menu /
+loading) - playing solo until they return.", and the moment the host is back in the world
+mirroring resumes on its own ("Host connection restored - rejoining.") — no reconnect, since
+the link never dropped. A load screen or a quick visit to the save menu is well under the
+grace period. Gated by `host_loss_release` like the other two triggers (`HostAwayRule`,
+[disconnect-reconnect.md §13](research/disconnect-reconnect.md)).
+
+## The host sees nothing when a friend on the wrong build (or wrong password) tries to join
+
+Fixed 2026-09-18. The joiner always got a typed `E_PROTO` / `E_PASSWORD` reject; the host
+now also gets a chat/console/log line — `co-op: a player at 203.0.113.9 on an older build
+tried to join (v50 vs your v52) - both sides need the same kotor-coop version`, or `... tried
+to join with the wrong password` — once per address per 30 s, however often that client
+retries (`RejectedJoinNotices`).
 
 ## I can't see my partner / their phantom never appears
 
@@ -294,7 +363,10 @@ where this file can grow past the cap before the next relaunch.
 
 The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`agent1.log`,
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
-its own `File.AppendAllText`, and rotates the same once-at-launch way as the other two.
+its own `File.AppendAllText`. Since 2026-09-18 it rotates the same way as the plugin logs: at
+agent start AND about every 30 s during the session (`AgentDashboard.RotateLogMidSessionIfDue`),
+shifting `.1.log` … `.3.log` up at the plugin's default 8 MB cap. Before that it rotated only
+at construction, so one long session grew it without limit.
 
 ## A partner's game crashes during or shortly after a module transition (`0xC0000005`)
 

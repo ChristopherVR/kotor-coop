@@ -44,6 +44,14 @@ public static partial class PackageInstaller
     public const string LoaderRelativePath = @"chain-loader\dinput8.dll";
     public const string GameExecutable = "swkotor.exe";
 
+    /// <summary>
+    /// Whether <see cref="Install"/>, <see cref="Check"/> and <see cref="Uninstall"/> touch the
+    /// Windows Firewall (<see cref="WindowsFirewall"/>). ON for every real run; the test suite
+    /// turns it off once, because an elevated test run (CI's Windows runners are) would
+    /// otherwise add a real inbound rule for a fake exe path in a temp directory.
+    /// </summary>
+    public static bool FirewallEnabled { get; set; } = true;
+
     /// <summary>What a dinput8.dll on disk is.</summary>
     public enum DinputKind
     {
@@ -380,6 +388,14 @@ public static partial class PackageInstaller
             log($"installed -> {iniTarget}");
         }
 
+        // After coop.ini, so the rule opens the port that file names. Adds it when elevated,
+        // prints the exact command otherwise — see WindowsFirewall for why the game hides
+        // Windows' own prompt.
+        if (FirewallEnabled)
+        {
+            WindowsFirewall.Install(game, log);
+        }
+
         log(string.Empty);
         log("checking the install...");
         return Check(game, log);
@@ -533,6 +549,13 @@ public static partial class PackageInstaller
         string iniPath = Path.Combine(game, "coop.ini");
         Report(File.Exists(iniPath), File.Exists(iniPath) ? $"{iniPath} exists" : $"{iniPath} is MISSING");
 
+        // A NOTE, never a FAIL: the install is complete without it, and a LAN-only host whose
+        // partner sits on the same network never needs it — see WindowsFirewall.Report.
+        if (FirewallEnabled)
+        {
+            WindowsFirewall.Report(game, log);
+        }
+
         return ok;
     }
 
@@ -603,6 +626,11 @@ public static partial class PackageInstaller
                 File.Delete(ours);
                 log($"removed override {ours}");
             }
+        }
+
+        if (FirewallEnabled)
+        {
+            WindowsFirewall.Remove(log);
         }
     }
 

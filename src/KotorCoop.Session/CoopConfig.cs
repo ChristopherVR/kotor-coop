@@ -279,6 +279,14 @@ public sealed record CoopConfig
     /// </summary>
     public int HostLossTimeoutMs { get; init; }
 
+    /// <summary>
+    /// How long a CLIENT'S host may sit flagged away (main menu, load screen — still sending)
+    /// before that counts as host loss and the <see cref="HostLossRelease"/> pass fires —
+    /// coop.ini <c>host_away_timeout_ms</c>. Default <see cref="HostAwayRule.DefaultTimeoutMs"/>
+    /// (20 s); 0 disables this one trigger. See <see cref="SessionSettings.HostAwayTimeoutMs"/>.
+    /// </summary>
+    public int HostAwayTimeoutMs { get; init; } = HostAwayRule.DefaultTimeoutMs;
+
     /// Show the persistent connection indicator ("co-op: connected, 2 players" /
     /// "co-op: reconnecting..." / "co-op: disconnected"), reposted only when it changes. On
     /// by default. Before this the ~ console's <c>status</c> verb was the only way to see any
@@ -899,6 +907,9 @@ public sealed record CoopConfig
             HostLossTimeoutMs = int.TryParse(kv.GetValueOrDefault("host_loss_timeout_ms"), out int hlt)
                 ? Math.Max(hlt, 0)
                 : 0,
+            HostAwayTimeoutMs = int.TryParse(kv.GetValueOrDefault("host_away_timeout_ms"), out int hat)
+                ? Math.Max(hat, 0)
+                : HostAwayRule.DefaultTimeoutMs,
             StatusToasts = !kv.ContainsKey("status_toasts") || IsTruthy(kv.GetValueOrDefault("status_toasts")),
             DialogueItemSync = !kv.ContainsKey("dialogue_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
