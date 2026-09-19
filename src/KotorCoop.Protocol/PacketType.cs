@@ -694,4 +694,21 @@ public enum PacketType : byte
 
     // 73-77 are this stream's own reservation (the same numbering discipline as the 39/47/48
     // skips above) — see PacketTypeTests, which fails the build on any collision regardless.
+
+    /// <summary>
+    /// any -&gt; all (relayed by the host, reliable): "a script just added a class to my
+    /// player character" — <see cref="ClassGrantPacket"/>. Dorak's Jedi path choice on
+    /// Dantooine runs <c>AddMultiClass(nClass, GetPC())</c> on the conversation owner's engine
+    /// only, so the other player never became a Jedi (docs/review-seamless-2026-09-18.md
+    /// blocker #1). The plugin captures the call at the VM handler, this relays it under the
+    /// origin's true identity, and the receiver runs the SAME handler on its own character.
+    /// <c>class_grant_sync</c>, default OFF, NEEDS-LIVE. See
+    /// docs/research/class-and-power-grants.md.
+    /// </summary>
+    ClassGrant = 78,
+
+    /// <summary>Acknowledges one <see cref="ClassGrant"/> op, in either direction —
+    /// <see cref="ClassGrantAckPacket"/>, keyed by the op's (origin, sequence) like
+    /// <see cref="DialogueGrantAck"/>.</summary>
+    ClassGrantAck = 79,
 }

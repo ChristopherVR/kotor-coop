@@ -70,4 +70,43 @@ public interface IPlayerBridge
     /// <see cref="ClearCoopState"/>; a no-op on a bridge with no plugin block.
     /// </summary>
     void SetBehaviourOverrides(uint overrideMask, uint overrideValues) { }
+
+    // ---- class-grant relay (docs/research/class-and-power-grants.md) ---------------
+
+    /// <summary>
+    /// The class a SCRIPT most recently added to THIS instance's own player through
+    /// <c>AddMultiClass</c> (Dorak's Jedi path choice on Dantooine): <paramref name="serial"/>
+    /// bumps once per grant (0 = never), and <paramref name="classId"/> is the
+    /// <c>classes.2da</c> row. Published by the plugin from its capture of the VM handler; a
+    /// replay of a peer's grant never bumps it. De-duplicate on the serial. Default false when
+    /// this bridge has no plugin.
+    /// </summary>
+    bool TryReadClassGrant(out uint serial, out int classId)
+    {
+        serial = 0;
+        classId = -1;
+        return false;
+    }
+
+    /// <summary>
+    /// Asks the plugin to add <paramref name="classId"/> to this instance's own player through
+    /// the engine's own <c>AddMultiClass</c> handler — the same call the peer's script made.
+    /// The plugin acks through <see cref="TryReadClassGrantStatus"/>. Default false when there
+    /// is no plugin.
+    /// </summary>
+    bool TryRequestClassGrant(int classId) => false;
+
+    /// <summary>
+    /// What the plugin did with the last <see cref="TryRequestClassGrant"/> request:
+    /// <paramref name="applied"/> echoes the request's own serial once handled, and
+    /// <paramref name="status"/> is the plugin's <c>ClassGrantStatusCode</c> (1 applied,
+    /// 2 engine refused, 3 bad class, 4 already had it, 5 both class slots taken).
+    /// False when there is no plugin.
+    /// </summary>
+    bool TryReadClassGrantStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+        return false;
+    }
 }

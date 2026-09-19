@@ -184,8 +184,16 @@ public static class ProtocolConstants
     /// the existing TCP path (faster, simpler, no new failure modes of its own) is unchanged for
     /// everyone it already works for. Off by default (<c>world_transfer_udp_fallback</c>),
     /// NEEDS-LIVE. See docs/research/network-topology.md's UDP world-transfer section.
+    ///
+    /// Version 53: <see cref="PacketType.ClassGrant"/> (78) / <see cref="PacketType.ClassGrantAck"/>
+    /// (79) — the class-grant relay. A script's <c>AddMultiClass</c> on one player's character
+    /// (Dorak's Jedi path choice, Dantooine) is captured at the VM handler, relayed reliably
+    /// under the origin's true (origin, sequence) identity, and applied to every other player's
+    /// character through the same engine handler, so the joiner becomes a Jedi too. Off by
+    /// default (<c>class_grant_sync</c>), NEEDS-LIVE. Closes docs/review-seamless-2026-09-18.md
+    /// blocker #1 statically. See docs/research/class-and-power-grants.md.
     /// </summary>
-    public const byte Version = 52;
+    public const byte Version = 53;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

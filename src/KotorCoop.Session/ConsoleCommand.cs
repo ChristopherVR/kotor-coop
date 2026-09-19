@@ -705,6 +705,16 @@ public enum CoopCommandKind
     SetGold,
 
     /// <summary>
+    /// <c>addclass &lt;class&gt;</c> — DEV VERB / LIVE-TEST PRIMITIVE for the class-grant relay
+    /// (docs/research/class-and-power-grants.md): runs the engine's own <c>AddMultiClass</c> VM
+    /// handler on the local player with <see cref="CoopCommand.Amount"/> as the
+    /// <c>classes.2da</c> row (3 Guardian, 4 Consular, 5 Sentinel), exactly as Dorak's
+    /// <c>k_pdan_makejedi</c> would, so the capture → relay → peer apply chain can be exercised
+    /// without playing to Dantooine. Local only.
+    /// </summary>
+    AddClass,
+
+    /// <summary>
     /// <c>followkick &lt;slot&gt;</c> — DEV-ONLY LIVE-TEST PRIMITIVE
     /// (docs/research/party-reconciliation.md Round 96). Dumps NPC roster slot
     /// <see cref="CoopCommand.Amount"/> (0-8)'s follow-record fields (phase, attempts, target,
@@ -1079,6 +1089,7 @@ public static partial class ConsoleCommand
         new(["startdialog"], ParseStartDialog),
         new(["removeparty"], ParseRemoveParty),
         new(["setgold"], ParseSetGold),
+        new(["addclass"], ParseAddClass),
         new(["followkick"], ParseFollowKick),
         new(["followstall"], ParseFollowStall),
         new(["cheats"], ParseCheats),

@@ -121,6 +121,7 @@ public sealed partial class CoopClient
             _journalSender.ResetBackoff();
             _lootSender.ResetBackoff();
             _dialogueGrantSender.ResetBackoff();
+            _classGrantSender.ResetBackoff();
 
             // ...and ask for the full world back, rather than trusting three version counters
             // that an outage can leave equal-but-different. See _resyncOnConnect.

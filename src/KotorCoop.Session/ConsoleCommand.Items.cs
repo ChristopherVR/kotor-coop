@@ -334,6 +334,19 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.SetGold, Amount: amount);
     }
 
+    // addclass <class>  - DEV VERB, see CoopCommandKind.AddClass. A classes.2da row, 0-8.
+    private static CoopCommand ParseAddClass(string[] rest)
+    {
+        if (rest.Length != 1 || !int.TryParse(rest[0], out int classId) || classId < 0 || classId > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: "addclass needs one classes.2da row 0-8 (3 Guardian, 4 Consular, 5 Sentinel), e.g. addclass 3");
+        }
+
+        return new CoopCommand(CoopCommandKind.AddClass, Amount: classId);
+    }
+
     // setglobal <name> <int|true|false|on|off>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SetGlobal.
     private static CoopCommand ParseSetGlobal(string[] rest)
     {

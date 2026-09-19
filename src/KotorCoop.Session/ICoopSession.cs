@@ -22,6 +22,7 @@ public interface ICoopSession :
     ICapabilitySession,
     IPartySession,
     IDialogueSession,
+    IClassGrantSession,
     IInteractionLockSession,
     IChatSession,
     ILootSession,

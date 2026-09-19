@@ -203,6 +203,8 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.InteractionClaim] = HandleInteractionClaim,
             [PacketType.DialogueGrant] = HandleDialogueGrant,
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
+            [PacketType.ClassGrant] = HandleClassGrant,
+            [PacketType.ClassGrantAck] = HandleClassGrantAck,
             [PacketType.Ping] = HandlePing,
             [PacketType.Bye] = HandleBye,
             [PacketType.WorldTransferRequest] = HandleWorldTransferRequest,
@@ -459,6 +461,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastPartyPoolV2(now, recipients);
         BroadcastStoreV2(now, recipients);
         BroadcastDialogueGrant(now, recipients);
+        BroadcastClassGrant(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastPeerEffects(recipients);
         BroadcastBarks(recipients);

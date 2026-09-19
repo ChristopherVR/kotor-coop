@@ -207,6 +207,7 @@ public sealed partial class CoopHost
             // reconnects goes out again immediately rather than waiting out a backoff, but one
             // already fully retired before it came back is not resent.
             _dialogueGrantSender.ResetBackoff();
+            _classGrantSender.ResetBackoff();
 
             // Same reasoning again, for the shared party item pool: a peer away long enough to
             // lose its live entry has also missed however many add/remove ops happened while

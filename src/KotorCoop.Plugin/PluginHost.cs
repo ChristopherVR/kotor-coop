@@ -102,6 +102,7 @@ internal static unsafe partial class PluginHost
     private static TriggerRelayController? _triggerRelay;
     private static MidModuleMovieController? _movieRelay;
     private static GalaxyDepartureController? _galaxyDeparture;
+    private static ClassGrantController? _classGrant;
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
@@ -369,7 +370,15 @@ internal static unsafe partial class PluginHost
         //      Odyssey.DepartToPlanet). Closes docs/limitations.md #15's "the client cannot
         //      follow a galaxy-map departure". NEEDS-LIVE at the time of the bump. See
         //      docs/research/galaxy-map-and-party-select.md's 2026-09-03 relay addendum.
-        _block->Version = 67;
+        // 68 = 2026-09-18: the class-grant relay at 0x4C20..0x4C38 (fits the galaxy region's
+        //      free tail, TotalSize stays 0x4D00), SharedBlock.OffsetClassGrant*. A script's
+        //      AddMultiClass(nClass, GetPC()) — Dorak's Jedi path choice, danm13 — is captured
+        //      at the VM handler (AddMultiClassHook), relayed (ClassGrantPacket) and replayed
+        //      on the peer's own player through the same handler (Odyssey.AddMultiClass,
+        //      ClassGrantController). coop.ini class_grant_sync, default OFF. Closes
+        //      docs/review-seamless-2026-09-18.md blocker #1 statically; NEEDS-LIVE. See
+        //      docs/research/class-and-power-grants.md.
+        _block->Version = 68;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

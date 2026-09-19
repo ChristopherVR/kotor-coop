@@ -837,6 +837,18 @@ public sealed partial class KotorGameBridge
     private const int BlockGalaxyDepartApplied = 0x4C10;
     private const int BlockGalaxyDepartStatus = 0x4C14;
 
+    // Class-grant relay (shared block version 68, region 0x4C20..0x4C38, inside the galaxy
+    // region's free tail — TotalSize stays 0x4D00). Mirrors SharedBlock.OffsetClassGrant*.
+    // Plugin -> agent: a script added a class to my player (serial + class). Agent -> plugin:
+    // add this class to your player (request serial + class), acked by applied + status.
+    // docs/research/class-and-power-grants.md.
+    private const int BlockClassGrantSerial = 0x4C20;
+    private const int BlockClassGrantClass = 0x4C24;
+    private const int BlockClassGrantRequestSerial = 0x4C28;
+    private const int BlockClassGrantRequestClass = 0x4C2C;
+    private const int BlockClassGrantApplied = 0x4C30;
+    private const int BlockClassGrantStatus = 0x4C34;
+
     /// <summary>
     /// The plugin's hash of the loaded executable image, or false if it has not published one
     /// (no plugin, an older plugin, or a read that failed inside the game). False means the

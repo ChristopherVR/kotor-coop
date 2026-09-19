@@ -52,6 +52,7 @@ internal static unsafe partial class PluginHost
         _triggerRelay = new TriggerRelayController(_view);
         _movieRelay = new MidModuleMovieController(_view);
         _galaxyDeparture = new GalaxyDepartureController(_view);
+        _classGrant = new ClassGrantController(_view);
         _pause = new PauseController(_view);
         _pauseKey = new PauseKeyController();
         _journal = new JournalController(_view);

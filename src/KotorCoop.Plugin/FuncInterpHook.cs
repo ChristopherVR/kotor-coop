@@ -137,6 +137,12 @@ internal static unsafe class FuncInterpHook
         // `givecredits`).
         "setgold",
 
+        // The class-grant relay's live-test primitive (2026-09-18,
+        // docs/research/class-and-power-grants.md): simulates Dorak's AddMultiClass on the
+        // local player so the capture -> relay -> peer apply chain can be exercised without
+        // playing Dantooine. Does not shadow a retail verb.
+        "addclass",
+
         // BUG FIX (2026-08-29, live-verification session): `pooladd`/`poolremove`
         // (docs/research/party-pool-sync.md, added to ConsoleCommand.cs in fcdab50) were never
         // added here, so every real in-game keystroke submission of either fell through to

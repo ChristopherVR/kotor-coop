@@ -631,6 +631,17 @@ public static class CheatKinds
     public const uint Gamepad = 74;
 
     /// <summary>
+    /// <c>addclass &lt;class&gt;</c> — DEV VERB for the class-grant relay
+    /// (docs/research/class-and-power-grants.md): runs the engine's own <c>AddMultiClass</c>
+    /// VM handler on the local player with <c>Amount</c> as the <c>classes.2da</c> row, exactly
+    /// as Dorak's script would, so the capture → relay → peer apply chain can be exercised
+    /// without playing to Dantooine. See <c>SharedBlock.CheatKindAddClass</c>.
+    ///
+    /// ⚠ 75, next free after 74 as of 2026-09-18.
+    /// </summary>
+    public const uint AddClass = 75;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it
