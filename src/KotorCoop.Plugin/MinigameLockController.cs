@@ -52,7 +52,9 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
 
     private const int NoticeRow = 9;
 
-    private static readonly byte[] NoticeSuffix = " is racing - waiting"u8.ToArray();
+    // Generic since 2026-09-19: this lock also holds a player out of the turret and the Manaan
+    // underwater modules (MinigameModuleRule.BuiltIn), where "is racing" would be plain wrong.
+    private static readonly byte[] NoticeSuffix = " is in a solo section - waiting"u8.ToArray();
 
     private readonly byte[] _noticeBuffer = new byte[SharedBlock.NameLength + NoticeSuffix.Length + 1];
 

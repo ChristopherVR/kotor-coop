@@ -132,7 +132,7 @@ These are built and pass the automatic tests, but nobody has watched them work i
 | Fear, stun and sneaking | **Fear and stun work; sneaking is untested** | Fear and stun land on your partner's real character (watched working both ways). Whether a partner who is sneaking is left out of enemy targeting has not been watched yet. |
 | Equipping a companion as the joining player | **Untested** | The host's game owns companion gear, so the joining player's Equipment screen for a companion is closed with a note instead of losing the item. |
 | Typing an address in the game | **Untested** | A **Connect to an address...** row at the bottom of the server list. The `~` console `connect` command still works. |
-| Story moments still known not to work | **Not supported yet** | The Leviathan prison break, Manaan's underwater section and the dark-side temple choice have designs but no code; the second player is likely to see them go wrong. |
+| Story moments still known not to work | **Not supported yet** | The Leviathan prison break and the dark-side temple choice have designs but no code; the second player is likely to see them go wrong. Manaan's underwater section is handled by keeping the second player in the station while the host is under water (the underwater walk itself has not been played through). |
 
 ## Things that are *not* limitations
 

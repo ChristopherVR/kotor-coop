@@ -51,7 +51,7 @@ public interface IPlayerBridge
     /// Publishes this tick's minigame peer-lock decision (<c>KotorCoop.Protocol
     /// .MinigameLockRule</c>) into the plugin's shared block: while
     /// <paramref name="locked"/> is true the plugin holds this instance's own player still
-    /// and shows "<paramref name="ownerName"/> is racing - waiting". A LEVEL, republished
+    /// and shows "<paramref name="ownerName"/> is in a solo section - waiting". A LEVEL, republished
     /// whenever it changes; best-effort, like <see cref="ClearCoopState"/>, and a no-op on a
     /// bridge with no plugin block. See docs/research/minigames.md §24.
     /// </summary>

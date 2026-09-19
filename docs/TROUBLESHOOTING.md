@@ -329,7 +329,7 @@ Fixed 2026-08-29 — the "the race never dispatches" report was a wrong test rec
 engine-level block: the race branch of Gadon's dialogue needs the `Tar_SummonGadon` global (not
 `Tar_SwoopEng`, which an earlier round had set instead) plus three real reply picks, and with
 those the race runs end to end. A KOTOR swoop track is a single-seat area, so the co-op layer
-holds every other peer still with a "&lt;name&gt; is racing - waiting" notice
+holds every other peer still with a "&lt;name&gt; is in a solo section - waiting" notice
 (`minigame_lock_peers`, ON by default, `minigame_lock_timeout_s=600`) and refuses to follow-warp
 anyone onto the track (`minigame_modules`); rewards (gold, journal, the `Tar_Swoop*` globals)
 reach everyone through the ordinary globals channel. The one remaining gap is NEEDS-LIVE: the

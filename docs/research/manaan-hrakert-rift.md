@@ -163,3 +163,11 @@ item grant relay: **L**.
    `manm28ab` (Option A refusal should stop it), the joiner's `SetRestrictMode(1)` log.
 4. Return via door `28bw`; confirm `K_PARTY_STORE1/2` reset and both rosters restored.
 No `firescript` on doors.
+
+## Option A shipped and verified (2026-09-19)
+
+`MinigameModuleRule.BuiltIn` now lists `manm28ab` (Sea Floor) and `manm28ad` (Hrakert Rift) beside the four minigame modules, so the existing single-seat machinery (refuse the follow, hold the joiner, wait notice) covers the solo underwater section with no new code path. The joiner stays in the station (`manm28aa`/`manm28ac`, both left OrdinaryModules by test) while the suited host is under water.
+
+Live, host + joiner on the Endar Spire deck, host `warp manm28ab`: the joiner's agent logged `host announced transition to 'manm28ab'` -> `not following the announced transition to 'manm28ab': that is a single-seat minigame track` -> `not following to 'manm28ab': a peer is in a single-seat minigame there - waiting for them instead`, and the joiner stayed in its own world. The on-screen notice was reworded to `<name> is in a solo section - waiting` (it said `is racing`, which was wrong for the turret and here).
+
+**Not verified:** the actual envirosuit walk (`k_pman_suituse` -> airlock -> `manm28ab`/`ad` with the party stored), the host returning to `manm28aa` via `k_pman_28b_at01` and the joiner rejoining it, and the Rift's death trigger. A `warp` skips the airlock scripts, so the host arrived unsuited; that proves the refusal, not the story path. The joiner-suited option (Option B: relay the suit item and the disguise effect) is unchanged and still needs the item and disguise relay.
