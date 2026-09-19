@@ -115,8 +115,10 @@ internal sealed partial class TransitionPump(IGameBridge bridge, ICoopSession se
     /// wholesale by a fresher one, never merged (unlike the movie accumulation, there is only
     /// ever one live destination). <see cref="PeerId"/> is who announced it: the host (always
     /// eligible) or, under <see cref="AgentSettings.FollowLeadMode"/> = <see cref="FollowLeadMode.Any"/>,
-    /// a client — see <see cref="LeadFollowRule"/>.</summary>
-    private readonly record struct PendingHostAnnounce(string Module, string Waypoint, uint Serial, uint PeerId);
+    /// a client — see <see cref="LeadFollowRule"/>. <see cref="SeenAtMs"/> is when it arrived:
+    /// only the stunt-leg replay (<see cref="StuntLegFollowRule.ExpiryMs"/>) reads it — an
+    /// ordinary announce has no expiry, exactly as before.</summary>
+    private readonly record struct PendingHostAnnounce(string Module, string Waypoint, uint Serial, uint PeerId, long SeenAtMs);
 
     private PendingHostAnnounce? _pendingAnnounce;
 

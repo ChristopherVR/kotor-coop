@@ -2399,6 +2399,151 @@ the reason every other pre-adoption/off-module announcement is inert in this cod
 
 ---
 
+## 12. Replaying the stunt leg on the follower's own engine — `follow_stunt` (2026-09-18, built, NEEDS-LIVE)
+
+Closes [review-seamless-2026-09-18.md](../review-seamless-2026-09-18.md) blocker #6 (roadmap #40)
+on the code side. §4.3 above described the shipped behaviour honestly: the follower was refused
+from every `STUNT_*` module, so it missed two movies and the whole Taris vision and then
+teleported into the apartment; the same refusal covered every Bastila/Revan vision, the romance
+payoffs (`STUNT_42`/`44`, [star-forge-finale.md §3.6](star-forge-finale.md)) and the credits
+chain (`STUNT_50a`→`57`), where "carry the movies to the eventual warp" was capped at the
+engine's six and never tested past two hops. Only the galaxy-map leg was different, and it
+already showed the right shape ([galaxy-map-and-party-select.md](galaxy-map-and-party-select.md),
+2026-09-03): relay the leader's scripted leg and let the follower **replay it on its own engine**.
+
+### 12.1 The design
+
+The leader side needed nothing new. A script's `StartNewModule("STUNT_00", "", "01c")` raises
+`move_to_module_pending`, and `TransitionAnnounceWatch.OnScriptedTransitionBegan`
+([transition-smoothness.md §11](transition-smoothness.md)) already publishes the destination and
+entry waypoint through the ordinary `TransitionAnnounce`, with the queued movie riding the
+`TransitionMovie` channel beside it. What changed is what the follower does with an announce
+that names a stunt module:
+
+| Before | Now (`follow_stunt` ON) |
+| --- | --- |
+| `StuntModuleRule` refused it on the fast path; the slow path later warped to wherever the host's module read once it left | `TransitionPump.TryReplayStuntLeg` (`TransitionPump.StuntLeg.cs`) issues the SAME leg here: `bridge.TryRequestTravel(module, waypoint, movies)` — the plugin's ordinary travel request, i.e. `Odyssey.TravelToModule`, which is the same `CServerExoAppInternal::StartNewModule` funnel the leader's script went through. The first hop's movie (`01c`) rides it exactly as it rides any follow (`TravelController.QueueStagedMovies`). No new engine offset anywhere. |
+
+From there the follower's own copy of the module runs the scene: `k_scene_start` →
+`cut00_convers.dlg` → `k_ren_visionland` → `StartNewModule("tar_m02af", "", "01f")`, so the
+second movie and the landing are native too. The leader lands in `tar_m02af`; the follower lands
+in `tar_m02af` through its own scripts; the ordinary "host's module changed" settle finds them
+together and does nothing. A chain is the same thing repeated: the follower replays the FIRST
+hop only and its own scripts run the rest.
+
+The pure decision is `StuntLegFollowRule.Decide` (xUnit: `StuntLegFollowRuleTests`; the pump
+integration is `TravelPumpTests`' stunt-leg section):
+
+- **Leader-initiated, or refuse.** Only an announce proves the leader's OWN engine began the
+  leg. The slow path's "the host's published module reads `STUNT_*`" does not — a host that is
+  itself following a client's leg looks identical — so that path keeps refusing exactly as
+  before, now with a once-per-leg log line saying why (`no announce said the host's own engine
+  began that leg`). `follow_stunt = 0` refuses on both paths, the pre-2026-09-18 behaviour.
+- **Already in it, drop.** Per-leg de-dup, three sources: (1) `_stuntLegActive` — this engine
+  is inside a leg (replayed, its own announce into a stunt module, or simply observed standing
+  in one); (2) `InGalaxyLeg` — the interplanetary leg's own `STUNT_*` hop; (3) a
+  `_stuntModulesRecentlyThrough` memory (5 min) of modules this engine replayed, announced or
+  stood in. This is what stops the loop: the follower's replay warp is itself announced
+  (`TravelController.Execute` publishes every co-op warp), and under `follow_lead=any` the
+  leader receives it as a client announce naming the module its own engine just committed to —
+  dropped, because it is in the leader's own leg. Later hops the leader announces while the
+  follower is mid-chain are discarded on the tick they arrive (`DropLaterHopAnnounceWhileHeld`),
+  never kept for after the landing.
+- **Busy, wait.** The same three guards the galaxy replay and the lead-swap safety gate use —
+  in dialogue, in combat, mid our own transition — keep the announce for up to
+  `ExpiryMs` (60 s) and retry; older than that it is old news and the ordinary follow applies.
+- **Inside our own leg, hold every follow.** `ShouldHoldFollowsInOwnLeg`: while this engine
+  stands in a stunt module of a leg it entered on purpose, `PumpTravel` returns before either
+  path — the exit is the leg's own script, and warping out early is §4.3's outcome from the
+  other side. This also fixes a case the refusal never covered: a CLIENT that took the escape
+  pod itself used to be yanked back to the host's module mid-vision by the slow path. Bounded
+  per hop by `HopWindowMs` (5 min, restarted on each new stunt module observed locally), so a
+  scene whose branch never exits here — a global this engine has not synced, a cutscene waiting
+  on a click — releases the follows and the ordinary reunion takes over. A leader's NON-stunt
+  announce (its exit, or a door it took after landing) is kept through the hold: spent on
+  landing if we land in the same module, the reunion if we do not.
+- **The chain's later movies are dropped, not hoarded.** `PumpTransitionMovies` treats
+  `InStuntLeg` exactly like `InGalaxyLeg`: the leader's `01f`/`51`/`54`/`56` are queued here by
+  this engine's own scripts, so its copies must not ride the next unrelated door (the
+  accumulation rule in §9.4 is unchanged for everything outside a leg).
+
+Both roles run the same code: under `follow_lead=any` the host replays a client's stunt leg the
+same way (eligibility is `LeadFollowRule.IsEligibleLeader`, judged before the announce is
+stored, as for every announce). While the follower is inside its stunt module its stand-in is
+absent from the leader's world (peers are filtered to the local module before the plugin writes
+them, `CoopAgent`) and every state publisher is already gated by `StuntModuleRule` — "parked and
+hidden" needed nothing new.
+
+Requires `transition_announce` (agent, ON) and the plugin's `transition_announce_scripted` (ON)
+on the LEADER: the announce is the only thing that proves who began the leg. `follow_stunt` is
+agent-only, like `follow_lead`; the plugin has no decision to make. Not a digest key — a
+follower with it off simply refuses as before; the leader needs no agreement.
+
+**Files.** `src/KotorCoop.Session/StuntLegFollowRule.cs` (new),
+`src/KotorCoop.Session/Pumps/TransitionPump.StuntLeg.cs` (new), `TransitionPump.cs`
+(`PendingHostAnnounce.SeenAtMs`), `TransitionPump.Movies.cs` (own stunt announce begins a leg;
+leg movies dropped), `TransitionPump.Travel.cs` (observe/hold/branch; slow-path log),
+`AgentSettings.FollowStunt`, `CoopConfig.FollowStunt` (+ parse + developer key),
+`PluginConfig` (developer key), `AgentComposition` (`?? true`). Tests:
+`tests/KotorCoop.Tests/StuntLegFollowRuleTests.cs` (new), `TravelPumpTests.cs` (stunt-leg
+section), `CoopConfigTests.cs`. No protocol or block version change: the wire and the shared
+block are untouched.
+
+### 12.2 What is INFERRED and must be watched live
+
+1. **A plugin-issued `TravelToModule` into `STUNT_00` behaves like the script's own
+   `StartNewModule`.** Same funnel by disassembly (`Odyssey.Travel.cs`), and the plugin's warp
+   has been into ordinary modules hundreds of times — never into a stunt module. `STUNT_00`
+   reshuffles the party table on entry; the 2026-08-28 `0x40D386` crash past `STUNT_00` was a
+   write storm since fixed (galaxy-map-and-party-select.md), but the replaying instance is the
+   one to watch. The escape pod's own `k_pend_pod02` (fade, gather party, jump to the pod) does
+   NOT run on the follower; `TravelToModule`'s party-count bound stands in for the gather.
+2. **The vision's branch.** `cut00_convers.dlg` picks its entry by the PC's body type and
+   `k_ren_visionland` branches on `K_CURRENT_PLANET` — set locally by `m01aa`'s own `OnEnter`
+   on every engine, so Taris is safe; later visions and the credits hops read globals that ride
+   quest-sync's generic merge (star-forge-finale.md §6 #4), never exercised for these keys.
+   Divergence is survivable by design (hop window, then the ordinary reunion) but has never
+   been seen.
+3. **Movie ordering on the first hop.** `01c` rides the replay only if its `TransitionMovie`
+   packet has arrived by the tick the announce is acted on (the movie pump runs first in the
+   tick, and both channels repeat five ticks). If it lands a tick late it is dropped as "belongs
+   to the leg under way here" — the follower would see the vision without the pod movie. Watch
+   for the `replaying ... with 1 transition movie(s): 01c` wording versus its absence.
+4. **The credits chain** is 5-6 hops with `STUNT_50a` able to loop back into `sta_m45ac`; the
+   de-dup memory would drop a genuine second `STUNT_50a` entry inside 5 min. Never run.
+5. **The hop window itself** (5 min) is a guess at the longest single base-game stunt scene
+   plus its movies; the log line `has run 300 s without exiting` names the scene if it is wrong.
+
+### 12.3 Live checklist (rig, two instances, shipped defaults; `follow_stunt` absent = ON)
+
+1. **Escape pod, host leads.** Both on `end_m01ab` by the pod (`-Save 1` then walk, or
+   `warp end_m01ab` on both, then `crossdoor`/`usedoor` as §8.3 describes). Host uses the pod
+   and picks the reply. Expect, host agent: `announcing transition to 'STUNT_00'`,
+   `stunt leg: in 'STUNT_00'`, later `stunt leg: over - landed in 'tar_m02af'`; host plugin:
+   `announce: scripted transition beginning (Script) -> 'STUNT_00'`. Client agent:
+   `host announced transition to 'STUNT_00'`, `replaying host's scripted leg into 'STUNT_00' ...
+   (follow_stunt) with 1 transition movie(s): 01c`; client plugin: `travel: moving to module
+   'STUNT_00' on the session's authority`, `cinematic: staged 1 of 1 movie(s) from the session
+   ... 01c`. Client screen: `01c`, the vision, `01f`, waking in the apartment. Then both agents
+   `stunt leg: over` and no `following the host to 'tar_m02af'` line on the client (its own
+   scripts landed it). Under `follow_lead=any` the host log must show the echo drop:
+   `joiner's announce into 'STUNT_00' is a leg this engine is already running`. FAIL lines:
+   `not following the host into 'STUNT_00'` (announce missed), a second `travel:` into
+   `STUNT_00`, or a `travel: moving to module 'tar_m02af'` on the client before its own vision
+   ends (the hold failed).
+2. **Escape pod, client leads** (`follow_lead=any`): mirror of 1 with the roles swapped, and
+   additionally the CLIENT must NOT be pulled back to `end_m01ab` mid-vision (the old slow-path
+   yank) — its agent shows `stunt leg: in 'STUNT_00' - holding every follow`.
+3. **Opt-out.** `follow_stunt = 0` on the follower: the pre-2026-09-18 behaviour, with the new
+   line `not following ... follow_stunt is off` once, and the follower still warped to
+   `tar_m02af` with `01c` + `01f` riding that warp (§9's accumulation, unchanged).
+4. **Busy follower.** Follower in a conversation (Trask) or in combat when the host takes the
+   pod: the replay fires after it clears, within 60 s; after 60 s it is dropped with
+   `... is N ms old - not replayed` and the old follow applies.
+5. **Later**, with a Star Forge save: a romance payoff (`STUNT_42`/`44`, one hop each) and the
+   credits chain — watch for hop-restart lines per module, exactly one `travel:` into
+   `STUNT_50a` on the follower, and the `CREDITPLAY` roll on both screens.
+
 ## Key addresses
 
 | Address | Symbol / meaning |

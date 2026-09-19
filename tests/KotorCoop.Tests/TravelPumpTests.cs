@@ -213,7 +213,7 @@ public class TravelPumpTests
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
         bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150,
         bool transitionAnnounce = false, bool clientDoorRefusal = false,
-        FollowLeadMode followLeadMode = FollowLeadMode.Host)
+        FollowLeadMode followLeadMode = FollowLeadMode.Host, bool followStunt = false)
     {
         TravelBridge bridge = new();
         StubSession session = new();
@@ -233,6 +233,11 @@ public class TravelPumpTests
 
             TransitionAnnounceEnabled = transitionAnnounce,
             ClientDoorRefusalEnabled = clientDoorRefusal,
+
+            // Off by default here for the same reason as FollowLeadMode below: every
+            // pre-existing stunt test in this file was written against the refusal. The
+            // stunt-leg section opts its own tests in; coop.ini's real default is ON.
+            FollowStunt = followStunt,
 
             // Host-only by default here so every pre-existing test in this file (all written
             // before lead-swap existed) keeps meaning exactly what it meant before. The
@@ -688,8 +693,10 @@ public class TravelPumpTests
         Assert.Empty(bridge.Requests);
     }
 
-    /// <summary>The stunt gate applies to an announced destination exactly like it does to the
-    /// host's published module — an announcement is earlier information, not different rules.</summary>
+    /// <summary>With <c>follow_stunt</c> OFF (this file's Build() default; coop.ini's real
+    /// default is ON), the stunt gate applies to an announced destination exactly like it does
+    /// to the host's published module — the pre-2026-09-18 behaviour, kept as the opt-out. The
+    /// stunt-leg section below covers the ON case.</summary>
     [Fact]
     public void AStuntModuleAnnouncementIsNeverFollowedEvenViaTheFastPath()
     {
@@ -766,6 +773,208 @@ public class TravelPumpTests
 
         session.IncomingAnnounces.Add(Announce(1, "tar_m03aa"));
         agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+    }
+
+    // ---- the stunt-leg replay (follow_stunt, docs/research/cinematics.md 2026-09-18) --------
+
+    private static PlayerState At(string module, uint flags = 0) =>
+        new(Vector3f.Zero, 0f, module, 20, 0, Flags: flags);
+
+    /// <summary>The canonical case, cinematics.md §4.2: the host uses the escape pod, its
+    /// engine announces STUNT_00 with 01c queued. The follower replays the same leg — the same
+    /// module through the same travel request — with 01c riding it, and says so on screen.</summary>
+    [Fact]
+    public void WithFollowStuntAStuntAnnounceIsReplayedWithTheFirstHopsMovie()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.Peers.Add(HostPeer(ClientModule)); // still reads "together": its load has only just begun
+        session.IncomingMovies.Add(new TransitionMoviePacket(CoopHost.HostPeerId, ClientModule, 1, ["01c"]));
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_00", "wp_entry"));
+        agent.PumpOnce();
+
+        (string module, string waypoint) = Assert.Single(bridge.Requests);
+        Assert.Equal("STUNT_00", module);
+        Assert.Equal("wp_entry", waypoint);
+        Assert.Equal(["01c"], Assert.Single(bridge.RequestMovies));
+        Assert.Equal("following host into the Pretty(STUNT_00) scene", Assert.Single(bridge.ChatLines));
+    }
+
+    /// <summary>The refusal survives where it is still right: the host's PUBLISHED module
+    /// reading STUNT_* proves nothing about who started the leg (a host following a client's
+    /// leg looks identical), so without an announce the slow path never follows in.</summary>
+    [Fact]
+    public void TheSlowPathStillRefusesAStuntModuleNobodyAnnounced()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.Peers.Add(HostPeer("STUNT_00"));
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>The credits chain (star-forge-finale.md §3.6): the leader's engine announces
+    /// every hop as its scripts run. The follower replays the FIRST hop only; while its own
+    /// engine is inside the chain, later hops are discarded (never kept for after the
+    /// landing), and the leader's exit announce holds until the follower's own scripts land it
+    /// — where it is spent, because they landed in the same place.</summary>
+    [Fact]
+    public void LaterHopsOfTheLeadersChainAreNotReplayedWhileOurOwnLegRuns()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_50a"));
+        agent.PumpOnce();
+        Assert.Equal("STUNT_50a", Assert.Single(bridge.Requests).Module);
+
+        // Our own engine is now inside the chain.
+        bridge.Local = At("STUNT_50a");
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(Announce(2, "STUNT_51a"));
+        agent.PumpOnce();
+        session.IncomingAnnounces.Add(Announce(3, "STUNT_57"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        // The leader lands and says so; we are still mid-chain, so the follow is held ...
+        session.IncomingAnnounces.Add(Announce(4, "unk_m44ac"));
+        session.Peers.Add(HostPeer("unk_m44ac"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        // ... and spent, not replayed, once our own scripts land us in the same module.
+        bridge.Local = At("unk_m44ac");
+        agent.PumpOnce();
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+    }
+
+    /// <summary>The loop the de-dup exists for: the follower's replay warp is itself announced
+    /// (the plugin announces every co-op warp). Under lead-swap the leader receives it as a
+    /// client announce naming the stunt module the leader's own engine just committed to —
+    /// and must not replay it back.</summary>
+    [Fact]
+    public void OurOwnReplayEchoIsNeverReplayedBack()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true,
+                followLeadMode: FollowLeadMode.Any);
+        session.EnemyAuthority = true;
+
+        // Our own engine's announce into the stunt module (the pod script's StartNewModule).
+        bridge.OwnAnnounce = (1, "STUNT_00", string.Empty);
+        agent.PumpOnce();
+
+        // The follower's replay, echoed back as a client lead.
+        session.Peers.Add(ClientPeer(2, "joiner", ClientModule));
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "STUNT_00"));
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
+    /// <summary>A leg ends when this engine is back in an ordinary module; a later, different
+    /// stunt leg (STUNT_42 then STUNT_44, the two romance payoffs) is replayed on its own.</summary>
+    [Fact]
+    public void AfterLandingANewStuntLegIsReplayedAgain()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_42"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        bridge.Local = At("STUNT_42");
+        agent.PumpOnce();
+        bridge.Local = At("sta_m45ab");
+        session.Peers.Add(HostPeer("sta_m45ab"));
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(Announce(2, "STUNT_44"));
+        agent.PumpOnce();
+
+        Assert.Equal(2, bridge.Requests.Count);
+        Assert.Equal("STUNT_44", bridge.Requests[1].Module);
+    }
+
+    /// <summary>Every hop after the first plays its movie from THIS engine's own scripts, so
+    /// the leader's copies announced during the leg are dropped rather than hoarded — a later,
+    /// unrelated door follow must not carry 01f along.</summary>
+    [Fact]
+    public void TheLeadersMoviesForLaterHopsAreDroppedDuringTheLeg()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_00"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        // The leader's vision exits with 01f queued; ours will queue its own.
+        session.IncomingMovies.Add(new TransitionMoviePacket(CoopHost.HostPeerId, "STUNT_00", 2, ["01f"]));
+        agent.PumpOnce();
+
+        bridge.Local = At("STUNT_00");
+        agent.PumpOnce();
+        bridge.Local = At("tar_m02af");
+        session.Peers.Add(HostPeer("tar_m02af"));
+        agent.PumpOnce();
+
+        // An ordinary door later: nothing rides it.
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer("tar_m02aa"));
+        agent.PumpOnce();
+
+        Assert.Equal(2, bridge.Requests.Count);
+        Assert.Equal("tar_m02aa", bridge.Requests[1].Module);
+        Assert.Empty(bridge.RequestMovies[1]);
+    }
+
+    /// <summary>Same busy gate as the galaxy-map replay: a leg that arrives mid-fight waits
+    /// (kept, not spent) and replays once the fight is over.</summary>
+    [Fact]
+    public void AStuntAnnounceWaitsWhileWeAreInCombatAndReplaysWhenItClears()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        bridge.Local = At(ClientModule, PlayerState.FlagInCombat);
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_00"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests);
+
+        bridge.Local = At(ClientModule);
+        agent.PumpOnce();
+        Assert.Equal("STUNT_00", Assert.Single(bridge.Requests).Module);
+    }
+
+    /// <summary>Inside our own stunt module the leg's scripts are the exit: the leader's
+    /// published module moving on must not pull us out mid-scene (cinematics.md §4.3's
+    /// "teleports into an apartment" outcome, from the other side).</summary>
+    [Fact]
+    public void FollowsAreHeldWhileOurOwnLegRuns()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_00"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        bridge.Local = At("STUNT_00");
+        session.Peers.Add(HostPeer("tar_m02af"));
+        agent.PumpOnce();
+        agent.PumpOnce();
+
         Assert.Single(bridge.Requests);
     }
 

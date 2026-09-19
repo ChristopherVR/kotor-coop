@@ -220,6 +220,19 @@ public sealed record AgentSettings
     public bool TransitionAnnounceEnabled { get; init; }
 
     /// <summary>
+    /// When true, a leader's announced transition INTO a <c>STUNT_*</c> module (the Taris
+    /// vision, the Bastila/Revan visions, the romance payoffs, the credits chain) is REPLAYED on
+    /// this engine — the same <c>StartNewModule</c> to the same module and entry waypoint,
+    /// through the ordinary travel request — instead of refused, so this player sees the scene
+    /// on their own engine and its scripts carry them to wherever the leader lands
+    /// (<see cref="StuntLegFollowRule"/>, docs/research/cinematics.md's 2026-09-18 section).
+    /// Needs <see cref="TransitionAnnounceEnabled"/> (the announce is what proves the leader's
+    /// own engine began the leg; the slow path keeps refusing a stunt module regardless).
+    /// coop.ini <c>follow_stunt</c>, default ON in every reader; NEEDS-LIVE.
+    /// </summary>
+    public bool FollowStunt { get; init; }
+
+    /// <summary>
     /// When true, a CLIENT's own engine-native door crossing (the player walking into a
     /// linked door, as opposed to a session-commanded warp) is refused early — before the
     /// load starts — whenever <see cref="FollowHostModule"/> is on and the host has not been

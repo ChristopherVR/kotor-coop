@@ -124,6 +124,7 @@ internal static class AgentComposition
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? true,
+            FollowStunt = config?.FollowStunt ?? true,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? true,
             MovieRelayEnabled = config?.MovieRelayEnabled ?? true,
             SyncCompanionXp = config?.CompanionXpSync ?? true,
