@@ -111,6 +111,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\NewCharacterCaptureRule.cs" Link="Plugin\NewCharacterCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PostAdoptEquipRepairRule.cs" Link="Plugin\PostAdoptEquipRepairRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CarriedPinReleaseRule.cs" Link="Plugin\CarriedPinReleaseRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MineRemovalRule.cs" Link="Plugin\MineRemovalRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GhostSweepRule.cs" Link="Plugin\GhostSweepRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SaveFlushRule.cs" Link="Plugin\SaveFlushRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />

@@ -662,6 +662,7 @@ public interface IGameBridge :
     IPluginChannelBridge,
     IDoorBridge,
     IPlaceableBridge,
+    IMineBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
     IStoreBridge,

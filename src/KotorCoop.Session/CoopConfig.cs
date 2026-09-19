@@ -377,6 +377,17 @@ public sealed record CoopConfig
     public bool ContainerFastPump { get; init; }
 
     /// <summary>
+    /// Floor-mine / trap-trigger sync (coop.ini <c>mine_sync</c>): a GIT-placed mine that one
+    /// instance disarms, recovers or detonates is removed on the peer through the engine's own
+    /// DestroyObject. OFF by default and NEEDS-LIVE — the apply half is a destructive engine
+    /// call that was verified only by disassembly (docs/research/mines.md), and the publish
+    /// half infers a removal from a trigger going absent. Gates BOTH halves on this instance
+    /// (agent publish, plugin apply); the three default readers agree on OFF (PluginConfig
+    /// fallback, this record's absent-key parse, AgentComposition's <c>?? false</c>).
+    /// </summary>
+    public bool MineSync { get; init; }
+
+    /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
     /// default — live-verified (docs/research/shared-state-audit.md §2) to false-positive
@@ -804,7 +815,7 @@ public sealed record CoopConfig
         "local_combat_engage_range", "local_combat_range", "local_combat_slots",
         "local_combat_targeting_us_fresh_s", "local_combat_timeout_s", "map_reveal_sync",
         "minigame_hide_peer", "minigame_lock_peers", "minigame_lock_timeout_s",
-        "minigame_modules", "minigame_spectate", "minigame_wait_notice", "minimap_peers",
+        "mine_sync", "minigame_modules", "minigame_spectate", "minigame_wait_notice", "minimap_peers",
         "mirror_smooth_ms", "movement", "movie_relay", "party_drive", "party_fast_pump",
         "party_follow", "party_follow_accept_final_node", "party_follow_advance_destnode",
         "party_follow_advance_destnode_phase6", "party_follow_advance_movingtopath",
@@ -977,6 +988,7 @@ public sealed record CoopConfig
             PartyFastPump = !kv.ContainsKey("party_fast_pump")
                 || IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
+            MineSync = IsTruthy(kv.GetValueOrDefault("mine_sync")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")
                 || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),

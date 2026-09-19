@@ -125,6 +125,7 @@ internal static class AgentComposition
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
+            MineSync = config?.MineSync ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? true,
             FollowStunt = config?.FollowStunt ?? true,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? true,

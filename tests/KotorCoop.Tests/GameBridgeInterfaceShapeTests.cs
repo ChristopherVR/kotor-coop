@@ -57,6 +57,8 @@ public class GameBridgeInterfaceShapeTests
         Assert.False(bridge.SupportsWorldState);
         Assert.False(bridge.SupportsDoorSync);
         Assert.False(bridge.SupportsPlaceableSync);
+        Assert.False(bridge.SupportsMineSync);
+        Assert.Empty(bridge.CollectChangedMineState());
         Assert.False(bridge.SupportsContainerLoot);
         Assert.False(bridge.SupportsPauseSync);
         Assert.False(bridge.SupportsCombatSync);
