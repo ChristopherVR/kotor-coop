@@ -147,6 +147,21 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
                 + "(RemovePartyMember burst), roster read not required to have caught up yet");
         }
 
+        // The third trigger (docs/research/leviathan.md §5.3 #1): a script put the PLAYER under a
+        // companion (SwitchPlayerCharacter, party table +0xF0 -1 -> slot) in the Leviathan brig.
+        // Runs before Step, which stays out of a segment this trigger owns.
+        SoloSegmentEvent controlledEvent = _machine.NoteControlledNpc(
+            module, Odyssey.IsPlayerUnderCompanionControl());
+        if (controlledEvent == SoloSegmentEvent.Began)
+        {
+            PluginHost.Log($"solo segment: began in {module} — a script put the player under a companion "
+                + "(SwitchPlayerCharacter, party table +0xF0); a peer here will spectate the host's feed (NEEDS-LIVE)");
+        }
+        else if (controlledEvent == SoloSegmentEvent.Ended)
+        {
+            PluginHost.Log("solo segment: ended (the player is back in their own body, or the module changed)");
+        }
+
         SoloSegmentEvent evt = _machine.Step(_catalogue, new SoloSegmentInputs(
             module, companionCount, removedAlive, partySelectionOpen));
 

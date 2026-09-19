@@ -33,6 +33,14 @@ public sealed class SoloSegmentCatalogue
     /// reading the compiled scripts directly. See this class's own doc comment.</summary>
     public static readonly IReadOnlyList<string> BaseModules = ["sta_m45ac", "sta_m45ad"];
 
+    /// <summary>Modules where a script hands the PLAYER over to a companion with
+    /// <c>SwitchPlayerCharacter</c> (<c>CSWPartyTable+0xF0</c> goes from -1 to the slot): the
+    /// Leviathan brig, where the rescuer is played while the real PC sits in a cell
+    /// (<c>k_plev_transform</c> / <c>k_plev_freeparty</c>, both in <c>lev_m40aa</c> —
+    /// docs/research/leviathan.md §3.3-3.4, §5.3 #1). The trigger is the +0xF0 edge, NOT the
+    /// roster count, so it is a separate list from <see cref="BaseModules"/>.</summary>
+    public static readonly IReadOnlyList<string> ControlledNpcBaseModules = ["lev_m40aa"];
+
     private readonly HashSet<string> _modules;
 
     public SoloSegmentCatalogue(IEnumerable<string>? extraModules = null)
@@ -58,6 +66,12 @@ public sealed class SoloSegmentCatalogue
     public IReadOnlyCollection<string> Modules => _modules;
 
     public bool Contains(string module) => !string.IsNullOrEmpty(module) && _modules.Contains(module);
+
+    /// <summary>True when <paramref name="module"/> is one where a +0xF0 edge (a script taking a
+    /// companion under player control) begins a solo segment.</summary>
+    public static bool ContainsControlledNpcModule(string module) =>
+        !string.IsNullOrEmpty(module)
+        && ControlledNpcBaseModules.Contains(module, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Parses coop.ini's <c>solo_segment_modules</c> value: comma-separated, blank
     /// entries and surrounding whitespace dropped. A null/blank/whitespace-only value parses to

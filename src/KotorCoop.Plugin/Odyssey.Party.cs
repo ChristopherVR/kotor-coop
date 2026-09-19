@@ -320,6 +320,15 @@ internal static unsafe partial class Odyssey
         return table == 0 || *(int*)(table + PartyControlledNpc) != -1;
     }
 
+    /// <summary>Whether a script has the PLAYER under a companion right now (<c>CSWPartyTable+0xF0</c>
+    /// is not -1). Unlike <see cref="IsPartyRosterFrozen"/> this is false, not true, when there is no
+    /// party table — a missing table must never read as "a segment began".</summary>
+    public static bool IsPlayerUnderCompanionControl()
+    {
+        nint table = GetPartyTable();
+        return table != 0 && *(int*)(table + PartyControlledNpc) != -1;
+    }
+
     /// <summary>
     /// Dispatches a zero-return NWScript roster routine, with the same guard structure as
     /// <see cref="SpawnCreature"/>: the routine index is found by VALUE in the live routine

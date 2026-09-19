@@ -75,6 +75,14 @@ public sealed class SoloSegmentMachine
     /// </summary>
     private bool _sawEmptyRosterSinceActive;
 
+    /// <summary>True while the active segment was begun by <see cref="NoteControlledNpc"/>. Such a
+    /// segment ends ONLY when the controlled slot returns to -1 or the module changes: the roster
+    /// count is meaningless during a rescuer segment (it is 0 from the strip, and the rescuer's
+    /// own party can refill it), so <see cref="Step"/> must not end it on a "refill".</summary>
+    private bool _controlledTrigger;
+
+    private bool _lastControlled;
+
     /// <summary>Recent <c>Environment.TickCount</c>-style timestamps of
     /// <see cref="NoteRemovePartyMemberCall"/> calls, oldest first, capped at
     /// <see cref="MaxRecentCalls"/> (a real wipe fires exactly nine — see
@@ -108,6 +116,12 @@ public sealed class SoloSegmentMachine
 
         if (Active)
         {
+            if (_controlledTrigger)
+            {
+                // Owned by NoteControlledNpc — see _controlledTrigger.
+                return SoloSegmentEvent.None;
+            }
+
             if (after == 0)
             {
                 _sawEmptyRosterSinceActive = true;
@@ -226,6 +240,45 @@ public sealed class SoloSegmentMachine
     }
 
     /// <summary>
+    /// The third trigger (docs/research/leviathan.md §5.3 #1): a script took a companion under the
+    /// player's control (<c>SwitchPlayerCharacter</c>, <c>CSWPartyTable+0xF0</c> from -1 to a slot)
+    /// in a module <see cref="SoloSegmentCatalogue.ContainsControlledNpcModule"/> lists. Begins a
+    /// segment on the -1 to slot edge and ends it on slot to -1 or a module change. Call every pass,
+    /// before <see cref="Step"/>; <paramref name="controlled"/> is <c>+0xF0 != -1</c>.
+    /// The first observation counts as an edge (a joiner arriving mid-segment must park too).
+    /// </summary>
+    public SoloSegmentEvent NoteControlledNpc(string module, bool controlled)
+    {
+        bool before = _lastControlled;
+        _lastControlled = controlled;
+
+        if (Active && _controlledTrigger)
+        {
+            bool moduleChanged = !string.Equals(_activeModule, module, StringComparison.OrdinalIgnoreCase);
+            if (controlled && !moduleChanged)
+            {
+                return SoloSegmentEvent.None;
+            }
+
+            Active = false;
+            _controlledTrigger = false;
+            _activeModule = string.Empty;
+            return SoloSegmentEvent.Ended;
+        }
+
+        if (Active || !controlled || before || !SoloSegmentCatalogue.ContainsControlledNpcModule(module))
+        {
+            return SoloSegmentEvent.None;
+        }
+
+        Active = true;
+        _controlledTrigger = true;
+        _activeModule = module;
+        _sawEmptyRosterSinceActive = true;
+        return SoloSegmentEvent.Began;
+    }
+
+    /// <summary>
     /// Module change or session teardown: forget everything, including the companion-count
     /// baseline. The NEXT <see cref="Step"/> call only establishes a fresh baseline — it can
     /// never itself read as a drop, however different the new module's starting count is from
@@ -237,6 +290,8 @@ public sealed class SoloSegmentMachine
         Active = false;
         _activeModule = string.Empty;
         _sawEmptyRosterSinceActive = false;
+        _controlledTrigger = false;
+        _lastControlled = false;
         _recentCallCount = 0;
     }
 }
