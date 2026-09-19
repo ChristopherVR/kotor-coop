@@ -252,3 +252,10 @@ console verbs from `docs/CONSOLE.md`):
   rule 2; a client holds solo mode today, so in practice this is the PC.
 * **Three or more players.** The report goes to the host only (the enemies' owner) and is not
   relayed to other clients; they see the consequence through the census.
+
+### 7.1 Live result, apply side (2026-09-19)
+
+Recipe step 2 run on the rig (host, `enemy_effect_sync=1`, module `tar_m02aa`, a hostile `g_sithtroop002` from `spawncreature`): `applyeffect` kinds 14 (Stunned), 1, 4 (Slow, magnitude 50) and 8 applied to the enemy body, each answered `applied kind N to 0xBD`, and the game stayed up. **The never-run half is now run: aiming the apply constructors at an enemy body does not crash.** Not confirmed: that the enemy visibly stops or that its AI resumes (no screen check was done). The capture half (step 3) is still NEEDS-LIVE, so the key stays OFF.
+
+Two rig facts for whoever runs step 3: (1) a `spawncreature` template must exist in the CURRENT module's archive (`tar10_vulkpoo002` failed with failure 9 outside `tar_m10aa`; list a module's templates with `python tools/kotorfiles.py list modules/<module>_s.rim --type utc`, `g_sithtroop002` works in `tar_m02aa`); (2) a runtime-spawned creature has no counterpart on the client, so it is never mirrored (host census 15, client 14) and cannot be used to test the client-cast capture: use a creature that is in the module's own GIT and has a client stand-in.
+
