@@ -107,3 +107,37 @@ Log entries are appended below as items close.
 - 2026-09-18 (§2 address box): built, not yet live. The browser's listbox gets a permanent last row, "Connect to an address..."; confirming it (Connect, or Enter/A on the row) floats the same `CSWGuiSaveNamePanel` the password ask uses (`PasswordEntryModal`, new `Ask.Address`), pre-filled with the last address (sidecar `kotorcoop-last-address.txt`, else coop.ini `host`/`port`; coop.ini is never written). OK runs `ConnectAddressRule` (pure, 40 xUnit cases incl. agreement with `CoopCommand.TryResolveEndpoint` and `SteamConnectStringRule`): a valid `host[:port]` / `[v6]:port` becomes the console line `connect host:port`, published only after the browser sweep, so the agent takes the verified typed-`connect` path (E_PASSWORD → serial → same modal over the menu); invalid text re-captions the panel title and stays open; empty is cancel. Gamepad: the title reads "Host address (keyboard only)". NEEDS-LIVE checklist in `server-browser.md`. Docs: limitations/site/package README/README/CONFIG/status/roadmap #46 now describe the real control.
 - Still to run from step 2: client-led party-select departure, Sith-fighter turret ambush.
 - 2026-09-18: §2 door/chest key collision (roadmap #47) closed statically. The old 8-bit fold does collide over the real 117-module list (pinned by a test, not just the birthday estimate). Flag ids are 64-bit from protocol 53: `tag8 | moduleHash32 | objectId24`, globals unchanged in the low 32 bits; op 21 -> 25 bytes, snapshot entry 13 -> 17, page 106 -> 81 entries. `TryApplyWorldState` now refuses object keys before the enum cast (a truncated 64-bit key could have landed on a real global). Per-module `EventFlagStore.Prune` exists but nothing calls it on a transition — a peer in another module still needs the entries. container-sync.md §12.
+
+## Wave 2 (2026-09-19): nine parallel agents against this document
+
+Nine agents worked the list in isolated worktrees (one on the live rig). Merged into main in one
+pass, reconciled by hand; build `-warnaserror` clean (solution and plugin project). Everything
+below marked NEEDS-LIVE is built and unit-tested but has not run in the game.
+
+**Version reconciliation.** Four agents each claimed "the next" protocol version and two claimed
+shared-block version 68 at the same offset. Final numbers: protocol 53 = 64-bit door/placeable
+flag keys, 54 = `FlagStealth` + effect kinds, 55 = `ClassGrant`/`ClassGrantAck` packets,
+56 = `BehaviourDigest` scheme 2 (scaling percentages). Shared block 68 = class-grant relay at
+0x4C20..0x4C38, 69 = scaling words moved to 0x4C38..0x4C40 (the two had collided at 0x4C20);
+plugin signature byte 0x45, `TotalSize` unchanged.
+
+| Item | Status | Where |
+|---|---|---|
+| #1 Jedi class for the joiner | Partly built, NEEDS-LIVE. `AddMultiClass` relay (routine 389, handler 0x0052DDC0, splice 0x0052DDF6) behind `class_grant_sync`, default OFF, plus an `addclass` dev verb. Feats and Force powers are NOT covered: K1 has no GrantFeat/GrantSpell routines, those come from the level-up screen and still need their own channel | `research/class-and-power-grants.md` |
+| #4 Leviathan | Researched, no code. Rescuer swap is `SwitchPlayerCharacter` (routine 11, changes the player object id twice); host owns the brig, joiner is a parked spectator; the solo-segment catalogue cannot detect it (no `RemovePartyMember` burst). RE targets: handler 0x00544910 / `CSWPartyTable::SwitchPlayerCharacter` 0x005667C0, party table +0xF0 | `research/leviathan.md` |
+| #5 Manaan Rift | Researched, no code. Airlock strips the party into `K_PARTY_STORE1/2`; suit comes from `k_pman_suituse`. Recommended: refuse the follow into `manm28ab`/`manm28ad`, park the joiner in `manm28aa` | `research/manaan-hrakert-rift.md` |
+| #11 Dark side | Researched, no code. `test3` flips Jolee and Juhani hostile via `ChangeToStandardFaction` (handler 0x0052F2F0); `PartyMemberState` carries no faction; Bastila's join uses NPC slots 15..19 outside the 16-bit mask | `research/dark-side-branch.md` |
+| #6 STUNT/credits chain | Built, NEEDS-LIVE. `follow_stunt` (default ON): a leader's announced StartNewModule into a STUNT module is replayed on the follower's engine; first hop only, follows held inside the leg, echo de-dup | `research/cinematics.md` §12 |
+| #7 Manual-save ghosts, save-time half | Built OFF, NEEDS-LIVE. `SaveFlushHook` on `CServerExoAppInternal::SaveGame` 0x4B58A0 (F4 and the save panel both reach it), `save_flush` default OFF; `tools/saveinspect.py` added | `research/save-ghosts.md` §4 |
+| #9 Player-count scaling | Built, NEEDS-LIVE. `enemy_health`/`enemy_damage` default 100 (off), `xp_rate`/`store_stock` default `auto` (health/stock 150/200/250, damage 115/125/135 at 2/3/4+ players). `store_prices` not built (needs RE) | `research/player-count-scaling.md` |
+| #10 Turret ambush | Partial, live. The client refuses `m12ab` and parks (works); the unattended host tore down to the main menu after 66 s, so completion and convergence are unverified | `research/minigames.md` |
+| §2 party-select departure | Still open, live attempt inconclusive. No PC ever crossed `ebn12_ebonexit`; the exit script `k_pebn_leavhawk` has no party-select call and needs `K_CURRENT_PLANET > 0`. A long `walkto` crashed the client engine in `CSWRoomSurfaceMesh::GetTriangleAdjacency`. Retry with a post-Endar-Spire save and short hops | `research/galaxy-map-and-party-select.md` |
+| §2 fear/stun/poison/disguise/stealth | Built. Fear and general Stun forward by default; poison forwards once per application; stealth sets a flag that holds the stealthed stand-in out of enemy targeting (`stealth_sync` ON). `poison_sync` (apply half), `disguise_sync`, `stealth_visual_sync` default OFF, NEEDS-LIVE | `research/effect-sync.md` §12 |
+| §2 door/chest key collisions (#47) | Closed statically: 64-bit key with the full module hash; 117 shipped modules, 239,616 keys all distinct | `research/container-sync.md` §12 |
+| §2 address box (#46) | Built, NEEDS-LIVE: a permanent "Connect to an address..." row at the bottom of the browser list opens the engine text panel | `research/server-browser.md` |
+| §2 reachability probe, firewall rule, rejected-join notice, host-away, long-session bounds | Built, NEEDS-LIVE. `ReachabilityCheck` (router WAN IP vs STUN address plus hairpin datagram) drives an honest status line; installer adds the Windows Firewall rule; host announces a rejected old-build peer; `host_away_timeout_ms` (20 s) treats a host parked at the menu as host loss; `ThreatTable` prune, SaveMismatch backoff capped at 5, agent log mid-session rotation, `DialogueGrantSender` cap 256 to 1024 | `research/network-topology.md` §17 |
+
+Not addressed this wave: mines, duel-ring parking, client-cast crowd control on enemies, healing
+or buffing the partner, per-object locals, monotonic re-locks, Pazaak cards on rejoin, Linux/Deck,
+physical pad, mod matrix, and the Artifact-quota/private-repo download blocker (needs a user
+decision).
