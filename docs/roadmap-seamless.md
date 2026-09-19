@@ -216,3 +216,5 @@ New open items, in the order a run hits them (details, evidence and effort in th
 | 47 | Door/chest flag keys (8-bit module hash + low 16 bits of object id) can collide across a ~60-module game. **Closed 2026-09-18**: 64-bit key with the full module hash (`ObjectKeyedFlags.cs`), protocol 53, tested collision-free over all 117 shipped modules ([container-sync.md §12](research/container-sync.md)) | Bug, closed |
 | 48 | Repo private + artifact quota: no downloadable build carries anything after 2026-09-06 | Infra |
 
+
+**Wave 2 (2026-09-19).** Nine agents worked items 35-48; per-item status, the version reconciliation (protocol 53-56, shared block 68-69) and what is still NEEDS-LIVE are in [review-seamless-2026-09-18.md](review-seamless-2026-09-18.md) "Wave 2". Headlines: 38/39/43 (Leviathan, Manaan, dark side) researched with designs; 35 (Jedi) partly built behind `class_grant_sync` (AddMultiClass only); 36 save-time half built OFF; 40 built ON (`follow_stunt`); 41 built; 42 refusal verified live, completion open; 44 partly built; 45 live attempt inconclusive; 46 address box, reachability probe, firewall rule and host-away built; 47 closed.
