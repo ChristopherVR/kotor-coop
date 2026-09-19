@@ -1578,3 +1578,14 @@ appearance.
    mode ON (stealth_visual_sync, NEEDS-LIVE)`, and the question is whether B's stand-in on A's
    screen renders the stealth shader and is skipped by A's enemies' `DoStealthDetection`. Any
    crash or a body stuck translucent after B unstealths → leave the key OFF and note it here.
+
+### 12.7 Live verification (2026-09-19, Endar Spire deck, host + joiner)
+
+`applyeffect` through `tools/blockpoke.ps1`, `effect_sync` ON, `disguise_sync=1` on both:
+
+1. **Fear (kind 13) and Stunned (kind 14), both directions: PASS.** Host `applyeffect fear` / `applyeffect stunned` at the client's stand-in (0x14E): host `applied kind 13 ... 6000ms`, client `effect: applied kind 13 from peer 0x1 (duration 6000ms, magnitude 0)`, then kind 14 the same about 5 s later; reversed from the client, the host logged `effect: applied kind 13/14 from peer 0x2`. No refusal (`table[158]`/`table[161]` held `0x5313F0`). The visible pose was not observed.
+2. **Disguise kind (16): PASS.** Host `applyeffect disguise 0x14E 8000 28` (a Sith soldier's appearance row): client `effect: applied kind 16 from peer 0x1 (duration 8000ms, magnitude 28)`; within 470 ms the host's stand-in of that player repainted, `identity: phantom slot 0 now renders appearance 146 (server row was 28, peer published 146)` then `renders appearance 28 (peer published 28)`. The revert after 8 s was not watched. Refusal path: `applyeffect disguise me 6000 0` answers `refused - magnitude is not a usable ... appearance row`. A blank target written as `""` through blockpoke is taken literally; use the phantom id.
+3. **Poison (15), local smoke only.** `applyeffect poison me 6000 0` applied; magnitude 300 refused as designed. The double-count question (does `poison_sync=1` on top of the damage-tick path double the damage?) was NOT run and `poison_sync` stays OFF.
+4. **Stealth, the stealth visual, the real Sith-uniform equip: not exercised** (no console verb sets stealth; the uniform needs a Taris save).
+
+Defaults after this pass: Fear/Stunned stay ON (now live-verified); `disguise_sync` stays OFF (the kind only fires when an effect lands on a stand-in, and a real uniform already rides the appearance channel, so ON buys nothing); `poison_sync` and `stealth_visual_sync` stay OFF.
