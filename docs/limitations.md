@@ -211,3 +211,5 @@ Built and automatically tested, but nobody has watched them on the running game 
   is being done about each, is in [review-seamless-2026-09-18.md](review-seamless-2026-09-18.md).
 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.
+
+[PLAYTEST.md](PLAYTEST.md) lists each one with the exact steps and what to look for; run `KotorCoop.Agent.exe logs` afterwards and attach the zip.
