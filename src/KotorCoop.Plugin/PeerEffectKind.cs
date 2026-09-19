@@ -63,4 +63,31 @@ internal static class PeerEffectKindValues
     /// apply-side constructor as of effect-sync.md §10 (2026-09-02), same
     /// <c>ExecuteCommandEffectComplex</c> family as Knockdown/Paralyze/Sleep.</summary>
     public const uint Confused = 12;
+
+    /// <summary>Engine type 8, sub-code 2 (routine 158 <c>EffectFrightened</c> — the real one;
+    /// <see cref="Frightened"/> is <c>EffectHorrified</c>). Apply-side constructor as of
+    /// effect-sync.md §12 (2026-09-18), <c>ExecuteCommandEffectComplex</c> family.</summary>
+    public const uint Fear = 13;
+
+    /// <summary>Engine type 8, sub-code 4 (routine 161 <c>EffectStunned</c> — the general,
+    /// non-droid stun; <see cref="Stun"/> is <c>EffectDroidStun</c>). Apply-side constructor as
+    /// of effect-sync.md §12 (2026-09-18), <c>ExecuteCommandEffectComplex</c> family.</summary>
+    public const uint Stunned = 14;
+
+    /// <summary>Engine type 35 (<c>OnApplyPoison</c>, routine 250 <c>EffectPoison</c>). One
+    /// <c>int nPoisonType</c> parameter (the magnitude), applied durable. Apply gated by
+    /// coop.ini <c>poison_sync</c> (default OFF) — effect-sync.md §12.</summary>
+    public const uint Poison = 15;
+
+    /// <summary>Engine type 62 (<c>OnApplyDisguise</c>, routine 463 <c>EffectDisguise</c>). One
+    /// <c>int nDisguiseAppearance</c> parameter (the magnitude = appearance.2da row), popped
+    /// by its <c>ExecuteCommandEffectComplex</c> case. Apply gated by coop.ini
+    /// <c>disguise_sync</c> (default OFF) — effect-sync.md §12.</summary>
+    public const uint Disguise = 16;
+
+    /// <summary>The highest kind with an apply-side constructor — what
+    /// <c>CheatController.ApplyEffect</c>'s range check and <c>OdysseyEffects</c>' switch
+    /// both stop at. One number, so adding a kind means changing it here and nowhere else on
+    /// the plugin side.</summary>
+    public const uint Max = Disguise;
 }

@@ -92,6 +92,10 @@ public class EffectVerbsTests
     [InlineData("HEAL", PeerEffectKind.Heal)]
     [InlineData("temporaryhitpoints", PeerEffectKind.TemporaryHitpoints)]
     [InlineData("Confused", PeerEffectKind.Confused)]
+    [InlineData("fear", PeerEffectKind.Fear)]
+    [InlineData("stunned", PeerEffectKind.Stunned)]
+    [InlineData("poison", PeerEffectKind.Poison)]
+    [InlineData("Disguise", PeerEffectKind.Disguise)]
     public void EveryAllowlistKindParsesCaseInsensitively(string word, PeerEffectKind expected)
     {
         CoopCommand command = ConsoleCommand.Parse($"applyeffect {word}");
@@ -249,6 +253,29 @@ public class EffectVerbsTests
             CheatRequest request = Assert.Single(bridge.Requests);
             Assert.Equal(CheatKinds.ApplyEffect, request.Kind);
             Assert.Equal((int)expected, request.Amount);
+        }
+    }
+
+    /// <summary>Fear, Stunned, Poison and Disguise (effect-sync.md §12) reach the plugin the
+    /// same way — including the magnitude, which for poison/disguise is a 2da ROW the plugin
+    /// refuses when unusable, so the verb has to carry it through untouched.</summary>
+    [Theory]
+    [InlineData("applyeffect fear", PeerEffectKind.Fear, 0u)]
+    [InlineData("applyeffect stunned", PeerEffectKind.Stunned, 0u)]
+    [InlineData("applyeffect poison me 6000 3", PeerEffectKind.Poison, 3u)]
+    [InlineData("applyeffect disguise me 6000 114", PeerEffectKind.Disguise, 114u)]
+    public void FearStunnedPoisonAndDisguiseReachThePluginWithTheRightKindAndMagnitude(
+        string line, PeerEffectKind expected, uint magnitude)
+    {
+        (CoopCommandDispatcher dispatcher, EffectBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            Type(dispatcher, line);
+
+            CheatRequest request = Assert.Single(bridge.Requests);
+            Assert.Equal(CheatKinds.ApplyEffect, request.Kind);
+            Assert.Equal((int)expected, request.Amount);
+            Assert.Equal(magnitude, request.MaxCharges); // the magnitude rides the MaxCharges field
         }
     }
 

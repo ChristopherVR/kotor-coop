@@ -184,8 +184,18 @@ public static class ProtocolConstants
     /// the existing TCP path (faster, simpler, no new failure modes of its own) is unchanged for
     /// everyone it already works for. Off by default (<c>world_transfer_udp_fallback</c>),
     /// NEEDS-LIVE. See docs/research/network-topology.md's UDP world-transfer section.
+    ///
+    /// Version 53: <see cref="PlayerState.FlagStealth"/> — a new bit on the existing flags
+    /// dword (no packet shape changed), sampled from the creature's own runtime stealth-mode
+    /// byte. A peer's instance holds a stealthed player's stand-in out of its enemies' target
+    /// selection while the bit is set (<c>stealth_sync</c>, default ON). A v52 peer never
+    /// publishes the bit, so a mixed session keeps today's behaviour; bumped so the changelog
+    /// names it, like 50. The same wave (2026-09-18) added four <see cref="PeerEffectKind"/>
+    /// values (Fear 13, Stunned 14, Poison 15, Disguise 16) — a wider use of the existing
+    /// <c>Kind</c> byte, no shape change, no bump of its own. See
+    /// docs/research/effect-sync.md §12.
     /// </summary>
-    public const byte Version = 52;
+    public const byte Version = 53;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

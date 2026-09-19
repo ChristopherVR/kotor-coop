@@ -231,7 +231,8 @@ internal sealed unsafe partial class PhantomController
             // here; back in Neutral, `GetReputation > 10` releases every attacker at the
             // next combat-round boundary. That release lever is what the original
             // aggro-sink design lacked entirely — see docs/research/combat-participation.md.
-            ApplyTargetable(i, phantom, alive: remote.Health > 0);
+            ApplyTargetable(i, phantom, alive: remote.Health > 0, stealthed: remote.Stealthed);
+            ApplyStealthVisual(i, phantom, remote.Stealthed);
             ApplyVitals(i, phantom, remote);
 
             // Forward what this body has taken to the peer whose character it stands for.
@@ -550,10 +551,75 @@ internal sealed unsafe partial class PhantomController
     /// Off falls back to the old decoration behaviour (Neutral forever).</summary>
     private readonly bool _targetable = PluginConfig.ReadBool("phantom_targetable", true);
 
+    /// <summary>coop.ini <c>stealth_sync</c> (default ON): a peer publishing
+    /// <c>PlayerState.FlagStealth</c> has their stand-in held Neutral here for as long as the
+    /// bit is set — the same faction flip + PacifyCreature <c>phantom_targetable</c> already
+    /// uses, no new engine write. See <see cref="PhantomTargetRule"/> and effect-sync.md §12.4.</summary>
+    private readonly bool _stealthSync = PluginConfig.ReadBool("stealth_sync", true);
+
+    /// <summary>coop.ini <c>stealth_visual_sync</c> (default OFF, NEEDS-LIVE): additionally
+    /// put the stand-in into the engine's own stealth mode through
+    /// <see cref="Odyssey.SetStealthMode"/> — the setter the stealth button itself reaches —
+    /// so the peer's body renders the stealth shader and is skipped by
+    /// <c>DoStealthDetection</c> the way their real one is. A NEW engine call on a body this
+    /// codebase has never put into that mode, so it stays off until a rig pass has watched it
+    /// (effect-sync.md §12.5's checklist). Latched per slot: the setter is called on the EDGE
+    /// only, never per frame.</summary>
+    private readonly bool _stealthVisualSync = PluginConfig.ReadBool("stealth_visual_sync", false);
+
     /// <summary>Per slot: is the body currently in the PLAYER faction. Tri-state via the
     /// separate _factionKnown so the first pass always writes.</summary>
     private readonly bool[] _hostileToLocals = new bool[SharedBlock.SlotCapacity];
     private readonly bool[] _factionKnown = new bool[SharedBlock.SlotCapacity];
+
+    /// <summary>Per slot: the stealth mode last written to the body by
+    /// <see cref="ApplyStealthVisual"/>, tri-state via <c>_stealthVisualKnown</c> the same way
+    /// the faction pair above is. Cleared with the slot.</summary>
+    private readonly bool[] _stealthVisualApplied = new bool[SharedBlock.SlotCapacity];
+    private readonly bool[] _stealthVisualKnown = new bool[SharedBlock.SlotCapacity];
+
+    private int _stealthLogged;
+
+    /// <summary>
+    /// The engine's stealth mode on the stand-in — <c>stealth_visual_sync</c> only. On the edge,
+    /// per body: the same "latch what you wrote, act on the change" discipline
+    /// <see cref="ApplyTargetable"/> follows, because <see cref="Odyssey.SetStealthMode"/>
+    /// itself is cheap and idempotent (it compares before writing) but a per-frame engine call
+    /// on a possibly-torn-down body is exactly the pattern this project's per-frame-write rule
+    /// forbids. A body that was never put into stealth is never taken out of it either — the
+    /// first write happens only when the peer's bit is actually SET, so with the peer never
+    /// stealthing this method makes no engine call at all.
+    /// </summary>
+    private void ApplyStealthVisual(int slot, nint phantom, bool stealthed)
+    {
+        if (!_stealthVisualSync || phantom == 0)
+        {
+            return;
+        }
+
+        bool want = _stealthSync && stealthed;
+
+        if (_stealthVisualKnown[slot] ? _stealthVisualApplied[slot] == want : !want)
+        {
+            return;
+        }
+
+        if (!Odyssey.SetStealthMode(phantom, want))
+        {
+            return; // try again next pass rather than latching a state we did not achieve
+        }
+
+        _stealthVisualApplied[slot] = want;
+        _stealthVisualKnown[slot] = true;
+
+        if (_stealthLogged < 20)
+        {
+            _stealthLogged++;
+            PluginHost.Log(want
+                ? $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode ON (stealth_visual_sync, NEEDS-LIVE)"
+                : $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode OFF (stealth_visual_sync)");
+        }
+    }
 
     /// <summary>
     /// Puts a phantom in or out of the PLAYER faction as the peer lives and dies.
@@ -563,7 +629,7 @@ internal sealed unsafe partial class PhantomController
     /// releases attackers immediately rather than at the next round boundary — belt and
     /// braces against the one failure this design must never reproduce.
     /// </summary>
-    private void ApplyTargetable(int slot, nint phantom, bool alive)
+    private void ApplyTargetable(int slot, nint phantom, bool alive, bool stealthed)
     {
         // ⚠ THE AUTHORITY SPLIT ONLY HOLDS IF EACH INSTANCE'S ENEMIES FIGHT ITS OWN PLAYER,
         // AND NOTHING IN THE ENGINE ENFORCES THAT.
@@ -594,7 +660,13 @@ internal sealed unsafe partial class PhantomController
         // this gate wrong makes a distant player un-fightable everywhere.
         bool holdNeutral = EnemyPresenceController.LocalCombat && block.DamageDealtEnabled;
 
-        bool want = _targetable && alive && !holdNeutral;
+        // A STEALTHED peer is held Neutral too (stealth_sync, PlayerState.FlagStealth — a
+        // level, republished every tick, so the body rejoins the player faction on the same
+        // edge logic the moment they drop out of stealth). Same lever as the authority split
+        // above: no new engine write, and PacifyPhantom below releases anything already
+        // locked on. See PhantomTargetRule / effect-sync.md §12.4.
+        bool want = PhantomTargetRule.WantsPlayerFaction(_targetable, alive, holdNeutral, _stealthSync, stealthed);
+        bool stealthHold = PhantomTargetRule.IsStealthHold(_targetable, alive, holdNeutral, _stealthSync, stealthed);
 
         if (_factionKnown[slot] && _hostileToLocals[slot] == want)
         {
@@ -622,7 +694,9 @@ internal sealed unsafe partial class PhantomController
 
         PluginHost.Log(want
             ? $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
-            : $"phantom 0x{objectId:X}: back to neutral; attackers released");
+            : stealthHold
+                ? $"phantom 0x{objectId:X}: back to neutral; attackers released (peer is in stealth)"
+                : $"phantom 0x{objectId:X}: back to neutral; attackers released");
     }
 
     private uint _loggedAmountsSerial;

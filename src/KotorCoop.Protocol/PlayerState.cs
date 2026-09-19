@@ -126,6 +126,26 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagPartyWiped = 256;
 
+    /// <summary>
+    /// The player's character is in STEALTH MODE: the engine's own runtime field,
+    /// <c>CSWSCreature+0x4D1</c> (<c>stealth_mode</c>, byte — written only by
+    /// <c>CSWSCreature::SetStealthMode 0x0050EE50</c>, which the stealth button reaches
+    /// through <c>SetActivity</c>; docs/research/effect-sync.md §12.4 for the disassembly).
+    /// A LEVEL, sampled every tick like <see cref="FlagInCombat"/>. A peer's instance uses it
+    /// to keep the player's stand-in out of its own enemies' target selection for as long as
+    /// the bit is set (coop.ini <c>stealth_sync</c>, default ON — the same neutral-faction
+    /// lever <c>phantom_targetable</c> already pulls), because a stealthed player on their own
+    /// screen was otherwise a plainly visible, attackable body on their partner's. The
+    /// engine's stealth VISUAL on the stand-in is a separate, unverified write
+    /// (<c>stealth_visual_sync</c>, default OFF, NEEDS-LIVE).
+    ///
+    /// Version 53. A v52 peer never publishes the bit, so a mixed session simply keeps
+    /// today's behaviour (stand-in stays targetable) — graceful, but bumped anyway so the
+    /// changelog names it, the way <see cref="FlagPartyWiped"/> and <see cref="FlagAway"/>
+    /// were.
+    /// </summary>
+    public const uint FlagStealth = 512;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -150,6 +170,8 @@ public readonly record struct PlayerState(
     public bool IsAway => (Flags & FlagAway) != 0;
 
     public bool IsInSoloSegment => (Flags & FlagSoloSegment) != 0;
+
+    public bool IsStealthed => (Flags & FlagStealth) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

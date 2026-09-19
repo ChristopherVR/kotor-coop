@@ -1319,3 +1319,262 @@ throughout.
 
 **§11.4's "left open as a staging hazard" status is superseded — this hazard is closed.** See
 `docs/limitations.md`'s combat table.
+
+---
+
+## 12. Fear, the general Stun, Poison, Disguise, and stealth (2026-09-18)
+
+Static analysis only (`tools/disasm.py`, `tools/xrefs.py`, `tools/q.py` against
+`kotor1_0_3.db`, direct reads of the binary's data section, and a K1 `nwscript.nss` copy
+parsed the way §7.3 did — 772 prototypes, the same five anchors re-checked). Nothing modified,
+no game run, no game function called. Four new wire kinds and one new `PlayerState` bit, from
+`docs/review-seamless-2026-09-18.md` §2's "named but not on the allowlist", "disguises don't
+mirror", "poison INFERRED" and "stealth not synced" bullets.
+
+Tag key as before: **VERIFIED** / **INFERRED** / **NEEDS-LIVE**.
+
+### 12.1 Fear (sub-code 2) and the general Stun (sub-code 4) — VERIFIED, shipped, default ON
+
+Nothing new to research: §7.2 already decoded both case bodies (`0x531546` = routine 158
+`EffectFrightened` → type 8, `SetInteger(0, 2)`; `0x531559` = routine 161 `EffectStunned` →
+type 8, `SetInteger(0, 4)`; neither pops a script argument) and §7.1 already read both
+registrations (`0x0054D0B7: mov [edx+0x278], eax` = 158; `0x0054D1D7: mov [edx+0x284], eax` =
+161). Re-decoding the compaction/jump table this pass (`0x53184C`/`0x531820`, routines
+`0x33..0xA4`) gives the same 10 targets, 158 → idx 7 → `0x531546`, 161 → idx 8 → `0x531559`.
+The `nwscript.nss` copy indexes `EffectFrightened` = 158 and `EffectStunned` = 161 (anchors
+`GetFirstPC` 548, `CreateObject` 243, `SetMinOneHP` 716, `EffectAssuredHit` 51,
+`EffectAssuredDeflection` 252 all still agree).
+
+Shipped as `PeerEffectKind.Fear = 13` and `PeerEffectKind.Stunned = 14`, both allowlist
+copies (`PeerEffectRules` / `PhantomEffectHook`) mapping `(8, 2)` and `(8, 4)`, and applied
+through the SAME `OdysseyEffects.ApplyComplexEffect` path Knockdown/Paralyze/Sleep/Confused use
+(`table[158]`/`table[161] == 0x5313F0` specific-index check, zero pushed arguments,
+`nParams = 0`). That path is live-verified for four sibling routine numbers (§9, §11.1), so
+these two ride `effect_sync` alone — no new key. Naming: `Fear` because this codebase's
+`Frightened` is really `EffectHorrified` (§7.3's correction, wire value 5, kept for stability);
+`Stunned` because `Stun` is the droid-scoped `EffectDroidStun`. Console verbs: `applyeffect
+fear`, `applyeffect stunned`.
+
+### 12.2 Disguise — VERIFIED two ways: the stand-in already follows a disguise; type 62 is now also a kind
+
+**What a disguise actually does to the wearer** — `CSWSCreature::Disguise(row, effect,
+gameLoading)` (`0x004EE010`, thiscall, `ret 0xC`), called from `Global::OnApplyDisguise`
+(`0x004E31D0`, the type-62 dispatch-table entry) with `GetInteger(effect, 0)` as the row:
+
+```
+0x004EE034  mov eax, [esi+0xA48]          ; already disguised? -> return 0 (refuses a second)
+0x004EE06B  mov eax, [esi+0xA74]          ; stats
+0x004EE071  mov cx, [eax+0x186]           ; current appearance row (stats copy)
+0x004EE078  mov [esi+0xA4C], cx           ; SAVED for UnDisguise
+0x004EE07F  mov ecx, [esp+0x28]           ; the disguise row
+0x004EE083  mov [eax+0x186], cx
+0x004EE08A  mov [esi+0xA60], cx           ; <-- CSWSCreature+0xA60, the appearance.2da row
+0x004EE093  call 0x4ED6E0                 ; UpdatePersonalSpace
+0x004EE09C  call 0x4ED850  (push 1)       ; UpdateAppearanceDependantInfo(bStore=1)
+0x004EE0A7  mov dword [esi+0xA48], 1      ; disguised flag
+```
+
+`CSWSCreature::UnDisguise` (`0x004EE150`, from `OnRemoveDisguise 0x004DCAC0`) is the mirror
+image: `+0xA60 = +0xA4C`, the same two rebuild calls, `+0xA48 = 0`.
+
+**So the mirror already exists.** `+0xA60` is exactly the field `KotorGameBridge.ReadLocalState`
+samples into `PlayerState.Appearance` every tick (`OffAppearanceType = 0xA60`), and the peer's
+`PhantomController.ApplyAppearance` repaints the stand-in whenever the published row differs from
+the body (`PeerIdentityRule.ShouldApply`: `onBody != chosen`, then the server rebuild plus
+`Odyssey.RebuildClientAppearance` — the X2 client-twin rebuild, live-verified
+`phantom-locomotion.md` §11.2 and re-verified for the re-spawn case `name-plates.md`
+2026-08-29). A Sith uniform / Sand People robes / envirosuit on player A therefore publishes as a
+changed row and A's stand-in on every peer is repainted with it, and back on removal — with
+NO new engine offset, through a path that is already live. The review's "disguises don't mirror"
+was a code-audit inference from the kinds table, not something anyone had watched; what was
+never true is that the effect KIND had to cross the wire for the look to follow. NEEDS-LIVE
+only in the sense that nobody has stood next to a partner in a Sith uniform yet (§12.6 #3).
+
+**What does NOT follow, and is out of scope**: the uniform's gameplay effect. Guards decide
+"is this a Sith?" in NWScript against THEIR instance's own PC, so a client in uniform walks the
+host's Sith base as a civilian on the host's screen (and vice versa). That is the
+script-locals / per-instance-scripting gap (`quest-sync.md` §8), not an appearance gap.
+
+**The kind itself** — `EffectDisguise(int nDisguiseAppearance)` is routine **463** and is an
+`ExecuteCommandEffectComplex` case, reached through the handler's SECOND dispatch stage (the
+`0x531443` cascade: `== 0xFC` → `0x5315DC`; `> 0xFC` → `0x53160F`, which is `== 0x1D3`(467) →
+`0x531703`, else `routine - 270` into a second compaction table at `0x5318D8` feeding a
+6-entry jump table at `0x5318C0`). Decoded from the bytes: 270 → `0x53163E`, 402 → `0x5316BC`,
+420 → `0x5316F6`, 460 → `0x53164E`, **463 → `0x531689`**. That case body:
+
+```
+0x00531689  mov ecx, [0x7A3A00]           ; the VM
+0x0053168F  lea edx, [esp+0x24]
+0x00531693  push edx
+0x00531694  call 0x5D1000                 ; guarded stack pop (returns 0 -> refuse below)
+0x0053169B  je  0x531670                  ; -> mov eax, 0xFFFFF82F; ret 8
+0x0053169D  mov ecx, [esp+0x24]           ; the popped int
+0x005316A1  mov ax, [0x746774]            ; = 62, read from the data section (0x74667C + 4*62)
+0x005316AC  mov [esi+8], ax               ; effect type 62
+0x005316B0  call 0x5036A0                 ; SetInteger(effect, 0, value)
+```
+
+— the ONE complex-family case this codebase calls that pops a script argument, hence the new
+`OdysseyEffects.ApplyComplexEffectOneInt` (the `table[463] == 0x5313F0` check of
+`ApplyComplexEffect`, plus the single push and `nParams = 1` of `ApplySlowEffect`). §7.1's
+"0x0054D04D → 0x73C (463), not decoded further" registration is this. `nwscript.nss` index 463
+= `EffectDisguise` — two independent sources, same number, same shape (the `EffectAssuredHit`
+51 / `EffectAssuredDeflection` 252 anchors again derived from this binary first).
+
+Shipped as `PeerEffectKind.Disguise = 16`: captured when type 62 lands on a stand-in, magnitude
+= `integer_list[0]` = the appearance row (bounded read, refused as unusable when 0 or > 0xFFFF
+BEFORE any VM push — `IsUsableDisguiseRow`, mirrored in `PeerEffectRules`), forwarded, and on
+the owner replayed as `EffectDisguise(row)` on the real body — whose `+0xA60` then publishes
+back and repaints the stand-in everywhere, closing the loop. `Disguise` at `0x4EE034` refuses a
+second disguise on an already-disguised body, so a replay onto a wearer is a logged no-op, not
+a double. **Apply gated by `disguise_sync` (default OFF, NEEDS-LIVE)**: the constructor call is
+shape-matched to live-verified paths but has never run, and realistically nothing in the retail
+game applies a disguise to a party-less stand-in (uniforms are item properties on the wearer),
+so the kind is completeness, not the mirror. Capture is always on so `effects` can show it.
+
+### 12.3 Poison — VERIFIED constructor, shipped as an explicit once-per-application kind, default OFF
+
+§10.3 left the tick path INFERRED (the `CSWSObject::ApplyEffect` → vtable slot 2 hop was not
+single-stepped) and concluded "no kind needed". This pass makes the APPLICATION explicit
+instead of relying on that inference, and leaves the tick question to the live pass it needs:
+
+- `Global::OnApplyPoison` (`0x004DB320`, type 35) is dispatched ONCE per application through
+  `OnEffectApplied` like every other handler (§1). `PhantomEffectHook` therefore sees a poison
+  landing on a stand-in exactly once, whatever its ticks do afterwards — that is what "once per
+  application, not per tick" means here, and it is a property of the dispatcher, not of this
+  code.
+- `CSWVirtualMachineCommands::ExecuteCommandEffectPoison` (`0x00533560`) — VERIFIED
+  `EffectHeal`'s exact shape: `call 0x5D1000` (guarded pop of one int) with an up-front refusal
+  `mov eax, 0xFFFFF82F; ret 8` when nothing is there, then effect type 35 (`0x5335FB` reads
+  global `0x746708`, = 35 by the `0x74667C + 4*type` layout every constant in §6 obeys) and
+  `SetInteger(effect, 0, nPoisonType)`. Routine number **250**: `0x0054D150: mov dword
+  [edx+0x3E8], 0x533560`, `0x3E8/4 = 250`; `tools/xrefs.py 0x533560` finds exactly that one
+  literal (unaliased, so `FindRoutine`'s linear scan is safe, as for Heal); `nwscript.nss`
+  index 250 = `EffectPoison(int nPoisonType)`.
+
+Shipped as `PeerEffectKind.Poison = 15`, magnitude = `integer_list[0]` = the poison.2da row
+(row 0 is a real row, so — unlike every other magnitude the hook reads — it is NOT gated on
+`aux > 0`; the receiver refuses rows above 255 before pushing), applied durable for the
+effect's own duration through `ApplyOneIntParamEffect` (`ExpectedEffectPoison`, min 0, max
+255). Console verb: `applyeffect poison [target] [ms] <poison.2da row>`.
+
+**Why `poison_sync` defaults OFF, and what must be answered before it flips**: if §10.3's
+INFERRED conclusion is right, a poison landing on a stand-in ALREADY reaches its owner as
+per-tick forwarded damage (`PhantomHitHook`'s cumulative total). Replaying the poison effect on
+the owner's real body on top of that would poison them twice — their own engine ticks the
+replayed effect AND the stand-in's ticks keep arriving as damage. Which of the two paths
+actually fires (or both) is precisely what nobody has watched; until a rig pass reads the
+owner's `combat: taken N` ledger with the key OFF and then ON, the safe default is the one that
+cannot double. Capture/forward are always on so the OFF run can still prove the capture half
+(`effects` on the sender shows a `poison` row; the receiver logs `effect: not replaying kind
+15 ... poison_sync is off`).
+
+### 12.4 Stealth — VERIFIED field and setter; `FlagStealth` (protocol 53); the stand-in is held Neutral
+
+**The field.** `CSWSCreature::SetStealthMode` (`0x0050EE50`, thiscall, `ret 8`) is the only
+writer of the byte the symbol DB names `stealth_mode` at `+0x4D1` (`SetDetectMode 0x0050EE30`
+is its twin for `detect_mode` at `+0x4D0`):
+
+```
+0x0050EE50  mov al, [esp+4]            ; mode (byte)
+0x0050EE54  cmp al, [ecx+0x4D1]
+0x0050EE5A  je  0x50EE71               ; idempotent
+0x0050EE5C  mov [ecx+0x4D1], al
+0x0050EE62  mov eax, [esp+8]           ; arg2
+0x0050EE66  mov [ecx+0xABC], eax
+0x0050EE6C  call 0x4F6D70              ; CSWSCreature::ComputeModifiedMovementRate
+0x0050EE71  ret 8
+```
+
+**The toggle path.** `tools/xrefs.py 0x50EE50` → 11 call sites, all in `CSWSCreature`:
+`SetActivity` (`0x4F02BC`/`0x4F02CF`), `ActivityManager` (`0x4F8905`/`0x4F89F1`), `AIUpdate`
+(`0x4FE596`), `LoadCreature` (`0x50042E`/`0x50043D` — the GFF `StealthMode` read
+`character-login-chain.md` line 145 mentions), `LoadFromTemplate` (`0x502918`/`0x502927`) and
+two in `0x4F2ADD`/`0x4F2B37`. `SetActivity(activity, on, arg)` keeps an activity mask at
+`+0x9FC` (`or ecx, ebx` / `and edx, ~ebx`), and for `activity == 1` with bits 2/3 (`test
+[esi+0x9FC], 0xC`) clear calls `SetStealthMode(on, [esp+0x18])`; the `LoadFromTemplate`/
+`LoadCreature` sites pass `(1, 0)` / `(0, 0)`. The client side of the same button is
+`CSWGuiMainInterface::OnStealthButtonPressed 0x00688640` → `CSWCCreature::IsStealthCapable
+0x00610AC0` → `CSWCCreature::PartyMenuStealth 0x0060F4B0` (the DB's names), which is where the
+player-to-server message that lands in `SetActivity` originates — not traced further, because
+the READ side does not need it: a level at `+0x4D1` that only this setter writes is the whole
+evidence the flag rests on.
+
+**Shipped.** `PlayerState.FlagStealth = 512` (the highest bit so far; the plugin slot's flags
+half is masked at `0xFFFF`, `KotorGameBridge.WriteToPlugin`, so it survives), read every tick
+by `ReadLocalFlags` from `creature+0x4D1` — a read, never a write. On peers,
+`PhantomController.ApplyTargetable` now takes the bit: while it is set and `stealth_sync` is on
+(default ON), `PhantomTargetRule.WantsPlayerFaction` answers false and the stand-in is held
+Neutral through the SAME faction flip + `PacifyCreature` that `phantom_targetable` already
+uses for a downed peer or the local_combat authority split — no new engine write, and the
+existing, live-verified release lever. `ProtocolConstants.Version` 52 → 53 for the new bit.
+
+**The visual half — `stealth_visual_sync`, default OFF, NEEDS-LIVE.** `Odyssey.SetStealthMode
+(creature, on)` calls the setter above with `(1|0, 0)`, the same arguments every toggle site
+passes, and reads the byte back. Latched per slot on the edge (`ApplyStealthVisual`), never
+per frame, and never called at all for a peer who never stealths. It stays off because (a) no
+stand-in has ever been put into this mode, (b) the callers' `+0x9FC` activity bit is not
+maintained by the setter, and (c) whether the CLIENT twin picks up the stealth shader from the
+server byte on a body the engine did not put there itself is exactly the kind of "server half
+written, client half unknown" gap X2 (`phantom-locomotion.md` §11.2) already found once for
+appearance.
+
+### 12.5 What shipped this pass
+
+- `PeerEffectKind` / `PeerEffectKindValues`: `Fear = 13`, `Stunned = 14`, `Poison = 15`,
+  `Disguise = 16`; `PeerEffectKindValues.Max` so the plugin's range check has one number.
+- Both allowlist copies (same commit): `(8,2)`, `(8,4)`, `35`, `62`. `PhantomEffectHook`'s
+  magnitude read extended to types 62 (row, `> 0`) and 35 (row, `>= 0`).
+- `OdysseyEffects`: `RoutineEffectFear`/`RoutineEffectStunned` through the existing
+  `ApplyComplexEffect`; `ExpectedEffectPoison` through the existing `ApplyOneIntParamEffect`;
+  `RoutineEffectDisguise` through the new `ApplyComplexEffectOneInt`. Failure code **11** =
+  "magnitude is not a usable poison type / appearance row", refused before any VM push.
+- `PeerEffectController`: `poison_sync` / `disguise_sync` (plain plugin keys, default OFF)
+  gate the APPLY of kinds 15/16 only; a gated entry is latched and logged, never replayed
+  later. `PeerEffectRules.NeedsOwnApplyGate` / `IsUsableDisguiseRow` are the testable mirrors.
+- `PlayerState.FlagStealth` (512, `IsStealthed`), `RemoteView.FlagStealth`/`Stealthed`,
+  `KotorGameBridge` `OffStealthMode = 0x4D1`, `PhantomTargetRule`, `stealth_sync` (ON),
+  `stealth_visual_sync` (OFF) + `Odyssey.SetStealthMode`. Protocol **53**.
+- `CheatController.ApplyEffect` / `applyeffect` usage: kinds `1..16`, the four new verbs.
+- Tests: `PeerEffectRulesTests` (four mapping rows, the distinct-from-look-alike fact, the
+  gate table, the disguise-row table, the contiguous-kinds pin), `PacketCodecTests`
+  (`FlagStealth` round trip above the low byte, a Disguise packet with a full u16 row),
+  `EffectVerbsTests` (the four verbs, magnitude carried), `PhantomTargetRuleTests` (new).
+- No `SharedBlock` layout change, no packet shape change.
+
+### 12.6 NEEDS-LIVE (exact `applyeffect` verbs — docs/CONSOLE.md; blank target = nearest phantom)
+
+1. **Fear / Stunned, both directions** (default ON — same bar §9 set for Knockdown/Paralyze/
+   Sleep): on instance A, `applyeffect fear` then `applyeffect stunned`; B's plugin log shows
+   `effect: applied kind 13 from peer 0x..` and `kind 14`; reverse from B. Local smoke:
+   `applyeffect fear me`, `applyeffect stunned me` answer `applied kind N to 0x7FFFFFFF`. If
+   either refuses with `failure 3`, `table[158]`/`table[161]` did not hold `0x5313F0` on the
+   live table — report it, do not guess.
+2. **Poison, the double-count question** (`poison_sync=0` first): `applyeffect poison "" 12000 0`
+   at B's stand-in from A. Expect A's `effects` to show a `poison` row captured/forwarded, B's
+   log `effect: not replaying kind 15 ... poison_sync is off`, and then WATCH B's `combat:
+   taken N` ledger for ~12 s: ticks arriving there confirm §10.3's inference (the tick path
+   forwards as damage). Then `poison_sync=1` on B, repeat: B logs `applied kind 15`; if the
+   ledger ALSO ticks, the two paths double and the key must stay OFF until the stand-in's
+   poison-tick damage is filtered out of `PhantomHitHook` (its type-38 effects carry the
+   poison effect's creator; that filter is the follow-up). Local smoke: `applyeffect poison me
+   6000 0`; a row above 255 must answer failure 11.
+3. **Disguise mirror (no key needed)**: A equips the Sith uniform on Taris (or any disguise
+   item); B watches A's stand-in repaint (`identity: phantom slot N ... now renders appearance
+   R` with the uniform's row in B's plugin log), and repaint back on unequip. This is the
+   review's actual ask and rides the existing appearance channel.
+4. **Disguise kind** (`disguise_sync=1` on the receiver): `applyeffect disguise "" 6000 <row>`
+   at B's stand-in from A (a real appearance.2da row, e.g. a Sith soldier's); B logs `applied
+   kind 16`, B's own body wears it for 6 s, and A's screen repaints B's stand-in from B's
+   republished row. Local smoke: `applyeffect disguise me 6000 <row>`; `... me 6000 0` must
+   answer failure 11; a second disguise on an already-disguised body is refused by the engine
+   (`Disguise` returns 0 at `0x4EE034`) — expect `applied` on the VM side with no visible change.
+5. **Stealth targeting** (default ON): B presses stealth; A's plugin log shows `phantom 0x..:
+   back to neutral; attackers released (peer is in stealth)`, and a hostile A provokes ignores
+   B's stand-in; B leaves stealth → `joined the player faction`. The agent dashboard shows
+   `STEALTH` on B's row while set. If the line never appears, read `creature+0x4D1` on B with
+   a memory probe while stealthed — the flag is only as good as that byte.
+6. **Stealth visual** (`stealth_visual_sync=1` on A): same steps; A's log adds `engine stealth
+   mode ON (stealth_visual_sync, NEEDS-LIVE)`, and the question is whether B's stand-in on A's
+   screen renders the stealth shader and is skipped by A's enemies' `DoStealthDetection`. Any
+   crash or a body stuck translucent after B unstealths → leave the key OFF and note it here.

@@ -15,8 +15,9 @@ namespace KotorCoop.Protocol;
 ///
 /// The desync this comment used to warn about (this copy briefly ahead of
 /// <c>PhantomEffectHook.cs</c>'s own copy on sub-codes 5/6) has since closed — see
-/// docs/research/effect-sync.md. Both copies list every allowlist member today (twelve as of
-/// §10, 2026-09-02), capture and apply alike.
+/// docs/research/effect-sync.md. Both copies list every allowlist member today (sixteen as of
+/// §12, 2026-09-18: the twelve of §10 plus Fear, Stunned, Poison and Disguise), capture and
+/// apply alike.
 /// </summary>
 public static class PeerEffectRules
 {
@@ -38,24 +39,28 @@ public static class PeerEffectRules
                 switch (subCode)
                 {
                     case 1: kind = PeerEffectKind.Confused; return true;    // EffectConfused (effect-sync.md §10)
+                    case 2: kind = PeerEffectKind.Fear; return true;        // EffectFrightened, routine 158 (effect-sync.md §12) —
+                                                                            // a DISTINCT native from the EffectHorrified this
+                                                                            // table calls "Frightened" below
                     case 3: kind = PeerEffectKind.Stun; return true;        // EffectDroidStun
+                    case 4: kind = PeerEffectKind.Stunned; return true;     // EffectStunned, routine 161 (effect-sync.md §12) —
+                                                                            // the general, non-droid stun
                     case 5: kind = PeerEffectKind.Paralyze; return true;    // EffectParalyze (effect-sync.md §7)
                     case 6: kind = PeerEffectKind.Sleep; return true;       // EffectSleep (effect-sync.md §7)
                     case 7: kind = PeerEffectKind.Choke; return true;       // EffectChoke
                     case 8: kind = PeerEffectKind.Frightened; return true;  // EffectHorrified
                     case 10: kind = PeerEffectKind.Whirlwind; return true;  // EffectWhirlWind
-                    // 2 (EffectFrightened — a DISTINCT native from the EffectHorrified this
-                    // table calls "Frightened" above) and 4 (EffectStunned, the
-                    // general/non-droid stun) are NAMED (effect-sync.md §7) but not on the
-                    // wire allowlist — no PeerEffectKind exists for them yet.
-                    default: kind = PeerEffectKind.None; return false;
+                    default: kind = PeerEffectKind.None; return false;      // 9 is minted by nothing found so far
                 }
 
             case 15: kind = PeerEffectKind.TemporaryHitpoints; return true; // OnApplyTemporaryHitpoints (effect-sync.md §10)
             case 20: kind = PeerEffectKind.Knockdown; return true;  // OnApplyKnockdown
             case 29: kind = PeerEffectKind.Slow; return true;       // OnApplyMovementSpeedDecrease
+            case 35: kind = PeerEffectKind.Poison; return true;     // OnApplyPoison, routine 250 (effect-sync.md §12) — once per
+                                                                    // application; the ticks are type-38 damage (§10.3)
             case 39: kind = PeerEffectKind.Heal; return true;       // OnApplyHeal (effect-sync.md §10)
             case 60: kind = PeerEffectKind.ForcePush; return true;  // OnApplyForcePush
+            case 62: kind = PeerEffectKind.Disguise; return true;   // OnApplyDisguise, routine 463 (effect-sync.md §12)
 
             default:
                 kind = PeerEffectKind.None;
@@ -88,8 +93,31 @@ public static class PeerEffectRules
         PeerEffectKind.Heal => true,
         PeerEffectKind.TemporaryHitpoints => true,
         PeerEffectKind.Confused => true,
+        PeerEffectKind.Fear => true,      // routine 158 — effect-sync.md §12
+        PeerEffectKind.Stunned => true,   // routine 161 — effect-sync.md §12
+        PeerEffectKind.Poison => true,    // routine 250 — effect-sync.md §12 (apply gated by poison_sync)
+        PeerEffectKind.Disguise => true,  // routine 463 — effect-sync.md §12 (apply gated by disguise_sync)
         _ => false,
     };
+
+    /// <summary>
+    /// Which kinds the RECEIVING side replays only when its own coop.ini says so, on top of
+    /// <c>effect_sync</c>: Poison (<c>poison_sync</c>) and Disguise (<c>disguise_sync</c>), both
+    /// default OFF until a live pass has run them (effect-sync.md §12). The other kinds ride
+    /// <c>effect_sync</c> alone. Capture and forwarding are never gated by this — a refused
+    /// replay is a logged no-op on the receiver, which is what keeps the two halves
+    /// independently testable.
+    /// </summary>
+    public static bool NeedsOwnApplyGate(PeerEffectKind kind) =>
+        kind is PeerEffectKind.Poison or PeerEffectKind.Disguise;
+
+    /// <summary>
+    /// What the wire's <c>Magnitude</c> means for each kind that carries one — the receiver
+    /// refuses a Disguise whose row is not a writable appearance.2da row (zero, or above the
+    /// u16 the engine stores it in) instead of substituting a default the way the heal family
+    /// does: there is no sensible "default disguise", and row 0 is not one either.
+    /// </summary>
+    public static bool IsUsableDisguiseRow(uint magnitude) => magnitude is not 0 && magnitude <= 0xFFFF;
 
     /// <summary>
     /// Which of a ring's captured entries are NEW since <paramref name="watermark"/> — the

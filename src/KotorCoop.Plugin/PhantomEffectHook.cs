@@ -6,9 +6,11 @@ namespace KotorCoop.Plugin;
 /// <summary>
 /// Watches the engine's GENERIC effect dispatcher for non-damage effects landing on a peer's
 /// phantom — stun, paralyze, knockdown, slow, frightened, sleep, choke, Force push/whirlwind,
-/// and (effect-sync.md §10, 2026-09-02) heal/temporary-hitpoints/confused — so they can be
-/// forwarded to that peer and replayed on their real character. The non-damage sibling of
-/// <see cref="PhantomHitHook"/>.
+/// (effect-sync.md §10, 2026-09-02) heal/temporary-hitpoints/confused, and (§12, 2026-09-18)
+/// fear/the general stun/poison/disguise — so they can be forwarded to that peer and replayed
+/// on their real character. The non-damage sibling of <see cref="PhantomHitHook"/>. Poison is
+/// captured ONCE, at <c>OnApplyPoison</c>; its per-tick damage is ordinary type-38 damage that
+/// (INFERRED, §10.3) re-enters <see cref="PhantomHitHook"/> like any hit.
 ///
 /// The hook point is <c>CSWSEffectListHandler::OnEffectApplied 0x004D8320</c> — the SAME kind
 /// of choke point <c>OnApplyDamage</c> is, one level up: every effect the game applies to
@@ -85,20 +87,24 @@ internal static unsafe class PhantomEffectHook
                 switch (subCode)
                 {
                     case 1: kind = PeerEffectKindValues.Confused; return true;    // EffectConfused (effect-sync.md §10)
+                    case 2: kind = PeerEffectKindValues.Fear; return true;        // EffectFrightened, routine 158 (effect-sync.md §12)
                     case 3: kind = PeerEffectKindValues.Stun; return true;        // EffectDroidStun
+                    case 4: kind = PeerEffectKindValues.Stunned; return true;     // EffectStunned, routine 161 (effect-sync.md §12)
                     case 5: kind = PeerEffectKindValues.Paralyze; return true;    // EffectParalyze (routine 148)
                     case 6: kind = PeerEffectKindValues.Sleep; return true;       // EffectSleep (routine 154)
                     case 7: kind = PeerEffectKindValues.Choke; return true;       // EffectChoke
                     case 8: kind = PeerEffectKindValues.Frightened; return true;  // EffectHorrified
                     case 10: kind = PeerEffectKindValues.Whirlwind; return true;  // EffectWhirlWind
-                    default: kind = PeerEffectKindValues.None; return false;      // unnamed sub-codes
+                    default: kind = PeerEffectKindValues.None; return false;      // 9: minted by nothing found so far
                 }
 
             case 15: kind = PeerEffectKindValues.TemporaryHitpoints; return true; // OnApplyTemporaryHitpoints (effect-sync.md §10)
             case 20: kind = PeerEffectKindValues.Knockdown; return true;  // OnApplyKnockdown
             case 29: kind = PeerEffectKindValues.Slow; return true;        // OnApplyMovementSpeedDecrease
+            case 35: kind = PeerEffectKindValues.Poison; return true;      // OnApplyPoison, once per application (effect-sync.md §12)
             case 39: kind = PeerEffectKindValues.Heal; return true;        // OnApplyHeal (effect-sync.md §10)
             case 60: kind = PeerEffectKindValues.ForcePush; return true;   // OnApplyForcePush
+            case 62: kind = PeerEffectKindValues.Disguise; return true;    // OnApplyDisguise (effect-sync.md §12)
 
             default:
                 kind = PeerEffectKindValues.None;
@@ -264,9 +270,17 @@ internal static unsafe class PhantomEffectHook
 
             // integer_list[0] carries the real magnitude for every single-int-parameter
             // constructor this hook understands: percent for Slow (29), heal amount for Heal
-            // (39), hit-point amount for TemporaryHitpoints (15) — same field, same read,
-            // three different meanings depending on engineType, exactly like `aux` above.
-            uint magnitude = (engineType is 29 or 39 or 15) && aux > 0 ? (uint)aux : 0;
+            // (39), hit-point amount for TemporaryHitpoints (15), the appearance.2da row for
+            // Disguise (62 — OnApplyDisguise's own `GetInteger(effect, 0)` feeds
+            // CSWSCreature::Disguise, effect-sync.md §12.2) — same field, same read, four
+            // different meanings depending on engineType, exactly like `aux` above.
+            //
+            // Poison (35) is the one whose row 0 is a VALID value (poison.2da row 0), so it
+            // is not gated on `aux > 0`: a zero magnitude for Poison means poison type 0,
+            // not "unknown". The receiver's clamp (OdysseyEffects) bounds it.
+            uint magnitude = engineType == 35 && aux >= 0
+                ? (uint)aux
+                : (engineType is 29 or 39 or 15 or 62) && aux > 0 ? (uint)aux : 0;
 
             float durationSeconds = *(float*)(effect + EffectDuration);
             uint durationMs = durationSeconds > 0f && durationSeconds < MaxSaneDurationSeconds

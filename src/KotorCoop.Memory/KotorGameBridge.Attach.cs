@@ -119,6 +119,12 @@ public sealed partial class KotorGameBridge
     // CSWSCreature.
     private const int OffPartyFollowInfo = 0x4C0;   // CSWSCreaturePartyFollowInfo*
     private const int OffAppearanceType = 0xA60;    // u16, the appearance.2da row
+
+    /// <summary>byte, <c>CSWSCreature.stealth_mode</c> — written only by
+    /// <c>CSWSCreature::SetStealthMode 0x0050EE50</c> (<c>cmp al,[ecx+0x4D1]; mov [ecx+0x4D1],al</c>),
+    /// which the stealth button reaches through <c>SetActivity</c>; docs/research/effect-sync.md
+    /// §12.4. A read, never a write, from this side.</summary>
+    private const int OffStealthMode = 0x4D1;
     private const int OffCreatureStats = 0xA74;     // CSWSCreatureStats*
     private const int OffInventory = 0xA2C;         // CSWInventory*
 

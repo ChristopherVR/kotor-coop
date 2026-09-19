@@ -58,8 +58,8 @@ public enum PeerEffectKind : byte
     /// one. This wire member's English name was a semantic guess made before either name was
     /// recoverable; its NUMERIC identity (sub-code 8 / <c>EffectHorrified</c>) is correct and
     /// unchanged, and it is kept as-is (not renamed) to avoid a wire-breaking change for an
-    /// already-shipped, live-tested kind. The real <c>EffectFrightened</c> (sub-code 2) has no
-    /// wire kind of its own yet.</summary>
+    /// already-shipped, live-tested kind. The real <c>EffectFrightened</c> (sub-code 2) is
+    /// <see cref="Fear"/> (effect-sync.md §12, 2026-09-18).</summary>
     Frightened = 5,
 
     /// <summary>Engine effect type 8, sub-code 6 — VERIFIED BY NAME (routine 154,
@@ -106,4 +106,39 @@ public enum PeerEffectKind : byte
     /// already use — zero pushed script arguments, dispatched on the calling routine
     /// number.</summary>
     Confused = 12,
+
+    /// <summary>Engine effect type 8, sub-code 2 (routine 158, <c>EffectFrightened</c>) — the
+    /// genuine <c>EffectFrightened</c> native, named in effect-sync.md §7.3 (2026-08-22) and
+    /// shipped §12 (2026-09-18). NOT the member called <see cref="Frightened"/> above, which is
+    /// really <c>EffectHorrified</c> (sub-code 8) and keeps its old label for wire stability.
+    /// Same <c>ExecuteCommandEffectComplex</c> zero-pushed-argument routing as
+    /// Knockdown/Paralyze/Sleep/Confused, at its own verified routine number.</summary>
+    Fear = 13,
+
+    /// <summary>Engine effect type 8, sub-code 4 (routine 161, <c>EffectStunned</c>) — the
+    /// GENERAL, non-droid stun; <see cref="Stun"/> above is the droid-scoped
+    /// <c>EffectDroidStun</c> (sub-code 3). Named §7.3, shipped §12 (2026-09-18) through the
+    /// same <c>ExecuteCommandEffectComplex</c> routing as <see cref="Fear"/>.</summary>
+    Stunned = 14,
+
+    /// <summary>Engine effect type 35 (<c>OnApplyPoison</c>), VM constructor
+    /// <c>ExecuteCommandEffectPoison</c> (<c>0x00533560</c>, routine 250) — VERIFIED single
+    /// <c>int nPoisonType</c> parameter (poison.2da row), effect-sync.md §12 (2026-09-18). The
+    /// magnitude carries the poison type. Captured ONCE per application (the dispatcher sees
+    /// <c>OnApplyPoison</c> once; the ticks are ordinary type-38 damage, §10.3), applied durable
+    /// for the effect's own duration. Apply-side gated by coop.ini <c>poison_sync</c> (default
+    /// OFF, NEEDS-LIVE — see §12 for the double-count question it must answer first).</summary>
+    Poison = 15,
+
+    /// <summary>Engine effect type 62 (<c>OnApplyDisguise</c>), VM constructor
+    /// <c>EffectDisguise(int nDisguiseAppearance)</c> = routine 463, one of the
+    /// <c>ExecuteCommandEffectComplex</c> cases that DOES pop one script argument
+    /// (effect-sync.md §12, 2026-09-18). The magnitude carries the appearance.2da row. Note
+    /// the peer's stand-in already follows a disguise WITHOUT this kind: the engine's own
+    /// <c>CSWSCreature::Disguise</c> writes the wearer's <c>+0xA60</c> appearance row, which
+    /// is the field <c>PlayerState.Appearance</c> samples every tick. This kind covers the
+    /// other direction — a disguise effect that lands on a stand-in is replayed on the real
+    /// body — and its apply side is gated by coop.ini <c>disguise_sync</c> (default OFF,
+    /// NEEDS-LIVE).</summary>
+    Disguise = 16,
 }
