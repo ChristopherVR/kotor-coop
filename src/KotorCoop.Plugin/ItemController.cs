@@ -73,6 +73,25 @@ internal sealed unsafe class ItemController(SharedBlockView block)
         return false;
     }
 
+    /// <summary>How many replicated item bodies are on the floor right now — what the
+    /// save-time flush asks before deciding to hold a save.</summary>
+    public int StandingCount
+    {
+        get
+        {
+            int standing = 0;
+            for (int slot = 0; slot < SharedBlock.ItemSlotCapacity; slot++)
+            {
+                if (_states[slot] == SharedBlock.ItemStateAlive)
+                {
+                    standing++;
+                }
+            }
+
+            return standing;
+        }
+    }
+
     /// <summary>
     /// Destroys every item body this controller put on the floor and reports how many are
     /// still there. The session's counterpart to <see cref="FlushOneBody"/>: a full sweep,

@@ -100,6 +100,7 @@ touch a running game.
 | `checkstub.py` | Re-emits and disassembles `CrashProbe.BuildHandler`'s hand-assembled exception stub — now including the `SetFilePointer`/`WriteFile` calls that hand the record to `kotorcoop-crash.bin` — byte for byte, as an offline correctness check. |
 | `globalvars.py` | Reader for KOTOR 1 save-game GFF files, specialised for `GLOBALVARS.res`. |
 | `kotorfiles.py` | Pure-stdlib readers for the Odyssey engine's data formats (KEY/BIF/GFF/2DA/TLK and friends). |
+| `saveinspect.py` | Counts what a save baked into its module — `SAVEGAME.sav` → nested module image → `.git` — and flags the co-op ghosts among them (`coop_phantom` creatures, `coop_mapnote`/untagged-enabled map pins, `Mod_NextObjId0`). The offline oracle for the save-time flush (docs/research/save-ghosts.md): a clean Endar Spire deck save reads 25 / 58; `--all <saves dir>` sweeps every save, `--expect-clean` exits 1 on any ghost. |
 | `patch_mainmenu.py` | Builds the `Override\mainmenu*.gui` that turns the dormant `BTN_WARP` control into the visible "Coop" button. |
 | `q.py` | Runs an ad-hoc SQL query against `kotor1_0_3.db`. *(no header comment — undocumented one-off.)* |
 

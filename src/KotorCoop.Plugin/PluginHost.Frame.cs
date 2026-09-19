@@ -448,6 +448,10 @@ internal static unsafe partial class PluginHost
                 InvalidateAll("module changed");
             }
 
+            // A save held by the save-time flush was a request for the world that just went
+            // away; it is dropped (logged), never re-issued into the one loading.
+            DropHeldSaveOnWorldChange();
+
             _epoch = epoch;
 
             // A world just came up: sweep out any co-op stand-ins and map pins a MANUAL save
@@ -601,6 +605,17 @@ internal static unsafe partial class PluginHost
         else
         {
             _moveToModulePendingSeen = false;
+        }
+
+        // The save-time flush (docs/research/save-ghosts.md §4): a manual save the
+        // SaveFlushHook detour is holding gets the same one-destroy-per-frame flush the two
+        // transition windows above and below run, then the identical save is re-issued.
+        // After the door and move-to-module blocks on purpose — a real transition outranks
+        // a held save, and the party-count crash guard must still run — and before the
+        // session warp, which a held save simply delays by its bounded hold.
+        if (RunSaveFlushFrame())
+        {
+            return;
         }
 
         if (_travel is { HasPendingRequest: true } travel)

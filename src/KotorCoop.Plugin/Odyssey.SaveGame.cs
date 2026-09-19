@@ -48,4 +48,113 @@ internal static unsafe partial class Odyssey
         DoQuickSaveFn();
         return true;
     }
+
+    // ---- the server-side save entry, for the save-time flush's re-issue ------------------
+
+    /// <summary>
+    /// <c>CServerExoAppInternal::SaveGame 0x004B58A0</c> — the ONE entry every save reaches
+    /// (quicksave, the save panel, both autosaves; the call chain is in
+    /// <see cref="SaveFlushHook"/>'s header). <c>thiscall</c> with FOUR stack arguments —
+    /// <c>ret 0x10</c> at both exits, 0x4B59EE and 0x4B5C4D; the symbol database's
+    /// <c>param_size 12</c> is wrong by one — <c>(int number, CExoString* name,
+    /// CSWSPlayer* player, unused)</c>, returning 1 for accepted and 0 for not enough disk
+    /// space. It only ARMS the save (directory + stall record); the module is stored on the
+    /// next server main-loop pass.
+    ///
+    /// ⚠ Calling it re-enters <see cref="SaveFlushHook"/>'s splice, by design: the hook
+    /// passes a request through while <see cref="SaveFlushRule"/> is in its quiet phase,
+    /// which is where the rule already is when the host re-issues.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, nint, nint, int> ServerSaveGameFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint, nint, nint, int>)0x004B58A0;
+
+    /// <summary>
+    /// Reads the text of an engine <c>CExoString</c> (<c>{char* text; int length}</c>) into a
+    /// managed string, bounded by <paramref name="capacity"/> and cut at the first null
+    /// (the engine's length field counts the terminator — the CExoString length trap). False
+    /// when the pointer or its text pointer does not look like data, or the length is absurd.
+    /// </summary>
+    public static bool TryReadExoString(nint exoString, int capacity, out string text)
+    {
+        text = string.Empty;
+        if (!LooksLikeDataPointer(exoString))
+        {
+            return false;
+        }
+
+        nint chars = *(nint*)exoString;
+        int length = *(int*)(exoString + 4);
+        if (length == 0 && chars == 0)
+        {
+            return true; // the empty string: a null text pointer and no length
+        }
+
+        if (!LooksLikeDataPointer(chars) || length < 0 || length > 4096)
+        {
+            return false;
+        }
+
+        int n = 0;
+        int limit = Math.Min(length, capacity);
+        while (n < limit && *(byte*)(chars + n) != 0)
+        {
+            n++;
+        }
+
+        text = n == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString((byte*)chars, n);
+        return true;
+    }
+
+    /// <summary>
+    /// Re-issues a save that <see cref="SaveFlushHook"/> held: the same call, the same
+    /// arguments, a fresh <c>CExoString</c> built from the captured name. Refuses (false)
+    /// when there is no server any more or the server object is not the one the request was
+    /// made against — a cross-world re-issue is exactly the pointer-poison the transition
+    /// rules forbid. Returns the engine's own answer otherwise.
+    ///
+    /// The <c>player</c> pointer is forwarded as captured: <c>SaveGame</c> reads it only on
+    /// its not-enough-disk-space exit, and the server-side player object it names lives for
+    /// the whole session (the player list is on <c>CServerExoAppInternal</c>, not the module).
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ReissueServerSaveGame(nint internalServer, int number, string name, nint player, nint arg4)
+    {
+        nint server = GetServer();
+        if (server == 0)
+        {
+            return false;
+        }
+
+        nint current = Deref(server + AppServerOffsetInternal);
+        if (current == 0 || current != internalServer)
+        {
+            return false;
+        }
+
+        byte* text = stackalloc byte[SaveFlushHook.NameCapacity + 1];
+        int n = 0;
+        foreach (char c in name)
+        {
+            if (n >= SaveFlushHook.NameCapacity)
+            {
+                break;
+            }
+
+            text[n++] = c is > (char)0 and < (char)128 ? (byte)c : (byte)'?';
+        }
+
+        text[n] = 0;
+
+        byte* storage = stackalloc byte[8];
+        CExoStringCtorFn(storage, text);
+        try
+        {
+            return ServerSaveGameFn(current, number, (nint)storage, player, arg4) != 0;
+        }
+        finally
+        {
+            CExoStringDtorFn(storage);
+        }
+    }
 }

@@ -239,6 +239,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `client_load_rejoin` | ON | a client's own Load Game tears down and rejoins the session | [session-save.md](research/session-save.md) |
 | `host_load_readopt` | ON | a host's own Load Game has every client rejoin instead of disconnecting | [session-save.md](research/session-save.md) |
 | `session_save_host_refusal` | OFF | tear the session down when the host's own save-load watch fires | [session-save.md](research/session-save.md) |
+| `save_flush` | OFF (NEEDS-LIVE) | hold a manual save (F4, the save panel, the `save` verb) while co-op spawns are destroyed, then re-issue it, so nothing is baked into the module | [save-ghosts.md §4](research/save-ghosts.md) |
 
 ### Minigames (swoop races, turrets, Pazaak)
 

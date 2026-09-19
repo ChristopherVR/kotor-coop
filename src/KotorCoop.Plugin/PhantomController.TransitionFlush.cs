@@ -12,6 +12,26 @@ internal sealed unsafe partial class PhantomController
     /// Returns false once nothing is left to destroy — a refused destroy still returns true,
     /// because the body IS still there and the caller must come back for it.
     /// </summary>
+    /// <summary>How many stand-in bodies are standing right now — what the save-time flush
+    /// (<c>PluginHost.CountSpawnedBodiesStanding</c>) asks before deciding to hold a save.
+    /// Counts every slot, for the same reason <see cref="FlushOneBody"/> walks every slot.</summary>
+    public int StandingCount
+    {
+        get
+        {
+            int standing = 0;
+            for (int i = 0; i < _phantoms.Length; i++)
+            {
+                if (_phantoms[i] != 0)
+                {
+                    standing++;
+                }
+            }
+
+            return standing;
+        }
+    }
+
     public bool FlushOneBody()
     {
         // ⚠ Every slot, not the first _phantomCount of them. Slots are stable per peer

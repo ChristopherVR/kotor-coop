@@ -197,6 +197,7 @@ $script:CoopIniDeveloperKeyDefaults = @{
     session_save_host_refusal          = '0'
     client_load_rejoin                 = '1'
     host_load_readopt                  = '1'
+    save_flush                         = '0'
     pause_button_hook                  = '1'
     local_combat_range                 = '20'
     damage_creator_attribution         = '0'

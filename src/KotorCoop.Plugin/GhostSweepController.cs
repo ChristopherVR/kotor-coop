@@ -30,9 +30,10 @@ namespace KotorCoop.Plugin;
 /// through <see cref="Odyssey.DestroyMapMarker"/>.
 ///
 /// The other half — opening the flush window before a manual save so nothing is baked in the
-/// first place — needs a hook on the quicksave and save-panel paths and is tracked in
-/// docs/research/save-ghosts.md; until then a manual save still bakes spawns, and this sweep
-/// makes that harmless.
+/// first place — is <see cref="SaveFlushHook"/> (the one server entry every save reaches,
+/// docs/research/save-ghosts.md §4, NEEDS-LIVE as of 2026-09-18). This sweep stays: it heals
+/// saves written before that hook existed, saves written with <c>save_flush=0</c>, and the
+/// bounded case where the flush ran out of frames with a body still refusing to die.
 ///
 /// MAIN THREAD ONLY, from the epoch-valid section of <c>PluginHost.OnFrame</c>.
 /// </summary>
