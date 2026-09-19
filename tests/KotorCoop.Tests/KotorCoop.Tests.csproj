@@ -110,6 +110,10 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NewCharacterCaptureRule.cs" Link="Plugin\NewCharacterCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PostAdoptEquipRepairRule.cs" Link="Plugin\PostAdoptEquipRepairRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PeerEffectKind.cs" Link="Plugin\PeerEffectKind.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnemyEffectMailboxRule.cs" Link="Plugin\EnemyEffectMailboxRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnemyEffectThrottleRule.cs" Link="Plugin\EnemyEffectThrottleRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnemyEffectApplyRule.cs" Link="Plugin\EnemyEffectApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CarriedPinReleaseRule.cs" Link="Plugin\CarriedPinReleaseRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GhostSweepRule.cs" Link="Plugin\GhostSweepRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SaveFlushRule.cs" Link="Plugin\SaveFlushRule.cs" />

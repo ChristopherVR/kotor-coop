@@ -228,6 +228,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
             [PacketType.ClassGrant] = HandleClassGrant,
             [PacketType.ClassGrantAck] = HandleClassGrantAck,
+            [PacketType.EnemyEffect] = HandleEnemyEffect,
             [PacketType.Ping] = HandlePing,
             [PacketType.Bye] = HandleBye,
             [PacketType.WorldTransferRequest] = HandleWorldTransferRequest,

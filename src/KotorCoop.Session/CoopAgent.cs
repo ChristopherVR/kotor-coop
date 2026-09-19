@@ -90,6 +90,7 @@ public sealed partial class CoopAgent
     private readonly WorldStatePump _worldStatePump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly ClassGrantPump _classGrantPump;
+    private readonly EnemyEffectPump _enemyEffectPump;
     private readonly PartyPoolPump _partyPoolPump;
     private readonly StorePump _storePump;
 
@@ -182,6 +183,7 @@ public sealed partial class CoopAgent
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
         _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
+        _enemyEffectPump = new EnemyEffectPump(bridge, session, settings, _log);
     }
 
     public IGameBridge Bridge => _bridge;
@@ -716,6 +718,11 @@ public sealed partial class CoopAgent
         // apply is a request + ack loop against the plugin; a no-op (one dword read) when
         // nothing is pending, and nothing at all when class_grant_sync is off.
         _classGrantPump.Pump(local, peers, _changedModule, _moduleSettledAtMs);
+
+        // The client-cast enemy-effect relay (docs/research/enemy-effects.md): report a cast on a
+        // mirrored enemy to the host, hand a client's reported cast to the plugin. Nothing at
+        // all when enemy_effect_sync is off.
+        _enemyEffectPump.Pump(local, _changedModule);
 
         // --- combat path: a few times a second -------------------------------------------
         //

@@ -220,8 +220,18 @@ public static class ProtocolConstants
     /// int32 each, 0 = auto) ride Hello/Welcome as host-authoritative keys, so a client adopts
     /// the host's setting and both sides resolve the same percent from the same player count.
     /// No new packet type. See docs/research/player-count-scaling.md.
+    ///
+    /// Version 58 (57 is another stream's): <see cref="PacketType.EnemyEffect"/> (84) /
+    /// <see cref="PacketType.EnemyEffectAck"/> (85) — the client-cast enemy-effect relay. A
+    /// non-damage effect (Stasis, Stun, Fear, Whirlwind, Force Push, Slow, Paralysis, Sleep, a
+    /// grenade rider) a CLIENT casts on a mirrored enemy is captured at the engine's effect
+    /// dispatcher and sent reliably to the host, which replays it on the enemy's real body
+    /// (<see cref="EnemyEffectRules"/> names the forwardable subset of
+    /// <see cref="PeerEffectKind"/>). Client to host only; the other clients see it through the
+    /// ordinary enemy census. Off by default (<c>enemy_effect_sync</c>), NEEDS-LIVE. See
+    /// docs/research/enemy-effects.md.
     /// </summary>
-    public const byte Version = 56;
+    public const byte Version = 58;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

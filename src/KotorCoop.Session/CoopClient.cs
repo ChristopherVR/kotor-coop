@@ -172,6 +172,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
             [PacketType.ClassGrant] = HandleClassGrant,
             [PacketType.ClassGrantAck] = HandleClassGrantAck,
+            [PacketType.EnemyEffectAck] = HandleEnemyEffectAck,
             [PacketType.JournalSnapshot] = HandleJournalSnapshot,
             [PacketType.EnemySnapshot] = HandleEnemySnapshot,
             [PacketType.WorldDigest] = HandleWorldDigest,
@@ -391,6 +392,7 @@ public sealed partial class CoopClient : ICoopSession
         FlushMidModuleMovies();
         FlushGalaxyDepartures();
         FlushClassGrants(now);
+        FlushEnemyEffects(now);
 
         if (now - _lastPingMs >= PingIntervalMs)
         {
@@ -572,7 +574,7 @@ public sealed partial class CoopClient : ICoopSession
         // traffic the host sends to MEMBERS counts: the snapshots, the levels, the handshake.
         if (type is not (PacketType.Pong or PacketType.FlagAck or PacketType.ItemAck
             or PacketType.JournalAck or PacketType.ContainerLootAck or PacketType.DialogueGrantAck
-            or PacketType.ClassGrantAck
+            or PacketType.ClassGrantAck or PacketType.EnemyEffectAck
             or PacketType.PartyPoolAck or PacketType.StoreAck))
         {
             _lastInboundMs = now;

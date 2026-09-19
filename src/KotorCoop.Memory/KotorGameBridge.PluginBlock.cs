@@ -822,6 +822,19 @@ public sealed partial class KotorGameBridge
     private const int BlockScalingCombat = 0x4C38;
     private const int BlockScalingEconomy = 0x4C3C;
 
+    // Client-cast enemy-effect relay (shared block version 70, region 0x4C60..0x4C80, no
+    // TotalSize growth). Mirrors SharedBlock.OffsetEnemyEffect*. Two 12-byte mailboxes
+    // (enemy id, head = kind | serial << 8, args = duration/100ms | magnitude << 16), one per
+    // direction, and one ack dword per direction. docs/research/enemy-effects.md.
+    private const int BlockEnemyEffectOutEnemy = 0x4C60;
+    private const int BlockEnemyEffectOutHead = 0x4C64;
+    private const int BlockEnemyEffectOutArgs = 0x4C68;
+    private const int BlockEnemyEffectInEnemy = 0x4C6C;
+    private const int BlockEnemyEffectInHead = 0x4C70;
+    private const int BlockEnemyEffectInArgs = 0x4C74;
+    private const int BlockEnemyEffectOutAck = 0x4C78;
+    private const int BlockEnemyEffectInApplied = 0x4C7C;
+
     /// <summary>See <see cref="IPlayerBridge.SetPlayerCountScaling"/>. Economy before combat:
     /// the plugin only ever ACTS on the combat word, so a reader that sees the new combat
     /// word already has the matching economy word for its status line.</summary>

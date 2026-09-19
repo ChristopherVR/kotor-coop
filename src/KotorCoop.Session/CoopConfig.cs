@@ -329,6 +329,15 @@ public sealed record CoopConfig
     /// false)</c> fallback. docs/research/class-and-power-grants.md.</summary>
     public bool ClassGrantSync { get; init; } = true;
 
+    /// <summary>coop.ini <c>enemy_effect_sync</c> — relay a non-damage effect a CLIENT casts on a
+    /// mirrored enemy (Stasis, Stun, Fear, Whirlwind, Force Push, Slow, Paralysis, Sleep, a
+    /// grenade rider) to the host, which replays it on the enemy's real body. OFF by default,
+    /// NEEDS-LIVE: the apply half has never been run against an enemy body. Three readers must
+    /// agree on that default — this record and its parser, the agent's
+    /// <c>AgentComposition</c> fallback and the plugin's <c>PluginConfig.ReadBool
+    /// ("enemy_effect_sync", false)</c>. docs/research/enemy-effects.md.</summary>
+    public bool EnemyEffectSync { get; init; }
+
     /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
@@ -795,7 +804,8 @@ public sealed record CoopConfig
         "container_locks", "damage_creator_attribution", "debug_hello_version", "dejitter",
         "delay_probe", "delay_probe_events", "dialog_state_watch", "dialogue_exclusive",
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport",
-        "dialogue_recruit_sync", "disguise_sync", "effect_sync", "enemy_drive", "enemy_materialise",
+        "dialogue_recruit_sync", "disguise_sync", "effect_sync", "enemy_drive",
+        "enemy_effect_sync", "enemy_materialise",
         "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
         "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat",
@@ -1023,6 +1033,7 @@ public sealed record CoopConfig
             // parsed here purely so the outgoing BehaviourDigest can compare them.
             LocalCombat = !kv.ContainsKey("local_combat") || IsTruthy(kv.GetValueOrDefault("local_combat")),
             CompanionLocalCombat = IsTruthy(kv.GetValueOrDefault("companion_local_combat")),
+            EnemyEffectSync = IsTruthy(kv.GetValueOrDefault("enemy_effect_sync")),
             EffectSync = !kv.ContainsKey("effect_sync") || IsTruthy(kv.GetValueOrDefault("effect_sync")),
             TriggerRelay = !kv.ContainsKey("trigger_relay") || IsTruthy(kv.GetValueOrDefault("trigger_relay")),
             ClientEncounters = !kv.ContainsKey("client_encounters")

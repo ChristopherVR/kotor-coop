@@ -105,6 +105,7 @@ internal static unsafe partial class PluginHost
     private static MidModuleMovieController? _movieRelay;
     private static GalaxyDepartureController? _galaxyDeparture;
     private static ClassGrantController? _classGrant;
+    private static EnemyEffectController? _enemyEffects;
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
@@ -385,7 +386,14 @@ internal static unsafe partial class PluginHost
         //      enemy_health/enemy_damage/xp_rate/store_stock to percents and pushes the two
         //      this plugin acts on (EnemyScalingController, PhantomHitHook). NEEDS-LIVE at
         //      the time of the bump. See docs/research/player-count-scaling.md.
-        _block->Version = 69;
+        //  70: the client-cast enemy-effect relay (SharedBlock.EnemyEffect.cs, 0x4C60..0x4C80, no
+        //      TotalSize growth): two 12-byte mailboxes and two ack dwords. A non-damage effect a
+        //      client casts on a mirrored enemy is captured at the effect dispatcher
+        //      (EnemyEffectCapture, off PhantomEffectHook), sent to the host (EnemyEffectPacket,
+        //      protocol 58) and applied to the enemy's real body (EnemyEffectController ->
+        //      OdysseyEffects). coop.ini enemy_effect_sync, default OFF; NEEDS-LIVE. See
+        //      docs/research/enemy-effects.md.
+        _block->Version = 70;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
