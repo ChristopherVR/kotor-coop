@@ -178,6 +178,7 @@ hand-editing one is unsupported.
 | `companion_local_combat_range` | `10` | release distance for companion local combat | [party-reconciliation.md](research/party-reconciliation.md) |
 | `companion_damage_sync` | ON | forward damage taken by a released companion to the host | [companion-state-sync.md §13](research/companion-state-sync.md) |
 | `companion_gear_sync` | ON | dress a mirrored companion in its real equipped gear | [companion-state-sync.md](research/companion-state-sync.md) |
+| `companion_equip_host_only` | ON (NEEDS-LIVE; plugin key, code default ON, no template line) | a client's Equipment screen is closed when it opens on a companion ("the host equips companions"): companion gear and the party pool are the host's, so an item a joiner equipped there was lost. The joiner's own character stays editable | [companion-state-sync.md](research/companion-state-sync.md) §14 |
 | `companion_xp_sync` | ON (since 2026-08-28; was OFF)³ | share each active companion's experience the same way the PC's own is | [companion-state-sync.md](research/companion-state-sync.md) |
 | `party_roster_sync` | ON | reconcile the party's ACTIVE-TWO seats across instances so a partial/aborted conversation doesn't leave them disagreeing. Does **not** by itself make a companion the peer just recruited available on this instance — see `dialogue_recruit_sync` below | [party-reconciliation.md](research/party-reconciliation.md) |
 | `party_select_host_only` | ON (NEEDS-LIVE — in particular whether a CLIENT-led departure through the swept panel still runs its exit script; see docs/review-seamless-2026-09-18.md §2) | suppress a client's own copy of the party-selection screen; the host picks | [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md) |
@@ -234,6 +235,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `transition_close_client_world` | ON | BISECT LEVER: close the client's world in the transition window where the server's module is already gone | [travel-map-init-crash.md](research/travel-map-init-crash.md) |
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `client_load_rejoin` | ON | a client's own Load Game tears down and rejoins the session | [session-save.md](research/session-save.md) |
+| `character_capture_interval_min` | 10 (0 = off; agent key, code default 10, no template line) | a joined client asks the engine for a quicksave and captures its co-op character into the sidecar every N minutes while idle (not in combat, conversation or minigame); the pre-disconnect capture quicksaves first regardless | [session-save.md](research/session-save.md) |
 | `host_load_readopt` | ON | a host's own Load Game has every client rejoin instead of disconnecting | [session-save.md](research/session-save.md) |
 | `session_save_host_refusal` | OFF | tear the session down when the host's own save-load watch fires | [session-save.md](research/session-save.md) |
 

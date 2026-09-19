@@ -499,3 +499,15 @@ sanitised wrap is written back as 0, and the client baseline is `Math.Min(hostGo
 mirror above the ceiling is not reported as a phantom spend. Pinned by `GoldReadingRuleTests`
 and two `ProgressionPumpTests` cases. The plugin-side cause (the store cache) is closed
 separately; this is the belt for anything else that can drive the table below zero.
+
+## XP baseline: a first report never raises the host (2026-09-18)
+
+`ExperienceMerge` replaces the bare `Math.Max(host, report.Experience)` fold in
+`PumpProgressionHost`. A peer's first report after join (or a new agent generation) is only a
+baseline; afterwards the candidate is `hostBase + (peerNow - peerBase)`, still folded by max, so a
+veteran 5,000 XP character joining a 500 XP save no longer lifts the host, while conversation XP
+only the peer received still carries. A peer at or below the host re-baselines. Two consecutive lower
+reports (a reload, which keeps peer id and generation) re-baseline; one is a reordered datagram and
+is ignored. The publish, host write-back and three-peer folds above are unchanged. Done and covered by
+`ExperienceMergeTests` and `ProgressionPumpTests`. NEEDS-LIVE: the rejoin case (reload a save
+mid-session and confirm no regression or jump).

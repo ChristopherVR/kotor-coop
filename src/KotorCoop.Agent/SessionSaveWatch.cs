@@ -202,6 +202,11 @@ public sealed class SessionSaveWatch(string gameDirectory)
     public string? CaptureOnDisconnect(string? currentSaveDirectory) =>
         currentSaveDirectory is null ? null : Capture(currentSaveDirectory);
 
+    /// <summary>The periodic capture (<c>character_capture_interval_min</c>, 2026-09-18): the
+    /// same best-effort capture as the disconnect one, run after the dispatcher's own quicksave
+    /// request has landed (or its wait expired). Same idempotence.</summary>
+    public string? CaptureNow(string? currentSaveDirectory) => CaptureOnDisconnect(currentSaveDirectory);
+
     private string? Capture(string currentSaveDirectory) =>
         ClientCharacterPersistence.Capture(
             SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic) switch

@@ -342,11 +342,16 @@ public sealed class ProgressionPumpTests
     [Fact]
     public void TheHostMergesAClientsHigherExperienceUpward()
     {
-        // Plot XP granted by a conversation only the client is having.
+        // Plot XP granted by a conversation only the client is having — AFTER its baseline.
+        // The first report is the baseline (ExperienceMerge, 2026-09-18) and lifts nothing.
         (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
         bridge.Experience = 500;
         session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 900));
 
+        agent.PumpOnce();
+        Assert.Equal(500u, bridge.Experience);
+
+        session.Reports[0] = new PeerProgression(2, 7, 0, 0, Experience: 1300);
         agent.PumpOnce();
 
         Assert.Equal(900u, bridge.Experience);
@@ -354,10 +359,27 @@ public sealed class ProgressionPumpTests
     }
 
     [Fact]
+    public void AVeteranCharacterJoiningAnEarlierSaveDoesNotLiftTheHost()
+    {
+        // docs/review-seamless-2026-09-18.md §2: a 5,000 XP co-op character joins a 500 XP
+        // save. Pre-fix, the first tick wrote 5,000 into the host's party table.
+        (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
+        bridge.Experience = 500;
+        session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 5000));
+
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Equal(500u, bridge.Experience);
+        Assert.DoesNotContain(session.Published, p => p.Experience == 5000);
+    }
+
+    [Fact]
     public void ThreePeersConvergeToTheHighestExperience()
     {
         // A 3+ peer session: every report is folded in by max in one pass, regardless of
-        // arrival order, so the party lands on the single highest total.
+        // arrival order, so the party lands on the single highest total — of what each peer
+        // EARNED since its baseline, not of the raw totals (ExperienceMerge, 2026-09-18).
         (CoopAgent agent, ProgressionBridge bridge, StubSession session) = Build(host: true);
         bridge.Experience = 200;
         session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 500));
@@ -365,9 +387,15 @@ public sealed class ProgressionPumpTests
         session.Reports.Add(new PeerProgression(4, 11, 0, 0, Experience: 800));
 
         agent.PumpOnce();
+        Assert.Equal(200u, bridge.Experience);
 
-        Assert.Equal(1200u, bridge.Experience);
-        Assert.Contains(session.Published, p => p.Experience == 1200);
+        session.Reports[0] = new PeerProgression(2, 7, 0, 0, Experience: 510);
+        session.Reports[1] = new PeerProgression(3, 9, 0, 0, Experience: 1230);
+        session.Reports[2] = new PeerProgression(4, 11, 0, 0, Experience: 820);
+        agent.PumpOnce();
+
+        Assert.Equal(230u, bridge.Experience);
+        Assert.Contains(session.Published, p => p.Experience == 230);
     }
 
     [Fact]
@@ -383,9 +411,12 @@ public sealed class ProgressionPumpTests
         session.Reports.Add(new PeerProgression(2, 7, 0, 0, Experience: 900));
 
         agent.PumpOnce();
+        session.Reports[0] = new PeerProgression(2, 7, 0, 0, Experience: 1300);
+        agent.PumpOnce();
         Assert.Equal(900u, bridge.Experience);
 
         session.Reports[0] = new PeerProgression(2, 7, 0, 0, Experience: 100);
+        agent.PumpOnce();
         agent.PumpOnce();
 
         Assert.Equal(900u, bridge.Experience);

@@ -31,6 +31,17 @@ namespace KotorCoop.Session;
 /// module change on the CLIENT bumps ITS OWN generation (the companion is reclaimed the moment
 /// the world changes — see docs/research/companion-state-sync.md §13), which rule 2 already
 /// handles; there is nothing module-shaped for the host side to track.
+///
+/// HEALS (2026-09-18) ride the same channel as a second cumulative total per roster slot,
+/// keyed by <see cref="CompanionDamageSlots.HealSlot"/> — bit 7 of the slot field, which a
+/// 1..9 roster slot never uses. A medpac or Force heal a client lands on its released
+/// companion is a RISE in that total; the arithmetic below does not care which kind a key
+/// names, so both are banked, de-duplicated, generation-reset and plausibility-gated by the
+/// identical code. The host's plugin decodes the key and spends a heal row through
+/// <c>EffectHeal</c> instead of <c>EffectDamage</c>. The reason a heal is not a NEGATIVE
+/// damage delta: the damage total is rise-only by rule 1, and a decrease is exactly what a
+/// stale datagram looks like — a signed net would have to trust ordering the wire does not
+/// give it.
 /// </summary>
 public sealed class CompanionDamageLedger
 {
@@ -51,6 +62,9 @@ public sealed class CompanionDamageLedger
     public uint OwedFor(uint rosterSlotPlusOne) =>
         _owed.TryGetValue(rosterSlotPlusOne, out uint owed) ? owed : 0;
 
+    /// <summary>Total HEALING banked against one roster slot — the heal-flagged key's total.</summary>
+    public uint HealOwedFor(uint rosterSlotPlusOne) => OwedFor(CompanionDamageSlots.HealSlot(rosterSlotPlusOne));
+
     /// <summary>
     /// Folds this tick's reports in and returns the full per-roster-slot owed table.
     ///
@@ -62,7 +76,8 @@ public sealed class CompanionDamageLedger
     {
         foreach (PeerCompanionDamage report in reports)
         {
-            if (report.RosterSlotPlusOne == 0)
+            // A heal row still has to name a roster slot: the flag alone is no companion.
+            if (CompanionDamageSlots.RosterSlotPlusOne(report.RosterSlotPlusOne) == 0)
             {
                 continue;
             }

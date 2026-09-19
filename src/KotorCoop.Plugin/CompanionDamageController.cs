@@ -1,3 +1,5 @@
+using KotorCoop.Protocol;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -39,20 +41,41 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
     /// <summary>Reused as-is: it is already keyed by an arbitrary uint id, and a roster slot
     /// (plus one) is just as valid a key as an enemy object id — see that class's own doc
-    /// comment for why the arithmetic itself needs no change to serve a second channel.</summary>
-    private readonly DamageOwedLedger _owed = new(SharedBlock.CompanionDamageOwedCapacity);
+    /// comment for why the arithmetic itself needs no change to serve a second channel. Twice
+    /// the row capacity since 2026-09-18: a heal row (<see cref="CompanionDamageSlots"/>) is a
+    /// second key per roster slot.</summary>
+    private readonly DamageOwedLedger _owed = new(SharedBlock.CompanionDamageOwedCapacity * 2);
 
     private uint _generation = 1;
+
+    // ---- heals a released companion received here (client side, 2026-09-18) ---------------
+    //
+    // Sampled, not hooked: see CompanionHealSampleRule. One sample per presence slot (which
+    // body, its hit points, the damage watch's serial at the time), one running TOTAL per
+    // roster slot — kept across a reclaim for the identical reason PhantomHitHook's own
+    // companion total is (its _companionCumulative doc comment), and zeroed only by
+    // Invalidate, alongside the generation bump the host's ledger reads as a restart.
+
+    private readonly CompanionHealSampleRule.Sample[] _healSample =
+        new CompanionHealSampleRule.Sample[SharedBlock.CompanionDamageSlotCapacity];
+
+    private readonly uint[] _healCumulative = new uint[SharedBlock.PartyRosterSlots + 1];
+    private readonly uint[] _healSerial = new uint[SharedBlock.PartyRosterSlots + 1];
 
     private int _countdown;
     private int _logged;
     private int _unresolvedLogged;
+    private int _healsLogged;
+    private int _healsRefused;
 
     public void Invalidate()
     {
         _countdown = 0;
         _generation++;
         _owed.Clear();
+        Array.Clear(_healSample);
+        Array.Clear(_healCumulative);
+        Array.Clear(_healSerial);
         block.CompanionDamageCount = 0;
         block.CompanionDamageOwedCount = 0;
     }
@@ -83,13 +106,34 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
         int published = 0;
         for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity; i++)
         {
-            PhantomHitHook.ReadCompanionSlot(i, out uint rosterSlotPlusOne, out uint cumulative, out uint serial);
+            PhantomHitHook.ReadCompanionSlot(
+                i, out uint rosterSlotPlusOne, out uint cumulative, out uint serial, out uint objectId);
+
+            SampleHeal(i, rosterSlotPlusOne, objectId, serial);
+
             if (rosterSlotPlusOne == 0 || cumulative == 0)
             {
                 continue;
             }
 
             block.SetCompanionDamageTaken(published++, rosterSlotPlusOne, cumulative, serial);
+        }
+
+        // Heal rows after every damage row, under the flagged key (CompanionDamageSlots): with
+        // at most two companions ever released at once, four rows hold both kinds for both.
+        for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity && published < SharedBlock.CompanionDamageSlotCapacity; i++)
+        {
+            PhantomHitHook.ReadCompanionSlot(i, out uint rosterSlotPlusOne, out _, out _);
+            if (rosterSlotPlusOne == 0 || _healCumulative[rosterSlotPlusOne] == 0)
+            {
+                continue;
+            }
+
+            block.SetCompanionDamageTaken(
+                published++,
+                CompanionDamageSlots.HealSlot(rosterSlotPlusOne),
+                _healCumulative[rosterSlotPlusOne],
+                _healSerial[rosterSlotPlusOne]);
         }
 
         // Blank the tail before moving the count down, so the agent never reads a row a
@@ -101,6 +145,60 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
         block.CompanionDamageGeneration = _generation;
         block.CompanionDamageCount = (uint)published;
+    }
+
+    /// <summary>
+    /// One hit-point sample of a released companion, folded through
+    /// <see cref="CompanionHealSampleRule"/> into the per-roster-slot heal total. Runs at the
+    /// same 10-frame cadence as the publish, so a medpac's rise and the next hit are almost
+    /// always in different windows; when they are not, that window is a baseline and the
+    /// medpac is not credited — the safe side, and a rare one (a hit and a heal inside the
+    /// same sixth of a second).
+    /// </summary>
+    private void SampleHeal(int slot, uint rosterSlotPlusOne, uint objectId, uint damageSerial)
+    {
+        CompanionHealSampleRule.Sample current = default;
+
+        if (objectId != 0 && rosterSlotPlusOne is > 0 and <= SharedBlock.PartyRosterSlots)
+        {
+            nint creature = Odyssey.ResolveServerObject(objectId);
+            if (creature != 0)
+            {
+                current = new CompanionHealSampleRule.Sample(objectId, Odyssey.GetCurrentHitPoints(creature), damageSerial);
+            }
+        }
+
+        CompanionHealSampleRule.Sample previous = _healSample[slot];
+        CompanionHealSampleRule.Verdict verdict = CompanionHealSampleRule.Observe(previous, current, out int heal);
+        _healSample[slot] = current;
+
+        switch (verdict)
+        {
+            case CompanionHealSampleRule.Verdict.Healed:
+                uint total = _healCumulative[rosterSlotPlusOne];
+                _healCumulative[rosterSlotPlusOne] = (uint)heal > uint.MaxValue - total ? uint.MaxValue : total + (uint)heal;
+                _healSerial[rosterSlotPlusOne]++;
+                if (_healsLogged < 20)
+                {
+                    _healsLogged++;
+                    PluginHost.Log(
+                        $"companion heal: released companion 0x{objectId:X} (roster slot {rosterSlotPlusOne - 1}) "
+                        + $"healed {heal} here -> {current.HitPoints} hp, cumulative {_healCumulative[rosterSlotPlusOne]}");
+                }
+
+                break;
+
+            case CompanionHealSampleRule.Verdict.Refused:
+                _healsRefused++;
+                if (_healsRefused <= 5)
+                {
+                    PluginHost.Log(
+                        $"companion heal: REFUSED an implausible rise on 0x{objectId:X} "
+                        + $"({previous.HitPoints} -> {current.HitPoints} hp in one window) — not a heal");
+                }
+
+                break;
+        }
     }
 
     /// <summary>Turns what the peers have dealt to our own companions into damage our own
@@ -134,15 +232,27 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
         for (int i = 0; i < count; i++)
         {
-            block.GetCompanionDamageOwed(i, out uint rosterSlotPlusOne, out uint owed);
+            block.GetCompanionDamageOwed(i, out uint slotField, out uint owed);
+
+            // Damage and heal rows share the table under different keys (CompanionDamageSlots);
+            // the applied ledger is keyed by the raw field, so the two never net against each
+            // other — a heal is spent as a heal, a hit as a hit, each exactly once.
+            bool isHeal = CompanionDamageSlots.IsHeal(slotField);
+            uint rosterSlotPlusOne = CompanionDamageSlots.RosterSlotPlusOne(slotField);
             if (rosterSlotPlusOne == 0 || rosterSlotPlusOne > SharedBlock.PartyRosterSlots)
             {
                 continue;
             }
 
-            int amount = _owed.Pending(rosterSlotPlusOne, owed);
+            int amount = _owed.Pending(slotField, owed);
             if (amount <= 0)
             {
+                continue;
+            }
+
+            if (isHeal)
+            {
+                ApplyHeal(slotField, rosterSlotPlusOne, amount, owed);
                 continue;
             }
 
@@ -167,7 +277,7 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
             if (Odyssey.ApplyDamageEffect(objectId, amount, creatorId, out int failure))
             {
-                _owed.Commit(rosterSlotPlusOne, amount);
+                _owed.Commit(slotField, amount);
                 block.CompanionDamageApplied += 1;
 
                 if (_logged < 20)
@@ -185,6 +295,67 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
                     $"companion damage: refused for companion 0x{objectId:X} "
                     + $"(roster slot {rosterSlotPlusOne - 1}, failure {failure})");
             }
+        }
+    }
+
+    /// <summary>
+    /// Spends a peer's heal on our own companion through the engine's own instant
+    /// <c>EffectHeal</c> (<see cref="OdysseyEffects.ApplyEffect"/>, the same constructor the
+    /// peer-effect channel already uses for a forwarded Heal on a stand-in). A companion with
+    /// no live body holds the debt like a hit does; a companion at or below zero has the debt
+    /// COMMITTED without applying — a medpac on a downed body is wasted in retail too, and
+    /// holding it would land a stale heal the moment the engine's own recovery stood it up.
+    /// NEEDS-LIVE: the sample-and-forward loop has not been watched on the rig.
+    /// </summary>
+    private void ApplyHeal(uint slotField, uint rosterSlotPlusOne, int amount, uint owed)
+    {
+        uint objectId = ResolveRosterObjectId((int)rosterSlotPlusOne - 1);
+        nint creature = objectId is 0 or Odyssey.ObjectInvalid ? 0 : Odyssey.ResolveServerObject(objectId);
+        if (creature == 0)
+        {
+            if (_unresolvedLogged < 10)
+            {
+                _unresolvedLogged++;
+                PluginHost.Log(
+                    $"companion heal: a peer owes {amount} healing to roster slot {rosterSlotPlusOne - 1}, "
+                    + "which has no live body here right now — holding it");
+            }
+
+            return;
+        }
+
+        if (Odyssey.GetCurrentHitPoints(creature) <= 0)
+        {
+            _owed.Commit(slotField, amount);
+            if (_logged < 20)
+            {
+                _logged++;
+                PluginHost.Log(
+                    $"companion heal: dropped {amount} owed to companion 0x{objectId:X} "
+                    + $"(roster slot {rosterSlotPlusOne - 1}) — it is down here, a heal would be wasted");
+            }
+
+            return;
+        }
+
+        if (OdysseyEffects.ApplyEffect(objectId, PeerEffectKindValues.Heal, 0, (uint)amount, out int failure))
+        {
+            _owed.Commit(slotField, amount);
+            block.CompanionDamageApplied += 1;
+            if (_logged < 20)
+            {
+                _logged++;
+                PluginHost.Log(
+                    $"companion heal: applied {amount} of a peer's healing to companion 0x{objectId:X} "
+                    + $"(roster slot {rosterSlotPlusOne - 1}, owed {owed})");
+            }
+        }
+        else if (_logged < 20)
+        {
+            _logged++;
+            PluginHost.Log(
+                $"companion heal: refused for companion 0x{objectId:X} "
+                + $"(roster slot {rosterSlotPlusOne - 1}, failure {failure})");
         }
     }
 

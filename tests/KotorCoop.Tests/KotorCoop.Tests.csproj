@@ -29,6 +29,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalMemoryGuard.cs" Link="Plugin\JournalMemoryGuard.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageDealtTable.cs" Link="Plugin\DamageDealtTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\CompanionHealSampleRule.cs" Link="Plugin\CompanionHealSampleRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
