@@ -143,20 +143,30 @@ public enum BehaviourFlags : uint
 ///
 /// Every boolean lives in <see cref="Flags"/> (one bitfield, one wire uint) rather than one
 /// field per key; <c>interp_ms</c> and <c>follow_lead</c> get their own fields because they are
-/// not booleans. <see cref="Hash"/> is a stable FNV-1a-32 over the whole digest, purely for a
+/// not booleans, and so do the four player-count scaling SETTINGS (<c>enemy_health</c>,
+/// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c> — integer percents, or
+/// <see cref="PlayerCountScalingRule.Auto"/>; docs/research/player-count-scaling.md), which are
+/// host-authoritative: a client adopts the host's setting so both resolve the same percent
+/// from the same player count. <see cref="Hash"/> is a stable FNV-1a-32 over the whole digest, purely for a
 /// cheap one-line startup log the way <see cref="ContentDigest"/>'s fields already get one
 /// (<c>AgentComposition.DescribeDigest</c>) — nothing compares against it directly; the actual
 /// judgment is always per-field, the same rule <see cref="ContentCompatibility"/> follows.
 /// </summary>
-public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, string FollowLead, uint Hash)
+public readonly record struct BehaviourDigest(
+    uint Flags, int InterpolationMs, string FollowLead,
+    int EnemyHealth, int EnemyDamage, int XpRate, int StoreStock, uint Hash)
 {
     /// <summary>Bumped only if the field set/order changes — mirrors <see
-    /// cref="ContentDigest.CurrentScheme"/>.</summary>
-    public const byte CurrentScheme = 1;
+    /// cref="ContentDigest.CurrentScheme"/>. 2 (2026-09-18): the four player-count scaling
+    /// settings joined the digest (protocol version 53).</summary>
+    public const byte CurrentScheme = 2;
 
     /// <summary>Every field at its built-in default: everything on except the OFF-by-default
-    /// keys, <c>interp_ms</c> at the built-in delay, <c>follow_lead</c> at "any". Used by test
-    /// fakes and any <see cref="ICoopSession"/> that never computed a real one.</summary>
+    /// keys, <c>interp_ms</c> at the built-in delay, <c>follow_lead</c> at "any", the four
+    /// scaling settings at their code fallbacks (<c>enemy_health</c>/<c>enemy_damage</c> 100 —
+    /// NEEDS-LIVE, see docs/research/player-count-scaling.md; <c>xp_rate</c>/<c>store_stock</c>
+    /// auto). Used by test fakes and any <see cref="ICoopSession"/> that never computed a real
+    /// one.</summary>
     public static BehaviourDigest Default { get; } = Compute(
         localCombat: true,
         companionLocalCombat: false,
@@ -177,7 +187,11 @@ public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, s
         mapRevealSync: false,
         requireIdenticalSave: false,
         interpolationMs: ProtocolConstants.DefaultInterpolationDelayMs,
-        followLead: "any");
+        followLead: "any",
+        enemyHealth: PlayerCountScalingRule.Vanilla,
+        enemyDamage: PlayerCountScalingRule.Vanilla,
+        xpRate: PlayerCountScalingRule.Auto,
+        storeStock: PlayerCountScalingRule.Auto);
 
     public bool Has(BehaviourFlags flag) => (Flags & (uint)flag) != 0;
 
@@ -186,11 +200,22 @@ public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, s
     /// <see cref="PacketCodec"/> on read, so a corrupted/truncated wire hash can never
     /// silently pass a same-hash comparison against genuinely different flags. A follow-lead
     /// of null/empty normalises to <c>"any"</c>, the same default <see cref="Compute"/>
-    /// applies.</summary>
-    public static BehaviourDigest FromFields(uint flags, int interpolationMs, string? followLead)
+    /// applies; a scaling setting is normalised through
+    /// <see cref="PlayerCountScalingRule.NormaliseSetting"/> so a corrupted wire int can never
+    /// resolve to a percent outside the documented range.</summary>
+    public static BehaviourDigest FromFields(
+        uint flags, int interpolationMs, string? followLead,
+        int enemyHealth = PlayerCountScalingRule.Auto, int enemyDamage = PlayerCountScalingRule.Auto,
+        int xpRate = PlayerCountScalingRule.Auto, int storeStock = PlayerCountScalingRule.Auto)
     {
         string follow = string.IsNullOrEmpty(followLead) ? "any" : followLead;
-        return new BehaviourDigest(flags, interpolationMs, follow, ComputeHash(flags, interpolationMs, follow));
+        enemyHealth = PlayerCountScalingRule.NormaliseSetting(enemyHealth);
+        enemyDamage = PlayerCountScalingRule.NormaliseSetting(enemyDamage);
+        xpRate = PlayerCountScalingRule.NormaliseSetting(xpRate);
+        storeStock = PlayerCountScalingRule.NormaliseSetting(storeStock);
+        return new BehaviourDigest(
+            flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock,
+            ComputeHash(flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock));
     }
 
     /// <summary>Builds a digest from the resolved (post coop.ini/CLI-default) value of every
@@ -216,7 +241,11 @@ public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, s
         bool mapRevealSync,
         bool requireIdenticalSave,
         int interpolationMs,
-        string followLead)
+        string followLead,
+        int enemyHealth = PlayerCountScalingRule.Auto,
+        int enemyDamage = PlayerCountScalingRule.Auto,
+        int xpRate = PlayerCountScalingRule.Auto,
+        int storeStock = PlayerCountScalingRule.Auto)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -246,15 +275,15 @@ public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, s
         Set(mapRevealSync, BehaviourFlags.MapRevealSync);
         Set(requireIdenticalSave, BehaviourFlags.RequireIdenticalSave);
 
-        string follow = string.IsNullOrEmpty(followLead) ? "any" : followLead;
-        uint hash = ComputeHash(flags, interpolationMs, follow);
-        return new BehaviourDigest(flags, interpolationMs, follow, hash);
+        return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock);
     }
 
     /// <summary>FNV-1a-32, the same house hash <see cref="SessionPassword"/> and <see
     /// cref="ContentDigest"/>'s producers use — folded over the flags word, the interpolation
-    /// delay, and the follow-lead string's UTF-16 code units.</summary>
-    private static uint ComputeHash(uint flags, int interpolationMs, string followLead)
+    /// delay, the follow-lead string's UTF-16 code units, and the four scaling settings.</summary>
+    private static uint ComputeHash(
+        uint flags, int interpolationMs, string followLead,
+        int enemyHealth, int enemyDamage, int xpRate, int storeStock)
     {
         uint h = 2166136261;
         void Mix(byte b) => h = (h ^ b) * 16777619;
@@ -276,6 +305,20 @@ public readonly record struct BehaviourDigest(uint Flags, int InterpolationMs, s
             Mix((byte)(c >> 8));
         }
 
+        MixInt(enemyHealth);
+        MixInt(enemyDamage);
+        MixInt(xpRate);
+        MixInt(storeStock);
+
         return h;
+
+        void MixInt(int value)
+        {
+            uint u = unchecked((uint)value);
+            Mix((byte)u);
+            Mix((byte)(u >> 8));
+            Mix((byte)(u >> 16));
+            Mix((byte)(u >> 24));
+        }
     }
 }

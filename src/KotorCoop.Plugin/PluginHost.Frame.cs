@@ -712,6 +712,10 @@ internal static unsafe partial class PluginHost
         _minigameNotice?.OnFrame();
 
         _items?.OnFrame();
+
+        // Before the combat mirror: a first-sighting max-hit-point write must precede the
+        // same frame's mirror clamp (see EnemyScalingController's class remarks).
+        _enemyScaling?.OnFrame();
         _combat?.OnFrame();
         _liveness?.OnFrame();
 

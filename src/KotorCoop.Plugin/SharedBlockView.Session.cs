@@ -216,4 +216,13 @@ internal sealed unsafe partial class SharedBlockView
     /// only where the paired bit of <see cref="BehaviourOverrideMask"/> is set.</summary>
     public uint BehaviourOverrideValues => *U32(SharedBlock.OffsetBehaviourOverrideValues);
 
+    // ---- resolved player-count scaling ---------------------------------------------
+
+    /// <summary>Agent-written: enemy health percent (low 16) | enemy damage percent (high 16).
+    /// See SharedBlock.PlayerCountScaling.cs and <see cref="EnemyScalingRule"/>.</summary>
+    public uint ScalingCombatWord => *U32(SharedBlock.OffsetScalingCombat);
+
+    /// <summary>Agent-written: xp rate percent (low 16) | store stock percent (high 16); status
+    /// line only.</summary>
+    public uint ScalingEconomyWord => *U32(SharedBlock.OffsetScalingEconomy);
 }

@@ -91,6 +91,7 @@ internal static class PluginConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
+        "enemy_health", "enemy_damage", "xp_rate", "store_stock",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
         "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp", "log_max_mb",

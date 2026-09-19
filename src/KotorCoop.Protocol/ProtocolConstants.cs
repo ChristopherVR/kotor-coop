@@ -184,8 +184,14 @@ public static class ProtocolConstants
     /// the existing TCP path (faster, simpler, no new failure modes of its own) is unchanged for
     /// everyone it already works for. Off by default (<c>world_transfer_udp_fallback</c>),
     /// NEEDS-LIVE. See docs/research/network-topology.md's UDP world-transfer section.
+    ///
+    /// Version 53: <see cref="BehaviourDigest"/> scheme 2 — the four player-count scaling
+    /// SETTINGS (<c>enemy_health</c>, <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c>;
+    /// int32 each, 0 = auto) ride Hello/Welcome as host-authoritative keys, so a client adopts
+    /// the host's setting and both sides resolve the same percent from the same player count.
+    /// No new packet type. See docs/research/player-count-scaling.md.
     /// </summary>
-    public const byte Version = 52;
+    public const byte Version = 53;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

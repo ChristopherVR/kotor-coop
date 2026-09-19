@@ -15,6 +15,7 @@ internal static unsafe partial class PluginHost
         _focus = new FocusKeeper(_view);
         _combat = new CombatController(_view);
         _liveness = new LivenessReconcileController(_view, _combat);
+        _enemyScaling = new EnemyScalingController(_view);
         _enemyPresence = new EnemyPresenceController(_view);
         _partyPresence = new PartyPresenceController(_view);
         _partyFollow = new PartyFollowController(_view);

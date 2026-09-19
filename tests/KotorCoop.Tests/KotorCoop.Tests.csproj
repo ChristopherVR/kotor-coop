@@ -30,6 +30,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageDealtTable.cs" Link="Plugin\DamageDealtTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnemyScalingRule.cs" Link="Plugin\EnemyScalingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
@@ -80,6 +81,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalApplyRule.cs" Link="Plugin\JournalApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.cs" Link="Plugin\SharedBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.BehaviourOverrides.cs" Link="Plugin\SharedBlock.BehaviourOverrides.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.PlayerCountScaling.cs" Link="Plugin\SharedBlock.PlayerCountScaling.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Items.cs" Link="Plugin\SharedBlock.Items.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Combat.cs" Link="Plugin\SharedBlock.Combat.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.CompanionDamage.cs" Link="Plugin\SharedBlock.CompanionDamage.cs" />

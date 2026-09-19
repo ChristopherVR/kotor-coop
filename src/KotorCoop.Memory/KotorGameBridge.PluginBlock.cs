@@ -815,6 +815,27 @@ public sealed partial class KotorGameBridge
         _memory.TryWrite(_pluginBlock + BlockBehaviourOverrideMask, overrideMask);
     }
 
+    // Resolved player-count scaling (shared block version 68, region 0x4C20..0x4C28, no
+    // TotalSize growth — it rides the free tail after the galaxy-map departure relay at
+    // 0x4C00..0x4C20). Mirrors SharedBlock.OffsetScalingCombat/OffsetScalingEconomy. See
+    // docs/research/player-count-scaling.md.
+    private const int BlockScalingCombat = 0x4C20;
+    private const int BlockScalingEconomy = 0x4C24;
+
+    /// <summary>See <see cref="IPlayerBridge.SetPlayerCountScaling"/>. Economy before combat:
+    /// the plugin only ever ACTS on the combat word, so a reader that sees the new combat
+    /// word already has the matching economy word for its status line.</summary>
+    public void SetPlayerCountScaling(uint combatWord, uint economyWord)
+    {
+        if (_pluginBlock == 0)
+        {
+            return;
+        }
+
+        _memory.TryWrite(_pluginBlock + BlockScalingEconomy, economyWord);
+        _memory.TryWrite(_pluginBlock + BlockScalingCombat, combatWord);
+    }
+
     // Live executable-image digest (shared block region 0x4720..0x4728, no TotalSize growth
     // — it rides the gap between the minigame lock at 0x4704..0x4720 and the chargen
     // handshake at 0x4780). Mirrors SharedBlock.OffsetExeImageDigest*. The plugin hashes the

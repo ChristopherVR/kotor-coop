@@ -243,6 +243,25 @@ public sealed record AgentSettings
     public FollowLeadMode FollowLeadMode { get; init; } = FollowLeadMode.Any;
 
     /// <summary>
+    /// The four player-count scaling SETTINGS from coop.ini (<c>enemy_health</c>,
+    /// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c> — docs/research/player-count-
+    /// scaling.md), each <see cref="PlayerCountScalingRule.Auto"/> or a fixed percent. What
+    /// THIS install asked for; a client's session may override any of them with the host's
+    /// (<see cref="SessionOverrides"/>), and <see cref="PlayerCountScaling"/> resolves the
+    /// effective setting to a percent from the live player count every tick.
+    /// </summary>
+    public PlayerCountScalingSettings Scaling { get; init; } = PlayerCountScalingSettings.Default;
+
+    /// <summary>
+    /// The game install directory, when the agent knows it (null for the test fakes and a
+    /// session whose install could not be resolved). Only used for the <c>store_stock</c>
+    /// once-per-store marker file under <c>saves\</c> (<see cref="StoreStockScaleLatch"/>): the
+    /// topped-up stock is baked into every save the host writes afterwards, so the marker has
+    /// to outlive the process or a reloaded save would be topped up again.
+    /// </summary>
+    public string? GameDirectory { get; init; }
+
+    /// <summary>
     /// When true, a mid-module <c>PlayMovie</c> call (no transition involved) captured by this
     /// instance's own <c>MoviePlayHook</c> is announced to peers, and an announcement received
     /// from a peer is forwarded into the plugin for it to act on. ON by default (an absent

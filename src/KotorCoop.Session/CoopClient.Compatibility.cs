@@ -134,6 +134,24 @@ public sealed partial class CoopClient
             return null;
         }
 
+        // A scaling SETTING travels as the text a player reads ("auto" / "150" —
+        // PlayerCountScalingRule.Describe) and is parsed back the same lenient way coop.ini
+        // is; the parse cannot fail on text Describe produced, but the fallback is still
+        // "adopt nothing" rather than a made-up number.
+        int? AdoptSetting(string key)
+        {
+            foreach (BehaviourDifference diff in result.Differences)
+            {
+                if (diff.HostAuthoritative && diff.Key == key)
+                {
+                    int parsed = PlayerCountScalingRule.ParseSetting(diff.HostValue, int.MinValue);
+                    return parsed == int.MinValue ? null : parsed;
+                }
+            }
+
+            return null;
+        }
+
         _overrides = new SessionOverrides(
             PartySync: Adopt("party_sync"),
             EffectSync: Adopt("effect_sync"),
@@ -143,7 +161,11 @@ public sealed partial class CoopClient
             ScriptItemSync: Adopt("script_item_sync"),
             DialogueItemSync: Adopt("dialogue_item_sync"),
             DialogueRecruitSync: Adopt("dialogue_recruit_sync"),
-            MovieRelay: Adopt("movie_relay"));
+            MovieRelay: Adopt("movie_relay"),
+            EnemyHealth: AdoptSetting("enemy_health"),
+            EnemyDamage: AdoptSetting("enemy_damage"),
+            XpRate: AdoptSetting("xp_rate"),
+            StoreStock: AdoptSetting("store_stock"));
     }
 
     private void HandleWorldDigest(IPEndPoint from, ReadOnlySpan<byte> span, long now)

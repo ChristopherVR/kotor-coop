@@ -251,7 +251,7 @@ public class TransitionMovieTests
         // and `PluginSignature` for the full history. 67 = the 2026-09-03 galaxy-map departure
         // relay (block grown to 0x4D00, SharedBlock.OffsetGalaxyDeparture*, docs/research/
         // galaxy-map-and-party-select.md's 2026-09-03 relay addendum).
-        Assert.Equal(67, int.Parse(version.Groups[1].Value));
+        Assert.Equal(68, int.Parse(version.Groups[1].Value)); // 68 = 2026-09-18 player-count scaling words
     }
 
     private static string RepositoryRoot()

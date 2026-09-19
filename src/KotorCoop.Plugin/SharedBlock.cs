@@ -236,7 +236,10 @@ internal partial struct SharedBlock
     /// added <see cref="OffsetThreatDebugCount"/>/<see cref="OffsetThreatDebugGeneration"/>/
     /// <see cref="OffsetThreatDebugRows"/> — diagnostics only (the <c>threat</c> blockpoke
     /// verb), never read by the agent — see SharedBlock.Combat.cs and
-    /// docs/research/peer-damage-ledger.md §9.
+    /// docs/research/peer-damage-ledger.md §9. Version 68 (2026-09-18) added
+    /// <see cref="OffsetScalingCombat"/>/<see cref="OffsetScalingEconomy"/> — the agent's
+    /// resolved player-count scaling percents — see SharedBlock.PlayerCountScaling.cs and
+    /// docs/research/player-count-scaling.md.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;
