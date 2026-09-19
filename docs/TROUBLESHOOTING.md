@@ -4,6 +4,15 @@ Common problems and what actually causes them. If a fix here references a `coop.
 see [CONFIG.md](CONFIG.md) for its default and where it's read; for a console verb, see
 [CONSOLE.md](CONSOLE.md).
 
+## Reporting a problem: one file with everything
+
+Run `KotorCoop.Agent.exe logs` (from the folder you extracted the package into, or add `--game-path` pointing at `swkotor.exe`).
+It writes `kotorcoop-support-<date>.zip` to your Desktop with the plugin log, the agent log (both with their older
+rotated copies), the crash record that survives a hard crash, a copy of `coop.ini` with the `password` and `host` values
+blanked, and a short note on the game and mod files present. Attach that one file. Nothing is uploaded. The logs can
+still show IP addresses and character names, so open the zip first if that matters. `crashbin.ps1` and `crashlog.ps1`
+are developer tools and are not needed for a report.
+
 ## "Co-op" button doesn't appear on the main menu
 
 `menu_button` defaults ON in the code (both readers — see CONFIG.md) and the shipped

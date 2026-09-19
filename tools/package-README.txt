@@ -402,8 +402,11 @@ Something is wrong
   swkotor.exe (read dinput8-chain.log if you use the chain loader).
 - Second instance on one machine exits immediately: start it through the helper (see
   Requirements), which renames the game's single-instance mutex.
-- The game crashed and you want to report it: kotorcoop-plugin.log's last lines are the
-  first thing to attach. For a crash the log itself can't explain (the game just vanishes,
+- The game crashed and you want to report it: run  KotorCoop.Agent.exe logs  (from the
+  folder you extracted this package into). It puts kotorcoop-support-<date>.zip on your
+  Desktop: the co-op logs, the crash record and a copy of coop.ini with the password and
+  host address blanked. Attach that one file. Nothing is uploaded, and the logs can still
+  show IP addresses and character names. For a crash the log itself can't explain (the game just vanishes,
   nothing after "FATAL"), turn on Windows' own crash dumps for swkotor.exe:
 
       # from an Administrator PowerShell, in the extracted package folder:

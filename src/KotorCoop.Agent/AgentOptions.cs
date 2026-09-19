@@ -29,6 +29,9 @@ public enum AgentCommand
     /// <summary>Remove what Install placed.</summary>
     Uninstall,
 
+    /// <summary>Zip the co-op logs, the crash record and a redacted coop.ini for a bug report.</summary>
+    Logs,
+
     /// <summary>No arguments at all: the double-click experience - find the game, install, launch.</summary>
     Setup,
 
@@ -252,6 +255,7 @@ public sealed record AgentOptions
             "craft-save" => AgentCommand.CraftSave,
             "install" => AgentCommand.Install,
             "uninstall" => AgentCommand.Uninstall,
+            "logs" => AgentCommand.Logs,
             "setup" => AgentCommand.Setup,
             _ => AgentCommand.Help,
         };
@@ -659,6 +663,7 @@ public sealed record AgentOptions
                     fresh sweep (needed after installing a new copy of the game).
           uninstall Remove what install placed (--game-path); keeps coop.ini, restores a
                     kept dinput8.dll. Run from the extracted zip, not the game directory.
+          logs      Zip the co-op logs, crash record and a redacted coop.ini into one file for a bug report.
           install --check
                     Report the install layout found (plain / chain / foreign-only / none)
                     and verify it - every dinput8.chain entry exists, the loader and

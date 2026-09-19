@@ -337,7 +337,7 @@ internal static class InstallCommand
         return code;
     }
 
-    private static string? ResolveGameDirectory(AgentOptions options, bool interactive, bool rescan)
+    internal static string? ResolveGameDirectory(AgentOptions options, bool interactive, bool rescan)
     {
         if (options.HasGamePath)
         {
