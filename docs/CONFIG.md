@@ -231,6 +231,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `transition_announce` | ON | a follower acts on an announced transition immediately | [transition-smoothness.md](research/transition-smoothness.md) |
 | `transition_announce_fade` | OFF | fade during an announced transition | [transition-smoothness.md](research/transition-smoothness.md) |
 | `transition_announce_scripted` | ON | also announce non-door transitions (galaxy-map departures, Leviathan/Star Forge stage changes) | [transition-smoothness.md §11](research/transition-smoothness.md) |
+| `follow_stunt` | ON (agent-only, like `follow_lead`; NEEDS-LIVE) | replay a leader's announced scripted leg INTO a `STUNT_*` cutscene module on this engine (the Taris vision, the Bastila/Revan visions, romance payoffs, the credits chain) instead of refusing it; needs `transition_announce` here and `transition_announce_scripted` on the leader. `0` restores the pre-2026-09-18 refusal | [cinematics.md §12](research/cinematics.md) |
 | `transition_close_client_world` | ON | BISECT LEVER: close the client's world in the transition window where the server's module is already gone | [travel-map-init-crash.md](research/travel-map-init-crash.md) |
 | `client_door_refusal` | ON¹ | refuse a client's own premature door crossing while following | [transition-smoothness.md](research/transition-smoothness.md) |
 | `client_load_rejoin` | ON | a client's own Load Game tears down and rejoins the session | [session-save.md](research/session-save.md) |

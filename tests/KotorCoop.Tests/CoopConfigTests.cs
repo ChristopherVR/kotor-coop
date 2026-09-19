@@ -245,11 +245,40 @@ public class CoopConfigTests
             Assert.True(c.TransitionAnnounceEnabled);
             Assert.True(c.ClientDoorRefusalEnabled);
             Assert.True(c.MovieRelayEnabled);
+
+            // follow_stunt (2026-09-18, docs/review-seamless-2026-09-18.md blocker #6): the
+            // stunt-leg replay ships ON through the same absent-key-means-ON idiom, in the
+            // record default, this parse, and AgentComposition's `?? true` alike.
+            Assert.True(c.FollowStunt);
         }
         finally
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void FollowStuntTurnsOffOnlyWhenExplicitlyZero()
+    {
+        string path = WriteTemp("""
+            mode = join
+            follow_stunt = 0
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.FollowStunt);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        // A developer switch, not a player setting: known to the readers, absent from the
+        // shipped example, so a coop.ini that sets it is logged once rather than flagged unknown.
+        Assert.True(CoopConfig.IsKnownDeveloperKey("follow_stunt"));
+        Assert.False(CoopConfig.IsPlayerFacingKey("follow_stunt"));
     }
 
     [Fact]

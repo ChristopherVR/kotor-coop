@@ -112,7 +112,7 @@ internal static class PluginConfig
         "delay_probe", "delay_probe_events", "dialog_state_watch", "dialogue_exclusive",
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport",
         "dialogue_recruit_sync", "effect_sync", "enemy_drive", "enemy_materialise",
-        "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
+        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
         "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat",
         "local_combat_bisect_mask", "local_combat_bypass_id", "local_combat_deferred_notice",

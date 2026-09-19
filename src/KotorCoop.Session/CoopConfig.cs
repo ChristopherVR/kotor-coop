@@ -433,6 +433,17 @@ public sealed record CoopConfig
     public bool ClientDoorRefusalEnabled { get; init; } = true;
 
     /// <summary>
+    /// Whether a leader's announced transition INTO a <c>STUNT_*</c> cutscene module is replayed
+    /// on this engine (the same scripted leg, run natively, so this player sees the vision /
+    /// romance payoff / credits chain too) rather than refused —
+    /// docs/research/cinematics.md's 2026-09-18 section. ON by default (an absent key enables
+    /// it; <c>follow_stunt = 0</c> restores the pre-2026-09-18 refusal). Agent-only, like
+    /// <c>follow_lead</c>: the plugin has no decision to make (the replay is the ordinary travel
+    /// request), so there is no plugin reader to keep in step. NEEDS-LIVE.
+    /// </summary>
+    public bool FollowStunt { get; init; } = true;
+
+    /// <summary>
     /// Who may lead an area transition that the OTHER side follows immediately via the announce
     /// channel — docs/research/transition-smoothness.md's "Lead-swap" entry. coop.ini
     /// <c>follow_lead</c>: <c>any</c> (the default) lets either player's committed door crossing
@@ -733,7 +744,7 @@ public sealed record CoopConfig
         "delay_probe", "delay_probe_events", "dialog_state_watch", "dialogue_exclusive",
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport",
         "dialogue_recruit_sync", "effect_sync", "enemy_drive", "enemy_materialise",
-        "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
+        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
         "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat",
         "local_combat_bisect_mask", "local_combat_bypass_id", "local_combat_deferred_notice",
@@ -918,6 +929,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")
                 || IsTruthy(kv.GetValueOrDefault("client_door_refusal")),
+            FollowStunt = !kv.ContainsKey("follow_stunt")
+                || IsTruthy(kv.GetValueOrDefault("follow_stunt")),
             FollowLead = kv.GetValueOrDefault("follow_lead", "any")
                 .Trim().Equals("host", StringComparison.OrdinalIgnoreCase)
                 ? FollowLeadMode.Host

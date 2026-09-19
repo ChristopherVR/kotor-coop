@@ -79,6 +79,14 @@ internal sealed partial class TransitionPump
                 _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
                 log($"announcing transition to '{module}'"
                     + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
+
+                // Our own engine committed to a stunt leg (its own script, or the replay warp
+                // we requested — the plugin announces both): from this tick a peer's announce
+                // naming the same module is an echo, not a lead. See TransitionPump.StuntLeg.cs.
+                if (StuntModuleRule.IsStuntModule(module))
+                {
+                    BeginStuntLeg(module);
+                }
             }
 
             if (_announceRepeatsLeftForTransition > 0)
@@ -119,7 +127,8 @@ internal sealed partial class TransitionPump
                 continue;
             }
 
-            _pendingAnnounce = new PendingHostAnnounce(packet.Module, packet.Waypoint, packet.Serial, packet.PeerId);
+            _pendingAnnounce = new PendingHostAnnounce(
+                packet.Module, packet.Waypoint, packet.Serial, packet.PeerId, SessionClock.NowMs);
             log($"{(announcerIsHost ? "host" : "client")} announced transition to '{packet.Module}'"
                 + (packet.Waypoint.Length > 0 ? $" at waypoint '{packet.Waypoint}'" : string.Empty));
         }
@@ -168,11 +177,14 @@ internal sealed partial class TransitionPump
 
             // An interplanetary leg's take-off/landing films are announced by the leader like
             // any transition's — but this engine is running (or about to run) the same leg
-            // itself and will play them natively; see _galaxyLegUntilMs.
-            if (InGalaxyLeg)
+            // itself and will play them natively; see _galaxyLegUntilMs. A replayed stunt leg
+            // is the same case for every hop after the first: the leader's 01f (or 51/54/56)
+            // is queued by THIS engine's own scripts as its copy of the chain runs
+            // (TransitionPump.StuntLeg.cs).
+            if (InGalaxyLeg || InStuntLeg)
             {
                 log($"peer's transition movie(s) {string.Join(", ", packet.Movies)} belong to the "
-                    + "interplanetary leg under way here - not queued for a follow");
+                    + (InGalaxyLeg ? "interplanetary" : "stunt") + " leg under way here - not queued for a follow");
                 continue;
             }
 

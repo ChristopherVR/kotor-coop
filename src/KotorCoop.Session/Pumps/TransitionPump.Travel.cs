@@ -51,6 +51,10 @@ internal sealed partial class TransitionPump
             isClient, settings.FollowHostModule, settings.ClientDoorRefusalEnabled,
             hostRecentlyTransitioning, settings.FollowLeadMode, hostBusyForRefusal));
 
+        // Every tick, ahead of every early return: which stunt modules this engine is passing
+        // through, and whether the leg it is running is over (TransitionPump.StuntLeg.cs).
+        ObserveStuntLeg(local);
+
         if (!settings.FollowHostModule
             || !bridge.SupportsTravel
             || local.Module.Length == 0)
@@ -79,6 +83,20 @@ internal sealed partial class TransitionPump
         // until the next pump anyway.
         if (bridge.IsInDialogue)
         {
+            return;
+        }
+
+        // ⚠ AND NEVER OUT OF A STUNT LEG THIS ENGINE IS RUNNING ON PURPOSE. Inside a replayed
+        // (or own) cutscene module the exit is the module's own script — k_ren_visionland's
+        // StartNewModule("tar_m02af") for the Taris vision, k_pstu_startmod for the credits
+        // hops. Warping out early because the leader's published module has already moved on
+        // is exactly the "teleports into an apartment on another planet" outcome
+        // cinematics.md §4.3 describes, from the other side. Bounded per hop; both roles.
+        if (StuntLegFollowRule.ShouldHoldFollowsInOwnLeg(
+                _stuntLegActive, StuntModuleRule.IsStuntModule(local.Module),
+                SessionClock.NowMs - _stuntLegHopStartedAtMs))
+        {
+            DropLaterHopAnnounceWhileHeld(peers);
             return;
         }
 
@@ -180,10 +198,29 @@ internal sealed partial class TransitionPump
         // Stunt modules stage cutscenes. The host will be dumped back into a real module
         // when its scene ends; following it in would trap this player in someone else's
         // cinematic. See StuntModuleRule for the same test shared with the state publishers.
+        //
+        // Still refused HERE, with follow_stunt on: the host's published module reading
+        // STUNT_* says nothing about who started the leg or where its scripts will exit — a
+        // host that is itself following a client's leg looks identical. The one path that
+        // proves the leader's own engine began the leg is its announce, and that is where the
+        // replay lives (TryReplayStuntLeg, via the fast path above). Reaching this line with
+        // follow_stunt on means the announce was missed (channel off, or the plugin's
+        // transition_announce_scripted off on the leader) — say so, once per leg.
         if (StuntModuleRule.IsStuntModule(target))
         {
+            if (!string.Equals(target, _lastRefusedStuntModule, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRefusedStuntModule = target;
+                log(settings.FollowStunt
+                    ? $"not following the host into '{target}': no announce said the host's own engine "
+                      + "began that leg (is transition_announce_scripted on there?) - waiting for it to land"
+                    : $"not following the host into '{target}': follow_stunt is off - waiting for it to land");
+            }
+
             return;
         }
+
+        _lastRefusedStuntModule = string.Empty;
 
         // ⚠ AND NEVER ONTO A MINIGAME TRACK, for the same reason a stunt module is refused
         // one line above and then some: a swoop/turret area is SINGLE-SEAT, and the
@@ -293,6 +330,15 @@ internal sealed partial class TransitionPump
             return false;
         }
 
+        // A leader's scripted leg INTO a stunt module is replayed here (follow_stunt), not
+        // refused — judged ahead of the role branches below because both roles answer it the
+        // same way, and StuntLegFollowRule carries its own mid-transition/busy gates (the same
+        // three LeadFollowRule.HostMaySafelyFollow applies). See TransitionPump.StuntLeg.cs.
+        if (StuntModuleRule.IsStuntModule(announce.Module))
+        {
+            return TryReplayStuntLeg(announce, local, peers, changedModule, moduleSettledAtMs);
+        }
+
         if (isHost)
         {
             if (announce.Module.Length == 0
@@ -327,11 +373,11 @@ internal sealed partial class TransitionPump
             return false;
         }
 
-        // The stunt gate and the fallback-name guard apply to an announced destination
-        // exactly as they do to the host's published module in the slow path below — an
-        // announcement is earlier information, not different rules.
-        if (StuntModuleRule.IsStuntModule(announce.Module)
-            || ModuleNameGuard.IsFallbackModuleName(announce.Module))
+        // The fallback-name guard applies to an announced destination exactly as it does to
+        // the host's published module in the slow path below — an announcement is earlier
+        // information, not different rules. (The stunt gate was judged above, before the role
+        // branches.)
+        if (ModuleNameGuard.IsFallbackModuleName(announce.Module))
         {
             _pendingAnnounce = null;
             return false;
