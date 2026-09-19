@@ -44,7 +44,7 @@ log; "the joiner's log" means the joining player's copy.
 
 | # | Do this | It should | Look for |
 | --- | --- | --- | --- |
-| 16 | **Manaan**: get the envirosuit, use an airlock door in the Hrakert Station as host. | The joiner stays in the station; the host walks the sea floor; on return the joiner is still fine. | Joiner: `not following the announced transition to 'manm28ab': that is a single-seat minigame track` and the on-screen line "is in a solo section - waiting". |
+| 16 | **Manaan**: get the envirosuit, use an airlock door in the Hrakert Station as host. (The scripted airlock and the return by `warp` are already proven on the rig; what is left is the walk on the sea floor and the real return trigger.) | The joiner stays in the station; the host walks the sea floor; on return the joiner is still fine. | Joiner: `not following the announced transition to 'manm28ab': that is a single-seat minigame track` and the on-screen line "is in a solo section - waiting". |
 | 17 | **Leviathan**: play the capture and the brig break as host (choose a rescuer). | The joiner is parked and spectating while the rescuer is played, and released when the host frees the party. | Host: `solo segment: began in lev_m40aa`. Joiner: `fighting alone - spectating`. Note what the joiner actually sees and whether their gear comes back. |
 | 18 | Play through an **ending** cutscene chain (Star Forge end, credits) as host. | The joiner also sees the scenes. | Both logs: `stunt leg:` lines. Note anything skipped. |
 | 19 | **Star Forge**: Bastila and Malak duels as host. | The joiner parks and watches. | Already verified with a forced trigger; the real fight is not. |
