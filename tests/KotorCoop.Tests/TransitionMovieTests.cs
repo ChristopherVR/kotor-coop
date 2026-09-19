@@ -252,8 +252,8 @@ public class TransitionMovieTests
         // relay (block grown to 0x4D00, SharedBlock.OffsetGalaxyDeparture*, docs/research/
         // galaxy-map-and-party-select.md's 2026-09-03 relay addendum). 68 = the 2026-09-18
         // class-grant relay (0x4C20 inside the existing 0x4D00, SharedBlock.OffsetClassGrant*,
-        // docs/research/class-and-power-grants.md).
-        Assert.Equal(68, int.Parse(version.Groups[1].Value));
+        // docs/research/class-and-power-grants.md); 69 = the player-count scaling words (0x4C38).
+        Assert.Equal(69, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

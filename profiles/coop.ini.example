@@ -60,6 +60,19 @@ menu_button = 1
 ; where only the host is ever followed.
 follow_lead = any
 
+; ------------------------------------------------------------------------------------------
+; Difficulty for more than one player (the host's values are used by everyone)
+; ------------------------------------------------------------------------------------------
+; Each is `auto` (scales with how many players are connected; alone you always get the
+; normal game) or a percent from 50 to 400. Two players on auto: enemies have 150% health
+; and deal 115% damage, shops hold 150% stock, experience is unchanged.
+; enemy_health and enemy_damage are 100 (normal) until they have been checked in the running
+; game; set them to `auto` to try them.
+enemy_health = 100
+enemy_damage = 100
+xp_rate = auto
+store_stock = auto
+
 ; Be pulled into an ordinary conversation another player starts, instead of clicking the
 ; same NPC yourself to join: off (default, click/walk over as usual), near (auto-join within
 ; dialogue_auto_join_range), always (auto-join regardless of distance). A conversation the

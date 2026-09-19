@@ -63,12 +63,17 @@ public sealed class BehaviourAnnouncer
         }
     }
 
-    /// <summary>Every <see cref="BehaviourDifference.HostAuthoritative"/> key compares through
-    /// <c>BehaviourCompatibility.CompareFlag</c>, whose values are always the literal "1"/"0"
-    /// strings <c>BehaviourCompatibility.Bool</c> produces — never <c>interp_ms</c>/
-    /// <c>follow_lead</c>, both declared <c>HostAuthoritative: false</c> — so this is safe to
-    /// apply only behind the same gate <see cref="Observe"/> already checks.</summary>
-    private static string BoolWord(string value) => value == "1" ? "on" : "off";
+    /// <summary>A boolean key compares through <c>BehaviourCompatibility.CompareFlag</c>, whose
+    /// values are always the literal "1"/"0" strings <c>BehaviourCompatibility.Bool</c>
+    /// produces, and reads as on/off. The four host-authoritative player-count scaling keys
+    /// (<c>enemy_health</c> and friends, 2026-09-18) carry the text a player reads instead —
+    /// "auto" or a percent — and are shown verbatim.</summary>
+    private static string BoolWord(string value) => value switch
+    {
+        "1" => "on",
+        "0" => "off",
+        _ => value,
+    };
 
     /// <summary>The session went away: forget everything, so a reconnect (possibly to a
     /// different host, with different settings) re-announces its own comparison.</summary>

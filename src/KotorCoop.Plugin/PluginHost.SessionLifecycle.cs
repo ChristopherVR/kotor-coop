@@ -185,6 +185,7 @@ internal static unsafe partial class PluginHost
         _items?.Invalidate();
         _combat?.Invalidate();
         _liveness?.Invalidate();
+        _enemyScaling?.Invalidate();
         _enemyPresence?.Invalidate();
         MaterialisedEnemies.Invalidate();
         _partyPresence?.Invalidate();

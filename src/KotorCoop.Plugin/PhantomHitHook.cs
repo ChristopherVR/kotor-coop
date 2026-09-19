@@ -170,6 +170,120 @@ internal static unsafe class PhantomHitHook
     private static readonly uint[] _ourAttacker = new uint[16];
     private static int _ourAttackerCount;
 
+    // ---- enemy DAMAGE scaling (coop.ini enemy_damage, docs/research/player-count-scaling.md)
+
+    /// <summary>The percent a hostile hit on a player body is rewritten to, 100 = untouched.
+    /// Set every pass by <see cref="EnemyScalingController"/> from the agent's resolved
+    /// value; never read from coop.ini here.</summary>
+    private static int _damagePercent = EnemyScalingRule.Vanilla;
+
+    /// <summary>Player bodies whose incoming hostile hits are scaled: the local PC and the
+    /// local party roster (<see cref="WatchDamageScaleTargets"/>). Phantoms and released
+    /// companions are already in <see cref="_watchedId"/>/<see cref="_companionId"/> and are
+    /// scaled through those. Fixed array, widen-then-count like <see cref="_ourAttacker"/>.</summary>
+    private static readonly uint[] _scaleTarget = new uint[16];
+    private static int _scaleTargetCount;
+
+    /// <summary>Hits this process rewrote, for the status line and the live checklist.</summary>
+    public static uint DamageScaledHits { get; private set; }
+
+    /// <summary>MAIN THREAD. A percent outside the agent's range is refused as vanilla by
+    /// <see cref="EnemyScalingRule"/> upstream; this only stores it.</summary>
+    public static void SetDamagePercent(int percent) => _damagePercent = percent;
+
+    /// <summary>MAIN THREAD. Same widen-before-narrow discipline as <see cref="WatchAttackers"/>.</summary>
+    public static void WatchDamageScaleTargets(ReadOnlySpan<uint> objectIds)
+    {
+        int count = 0;
+        for (int i = 0; i < objectIds.Length && count < _scaleTarget.Length; i++)
+        {
+            if (objectIds[i] is not (0 or ObjectInvalid))
+            {
+                _scaleTarget[count++] = objectIds[i];
+            }
+        }
+
+        for (int i = count; i < _scaleTarget.Length; i++)
+        {
+            _scaleTarget[i] = 0;
+        }
+
+        _scaleTargetCount = count;
+    }
+
+    private static bool IsDamageScaleTarget(uint objectId)
+    {
+        for (int i = 0; i < _scaleTargetCount; i++)
+        {
+            if (_scaleTarget[i] == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWatchedCompanion(uint objectId)
+    {
+        for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity; i++)
+        {
+            if (_companionId[i] != 0 && _companionId[i] == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Rewrites a hostile hit's per-type amounts IN PLACE before the engine reads them —
+    /// slot 14 (the number the engine applies, see <see cref="ReadTotal"/>) and the typed
+    /// breakdown alike, so the tally the engine keeps per type matches what it applied. Runs
+    /// only when the target is a player body and the attacker is NOT one (not ours, not a
+    /// phantom, not a released companion), so friendly fire, a peer's stand-in and the mod's
+    /// own forwarded applies (<see cref="SuppressDealt"/>, checked by the caller) stay
+    /// untouched. A creator of 0/invalid (a mine, a trap, a scripted hit) is left alone too:
+    /// nothing says it was an enemy. The bookkeeping below then reads the SCALED numbers, so
+    /// a phantom's forwarded total already carries the multiplier and the owner applies it
+    /// once, unscaled (its own apply runs under SuppressDealt). NEEDS-LIVE: this is the only
+    /// place the mod writes into an effect's integer list.
+    /// </summary>
+    private static void ScaleHostileDamage(nint effect)
+    {
+        uint attacker = *(uint*)(effect + EffectCreator);
+        if (attacker is 0 or ObjectInvalid
+            || IsDamageScaleTarget(attacker) || IsWatchedPhantom(attacker) || IsWatchedCompanion(attacker))
+        {
+            return;
+        }
+
+        int count = *(int*)(effect + EffectIntCount);
+        nint ints = *(nint*)(effect + EffectInts);
+        if (ints == 0 || count <= 0)
+        {
+            return;
+        }
+
+        int slots = Math.Min(count, DamageTypeSlots);
+        bool touched = false;
+        for (int i = 0; i < slots; i++)
+        {
+            int* amount = (int*)(ints + (i * 4));
+            if (*amount > 0 && *amount <= MaxPlausibleHit)
+            {
+                *amount = EnemyScalingRule.ScaleDamage(*amount, _damagePercent);
+                touched = true;
+            }
+        }
+
+        if (touched)
+        {
+            DamageScaledHits++;
+        }
+    }
+
     /// <summary>
     /// ⚠ Set while the plugin is applying a damage effect OF ITS OWN, so the dealt ledger
     /// does not count it.
@@ -399,6 +513,8 @@ internal static unsafe class PhantomHitHook
         Array.Clear(_serial);
         Array.Clear(_ourAttacker);
         _ourAttackerCount = 0;
+        Array.Clear(_scaleTarget);
+        _scaleTargetCount = 0;
         _dealt.Clear();
         Array.Clear(_companionId);
         Array.Clear(_companionRosterSlotPlusOne);
@@ -529,6 +645,14 @@ internal static unsafe class PhantomHitHook
                         break;
                     }
                 }
+            }
+
+            // enemy_damage: rewrite a hostile hit on a player body BEFORE anything below reads
+            // the amounts, so the engine's apply and every ledger see the same number.
+            if (_damagePercent != EnemyScalingRule.Vanilla && !SuppressDealt
+                && (slot >= 0 || companionSlot >= 0 || IsDamageScaleTarget(targetId)))
+            {
+                ScaleHostileDamage(effect);
             }
 
             bool ours = slot < 0 && companionSlot < 0 && !SuppressDealt

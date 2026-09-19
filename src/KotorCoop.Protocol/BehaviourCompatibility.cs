@@ -110,7 +110,31 @@ public static class BehaviourCompatibility
                 "follow_lead", host.FollowLead, peer.FollowLead, HostAuthoritative: false));
         }
 
+        // The four player-count scaling SETTINGS (docs/research/player-count-scaling.md). All
+        // HOST-AUTHORITATIVE: the host's engine is where enemy hit points are set, where the
+        // XP delta is scaled before the max-merge and where store stock is topped up, so a
+        // client running a different number would only disagree with what it is shown — and a
+        // client that fights a released enemy through its own engine (local_combat) must scale
+        // that enemy's damage by the same percent the host does. Values travel as the text a
+        // player reads ("auto" / "150"); SessionOverrides parses them back.
+        CompareSetting(host.EnemyHealth, peer.EnemyHealth, "enemy_health");
+        CompareSetting(host.EnemyDamage, peer.EnemyDamage, "enemy_damage");
+        CompareSetting(host.XpRate, peer.XpRate, "xp_rate");
+        CompareSetting(host.StoreStock, peer.StoreStock, "store_stock");
+
         return diffs.Count == 0 ? BehaviourComparisonResult.None : new BehaviourComparisonResult(diffs);
+
+        void CompareSetting(int hostSetting, int peerSetting, string key)
+        {
+            if (hostSetting != peerSetting)
+            {
+                diffs.Add(new BehaviourDifference(
+                    key,
+                    PlayerCountScalingRule.Describe(hostSetting),
+                    PlayerCountScalingRule.Describe(peerSetting),
+                    HostAuthoritative: true));
+            }
+        }
     }
 
     private static string Bool(bool value) => value ? "1" : "0";

@@ -37,7 +37,9 @@ internal sealed class StorePumpV2(
     ICoopSession session,
     Action<string> log,
     bool trace = false,
-    long expectedTimeoutMs = StorePumpV2.DefaultExpectedTimeoutMs)
+    long expectedTimeoutMs = StorePumpV2.DefaultExpectedTimeoutMs,
+    PlayerCountScaling? scaling = null,
+    StoreStockScaleLatch? stockLatch = null)
 {
     private const int MaxPendingApplies = 256;
 
@@ -170,9 +172,18 @@ internal sealed class StorePumpV2(
             return;
         }
 
+        // A new game starts on the Endar Spire: every shop of this playthrough is vanilla
+        // again, so the once-per-store top-up marker starts over (store_stock, below).
+        if (stockLatch is not null && StoreStockScaleRule.IsNewGameModule(localModule) && stockLatch.Count > 0)
+        {
+            stockLatch.Reset();
+            log("store_stock: new game - forgot every store this install had topped up");
+        }
+
         if (bridge.TryScanOpenStore(out uint storeObjectId, out IReadOnlyDictionary<StoreStackKey, int> totals))
         {
             session.PublishStoreSnapshotV2(storeObjectId, totals);
+            TopUpStockOnce(localModule, storeObjectId, totals);
         }
 
         foreach (StoreIntentPacketV2 intent in session.DrainStoreIntentsV2())
@@ -180,6 +191,80 @@ internal sealed class StorePumpV2(
             EnqueueApply(intent.Kind, intent.Key, intent.Count);
         }
     }
+
+    /// <summary>
+    /// coop.ini <c>store_stock</c> (docs/research/player-count-scaling.md §Store): the first
+    /// time THIS playthrough's host opens a store, every finite stack is topped up to the
+    /// resolved percent through the exact apply path a client's accepted sell intent already
+    /// takes (<see cref="EnqueueApply"/> → the dispatcher's store-insert cheat, live on the
+    /// host since v2). The host's own next scan then reads the larger count and publishes
+    /// it, and every client mirrors the rise as an ordinary host-side change.
+    ///
+    /// Once per store per PLAYTHROUGH, not per process: the extra stock is baked into every
+    /// save the host writes afterwards, so the marker lives in
+    /// <see cref="StoreStockScaleLatch"/>'s file. No marker file (or one that cannot be
+    /// written) means no top-up at all — see that class's fail-safe remarks. An empty scan is
+    /// not marked: it may be a transient partial read (store-sync.md §7), and marking it
+    /// would lose the store's top-up for good.
+    /// </summary>
+    private void TopUpStockOnce(string module, uint storeObjectId, IReadOnlyDictionary<StoreStackKey, int> totals)
+    {
+        if (scaling is null || stockLatch is null || string.IsNullOrEmpty(module) || totals.Count == 0)
+        {
+            return;
+        }
+
+        int percent = scaling.StoreStockPercent;
+        if (percent <= PlayerCountScalingRule.Vanilla)
+        {
+            return;
+        }
+
+        string key = StoreStockScaleRule.Key(module, storeObjectId);
+        if (stockLatch.Contains(key))
+        {
+            return;
+        }
+
+        if (!stockLatch.Persistent)
+        {
+            if (!_stockLatchFailureLogged)
+            {
+                _stockLatchFailureLogged = true;
+                log($"store_stock: not topping up store 0x{storeObjectId:X} - the once-per-store marker "
+                    + $"file cannot be kept ({stockLatch.LastFailure ?? "unknown"}), and without it a "
+                    + "reloaded save would be topped up again");
+            }
+
+            return;
+        }
+
+        int stacks = 0;
+        int units = 0;
+        foreach ((StoreStackKey stack, int count) in totals)
+        {
+            ushort extra = StoreStockScaleRule.ExtraStock(count, percent);
+            if (extra == 0)
+            {
+                continue;
+            }
+
+            if (!EnqueueApply(StoreOpKind.Add, stack, extra))
+            {
+                log($"store_stock: apply queue full at {stacks} stack(s) for store 0x{storeObjectId:X}; the rest stays vanilla");
+                break;
+            }
+
+            stacks++;
+            units += extra;
+        }
+
+        stockLatch.Mark(key);
+        log($"store_stock: store 0x{storeObjectId:X} in {module} topped up to {percent}% "
+            + $"({scaling.PlayerCount} player(s)): +{units} unit(s) across {stacks} of {totals.Count} finite stack(s)");
+    }
+
+    private bool _stockLatchFailureLogged;
 
     private void PumpClient()
     {

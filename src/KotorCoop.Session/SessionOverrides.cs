@@ -45,8 +45,19 @@ public sealed record SessionOverrides(
     bool? ScriptItemSync = null,
     bool? DialogueItemSync = null,
     bool? DialogueRecruitSync = null,
-    bool? MovieRelay = null)
+    bool? MovieRelay = null,
+    int? EnemyHealth = null,
+    int? EnemyDamage = null,
+    int? XpRate = null,
+    int? StoreStock = null)
 {
+    // The four int? fields (2026-09-18) are the player-count scaling SETTINGS
+    // (docs/research/player-count-scaling.md): the host's coop.ini value, adopted verbatim —
+    // PlayerCountScalingRule.Auto or a fixed percent — so this client resolves the same
+    // percent from the same player count the host does. Consulted by CoopAgent's
+    // PlayerCountScaling.Update alongside AgentSettings.Scaling, the same "override ?? local"
+    // idiom the bool fields use.
+
     /// <summary>No overrides: every consultation site falls back to its own local
     /// AgentSettings/CoopConfig value. What a host always returns, and what a fresh client
     /// returns before its first Welcome.</summary>

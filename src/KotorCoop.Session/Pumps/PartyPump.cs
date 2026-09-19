@@ -8,7 +8,9 @@ namespace KotorCoop.Session.Pumps;
 /// progression (gold, experience). The host owns the companions and the purse; every client
 /// freezes its own copies and mirrors the host's. See docs/research/party-reconciliation.md.
 /// </summary>
-internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log)
+internal sealed class PartyPump(
+    IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log,
+    PlayerCountScaling? scaling = null)
 {
     /// <summary>
     /// Keeps the party companions single and coherent. The host owns them — its own engine
@@ -170,6 +172,14 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     /// increase is applied once. Keyed by peer, valued by (generation, earned, spent).</summary>
     private readonly Dictionary<uint, (uint Generation, uint Earned, uint Spent)> _appliedProgression = [];
 
+    /// <summary>coop.ini <c>xp_rate</c> (docs/research/player-count-scaling.md): the host's own
+    /// experience RISE between two readings is scaled and the bonus written on top, before
+    /// the max-merge. See <see cref="XpRateRule"/> for the delta-not-absolute reasoning and
+    /// the re-baseline that keeps our own write from being scaled again.</summary>
+    private readonly XpRateRule _xpRate = new();
+
+    private bool _xpRateBelowVanillaLogged;
+
     /// <summary>
     /// Shares progression. The host's party table IS the purse; clients report what their own
     /// engine put in and took out, the host spends each increase against its table, and the
@@ -257,6 +267,27 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
     private void PumpProgressionHost(uint gold, uint rawGold, uint experience)
     {
         long purse = gold;
+        uint rawExperience = experience;
+
+        // xp_rate: scale what the ENGINE just granted (the rise since the last reading) and
+        // add the bonus before the merge, so the host's larger total wins the max-merge and
+        // reaches every client. Our own write below re-baselines, so it is never re-scaled.
+        int xpPercent = scaling?.XpRatePercent ?? PlayerCountScalingRule.Vanilla;
+        int bonus = _xpRate.Observe(rawExperience, xpPercent);
+        if (bonus > 0)
+        {
+            experience = (uint)Math.Min((long)rawExperience + bonus, uint.MaxValue);
+            log($"xp_rate: engine granted +{_xpRate.LastRise} xp, "
+                + $"{xpPercent}% adds +{bonus} ({rawExperience} -> {experience})");
+        }
+        else if (xpPercent < PlayerCountScalingRule.Vanilla && !_xpRateBelowVanillaLogged)
+        {
+            _xpRateBelowVanillaLogged = true;
+            log($"xp_rate: {xpPercent}% is below 100 - a rate under 100 cannot take effect while a "
+                + "client is connected (its own engine grants vanilla XP and the max-merge keeps the "
+                + "larger total); XP stays vanilla");
+        }
+
         uint mergedExperience = experience;
 
         foreach (PeerProgression report in session.GetProgressionReports())
@@ -299,14 +330,18 @@ internal sealed class PartyPump(IGameBridge bridge, ICoopSession session, AgentS
         // ceiling: SetGold clamps there, so a purse above it would read back as a spend.
         purse = Math.Clamp(purse, 0, GoldReadingRule.Max);
 
-        // Compared against the RAW reading: a sanitised wrap is a purse the table does not
-        // yet hold, and must be written even when nobody contributed this tick.
-        if ((purse != rawGold || mergedExperience != experience)
+        // Compared against the RAW readings: a sanitised wrap is a purse the table does not
+        // yet hold, and an xp_rate bonus is a total the table does not yet hold either — both
+        // must be written even when nobody contributed this tick.
+        if ((purse != rawGold || mergedExperience != rawExperience)
             && bridge.TryWriteProgression((uint)purse, mergedExperience))
         {
             // Our own write is not the game earning or spending; re-baseline so the next
-            // observation measures only what the engine did.
+            // observation measures only what the engine did. Same for experience: without
+            // this the bonus just written would read back as a fresh grant and be scaled
+            // again on the next tick.
             _lastObservedGold = purse;
+            _xpRate.Rebaseline(mergedExperience);
         }
 
         session.PublishProgression((uint)purse, mergedExperience);

@@ -240,6 +240,10 @@ internal partial struct SharedBlock
     /// departure relay (SharedBlock.GalaxyDeparture.cs). Version 68 (2026-09-18) added the
     /// class-grant relay in that region's free tail — see SharedBlock.ClassGrant.cs and
     /// docs/research/class-and-power-grants.md.
+    /// docs/research/peer-damage-ledger.md §9. Version 69 (2026-09-18) added
+    /// <see cref="OffsetScalingCombat"/>/<see cref="OffsetScalingEconomy"/> — the agent's
+    /// resolved player-count scaling percents — see SharedBlock.PlayerCountScaling.cs and
+    /// docs/research/player-count-scaling.md.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

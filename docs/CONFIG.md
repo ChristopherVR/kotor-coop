@@ -80,6 +80,10 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
 | `follow_lead` | `any` | who may LEAD a transition the other player follows: `any` or `host` | [transition-smoothness.md](research/transition-smoothness.md) |
+| `enemy_health` | `100` (code fallback `100`; NEEDS-LIVE, then `auto`) | enemy hit points: `auto` (by player count) or a percent, clamped 50-400. Scales max + current once per enemy per module, host-authoritative | [player-count-scaling.md](research/player-count-scaling.md) |
+| `enemy_damage` | `100` (code fallback `100`; NEEDS-LIVE, then `auto`) | damage enemies deal to players: `auto` or a percent, clamped 50-400. Rewritten at the `OnApplyDamage` detour, host-authoritative | [player-count-scaling.md](research/player-count-scaling.md) |
+| `xp_rate` | `auto` (code fallback `auto`; 100% at every count) | the host's own XP gains: `auto` or a percent. The DELTA is scaled before the max-merge; below 100 cannot take effect while a client is connected | [player-count-scaling.md](research/player-count-scaling.md) |
+| `store_stock` | `auto` (code fallback `auto`) | finite shop stock topped up once per store per playthrough on the host's first open: `auto` or a percent. `store_prices` is NOT built (the price lookup needs reverse engineering) | [player-count-scaling.md](research/player-count-scaling.md) |
 | `dialogue_auto_join` | `off` | be pulled into an ORDINARY conversation another player starts: `off`, `near`, or `always`. A conversation the game itself forces on both players always auto-joins regardless | [dialogue-sync.md](research/dialogue-sync.md) |
 | `dialogue_auto_join_range` | `20` | the range (game units) `dialogue_auto_join = near` auto-joins within | [dialogue-sync.md](research/dialogue-sync.md) |
 | `spectate_on_down` | ON | hand your camera to the other player while you are downed | [spectate-camera.md](research/spectate-camera.md) |

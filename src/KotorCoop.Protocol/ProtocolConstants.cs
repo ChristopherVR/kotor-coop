@@ -214,8 +214,14 @@ public static class ProtocolConstants
     /// character through the same engine handler, so the joiner becomes a Jedi too. Off by
     /// default (<c>class_grant_sync</c>), NEEDS-LIVE. Closes docs/review-seamless-2026-09-18.md
     /// blocker #1 statically. See docs/research/class-and-power-grants.md.
+    ///
+    /// Version 56: <see cref="BehaviourDigest"/> scheme 2 — the four player-count scaling
+    /// SETTINGS (<c>enemy_health</c>, <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c>;
+    /// int32 each, 0 = auto) ride Hello/Welcome as host-authoritative keys, so a client adopts
+    /// the host's setting and both sides resolve the same percent from the same player count.
+    /// No new packet type. See docs/research/player-count-scaling.md.
     /// </summary>
-    public const byte Version = 55;
+    public const byte Version = 56;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

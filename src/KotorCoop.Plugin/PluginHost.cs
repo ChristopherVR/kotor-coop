@@ -83,6 +83,7 @@ internal static unsafe partial class PluginHost
     private static PostAdoptEquipRepairController? _postAdoptEquipRepair;
     private static CarriedPinReleaseController? _carriedPinRelease;
     private static GhostSweepController? _ghostSweep;
+    private static EnemyScalingController? _enemyScaling;
 
     /// <summary>The `newgame` / `chargen quick` / `chargen accept` verbs — the engine's own
     /// character-creation button handlers, called rather than clicked.</summary>
@@ -378,7 +379,12 @@ internal static unsafe partial class PluginHost
         //      ClassGrantController). coop.ini class_grant_sync, default OFF. Closes
         //      docs/review-seamless-2026-09-18.md blocker #1 statically; NEEDS-LIVE. See
         //      docs/research/class-and-power-grants.md.
-        _block->Version = 68;
+        //  69: the resolved player-count scaling words (SharedBlock.PlayerCountScaling.cs,
+        //      0x4C38..0x4C40, no TotalSize growth): the agent resolves coop.ini
+        //      enemy_health/enemy_damage/xp_rate/store_stock to percents and pushes the two
+        //      this plugin acts on (EnemyScalingController, PhantomHitHook). NEEDS-LIVE at
+        //      the time of the bump. See docs/research/player-count-scaling.md.
+        _block->Version = 69;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

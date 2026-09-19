@@ -145,6 +145,17 @@ internal static class AgentComposition
             // exact host-leads/client-follows behaviour, not the new lead-swap default.
             FollowLeadMode = config?.FollowLead ?? FollowLeadMode.Host,
 
+            // Player-count scaling (docs/research/player-count-scaling.md). The fallbacks are
+            // the same numbers CoopConfig's record defaults and parse fallbacks carry
+            // (docs/CONFIG.md footnote ³): enemy health/damage 100 while their engine writes
+            // are NEEDS-LIVE, xp/store on the auto curve.
+            Scaling = new PlayerCountScalingSettings(
+                config?.EnemyHealth ?? PlayerCountScalingRule.Vanilla,
+                config?.EnemyDamage ?? PlayerCountScalingRule.Vanilla,
+                config?.XpRate ?? PlayerCountScalingRule.Auto,
+                config?.StoreStock ?? PlayerCountScalingRule.Auto),
+            GameDirectory = installDirectory,
+
             // CoopAgent is deliberately game-agnostic and has no reader of its own for a
             // module's display name; this is the one place that both has the game directory
             // and already imports KotorCoop.Memory.GameFiles. A failed lookup falls back to
@@ -212,7 +223,11 @@ internal static class AgentComposition
             mapRevealSync: config?.MapRevealSync ?? true,
             requireIdenticalSave: options.RequireIdenticalSave,
             interpolationMs: interpolationMs,
-            followLead: agentSettings.FollowLeadMode == FollowLeadMode.Host ? "host" : "any");
+            followLead: agentSettings.FollowLeadMode == FollowLeadMode.Host ? "host" : "any",
+            enemyHealth: agentSettings.Scaling.EnemyHealth,
+            enemyDamage: agentSettings.Scaling.EnemyDamage,
+            xpRate: agentSettings.Scaling.XpRate,
+            storeStock: agentSettings.Scaling.StoreStock);
 
         SessionManager manager = new(bridge, agentSettings);
 

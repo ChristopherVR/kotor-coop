@@ -41,6 +41,14 @@ internal sealed unsafe partial class SharedBlockView
         *U32(SharedBlock.OffsetLocalPartyRosterObjectIds
             + (Clamp(slot, SharedBlock.PartyRosterSlots) * 4)) = objectId;
 
+    /// <summary>Reads back what <see cref="SetLocalPartyRosterObjectId"/> last wrote for
+    /// <paramref name="slot"/> — 0 for a slot not in the local party. In-process consumer:
+    /// <see cref="EnemyScalingController"/>, which needs "is this id one of our own party's
+    /// bodies" without re-walking the party table itself.</summary>
+    public uint GetLocalPartyRosterObjectId(int slot) =>
+        *U32(SharedBlock.OffsetLocalPartyRosterObjectIds
+            + (Clamp(slot, SharedBlock.PartyRosterSlots) * 4));
+
     /// <summary>Agent-written; the HOST's own party-table object id for <paramref name="slot"/>,
     /// or 0 if never published (an older peer build) or the host has no live body for that slot
     /// right now. Not gated on <see cref="TryGetHostPartyRoster"/>'s own valid bit here — a

@@ -116,6 +116,22 @@ public sealed partial class CoopAgent
     /// encode compare — see <see cref="PumpBehaviourOverrides"/>.</summary>
     private (uint Mask, uint Values) _lastBehaviourOverrides;
 
+    /// <summary>See the constructor's player-count scaling remarks and
+    /// <see cref="PumpPlayerCountScaling"/>.</summary>
+    private readonly PlayerCountScaling _scaling;
+
+    private readonly StoreStockScaleLatch _stockLatch;
+
+    /// <summary>The <see cref="PlayerCountScaling.Generation"/> last pushed into the plugin
+    /// block, so the two dwords are written on a genuine change only. Starts at
+    /// uint.MaxValue so the very first tick always writes (a fresh block reads 0/0, which the
+    /// plugin treats as "nothing to apply", and the resolved 100/100 must replace it).</summary>
+    private uint _lastScalingGenerationPushed = uint.MaxValue;
+
+    /// <summary>The resolved player-count scaling for this session, for <c>agent info</c> and
+    /// the dispatcher's status line.</summary>
+    public PlayerCountScaling Scaling => _scaling;
+
     public CoopAgent(IGameBridge bridge, ICoopSession session, AgentSettings settings)
     {
         _bridge = bridge;
@@ -138,11 +154,22 @@ public sealed partial class CoopAgent
         _transitionPump = new TransitionPump(bridge, session, settings, _log);
         _lootPump = new LootPump(bridge, session, _recentlySyncedItems, _log);
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
-        _partyPump = new PartyPump(bridge, session, settings, _log);
+        // Player-count scaling (docs/research/player-count-scaling.md): one resolved set of
+        // percents per agent, recomputed every tick from the effective settings and the live
+        // player count, handed to the two pumps that apply their half and pushed into the
+        // plugin's block for the other half (PumpPlayerCountScaling).
+        _scaling = new PlayerCountScaling(settings.Scaling);
+        _stockLatch = new StoreStockScaleLatch(
+            settings.GameDirectory is { Length: > 0 } gameDirectory
+                ? Path.Combine(gameDirectory, "saves")
+                : null);
+
+        _partyPump = new PartyPump(bridge, session, settings, _log, _scaling);
         _partyPoolPump = new PartyPoolPump(bridge, session, _log);
         _storePump = new StorePump(bridge, session, _log);
         _partyPoolPumpV2 = new PartyPoolPumpV2(bridge, session, _log, _settings.PartyPoolTrace);
-        _storePumpV2 = new StorePumpV2(bridge, session, _log, _settings.PartyPoolTrace);
+        _storePumpV2 = new StorePumpV2(
+            bridge, session, _log, _settings.PartyPoolTrace, scaling: _scaling, stockLatch: _stockLatch);
 
         // TriggerPump before CombatPump: CombatPump.PumpEnemies calls into it for the
         // client-triggered encounter/generic-trigger sub-steps.
@@ -438,6 +465,8 @@ public sealed partial class CoopAgent
         }
 
         RaisePeerJoinLeaveEvents(peers);
+
+        PumpPlayerCountScaling(peers.Count + 1);
 
         // Round 78 instrumentation — every tick, ahead of every cadence gate below, so the
         // logged edge is as close to the engine's own true transition as this process can see.
@@ -935,6 +964,30 @@ public sealed partial class CoopAgent
 
         _lastBehaviourOverrides = (mask, values);
         _bridge.SetBehaviourOverrides(mask, values);
+    }
+
+    /// <summary>
+    /// Resolves the four player-count scaling percents for this tick (the host's adopted
+    /// settings where the session has them, else this install's; the player count is this
+    /// instance plus every peer in the list) and, on a change, logs one line and pushes the
+    /// plugin-side pair (enemy health, enemy damage) into the shared block — the same
+    /// change-only idiom <see cref="PumpBehaviourOverrides"/> uses. Cheap every tick: four
+    /// integer resolves and one compare. See docs/research/player-count-scaling.md.
+    /// </summary>
+    private void PumpPlayerCountScaling(int playerCount)
+    {
+        if (_scaling.Update(_session.Overrides, playerCount))
+        {
+            _log($"scaling: {_scaling.Describe()}");
+        }
+
+        if (_scaling.Generation == _lastScalingGenerationPushed)
+        {
+            return;
+        }
+
+        _lastScalingGenerationPushed = _scaling.Generation;
+        _bridge.SetPlayerCountScaling(_scaling.PackCombatWord(), _scaling.PackEconomyWord());
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises

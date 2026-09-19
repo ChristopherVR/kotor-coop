@@ -469,6 +469,32 @@ public sealed record CoopConfig
     /// </summary>
     public FollowLeadMode FollowLead { get; init; } = FollowLeadMode.Any;
 
+    // ── Player-count scaling (docs/research/player-count-scaling.md) ─────────────────────
+    // Four SETTINGS, each PlayerCountScalingRule.Auto (0, "resolve from the live player
+    // count") or a fixed percent clamped 50-400. Host-authoritative on the wire
+    // (BehaviourDigest); resolved to a percent by CoopAgent's PlayerCountScaling every tick.
+    // Defaults must agree across the three readers (docs/CONFIG.md footnote ³): this record,
+    // TryLoad's parse below, AgentComposition.Compose's `?? fallback`, and the shipped
+    // profiles/coop.ini.example.
+
+    /// <summary>coop.ini <c>enemy_health</c>: enemy hit points, percent of vanilla, or
+    /// <c>auto</c>. Default 100 (vanilla) — the max-hit-point write this drives is NEEDS-LIVE;
+    /// flips to <c>auto</c> once that pass is done.</summary>
+    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Vanilla;
+
+    /// <summary>coop.ini <c>enemy_damage</c>: damage enemies deal to players, percent of
+    /// vanilla, or <c>auto</c>. Default 100 (vanilla) — the in-hook damage rewrite this drives
+    /// is NEEDS-LIVE; flips to <c>auto</c> once that pass is done.</summary>
+    public int EnemyDamage { get; init; } = PlayerCountScalingRule.Vanilla;
+
+    /// <summary>coop.ini <c>xp_rate</c>: the host's own experience gains, percent of vanilla,
+    /// or <c>auto</c> (the auto curve is 100 at every player count). Default auto.</summary>
+    public int XpRate { get; init; } = PlayerCountScalingRule.Auto;
+
+    /// <summary>coop.ini <c>store_stock</c>: finite shop stock, percent of vanilla, or
+    /// <c>auto</c>. Default auto.</summary>
+    public int StoreStock { get; init; } = PlayerCountScalingRule.Auto;
+
     /// <summary>
     /// Relays a mid-module <c>PlayMovie</c> call (no transition involved) to peers, and acts
     /// on one a peer announces. ON by default (an absent key enables it; <c>movie_relay = 0</c>
@@ -735,6 +761,7 @@ public sealed record CoopConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
+        "enemy_health", "enemy_damage", "xp_rate", "store_stock",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
         "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp",
@@ -954,6 +981,17 @@ public sealed record CoopConfig
                 .Trim().Equals("host", StringComparison.OrdinalIgnoreCase)
                 ? FollowLeadMode.Host
                 : FollowLeadMode.Any,
+
+            // Player-count scaling: "auto", a percent (with or without %), clamped 50-400;
+            // absent or unparseable -> the record's own default (see the property group).
+            EnemyHealth = PlayerCountScalingRule.ParseSetting(
+                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Vanilla),
+            EnemyDamage = PlayerCountScalingRule.ParseSetting(
+                kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Vanilla),
+            XpRate = PlayerCountScalingRule.ParseSetting(
+                kv.GetValueOrDefault("xp_rate"), PlayerCountScalingRule.Auto),
+            StoreStock = PlayerCountScalingRule.ParseSetting(
+                kv.GetValueOrDefault("store_stock"), PlayerCountScalingRule.Auto),
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
 
             // Absent key -> the default server list; PRESENT-but-empty ("stun_servers = ")

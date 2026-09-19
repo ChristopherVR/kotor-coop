@@ -109,4 +109,17 @@ public interface IPlayerBridge
         status = 0;
         return false;
     }
+
+    /// <summary>
+    /// Pushes this session's RESOLVED player-count scaling into the plugin's shared block
+    /// (docs/research/player-count-scaling.md): <paramref name="combatWord"/> carries the enemy
+    /// health percent in its low 16 bits and the enemy damage percent in its high 16 — the two
+    /// the plugin applies (hit points on first sighting, the damage rewrite at the
+    /// OnApplyDamage detour); <paramref name="economyWord"/> carries xp and store stock the
+    /// same way, for the plugin's status line only. 0 in a half means "no session has resolved
+    /// this" and the plugin applies nothing, which is also the post-teardown state
+    /// (<c>KotorGameBridge.SessionScopedBlockLevels</c>). Best-effort, like
+    /// <see cref="ClearCoopState"/>; a no-op on a bridge with no plugin block.
+    /// </summary>
+    void SetPlayerCountScaling(uint combatWord, uint economyWord) { }
 }
