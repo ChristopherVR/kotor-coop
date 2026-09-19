@@ -686,6 +686,11 @@ public sealed class AgentDashboard(
             parts.Add("IN COMBAT");
         }
 
+        if ((state.Flags & PlayerState.FlagStealth) != 0)
+        {
+            parts.Add("STEALTH");
+        }
+
         if ((state.Flags & PlayerState.FlagPaused) != 0)
         {
             parts.Add("PAUSED");

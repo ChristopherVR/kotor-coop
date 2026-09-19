@@ -329,6 +329,14 @@ public sealed partial class KotorGameBridge
             flags |= PlayerState.FlagInCombat;
         }
 
+        // The engine's own stealth-mode byte, a level like in-combat: peers hold this
+        // player's stand-in out of their enemies' target selection while it is set
+        // (PlayerState.FlagStealth, stealth_sync). Protocol 53.
+        if (_memory.TryRead(creature + OffStealthMode, out byte stealthMode) && stealthMode != 0)
+        {
+            flags |= PlayerState.FlagStealth;
+        }
+
         if (IsInMinigame)
         {
             flags |= PlayerState.FlagInMinigame;

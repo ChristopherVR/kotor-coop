@@ -25,6 +25,33 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
     private readonly EffectiveBehaviourFlag _effectSync = new(
         "effect_sync", SharedBlock.OverrideBitEffectSync, PluginConfig.ReadBool("effect_sync", true));
 
+    /// <summary>
+    /// The two kinds whose APPLY half has never run on a live game (effect-sync.md §12,
+    /// 2026-09-18) sit behind their own keys on top of <c>effect_sync</c>, default OFF:
+    /// <c>poison_sync</c> (a poison landing on your stand-in over there is replayed on your
+    /// real body here — open question: whether its ticks ALSO arrive as forwarded damage, which
+    /// would poison you twice) and <c>disguise_sync</c> (a disguise effect landing on your
+    /// stand-in is replayed on you; the ordinary "my partner sees my Sith uniform" mirror does
+    /// NOT need this — it rides the per-tick appearance sample, §12.2). Capture and forwarding
+    /// of both kinds are always on so the OUT ring / <c>effects</c> readout can prove the
+    /// capture half without ever calling the unverified constructor; a refused replay is a
+    /// logged no-op. Plain plugin keys, not host-authoritative overrides: each receiver
+    /// decides what it lets onto its own character.
+    /// </summary>
+    private readonly bool _poisonSync = PluginConfig.ReadBool("poison_sync", false);
+
+    private readonly bool _disguiseSync = PluginConfig.ReadBool("disguise_sync", false);
+
+    /// <summary>The receiver-side gate for one kind: <c>effect_sync</c> alone for the
+    /// live-verified kinds, plus the kind's own key for the two above. Mirrors
+    /// <c>PeerEffectRules.NeedsOwnApplyGate</c> (Protocol; unreachable from here).</summary>
+    private bool AllowsApply(uint kind) => kind switch
+    {
+        PeerEffectKindValues.Poison => _poisonSync,
+        PeerEffectKindValues.Disguise => _disguiseSync,
+        _ => true,
+    };
+
     private int _countdown;
 
     /// <summary>The hook's own monotonic sequence last time this ran a publish pass — a
@@ -141,6 +168,23 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
                 continue;
             }
 
+            if (!AllowsApply(kind))
+            {
+                // Latched above like any other entry — a gate that flips on later must not
+                // replay a stale capture. Logged so the live pass can see the capture arrived.
+                if (_logged < 40)
+                {
+                    _logged++;
+                    PluginHost.Log(
+                        $"effect: not replaying kind {kind} from peer 0x{originPeerId:X} "
+                        + $"(duration {durationMs}ms, magnitude {magnitude}) — its coop.ini key "
+                        + (kind == PeerEffectKindValues.Poison ? "poison_sync" : "disguise_sync")
+                        + " is off (effect-sync.md §12)");
+                }
+
+                continue;
+            }
+
             bool applied = OdysseyEffects.ApplyEffect(playerId, kind, durationMs, magnitude, out int failure);
 
             if (_logged < 40)
@@ -150,9 +194,12 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
                     ? $"effect: applied kind {kind} from peer 0x{originPeerId:X} "
                         + $"(duration {durationMs}ms, magnitude {magnitude})"
                     : $"effect: refused kind {kind} from peer 0x{originPeerId:X} (failure {failure}) — "
-                        + (failure == -1
-                            ? "no apply-side constructor for this kind yet (see effect-sync.md)"
-                            : "engine call refused; see the failure-code comments in OdysseyEffects"));
+                        + (failure switch
+                        {
+                            -1 => "no apply-side constructor for this kind yet (see effect-sync.md)",
+                            11 => "magnitude is not a usable poison type / appearance row (refused before any VM push)",
+                            _ => "engine call refused; see the failure-code comments in OdysseyEffects",
+                        }));
             }
         }
     }

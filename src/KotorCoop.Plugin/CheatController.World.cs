@@ -81,13 +81,13 @@ internal sealed unsafe partial class CheatController
     private void ApplyEffect(nint player)
     {
         uint kind = (uint)block.CheatAmount;
-        if (kind is PeerEffectKindValues.None || kind > PeerEffectKindValues.Confused)
+        if (kind is PeerEffectKindValues.None || kind > PeerEffectKindValues.Max)
         {
             Answer(
                 SharedBlock.CheatStatusRefused,
-                $"unknown effect kind {kind} (1..12 - stun, paralyze, knockdown, slow, "
+                $"unknown effect kind {kind} (1..{PeerEffectKindValues.Max} - stun, paralyze, knockdown, slow, "
                 + "frightened, sleep, choke, forcepush, whirlwind, heal, temporaryhitpoints, "
-                + "confused)");
+                + "confused, fear, stunned, poison, disguise)");
             return;
         }
 
@@ -128,9 +128,13 @@ internal sealed unsafe partial class CheatController
 
         if (!applied)
         {
-            string reason = failure == -1
-                ? "no apply-side constructor for this kind yet (see effect-sync.md §4)"
-                : $"engine call refused (failure {failure})";
+            string reason = failure switch
+            {
+                -1 => "no apply-side constructor for this kind yet (see effect-sync.md §4)",
+                11 => "magnitude is not a usable poison type / appearance row - poison wants a poison.2da "
+                    + "row (0..255), disguise a non-zero appearance.2da row (effect-sync.md §12)",
+                _ => $"engine call refused (failure {failure})",
+            };
 
             PluginHost.Log($"applyeffect: kind {kind} on {what} (0x{targetId:X}) refused - {reason}");
             Answer(SharedBlock.CheatStatusEngineRefused, $"kind {kind} on {what} (0x{targetId:X}) refused - {reason}");

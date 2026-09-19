@@ -396,6 +396,31 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void StealthFlagRoundTripsIndependentlyOfTheOtherPresenceFlags()
+    {
+        // FlagStealth (protocol 53, docs/research/effect-sync.md §12.4) is the highest bit on
+        // the Flags dword so far (512) — pinned the same way FlagSoloSegment is above, and
+        // specifically as a bit ABOVE the low byte, since the plugin block's flags half is
+        // masked at 0xFFFF and a bit that only ever survived the low byte would vanish there.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PlayerState stealthed = SampleState with
+        {
+            Flags = PlayerState.FlagInCombat | PlayerState.FlagStealth,
+        };
+
+        int length = PacketCodec.Write(buffer, new StateUpdatePacket(1, 1, 1, stealthed));
+        StateUpdatePacket? decoded = PacketCodec.ReadStateUpdate(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.True(decoded.State.IsStealthed);
+        Assert.True(decoded.State.IsInCombat);
+        Assert.False(decoded.State.IsInSoloSegment);
+        Assert.False(decoded.State.IsPartyWiped);
+        Assert.True(PlayerState.FlagStealth > 0xFF);
+        Assert.True(PlayerState.FlagStealth <= 0xFFFF);
+    }
+
+    [Fact]
     public void ClearingTheAwayFlagRoundTrips()
     {
         // A stuck bit on the wire would leave a returned player parked forever.
@@ -1259,6 +1284,21 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         PeerEffectPacket original = new(
             FromPeerId: 4, TargetPeerId: 5, Kind: PeerEffectKind.Heal, DurationMs: 0, Magnitude: 30, Sequence: 2);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPeerEffect(buffer[..length]));
+    }
+
+    /// <summary>The highest kind so far (Disguise = 16, effect-sync.md §12) with a magnitude
+    /// that is a full appearance.2da ROW rather than an amount — pins that the Kind byte and
+    /// the 32-bit magnitude both carry it unchanged.</summary>
+    [Fact]
+    public void PeerEffectRoundTripsWithDisguiseKindAndAppearanceRow()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PeerEffectPacket original = new(
+            FromPeerId: 2, TargetPeerId: 1, Kind: PeerEffectKind.Disguise, DurationMs: 6000, Magnitude: 0xFFFF, Sequence: 7);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);

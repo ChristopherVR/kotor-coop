@@ -62,6 +62,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PeerIdentityRule.cs" Link="Plugin\PeerIdentityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipRetryRule.cs" Link="Plugin\EquipRetryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomSpawnReadinessRule.cs" Link="Plugin\PhantomSpawnReadinessRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PhantomTargetRule.cs" Link="Plugin\PhantomTargetRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightEngageFallbackRule.cs" Link="Plugin\LocalFightEngageFallbackRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightActivityRule.cs" Link="Plugin\LocalFightActivityRule.cs" />

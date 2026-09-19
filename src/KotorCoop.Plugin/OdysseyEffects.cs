@@ -34,6 +34,16 @@ namespace KotorCoop.Plugin;
 /// unaliased one-int-parameter constructor (<see cref="ApplyOneIntParamEffect"/>), the same
 /// family <see cref="ApplySlowEffect"/> already proves live.
 ///
+/// effect-sync.md §12 (2026-09-18) adds four more: Fear (<c>EffectFrightened</c>=158) and the
+/// general Stunned (<c>EffectStunned</c>=161) through <see cref="ApplyComplexEffect"/>
+/// unchanged; Poison (<c>EffectPoison</c>=250, a dedicated one-int constructor) through
+/// <see cref="ApplyOneIntParamEffect"/>; and Disguise (<c>EffectDisguise</c>=463 — a complex-
+/// family case that, unlike the others, pops one int) through the new
+/// <see cref="ApplyComplexEffectOneInt"/>. The first two reuse a live-verified path outright;
+/// Poison and Disguise are shape-matched to live-verified paths but their apply halves have
+/// never run on a game, so <c>PeerEffectController</c> gates them behind <c>poison_sync</c> /
+/// <c>disguise_sync</c> (default OFF) until a live pass does.
+///
 /// MAIN THREAD ONLY, same as every other VM-dispatching call in this codebase.
 /// </summary>
 internal static unsafe class OdysseyEffects
@@ -85,6 +95,37 @@ internal static unsafe class OdysseyEffects
     /// three-way cross-check (§7.3) but not shipped that pass.</summary>
     private const int RoutineEffectConfused = 157; // -> effect type 8, sub-code 1
 
+    /// <summary>The two remaining zero-argument complex-family cases effect-sync.md §7.3 named
+    /// but did not ship, shipped §12 (2026-09-18): the REAL <c>EffectFrightened</c> (not the
+    /// <c>EffectHorrified</c> this codebase calls Frightened) and the general, non-droid
+    /// <c>EffectStunned</c>. Case bodies at <c>0x531546</c>/<c>0x531559</c> pop nothing — same
+    /// shape as Paralyze/Sleep/Confused, same <see cref="ApplyComplexEffect"/> path.</summary>
+    private const int RoutineEffectFear = 158;    // -> effect type 8, sub-code 2
+    private const int RoutineEffectStunned = 161; // -> effect type 8, sub-code 4
+
+    /// <summary>
+    /// <c>EffectDisguise(int nDisguiseAppearance)</c> — ALSO an <c>ExecuteCommandEffectComplex</c>
+    /// case (reached through the handler's second compaction table for routines 270..463,
+    /// effect-sync.md §12.2), but unlike every other complex-family member this codebase calls
+    /// it DOES pop one script argument: its case body at <c>0x531689</c> calls the guarded VM
+    /// stack-pop helper (<c>0x5D1000</c>), refuses with the VM's own error code if nothing is
+    /// there, writes effect type 62 (global <c>0x746774</c>, read: 62) and
+    /// <c>SetInteger(effect, 0, value)</c>. So it needs <see cref="ApplyComplexEffectOneInt"/>:
+    /// the specific-index table check of <see cref="ApplyComplexEffect"/> plus the one push and
+    /// <c>nParams = 1</c> of <see cref="ApplySlowEffect"/>.
+    /// </summary>
+    private const int RoutineEffectDisguise = 463; // -> effect type 62, integer_list[0] = appearance row
+
+    /// <summary>
+    /// <c>ExecuteCommandEffectPoison</c> — a dedicated, unaliased constructor (one address-literal
+    /// registration, at table offset <c>0x3E8</c> = routine 250, effect-sync.md §12.3) with the
+    /// exact <c>ExecuteCommandEffectHeal</c> shape: an up-front pop through the guarded helper
+    /// (refuses with <c>0xFFFFF82F</c> on an empty/mistyped stack), then effect type 35 (global
+    /// <c>0x746708</c>, read: 35) and <c>SetInteger(effect, 0, nPoisonType)</c>. Same
+    /// <see cref="ApplyOneIntParamEffect"/> path as Heal/TemporaryHitpoints.
+    /// </summary>
+    private const nint ExpectedEffectPoison = 0x00533560; // 1 param (int nPoisonType) — type 35
+
     /// <summary>The two heal-family one-int-parameter VM effect constructors added in
     /// effect-sync.md §10 (2026-09-02) — VERIFIED via fresh disassembly: each pops exactly one
     /// int off the VM stack through the same shared stack-pop helper Slow's own constructor
@@ -111,6 +152,10 @@ internal static unsafe class OdysseyEffects
     private static int _routineConfused = -1;
     private static int _routineHeal = -1;
     private static int _routineTemporaryHitpoints = -1;
+    private static int _routineFear = -1;
+    private static int _routineStunned = -1;
+    private static int _routinePoison = -1;
+    private static int _routineDisguise = -1;
 
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int> StackPushInteger =
         (delegate* unmanaged[Thiscall]<nint, int, int>)0x005D1010;
@@ -193,6 +238,23 @@ internal static unsafe class OdysseyEffects
     private const int MaxTemporaryHitpointsMagnitude = 999;
     private const int DefaultTemporaryHitpointsMagnitude = 20;
 
+    /// <summary>Poison's magnitude is a poison.2da ROW, not an amount, so there is no sensible
+    /// substitute for a bad one — a value above this bound is REFUSED (failure 11) before
+    /// anything touches the VM stack, never defaulted. The bound is a sanity cap on a wire
+    /// value (K1's poison.2da is a few dozen rows), not a measured table size; row 0 is a real
+    /// row and stays accepted.</summary>
+    private const int MaxPoisonType = 255;
+
+    /// <summary>What a magnitude has to be for the kind to be applied at all — checked in
+    /// <see cref="ApplyEffect"/> BEFORE the shared helpers push anything, because every helper
+    /// pushes the duration and target first and a refusal after that would leave two values
+    /// on the VM stack.</summary>
+    private static bool IsUsablePoisonType(uint magnitude) => magnitude <= MaxPoisonType;
+
+    /// <summary>Mirrors <c>PeerEffectRules.IsUsableDisguiseRow</c> / <c>PeerIdentityRule
+    /// .IsUsableAppearance</c>: a non-zero row that fits the u16 the engine stores it in.</summary>
+    private static bool IsUsableDisguiseRow(uint magnitude) => magnitude is not 0 && magnitude <= 0xFFFF;
+
     /// <summary>
     /// Applies one peer-effect kind to <paramref name="objectId"/> (expected: the local
     /// player) through the engine's own VM pipeline. Returns false with a nonzero
@@ -257,6 +319,37 @@ internal static unsafe class OdysseyEffects
                     objectId, ExpectedEffectTemporaryHitpoints, ref _routineTemporaryHitpoints, durationMs,
                     magnitude, MinTemporaryHitpointsMagnitude, MaxTemporaryHitpointsMagnitude,
                     DefaultTemporaryHitpointsMagnitude, instant: false, out failure);
+
+            case PeerEffectKindValues.Fear:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectFear, ref _routineFear, durationMs, out failure);
+
+            case PeerEffectKindValues.Stunned:
+                return ApplyComplexEffect(
+                    objectId, RoutineEffectStunned, ref _routineStunned, durationMs, out failure);
+
+            case PeerEffectKindValues.Poison:
+                // A poison.2da row, refused rather than defaulted when out of range — and
+                // refused HERE, before the helper pushes the duration and target.
+                if (!IsUsablePoisonType(magnitude))
+                {
+                    failure = 11;
+                    return false;
+                }
+
+                return ApplyOneIntParamEffect(
+                    objectId, ExpectedEffectPoison, ref _routinePoison, durationMs, magnitude,
+                    0, MaxPoisonType, 0, instant: false, out failure);
+
+            case PeerEffectKindValues.Disguise:
+                if (!IsUsableDisguiseRow(magnitude))
+                {
+                    failure = 11;
+                    return false;
+                }
+
+                return ApplyComplexEffectOneInt(
+                    objectId, RoutineEffectDisguise, ref _routineDisguise, durationMs, (int)magnitude, out failure);
 
             default:
                 failure = -1;
@@ -640,6 +733,101 @@ internal static unsafe class OdysseyEffects
         if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
         {
             failure = 9;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Disguise — the one complex-family case this codebase calls that POPS a script argument
+    /// (<see cref="RoutineEffectDisguise"/>). <see cref="ApplyComplexEffect"/>'s specific-index
+    /// table check (the handler is aliased twenty-odd times; a linear scan would find
+    /// <c>EffectAssuredHit</c>) joined to <see cref="ApplySlowEffect"/>'s one push and
+    /// <c>nParams = 1</c>. A separate method rather than a parameter on
+    /// <see cref="ApplyComplexEffect"/> so that already-live-tested method is byte-for-byte
+    /// untouched. The caller validates <paramref name="value"/> before this pushes anything.
+    /// </summary>
+    private static bool ApplyComplexEffectOneInt(
+        uint objectId, int routineIndex, ref int cachedRoutine, uint durationMs, int value, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (cachedRoutine < 0)
+        {
+            cachedRoutine = Deref(table + (routineIndex * 4)) == ExpectedEffectComplex
+                ? routineIndex
+                : -1;
+        }
+
+        if (_routineApplyEffect < 0)
+        {
+            _routineApplyEffect = FindRoutine(table, ExpectedApplyEffectToObject);
+        }
+
+        if (cachedRoutine < 0 || _routineApplyEffect < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        float durationSeconds = durationMs / 1000f;
+        if (StackPushFloat(vm, durationSeconds) == 0 || StackPushObject(vm, objectId) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        if (StackPushInteger(vm, value) == 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        var effectCtor = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedEffectComplex;
+        if (effectCtor(implementer, cachedRoutine, 1) != 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        if (StackPushInteger(vm, DurationTypeTemporary) == 0)
+        {
+            failure = 8;
+            return false;
+        }
+
+        var applyEffect = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedApplyEffectToObject;
+        if (applyEffect(implementer, _routineApplyEffect, 4) != 0)
+        {
+            failure = 9;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 10;
         }
 
         return true;

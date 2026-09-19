@@ -40,7 +40,16 @@ internal readonly record struct RemoteView(
     /// deliberate: the owner must stay visible for the spectator's camera to follow.</summary>
     public const uint FlagSoloSegment = 128;
 
+    /// <summary>Matches <c>PlayerState.FlagStealth</c> (protocol 53) — the peer's character is
+    /// in the engine's stealth mode (their <c>CSWSCreature+0x4D1</c> byte, sampled by their
+    /// agent every tick). Carried verbatim through the existing <see cref="Flags"/> dword; no
+    /// block layout change. <c>PhantomController.ApplyTargetable</c> holds the stand-in
+    /// Neutral while it is set (<c>stealth_sync</c>) — see <see cref="PhantomTargetRule"/>.</summary>
+    public const uint FlagStealth = 512;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
+
+    public bool Stealthed => (Flags & FlagStealth) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
 

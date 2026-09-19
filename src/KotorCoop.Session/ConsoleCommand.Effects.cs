@@ -30,8 +30,9 @@ public static partial class ConsoleCommand
         const string usage =
             "applyeffect <kind> [target] [durationMs] [magnitude]  (kind: stun, paralyze, "
             + "knockdown, slow, frightened, sleep, choke, forcepush, whirlwind, heal, "
-            + "temporaryhitpoints, confused; target: object id, 'me', or blank for the "
-            + "nearest phantom)";
+            + "temporaryhitpoints, confused, fear, stunned, poison, disguise; target: object "
+            + "id, 'me', or blank for the nearest phantom; magnitude is the poison.2da row "
+            + "for poison and the appearance.2da row for disguise)";
 
         if (rest.Length == 0 || rest.Length > 4)
         {

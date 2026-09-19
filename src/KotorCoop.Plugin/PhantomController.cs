@@ -130,6 +130,8 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         _peerInCombat[slot] = false;
         _hostileToLocals[slot] = false;
         _factionKnown[slot] = false;
+        _stealthVisualApplied[slot] = false;
+        _stealthVisualKnown[slot] = false;
         _smoothing[slot] = false;
         _shownAtTime[slot] = 0;
         _speedFromTime[slot] = 0;
