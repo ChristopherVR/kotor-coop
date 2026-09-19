@@ -2234,3 +2234,16 @@ cutscene ran to `the owner ended the conversation` on both sides with both playe
 the announce line at 05:33:04. `PersistentSaveMismatchRule` and `RejoinTrigger.SaveMismatch` are
 unchanged — a genuinely different save (`-Save 2` on one side, or a Load mid-session) still
 rejoins exactly as the 2026-09-02 sections above describe.
+
+## Periodic and pre-disconnect character capture (2026-09-18)
+
+A client's co-op character used to be captured only at door autosaves and on a clean disconnect,
+reading whatever save was newest. Now `CoopCommandDispatcher.MaintainPeriodicCapture` asks the engine
+for a quicksave (`CheatKinds.QuickSave`, the `save` verb) every `character_capture_interval_min`
+minutes (default 10, 0 = off) when `CharacterCaptureCadenceRule` says the player is not in combat, a
+conversation, a minigame or down; it waits at most 5 s for `FindCaptureSource` to show a new or
+newer save, then captures (falling back to the newest existing save, since a refused save is silent).
+The source is still the newest NON-staged save, so `saves\000001 - AUTOSAVE` on a joiner is never
+read. `CaptureCharacterOnDisconnect` does the same quicksave-then-wait (blocking, up to 5 s, on the
+teardown path). The cadence rule is pinned by `CharacterCaptureCadenceRuleTests`; the dispatcher wiring is not unit-tested. NEEDS-LIVE: the
+quicksave landing where `FindCaptureSource` looks, and that a periodic quicksave is unobtrusive.

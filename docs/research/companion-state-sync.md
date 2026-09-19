@@ -1549,3 +1549,29 @@ Still NEEDS-LIVE from §13.4: item 3 (a mirrored companion's region stays at cou
 contradicted, the host applied nothing outside release windows, but not isolated), item 4 (two
 companions released at once — one companion on this rig), item 5 (a module transition
 mid-release — the warp in this round happened while Trask was mirrored, not released).
+
+## 14. A joiner and a mirrored companion's gear and health (2026-09-18)
+
+docs/review-seamless-2026-09-18.md §2. **Gear (`companion_equip_host_only`, default ON, NEEDS-LIVE).**
+A client's equip on a mirrored companion takes the item out of the (host-authoritative) pool and the
+host's next gear publish re-dresses the companion, so the item is lost. The screen is refused on a
+client instead: `CompanionEquipSuppressionController` reads `CGuiInGame+0x0C` (the Equipment screen,
+`CSWGuiInGameEquip`, vtable `0x007567A0`, index 0 of the screen array `[gui+0x2C]`), requires the
+GUI manager to report it registered (`PanelExists 0x0040BD70`), reads the subject creature at
+`panel+0x64` (`SetCharacter 0x006B7590`), and when that is not the controlled PC closes it through
+`Odyssey.CloseFullScreenGui` (the `closegui` primitive) with the line "the host equips companions".
+One close per visit (the rule re-arms when the screen is seen closed or on the PC). Static only:
+`GetCurrentEquipScreenNPC 0x0062FEA0` and `HideSWInGameGui 0x0062CBA0` were disassembled; nothing was
+run. NEEDS-LIVE: that `[gui+0x0C]` is the panel and `+0x64` the subject at runtime, and that the close
+does not leave the input class wrong. The fallback (revert a client-side change through the gear
+channel) is NOT built and is the follow-up if the live check fails.
+
+**Heals (built, NEEDS-LIVE).** A heal is a second cumulative total per roster slot riding the existing
+companion-damage packet and block rows, keyed by bit 7 of the slot byte (`CompanionDamageSlots`), so
+no packet or block version changes. The released companion's hit points are sampled every 10 frames
+(`CompanionHealSampleRule`: a rise with no hit in the window, body not at 0, at most 999); the
+host's `CompanionDamageLedger` banks it rise-only with the same plausibility gate, and
+`CompanionDamageController.ApplyHeal` spends it through `EffectHeal`. A heal on a downed body is
+dropped. Only a RELEASED companion (`companion_local_combat`, default OFF) is sampled, so a heal on a
+non-released mirror is still overwritten by the host, as before. The 9-row owed block is rotated by
+`CompanionDamageOwedWindow` because heal rows can double the table.

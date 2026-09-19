@@ -65,6 +65,7 @@ internal static unsafe partial class PluginHost
         _interactionLocks = new InteractionLockController(_view);
         _partyRoster = new PartyRosterController(_view);
         _partySelectSuppression = new PartySelectSuppressionController(_view);
+        _companionEquipSuppression = new CompanionEquipSuppressionController(_view);
         _controlReturn = new ControlReturnController(_view);
         _agentLiveness = new AgentLivenessController(_view);
         _connectionIndicator = new ConnectionIndicatorController(_view);

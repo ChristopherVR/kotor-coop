@@ -180,6 +180,11 @@ internal sealed class PartyPump(
 
     private bool _xpRateBelowVanillaLogged;
 
+    /// <summary>Per-peer XP baselines (host side): a peer's first report after it joins never
+    /// raises the host; only what it earns afterwards is folded in. See
+    /// <see cref="ExperienceMerge"/>.</summary>
+    private readonly ExperienceMerge _experience = new();
+
     /// <summary>
     /// Shares progression. The host's party table IS the purse; clients report what their own
     /// engine put in and took out, the host spends each increase against its table, and the
@@ -198,7 +203,9 @@ internal sealed class PartyPump(
     /// <c>ApplyDeathExperience</c> run on the mirror exactly as on the owner. Forwarding a
     /// delta would count every kill in the game twice. It is absolute and merges by max, which
     /// carries the thing that genuinely diverges — script-granted XP, from a conversation or a
-    /// stealth award only one instance ran — and leaves the rest alone.
+    /// stealth award only one instance ran — and leaves the rest alone. Since 2026-09-18 the
+    /// max is taken against a per-peer BASELINE (<see cref="ExperienceMerge"/>): a peer's first
+    /// report after joining never raises the host, only what it earns after that does.
     /// </summary>
     public void PumpProgression(SessionCapabilities caps, string localModule)
     {
@@ -292,7 +299,12 @@ internal sealed class PartyPump(
 
         foreach (PeerProgression report in session.GetProgressionReports())
         {
-            mergedExperience = Math.Max(mergedExperience, report.Experience);
+            // Max-merge against a per-peer BASELINE, not the raw report: a veteran character
+            // joining an earlier save must not lift the host to its own total on the first
+            // tick (docs/review-seamless-2026-09-18.md §2). ExperienceMerge keeps the
+            // "never below the host's own reading" property of the bare max.
+            mergedExperience = _experience.Fold(
+                mergedExperience, report.PeerId, report.Generation, report.Experience);
 
             if (!_appliedProgression.TryGetValue(report.PeerId, out (uint Generation, uint Earned, uint Spent) applied)
                 || applied.Generation != report.Generation)

@@ -59,6 +59,127 @@ public sealed partial class CoopCommandDispatcher
     private bool HostLoadReadoptEnabled =>
         _hostLoadReadoptEnabled ??= loadConfig?.Invoke()?.HostLoadReadopt ?? true;
 
+    // ---- periodic + pre-disconnect character capture (2026-09-18) --------------------------
+    //
+    // docs/review-seamless-2026-09-18.md §2: the co-op character was captured only when a
+    // door autosave or a clean disconnect happened to produce a save. Now a CLIENT asks its own
+    // engine for a quicksave (the same CheatKinds.QuickSave the `save` verb drives) every
+    // character_capture_interval_min minutes while idle, waits a bounded time for the save to
+    // land (CharacterCaptureCadenceRule.SaveWaitMs), then captures; and the disconnect capture
+    // quicksaves first the same way. The capture source is unchanged — this install's newest
+    // NON-staged save (ClientCharacterPersistence.FindCaptureSource) — so the staged copy of the
+    // host's world is never read (StagedSave). See docs/research/session-save.md.
+
+    /// <summary>coop.ini <c>character_capture_interval_min</c>; 0 = off; 10 when the ini is
+    /// missing (the code default, same missing-ini note as the rejoin gates above).</summary>
+    private int? _characterCaptureIntervalMin;
+
+    private int CharacterCaptureIntervalMin =>
+        _characterCaptureIntervalMin ??= loadConfig?.Invoke()?.CharacterCaptureIntervalMin ?? 10;
+
+    /// <summary>When the last periodic capture ran (or the connection began) — the interval is
+    /// measured from here. 0 = not yet baselined for this connection.</summary>
+    private long _captureLastMs;
+
+    /// <summary>When the in-flight quicksave was requested, or 0 when none is.</summary>
+    private long _captureRequestedMs;
+
+    private string? _captureSourceBefore;
+    private DateTime _captureStampBefore;
+
+    /// <summary>The newest write inside a save directory. The DIRECTORY's own time is not
+    /// enough: a quicksave over an existing QUICKSAVE folder rewrites files in place, which on
+    /// NTFS leaves the folder's timestamp alone.</summary>
+    private static DateTime SaveStamp(string? saveDirectory)
+    {
+        if (saveDirectory is null)
+        {
+            return DateTime.MinValue;
+        }
+
+        try
+        {
+            DateTime newest = DateTime.MinValue;
+            foreach (string file in Directory.EnumerateFiles(saveDirectory))
+            {
+                DateTime written = File.GetLastWriteTimeUtc(file);
+                if (written > newest)
+                {
+                    newest = written;
+                }
+            }
+
+            return newest;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    /// <summary>The client's periodic capture, one step per tick — see the section comment.</summary>
+    private void MaintainPeriodicCapture(PlayerState? localState, long nowMs, string savesDirectory)
+    {
+        if (_sessionSaveWatch is null)
+        {
+            return;
+        }
+
+        if (_captureLastMs == 0)
+        {
+            // First tick of this connection: the interval runs from here, not from the epoch —
+            // a join must not be followed by an immediate quicksave into a world still landing.
+            _captureLastMs = nowMs;
+            return;
+        }
+
+        if (_captureRequestedMs != 0)
+        {
+            string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+            bool landed = CharacterCaptureCadenceRule.SaveLanded(
+                _captureSourceBefore, _captureStampBefore, sourceNow, SaveStamp(sourceNow));
+
+            if (!landed && !CharacterCaptureCadenceRule.WaitExpired(_captureRequestedMs, nowMs))
+            {
+                return;
+            }
+
+            Log?.Invoke(landed
+                ? $"character capture: quicksave landed after {nowMs - _captureRequestedMs} ms - capturing"
+                : "character capture: no save appeared within the wait (the engine may refuse to save here) - capturing the newest save as before");
+
+            string? outcome = _sessionSaveWatch.CaptureNow(sourceNow);
+            if (outcome is not null)
+            {
+                Log?.Invoke(outcome);
+            }
+
+            _captureRequestedMs = 0;
+            _captureLastMs = nowMs;
+            return;
+        }
+
+        if (!CharacterCaptureCadenceRule.IsDue(CharacterCaptureIntervalMin, nowMs, _captureLastMs, requestPending: false, localState))
+        {
+            return;
+        }
+
+        if (!bridge.SupportsCheats)
+        {
+            // No plugin block: nothing can ask the engine to save. Try again next interval
+            // rather than every tick.
+            _captureLastMs = nowMs;
+            return;
+        }
+
+        _captureSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+        _captureStampBefore = SaveStamp(_captureSourceBefore);
+        _captureRequestedMs = nowMs;
+
+        Log?.Invoke($"character capture: {CharacterCaptureIntervalMin} min elapsed - asking the engine for a quicksave");
+        SendCheat(new CheatRequest(CheatKinds.QuickSave), quiet: true);
+    }
+
     /// <summary>
     /// coop.ini <c>auto_adopt_world</c> — ON by default, unlike its two neighbours above,
     /// because it is the gate on the thing a joiner almost always wants: a world that differs
@@ -182,6 +303,8 @@ public sealed partial class CoopCommandDispatcher
             _saveLineageAnnounced = false;
             _wipeRecoveryState = WipeRecoveryState.Initial;
             _hostWorldReplacedState = HostWorldReplacedState.Initial;
+            _captureLastMs = 0;
+            _captureRequestedMs = 0;
             return;
         }
 
@@ -270,6 +393,10 @@ public sealed partial class CoopCommandDispatcher
             (bool hostBackAfterWipe, WipeRecoveryState nextWipeState) =
                 WipeRecoveryRule.Observe(_wipeRecoveryState, localState, hostState);
             _wipeRecoveryState = nextWipeState;
+
+            // Every tick too: a quicksave request in flight has to be watched for its save
+            // landing regardless of what the verdict chain below decides this tick.
+            MaintainPeriodicCapture(localState, nowMs, Path.Combine(gameDirectory, "saves"));
 
             // The serial-only fallback for the host's load, same lifecycle as the wipe watch:
             // arms on the raw edge, fires once the host stands in a named module. Runs every
@@ -690,7 +817,38 @@ public sealed partial class CoopCommandDispatcher
         // Same source rule as the per-tick capture: this install's own newest save, not the
         // staged copy of the host's world (the 2026-09-03 live pass caught exactly this call
         // writing the host's PC into the sidecar).
-        string? currentSave = ClientCharacterPersistence.FindCaptureSource(Path.Combine(gameDirectory, "saves"));
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        string? currentSave = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+
+        // 2026-09-18: save FIRST, so the capture holds the levels and gear since the last door
+        // rather than whatever the last autosave happened to hold. Straight through the bridge,
+        // not SendCheat's queue — the session is being torn down and there is no next tick to
+        // drain a queue on. Bounded: CSWSPlayer::GetIsAllowedToSave refuses silently, so after
+        // SaveWaitMs the newest existing save is captured exactly as before.
+        if (bridge.SupportsCheats && bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
+        {
+            DateTime stampBefore = SaveStamp(currentSave);
+            long requestedMs = SessionClock.NowMs;
+            bool landed = false;
+
+            while (!CharacterCaptureCadenceRule.WaitExpired(requestedMs, SessionClock.NowMs))
+            {
+                Thread.Sleep(100);
+
+                string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+                if (CharacterCaptureCadenceRule.SaveLanded(currentSave, stampBefore, sourceNow, SaveStamp(sourceNow)))
+                {
+                    currentSave = sourceNow;
+                    landed = true;
+                    break;
+                }
+            }
+
+            Log?.Invoke(landed
+                ? $"character capture: pre-disconnect quicksave landed after {SessionClock.NowMs - requestedMs} ms"
+                : "character capture: pre-disconnect quicksave did not land within the wait - capturing the newest save as before");
+        }
+
         string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);
         if (outcome is not null)
         {

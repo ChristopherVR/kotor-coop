@@ -427,6 +427,17 @@ public sealed record CoopConfig
     public bool HostLoadReadopt { get; init; } = true;
 
     /// <summary>
+    /// coop.ini <c>character_capture_interval_min</c> (client only, 2026-09-18): how often, in
+    /// minutes, a joined client asks its own engine for a quicksave and captures its co-op
+    /// character into the sidecar — only while not in combat, a conversation or a minigame
+    /// (<see cref="CharacterCaptureCadenceRule"/>). Until this the character was captured only
+    /// at door autosaves and on a clean disconnect, so a crash lost everything since the last
+    /// door (docs/review-seamless-2026-09-18.md §2). Default 10; 0 turns the cadence off (the
+    /// pre-disconnect quicksave stays). Clamped to a day.
+    /// </summary>
+    public int CharacterCaptureIntervalMin { get; init; } = 10;
+
+    /// <summary>
     /// Whether a follower acts on a host's announced transition destination immediately,
     /// instead of waiting for the host's published module to change and the module-settle
     /// debounce to elapse — docs/research/transition-smoothness.md. ON by default:
@@ -777,8 +788,9 @@ public sealed record CoopConfig
     private static readonly string[] DeveloperKnownKeys =
     [
         "activate_render_on_start", "bark_replay", "bark_sync", "behaviour_override_reader",
-        "class_grant_sync", "client_door_refusal", "client_encounters", "client_load_rejoin",
-        "client_temp_death_suppress", "companion_damage_sync", "companion_gear_sync",
+        "character_capture_interval_min", "class_grant_sync", "client_door_refusal",
+        "client_encounters", "client_load_rejoin", "client_temp_death_suppress",
+        "companion_damage_sync", "companion_equip_host_only", "companion_gear_sync",
         "companion_local_combat", "companion_local_combat_range", "companion_xp_sync",
         "connect_timeout_ms", "container_fast_pump", "container_lock_arbitration",
         "container_locks", "damage_creator_attribution", "debug_hello_version", "dejitter",
@@ -971,6 +983,10 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
             HostLoadReadopt = !kv.ContainsKey("host_load_readopt")
                 || IsTruthy(kv.GetValueOrDefault("host_load_readopt")),
+            CharacterCaptureIntervalMin =
+                int.TryParse(kv.GetValueOrDefault("character_capture_interval_min"), out int captureMin)
+                    ? Math.Clamp(captureMin, 0, 24 * 60)
+                    : 10,
             TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")

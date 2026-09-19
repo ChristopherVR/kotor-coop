@@ -15,6 +15,10 @@ internal sealed partial class CombatPump
     private readonly CompanionDamageLedger _companionDamage = new();
     private uint _companionRefusedLogged;
 
+    /// <summary>Rotation cursor for <see cref="CompanionDamageOwedWindow"/> — only moves once
+    /// heal rows push the owed table past the plugin's nine rows.</summary>
+    private int _companionOwedWindowStart;
+
     /// <summary>
     /// Moves companion-damage state between the game and the session in whichever direction
     /// this peer is responsible for — DOWN from the host is nothing (a companion's health is
@@ -38,14 +42,21 @@ internal sealed partial class CombatPump
             // damage on our own engine. Published every pass, even when empty — the total is a
             // LEVEL the plugin diffs against what it has already applied, so a pass the plugin
             // misses costs nothing and republishing the same table is free.
-            bridge.TryPublishCompanionDamageOwed(_companionDamage.Merge(session.GetCompanionDamage()));
+            // Heal rows (CompanionDamageSlots) can double the table past the plugin's nine
+            // rows; the window rotates so every row is seen within two passes.
+            bridge.TryPublishCompanionDamageOwed(CompanionDamageOwedWindow.Slice(
+                _companionDamage.Merge(session.GetCompanionDamage()),
+                ProtocolConstants.PartyRosterSlots,
+                ref _companionOwedWindowStart));
 
             if (_companionDamage.RefusedRises != _companionRefusedLogged)
             {
                 _companionRefusedLogged = _companionDamage.RefusedRises;
-                (uint peer, uint slotPlusOne, uint delta) = _companionDamage.LastRefused;
-                log($"companion damage: REFUSED an implausible damage rise of {delta} on roster "
-                    + $"slot {slotPlusOne - 1} from peer {peer} ({_companionRefusedLogged} refused so far)");
+                (uint peer, uint slotField, uint delta) = _companionDamage.LastRefused;
+                string kind = CompanionDamageSlots.IsHeal(slotField) ? "heal" : "damage";
+                log($"companion damage: REFUSED an implausible {kind} rise of {delta} on roster "
+                    + $"slot {CompanionDamageSlots.RosterSlotPlusOne(slotField) - 1} from peer {peer} "
+                    + $"({_companionRefusedLogged} refused so far)");
             }
 
             return;

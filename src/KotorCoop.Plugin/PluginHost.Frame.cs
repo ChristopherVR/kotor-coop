@@ -762,6 +762,9 @@ internal static unsafe partial class PluginHost
         // After the roster poll, not before: suppression only decides whether to close the
         // client's own screen, and never blocks the reconcile pass above from converging.
         _partySelectSuppression?.OnFrame();
+        // Same footing as the party-select screen: a client's companion Equipment page is
+        // closed, never reconciled — companion gear is the host's (companion_equip_host_only).
+        _companionEquipSuppression?.OnFrame();
 
         // After death handling has published whether we are down, so damage that would
         // arrive on an already-downed player is skipped rather than fighting the revive.

@@ -150,6 +150,26 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void AHealRowRidesTheCompanionDamagePacketUnchanged()
+    {
+        // CompanionDamageSlots (2026-09-18): bit 7 of the slot byte marks a heal total. No
+        // format change — the byte already carried 0..255 and a roster slot is 1..9.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        CompanionDamagePacket original = new(2, 4,
+            [new CompanionDamageEntry(1, 27), new CompanionDamageEntry(CompanionDamageSlots.HealSlot(1), 15)]);
+
+        int length = PacketCodec.Write(buffer, original);
+        CompanionDamagePacket? decoded = PacketCodec.ReadCompanionDamage(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(original.Damage, decoded.Damage);
+        Assert.True(CompanionDamageSlots.IsHeal(decoded.Damage[1].RosterSlotPlusOne));
+        Assert.Equal(1u, CompanionDamageSlots.RosterSlotPlusOne(decoded.Damage[1].RosterSlotPlusOne));
+        Assert.False(CompanionDamageSlots.IsHeal(decoded.Damage[0].RosterSlotPlusOne));
+    }
+
+    [Fact]
     public void ATruncatedCompanionDamageReportIsRejected()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];

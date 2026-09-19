@@ -485,16 +485,25 @@ internal static unsafe class PhantomHitHook
     }
 
     public static void ReadCompanionSlot(
-        int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial)
+        int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial) =>
+        ReadCompanionSlot(slot, out rosterSlotPlusOne, out cumulative, out serial, out _);
+
+    /// <summary>The form <see cref="CompanionDamageController"/>'s heal sampling needs: also
+    /// which body the watch names, so a hit-point sample can be tied to the same object the
+    /// damage serial belongs to (<see cref="CompanionHealSampleRule"/>).</summary>
+    public static void ReadCompanionSlot(
+        int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial, out uint objectId)
     {
         if (slot is < 0 or >= SharedBlock.CompanionDamageSlotCapacity || _companionId[slot] == 0)
         {
             rosterSlotPlusOne = 0;
             cumulative = 0;
             serial = 0;
+            objectId = 0;
             return;
         }
 
+        objectId = _companionId[slot];
         rosterSlotPlusOne = _companionRosterSlotPlusOne[slot];
         cumulative = _companionCumulative[rosterSlotPlusOne];
         serial = _companionSerial[rosterSlotPlusOne];

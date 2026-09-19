@@ -202,6 +202,114 @@ public class CompanionDamageLedgerTests
         Assert.Equal(12u, ledger.OwedFor(1));
     }
 
+    // ---- heals (2026-09-18): the same arithmetic under the heal-flagged key -------------
+
+    [Fact]
+    public void AHealRowIsBankedUnderItsOwnKeyAndNeverNetsAgainstDamage()
+    {
+        // A medpac on a released companion is a rise in the HEAL total for that roster slot;
+        // the damage total for the same slot is untouched, and vice versa.
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Report(2, 1, 30), Heal(2, 1, 15)]);
+        Assert.Equal(30u, ledger.OwedFor(1));
+        Assert.Equal(15u, ledger.HealOwedFor(1));
+
+        ledger.Merge([Report(2, 1, 30), Heal(2, 1, 40)]);
+        Assert.Equal(30u, ledger.OwedFor(1));
+        Assert.Equal(40u, ledger.HealOwedFor(1));
+
+        IReadOnlyList<CompanionDamageEntry> table = ledger.Merge([]);
+        Assert.Contains(table, e => e.RosterSlotPlusOne == 1 && e.CumulativeDamage == 30);
+        Assert.Contains(table, e => e.RosterSlotPlusOne == CompanionDamageSlots.HealSlot(1) && e.CumulativeDamage == 40);
+    }
+
+    [Fact]
+    public void AStaleOrRepeatedHealReportAddsNothing()
+    {
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Heal(2, 1, 20)]);
+        ledger.Merge([Heal(2, 1, 20)]);
+        ledger.Merge([Heal(2, 1, 12)]);
+
+        Assert.Equal(20u, ledger.HealOwedFor(1));
+    }
+
+    [Fact]
+    public void AHealThatRestartsItsCountIsBelievedAgain()
+    {
+        // A module change bumps the sender's generation; its heal total starts at 0 again
+        // and everything it now reports is new healing.
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Heal(2, 1, 20, generation: 1)]);
+        ledger.Merge([Heal(2, 1, 5, generation: 2)]);
+
+        Assert.Equal(25u, ledger.HealOwedFor(1));
+    }
+
+    [Fact]
+    public void AnImplausibleHealIsRefusedLikeAnImplausibleHit()
+    {
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Heal(2, 1, 7)]);
+        ledger.Merge([Heal(2, 1, 7 + PeerDamageLedger.MaxPlausibleRise + 1)]);
+
+        Assert.Equal(7u, ledger.HealOwedFor(1));
+        Assert.Equal(1u, ledger.RefusedRises);
+        Assert.Equal((2u, CompanionDamageSlots.HealSlot(1), PeerDamageLedger.MaxPlausibleRise + 1), ledger.LastRefused);
+    }
+
+    [Fact]
+    public void AHealRowWithNoRosterSlotIsIgnored()
+    {
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([new PeerCompanionDamage(2, 1, CompanionDamageSlots.HealFlag, 50)]);
+
+        Assert.Empty(ledger.Merge([]));
+    }
+
+    [Fact]
+    public void TwoPeersHealingTheSameCompanionAreSummed()
+    {
+        CompanionDamageLedger ledger = new();
+
+        ledger.Merge([Heal(2, 3, 10), Heal(3, 3, 25)]);
+
+        Assert.Equal(35u, ledger.HealOwedFor(3));
+    }
+
+    [Fact]
+    public void TheHostSideOwedLedgerSpendsHealsAndHitsSeparately()
+    {
+        // The plugin keys its applied totals by the RAW slot field, so a heal row and a damage
+        // row for the same companion are two debts, each paid exactly once.
+        CompanionDamageLedger ledger = new();
+        DamageOwedLedger plugin = new(18, maxPerApplication: 200);
+
+        ledger.Merge([Report(2, 1, 30), Heal(2, 1, 15)]);
+        foreach (CompanionDamageEntry entry in ledger.Merge([]))
+        {
+            int amount = plugin.Pending(entry.RosterSlotPlusOne, entry.CumulativeDamage);
+            Assert.True(amount > 0);
+            plugin.Commit(entry.RosterSlotPlusOne, amount);
+        }
+
+        Assert.Equal(30u, plugin.AppliedTo(1));
+        Assert.Equal(15u, plugin.AppliedTo(CompanionDamageSlots.HealSlot(1)));
+
+        foreach (CompanionDamageEntry entry in ledger.Merge([]))
+        {
+            Assert.Equal(0, plugin.Pending(entry.RosterSlotPlusOne, entry.CumulativeDamage));
+        }
+    }
+
     private static PeerCompanionDamage Report(uint peer, uint rosterSlotPlusOne, uint total, uint generation = 1) =>
         new(peer, generation, rosterSlotPlusOne, total);
+
+    private static PeerCompanionDamage Heal(uint peer, uint rosterSlotPlusOne, uint total, uint generation = 1) =>
+        new(peer, generation, CompanionDamageSlots.HealSlot(rosterSlotPlusOne), total);
 }
