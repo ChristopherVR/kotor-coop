@@ -166,3 +166,5 @@ Manaan: the joiner refuses the follow into `manm28ab` (live); the wait notice no
 
 Three RE agents reported (branches not yet merged at the time of writing): **mines** built behind `mine_sync` (OFF), party-placed mines not built; **enemy crowd control** (client casts on mirrored enemies) built behind `enemy_effect_sync` (OFF, protocol 56 -> 58); **partner heal/buff** premise mostly wrong (medpacs heal only their user, Heal/Cure/Recovery loop the roster with no faction test; only Valor uses `GetIsFriend`) - `partner_buffs` (OFF) moves the stand-in to Friendly_1 so Valor can reach it; healing the partner needs a mirror design (`research/partner-buffs.md` section 8). All three are NEEDS-LIVE.
 
+**STUNT-follow trigger: VERIFIED live** (host `warp STUNT_50a`, joiner replays the leg on its own engine, echo de-dup fires, both land in `sta_m45ac`; `research/cinematics.md` 12.9). Still unproven: a multi-hop scripted chain and the other STUNT modules.
+
