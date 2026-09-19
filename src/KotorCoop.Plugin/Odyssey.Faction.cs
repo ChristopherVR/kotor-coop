@@ -19,6 +19,11 @@ internal static unsafe partial class Odyssey
 
     public const int FactionPlayer = 0;
 
+    /// <summary>Friendly_1, row/column 2 of repute.2da: 100 from the Player row (so
+    /// <c>GetIsFriend</c> holds for a party member), 0 from Hostile_1/Hostile_2. Used only
+    /// under coop.ini <c>partner_buffs</c> (docs/research/partner-buffs.md).</summary>
+    public const int FactionFriendly1 = 2;
+
     /// <summary>
     /// Moves a creature into a faction through the engine's own membership call.
     ///

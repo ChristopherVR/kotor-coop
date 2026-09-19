@@ -557,6 +557,12 @@ internal sealed unsafe partial class PhantomController
     /// uses, no new engine write. See <see cref="PhantomTargetRule"/> and effect-sync.md §12.4.</summary>
     private readonly bool _stealthSync = PluginConfig.ReadBool("stealth_sync", true);
 
+    /// <summary>coop.ini <c>partner_buffs</c>, default OFF, NEEDS-LIVE: seat the targetable
+    /// stand-in in Friendly_1 rather than Player so a friend-sphere cast (Force Valor family)
+    /// reaches it. Plugin-only key — the agent never reads it, so there is no digest field and
+    /// no second default to keep in step. See docs/research/partner-buffs.md.</summary>
+    private readonly bool _partnerBuffs = PluginConfig.ReadBool("partner_buffs", false);
+
     /// <summary>coop.ini <c>stealth_visual_sync</c> (default OFF, NEEDS-LIVE): additionally
     /// put the stand-in into the engine's own stealth mode through
     /// <see cref="Odyssey.SetStealthMode"/> — the setter the stealth button itself reaches —
@@ -679,7 +685,19 @@ internal sealed unsafe partial class PhantomController
             return;
         }
 
-        if (!Odyssey.SetCreatureFaction(objectId, want ? Odyssey.FactionPlayer : Odyssey.FactionNeutralId))
+        // partner_buffs (default OFF, NEEDS-LIVE): the targetable state uses Friendly_1 instead of
+        // Player so the engine's GetIsFriend (reputation >= 90) holds for the local caster — see
+        // PhantomTargetRule.FactionFor and docs/research/partner-buffs.md. The latch below stays
+        // keyed on `want`: the key is read once at construction, so the pair never disagrees.
+        PhantomTargetRule.Kind kind = PhantomTargetRule.FactionFor(want, _partnerBuffs);
+        int factionId = kind switch
+        {
+            PhantomTargetRule.Kind.Friendly => Odyssey.FactionFriendly1,
+            PhantomTargetRule.Kind.Player => Odyssey.FactionPlayer,
+            _ => Odyssey.FactionNeutralId,
+        };
+
+        if (!Odyssey.SetCreatureFaction(objectId, factionId))
         {
             return; // try again next pass rather than latching a state we did not achieve
         }
@@ -693,7 +711,9 @@ internal sealed unsafe partial class PhantomController
         _factionKnown[slot] = true;
 
         PluginHost.Log(want
-            ? $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
+            ? kind == PhantomTargetRule.Kind.Friendly
+                ? $"phantom 0x{objectId:X}: joined the friendly faction (partner_buffs); local enemies can fight it and a friend-sphere cast reaches it"
+                : $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
             : stealthHold
                 ? $"phantom 0x{objectId:X}: back to neutral; attackers released (peer is in stealth)"
                 : $"phantom 0x{objectId:X}: back to neutral; attackers released");

@@ -1031,6 +1031,11 @@ sub-code 1 below), forwarded, and replayed on the peer's REAL character via
 read from the same §5 table but is deliberately **not** shipped: a stat buff applied to a
 phantom (which nothing else reads) has no real-body counterpart worth forwarding, unlike HP.
 
+> **Correction, 2026-09-19 (`partner-buffs.md`):** the medpac/Cure/Heal sentence above is only
+> half right. A medpac heals its user only; Heal and Cure loop the party roster; only the Valor
+> family tests friendship. A cast never "lands on" a stand-in unless it is a friend-sphere buff, so
+> the forwarding described here is reachable by the staging verb, not by ordinary play.
+
 `PeerEffectKind.Heal = 10`, `PeerEffectKind.TemporaryHitpoints = 11` (`KotorCoop.Protocol` and
 its `PeerEffectKindValues` plugin-side mirror); `PeerEffectRules.TryMapAllowlist` maps engine
 type 39/15 directly (no sub-code involved, same shape as Knockdown/Slow/ForcePush);

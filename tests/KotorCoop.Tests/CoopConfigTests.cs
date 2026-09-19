@@ -685,6 +685,7 @@ public class CoopConfigTests
     [InlineData("local_combat")]
     [InlineData("party_pool_sync")]
     [InlineData("threat_retarget")]
+    [InlineData("partner_buffs")]
     [InlineData("party_follow_stall_recovery_method")]
     [InlineData("DEJITTER")] // case-insensitive
     public void KnownDeveloperKeysAreRecognisedAsDeveloperSwitches(string key)

@@ -1,6 +1,6 @@
 # Research
 
-78 write-ups behind every feature in the top-level README, plus the reverse-engineering they
+79 write-ups behind every feature in the top-level README, plus the reverse-engineering they
 stand on. Each is verified against the retail GOG `swkotor.exe` v1.0.3 (disk == memory, no
 ASLR) or the game files themselves, not folklore.
 
@@ -60,6 +60,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [spectate-camera.md](spectate-camera.md) | The camera handoff to a downed player's partner | Implemented, live-verified, ON by default |
 | [creature-liveness.md](creature-liveness.md) | Reconciling a body alive on one screen, dead on the other | Design → live-verified for the first time; OFF by default; one sub-theory open, blocked on a missing `spawncreature` verb |
 | [effect-sync.md](effect-sync.md) | The generic non-damage effect dispatcher | Implemented; 9/12 kinds live-verified both directions, 3 (heal, temporary hitpoints, confused — §10, 2026-09-02) built/unit-tested but NEEDS-LIVE; ON by default in code and (since 2026-08-27) in the shipped `coop.ini.example` |
+| [partner-buffs.md](partner-buffs.md) | What the engine tests before a heal or buff can reach a stand-in (friend reputation, party roster, client targeting) | Researched; `partner_buffs` faction switch built, OFF, NEEDS-LIVE; heal mirror designed only |
 
 ## Dialogue
 
