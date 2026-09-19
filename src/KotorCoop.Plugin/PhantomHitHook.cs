@@ -187,6 +187,9 @@ internal static unsafe class PhantomHitHook
     /// <summary>Hits this process rewrote, for the status line and the live checklist.</summary>
     public static uint DamageScaledHits { get; private set; }
 
+    /// <summary>How many damage rewrites are logged (the rest are only counted).</summary>
+    private const uint DamageScaleLogBudget = 12;
+
     /// <summary>MAIN THREAD. A percent outside the agent's range is refused as vanilla by
     /// <see cref="EnemyScalingRule"/> upstream; this only stores it.</summary>
     public static void SetDamagePercent(int percent) => _damagePercent = percent;
@@ -268,12 +271,21 @@ internal static unsafe class PhantomHitHook
 
         int slots = Math.Min(count, DamageTypeSlots);
         bool touched = false;
+        int firstBefore = 0;
+        int firstAfter = 0;
         for (int i = 0; i < slots; i++)
         {
             int* amount = (int*)(ints + (i * 4));
             if (*amount > 0 && *amount <= MaxPlausibleHit)
             {
+                int before = *amount;
                 *amount = EnemyScalingRule.ScaleDamage(*amount, _damagePercent);
+                if (!touched)
+                {
+                    firstBefore = before;
+                    firstAfter = *amount;
+                }
+
                 touched = true;
             }
         }
@@ -281,6 +293,13 @@ internal static unsafe class PhantomHitHook
         if (touched)
         {
             DamageScaledHits++;
+
+            // The first few rewrites are logged (2026-09-19) so a live pass can SEE enemy_damage
+            // act: before this the counter was the only trace and nothing read it.
+            if (DamageScaledHits <= DamageScaleLogBudget)
+            {
+                PluginHost.Log($"scaling: enemy damage {firstBefore} -> {firstAfter} ({_damagePercent}%) on a hit to a player body (rewrite #{DamageScaledHits})");
+            }
         }
     }
 

@@ -495,7 +495,7 @@ public sealed record CoopConfig
     /// <summary>coop.ini <c>enemy_damage</c>: damage enemies deal to players, percent of
     /// vanilla, or <c>auto</c>. Default 100 (vanilla) — the in-hook damage rewrite this drives
     /// is NEEDS-LIVE; flips to <c>auto</c> once that pass is done.</summary>
-    public int EnemyDamage { get; init; } = PlayerCountScalingRule.Vanilla;
+    public int EnemyDamage { get; init; } = PlayerCountScalingRule.Auto;
 
     /// <summary>coop.ini <c>xp_rate</c>: the host's own experience gains, percent of vanilla,
     /// or <c>auto</c> (the auto curve is 100 at every player count). Default auto.</summary>
@@ -1002,7 +1002,7 @@ public sealed record CoopConfig
             EnemyHealth = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Auto),
             EnemyDamage = PlayerCountScalingRule.ParseSetting(
-                kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Vanilla),
+                kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Auto),
             XpRate = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("xp_rate"), PlayerCountScalingRule.Auto),
             StoreStock = PlayerCountScalingRule.ParseSetting(

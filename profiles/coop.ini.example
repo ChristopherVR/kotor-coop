@@ -66,10 +66,10 @@ follow_lead = any
 ; Each is `auto` (scales with how many players are connected; alone you always get the
 ; normal game) or a percent from 50 to 400. Two players on auto: enemies have 150% health
 ; and deal 115% damage, shops hold 150% stock, experience is unchanged.
-; enemy_health is `auto` (checked in the running game). enemy_damage stays 100 (normal)
-; until it has been checked too; set it to `auto` to try it.
+; enemy_health and enemy_damage are `auto` (both checked in the running game). Set either to
+; 100 for the normal game.
 enemy_health = auto
-enemy_damage = 100
+enemy_damage = auto
 xp_rate = auto
 store_stock = auto
 

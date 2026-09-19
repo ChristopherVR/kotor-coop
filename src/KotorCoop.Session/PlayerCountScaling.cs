@@ -15,7 +15,7 @@ public sealed record PlayerCountScalingSettings(int EnemyHealth, int EnemyDamage
     /// ³): enemy health and damage at 100 because their engine writes are NEEDS-LIVE, XP and
     /// store stock on the auto curve.</summary>
     public static PlayerCountScalingSettings Default { get; } = new(
-        PlayerCountScalingRule.Auto, PlayerCountScalingRule.Vanilla,
+        PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto,
         PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto);
 }
 

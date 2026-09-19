@@ -151,7 +151,7 @@ internal static class AgentComposition
             // are NEEDS-LIVE, xp/store on the auto curve.
             Scaling = new PlayerCountScalingSettings(
                 config?.EnemyHealth ?? PlayerCountScalingRule.Auto,
-                config?.EnemyDamage ?? PlayerCountScalingRule.Vanilla,
+                config?.EnemyDamage ?? PlayerCountScalingRule.Auto,
                 config?.XpRate ?? PlayerCountScalingRule.Auto,
                 config?.StoreStock ?? PlayerCountScalingRule.Auto),
             GameDirectory = installDirectory,
