@@ -816,7 +816,7 @@ public sealed record CoopConfig
         "local_combat_targeting_us_fresh_s", "local_combat_timeout_s", "map_reveal_sync",
         "minigame_hide_peer", "minigame_lock_peers", "minigame_lock_timeout_s",
         "mine_sync", "minigame_modules", "minigame_spectate", "minigame_wait_notice", "minimap_peers",
-        "mirror_smooth_ms", "movement", "movie_relay", "party_drive", "party_fast_pump",
+        "mirror_smooth_ms", "movement", "movie_relay", "partner_buffs", "party_drive", "party_fast_pump",
         "party_follow", "party_follow_accept_final_node", "party_follow_advance_destnode",
         "party_follow_advance_destnode_phase6", "party_follow_advance_movingtopath",
         "party_follow_extend_final_node", "party_follow_finelog", "party_follow_force_walking",

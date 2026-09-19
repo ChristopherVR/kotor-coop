@@ -73,4 +73,38 @@ public class PhantomTargetRuleTests
         Assert.False(PhantomTargetRule.IsStealthHold(
             targetable: true, alive: true, holdNeutral: true, stealthSync: true, stealthed: true));
     }
+
+    // ---- partner_buffs (docs/research/partner-buffs.md) ------------------------------------
+
+    [Theory]
+    [InlineData(false, false, 0)]   // Kind.Neutral
+    [InlineData(false, true, 0)]    // a hold stays Neutral whatever the key says
+    [InlineData(true, false, 1)]    // Kind.Player: key OFF is byte-for-byte the old behaviour
+    [InlineData(true, true, 2)]     // Kind.Friendly
+    public void FactionForIsAFourRowTable(bool wantsPlayerFaction, bool partnerBuffs, int expected)
+    {
+        Assert.Equal((PhantomTargetRule.Kind)expected, PhantomTargetRule.FactionFor(wantsPlayerFaction, partnerBuffs));
+    }
+
+    [Theory]
+    [InlineData(false, true, false, false)]  // phantom_targetable off
+    [InlineData(true, false, false, false)]  // peer is down
+    [InlineData(true, true, true, false)]    // local_combat authority split
+    [InlineData(true, true, false, true)]    // stealthed peer
+    public void EveryHoldReasonKeepsTheBodyNeutralEvenWithPartnerBuffsOn(
+        bool targetable, bool alive, bool holdNeutral, bool stealthed)
+    {
+        bool want = PhantomTargetRule.WantsPlayerFaction(targetable, alive, holdNeutral, stealthSync: true, stealthed);
+        Assert.False(want);
+        Assert.Equal(PhantomTargetRule.Kind.Neutral, PhantomTargetRule.FactionFor(want, partnerBuffs: true));
+    }
+
+    [Fact]
+    public void ALivingUnheldPeerBecomesFriendlyOnlyWhenPartnerBuffsIsOn()
+    {
+        bool want = PhantomTargetRule.WantsPlayerFaction(
+            targetable: true, alive: true, holdNeutral: false, stealthSync: true, stealthed: false);
+        Assert.Equal(PhantomTargetRule.Kind.Player, PhantomTargetRule.FactionFor(want, partnerBuffs: false));
+        Assert.Equal(PhantomTargetRule.Kind.Friendly, PhantomTargetRule.FactionFor(want, partnerBuffs: true));
+    }
 }
