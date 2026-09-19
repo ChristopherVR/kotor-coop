@@ -120,6 +120,8 @@ internal static class AgentComposition
             ExtraMinigameModules = config?.ExtraMinigameModules ?? [],
             DialogueItemSync = config?.DialogueItemSync ?? true,
             ScriptItemSync = config?.ScriptItemSync ?? true,
+            // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
+            ClassGrantSync = config?.ClassGrantSync ?? false,
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,

@@ -250,8 +250,10 @@ public class TransitionMovieTests
         // the signature byte followed) — see the changelog comments beside `_block->Version`
         // and `PluginSignature` for the full history. 67 = the 2026-09-03 galaxy-map departure
         // relay (block grown to 0x4D00, SharedBlock.OffsetGalaxyDeparture*, docs/research/
-        // galaxy-map-and-party-select.md's 2026-09-03 relay addendum).
-        Assert.Equal(67, int.Parse(version.Groups[1].Value));
+        // galaxy-map-and-party-select.md's 2026-09-03 relay addendum). 68 = the 2026-09-18
+        // class-grant relay (0x4C20 inside the existing 0x4D00, SharedBlock.OffsetClassGrant*,
+        // docs/research/class-and-power-grants.md).
+        Assert.Equal(68, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot()

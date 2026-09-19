@@ -142,6 +142,11 @@ internal static class ConsoleVerbCatalog
         // registered the same way. Does not shadow a retail verb.
         ("setgold", "setgold <amount>  (dev-only: sets party gold directly via CSWSCreature::SetGold; repairs a poisoned save)"),
 
+        // The class-grant relay's live-test primitive (2026-09-18,
+        // docs/research/class-and-power-grants.md): the same AddMultiClass VM call Dorak's
+        // script makes, against the local player, captured and relayed like the real thing.
+        ("addclass", "addclass <class 0-8>  (dev-only: runs the engine's AddMultiClass on your player; 3 Guardian, 4 Consular, 5 Sentinel)"),
+
         // The character-creation drive verbs (2026-08-29). Only meaningful at the MAIN MENU,
         // which is exactly where the console detour still works and the frame hook does not.
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),

@@ -157,6 +157,16 @@ public sealed record AgentSettings
     /// </summary>
     public bool ScriptItemSync { get; init; } = true;
 
+    /// <summary>
+    /// Relay a class a script adds to one player's character (Dorak's Jedi path choice,
+    /// <c>AddMultiClass</c>) to every other player's character through the same engine
+    /// handler — docs/research/class-and-power-grants.md, coop.ini <c>class_grant_sync</c>.
+    /// OFF by default: the plugin's VM-handler splice and the replay have never run on a live
+    /// process (NEEDS-LIVE). The plugin reads the same key for its own half; both must agree
+    /// (docs/CONFIG.md footnote ³'s rule).
+    /// </summary>
+    public bool ClassGrantSync { get; init; }
+
     /// <summary>How often <see cref="Pumps.ScriptItemGrantPump"/> re-samples the local PC's
     /// inventory once it has a baseline, in milliseconds — independent of
     /// <see cref="HeavyPumpIntervalMs"/> for the same reason

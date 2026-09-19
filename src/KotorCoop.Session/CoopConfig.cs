@@ -323,6 +323,12 @@ public sealed record CoopConfig
     /// </summary>
     public bool ScriptItemSync { get; init; } = true;
 
+    /// <summary>coop.ini <c>class_grant_sync</c> — relay a script's <c>AddMultiClass</c> (the
+    /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
+    /// NEEDS-LIVE; must match the plugin's own <c>PluginConfig.ReadBool("class_grant_sync",
+    /// false)</c> fallback. docs/research/class-and-power-grants.md.</summary>
+    public bool ClassGrantSync { get; init; }
+
     /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
@@ -744,7 +750,7 @@ public sealed record CoopConfig
     private static readonly string[] DeveloperKnownKeys =
     [
         "activate_render_on_start", "bark_replay", "bark_sync", "behaviour_override_reader",
-        "client_door_refusal", "client_encounters", "client_load_rejoin",
+        "class_grant_sync", "client_door_refusal", "client_encounters", "client_load_rejoin",
         "client_temp_death_suppress", "companion_damage_sync", "companion_gear_sync",
         "companion_local_combat", "companion_local_combat_range", "companion_xp_sync",
         "connect_timeout_ms", "container_fast_pump", "container_lock_arbitration",
@@ -927,6 +933,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             ScriptItemSync = !kv.ContainsKey("script_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
+            ClassGrantSync = IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")

@@ -123,6 +123,24 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // The joiner-never-becomes-a-Jedi gap (docs/review-seamless-2026-09-18.md blocker #1,
+        // docs/research/class-and-power-grants.md): a mid-function splice inside
+        // CSWVirtualMachineCommands::ExecuteCommandAddMultiClass that captures every
+        // AddMultiClass(nClass, oTarget) a script runs, for ClassGrantController to relay.
+        // Behind class_grant_sync (default OFF, NEEDS-LIVE): the splice has never run live,
+        // and with the key off nothing here reads or writes the block region either.
+        if (PluginConfig.ReadBool("class_grant_sync", false))
+        {
+            if (AddMultiClassHook.Install(out string addMultiClassDiagnostic))
+            {
+                Log($"class-grant: {addMultiClassDiagnostic}");
+            }
+            else
+            {
+                Log($"class-grant hook NOT installed: {addMultiClassDiagnostic}");
+            }
+        }
+
         // The script-agnostic second solo-segment trigger (docs/research/star-forge-finale.md
         // §11): a detour on every RemovePartyMember VM call, independent of and in addition to
         // SoloSegmentController's own roster-count poll. Installed unconditionally, like

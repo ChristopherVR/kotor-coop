@@ -236,7 +236,10 @@ internal partial struct SharedBlock
     /// added <see cref="OffsetThreatDebugCount"/>/<see cref="OffsetThreatDebugGeneration"/>/
     /// <see cref="OffsetThreatDebugRows"/> — diagnostics only (the <c>threat</c> blockpoke
     /// verb), never read by the agent — see SharedBlock.Combat.cs and
-    /// docs/research/peer-damage-ledger.md §9.
+    /// docs/research/peer-damage-ledger.md §9. Version 67 (2026-09-03) added the galaxy-map
+    /// departure relay (SharedBlock.GalaxyDeparture.cs). Version 68 (2026-09-18) added the
+    /// class-grant relay in that region's free tail — see SharedBlock.ClassGrant.cs and
+    /// docs/research/class-and-power-grants.md.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;
@@ -1299,4 +1302,16 @@ internal partial struct SharedBlock
     /// ⚠ 74, next free after every noted reserved range through 73 as of 2026-09-03.
     /// </summary>
     public const uint CheatKindGamepad = 74;
+
+    /// <summary>
+    /// <c>addclass &lt;class&gt;</c> — DEV VERB / LIVE-TEST PRIMITIVE for the class-grant relay
+    /// (docs/research/class-and-power-grants.md): runs the engine's own <c>AddMultiClass</c> VM
+    /// handler against the local player with <see cref="OffsetCheatAmount"/> as the
+    /// <c>classes.2da</c> row, exactly as Dorak's <c>k_pdan_makejedi</c> would — NOT flagged as a
+    /// replay, so <c>AddMultiClassHook</c> captures it and, under <c>class_grant_sync</c>, the
+    /// session relays it to every peer. Local only.
+    ///
+    /// ⚠ 75, next free after 74 as of 2026-09-18.
+    /// </summary>
+    public const uint CheatKindAddClass = 75;
 }

@@ -89,6 +89,7 @@ public sealed partial class CoopAgent
     private readonly DeathPump _deathPump;
     private readonly WorldStatePump _worldStatePump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
+    private readonly ClassGrantPump _classGrantPump;
     private readonly PartyPoolPump _partyPoolPump;
     private readonly StorePump _storePump;
 
@@ -152,6 +153,7 @@ public sealed partial class CoopAgent
         _deathPump = new DeathPump(bridge, session, _log);
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
+        _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
     }
 
     public IGameBridge Bridge => _bridge;
@@ -678,6 +680,12 @@ public sealed partial class CoopAgent
         PerfPhaseStart();
         _bridge.DrainItemTemplateSpawns();
         PerfPhaseEnd(PumpPhase.SpawnRing);
+
+        // The class-grant relay (docs/research/class-and-power-grants.md): announce a class a
+        // script just added to this character, apply a peer's to it. Every tick because the
+        // apply is a request + ack loop against the plugin; a no-op (one dword read) when
+        // nothing is pending, and nothing at all when class_grant_sync is off.
+        _classGrantPump.Pump(local, peers, _changedModule, _moduleSettledAtMs);
 
         // --- combat path: a few times a second -------------------------------------------
         //

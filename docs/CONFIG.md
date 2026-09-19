@@ -218,6 +218,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | --- | --- | --- | --- |
 | `dialogue_item_sync` | ON | forward a reward node's item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
 | `script_item_sync` | ON (since 2026-08-28; was OFF)³ | forward a script (OnEnter/OnDeath/heartbeat) item grant to the other player | [dialogue-consequences.md](research/dialogue-consequences.md) |
+| `class_grant_sync` | OFF (NEEDS-LIVE) | relay a script's `AddMultiClass` (Dorak's Jedi path choice on Dantooine) to every other player's character through the same engine handler, so the joiner becomes a Jedi. Plugin, agent and `CoopConfig` all default OFF (footnote ³ rule) | [class-and-power-grants.md](research/class-and-power-grants.md) |
 | `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
