@@ -68,7 +68,19 @@ internal static unsafe class EnemyEffectCapture
             return;
         }
 
-        if (!PhantomHitHook.IsOursOnForeignCreature(target, targetId, effect))
+        bool ours = PhantomHitHook.IsOursOnForeignCreature(target, targetId, effect);
+
+        // The creator stamp on a non-damage effect is INFERRED (enemy-effects.md 2.2): say what
+        // the first few effects looked like, once, so a live run can settle it.
+        if (_diagLogged < DiagLogLimit)
+        {
+            _diagLogged++;
+            PluginHost.Log(
+                $"enemy-effect: saw kind {kind} on 0x{targetId:X} creator 0x{*(uint*)(effect + 0x18):X} "
+                + $"ours={ours} attackers={PhantomHitHook.HasAttackers}");
+        }
+
+        if (!ours)
         {
             return;
         }
@@ -103,6 +115,10 @@ internal static unsafe class EnemyEffectCapture
         _count++;
         Captured++;
     }
+
+    private const int DiagLogLimit = 12;
+
+    private static int _diagLogged;
 
     /// <summary>Frame thread: takes the oldest captured effect, if any.</summary>
     public static bool TryDequeue(out uint enemyId, out uint kind, out uint durationMs, out uint magnitude)

@@ -259,3 +259,9 @@ Recipe step 2 run on the rig (host, `enemy_effect_sync=1`, module `tar_m02aa`, a
 
 Two rig facts for whoever runs step 3: (1) a `spawncreature` template must exist in the CURRENT module's archive (`tar10_vulkpoo002` failed with failure 9 outside `tar_m10aa`; list a module's templates with `python tools/kotorfiles.py list modules/<module>_s.rim --type utc`, `g_sithtroop002` works in `tar_m02aa`); (2) a runtime-spawned creature has no counterpart on the client, so it is never mirrored (host census 15, client 14) and cannot be used to test the client-cast capture: use a creature that is in the module's own GIT and has a client stand-in.
 
+### 7.2 Live result, capture and round trip (2026-09-19) - VERIFIED for Stunned
+
+Step 3 run with `enemy_effect_sync=1` in both `coop.ini` (module `sta_m45ac`, enemy id 0x19 resolving on both instances; the verb aimed at the client's copy): client plugin `enemy-effect: saw kind 14 on 0x19 creator 0x7FFFFFFF ours=True attackers=True`; client agent `reporting kind 14 on enemy 0x19 to the host (5000 ms, magnitude 0)`; host agent `handing a client's kind 14 on enemy 0x19 to the plugin`; host plugin `enemy-effect: applied kind 14 to enemy 0x19 (5000ms, magnitude 0)`. Both games stayed up. **The INFERRED half of 2.2 is settled**: an effect applied through the script pipeline carries the local player (`0x7FFFFFFF`) as creator at the dispatcher, so the ownership gate passes. `EnemyEffectCapture` now logs its first 12 sightings (`enemy-effect: saw kind ...`) to keep that visible.
+
+Still not shown: a real Force-power cast (the console verb goes through the same VM pipeline, so this is expected to hold), the other eleven kinds through the wire, that the host's enemy visibly stops, and the throttle. The key stays OFF until someone has seen a real cast stop an enemy.
+

@@ -231,3 +231,8 @@ Things to read off the live game that this pass could not: whether a freed trigg
 carrying the `0x00749A38` vtable within the 1 s scan (the absence detector relies on it; if it keeps it, mines
 are never reported, the safe failure), whether `+0x314` reads 0 for every GIT mine, and whether the
 DestroyObject event on a trigger visibly removes the mine model for the peer.
+
+## 9. Live result (2026-09-19) - steps 1, 2 and 5 VERIFIED
+
+Both instances with `mine_sync = 1`, host `warp tar_m10aa`: step 1 (`resolve 0x71/0x74/0x75/0x76` non-zero on both). Step 2: host `destroyobject 0x75` -> host `destroyed 0x75`; client plugin `mine 0x75: removed on the session's authority (engine DestroyObject)` within 12 s and client `resolve 0x75` = 0 while `0x76` stayed. Step 5: four warps (`tar_m10ab`, `tar_m10aa`, twice) and then `0x74` and `0x76` still resolved on BOTH instances, i.e. no false "gone" from a module unload; `0x75` stayed gone on both (the area keeps the removal for the session). **Step 3 (real detonation) is NOT shown**: `tp 173.26 127.53` put the host on mine `0x71` but the mine did not fire (a teleport does not run the trigger's enter test), so walk-on detonation and the client-to-host direction (step 4) need a real walk. `mine_sync` stays OFF until that is seen.
+
