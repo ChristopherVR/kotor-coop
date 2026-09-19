@@ -21,7 +21,7 @@ namespace KotorCoop.Protocol;
 ///
 /// The built-in catalogue is not guessed: it is every module in a stock GOG v1.0.3 install
 /// whose area file actually contains a <c>MiniGame</c> struct, found by reading all of them
-/// (docs/research/minigames.md §24). <c>coop.ini minigame_modules</c> adds more for a mod that
+/// (docs/research/minigames.md §24), plus the two Manaan solo modules described on <see cref="BuiltIn"/>. <c>coop.ini minigame_modules</c> adds more for a mod that
 /// ships its own.
 /// </summary>
 public static class MinigameModuleRule
@@ -33,9 +33,17 @@ public static class MinigameModuleRule
     /// (Manaan swoop), <c>tat_m17mg</c> (Tatooine swoop) and <c>M12ab</c> (the Leviathan
     /// turret, <c>Type = 2</c>). Matched case-insensitively — the engine's own module names
     /// are inconsistently cased and this project has been bitten by that before.
+    ///
+    /// <para>Two entries are NOT minigames and are listed on purpose (2026-09-19,
+    /// docs/research/manaan-hrakert-rift.md): <c>manm28ab</c> (Sea Floor) and <c>manm28ad</c> (the
+    /// Hrakert Rift) are the envirosuit modules, solo by design — the airlock script strips the
+    /// party into <c>K_PARTY_STORE</c> and only the suited leader walks in, and the suit item is
+    /// granted by <c>k_pman_suituse</c> on ONE engine, so a follower would arrive unsuited and
+    /// double-fire the module scripts. Refusing the follow parks the joiner in the station
+    /// (<c>manm28aa</c>/<c>manm28ac</c>), the same single-seat treatment the turret gets.</para>
     /// </summary>
     public static readonly string[] BuiltIn =
-        ["tar_m03mg", "manm26mg", "tat_m17mg", "m12ab"];
+        ["tar_m03mg", "manm26mg", "tat_m17mg", "m12ab", "manm28ab", "manm28ad"];
 
     /// <summary>True when <paramref name="module"/> is a known single-seat minigame area.
     /// An empty or unreadable name is never a match — a follow decision made on a placeholder

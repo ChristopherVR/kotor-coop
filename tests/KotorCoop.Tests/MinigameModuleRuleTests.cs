@@ -19,12 +19,16 @@ public class MinigameModuleRuleTests
     [InlineData("tat_m17mg")]  // Tatooine swoop
     [InlineData("m12ab")]      // the Leviathan turret (Type = 2)
     [InlineData("M12ab")]
+    [InlineData("manm28ab")]   // Manaan Sea Floor: envirosuit, solo by design (not a minigame)
+    [InlineData("MANM28AD")]   // Manaan Hrakert Rift: same
     public void TheStockTracksAreRecognised(string module) =>
         Assert.True(MinigameModuleRule.IsMinigameModule(module));
 
     [Theory]
     [InlineData("tar_m03af")]  // the Bek garage the race is entered FROM — a normal module
     [InlineData("tar_m11aa")]
+    [InlineData("manm28aa")]   // Hrakert Station: the airlock is where the joiner is parked, so it must follow
+    [InlineData("manm28ac")]   // Kolto Control: reached on foot from the station
     [InlineData("END_M01AA")]
     [InlineData("")]
     public void OrdinaryModulesAreNot(string module) =>
