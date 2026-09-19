@@ -22,11 +22,20 @@ internal static unsafe class DialogueReplyHook
     /// <c>CSWGuiDialog::SelectReply</c> — the commit for the ordinary dialogue panel, and
     /// (through the same address in their vtables) for the two computer panels.
     ///
-    /// The five bytes the jump overwrites: <c>mov eax,[ecx+0x6C]</c> then the first two of
-    /// <c>mov edx,[esp+4]</c>. Both are position-independent — no rel32, no rip-relative —
-    /// so relocating them into the stub is safe.
+    /// The seven bytes relocated: <c>mov eax,[ecx+0x6C]</c> then <c>mov edx,[esp+4]</c>, two
+    /// WHOLE instructions (the jump itself only overwrites the first five and the rest is
+    /// NOP-padded). Both are position-independent — no rel32, no rip-relative — so relocating
+    /// them into the stub is safe.
+    ///
+    /// ⚠ This used to copy just five bytes, cutting <c>mov edx,[esp+4]</c> after its first two
+    /// (<c>8B 54</c>): the stub then ran those two bytes fused with the <c>jmp</c> opcode that
+    /// follows them, a garbage instruction, and jumped into the weeds. It only bit on the BASE
+    /// panel (computer terminals and conversations flagged as computer ones, such as the Manaan
+    /// airlock's <c>man28_airlock</c>): story conversations commit through the cinematic
+    /// function below, which is why every earlier live test passed. 2026-09-19, found when the
+    /// rig committed a reply in the airlock conversation and the host died at stub+0x23.
     /// </summary>
-    private static readonly byte[] BasePrologue = [0x8B, 0x41, 0x6C, 0x8B, 0x54];
+    private static readonly byte[] BasePrologue = [0x8B, 0x41, 0x6C, 0x8B, 0x54, 0x24, 0x04];
 
     /// <summary>
     /// <c>CSWGuiDialogCinematic::SelectReply</c> — a DIFFERENT function, and the reason both

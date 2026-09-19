@@ -466,8 +466,11 @@ internal static unsafe partial class Odyssey
         var selectReply = (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(vtable + PanelSelectReplySlot));
         if (!LooksLikeCodePointer((nint)selectReply))
         {
+            PluginHost.Log($"dialogue: select reply refused - panel 0x{panel:X} vtable 0x{vtable:X} slot 0x{(nint)selectReply:X} is no code pointer");
             return false;
         }
+
+        PluginHost.Log($"dialogue: select reply slot {slot} of {count} on panel 0x{panel:X} vtable 0x{vtable:X} -> 0x{(nint)selectReply:X}");
 
         // Bracketed so the one pick we dispatch passes the follower's own-click block.
         DialogueReplyHook.AllowReplay = true;
