@@ -58,6 +58,11 @@ public sealed partial class KotorGameBridge
         _placeableBaselined = false;
         _nextPlaceableScanTicks = 0;
 
+        // Floor mines: same edge-publisher shape, same reason.
+        _mineTracker.Reset();
+        _mineModule = string.Empty;
+        _nextMineScanTicks = 0;
+
         // Globals. The shadow arrays are re-taken by TryResolveGlobals against the new world;
         // dropping them makes the next collect a baseline rather than a diff against the
         // previous save's values.

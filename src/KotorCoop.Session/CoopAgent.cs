@@ -908,6 +908,12 @@ public sealed partial class CoopAgent
             _worldStatePump.PumpPlaceables(caps);
         }
 
+        // Off by default (coop.ini mine_sync); see docs/research/mines.md.
+        if (_settings.MineSync)
+        {
+            _worldStatePump.PumpMines(caps);
+        }
+
         // PumpContainerLoot itself moved to the fast per-tick path above, ahead of the
         // script-item-grant sample — see that call site's own doc for why.
 

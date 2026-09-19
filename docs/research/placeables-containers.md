@@ -168,6 +168,10 @@ mine via `CItemRepository::RemoveItem` `0x00555FD0`, and disarm runs through
 `OnApplyDisarm` `0x004D9CE0`. A cleaner mirror for a **disarmed mine** is therefore removal
 (delete the mine object on the peer) rather than a flag, reusing the §2 take/destroy path.
 
+> **Superseded 2026-09-19 by [mines.md](mines.md).** `+0x2CC`/`+0x2D0` are `AutoRemoveKey`/`TrapOneShot`,
+> `OnApplyDisarm 0x004D9CE0` is the WEAPON-disarm effect (not trap disarm), and a floor mine has no
+> armed/disarmed byte at all: every end of it is the engine deleting the trigger.
+
 **Recommendation:** ship only the placeable `trap_flag +0x278 = 0` monotonic mirror first
 (keeps a disarmed trapped-chest disarmed for both, byte write, safe). Trigger-mine sync is a
 follow-up gated on identifying `+0x2CC`/`+0x2D0` live.

@@ -218,6 +218,14 @@ public sealed record AgentSettings
     /// </summary>
     public bool ContainerFastPump { get; init; }
 
+    /// <summary>
+    /// When true, <see cref="Pumps.WorldStatePump.PumpMines"/> publishes GIT-placed floor
+    /// mines that vanished locally (disarmed, recovered, detonated) as mine-typed world flags.
+    /// coop.ini <c>mine_sync</c>, default OFF, NEEDS-LIVE (docs/research/mines.md). The
+    /// peer-removal APPLY half is gated separately in the plugin by the same key.
+    /// </summary>
+    public bool MineSync { get; init; }
+
     /// When true, a follower acts on a host's <see cref="TransitionAnnouncePacket"/> the
     /// instant it arrives — starting its own warp toward the announced destination without
     /// waiting for the host's published <c>PlayerState.Module</c> to change or for

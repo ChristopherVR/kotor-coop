@@ -282,6 +282,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `container_locks` | ON | one-at-a-time container/corpse open lock | [container-sync.md](research/container-sync.md) |
 | `container_lock_arbitration` | ON | host-arbitrated container lock request/response, closing a same-RTT double-open race | [container-sync.md](research/container-sync.md) |
 | `container_fast_pump` | OFF | pump placeable open/lock state on the real-time path | [container-sync.md](research/container-sync.md) |
+| `mine_sync` | OFF | remove a GIT-placed floor mine on the peer when this side disarms, recovers or detonates it (and apply the peer's removal here); gates BOTH the agent publish and the plugin apply, NEEDS-LIVE. Three readers agree on OFF: `PluginConfig.ReadBool` in `MineController`, `CoopConfig.MineSync`, `AgentComposition`'s `?? false` | [mines.md](research/mines.md) |
 | `trigger_relay` | ON⁵ | relay a generic trigger's `OnEnter` to peers | [trigger-relay.md](research/trigger-relay.md) |
 | `trigger_relay_patterns` | `k_p*_*` | comma-separated globs matched against a trigger's OnEnter script | [trigger-relay.md](research/trigger-relay.md) |
 | `removeparty_hook` | ON¹³ | DIAGNOSTIC-only kill key: install the `RemovePartyMember` detour at all | [transition-crashes.md](research/transition-crashes.md) |

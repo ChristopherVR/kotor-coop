@@ -227,6 +227,27 @@ internal sealed class WorldStatePump(
     }
 
     /// <summary>
+    /// Publishes GIT-placed floor mines that disappeared locally (disarmed, recovered, key
+    /// disarmed, one-shot detonated) as mine-typed flags on the same reliable store the door
+    /// and placeable channels use. PUBLISH ONLY: the peer-removal apply rides
+    /// <c>TryWritePlaceableStates</c>'s slot list (called from <see cref="PumpPlaceables"/>)
+    /// and is gated in the plugin. The caller gates on <c>AgentSettings.MineSync</c>; shares
+    /// the door capability gate for the same object-ids-match-across-one-save reason.
+    /// </summary>
+    public void PumpMines(SessionCapabilities caps)
+    {
+        if (!bridge.SupportsMineSync || (caps & SessionCapabilities.Doors) == 0)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<ulong, sbyte> change in bridge.CollectChangedMineState())
+        {
+            session.SetFlag(change.Key, change.Value);
+        }
+    }
+
+    /// <summary>
     /// Carries KOTOR's own world state — the quest and story globals every script branches
     /// on — in both directions. This is what separates two players sharing a map from two
     /// players sharing a game.

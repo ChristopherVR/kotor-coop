@@ -153,10 +153,18 @@ public sealed partial class KotorGameBridge
             ok &= _memory.TryWrite(address + 0x05, PlaceableFlags.UnlockedOf(flag.Value) ? (byte)1 : (byte)0);
             ok &= _memory.TryWrite(address + 0x06, PlaceableFlags.DisarmedOf(flag.Value) ? (byte)1 : (byte)0);
 
+            // Slot kind: 0 = placeable. Byte +7 was padding before floor-mine sync started
+            // sharing this list (docs/research/mines.md §6); zeroed so a slot that once held a
+            // mine entry is never read as one.
+            ok &= _memory.TryWrite(address + 0x07, (byte)0);
+
             // Object id last, so the plugin never reads a slot whose id and payload disagree.
             ok &= _memory.TryWrite(address + 0x00, PlaceableFlags.ObjectIdOf(flag.Key));
             slot++;
         }
+
+        // Floor-mine removals share the list after the placeables (kind byte +7 == 1).
+        ok &= AppendMineSlots(flags, ref slot);
 
         ok &= _memory.TryWrite(_pluginBlock + BlockPlaceableCount, (uint)slot);
         return ok;

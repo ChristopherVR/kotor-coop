@@ -2,12 +2,14 @@ namespace KotorCoop.Memory;
 
 /// <summary>
 /// The shared 64-bit key layout for every world flag that names an OBJECT in a MODULE rather
-/// than a global variable — doors (<see cref="DoorFlags"/>) and placeables
-/// (<see cref="PlaceableFlags"/>). Protocol 53 widened the flag id from 32 to 64 bits for this.
+/// than a global variable — doors (<see cref="DoorFlags"/>), placeables
+/// (<see cref="PlaceableFlags"/>) and floor mines (<see cref="MineFlags"/>). Protocol 53
+/// widened the flag id from 32 to 64 bits for this.
 ///
 /// Layout (64 bits, high to low):
 /// <list type="bullet">
-/// <item>bits 63..56 — an 8-bit type tag (<c>'D'</c> 0x44 doors, <c>'P'</c> 0x50 placeables).</item>
+/// <item>bits 63..56 — an 8-bit type tag (<c>'D'</c> 0x44 doors, <c>'P'</c> 0x50 placeables,
+/// <c>'T'</c> 0x54 trap triggers / floor mines — <see cref="TriggerTag"/>).</item>
 /// <item>bits 55..24 — the FULL 32-bit FNV-1a of the module name, case-folded.</item>
 /// <item>bits 23..0 — the object id (24 bits; the bridge already refuses ids above 0xFFFF).</item>
 /// </list>
@@ -37,6 +39,11 @@ namespace KotorCoop.Memory;
 /// </summary>
 public static class ObjectKeyedFlags
 {
+    /// <summary>Type tag for a CSWSTrigger that is a trap/mine (UTT <c>Type == 2</c>,
+    /// <c>CSWSTrigger + 0x2BC != 0</c>); see <see cref="MineFlags"/> and docs/research/mines.md.
+    /// Adding a tag needs no protocol bump: the key is opaque to the flag store and the wire.</summary>
+    public const byte TriggerTag = 0x54;
+
     private const int TagShift = 56;
     private const int ModuleShift = 24;
     private const ulong ModuleMask = 0xFFFF_FFFFUL;

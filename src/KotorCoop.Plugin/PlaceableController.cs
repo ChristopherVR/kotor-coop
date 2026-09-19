@@ -21,8 +21,15 @@ internal sealed class PlaceableController(SharedBlockView block)
     private int _countdown;
     private int _logged;
 
+    /// <summary>Floor-mine removals share this slot list (kind byte +7 == 1) — SharedBlock.Mines.cs.</summary>
+    private readonly MineController _mines = new();
+
     /// <summary>Forgets everything on a module change; ids now name different placeables.</summary>
-    public void Invalidate() => block.PlaceableCount = 0;
+    public void Invalidate()
+    {
+        block.PlaceableCount = 0;
+        _mines.Invalidate();
+    }
 
     public void OnFrame()
     {
@@ -43,6 +50,12 @@ internal sealed class PlaceableController(SharedBlockView block)
 
         for (int i = 0; i < count; i++)
         {
+            if (block.GetPlaceableSlotKind(i) == SharedBlock.PlaceableSlotKindMine)
+            {
+                _mines.Apply(block.GetPlaceable(i).ObjectId);
+                continue;
+            }
+
             Apply(block.GetPlaceable(i));
         }
     }
