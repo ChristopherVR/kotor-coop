@@ -3493,3 +3493,38 @@ baseline, and every failure in the long-known set (the flaky item-pickup / clien
 downed/revive pair that needs a human, the 2-of-197 signature mismatch, the container walk-up, and
 the per-frame-spam check reading a stale log window). `dotnet test tests/KotorCoop.Tests`:
 **2560/2560**.
+
+## Live pass 2026-09-19 (review follow-up): m12ab turret ambush with a client attached - refusal WORKS, completion and convergence INCONCLUSIVE
+
+Both instances in `ebo_m12aa`, one `travel m12ab` on the host at 17:38:02, `minigame_lock_peers=1`, current main build, about
+3 minutes observed, no input injected.
+
+**The client refuses the follow and parks (WORKS).** Agent 2: `host announced transition to 'm12ab'`,
+`not following the announced transition to 'm12ab': that is a single-seat minigame track`, `Lanik is in a minigame - waiting`,
+`minigame lock: Lanik started a minigame - holding control until it ends`,
+`not following to 'm12ab': a peer is in a single-seat minigame there - waiting for them instead`. Client plugin:
+`minigame lock: a peer is racing - this player is held until it ends`, `peer left: destroyed phantom 0x78 (slot 0)`. The client
+stayed in `ebo_m12aa` at 66.5 53.5 4.0 the whole time. Host plugin: `minigame: entered (Unknown)`, `minigame: kind settled to Turret`;
+host `where` = `module m12ab at 3.0 3.0 -0.7`.
+
+**The unattended host loses and drops to the main menu (as in 9.4, now with a client attached).** 66 s after entry, host plugin:
+`[17:39:08.408] world: unannounced teardown - treating as a load, not a transition`, `menu: Co-op button shown`. Host `where` from then on:
+`no player loaded (not in a module yet)`, still true about 2 minutes later (agent: `stall diag: CanWriteRemotes=false ... no player loaded`).
+Presumably the vanilla Game Over for a passive turret player. `travel ebo_m12aa` back was therefore not possible.
+
+**Convergence after that: the client is dragged into a reload of the old world.** Agent 2: `the host's world was reloaded - rejoining
+their world`, `session-save: starting rejoin (HostReload)`, `world adoption: adopted 'END_M01AA' (652,638 bytes ...)`, `rejoined 'END_M01AA'`,
+then `Lanik left the world (main menu / loading)` and `minigame lock: Lanik started a minigame - holding control until it ends`
+again, `not following to 'm12ab'` repeated (the lock is re-applied to a host that is at the menu). Client plugin:
+`minigame lock: the session ended - control is yours again`, `menu: tearing down the existing server for a mid-session load`,
+`menu: restored the carried character`, `menu: the world is up and on screen`, then `minigame lock: a peer is racing` again. The client
+ended in `END_M01AA` (the staged host autosave), not `ebo_m12aa`, while the host sat at the menu. No process died in this section.
+
+**Verdicts.** Refusal and park: WORKS. Host completing the ambush and reconverging in `ebo_m12aa`: INCONCLUSIVE, because the turret
+cannot be played with this rig (9.3) and the unattended host loses first. New observations: the client's forced rejoin lands in
+`END_M01AA`; and the client's minigame lock survives a host that is at the menu (still reads "in a minigame"), released only
+when the host loads a world.
+
+**Next.** Run with a human at the turret so the ambush ends through its own script and returns to `ebo_m12aa`, or `travel ebo_m12aa`
+from the host within about 60 s of entry (before the unattended loss) to test the convergence leg. Consider clearing the client's
+minigame lock when the host reports no module.

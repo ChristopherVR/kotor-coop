@@ -2095,3 +2095,47 @@ unverified items 13/15) and `docs/CONSOLE.md` (`galaxymap depart <n>`, `popmodal
   since a follower never needs to choose.
 - A departure fired while the follower is mid-dialogue is retried by the agent for the 90 s leg
   window; a longer conversation on the follower's side would lose the follow (a `W_SAVE` later).
+
+## Live pass 2026-09-19 (review follow-up): client-led departure through the Ebon Hawk exit - INCONCLUSIVE
+
+Rig: current main build (dinput8.dll 2026-09-18 14:24, 2,414,080 bytes in both dirs), `demo.ps1 -ClientAutoCharacter`,
+host loads `000000 - QUICKSAVE` (END_M01AA), joiner adopts with its co-op character. One `travel ebo_m12aa` on the host; the
+client followed (both in `ebo_m12aa` at 52.8 75.7 1.8).
+
+**Observed.**
+
+* The party-select panel is raised on the client at every world-up, including the Hawk load, and the sweep runs:
+  `[17:12:28.243] party-select: client copy suppressed - the host is picking (...)` then
+  `[17:12:28.316] party-select: client copy swept away` (same pair at the first world-up, 17:11:53.028/.071). The host log has
+  no `party-select` line. This is the known post-load leftover-panel pattern, not a screen raised by the exit script.
+* The exit is trigger `ebn12_ebonexit` (GIT TriggerList index 0, object id 0x2, `ScriptOnEnter = k_pebn_leavhawk`), position
+  (64.46, 51.48, 3.07), polygon roughly x 64.4..68.8, y 47.6..51.5. `newtransition001` (AreaTransition, empty LinkedTo) sits
+  next to it.
+* `k_pebn_leavhawk.ncs` disassembled (289 bytes): `GetEnteringObject() == GetFirstPC()` and `GetGlobalNumber("K_CURRENT_PLANET") > 0`
+  then `ExecuteScript("k_pebn_exithawk", ...)` (routine 712), with a branch on `K_CURRENT_PLANET == 50 && G_FinalChoice == 1`
+  choosing an argument. It contains no `ShowPartySelectionGUI` and no `StartNewModule`; the `StartNewModule` dispatch is in
+  `k_pebn_exithawk` (`k_<planet>_ebon_hawk_transition` gates). So a Hawk exit does not itself use party-select, and the
+  precondition `K_CURRENT_PLANET > 0` is real: a save that never left the Endar Spire may make the exit do nothing.
+* No real crossing was achieved. (1) `walkto 66.6 49.5` from the Hawk spawn CRASHED the client engine (below). (2) After a `tp` to
+  (66.5, 53.5) the engine put the PC at z 4.0 and every `walkto`, `blockpoke walk` and virtual-pad push left it at 66.5 53.5 4.0
+  (a control `walkto` on the HOST from the same spot also did not move it; a short host walk elsewhere in the Hawk worked), so the
+  spot is walkmesh-isolated from the ramp; the client's DI keyboard read also returned `0x8007000C` and a firewall dialog from
+  an unrelated `testhost` sat over the client window. (3) Firing the trigger relay by hand (`blockpoke triggers 0x2 1`) logged
+  `triggers: fired OnEnter of 0x2 for peer 1 (phantom 0x78)`, but the enterer is the phantom, not the PC, so the script's
+  first test fails by construction; nothing happened. That proves nothing about a real crossing.
+
+**Client crash (retail engine, not the mod).** `[17:15:43.391] cheat: walking to 66.6,49.5` then
+`EXITPROCESS(3221225477) called from 0x6FB0C7`; `kotorcoop-crash.bin`: access violation at 0x58063B, esp 0x1AF768, stack
+0x584488 0x4BB6B0 0x72025B 0x4BCC2E = `CSWRoomSurfaceMesh::GetTriangleAdjacency` under `ClippedLineSegmentWalkable`, `CSWSArea::GetRoom`,
+`CSWSArea::TestDirectLine`: the engine's walk-line test on a target outside walkable geometry (same family as the `walkto`
+refusals in minigames.md 9.3). Host logged `peer left`; the client was relaunched with `agent launch --instance 2` and rejoined.
+
+**Verdict: INCONCLUSIVE.** Neither PC crossed `ebn12_ebonexit`, so the open question in `PartySelectSuppressionController.cs`
+(does the swept panel's exit script still run on a client-led departure) was not answered. What is settled: the Hawk exit's
+own script has no party-select call, so the sweep cannot be what stops it; the untested part is `k_pebn_exithawk`'s planet
+dispatch on a client with `K_CURRENT_PLANET` unset.
+
+**Next.** Use a save that has left the Endar Spire, or `galaxymap depart <n>` on the host, so both land in a fresh `ebo_m12aa`
+with `K_CURRENT_PLANET` set; then reach the polygon with a human at the controls or with short waypoint hops from the deck spawn
+(52.8, 75.7). Never one long `walkto` across the ship (crash above). Read the `StartNewModule` / `client 2 set course` lines
+in both logs.
