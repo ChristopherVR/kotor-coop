@@ -742,6 +742,127 @@ public sealed partial class CoopCommandDispatcher
         });
     }
 
+    /// <summary>The in-flight named-save copy, if any (see <see cref="SaveGameCommand"/>).</summary>
+    private Task? _namedSaveTask;
+
+    /// <summary>
+    /// <c>save [name]</c>. A bare <c>save</c> is the engine quicksave, as before. With a name it ALSO
+    /// keeps a copy as a save folder <c>NNNNNN - name</c> (<see cref="NamedSaveRule"/>) once the engine
+    /// has actually written the quicksave, so <c>loadgame &lt;name&gt;</c> can return to it later: a rig or
+    /// a tester can <c>warp</c> to a late-game module, save it ONCE and come back without replaying
+    /// anything. Saving under an existing name replaces that save in place.
+    /// </summary>
+    private void SaveGameCommand(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            SendCheat(new CheatRequest(CheatKinds.QuickSave));
+            return;
+        }
+
+        if (string.IsNullOrEmpty(gameDirectory))
+        {
+            Reply("save <name> needs the game folder (not known on this connection); plain save still works");
+            return;
+        }
+
+        string saves = Path.Combine(gameDirectory, "saves");
+        string quick = Path.Combine(saves, NamedSaveRule.QuickSaveFolder);
+        DateTime before = SaveStamp(quick);
+
+        SendCheat(new CheatRequest(CheatKinds.QuickSave));
+
+        _namedSaveTask = Task.Run(async () =>
+        {
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < deadline && SaveStamp(quick) <= before)
+            {
+                await Task.Delay(250).ConfigureAwait(false);
+            }
+
+            if (SaveStamp(quick) <= before)
+            {
+                Reply($"save {name}: the engine wrote no quicksave within 20 s (it refuses to save in some scenes) - nothing copied");
+                return;
+            }
+
+            // The engine writes several files; let the last one land before copying.
+            await Task.Delay(750).ConfigureAwait(false);
+
+            try
+            {
+                string target = CopyQuickSaveAs(saves, quick, name);
+                Reply($"saved '{Path.GetFileName(target)}' - load it with: loadgame {name}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Reply($"save {name}: could not copy the quicksave ({ex.Message})");
+            }
+        });
+    }
+
+    /// <summary>Copies the quicksave folder to <c>NNNNNN - name</c> (replacing an existing save of
+    /// the same name in place) and returns the target path.</summary>
+    public static string CopyQuickSaveAs(string savesDirectory, string quickSaveDirectory, string name)
+    {
+        string[] existing = [.. Directory.GetDirectories(savesDirectory).Select(d => Path.GetFileName(d))];
+        string? same = existing.FirstOrDefault(
+            f => !f.EndsWith("AUTOSAVE", StringComparison.OrdinalIgnoreCase)
+                && f != NamedSaveRule.QuickSaveFolder
+                && string.Equals(NamedSaveRule.NameOf(f), name, StringComparison.OrdinalIgnoreCase));
+
+        string folder = same ?? NamedSaveRule.FolderName(NamedSaveRule.NextIndex(existing), name);
+        string target = Path.Combine(savesDirectory, folder);
+
+        if (Directory.Exists(target))
+        {
+            Directory.Delete(target, recursive: true);
+        }
+
+        Directory.CreateDirectory(target);
+        foreach (string file in Directory.GetFiles(quickSaveDirectory))
+        {
+            File.Copy(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+        }
+
+        // Newest, so it is slot 0 in the loader's most-recent-first order right after saving.
+        Directory.SetLastWriteTimeUtc(target, DateTime.UtcNow);
+        return target;
+    }
+
+    /// <summary><c>loadgame &lt;name&gt;</c>: resolves a save name to the slot the loader would use
+    /// (same ordering as <c>PluginMenuLoader.TryResolveSaveDirectory</c>) and loads it.</summary>
+    private void LoadGameByName(string name)
+    {
+        string saves = string.IsNullOrEmpty(gameDirectory) ? string.Empty : Path.Combine(gameDirectory, "saves");
+        if (saves.Length == 0 || !Directory.Exists(saves))
+        {
+            Reply("loadgame <name> needs the game's saves folder (not found on this connection); use a slot number");
+            return;
+        }
+
+        (string, DateTime)[] list =
+        [
+            .. new DirectoryInfo(saves).GetDirectories().Select(d => (d.Name, d.LastWriteTimeUtc)),
+        ];
+
+        switch (NamedSaveRule.FindSlot(list, name, out int slot, out string folder))
+        {
+            case NamedSaveRule.LookupResult.Found:
+                Reply($"loadgame: '{folder}' is slot {slot}");
+                TriggerMidSessionLoad(slot);
+                break;
+            case NamedSaveRule.LookupResult.Ambiguous:
+                Reply($"loadgame: more than one save matches '{name}' - use a longer part of the name");
+                break;
+            default:
+                Reply($"loadgame: no save matches '{name}' (saves: "
+                    + string.Join(", ", list.Select(l => NamedSaveRule.NameOf(l.Item1))
+                        .Where(n => !n.Equals("AUTOSAVE", StringComparison.OrdinalIgnoreCase)).Take(12)) + ")");
+                break;
+        }
+    }
+
     /// <summary>
     /// <c>loadgame &lt;slot&gt;</c> — LIVE-TEST PRIMITIVE (docs/research/session-save.md).
     /// Fires <see cref="KotorGameBridge.TryRequestMidSessionLoad"/> so a live round can

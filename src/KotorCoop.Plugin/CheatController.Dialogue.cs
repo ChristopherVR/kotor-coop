@@ -176,10 +176,26 @@ internal sealed unsafe partial class CheatController
             }
 
             string tag = Encoding.ASCII.GetString(text, tagLength);
-            nint npc = CreatureFinder.FindByTag(new ReadOnlySpan<byte>(text, tagLength));
+            ReadOnlySpan<byte> tagSpan = new(text, tagLength);
+            nint npc = CreatureFinder.FindByTag(tagSpan);
+
+            // 2026-09-19: a conversation can also live on a DOOR or a PLACEABLE (Manaan's airlocks are
+            // three locked doors carrying man28_airlock.dlg — docs/research/manaan-hrakert-rift.md), which the
+            // creature sweep never finds. ActionStartConversation takes any object id, so fall back to the
+            // door and placeable sweeps (all three share the object id at +0x04).
             if (npc == 0)
             {
-                Answer(SharedBlock.CheatStatusNoTarget, $"no npc tagged '{tag}' found here");
+                npc = CreatureFinder.FindDoorByTag(tagSpan);
+            }
+
+            if (npc == 0)
+            {
+                npc = CreatureFinder.FindPlaceableByTag(tagSpan);
+            }
+
+            if (npc == 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, $"no npc, door or placeable tagged '{tag}' found here");
                 return;
             }
 

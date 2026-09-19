@@ -311,10 +311,20 @@ public static partial class ConsoleCommand
             : new CoopCommand(CoopCommandKind.SkipKey);
 
     // save  - see CoopCommandKind.Save.
-    private static CoopCommand ParseSave(string[] rest) =>
-        rest.Length > 0
-            ? new CoopCommand(CoopCommandKind.Invalid, Error: "save takes no arguments")
-            : new CoopCommand(CoopCommandKind.Save);
+    // save [name]  - a bare `save` is the engine quicksave; `save <name>` also keeps a copy under a
+    // name (NamedSaveRule), carried in Address, so `loadgame <name>` can return to it.
+    private static CoopCommand ParseSave(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Save);
+        }
+
+        string name = NamedSaveRule.SanitizeName(string.Join(' ', rest));
+        return name.Length == 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: "save <name>: the name needs letters or digits")
+            : new CoopCommand(CoopCommandKind.Save, Address: name);
+    }
 
     // quittomenu  - LIVE-TEST PRIMITIVE, see CoopCommandKind.QuitToMenu.
     private static CoopCommand ParseQuitToMenu(string[] rest) =>
@@ -390,15 +400,23 @@ public static partial class ConsoleCommand
     // loadgame <slot>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.LoadGame.
     private static CoopCommand ParseLoadGame(string[] rest)
     {
-        if (rest.Length != 1 || !int.TryParse(rest[0], out int loadSlot) || loadSlot < 0)
+        // A number is a slot; anything else is a save NAME (`loadgame manaan`), resolved by the
+        // dispatcher against the saves folder with the same ordering the loader uses.
+        if (rest.Length == 1 && int.TryParse(rest[0], out int loadSlot) && loadSlot >= 0)
+        {
+            return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
+        }
+
+        string wanted = string.Join(' ', rest).Trim();
+        if (wanted.Length == 0 || (rest.Length == 1 && int.TryParse(rest[0], out _)))
         {
             return new CoopCommand(
                 CoopCommandKind.Invalid,
-                Error: "loadgame needs one save slot (0-based, most-recent-first), "
-                    + "e.g. loadgame 0");
+                Error: "loadgame needs a save slot (0-based, most-recent-first) or a save name, "
+                    + "e.g. loadgame 0 or loadgame manaan");
         }
 
-        return new CoopCommand(CoopCommandKind.LoadGame, Amount: loadSlot);
+        return new CoopCommand(CoopCommandKind.LoadGame, Address: wanted);
     }
 
     // newgame  - opens the game's own character-creation screens. See CoopCommandKind.NewGame.
@@ -601,10 +619,11 @@ public static partial class ConsoleCommand
         "                      answers with the gag's swallow count before -> after",
         "  selectreply <slot>  commit a reply slot on your OWNED conversation, in-process",
         "                      (no OS input); test-only navigation helper for skipline",
-        "  save                quicksave through the engine's own DoQuickSave (asynchronous:",
-        "                      the directory appears a tick or two later)",
-        "  loadgame <slot>     fire a GENUINE mid-session Load Game action, in-process (no",
-        "                      clicks); slot is 0-based, most-recent-first",
+        "  save [name]         quicksave through the engine's own DoQuickSave (asynchronous:",
+        "                      the directory appears a tick or two later); with a name, also",
+        "                      keeps a copy in the saves folder as 'NNNNNN - name' for loadgame",
+        "  loadgame <slot|name>  fire a GENUINE mid-session Load Game action, in-process (no",
+        "                      clicks); slot is 0-based, most-recent-first, or a save name",
         "  pooladd <resref> [stack]     add a resref stack to the shared party item pool",
         "  poolremove <resref> [stack]  remove a resref stack from the shared party item pool",
         "  grantxp <id|me> <amount>     add a signed xp delta to a creature (script-grant sim)",

@@ -343,9 +343,19 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Recruit] = c => Recruit(c.Amount, c.Address ?? string.Empty),
         [CoopCommandKind.SkipLine] = _ => SendCheat(new CheatRequest(CheatKinds.SkipLine)),
         [CoopCommandKind.SkipKey] = _ => SendCheat(new CheatRequest(CheatKinds.SkipKey)),
-        [CoopCommandKind.Save] = _ => SendCheat(new CheatRequest(CheatKinds.QuickSave)),
+        [CoopCommandKind.Save] = c => SaveGameCommand(c.Address),
         [CoopCommandKind.SelectReply] = c => SendCheat(new CheatRequest(CheatKinds.SelectReply, Amount: c.Amount)),
-        [CoopCommandKind.LoadGame] = c => TriggerMidSessionLoad(c.Amount),
+        [CoopCommandKind.LoadGame] = c =>
+        {
+            if (string.IsNullOrEmpty(c.Address))
+            {
+                TriggerMidSessionLoad(c.Amount);
+            }
+            else
+            {
+                LoadGameByName(c.Address);
+            }
+        },
 
         // The character-creation drive verbs. NOT SendCheat: the cheat channel refuses every
         // request with no player loaded and runs behind the plugin's world-epoch gate, and
