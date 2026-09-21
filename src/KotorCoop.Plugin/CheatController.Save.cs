@@ -29,7 +29,7 @@ internal sealed unsafe partial class CheatController
     {
         if (!Odyssey.RequestQuickSave())
         {
-            Answer(SharedBlock.CheatStatusNoTarget, "no world loaded here to save");
+            Answer(SharedBlock.CheatStatusNoTarget, "player world is not ready to save yet");
             return;
         }
 

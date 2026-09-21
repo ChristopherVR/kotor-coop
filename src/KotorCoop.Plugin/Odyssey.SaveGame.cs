@@ -40,12 +40,56 @@ internal static unsafe partial class Odyssey
     /// </summary>
     public static bool RequestQuickSave()
     {
-        if (!HasPlayer)
+        if (!TryGetQuickSaveReadiness(out _))
         {
             return false;
         }
 
         DoQuickSaveFn();
+        return true;
+    }
+
+    /// <summary>
+    /// Checks the native preconditions needed by both a new quicksave request and a delayed
+    /// save-flush reissue. The epoch alone is insufficient: the server can have a readable
+    /// world while the player creature is still detached from its area. Retail's later
+    /// <c>StallEventSaveGame</c> path calls <c>GetArea(player)</c> and dereferences the result's
+    /// localized name without a null check.
+    /// </summary>
+    internal static bool TryGetQuickSaveReadiness(out string reason)
+    {
+        if (!TryGetWorldEpoch(out _))
+        {
+            reason = "world epoch unreadable";
+            return false;
+        }
+
+        nint player = GetPlayerCreaturePointer();
+        if (player == 0)
+        {
+            reason = "player creature unresolved";
+            return false;
+        }
+
+        if (GetAreaFn(player) == 0)
+        {
+            reason = "player area object unresolved";
+            return false;
+        }
+
+        if (!HasRenderedBody(player))
+        {
+            reason = "player body is not rendered";
+            return false;
+        }
+
+        if (IsAreaTransitionPending())
+        {
+            reason = "area transition pending";
+            return false;
+        }
+
+        reason = string.Empty;
         return true;
     }
 

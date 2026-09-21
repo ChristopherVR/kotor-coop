@@ -151,6 +151,20 @@ internal static unsafe partial class PluginHost
         int destroyed = Math.Max(0, _saveFlush.StandingAtHold - left);
         SaveFlushHook.Capture held = _heldSave;
 
+        // The request may have been accepted while the player was attached, then cross a
+        // world-settle edge during the flush window.  SaveGame's later StallEventSaveGame
+        // path resolves the current player and immediately dereferences its area-localized
+        // string; do not re-arm that retail path while the player has detached again.  Keep
+        // this guard here as well as in RequestQuickSave because manual/native save requests
+        // can enter SaveFlushHook without going through the console verb.
+        if (!Odyssey.TryGetQuickSaveReadiness(out string readinessReason))
+        {
+            _saveFlush.Reset();
+            Log($"save flush: refused to re-issue the held save (slot {held.Number}, '{held.Name}') - "
+                + $"player world is not ready ({readinessReason}); the held save was dropped");
+            return;
+        }
+
         if (Odyssey.ReissueServerSaveGame(held.Server, held.Number, held.Name, held.Player, held.Arg4))
         {
             Log($"save flush: re-issued the save (slot {held.Number}, '{held.Name}') after "
