@@ -54,19 +54,10 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     /// through it.</summary>
     private const nint PartySelectionVtable = 0x00756D28;
 
-    /// <summary>CSWGuiPanel + this = the CSWGuiManager* it was constructed with
-    /// (docs/research/native-browser-panel.md §1: "The manager lands in panel+0x18" — verified
-    /// for <c>CSWGuiSaveLoad</c>, a DIFFERENT panel class; INFERRED here to hold for every panel
-    /// through the shared <c>CSWGuiPanel</c> base constructor, not independently re-verified
-    /// for <c>CSWGuiPartySelection</c> — NEEDS-LIVE, guarded below by
-    /// <see cref="LooksLikeHeapPointer"/> before use).</summary>
-    private const int PanelGuiManager = 0x18;
-
     /// <summary>CSWGuiPanel + this = the state bits the manager's per-frame sweep reads.
     /// Writing <c>(state &amp; ~0x300) | 0x400</c> is the exact retail close idiom
     /// docs/research/native-browser-panel.md §2's state machine documents: RemovePanel, then
-    /// delete, on the manager's NEXT Update. Same base-class-inferred caveat as
-    /// <see cref="PanelGuiManager"/>.</summary>
+    /// delete, on the manager's NEXT Update.</summary>
     private const int PanelStateBits = 0x44;
 
     /// <summary>CSWGuiManager::PanelExists(panel) — pointer compare over the registered array;
@@ -79,11 +70,6 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     // ---- config / state --------------------------------------------------------------------
 
     private readonly bool _enabled = PluginConfig.ReadBool("party_select_host_only", true);
-
-    /// <summary>Latched once a guard refuses an address: stop touching this feature for the
-    /// rest of the session rather than retry a wrong assumption every frame — the same idiom
-    /// <see cref="NativeBrowserController"/>'s own <c>Break</c> uses.</summary>
-    private bool _guardFailed;
 
     /// <summary>The panel this controller has already marked for the sweep, or 0. Never
     /// dereferenced again once set — see the class comment.</summary>
@@ -101,7 +87,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
 
     public void OnFrame()
     {
-        if (!_enabled || _guardFailed)
+        if (!_enabled)
         {
             return;
         }
@@ -119,8 +105,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return;
         }
 
-        nint panel = GetPartySelectionPanel();
-        if (panel == 0)
+        if (!TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager))
         {
             return;
         }
@@ -142,15 +127,6 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return;
         }
 
-        nint guiManager = Deref(panel + PanelGuiManager);
-        if (!LooksLikeHeapPointer(guiManager))
-        {
-            _guardFailed = true;
-            PluginHost.Log("party-select: guard refused (panel+0x18 did not look like a gui "
-                + "manager pointer) — suppression disabled for this session");
-            return;
-        }
-
         uint* state = (uint*)(panel + PanelStateBits);
         *state = (*state & ~0x300u) | 0x400u;
 
@@ -169,9 +145,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     /// afterward would risk asking a freed manager about a freed panel. Also forgets
     /// <see cref="_lastHandledPanel"/>: a fresh module gets a fresh <c>CGuiInGame</c>, so a
     /// genuinely new panel there deserves the same one-time suppression a first-ever panel
-    /// would, even if its address happens to coincide with one from a previous module. Does NOT
-    /// reset <see cref="_guardFailed"/>: a wrong offset assumption is wrong for the whole
-    /// process, not per-module.</summary>
+    /// would, even if its address happens to coincide with one from a previous module.</summary>
     public void Invalidate()
     {
         _panel = 0;
@@ -179,41 +153,69 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         _lastHandledPanel = 0;
     }
 
-    /// <summary>The live CSWGuiPartySelection*, vtable-verified, or 0 (no module loaded, the
-    /// panel not open, or a pointer that is not what the offsets above assume).</summary>
-    private static nint GetPartySelectionPanel()
+    /// <summary>Resolves a currently registered party-selection panel. The manager's pointer
+    /// comparison is deliberately before the candidate vtable read: <c>CGuiInGame+0x78</c> is
+    /// a cached field that can retain an already-removed allocation, while
+    /// <c>CSWGuiManager::PanelExists</c> only compares the candidate against its registered
+    /// panel array and does not dereference the candidate. This ordering is the native
+    /// <c>ShowPartySelection</c> ordering too (0x62DDC6..0x62DDD4).</summary>
+    private static bool TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager)
     {
+        panel = 0;
+        guiManager = 0;
+
         nint appManager = Deref(AppManagerPtr);
         if (appManager == 0)
         {
-            return 0;
+            return false;
         }
 
         nint client = Deref(appManager + AppClientOffset);
         if (client == 0)
         {
-            return 0;
+            return false;
         }
 
         nint clientInternal = Deref(client + ClientInternalOffset);
         if (!LooksLikeHeapPointer(clientInternal))
         {
-            return 0;
+            return false;
         }
 
         nint gui = Deref(clientInternal + ClientInternalGui);
         if (!LooksLikeHeapPointer(gui))
         {
-            return 0;
+            return false;
         }
 
-        nint panel = Deref(gui + GuiPartySelectionPanel);
-        if (!LooksLikeHeapPointer(panel))
+        guiManager = Deref(gui + 0x38);
+        panel = Deref(gui + GuiPartySelectionPanel);
+        if (!LooksLikeHeapPointer(guiManager) || !LooksLikeHeapPointer(panel))
         {
-            return 0;
+            panel = 0;
+            guiManager = 0;
+            return false;
         }
 
-        return Deref(panel) == PartySelectionVtable ? panel : 0;
+        // PanelExists is a pointer comparison over the manager's registered array. Do this
+        // before reading the candidate vtable: +0x78 is known to remain non-null after our
+        // sweep removes the object, so a vtable check alone is not an open-panel test.
+        if (PanelExistsFn(guiManager, panel) == 0)
+        {
+            panel = 0;
+            guiManager = 0;
+            return false;
+        }
+
+        // Only a registered candidate is safe to inspect beyond the pointer itself.
+        if (Deref(panel) != PartySelectionVtable)
+        {
+            panel = 0;
+            guiManager = 0;
+            return false;
+        }
+
+        return true;
     }
 
     private static nint Deref(nint p) => p == 0 ? 0 : *(nint*)p;
