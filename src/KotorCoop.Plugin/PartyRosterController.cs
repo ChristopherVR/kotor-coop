@@ -6,7 +6,7 @@ namespace KotorCoop.Plugin;
 /// PUBLISHES this instance's roster — which of the nine NPC slots are recruited, and which are
 /// in the active party — every frame, so the host's agent has something to broadcast; and, on
 /// an instance that is being told a roster, RECONCILES its own to match by calling the engine's
-/// own AddPartyMember / RemovePartyMember.
+/// own AddPartyMember / RemovePartyMember / RemoveAvailableNPC routines.
 ///
 /// The gap it fills: those two calls had no channel at all. A conversation that recruits or
 /// dismisses a companion runs its scripts on ONE instance — the other is spectating a token,
@@ -27,15 +27,18 @@ namespace KotorCoop.Plugin;
 /// literal 1 at 0x00564350. What always diverges in practice is the PARTY SEAT, which a partial
 /// or aborted conversation gets wrong on its own, and that is what this reconciles every pass.
 ///
-/// AVAILABILITY is reconciled too, behind <c>dialogue_recruit_sync</c>
+/// AVAILABILITY additions and removals are reconciled too, behind <c>dialogue_recruit_sync</c>
 /// (docs/research/dialogue-consequences.md §4.2), ON BY DEFAULT SINCE 2026-09-18: since K1's
 /// nine companion slots are a fixed, game-defined mapping identical on both installs, the
 /// ALREADY-broadcast <c>hostAvailable</c> mask is itself sufficient — no wire payload needed —
 /// to recruit a peer's extra slot locally through the real engine call
-/// (<see cref="Odyssey.AddAvailableNpcByTemplate"/>). With the flag OFF a slot the peer has and
-/// this instance never recruited is logged, once, and skipped — see
-/// <see cref="_unavailableLogged"/> — and only whoever ran the recruiting conversation keeps the
-/// companion. History of the default: an EARLIER build poked the availability flag directly
+/// (<see cref="Odyssey.AddAvailableNpcByTemplate"/>). Removals use a stricter rule: the host
+/// must first publish the bit and then publish a falling edge; an initial host zero is not a
+/// destructive command because a client-led recruiting dialogue can briefly lead the host's
+/// mirrored script. With the flag OFF a slot the peer has and this instance never recruited is
+/// logged, once, and skipped — see <see cref="_unavailableLogged"/> — and only whoever ran the
+/// recruiting conversation keeps the companion. History of the default: an EARLIER build poked
+/// the availability flag directly
 /// (<see cref="Odyssey.TrySetSlotAvailable"/>), which docs/research/party-reconciliation.md
 /// Round 75 live-confirmed insufficient on its own (the subsequent spawn has nothing to build
 /// from — see that method's own doc comment for the disassembled root cause);
@@ -124,7 +127,18 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// <see cref="TryReuseGitPlacedBody"/>). Reset with <see cref="_unavailableLogged"/>.</summary>
     private uint _spawnRefusedLogged;
 
+    /// <summary>Host-confirmed availability falling edges awaiting local application. An initial
+    /// host zero is never enough to populate this mask; the previous host level must have carried
+    /// the bit first.</summary>
+    private uint _hostAvailabilityRemovalEdges;
+
+    /// <summary>Do not let a failed native availability removal fill the log every reconcile
+    /// pass. A successful retry clears the bit so a later failure is visible again.</summary>
+    private uint _availabilityRemovalFailedLogged;
+
     private uint _lastLocalParty = uint.MaxValue;
+    private uint _lastLocalAvailable = uint.MaxValue;
+    private uint _lastHostAvailable = PartyRosterAvailabilityRule.UnknownMask;
     private bool _lastHostValid;
 
     /// <summary>A module change reassigns every object id, so the cached "I already complained
@@ -133,7 +147,11 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     {
         _unavailableLogged = 0;
         _spawnRefusedLogged = 0;
+        _hostAvailabilityRemovalEdges = 0;
+        _availabilityRemovalFailedLogged = 0;
         _lastLocalParty = uint.MaxValue;
+        _lastLocalAvailable = uint.MaxValue;
+        _lastHostAvailable = PartyRosterAvailabilityRule.UnknownMask;
         _lastHostValid = false;
         _countdown = 0;
         block.ClearLocalPartyRoster();
@@ -275,11 +293,26 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     {
         if (!Odyssey.TryReadPartyRoster(out uint available, out uint party))
         {
+            // A failed read is a world gap, not an empty roster. Do not carry a pre-transition
+            // 0->1 edge into the newly resolved party table and accidentally defer a genuine
+            // host dismissal there.
+            _lastLocalAvailable = uint.MaxValue;
             block.ClearLocalPartyRoster();
             block.ClearLocalPartyRosterObjectIds();
             return;
         }
 
+        if (_lastLocalAvailable != uint.MaxValue)
+        {
+            // A new local bit may be a client-led dialogue grant racing an old host level, or a
+            // host-driven AddAvailableNPC that is already on its way. In either case it cancels
+            // any older host-removal edge for this slot; a later 1->0 host transition is
+            // required before the slot can be cleared again.
+            _hostAvailabilityRemovalEdges &= ~PartyRosterAvailabilityRule.NewlyAvailable(
+                _lastLocalAvailable, available);
+        }
+
+        _lastLocalAvailable = available;
         block.SetLocalPartyRoster(available, party);
 
         // docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body" entry: one
@@ -327,8 +360,18 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 PluginHost.Log("party roster: no peer roster to reconcile against");
             }
 
+            _lastHostAvailable = PartyRosterAvailabilityRule.UnknownMask;
+            _hostAvailabilityRemovalEdges = 0;
+
             return;
         }
+
+        // Capture this level before conversation/frozen guards. A real host 1->0 edge must not
+        // be lost just because the local engine is still finishing the same dialogue or a script
+        // currently owns the party table. The edge remains pending until applied or re-added.
+        _hostAvailabilityRemovalEdges = PartyRosterAvailabilityRule.UpdateHostRemovalEdges(
+            _hostAvailabilityRemovalEdges, _lastHostAvailable, hostAvailable);
+        _lastHostAvailable = hostAvailable;
 
         if (!_lastHostValid)
         {
@@ -360,12 +403,24 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         uint toRemove = localParty & ~hostParty;
+        // The feature gate covers both directions. In particular, an opt-out must preserve a
+        // locally recruited companion even when the host's older roster has not caught up yet.
+        bool availabilitySync = _pokeAvailability.Resolve(block);
+        uint toRemoveAvailability = availabilitySync
+            ? PartyRosterAvailabilityRule.PendingRemovals(localAvailable, hostAvailable, hostParty)
+            : 0;
+
+        // A local mismatch is removable only after the host has published that bit before and
+        // then published it cleared. A first host snapshot of zero is intentionally not a
+        // destructive command, and a client-led 0->1 edge cancels an older falling edge above.
+        toRemoveAvailability &= _hostAvailabilityRemovalEdges;
         uint toAdd = hostParty & ~localParty;
 
-        if (toRemove == 0 && toAdd == 0)
+        if (toRemove == 0 && toRemoveAvailability == 0 && toAdd == 0)
         {
             _unavailableLogged = 0;
             _spawnRefusedLogged = 0;
+            _availabilityRemovalFailedLogged = 0;
             return;
         }
 
@@ -388,6 +443,37 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             {
                 block.PartyRosterStatus = (uint)failure;
                 PluginHost.Log($"party roster: could not remove NPC slot {slot} (failure {failure})");
+            }
+
+            return;
+        }
+
+        // Remove an availability bit only after any active seat for that slot has been removed.
+        // The verified engine implementation of RemoveAvailableNPC clears the party table's
+        // +0x30 flag and deliberately leaves live bodies alone; removing the seat first keeps
+        // this operation ordered with the game's own dismiss path and avoids a stale active
+        // body being treated as an unavailable companion on the next pass.
+        if (toRemoveAvailability != 0)
+        {
+            int slot = PartyRosterAvailabilityRule.LowestPendingSlot(toRemoveAvailability);
+            if (Odyssey.RemoveAvailableNpc(slot, out int failure))
+            {
+                _hostAvailabilityRemovalEdges &= ~(1u << slot);
+                _availabilityRemovalFailedLogged &= ~(1u << slot);
+                block.PartyRosterStatus = 0;
+                PluginHost.Log($"party roster: cleared availability for NPC slot {slot} "
+                    + "(the peer no longer has them recruited)");
+            }
+            else
+            {
+                block.PartyRosterStatus = (uint)failure;
+                uint bit = 1u << slot;
+                if ((_availabilityRemovalFailedLogged & bit) == 0)
+                {
+                    _availabilityRemovalFailedLogged |= bit;
+                    PluginHost.Log($"party roster: could not clear availability for NPC slot {slot} "
+                        + $"(failure {failure}); retrying (logged once)");
+                }
             }
 
             return;

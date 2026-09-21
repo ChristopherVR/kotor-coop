@@ -1,6 +1,7 @@
 // Odyssey.Party.cs - the companion roster: CSWPartyTable field offsets, reading the
-// availability/membership masks, and the three NWScript roster routines (AddPartyMember,
-// RemovePartyMember, SpawnAvailableNPC) dispatched the same way the engine's own scripts do.
+// availability/membership masks, and the four NWScript roster routines (AddPartyMember,
+// RemovePartyMember, RemoveAvailableNPC, SpawnAvailableNPC) dispatched the same way the
+// engine's own scripts do.
 // Also the raw availability poke used only by the dev recruit cheat, and the template-based
 // recruit path used by real dialogue-driven recruitment sync.
 // See docs/research/party-reconciliation.md for the full investigation history.
@@ -98,6 +99,16 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, int> ExecuteCommandRemovePartyMember =
         (delegate* unmanaged[Thiscall]<nint, int, int, int>)0x00541C00;
 
+    // CSWVirtualMachineCommands::ExecuteCommandRemoveAvailableNPC(nCommandId, nParams).
+    //
+    // int RemoveAvailableNPC(int nNPC). The shipped handler at 0x00541B40 pops one integer,
+    // resolves the party table, calls CSWPartyTable::RemoveNPC at 0x005646D0, and pushes that
+    // bool result back on the VM stack. The handler is `ret 8`, matching the other one-argument
+    // roster commands above. RemoveNPC only clears CSWPartyTable +0x30 (the availability bit);
+    // it does not remove an active party seat, so reconciliation always removes a seat first.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, int, int> ExecuteCommandRemoveAvailableNPC =
+        (delegate* unmanaged[Thiscall]<nint, int, int, int>)0x00541B40;
+
     // CSWVirtualMachineCommands::ExecuteCommandSpawnAvailableNPC(nCommandId, nParams).
     //
     // object SpawnAvailableNPC(int nNPC, location lLoc). Integer pop at 0x00543EDE, then an
@@ -115,6 +126,7 @@ internal static unsafe partial class Odyssey
 
     private static int _routineAddPartyMember = -1;
     private static int _routineRemovePartyMember = -1;
+    private static int _routineRemoveAvailableNpc = -1;
     private static int _routineSpawnAvailableNpc = -1;
 
     /// <summary>The live CSWPartyTable, or 0 before a world exists (at the main menu, and
@@ -493,6 +505,71 @@ internal static unsafe partial class Odyssey
         }
 
         if (ExecuteCommandRemovePartyMember(implementer, _routineRemovePartyMember, 1) != 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        int removed = 0;
+        if (StackPopInteger(vm, &removed) == 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 8;
+            return false;
+        }
+
+        if (removed == 0)
+        {
+            failure = 9;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Clears NPC slot <paramref name="slot"/>'s recruited/available flag through the engine's
+    /// own <c>RemoveAvailableNPC(int nNPC)</c> VM command. This is the availability operation
+    /// used by the game's scripts; it is deliberately separate from
+    /// <see cref="RemovePartyMemberBySlot"/>, which only vacates an active party seat.
+    ///
+    /// The engine implementation is <c>CSWPartyTable::RemoveNPC</c> at <c>0x005646D0</c> and
+    /// only clears <c>CSWPartyTable + 0x30 + slot*4</c>. It does not destroy or detach a live
+    /// body, so callers must remove an active seat first when both bits differ.
+    /// MAIN THREAD ONLY. Failure codes use the same dispatch/stack contract as the other roster
+    /// wrappers: 1 no VM, 2 no routine table, 3 routine not found, 4 a script is running,
+    /// 5 a push was refused, 6 the handler refused, 7 the return could not be popped,
+    /// 8 the stack was left skewed, 9 the engine returned "not removed", 10 bad slot.
+    /// </summary>
+    public static bool RemoveAvailableNpc(int slot, out int failure)
+    {
+        failure = 0;
+
+        if (slot is < 0 or >= PartyRosterSlots)
+        {
+            failure = 10;
+            return false;
+        }
+
+        if (!DispatchRosterRoutine(
+            ExecuteCommandRemoveAvailableNPC, ref _routineRemoveAvailableNpc,
+            out nint vm, out nint internalVm, out int stackPointer, out nint implementer, out failure))
+        {
+            return false;
+        }
+
+        if (StackPushInteger(vm, slot) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        if (ExecuteCommandRemoveAvailableNPC(implementer, _routineRemoveAvailableNpc, 1) != 0)
         {
             failure = 6;
             return false;

@@ -67,6 +67,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyCountRestoreRule.cs" Link="Plugin\PartyCountRestoreRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PeerEffectReplayRule.cs" Link="Plugin\PeerEffectReplayRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterRecruitRule.cs" Link="Plugin\PartyRosterRecruitRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterAvailabilityRule.cs" Link="Plugin\PartyRosterAvailabilityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterBodyReuseRule.cs" Link="Plugin\PartyRosterBodyReuseRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterTemplateTable.cs" Link="Plugin\PartyRosterTemplateTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantCaptureRule.cs" Link="Plugin\ClassGrantCaptureRule.cs" />
