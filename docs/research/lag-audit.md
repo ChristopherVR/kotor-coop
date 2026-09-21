@@ -160,8 +160,9 @@ follow, roster, solo, and suppression. Total and prelude timings are closed with
 world-transition early returns and controller failures still contribute to the appropriate
 diagnostic. These timings run only while `frame_stats` is enabled and use fixed accumulators; they
 add no per-frame allocation when the diagnostic is off. A group or detail maximum near the frame
-histogram's worst value identifies where the game-thread stall occurred. If total is high while
-the groups and prelude stay low, the gap is outside the measured controller schedule.
+histogram's worst value identifies where the game-thread stall occurred. If the frame interval is
+high while total is low, the delay lies outside this OnFrame call; a high total with low section
+timings points to unclassified overhead inside it.
 
 ### `lagstats` — the console verb
 

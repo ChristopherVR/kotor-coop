@@ -393,7 +393,10 @@ internal static unsafe partial class PluginHost
         //      protocol 58) and applied to the enemy's real body (EnemyEffectController ->
         //      OdysseyEffects). coop.ini enemy_effect_sync, default OFF; NEEDS-LIVE. See
         //      docs/research/enemy-effects.md.
-        _block->Version = 70;
+        //  71: companion presence slots use their existing +0x24 padding as a publication
+        //      sequence. Readers accept only stable even generations, so a position and
+        //      facing cannot come from different agent updates. No size/offset growth.
+        _block->Version = 71;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

@@ -85,6 +85,10 @@ public class MotionSmootherTests
         (Vec3 shown, _, _) = smoother.Step(0, At(10f), now + FrameDt);
 
         Assert.Equal(10f, shown.X);
+        Assert.True(smoother.LastStepSnapped);
+
+        smoother.Step(0, At(10.1f), now + (2 * FrameDt));
+        Assert.False(smoother.LastStepSnapped);
     }
 
     [Fact]

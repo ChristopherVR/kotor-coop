@@ -53,6 +53,10 @@ internal sealed class MotionSmoother(int capacity, float smoothingTauSeconds)
     private readonly bool[] _smoothing = new bool[capacity];
     private readonly double[] _lastMovedAt = new double[capacity];
 
+    /// <summary>Whether the most recent <see cref="Step"/> cut to its target because the
+    /// target gap exceeded the teleport threshold (or the slot had no prior sample).</summary>
+    public bool LastStepSnapped { get; private set; }
+
     public void Reset(int slot)
     {
         _lastGoal[slot] = default;
@@ -62,10 +66,12 @@ internal sealed class MotionSmoother(int capacity, float smoothingTauSeconds)
         _shownAtTime[slot] = 0;
         _smoothing[slot] = false;
         _lastMovedAt[slot] = 0;
+        LastStepSnapped = false;
     }
 
     public (Vec3 Shown, float Speed, bool Moving) Step(int slot, Vec3 target, double now)
     {
+        LastStepSnapped = false;
         float mdx = target.X - _lastGoal[slot].X;
         float mdy = target.Y - _lastGoal[slot].Y;
         float moved = MathF.Sqrt((mdx * mdx) + (mdy * mdy));
@@ -97,6 +103,7 @@ internal sealed class MotionSmoother(int capacity, float smoothingTauSeconds)
         {
             _smoothing[slot] = true;
             shown = target;
+            LastStepSnapped = true;
         }
         else
         {

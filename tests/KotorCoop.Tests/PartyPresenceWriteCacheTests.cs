@@ -176,4 +176,33 @@ public sealed class PartyPresenceWriteCacheTests
         // matches — capacity must not bleed one slot's cache into another's.
         Assert.False(cache.CanSkipSlot(1, m, moduleChanged: false));
     }
+
+    [Fact]
+    public void FailedPublicationCannotBeSkippedWhenCandidateReturnsToPreviousValue()
+    {
+        PartyPresenceWriteCache cache = new(capacity: 4);
+        PartyMemberState first = Member(x: 1f);
+        PartyMemberState second = Member(x: 5f);
+
+        cache.RecordSlot(0, first);
+        cache.InvalidateSlot(0); // first -> second publication failed after becoming busy
+
+        Assert.False(cache.CanSkipSlot(0, second, moduleChanged: false));
+        Assert.False(cache.CanSkipSlot(0, first, moduleChanged: false));
+
+        cache.RecordSlot(0, first); // only a completed publication clears the dirty bit
+        Assert.True(cache.CanSkipSlot(0, first, moduleChanged: false));
+    }
+
+    [Fact]
+    public void FailedEmptyPublicationCannotBeSkippedByNullCandidate()
+    {
+        PartyPresenceWriteCache cache = new(capacity: 4);
+
+        cache.InvalidateSlot(0);
+
+        Assert.False(cache.CanSkipSlot(0, candidate: null, moduleChanged: false));
+        cache.RecordSlot(0, candidate: null);
+        Assert.True(cache.CanSkipSlot(0, candidate: null, moduleChanged: false));
+    }
 }

@@ -10,7 +10,9 @@ namespace KotorCoop.Memory;
 /// Pulled out of <c>KotorGameBridge.Party.cs</c> (round 103, docs/research/party-reconciliation.md)
 /// so the reset this round adds is directly unit-testable without a real game process, and so the
 /// bookkeeping itself is exercised by the SAME <see cref="PartyPresenceDirtyCheck.CanSkipWrite"/>
-/// every write already goes through — nothing here re-implements that decision.
+/// every write already goes through — nothing here re-implements that decision. A failed
+/// publication also marks the slot dirty independently of its last successful value, so a
+/// later snapshot that returns to that value cannot skip an outstanding retry.
 ///
 /// ⚠ WHY A RESET WAS MISSING. <c>SessionManager</c> keeps ONE bridge alive across every
 /// disconnect and reconnect a player does (a fresh <c>CoopAgent</c>, the SAME bridge instance —
@@ -30,6 +32,7 @@ namespace KotorCoop.Memory;
 public sealed class PartyPresenceWriteCache(int capacity)
 {
     private readonly PartyMemberState?[] _lastWritten = new PartyMemberState?[capacity];
+    private readonly bool[] _dirty = new bool[capacity];
     private uint? _lastWrittenCount;
     private string _module = string.Empty;
 
@@ -50,6 +53,7 @@ public sealed class PartyPresenceWriteCache(int capacity)
         {
             _module = module;
             Array.Clear(_lastWritten);
+            Array.Clear(_dirty);
             _lastWrittenCount = null;
         }
 
@@ -60,11 +64,21 @@ public sealed class PartyPresenceWriteCache(int capacity)
     /// to <see cref="PartyPresenceDirtyCheck.CanSkipWrite"/>, the pure decision, against what THIS
     /// cache last recorded for that slot.</summary>
     public bool CanSkipSlot(int slot, PartyMemberState? candidate, bool moduleChanged) =>
-        PartyPresenceDirtyCheck.CanSkipWrite(candidate, _lastWritten[slot], moduleChanged);
+        !_dirty[slot]
+        && PartyPresenceDirtyCheck.CanSkipWrite(candidate, _lastWritten[slot], moduleChanged);
 
     /// <summary>Records what was actually written to <paramref name="slot"/> this pass — call
     /// only when the write itself happened, exactly as <c>TryWritePartyMembers</c> always has.</summary>
-    public void RecordSlot(int slot, PartyMemberState? candidate) => _lastWritten[slot] = candidate;
+    public void RecordSlot(int slot, PartyMemberState? candidate)
+    {
+        _lastWritten[slot] = candidate;
+        _dirty[slot] = false;
+    }
+
+    /// <summary>Marks a slot as requiring another publication after any failed memory write.
+    /// This remains true even when the next candidate happens to equal the last successful
+    /// candidate; an odd sequence marker or a partially written payload must never be skipped.</summary>
+    public void InvalidateSlot(int slot) => _dirty[slot] = true;
 
     /// <summary>Whether the block's own <c>PartyPresenceCount</c> level can be left alone this
     /// pass — true only when the module has not changed AND the occupied-slot count this pass
@@ -84,6 +98,7 @@ public sealed class PartyPresenceWriteCache(int capacity)
     public void Reset()
     {
         Array.Clear(_lastWritten);
+        Array.Clear(_dirty);
         _lastWrittenCount = null;
         _module = string.Empty;
     }

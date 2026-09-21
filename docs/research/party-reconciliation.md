@@ -5852,3 +5852,30 @@ recovery and the `usedoor`/door-transition gather helper), not a new call site.
   before this method's restore write ever runs) rather than only in the gap after it returns —
   which would need a different fix (e.g. suppressing/clearing any freshly-queued follow action on
   the affected companions after the restore, not just restoring the flag).
+
+## Follow continuation timing and pause boundary (2026-09-21)
+
+The live follow log measured about 3300 callbacks in ten seconds. `PartyFollowController` was
+feeding `TryDriveFollowLeaderStep` a fixed 16 ms on every callback, so an uncapped callback loop
+could advance the native continuation at roughly five times wall time. Its stationary detector
+also replaced each companion's position baseline for sub-0.05-unit movement, preventing normal
+walking from accumulating as movement and allowing a stale stall timer to trigger recovery.
+
+The controller now carries fractional milliseconds between callbacks, bounds one native step to
+100 ms, and drops a long-hitch remainder. It updates each companion baseline before the recovery
+decision and resets the carry/baselines on disabled, mirrored, frozen, module-transition, and
+invalid-pointer paths. The controller also returns before `PumpPartyUpdate` or any manual follow
+step when `GetPauseMask() | GetClientPauseMask()` is nonzero or `IsMoviePlaying()` is true. This
+prevents simulation progress during a held pause and avoids a post-pause catch-up step. The
+timing rule has isolated tests covering 30, 60, 144, 330, and 1000 callbacks per second plus
+sub-millisecond carry and long-gap reset. The x86 NativeAOT build passed with warnings as errors
+and is installed in both running instances. Normal following pace/direction still needs the
+user's live confirmation; installation alone does not close that report.
+
+Mirrored companions now ease heading along the shortest angular arc while moving, using the
+position smoother's time constant. Stationary poses and position teleports preserve exact owner
+heading. The party-presence mailbox uses its reserved slot word as a sequence lock (shared block
+version 71), preventing mixed position/heading snapshots. Busy reads preserve the last mirrored
+body and spectate state; failed writes invalidate the dirty cache so the next publish retries.
+An actual concurrent-reader test exercises this reader against changing correlated payloads.
+The focused follow/inventory/version suite passed **102 tests** with warnings as errors.

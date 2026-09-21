@@ -301,6 +301,11 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// <see cref="Odyssey.PumpPartyUpdate"/> call, or -1 before the first frame.</summary>
     private double _lastUpdateTime = -1;
 
+    // Fractional milliseconds carried between rendered callbacks. At uncapped rates a single
+    // callback may be below one millisecond; rounding each callback would over- or under-drive
+    // the native follow continuation.
+    private double _followStepFractionalMilliseconds;
+
     /// <summary>ROUND 87 (party-reconciliation.md): see <see cref="PartyFollowTransitionRule"/>'s
     /// own remarks — the last epoch THIS controller has actually driven follow logic against.
     /// Starts at 0, which is not a valid epoch (<c>Odyssey.TryGetWorldEpoch</c> hashes a
@@ -309,10 +314,24 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// change: skipped once, harmlessly, before driving begins.</summary>
     private ulong _lastSeenEpoch;
 
+    private void ResetFrameTimingBaselines()
+    {
+        _lastUpdateTime = -1;
+        _followStepFractionalMilliseconds = 0;
+        _leaderTracked = false;
+        Array.Clear(_tracked);
+        Array.Clear(_inPhase2Run);
+        Array.Clear(_phase2RunStart);
+        Array.Clear(_finalNodeStallFrames);
+        Array.Clear(_lastFinalNodeSeen);
+        Array.Clear(_lastMovingToPathAccumulator);
+    }
+
     public void OnFrame()
     {
         if (!_enabled || block.Command != SharedBlock.CommandSpawnAndDrive)
         {
+            ResetFrameTimingBaselines();
             return;
         }
 
@@ -320,6 +339,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // see the class comment. Nothing to do here while that channel is active.
         if (block.PartyPresenceCount != 0)
         {
+            ResetFrameTimingBaselines();
             return;
         }
 
@@ -329,6 +349,19 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // beat) — issuing a follow order over either would fight the thing actually in control.
         if (Odyssey.IsConversationActive || Odyssey.IsPartyRosterFrozen())
         {
+            ResetFrameTimingBaselines();
+            return;
+        }
+
+        // Native follow continuation is a simulation step, not a render-only operation. Do not
+        // advance it while either world pause mask is held or while the client owns a cinematic;
+        // otherwise a manual step can move a companion during a pause even though the engine's
+        // ordinary party update is stopped. Reset the measured-time carry so the first resumed
+        // frame cannot emit a catch-up step for the paused interval.
+        bool moviePlaying = Odyssey.IsMoviePlaying();
+        if ((Odyssey.GetPauseMask() | Odyssey.GetClientPauseMask()) != 0 || moviePlaying)
+        {
+            ResetFrameTimingBaselines();
             return;
         }
 
@@ -362,7 +395,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
             Array.Clear(_stallLatchLogged);
             Array.Clear(_stallCountRestored);
             Array.Fill(_stallLastFireTime, -1);
-            _leaderTracked = false;
+            ResetFrameTimingBaselines();
             return;
         }
 
@@ -376,8 +409,11 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // with a real measured delta time — the same cadence and argument shape the engine's own
         // caller uses.
         double nowForUpdate = _clock.Elapsed.TotalSeconds;
-        float dt = _lastUpdateTime < 0 ? 0f : (float)(nowForUpdate - _lastUpdateTime);
+        double elapsedSeconds = _lastUpdateTime < 0 ? 0.0 : nowForUpdate - _lastUpdateTime;
+        float dt = (float)elapsedSeconds;
         _lastUpdateTime = nowForUpdate;
+        int followStepMilliseconds = FollowStepTimingRule.Consume(
+            ref _followStepFractionalMilliseconds, elapsedSeconds);
         if (dt > 0f && dt < 1f) // skip the first frame (dt==0) and any huge stall/load gap
         {
             Odyssey.PumpPartyUpdate(dt);
@@ -402,18 +438,21 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         nint appManager = *(nint*)AppManagerPtr;
         if (appManager == 0)
         {
+            ResetFrameTimingBaselines();
             return;
         }
 
         nint server = *(nint*)(appManager + AppServerOffset);
         if (server == 0)
         {
+            ResetFrameTimingBaselines();
             return;
         }
 
         nint serverInternal = *(nint*)(server + InternalOffset);
         if (serverInternal == 0)
         {
+            ResetFrameTimingBaselines();
             return;
         }
 
@@ -442,7 +481,13 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 leaderMoving = ((ldx * ldx) + (ldy * ldy)) > MovedEpsilon * MovedEpsilon;
             }
 
-            _lastLeaderPos = playerPos;
+            // Keep the last significant sample as the baseline. At high callback rates a normal
+            // walk moves less than MovedEpsilon per callback; replacing this baseline every time
+            // made a genuinely moving leader look stationary to the stall gate.
+            if (!_leaderTracked || leaderMoving)
+            {
+                _lastLeaderPos = playerPos;
+            }
             _leaderTracked = true;
         }
         else
@@ -454,7 +499,7 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         // roster-freeze / mirrored-session / module-change-frame cases are all already hard
         // early-returns above, so the only one left to fold in here is a playing movie — the one
         // engine-owned state that can hold the world still without any of those firing.
-        bool stallSuppressed = Odyssey.IsMoviePlaying();
+        bool stallSuppressed = moviePlaying;
 
         for (int slot = 0; slot < PartyNpcSlots; slot++)
         {
@@ -474,6 +519,30 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
 
             int headType = Odyssey.GetHeadActionType(creature);
             Vec3 pos = Odyssey.GetPosition(creature);
+
+            // Update the movement baseline before any recovery decision. At the previous
+            // location this ran after DriveStallRecovery, so a companion that moved on this
+            // frame could still be recovered using the old stationary timer. Keep the flag
+            // until the original stall gate below, while allowing the follow writes to run.
+            bool movementBaselineFresh = false;
+            if (!_tracked[slot])
+            {
+                _tracked[slot] = true;
+                _lastPos[slot] = pos;
+                _stationarySince[slot] = now;
+                movementBaselineFresh = true;
+            }
+            else
+            {
+                float dx = pos.X - _lastPos[slot].X;
+                float dy = pos.Y - _lastPos[slot].Y;
+                if ((dx * dx) + (dy * dy) > MovedEpsilon * MovedEpsilon)
+                {
+                    _lastPos[slot] = pos;
+                    _stationarySince[slot] = now;
+                    movementBaselineFresh = true;
+                }
+            }
 
             // ROUND 73 FALLBACK: keep this companion's own follow-data record driven straight
             // off the real leader position every frame — see Odyssey.TryDriveFollowTarget's own
@@ -506,12 +575,15 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 // ROUND 80 EXPERIMENT: see Odyssey.TryDriveFollowLeaderStep's own remarks — a
                 // bare TryPokeStepAccumulator poke was live-tested and found insufficient (the
                 // engine's own outer caller re-zeroes the field before ever consuming a poke left
-                // for it); this drives the real FollowLeader step function directly instead. 16
-                // ~= one frame at 60fps, the same millisecond unit the cached-time-pair fields
-                // this record already exposes are measured in.
-                if (_pokeStepAccumulator)
+                // for it); this drives the real FollowLeader step function directly instead. The
+                // measured, fractional-carry value is in the same millisecond unit as the
+                // cached-time-pair fields this record exposes.
+                if (_pokeStepAccumulator && followStepMilliseconds > 0)
                 {
-                    Odyssey.TryDriveFollowLeaderStep(objectId, 16);
+                    // The native field is a millisecond step budget. A fixed 16 ms overdrives
+                    // an uncapped render loop; the measured value above is fractional-carry
+                    // accumulated and bounded across callbacks.
+                    Odyssey.TryDriveFollowLeaderStep(objectId, followStepMilliseconds);
                 }
 
                 // ROUND 83: break the phase=7 permanent stall at its real, disassembly-grounded
@@ -733,24 +805,10 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
                 }
             }
 
-            if (!_tracked[slot])
+            if (movementBaselineFresh)
             {
-                _tracked[slot] = true;
-                _lastPos[slot] = pos;
-                _stationarySince[slot] = now;
-                continue; // first sighting this slot — nothing to compare against yet
+                continue; // first sighting or genuinely moving — nothing to recover
             }
-
-            float dx = pos.X - _lastPos[slot].X;
-            float dy = pos.Y - _lastPos[slot].Y;
-            if ((dx * dx) + (dy * dy) > MovedEpsilon * MovedEpsilon)
-            {
-                _lastPos[slot] = pos;
-                _stationarySince[slot] = now;
-                continue; // genuinely moving — nothing to do
-            }
-
-            _lastPos[slot] = pos;
 
             if (headType == HeadActionPartyFollowLeader || IsBusyHead(headType))
             {
@@ -904,9 +962,8 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
     /// </list>
     ///
     /// The frozen-duration input is deliberately the SAME <c>_stationarySince</c> bookkeeping this
-    /// controller's older "reissue ActionFollowLeader" stall check already maintains, read one
-    /// frame behind (it is updated later in the same loop) — one motion tracker, not two that can
-    /// disagree about what "still" means.
+    /// controller's older "reissue ActionFollowLeader" stall check already maintains, updated
+    /// before this call — one motion tracker, not two that can disagree about what "still" means.
     /// </summary>
     private void DriveStallRecovery(
         int slot, uint objectId, Vec3 pos, Vec3 leaderPos, double now, bool leaderMoving, bool suppressed)

@@ -42,6 +42,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyFacingSmoother.cs" Link="Plugin\PartyFacingSmoother.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GaitRule.cs" Link="Plugin\GaitRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PasswordAnswer.cs" Link="Plugin\PasswordAnswer.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConnectAddressRule.cs" Link="Plugin\ConnectAddressRule.cs" />
@@ -134,6 +135,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\Phase2StallRule.cs" Link="Plugin\Phase2StallRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowPhaseReleaseRule.cs" Link="Plugin\FollowPhaseReleaseRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowStallRule.cs" Link="Plugin\FollowStallRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\FollowStepTimingRule.cs" Link="Plugin\FollowStepTimingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceReleaseOrderRule.cs" Link="Plugin\PartyPresenceReleaseOrderRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceResolveCacheRule.cs" Link="Plugin\PartyPresenceResolveCacheRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />

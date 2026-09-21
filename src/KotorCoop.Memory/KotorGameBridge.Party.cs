@@ -531,11 +531,17 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
-            float facing = 0f;
-            if (TryReadVector(creature + OffOrientation, out Vector3f orientation))
+            // A failed/tearing orientation read must not turn into a plausible-looking zero
+            // facing. Zero-length XY vectors have no heading either; omit the member so the
+            // next level snapshot can retry it instead of publishing a false direction.
+            if (!TryReadVector(creature + OffOrientation, out Vector3f orientation)
+                || !orientation.IsFinite
+                || (orientation.X == 0f && orientation.Y == 0f))
             {
-                facing = Angles.Normalize(MathF.Atan2(orientation.Y, orientation.X));
+                continue;
             }
+
+            float facing = Angles.Normalize(MathF.Atan2(orientation.Y, orientation.X));
 
             _memory.TryReadUInt32(creature + OffAnimation, out uint animation);
             int health = _memory.TryRead(creature + OffCurrentHitPoints, out short hp) ? hp : 0;
@@ -566,14 +572,16 @@ public sealed partial class KotorGameBridge
         return members;
     }
 
-    // Party presence (block version 20): companion state handed to the plugin, which
+    // Party presence (block version 71): companion state handed to the plugin, which
     // drives the body on the game thread with the seamless recipe. Roster slot + 1 @0
     // (0 = empty, written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
-    // @0x14, health i32 @0x18, one-shot serial u32 @0x1C, one-shot anim u32 @0x20.
+    // @0x14, health i32 @0x18, one-shot serial u32 @0x1C, one-shot anim u32 @0x20,
+    // publication sequence u32 @0x24 (odd while writing; readers require unchanged even).
     private const int BlockPartyPresenceCount = 0x1C20;
     private const int BlockPartyPresenceSlots = 0x1C30;
     private const int BlockPartyPresenceStride = 0x28;
     private const int BlockPartyPresenceCapacity = 4;
+    private const int BlockPartyPresenceSequenceOffset = 0x24;
 
     // Companion equipment (block version 54): the host's per-companion gear, keyed by the
     // SAME presence slot index as BlockPartyPresenceSlots — 4 slots x 3 resrefs (body, right
@@ -628,6 +636,7 @@ public sealed partial class KotorGameBridge
             bool moduleChanged = _partyPresenceCache.NoteModule(module) || moduleReadFailed;
 
             int written = 0;
+            bool allPresenceSlotsPublished = true;
             for (int i = 0; i < BlockPartyPresenceCapacity; i++)
             {
                 PartyMemberState? candidate = i < members.Count && members[i].SlotIndex < PartyNpcSlots
@@ -645,24 +654,20 @@ public sealed partial class KotorGameBridge
                 }
 
                 nint slot = _pluginBlock + BlockPartyPresenceSlots + (i * BlockPartyPresenceStride);
-                if (candidate is { } m)
+                bool published = TryPublishPartyPresenceSlot(slot, candidate);
+                if (published)
                 {
-                    _memory.TryWrite(slot + 0x04, m.Position.X);
-                    _memory.TryWrite(slot + 0x08, m.Position.Y);
-                    _memory.TryWrite(slot + 0x0C, m.Position.Z);
-                    _memory.TryWrite(slot + 0x10, m.Facing);
-                    _memory.TryWrite(slot + 0x14, m.Animation);
-                    _memory.TryWrite(slot + 0x18, m.Health);
-                    _memory.TryWrite(slot + 0x1C, m.OneShotSerial);
-                    _memory.TryWrite(slot + 0x20, (uint)m.OneShotAnimation);
-                    _memory.TryWrite(slot + 0x00, (uint)m.SlotIndex + 1);
+                    _partyPresenceCache.RecordSlot(i, candidate);
                 }
                 else
                 {
-                    _memory.TryWrite(slot + 0x00, 0u);
+                    // Do not let a transient WriteProcessMemory failure make the dirty cache
+                    // believe this payload reached the block. In particular, the odd marker is
+                    // intentionally left busy when a later field or the even commit fails, so
+                    // the plugin skips this slot rather than driving torn position/facing data.
+                    _partyPresenceCache.InvalidateSlot(i);
+                    allPresenceSlotsPublished = false;
                 }
-
-                _partyPresenceCache.RecordSlot(i, candidate);
 
                 // Companion gear (2026-08-27, docs/research/companion-state-sync.md): written
                 // every pass this instance opted into applying it, independent of the position
@@ -686,10 +691,13 @@ public sealed partial class KotorGameBridge
                 }
             }
 
-            if (!_partyPresenceCache.CanSkipCount((uint)written, moduleChanged))
+            if (allPresenceSlotsPublished
+                && !_partyPresenceCache.CanSkipCount((uint)written, moduleChanged))
             {
-                _memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written);
-                _partyPresenceCache.RecordCount((uint)written);
+                if (_memory.TryWrite(_pluginBlock + BlockPartyPresenceCount, (uint)written))
+                {
+                    _partyPresenceCache.RecordCount((uint)written);
+                }
             }
 
             return written;
@@ -735,6 +743,57 @@ public sealed partial class KotorGameBridge
         }
 
         return placed;
+    }
+
+    private bool TryPublishPartyPresenceSlot(nint slot, PartyMemberState? candidate)
+    {
+        // Read the current stable marker from the block itself. A bridge can reconnect to a
+        // block written by an earlier bridge instance; falling back to a process-local zero on
+        // read failure would permit an ABA sequence after such a restart, so fail closed.
+        if (!_memory.TryReadUInt32(slot + BlockPartyPresenceSequenceOffset, out uint observed))
+        {
+            return false;
+        }
+
+        uint odd = PartyPresencePublicationRule.BeginWrite(observed);
+        if (!_memory.TryWrite(slot + BlockPartyPresenceSequenceOffset, odd))
+        {
+            return false;
+        }
+
+        bool ok = true;
+        if (candidate is { } m)
+        {
+            ok &= _memory.TryWrite(slot + 0x04, m.Position.X);
+            ok &= _memory.TryWrite(slot + 0x08, m.Position.Y);
+            ok &= _memory.TryWrite(slot + 0x0C, m.Position.Z);
+            ok &= _memory.TryWrite(slot + 0x10, m.Facing);
+            ok &= _memory.TryWrite(slot + 0x14, m.Animation);
+            ok &= _memory.TryWrite(slot + 0x18, m.Health);
+            ok &= _memory.TryWrite(slot + 0x1C, m.OneShotSerial);
+            ok &= _memory.TryWrite(slot + 0x20, (uint)m.OneShotAnimation);
+            // Keep the identity write last. The sequence lock is still the authoritative
+            // reader guard, while this ordering also keeps an empty/new slot harmless to any
+            // diagnostic code that only samples the roster key.
+            ok &= _memory.TryWrite(slot + 0x00, (uint)m.SlotIndex + 1);
+        }
+        else
+        {
+            ok &= _memory.TryWrite(slot + 0x00, 0u);
+        }
+
+        if (!ok)
+        {
+            return false;
+        }
+
+        uint even = PartyPresencePublicationRule.CompleteWrite(odd);
+        if (!_memory.TryWrite(slot + BlockPartyPresenceSequenceOffset, even))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     public void ReleasePartyFreeze()

@@ -147,30 +147,51 @@ internal sealed unsafe partial class SharedBlockView
         set => *U32(SharedBlock.OffsetPartyPresenceCount) = value;
     }
 
-    public PartyPresenceView GetPartyPresence(int index)
+    /// <summary>Reads a coherent companion publication, or leaves the caller's prior state
+    /// intact when the agent is in the middle of writing. Never wait on the game thread.</summary>
+    public bool TryGetPartyPresence(int index, out PartyPresenceView member)
     {
         byte* slot = baseAddress + SharedBlock.OffsetPartyPresenceSlots
             + (Clamp(index, SharedBlock.PartyPresenceCapacity) * SharedBlock.PartyPresenceStride);
-
-        return new PartyPresenceView(
-            *(uint*)(slot + 0x00),
-            new Vec3
+        ref uint sequence = ref *(uint*)(slot + 0x24);
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            uint before = System.Threading.Volatile.Read(ref sequence);
+            if ((before & 1u) != 0)
             {
-                X = *(float*)(slot + 0x04),
-                Y = *(float*)(slot + 0x08),
-                Z = *(float*)(slot + 0x0C),
-            },
-            *(float*)(slot + 0x10),
-            *(uint*)(slot + 0x14),
-            *(int*)(slot + 0x18),
-            *(uint*)(slot + 0x1C),
-            *(uint*)(slot + 0x20));
-    }
+                continue;
+            }
 
+            PartyPresenceView snapshot = new(
+                *(uint*)(slot + 0x00),
+                new Vec3
+                {
+                    X = *(float*)(slot + 0x04),
+                    Y = *(float*)(slot + 0x08),
+                    Z = *(float*)(slot + 0x0C),
+                },
+                *(float*)(slot + 0x10),
+                *(uint*)(slot + 0x14),
+                *(int*)(slot + 0x18),
+                *(uint*)(slot + 0x1C),
+                *(uint*)(slot + 0x20));
+
+            // The payload reads must finish before checking whether the writer changed it.
+            System.Threading.Thread.MemoryBarrier();
+            if (before == System.Threading.Volatile.Read(ref sequence))
+            {
+                member = snapshot;
+                return true;
+            }
+        }
+
+        member = default;
+        return false;
+    }
     /// <summary>
     /// Agent -&gt; plugin (docs/research/companion-state-sync.md, roadmap item 12). Pointer to a
     /// mirrored companion's null-terminated equip resref (16 bytes), keyed by the SAME presence
-    /// slot index <see cref="GetPartyPresence"/> uses — not by NPC roster slot. Same shape as
+    /// slot index <see cref="TryGetPartyPresence"/> uses — not by NPC roster slot. Same shape as
     /// <see cref="GetEquipResref"/>, applied to a companion body instead of a phantom.
     /// </summary>
     public byte* GetCompanionEquipResref(int presenceIndex, int equipIndex) =>

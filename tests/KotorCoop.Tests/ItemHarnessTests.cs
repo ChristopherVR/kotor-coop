@@ -155,10 +155,11 @@ public class ItemHarnessTests
         Assert.Equal(int.Parse(written.Groups[1].Value), agentVersion);
     }
 
-    /// <summary>Walks up from the test binary to the directory holding the solution file.</summary>
-    private static string RepositoryRoot()
+    /// <summary>Finds source even when test artifacts are built outside the checkout.</summary>
+    private static string RepositoryRoot(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "")
     {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        DirectoryInfo? directory = new(Path.GetDirectoryName(sourceFile)!);
 
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "KotorCoop.slnx")))
         {

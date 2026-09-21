@@ -71,6 +71,7 @@
     <Compile Include="..\KotorCoop.Protocol\ExeImageDigestRule.cs" Link="Shared\ExeImageDigestRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\PhantomAttackerLedger.cs" Link="Shared\PhantomAttackerLedger.cs" />
     <Compile Include="..\KotorCoop.Protocol\ModuleIdentity.cs" Link="Shared\ModuleIdentity.cs" />
+    <Compile Include="..\KotorCoop.Protocol\Vector3f.cs" Link="Shared\Vector3f.cs" />
 
     <!--
       Same technique, one file from KotorCoop.Memory: WineDetection needs to be reachable from

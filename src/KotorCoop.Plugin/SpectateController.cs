@@ -144,6 +144,12 @@ internal sealed unsafe class SpectateController(SharedBlockView block)
 
         Span<uint> candidates = stackalloc uint[SharedBlock.SlotCapacity + SharedBlock.PartyPresenceCapacity];
         int count = CollectCandidates(candidates);
+        if (count < 0)
+        {
+            // An agent publication is in progress. Preserve the camera and queued cycle
+            // until the next pass rather than mistaking a busy companion for a missing one.
+            return;
+        }
 
         uint pick = SpectateCycle.Pick(candidates[..count], _watching, _advanceQueued);
         _advanceQueued = false;
@@ -208,7 +214,10 @@ internal sealed unsafe class SpectateController(SharedBlockView block)
         int partyCount = (int)Math.Min(block.PartyPresenceCount, (uint)SharedBlock.PartyPresenceCapacity);
         for (int i = 0; i < partyCount; i++)
         {
-            PartyPresenceView member = block.GetPartyPresence(i);
+            if (!block.TryGetPartyPresence(i, out PartyPresenceView member))
+            {
+                return -1;
+            }
             if (member.RosterSlotPlusOne == 0 || member.Health <= 0)
             {
                 continue;

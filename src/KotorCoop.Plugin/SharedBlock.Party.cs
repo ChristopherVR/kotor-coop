@@ -18,7 +18,8 @@ internal partial struct SharedBlock
 
     /// <summary>Agent -&gt; plugin. roster slot + 1 u32 @0 (0 = empty, written last),
     /// position 3xf32 @4, facing f32 @0x10, animation u32 @0x14, health i32 @0x18,
-    /// one-shot serial u32 @0x1C, one-shot animation u32 @0x20. Occupies 0x1C30..0x1CD0.</summary>
+    /// one-shot serial u32 @0x1C, one-shot animation u32 @0x20, publication sequence u32 @0x24
+    /// (odd while writing; readers require an unchanged even sequence). Occupies 0x1C30..0x1CD0.</summary>
     public const int OffsetPartyPresenceSlots = 0x1C30;
 
     public const int PartyPresenceStride = 0x28;

@@ -332,3 +332,24 @@ The proposed Korriban entry-trigger shortcut was rejected after review: compiled
 can skip the actual duel despite the trigger firing. Zero/one-companion parking remains open;
 `research/duel-rings.md` now records the conditional-script evidence. The unused dark-side
 classification prototype was removed; no runtime faction handoff is claimed.
+
+### Follow timing and coherent companion snapshots (2026-09-21)
+
+The next reviewed build replaces the fixed 16 ms native follow step per rendered frame with
+elapsed-time steps and fractional carry. At the measured 330+ callbacks/second the old step
+could advance follow logic more than five times faster than wall time. Movement now accumulates
+against a significant-position baseline before stall recovery is considered, and pause/movie
+boundaries reset the timing baseline. Mirrored moving companions ease their heading using the
+same time constant as their position, with exact heading retained for stationary poses/teleports.
+
+Shared-block version 71 adds a sequence marker in existing party-slot padding. The plugin and
+spectate reader keep prior state during a partial publication instead of consuming mixed
+position/facing values. Failed publications remain dirty for retry. Both running instances have
+the x86 warnings-as-errors build; **102 focused tests passed**, including an actual concurrent
+slot-reader regression. Experimental local companion combat settings on the live rig were
+restored to the normal disabled default. Human confirmation of normal follow pace and direction
+is still pending; these changes do not yet close the user's visual movement report.
+
+Final independent review also cleared stale optional phase-recovery baselines after pause or
+disable. That final native adjustment builds successfully but awaits the next game restart;
+the installed timing/heading/publication fixes above are already active.

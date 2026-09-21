@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Plugin;
 
@@ -196,10 +197,16 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     private bool _rosterFrozen;
 
     // mirror_smooth_ms, not the phantom's smooth_ms: companions arrive on the agent's
-    // combat pump (~150 ms apart), not the 30 Hz tick — see EnemyPresenceController.
+    // combat pump (~150 ms apart), not the 30 Hz tick — see EnemyPresenceController. The
+    // facing smoother uses the same tau to reduce heading jumps during the position chase.
+    private static readonly float MirrorSmoothTauSeconds =
+        Math.Clamp(PluginConfig.ReadFloat("mirror_smooth_ms", 150f), 0f, 600f) / 1000f;
+
     private readonly MotionSmoother _smoother = new(
-        SharedBlock.PartyPresenceCapacity,
-        Math.Clamp(PluginConfig.ReadFloat("mirror_smooth_ms", 150f), 0f, 600f) / 1000f);
+        SharedBlock.PartyPresenceCapacity, MirrorSmoothTauSeconds);
+
+    private readonly PartyFacingSmoother _facingSmoother = new(
+        SharedBlock.PartyPresenceCapacity, MirrorSmoothTauSeconds);
 
     private int _drivenLogged = -1;
 
@@ -455,8 +462,22 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
         for (int i = 0; i < count; i++)
         {
+            // A sequence-locked slot can be busy while the agent is publishing its next
+            // snapshot. Keep the previous per-slot state intact and count an already-mirrored
+            // member as driven for this diagnostic pass; treating busy as an empty/default slot
+            // would call Forget, reset smoothing, and spam a false "mirroring 0" transition.
+            if (!block.TryGetPartyPresence(i, out PartyPresenceView member))
+            {
+                if (_trackedId[i] != 0 && !_released[i])
+                {
+                    driven++;
+                }
+
+                continue;
+            }
+
             if (DriveOne(
-                    i, block.GetPartyPresence(i), now, player, localFightActive,
+                    i, member, now, player, localFightActive,
                     _localEnemyPosition, _localEnemyObjectId, localEnemyCount))
             {
                 driven++;
@@ -482,6 +503,14 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
         if (!Vec3.IsWorldPlausible(member.Position)
             || (member.Position.X == 0f && member.Position.Y == 0f))
+        {
+            return false;
+        }
+
+        // The host can be tearing down a creature while its position is still readable. Never
+        // let the resulting NaN/infinity reach MathF.Cos/Sin in DriveBody; a finite but missing
+        // orientation is handled on the writer side by withholding the snapshot member.
+        if (!float.IsFinite(member.Facing))
         {
             return false;
         }
@@ -681,7 +710,30 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         }
 
         (Vec3 shown, float speed, bool moving) = _smoother.Step(slot, member.Position, now);
-        Odyssey.DriveEnemy(creature, shown, member.Facing, speed, moving, member.Animation);
+        float facing;
+        if (_smoother.LastStepSnapped)
+        {
+            // Position teleports (first sample, module re-entry, or an >8-unit gap) must not
+            // leave the heading easing from the previous world/trajectory.
+            _facingSmoother.Snap(slot, member.Facing, now);
+            facing = Angles.Normalize(member.Facing);
+        }
+        else if (moving)
+        {
+            if (!_facingSmoother.TryStep(slot, member.Facing, now, out facing))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // Preserve the owner's exact turn-in-place/combat heading. The next moving sample
+            // starts from this angle rather than from a stale point on the previous chase.
+            _facingSmoother.Snap(slot, member.Facing, now);
+            facing = Angles.Normalize(member.Facing);
+        }
+
+        Odyssey.DriveEnemy(creature, shown, facing, speed, moving, member.Animation);
         return true;
     }
 
@@ -865,6 +917,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // on their own Invalidate.
         PhantomHitHook.WatchCompanion(slot, 0, 0);
         _smoother.Reset(slot);
+        _facingSmoother.Reset(slot);
 
         // A different companion (or the same one, freshly re-resolved) may now occupy this
         // presence slot; forget what gear this controller last believed it applied so a real
