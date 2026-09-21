@@ -1,8 +1,9 @@
 # The dark-side branch: the Lehon temple summit and the DS ending (2026-09-18)
 
 Review blocker #11, roadmap item 43, `star-forge-finale.md` §3.1 (which marked it INFERRED).
-RESEARCH ONLY: no code, no game, no rig script. Method as in [leviathan.md](leviathan.md) §1.
-Tags: **VERIFIED**, **INFERRED**, **NEEDS-LIVE**.
+Static resource research identifies a faction-based handoff, but runtime implementation
+remains pending a complete receiver mapping. No VM hook, packet/shared-block write,
+or rig script was run in this pass. Tags: **VERIFIED**, **INFERRED**, **NEEDS-LIVE**.
 
 ## 1. Where the choice is (confirmed)
 
@@ -110,7 +111,25 @@ host-owned enemy fight for the four hostile bodies; `enemy-presence-sync.md` mir
 creatures to the joiner, so a hostile Jolee is a normal mirrored enemy IF his `FactionID`
 reaches the enemy channel as hostile). The joiner keeps its own PC and fights normally.
 
-Design, in increasing scope:
+### Bounded implementation boundary (2026-09-21)
+
+The verified `HOSTILE_1` standard faction (ID 1) can identify a hostile companion even
+when the party table still contains the body during the script's short removal window. The existing `EnemyState.Faction` field is sufficient for a future
+promotion through the enemy channel, but that promotion is intentionally not enabled here.
+The receiver must first map the host object id to the retained local companion body and coordinate
+CombatController, PhantomHitHook, health/death, and materialisation ownership; a DriveOne-only
+mapping would show motion while still dropping or misattributing combat. No runtime faction
+filter or native write ships from this research pass.
+
+Unknown faction reads must retain conservative party exclusion. The unused classifier prototype
+was removed rather than shipping disconnected code. The complete handoff remains **NEEDS-LIVE**
+for the summit fight and the engine's timing between faction flip, roster removal, follow-state clearing, and
+owner-id translation in every combat path.
+
+The bounded implementation candidate is design 1 with a census-time faction read and a
+retained-body handoff. It remains staged until the full owner-id translation is proven. The following
+options remain as historical alternatives if the live summit pass exposes a timing or body-reuse
+problem:
 
 1. **Do nothing new for the fight, make the mirror release the flipped companions.** On the
    host, a companion whose faction has left `Player`/`Neutral` (read via `GetStandardFaction`,
@@ -138,8 +157,11 @@ Design, in increasing scope:
 1. Host-side faction watch on companions: `CSWVirtualMachineCommands::
    ExecuteCommandChangeToStandardFaction 0x0052F2F0` (routine 412; shares its handler with
    173 `ChangeFaction`) as a hook or a per-companion faction poll. Hook splice shape as
-   `RemovePartyMemberHook` (leviathan.md §5.3 #4). **M, RE-lite** (prologue verify).
-2. Wire: `PartyMemberState.Faction` or an enemy-channel promotion (design 1/2).
+   `RemovePartyMemberHook` (leviathan.md §5.3 #4). The proposed bounded path would avoid a hook by
+   reading faction at census/roster publication time; a hook remains unnecessary unless a live
+   pass shows that read window is too short. **M, RE-lite** (prologue verify).
+2. A new faction field is not required by the bounded enemy-channel promotion; the existing
+   `EnemyState.Faction` carries the verified value.
 3. Roster wire width for slots 15..19 (`PartyRoster.AvailableMask` is a `ushort`; the slots
    `AddAvailableNPCByTemplate` accepts are wider than 0..8). Not investigated whether
    `CSWPartyTable` has storage beyond `+0x30 int[9]` for them (the table layout in

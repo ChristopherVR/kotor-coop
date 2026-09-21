@@ -28,13 +28,21 @@ player boundary.
 
 ## Korriban start-cue research
 
-The Korriban resources do expose a narrower story cue, but it is not a safe substitute for a
+The Korriban resources do expose a narrower story cue, but it is not yet a safe substitute for a
 player pin read. `korr_m35aa.rim:m35aa.git` has a `TriggerList` entry whose
 `TemplateResRef` is `k35_init_duel` at the duel-room coordinates (185.303, 74.0769, 6.15).
 The compiled `k35_init_duel.ncs` is therefore the actual entry boundary: it is a trigger script,
 not an area OnEnter or a module transition. Its action stream resolves `kor35_sithduel` and
 `kor35_captive9`, then stages the duel conversation. The same GIT has a separate
 `k35_init_duelend` trigger for the exit boundary.
+
+The trigger fire alone does not prove that the duel branch ran. A fresh disassembly of the
+installed `k35_init_duel.ncs` (4,397 bytes) finds conditional jumps at byte offsets 3125 and
+3149 before the first `kor35_sithduel`/`kor35_captive9` resolutions at 3175 and 3220. Those
+guards include the script's entering-object/global state checks; the plugin has no verified
+read of the corresponding state. Treating every native `k35_init_duel` fire as a parking edge
+would therefore park on a false-positive trigger entry, so the runtime trigger consumer remains
+deferred until the guard is observed and mapped on the live game.
 
 The party-removal script is a later, script-level cue. `k_pkor_partyleav.ncs` writes the
 transient module globals `KOR_REMOVE_PCS` and `KOR_REMOVE_PC`, loops over active party slots,
@@ -48,7 +56,8 @@ This leaves two evidence-backed facts: the trigger volume is the real Korriban s
 and the removal loop is the real companion-strip boundary. The plugin has no verified, safe read
 of trigger overlap or a stable PC/local duel flag, so no Korriban position heuristic, global
 write, or speculative native trigger hook is added. With zero or one companion, Korriban remains
-NEEDS-LIVE for a future trigger observation that can be tied to the exact `k35_init_duel` event.
+NEEDS-LIVE for a future trigger observation that can be tied to the exact `k35_init_duel` event
+and its script guard state.
 
 `SoloSegmentCatalogue.BaseModules` now includes both modules. The regular roster-drop edge
 remains catalogue-gated, and `solo_segment_any_module` remains OFF by default. Existing
@@ -57,14 +66,13 @@ Star Forge and Leviathan handling is unchanged.
 ## Dark-side companion authority
 
 The summit resources independently establish `ChangeToStandardFaction(Jolee, HOSTILE_1 = 1)`
-and the matching Juhani call in `unk_m44ac/test3.ncs`. The pure faction rule treats known
-standard faction 1 as authoritative hostility even if the party table still contains the body
-during the script's short remove window. A complete runtime promotion remains staged: the
-receiver must map the host body to its retained local body across movement, health, death, and
-damage paths before the host can omit it from the companion channel. Unknown faction reads remain
+and the matching Juhani call in `unk_m44ac/test3.ncs`. This is a proposed authority signal only;
+no runtime faction classifier ships. A complete runtime promotion remains staged: the receiver
+must map the host body to its retained local body across movement, health, death, and damage
+paths before the host can omit it from the companion channel. Unknown faction reads remain
 conservatively party-owned.
 
 This is intentionally bounded. No VM hook, raw stats write, packet/shared-block layout change,
-or new party slot is introduced. The pure decision is covered by `PartyCensusRuleTests`; the
-retained-body receiver handoff is **NEEDS-LIVE** until the summit path confirms roster removal,
-follow-state clearing, and every owner-id combat translation together.
+or new party slot is introduced. No disconnected classifier ships; the retained-body receiver
+handoff is **NEEDS-LIVE** until the summit path confirms roster removal, follow-state clearing,
+and every owner-id combat translation together.

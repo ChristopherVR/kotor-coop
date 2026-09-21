@@ -313,3 +313,22 @@ Further validation: **67 persistence tests**, **119 control/inventory/mine tests
 passed 185 tests with one source-location fixture failure when binaries were placed outside the
 repository; the fixture now locates its source via `CallerFilePath`, and its mine suite passed
 in the later integrated run. The current native plugin builds as x86 with warnings as errors.
+
+### Recurring lag resolved; follow behaviour still open (2026-09-21)
+
+The native profiler isolated the recurring ~140–180 ms freezes to the health-scaling full-memory
+scan every 90 frames. It now uses the bounded live server object table. Both running instances
+have the reviewed build: simultaneous 20-second samples showed no gaps over 50 ms (largest
+sampled gap 22 ms on each), and the user confirmed the freezes are gone. The user's remaining
+Trask report is immediate/erratic following and incorrect running direction; that is still open.
+49 focused tests and the x86 warnings-as-errors build passed. Loading cleanup/initial spawning
+still has isolated hitches and is not covered by the steady-state improvement.
+
+A separate confirmed defect is now tracked: saved enemy HP can be scaled again on reload because
+the per-epoch latch is not persisted. A safe exact-save identity design is recorded in
+`research/player-count-scaling.md`; it is not implemented yet.
+
+The proposed Korriban entry-trigger shortcut was rejected after review: compiled script branches
+can skip the actual duel despite the trigger firing. Zero/one-companion parking remains open;
+`research/duel-rings.md` now records the conditional-script evidence. The unused dark-side
+classification prototype was removed; no runtime faction handoff is claimed.
