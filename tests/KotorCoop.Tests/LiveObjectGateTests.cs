@@ -317,4 +317,12 @@ public class LiveObjectGateTests
                 $"{state} renders {described.Length} chars: {described}");
         }
     }
+
+    [Fact]
+    public void PossessedItemRowsRequireTheNativeServerBody()
+    {
+        Assert.True(KotorGameBridge.IsLiveServerItem(true, (nint)0x1000, (nint)0x1000));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x1000, (nint)0x2000));
+        Assert.False(KotorGameBridge.IsLiveServerItem(false, (nint)0x1000, (nint)0x1000));
+    }
 }

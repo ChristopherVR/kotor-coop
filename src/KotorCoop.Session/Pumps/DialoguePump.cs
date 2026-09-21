@@ -557,8 +557,22 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             return DialogueGrantSampleResult.Deferred;
         }
 
+        // A missing native object array makes ReadPossessedItems intentionally return no
+        // rows. Preserve the dialogue baseline until the resolver is ready instead of
+        // treating that transient empty view as a reward/removal delta.
+        if (!bridge.IsItemResolverReady)
+        {
+            return DialogueGrantSampleResult.Deferred;
+        }
+
         items = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
             .Select(i => (i.Resref, i.Identity))];
+
+        if (!bridge.LastPossessedItemReadWasComplete)
+        {
+            items = [];
+            return DialogueGrantSampleResult.Deferred;
+        }
 
         if (bridge.TryReadCurrentModule(out string currentModule) && currentModule.Length > 0)
         {

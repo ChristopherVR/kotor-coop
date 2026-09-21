@@ -41,6 +41,9 @@ public sealed class ScriptItemGrantPumpTests
         /// the window right after a world edge where the item view has not yet stood still.</summary>
         public bool IsItemViewSettled { get; set; } = true;
 
+        public bool IsItemResolverReady { get; set; } = true;
+        public bool LastPossessedItemReadWasComplete { get; set; } = true;
+
         /// <summary>Whether <see cref="TryReadLocalState"/> succeeds — false stands in for the
         /// engine having no resolvable player (mid-load), the same read the agent retains its
         /// previous state across.</summary>
@@ -480,6 +483,35 @@ public sealed class ScriptItemGrantPumpTests
         agent.PumpOnce();
 
         Assert.Empty(session.PublishedGrants);
+    }
+
+    [Fact]
+    public void AnItemResolverDropDoesNotTurnRecoveryIntoAWholeInventoryGrant()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        agent.PumpOnce();
+
+        // The read races a torn-down server object array. The fake still exposes rows to make
+        // sure the completeness bit, rather than an accidental empty list, protects the old
+        // baseline.
+        // The pre-read check still says ready; the point-of-use read reports the race.
+        bridge.IsItemResolverReady = true;
+        bridge.LastPossessedItemReadWasComplete = false;
+        bridge.Possessed =
+        [
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_lghtsbr01", new ItemIdentity(2, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+        Assert.Empty(session.PublishedGrants);
+
+        // Once the resolver is stable, only the genuinely new item is reported, exactly once.
+        bridge.LastPossessedItemReadWasComplete = true;
+        agent.PumpOnce();
+        MaterialisedLootItem item = Assert.Single(Assert.Single(session.PublishedGrants).Items);
+        Assert.Equal("g_w_lghtsbr01", item.Resref);
     }
 
     /// <summary>The bridge's own between-lives verdict gates the same way, independently of

@@ -5,6 +5,15 @@ namespace KotorCoop.Memory;
 
 public interface IItemBridge
 {
+    /// <summary>Whether possessed-item reads can be trusted as a complete server-owned view.
+    /// A false result is a transient lifecycle state; consumers must retain their previous
+    /// baseline rather than interpreting an empty read as inventory removal.</summary>
+    bool IsItemResolverReady => true;
+
+    /// <summary>Whether the most recent possessed-item read was complete.  A resolver can
+    /// disappear between the pre-read readiness check and the scan itself.</summary>
+    bool LastPossessedItemReadWasComplete => true;
+
     /// <summary>
     /// Every item any of <paramref name="possessorIds"/> is carrying, by possessor plus resref
     /// plus full per-instance identity — the same sweep the <c>items</c>/<c>setitem</c> staging

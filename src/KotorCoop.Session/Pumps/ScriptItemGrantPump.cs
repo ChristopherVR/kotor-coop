@@ -116,6 +116,14 @@ internal sealed class ScriptItemGrantPump(
             return;
         }
 
+        // The native server object array is the completeness/liveness gate for the item scan.
+        // An unavailable array must not look like an empty inventory, or the next ready sample
+        // would publish the whole character as a fresh script grant.
+        if (!bridge.IsItemResolverReady)
+        {
+            return;
+        }
+
         long nowMs = Environment.TickCount64;
 
         // A reload of the same module is a new world with the same name (every id re-minted,
@@ -143,12 +151,17 @@ internal sealed class ScriptItemGrantPump(
         // edge (this method's own doc, the 2026-09-02 23:31 round) — an item that only just
         // finished being created belongs in the baseline, not in a diff.
         bool rebaselineOnly = !_hasBaseline || _wasOwnedByDialoguePump || !bridge.IsItemViewSettled;
-        _wasOwnedByDialoguePump = false;
 
         if (rebaselineOnly)
         {
-            _baseline = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+            List<(string Resref, ItemIdentity Identity)> candidate = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
                 .Select(i => (i.Resref, i.Identity))];
+            if (!bridge.LastPossessedItemReadWasComplete)
+            {
+                return;
+            }
+            _baseline = candidate;
+            _wasOwnedByDialoguePump = false;
             _hasBaseline = true;
             _lastSampleMs = nowMs;
             return;
@@ -159,10 +172,15 @@ internal sealed class ScriptItemGrantPump(
             return;
         }
 
-        _lastSampleMs = nowMs;
-
         List<(string Resref, ItemIdentity Identity)> current =
             [.. bridge.ReadPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
+
+        if (!bridge.LastPossessedItemReadWasComplete)
+        {
+            return;
+        }
+
+        _lastSampleMs = nowMs;
 
         ScriptItemGrantRule.Result result = ScriptItemGrantRule.Evaluate(
             _baseline, current, rebaselineOnly: false, suppression, nowMs);

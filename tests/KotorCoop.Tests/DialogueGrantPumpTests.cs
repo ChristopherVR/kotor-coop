@@ -19,6 +19,8 @@ public sealed class DialogueGrantPumpTests
         public int WorldEpoch { get; set; }
         public bool IsWorldBetweenLives { get; set; }
         public bool IsItemViewSettled { get; set; } = true;
+        public bool IsItemResolverReady { get; set; } = true;
+        public bool LastPossessedItemReadWasComplete { get; set; } = true;
         public bool InDialogue { get; set; }
         public int ReadItemsCalls { get; private set; }
         public Action? BeforeReadPossessedItems { get; set; }
@@ -137,6 +139,9 @@ public sealed class DialogueGrantPumpTests
     public void StableConversationCloseStillPublishesAReward()
     {
         (DialoguePump pump, Bridge bridge, Session session) = Build();
+        bridge.Possessed = [("g_w_shortswrd01", Identity(9))];
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All); // establish the old-world baseline
+        session.Grants.Clear();
         bridge.InDialogue = true;
         pump.PumpDialogue(State(bridge), SessionCapabilities.All);
 
@@ -147,6 +152,35 @@ public sealed class DialogueGrantPumpTests
 
         MaterialisedLootItem item = Assert.Single(Assert.Single(session.Grants).Items);
         Assert.Equal("g_w_lghtsbr01", item.Resref);
+    }
+
+    [Fact]
+    public void AnIncompletePossessedReadDoesNotBecomeADialogueRewardOnRecovery()
+    {
+        (DialoguePump pump, Bridge bridge, Session session) = Build();
+        bridge.Possessed = [("g_w_shortswrd01", Identity(9))];
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+        session.Grants.Clear();
+        bridge.InDialogue = true;
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+
+        bridge.InDialogue = false;
+        bridge.Possessed =
+        [
+            ("g_w_shortswrd01", Identity(9)),
+            ("g_w_lghtsbr01", Identity(1)),
+        ];
+        bridge.LastPossessedItemReadWasComplete = false;
+        Thread.Sleep(350);
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+        Assert.Empty(session.Grants);
+
+        bridge.LastPossessedItemReadWasComplete = true;
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+        Assert.Single(session.Grants);
+        IReadOnlyList<MaterialisedLootItem> recovered = session.Grants[0].Items;
+        Assert.Single(recovered);
+        Assert.Equal("g_w_lghtsbr01", recovered[0].Resref);
     }
 
     [Fact]

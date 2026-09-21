@@ -7,6 +7,12 @@ namespace KotorCoop.Memory;
 
 public sealed partial class KotorGameBridge
 {
+    /// <summary>Point-of-use liveness gate for a scan row.  A vtable hit can be a freed heap
+    /// body whose old id/tag bytes have not been overwritten yet; the server object array is
+    /// the engine's authoritative id-to-body map.</summary>
+    internal static bool IsLiveServerItem(bool serverArrayResolved, nint scannedAddress, nint serverAddress) =>
+        serverArrayResolved && scannedAddress != 0 && scannedAddress == serverAddress;
+
     /// <summary>CSWSItem vtable; every 4-byte occurrence in private memory is an item.</summary>
     private const uint ItemVtable = ItemIdentityLayout.ItemVtable;
 
@@ -94,6 +100,10 @@ public sealed partial class KotorGameBridge
     /// <summary>Whether the sweep the caches hold was taken between lives — see the rule's
     /// own doc for the rejoin that published the client's own sword as a script grant.</summary>
     private readonly ItemSweepProvenanceRule _itemSweepProvenance = new();
+
+    public bool IsItemResolverReady => EngineGlobals.TryGetServerObjectArray(_memory, out _);
+
+    public bool LastPossessedItemReadWasComplete { get; private set; } = true;
 
     /// <summary>What the last sweep found, as <see cref="ItemSweepProvenanceRule.Fingerprint"/>s
     /// (id + possessor + whether the tag read) — the set two settle sweeps must agree on. Rebuilt
@@ -674,8 +684,11 @@ public sealed partial class KotorGameBridge
     {
         if (possessorIds.Count == 0)
         {
+            LastPossessedItemReadWasComplete = true;
             return [];
         }
+
+        LastPossessedItemReadWasComplete = false;
 
         List<(uint, string, ItemIdentity)> result = [];
 
@@ -687,11 +700,33 @@ public sealed partial class KotorGameBridge
         // host re-grant its whole pool to the peer (see TryReadPartyPoolItemIds' remarks).
         HashSet<uint>? poolIds = possessorIds.Contains(CheatKinds.LocalPlayerTarget) ? TryReadPartyPoolItemIds() : null;
 
+        // Keep the expensive scan cache for diagnostics (`items` must continue to show ghosts),
+        // but only publish rows that the native server object array still owns.  Resolve the
+        // array once per read and do one bounded bucket lookup per candidate; this avoids a
+        // second full-memory scan and closes the gap between a cached vtable hit and its use.
+        bool serverArrayResolved = EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray);
+
         // force: false — this runs on the agent's pump thread, between two position writes.
         // See ListItems(bool)'s own remarks for the measured cost of the sweep this declines
         // to trigger.
         foreach (ItemListing item in ListItems(force: false))
         {
+            // Apply the cheap ownership filter before the native liveness lookup.  Most of the
+            // scan is NPC/party inventory and cannot enter this result anyway.
+            if (!possessorIds.Contains(item.Possessor)
+                && (poolIds is null || !poolIds.Contains(item.ObjectId)))
+            {
+                continue;
+            }
+
+            if (!serverArrayResolved
+                || !_itemAddresses.TryGetValue(item.ObjectId, out nint scannedAddress)
+                || !EngineGlobals.TryResolveServerObject(_memory, objectArray, item.ObjectId, out nint serverAddress)
+                || !IsLiveServerItem(serverArrayResolved, scannedAddress, serverAddress))
+            {
+                continue;
+            }
+
             if (possessorIds.Contains(item.Possessor))
             {
                 result.Add((item.Possessor, item.Resref, item.Identity));
@@ -701,6 +736,12 @@ public sealed partial class KotorGameBridge
                 result.Add((CheatKinds.LocalPlayerTarget, item.Resref, item.Identity));
             }
         }
+
+        // The array may have been torn down after the initial pointer read.  Treat that sample
+        // as incomplete so callers retain their baseline and retry after the world is ready.
+        LastPossessedItemReadWasComplete = serverArrayResolved
+            && EngineGlobals.TryGetServerObjectArray(_memory, out nint finalArray)
+            && finalArray == objectArray;
 
         return result;
     }
