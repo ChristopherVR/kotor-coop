@@ -906,6 +906,116 @@ public class TravelPumpTests
         Assert.Equal("STUNT_44", bridge.Requests[1].Module);
     }
 
+    /// <summary>A later branch can announce the same stunt room again. The transition serial
+    /// is the authoritative identity;
+    /// a five-minute module-name cache must not discard the newer announcement after the
+    /// first leg has completed.</summary>
+    [Fact]
+    public void AfterLandingTheSameStuntLegWithANewSerialIsReplayedAgain()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_50a"));
+        agent.PumpOnce();
+        Assert.Single(bridge.Requests);
+
+        bridge.Local = At("STUNT_50a");
+        agent.PumpOnce();
+        bridge.Local = At("sta_m45ac");
+        session.Peers.Add(HostPeer("sta_m45ac"));
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(Announce(2, "STUNT_50a"));
+        agent.PumpOnce();
+
+        Assert.Equal(2, bridge.Requests.Count);
+        Assert.Equal("STUNT_50a", bridge.Requests[1].Module);
+    }
+
+    /// <summary>Serial de-duplication still rejects a retransmission of the completed leg;
+    /// only a newer authoritative announcement reopens the same stunt module.</summary>
+    [Fact]
+    public void AfterLandingTheSameStuntLegWithTheSameSerialIsNotReplayed()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, combatPumpMs: 0, followStunt: true);
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_50a"));
+        agent.PumpOnce();
+        bridge.Local = At("STUNT_50a");
+        agent.PumpOnce();
+        bridge.Local = At("sta_m45ac");
+        session.Peers.Add(HostPeer("sta_m45ac"));
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(Announce(1, "STUNT_50a"));
+        agent.PumpOnce();
+
+        Assert.Single(bridge.Requests);
+    }
+
+    /// <summary>Under lead-swap the host can finish its own STUNT chain before a slower client
+    /// republishes that chain. Fresh serials from that still-running peer are stale by leg
+    /// ownership and must not pull the host back into STUNT_50a or STUNT_51a.</summary>
+    [Fact]
+    public void HostDoesNotReplayLateFreshSerialsFromASlowerPeerAfterItsOwnLegLands()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0,
+                followStunt: true);
+        session.EnemyAuthority = true;
+        session.Peers.Add(ClientPeer(ClientPeerId, "slow", "STUNT_50a"));
+
+        bridge.Local = At("STUNT_50a");
+        agent.PumpOnce();
+        bridge.Local = At("sta_m45ac");
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "STUNT_50a"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests);
+
+        // An unreadable transition sample must not erase the preceding STUNT observation.
+        session.Peers.Clear();
+        session.Peers.Add(ClientPeer(ClientPeerId, "slow", ""));
+        agent.PumpOnce();
+
+        // A state edge, rather than a single ordinary snapshot, proves the slower peer has
+        // exited the preceding leg. Its next fresh serial is a genuinely new leg and is then
+        // accepted.
+        session.Peers.Clear();
+        session.Peers.Add(ClientPeer(ClientPeerId, "slow", ClientModule));
+        agent.PumpOnce();
+        session.IncomingAnnounces.Add(ClientAnnounce(2, "STUNT_51a"));
+        agent.PumpOnce();
+
+        Assert.Equal("STUNT_51a", Assert.Single(bridge.Requests).Module);
+    }
+
+    [Fact]
+    public void APeerThatLandsBeforeTheHostCanAnnounceItsNextStuntLeg()
+    {
+        (CoopAgent agent, TravelBridge bridge, StubSession session) =
+            Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0,
+                followStunt: true);
+        session.EnemyAuthority = true;
+        session.Peers.Add(ClientPeer(ClientPeerId, "fast", "STUNT_50a"));
+
+        bridge.Local = At("STUNT_50a");
+        agent.PumpOnce();
+        session.Peers.Clear();
+        session.Peers.Add(ClientPeer(ClientPeerId, "fast", ClientModule));
+        agent.PumpOnce(); // the peer's landing is observed while the host is still in STUNT
+        bridge.Local = At("sta_m45ac");
+        agent.PumpOnce();
+
+        session.IncomingAnnounces.Add(ClientAnnounce(1, "STUNT_51a"));
+        agent.PumpOnce();
+
+        Assert.Equal("STUNT_51a", Assert.Single(bridge.Requests).Module);
+    }
+
     /// <summary>Every hop after the first plays its movie from THIS engine's own scripts, so
     /// the leader's copies announced during the leg are dropped rather than hoarded — a later,
     /// unrelated door follow must not carry 01f along.</summary>

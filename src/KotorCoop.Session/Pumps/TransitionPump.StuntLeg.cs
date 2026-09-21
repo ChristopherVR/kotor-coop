@@ -44,14 +44,22 @@ internal sealed partial class TransitionPump
     /// moment this engine is back in an ordinary module.</summary>
     private string _stuntLegGaveUpOn = string.Empty;
 
-    /// <summary>
-    /// Stunt modules this engine has been through recently (replayed, announced by its own
-    /// engine, or observed locally) and when — the per-leg de-dup. A stunt announce naming one
-    /// of these inside <see cref="StuntLegFollowRule.HopWindowMs"/> is dropped: it is either the
-    /// echo of our own replay warp coming back off a peer (the plugin announces every co-op
-    /// warp) or a hop of a chain this engine already ran itself.
-    /// </summary>
-    private readonly Dictionary<string, long> _stuntModulesRecentlyThrough = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The peer whose committed announce started the active leg. Retained when the
+    /// leg lands so a slower peer's replay can be identified without suppressing a genuinely
+    /// newer announce from that same authoritative peer.</summary>
+    private uint _stuntLegOriginPeerId;
+
+    /// <summary>Origin and time of the most recent leg that completed in an ordinary module.
+    /// The peer sets below are based on observed transitions, rather than a single remote-module
+    /// snapshot: a stale ordinary snapshot is not proof that a peer finished its copy.</summary>
+    private uint _lastCompletedStuntLegOriginPeerId;
+    private long _lastCompletedStuntLegAtMs = long.MinValue;
+    private readonly HashSet<uint> _stuntLegPeers = [];
+    private readonly HashSet<uint> _stuntLegPeersLanded = [];
+    private readonly HashSet<uint> _completedStuntLegPeers = [];
+    private readonly HashSet<uint> _completedStuntLegPeersLanded = [];
+    private readonly Dictionary<uint, string> _lastObservedPeerModules = [];
+    private bool _stuntLegCompletedThisTick;
 
     /// <summary>The stunt module the slow path last refused, so the refusal logs once per leg
     /// rather than at the follow cadence.</summary>
@@ -71,8 +79,6 @@ internal sealed partial class TransitionPump
 
         if (StuntModuleRule.IsStuntModule(module))
         {
-            _stuntModulesRecentlyThrough[module] = now;
-
             if (string.Equals(module, _stuntLegGaveUpOn, StringComparison.OrdinalIgnoreCase))
             {
                 // The hop overran its window and the follows were released; do not re-arm the
@@ -82,7 +88,6 @@ internal sealed partial class TransitionPump
 
             bool newHop = !_stuntLegActive
                 || !_stuntLegSawStuntLocally
-                || !_stuntModulesRecentlyThrough.ContainsKey(module)
                 || !string.Equals(module, _stuntLegCurrentModule, StringComparison.OrdinalIgnoreCase);
 
             if (!_stuntLegActive)
@@ -92,6 +97,11 @@ internal sealed partial class TransitionPump
                 // our own leg — nothing good ever comes from being warped OUT of a cutscene
                 // module mid-scene, and its scripts exit by themselves.
                 _stuntLegActive = true;
+                _stuntLegOriginPeerId = session.LocalPeerId;
+                _stuntLegPeers.Add(session.LocalPeerId);
+                _completedStuntLegPeers.Clear();
+                _completedStuntLegPeersLanded.Clear();
+                _stuntLegPeersLanded.Clear();
                 log($"stunt leg: in '{module}' - holding every follow until its scripts exit "
                     + $"(hop window {StuntLegFollowRule.HopWindowMs / 1000} s)");
             }
@@ -136,6 +146,23 @@ internal sealed partial class TransitionPump
         if (_stuntLegSawStuntLocally)
         {
             log($"stunt leg: over - landed in '{module}'; the ordinary follow rules apply again");
+            _lastCompletedStuntLegOriginPeerId = _stuntLegOriginPeerId;
+            _lastCompletedStuntLegAtMs = now;
+            _completedStuntLegPeers.Clear();
+            foreach (uint peerId in _stuntLegPeers)
+            {
+                _completedStuntLegPeers.Add(peerId);
+            }
+
+            _completedStuntLegPeersLanded.Clear();
+            foreach (uint peerId in _stuntLegPeersLanded)
+            {
+                _completedStuntLegPeersLanded.Add(peerId);
+            }
+
+            _stuntLegPeers.Clear();
+            _stuntLegPeersLanded.Clear();
+            _stuntLegCompletedThisTick = true;
             _stuntLegActive = false;
             _stuntLegSawStuntLocally = false;
             return;
@@ -152,10 +179,9 @@ internal sealed partial class TransitionPump
     /// <summary>Marks the start of a leg this engine is about to run (a replay just requested,
     /// or our own engine's announce into a stunt module) so echoes and later hops are dropped
     /// from the first tick, before the local module has any chance to read as stunt.</summary>
-    private void BeginStuntLeg(string module)
+    private void BeginStuntLeg(uint originPeerId)
     {
         long now = SessionClock.NowMs;
-        _stuntModulesRecentlyThrough[module] = now;
 
         if (_stuntLegActive)
         {
@@ -163,8 +189,89 @@ internal sealed partial class TransitionPump
         }
 
         _stuntLegActive = true;
+        _stuntLegOriginPeerId = originPeerId;
+        _stuntLegPeers.Clear();
+        _stuntLegPeers.Add(originPeerId);
+        _completedStuntLegPeers.Clear();
+        _completedStuntLegPeersLanded.Clear();
+        _stuntLegPeersLanded.Clear();
         _stuntLegSawStuntLocally = false;
         _stuntLegHopStartedAtMs = now;
+    }
+
+    /// <summary>Records the remote state transitions needed to distinguish a peer that is
+    /// still replaying the preceding leg from one that has actually landed and can announce a
+    /// new leg. The caller samples once before and once after local observation so a peer's
+    /// STUNT-&gt;ordinary edge on the same tick as our landing is credited to the completed leg.</summary>
+    private void ObserveStuntPeers(IReadOnlyList<RemotePeer> peers, bool wasActive, bool updatePrevious)
+    {
+        for (int i = 0; i < peers.Count; i++)
+        {
+            RemotePeer peer = peers[i];
+            string module = peer.State.Module;
+            bool inStunt = StuntModuleRule.IsStuntModule(module);
+
+            if (wasActive && inStunt)
+            {
+                if (_stuntLegCompletedThisTick)
+                {
+                    _completedStuntLegPeers.Add(peer.PeerId);
+                }
+                else
+                {
+                    _stuntLegPeers.Add(peer.PeerId);
+                }
+            }
+
+            bool ordinaryLoaded = module.Length > 0
+                && !ModuleNameGuard.IsFallbackModuleName(module)
+                && !inStunt;
+            bool landed = _lastObservedPeerModules.TryGetValue(peer.PeerId, out string? previous)
+                && StuntModuleRule.IsStuntModule(previous)
+                && ordinaryLoaded;
+
+            if (landed && wasActive)
+            {
+                _stuntLegPeersLanded.Add(peer.PeerId);
+            }
+
+            if (landed && _completedStuntLegPeers.Contains(peer.PeerId))
+            {
+                _completedStuntLegPeersLanded.Add(peer.PeerId);
+            }
+
+            if (updatePrevious && (inStunt || ordinaryLoaded))
+            {
+                _lastObservedPeerModules[peer.PeerId] = module;
+            }
+        }
+    }
+
+    private void NoteStuntLegPeer(uint peerId)
+    {
+        if (_stuntLegActive)
+        {
+            _stuntLegPeers.Add(peerId);
+        }
+    }
+
+    private bool IsLatePeerReplayOfCompletedLeg(
+        in PendingHostAnnounce announce, in PlayerState local, long now)
+    {
+        if (!StuntModuleRule.IsStuntModule(announce.Module)
+            || _lastCompletedStuntLegOriginPeerId == 0
+            || announce.PeerId == _lastCompletedStuntLegOriginPeerId
+            || now - _lastCompletedStuntLegAtMs > StuntLegFollowRule.HopWindowMs
+            || StuntModuleRule.IsStuntModule(local.Module))
+        {
+            return false;
+        }
+
+        // A peer observed in the preceding leg must first be observed landing in an ordinary
+        // module during or after our own leg. Its current module alone is not enough: a stale
+        // ordinary packet and a still-running STUNT packet are both possible during a race.
+        return _completedStuntLegPeers.Contains(announce.PeerId)
+            && !_completedStuntLegPeersLanded.Contains(announce.PeerId);
     }
 
     /// <summary>
@@ -184,15 +291,10 @@ internal sealed partial class TransitionPump
             return;
         }
 
-        _stuntModulesRecentlyThrough[held.Module] = SessionClock.NowMs;
         log($"{AnnouncerLabel(held, peers)}'s announce into '{held.Module}' arrived while this engine is inside "
             + "its own stunt leg - a later hop of the same chain, not replayed");
         _pendingAnnounce = null;
     }
-
-    private bool RecentlyThroughStuntModule(string module, long now) =>
-        _stuntModulesRecentlyThrough.TryGetValue(module, out long at)
-        && now - at <= StuntLegFollowRule.HopWindowMs;
 
     /// <summary>
     /// The fast path's stunt branch: an eligible leader announced a transition INTO a stunt
@@ -221,7 +323,8 @@ internal sealed partial class TransitionPump
             || InGalaxyLeg
             || _pendingGalaxyDeparture is not null
             || _galaxyReplayInFlight
-            || RecentlyThroughStuntModule(announce.Module, now);
+            || string.Equals(_stuntLegGaveUpOn, announce.Module, StringComparison.OrdinalIgnoreCase)
+            || IsLatePeerReplayOfCompletedLeg(announce, local, now);
 
         // leaderInitiated is true by construction here: the announce channel only carries a
         // transition the announcer's OWN engine committed to, and LeadFollowRule.IsEligibleLeader
@@ -289,7 +392,7 @@ internal sealed partial class TransitionPump
         _pendingFollowMovies.Clear();
         _pendingFollowMoviesSawHostAway = false;
         _pendingAnnounce = null;
-        BeginStuntLeg(announce.Module);
+        BeginStuntLeg(announce.PeerId);
 
         log($"replaying {leader}'s scripted leg into '{announce.Module}'"
             + (announce.Waypoint.Length > 0 ? $" at waypoint '{announce.Waypoint}'" : string.Empty)

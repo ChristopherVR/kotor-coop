@@ -53,7 +53,11 @@ internal sealed partial class TransitionPump
 
         // Every tick, ahead of every early return: which stunt modules this engine is passing
         // through, and whether the leg it is running is over (TransitionPump.StuntLeg.cs).
+        bool wasStuntLegActive = _stuntLegActive;
+        _stuntLegCompletedThisTick = false;
+        ObserveStuntPeers(peers, wasStuntLegActive, updatePrevious: false);
         ObserveStuntLeg(local);
+        ObserveStuntPeers(peers, wasStuntLegActive, updatePrevious: true);
 
         if (!settings.FollowHostModule
             || !bridge.SupportsTravel

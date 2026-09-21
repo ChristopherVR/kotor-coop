@@ -85,7 +85,7 @@ internal sealed partial class TransitionPump
                 // naming the same module is an echo, not a lead. See TransitionPump.StuntLeg.cs.
                 if (StuntModuleRule.IsStuntModule(module))
                 {
-                    BeginStuntLeg(module);
+                    BeginStuntLeg(session.LocalPeerId);
                 }
             }
 
@@ -125,6 +125,11 @@ internal sealed partial class TransitionPump
             if (!LeadFollowRule.IsEligibleLeader(weAreHost, announcerIsHost, settings.FollowLeadMode))
             {
                 continue;
+            }
+
+            if (StuntModuleRule.IsStuntModule(packet.Module))
+            {
+                NoteStuntLegPeer(packet.PeerId);
             }
 
             _pendingAnnounce = new PendingHostAnnounce(
