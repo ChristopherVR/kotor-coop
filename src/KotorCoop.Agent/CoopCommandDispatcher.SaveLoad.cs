@@ -101,7 +101,8 @@ public sealed partial class CoopCommandDispatcher
 
         try
         {
-            return File.GetLastWriteTimeUtc(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            FileInfo save = new(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            return save.Exists && save.Length != 0 ? save.LastWriteTimeUtc : DateTime.MinValue;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
@@ -128,8 +129,9 @@ public sealed partial class CoopCommandDispatcher
         if (_captureRequestedMs != 0)
         {
             string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-            bool landed = CharacterCaptureCadenceRule.SaveLanded(
+            bool changed = CharacterCaptureCadenceRule.SaveLanded(
                 _captureSourceBefore, _captureStampBefore, sourceNow, SaveStamp(sourceNow));
+            bool landed = changed && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
 
             if (!landed && !CharacterCaptureCadenceRule.WaitExpired(_captureRequestedMs, nowMs))
             {
@@ -944,9 +946,9 @@ public sealed partial class CoopCommandDispatcher
         // not SendCheat's queue — the session is being torn down and there is no next tick to
         // drain a queue on. Bounded: CSWSPlayer::GetIsAllowedToSave refuses silently, so after
         // SaveWaitMs the newest existing save is captured exactly as before.
+        DateTime stampBefore = SaveStamp(currentSave);
         if (bridge.SupportsCheats && bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
         {
-            DateTime stampBefore = SaveStamp(currentSave);
             long requestedMs = SessionClock.NowMs;
             bool landed = false;
 
@@ -955,7 +957,8 @@ public sealed partial class CoopCommandDispatcher
                 Thread.Sleep(100);
 
                 string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-                if (CharacterCaptureCadenceRule.SaveLanded(currentSave, stampBefore, sourceNow, SaveStamp(sourceNow)))
+                bool changed = CharacterCaptureCadenceRule.SaveLanded(currentSave, stampBefore, sourceNow, SaveStamp(sourceNow));
+                if (changed && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow))
                 {
                     currentSave = sourceNow;
                     landed = true;

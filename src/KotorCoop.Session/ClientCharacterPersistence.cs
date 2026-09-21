@@ -116,11 +116,46 @@ public static class ClientCharacterPersistence
     /// </summary>
     public static string? FindCaptureSource(string savesDirectory)
     {
+        return EnumerateCaptureSources(savesDirectory).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Returns whether the save archive is complete enough for character extraction.  The
+    /// engine exposes a directory as soon as it starts writing a quicksave, so existence and
+    /// mtime alone are not a commit indication.  Keep this check separate from
+    /// <see cref="FindCaptureSource"/>: ordinary save identity polling must remain cheap, while
+    /// the bounded post-quicksave wait can afford to parse the candidate it is about to capture.
+    /// </summary>
+    public static bool IsCaptureSourceReady(string? saveDirectory)
+    {
+        if (string.IsNullOrEmpty(saveDirectory))
+        {
+            return false;
+        }
+
+        try
+        {
+            FileInfo save = new(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            if (!save.Exists || save.Length == 0)
+            {
+                return false;
+            }
+
+            return PlayerIfo.TryExtractPlayer(saveDirectory, out _, out _);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateCaptureSources(string savesDirectory)
+    {
         try
         {
             if (!Directory.Exists(savesDirectory))
             {
-                return null;
+                return [];
             }
 
             return new DirectoryInfo(savesDirectory)
@@ -129,11 +164,12 @@ public static class ClientCharacterPersistence
                 .Where(f => f.Exists)
                 .OrderByDescending(f => f.LastWriteTimeUtc)
                 .Select(f => f.DirectoryName!)
-                .FirstOrDefault(d => !StagedSave.IsStagedCopy(savesDirectory, d));
+                .Where(d => !StagedSave.IsStagedCopy(savesDirectory, d))
+                .ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            return null;
+            return [];
         }
     }
 
@@ -144,8 +180,21 @@ public static class ClientCharacterPersistence
     /// again immediately before extraction. Keep the observed source as a teardown fallback
     /// when the save tree disappears between the two reads.
     /// </summary>
-    public static string? RefreshCaptureSource(string savesDirectory, string? observedSource) =>
-        FindCaptureSource(savesDirectory) ?? observedSource;
+    public static string? RefreshCaptureSource(string savesDirectory, string? observedSource)
+    {
+        // Walk all candidates, not just the newest one: while the engine is replacing
+        // QUICKSAVE, its new archive can be visible with a newer mtime before it is parseable.
+        // In that interval the last complete candidate is the only safe teardown fallback.
+        foreach (string candidate in EnumerateCaptureSources(savesDirectory))
+        {
+            if (IsCaptureSourceReady(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return IsCaptureSourceReady(observedSource) ? observedSource : null;
+    }
 
     /// <summary>
     /// Extracts the player out of <paramref name="saveDirectory"/> — this install's own,

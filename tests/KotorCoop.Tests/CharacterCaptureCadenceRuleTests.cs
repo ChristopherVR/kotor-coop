@@ -40,13 +40,14 @@ public class CharacterCaptureCadenceRuleTests
     }
 
     [Fact]
-    public void ASaveLandedWhenTheNewestDirectoryChangesOrIsRewritten()
+    public void ASaveLandedRequiresNewerArchiveContentsEvenWhenTheDirectoryChanges()
     {
         DateTime t = new(2026, 9, 18, 12, 0, 0, DateTimeKind.Utc);
 
         Assert.False(CharacterCaptureCadenceRule.SaveLanded("a", t, "a", t));
         Assert.True(CharacterCaptureCadenceRule.SaveLanded("a", t, "a", t.AddSeconds(2)));
-        Assert.True(CharacterCaptureCadenceRule.SaveLanded("a", t, "b", t));
+        Assert.False(CharacterCaptureCadenceRule.SaveLanded("a", t, "b", t));
+        Assert.True(CharacterCaptureCadenceRule.SaveLanded("a", t, "b", t.AddSeconds(2)));
         Assert.False(CharacterCaptureCadenceRule.SaveLanded("a", t, null, t));
     }
 

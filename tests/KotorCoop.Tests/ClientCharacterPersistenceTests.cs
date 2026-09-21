@@ -309,6 +309,33 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void CaptureBoundaryIgnoresAVisibleButIncompleteNewestSave()
+    {
+        string saves = TempDirectory();
+        string old = BuildSaveIn(saves, "000002 - Game1", "end_m01aa", 0x11, "Trask Ulgo");
+        string quick = Path.Combine(saves, "000000 - QUICKSAVE");
+        Directory.CreateDirectory(quick);
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"), [0x45, 0x52, 0x46]);
+
+        DateTime baseline = DateTime.UtcNow.AddMinutes(-10);
+        File.SetLastWriteTimeUtc(Path.Combine(old, "SAVEGAME.sav"), baseline);
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), baseline.AddMinutes(1));
+
+        // The directory resolver sees the newest file immediately, but the archive is still
+        // an incomplete engine write. A capture boundary must retain the last parseable save.
+        Assert.Equal(quick, ClientCharacterPersistence.FindCaptureSource(saves));
+        Assert.False(ClientCharacterPersistence.IsCaptureSourceReady(quick));
+        Assert.Equal(old, ClientCharacterPersistence.RefreshCaptureSource(saves, old));
+
+        Directory.Delete(quick, recursive: true);
+        BuildSaveIn(saves, "000000 - QUICKSAVE", "end_m01ab", 0x12, "Trask Ulgo");
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), baseline.AddMinutes(2));
+
+        Assert.True(ClientCharacterPersistence.IsCaptureSourceReady(quick));
+        Assert.Equal(quick, ClientCharacterPersistence.RefreshCaptureSource(saves, old));
+    }
+
+    [Fact]
     public void TheAutosaveSlotsContentTellsAStagedCopyApartWithoutAMarker()
     {
         // An install upgraded mid-life: the previous session staged the host's world before

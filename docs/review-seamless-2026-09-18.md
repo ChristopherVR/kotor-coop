@@ -432,12 +432,38 @@ distinct live creature remains protected. The duplicate case was observed after 
 rejoin left Trask in slots 0 and 1 with count 1. **95 focused control/count/follow tests** and
 the x86 warnings-as-errors build pass. The first guarded retry deferred control until the
 client PC existed and restored it without crashing; the duplicate-slot extension still
-requires the next restart. This does not close every rejoin path or the visual follow report.
+needed a restart at that point. Both installations now include it; its exact duplicate-slot
+case is regression-tested, while the final live run used the existing-PC rotation path.
+This does not close every rejoin path or the visual follow report. Native changes are committed
+in `4f5ddc2`.
 
-The live retry also exposed two managed lifecycle issues under investigation: quicksave
-readiness could be reported while `SAVEGAME.sav` was being replaced, and the agent's own
-adoption load could trigger a redundant `OwnLoad` rejoin. Fresh named saves and full backups
-were retained before restarting either game.
+The live retry also exposed two managed lifecycle issues, now corrected:
+
+- Quicksave readiness could be reported while `SAVEGAME.sav` was being replaced: the temporary
+  disappearance exposed an older named save, and a changed path incorrectly counted as a
+  completed save. Readiness now requires a newer archive timestamp plus successful character
+  extraction. The baseline is sampled before requesting the save; final capture skips incomplete
+  archives and retains a complete fallback.
+- Load completion accepted any nonzero acknowledgement, including the previous request's
+  success. The agent reconnected before the new world finished loading, then classified its own
+  adoption as another `OwnLoad`. Completion now requires the current request's acknowledgement,
+  with a second serial read rejecting a changed request during polling. No timed suppression of
+  genuine player loads was added.
+
+**Final live retry, 23:56:** quicksave readiness took 224 ms and selected the new quicksave.
+Load request 2 was sent at 23:56:07; the plugin reported the world on screen at 23:56:10.708;
+the agent rejoined at 23:56:11. Exactly one automatic rejoin occurred. `resolve party` at
+23:56:24 showed PC `0x7FFFFFFE` and its valid client body in member 0, with the stale third
+entry outside the live count. The engine wrote `kcoop_rejoinverified`; extraction from its
+active TAR module preserved XP 7,320,369, max HP 9, and `Min1HP=0`. **98 combined lifecycle,
+adoption, capture, digest and recovery tests** passed with warnings as errors. Fresh named saves
+and full backups were retained before restarting either game.
+Independent read-back confirmed the entire Pazaak collection and empty ten-card side deck
+match `kcoop_currentverify`, including the extra card at index 13. Both processes remained
+connected through the subsequent observation window, without a second rejoin; settled
+10-second native frame samples reported no frames over 33 ms on either instance. This does
+not include load-time hitches or constitute a long-session soak. Final independent code review
+found no further material issues in this change group.
 
 Saved-module compatibility now distinguishes unvisited modules from unreadable or ambiguous
 saved state. A present nested module with missing GIT, malformed data, or duplicate members

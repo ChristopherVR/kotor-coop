@@ -29,4 +29,16 @@ public class PluginMenuLoaderInFlightTests
     {
         Assert.False(PluginMenuLoader.IsLoadInFlight(requestedSerial: 0, appliedSerial: 0));
     }
+
+    [Fact]
+    public void PreviousAppliedSerialCannotAcknowledgeANewRequest()
+    {
+        Assert.False(PluginMenuLoader.IsLoadAcknowledged(requestedSerial: 2, appliedSerial: 1));
+        Assert.True(PluginMenuLoader.IsLoadAcknowledged(requestedSerial: 2, appliedSerial: 2));
+        Assert.False(PluginMenuLoader.IsLoadAcknowledged(requestedSerial: 0, appliedSerial: 0));
+        Assert.False(PluginMenuLoader.IsLoadAcknowledged(
+            requestedSerialBefore: 2, requestedSerialAfter: 3, appliedSerial: 2));
+        Assert.True(PluginMenuLoader.IsLoadAcknowledged(
+            requestedSerialBefore: 2, requestedSerialAfter: 2, appliedSerial: 2));
+    }
 }

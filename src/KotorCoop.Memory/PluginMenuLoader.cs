@@ -324,14 +324,52 @@ public static class PluginMenuLoader
     public static bool IsLoadInFlight(uint requestedSerial, uint appliedSerial) =>
         requestedSerial != appliedSerial;
 
-    /// <summary>Reads back the plugin's ack and failure code for the last request.</summary>
+    /// <summary>
+    /// Reads back the plugin's ack and failure code for the last request.  The applied field
+    /// is cumulative across requests, so a fresh request can briefly expose the previous
+    /// nonzero applied value while the engine is still on the old world.  Return a result only
+    /// when the applied serial acknowledges the CURRENT request; otherwise expose zero so
+    /// callers cannot mistake a stale success for a new settled load.
+    /// </summary>
     public static bool TryReadStatus(ProcessMemory memory, nint block, out uint applied, out int status)
     {
         applied = 0;
         status = 0;
-        return memory.TryReadUInt32(block + BlockMenuLoadApplied, out applied)
-            && memory.TryReadInt32(block + BlockMenuLoadStatus, out status);
+        if (!memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint requested)
+            || !memory.TryReadUInt32(block + BlockMenuLoadApplied, out uint observedApplied)
+            || !memory.TryReadInt32(block + BlockMenuLoadStatus, out int observedStatus))
+        {
+            return false;
+        }
+
+        // A request can be issued on the dispatcher task while this poll runs. Re-read
+        // the serial after the payload so a previous applied value cannot pair with the
+        // request serial captured before the new request was written.
+        if (!memory.TryReadUInt32(block + BlockMenuLoadSerial, out uint requestedAfter)
+            || !IsLoadAcknowledged(requested, requestedAfter, observedApplied))
+        {
+            return true;
+        }
+
+        applied = observedApplied;
+        status = observedStatus;
+        return true;
     }
+
+    /// <summary>True only when a nonzero request serial has been acknowledged by the plugin.
+    /// Equality is required because the applied field retains the previous request's serial
+    /// while a new load is still being serviced.</summary>
+    public static bool IsLoadAcknowledged(uint requestedSerial, uint appliedSerial) =>
+        requestedSerial != 0 && requestedSerial == appliedSerial;
+
+    /// <summary>Snapshot-safe form used when request and status fields are read separately:
+    /// both request reads must agree before the applied serial can acknowledge the request.</summary>
+    public static bool IsLoadAcknowledged(
+        uint requestedSerialBefore,
+        uint requestedSerialAfter,
+        uint appliedSerial) =>
+        requestedSerialBefore == requestedSerialAfter
+        && IsLoadAcknowledged(requestedSerialAfter, appliedSerial);
 
     /// <summary>
     /// Finds the plugin's shared block, proving it live before handing it back.

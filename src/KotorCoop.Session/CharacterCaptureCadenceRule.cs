@@ -44,12 +44,13 @@ public static class CharacterCaptureCadenceRule
         return nowMs - lastCaptureMs >= intervalMinutes * 60_000L;
     }
 
-    /// <summary>The engine wrote a save since the request: a different newest directory, or the
-    /// same one with newer contents.</summary>
+    /// <summary>The requested archive's <c>SAVEGAME.sav</c> became newer than the baseline
+    /// captured before the request. A directory change alone is not evidence: if a transient
+    /// quicksave directory disappears, the resolver can briefly return an older named save.</summary>
     public static bool SaveLanded(
         string? sourceBefore, DateTime stampBefore, string? sourceNow, DateTime stampNow) =>
         sourceNow is not null
-        && (!string.Equals(sourceBefore, sourceNow, StringComparison.OrdinalIgnoreCase) || stampNow > stampBefore);
+        && stampNow > stampBefore;
 
     public static bool WaitExpired(long requestedMs, long nowMs) => nowMs - requestedMs >= SaveWaitMs;
 }
