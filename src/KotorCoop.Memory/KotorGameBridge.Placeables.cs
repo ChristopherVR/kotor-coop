@@ -37,6 +37,7 @@ public sealed partial class KotorGameBridge
     private uint _placeableModuleHash;
     private bool _placeableBaselined;
     private long _nextPlaceableScanTicks;
+    private int _placeableSlotCursor;
 
     public bool SupportsPlaceableSync => _pluginBlock != 0;
 
@@ -63,6 +64,7 @@ public sealed partial class KotorGameBridge
             _placeableBaselineTrapped.Clear();
             _placeableBaselined = false;
             _nextPlaceableScanTicks = 0;
+            _placeableSlotCursor = 0;
         }
 
         long now = Environment.TickCount64;
@@ -134,6 +136,13 @@ public sealed partial class KotorGameBridge
         bool ok = true;
         int slot = 0;
 
+        // Mine removals get a small reserved slice first. MineSlotPlanner rotates that slice
+        // across a larger backlog, so a module with 32+ placeables cannot starve a mine while
+        // the ordinary placeable state still receives the remaining slots.
+        ok &= AppendMineSlots(flags, ref slot);
+        HashSet<uint> selectedPlaceables = [.. MineSlotPlanner.SelectPlaceables(
+            flags, _placeableModuleHash, ref _placeableSlotCursor, BlockPlaceableCapacity - slot)];
+
         foreach (KeyValuePair<ulong, sbyte> flag in flags)
         {
             if (slot >= BlockPlaceableCapacity)
@@ -144,6 +153,11 @@ public sealed partial class KotorGameBridge
             if (!PlaceableFlags.IsPlaceableKey(flag.Key)
                 || PlaceableFlags.ModuleHashOf(flag.Key) != _placeableModuleHash
                 || flag.Value <= 0)
+            {
+                continue;
+            }
+
+            if (!selectedPlaceables.Contains(PlaceableFlags.ObjectIdOf(flag.Key)))
             {
                 continue;
             }
@@ -162,9 +176,6 @@ public sealed partial class KotorGameBridge
             ok &= _memory.TryWrite(address + 0x00, PlaceableFlags.ObjectIdOf(flag.Key));
             slot++;
         }
-
-        // Floor-mine removals share the list after the placeables (kind byte +7 == 1).
-        ok &= AppendMineSlots(flags, ref slot);
 
         ok &= _memory.TryWrite(_pluginBlock + BlockPlaceableCount, (uint)slot);
         return ok;

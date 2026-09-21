@@ -198,9 +198,67 @@ side excludes `+0x314 != 0` mines outright. A safe mirror needs a host-authorita
    client the enemies are mirrored copies, so damage would have to route through the enemy-damage ledger
    rather than be applied twice. That routing is the open question, and the reason to stop here.
 
-## 8. NEEDS-LIVE recipe (two instances, GOG rig, both with `mine_sync = 1`)
+### 7.1 Offline route audit (2026-09-21)
 
-Every WRITE here is behind `mine_sync` (default OFF). Nothing in this document has been watched on the game.
+The installed GOG executable was re-read from disk with `tools/disasm.py`, `tools/xrefs.py`, and
+`tools/q.py`; no process was opened and no game memory or code was written. The static trace confirms
+that a safe *engine-thread construction sequence exists*, but it does not make the replication feature
+safe to enable yet.
+
+The only floor-mine constructor in the retail image is the no-target branch of
+`CSWSCreature::AIActionSetMine 0x00519E30` (`0x0051A607..0x0051A76B`). The exact sequence is:
+
+```
+operator new(0x318)                         0x006FA7E6 (__cdecl)
+CSWSTrigger::Constructor(p, 0x7F000000)     0x0058EAE0 (__thiscall, ret 8)
+CSWSTrigger::SetCreator(p, setter_id)        0x0058D700 (__thiscall, ret 4)
+CSWSTrigger::CreateNewGeometry(p, 2.0, ...) 0x0058D210 (__thiscall, ret 12)
+CSWSTrigger::AddToArea(p, area, x, y, z, 1, 1)
+                                             0x0058F030 (__thiscall, ret 0x14)
+```
+
+Before `AddToArea`, the engine writes the trigger's trap fields (`+0x2BC`, `+0x2C0`, `+0x2C4`,
+`+0x2D4`, `+0x2D8`, `+0x2DC`, `+0x2B8`, `+0x264`, and `+0x22C`) and then appends the returned
+dynamic id to the area's mine list at `+0x12C`. The constructor starts the id at `0x7F000000`, so
+the id allocated by this path is dynamic and local to the process. `tools/xrefs.py` reports the
+constructor call sites at `0x0050A42E`, `0x0051A62B`, and `0x005220C6`; `CreateNewGeometry` is
+called at `0x0051A72D` and `0x0052214E`; and `AddToArea` is called at `0x0050A744` and
+`0x0051A750`. These are independent static references to the same route.
+
+The damage side is engine-owned: `CSWSTrigger::OnEnterMine 0x0058D570` calls the trap script at
+`+0x264`, then queues event 11 (`0x007441E0`) at the trigger. The shipped trap script applies its
+damage through the normal effect handler (`CSWSEffectListHandler::OnApplyDamage 0x004DFA40`), whose
+effect creator is the object that entered. This proves that a directly constructed mine can use the
+normal damage pipeline; it does **not** prove which process should own damage when the entering object
+is a mirrored enemy.
+
+The frame hook gives a suitable *thread boundary*: the IAT `GDI32!SwapBuffers` hook at `0x0073D00C`
+runs on the game thread after `CServerExoApp::MainLoop`. It is therefore the only candidate at which
+the sequence above could be attempted. It is not a license to call it: the construction still needs
+the trigger's `CExoString` lifetime, `TrapScript`/`TrapName` resolution, area pointer, and creator
+semantics to be proved with a live spawn. No such spawn has been attempted in this pass.
+
+The static route leaves three blockers that are material to correctness:
+
+* No NWScript command in the 772-entry command table creates a floor mine. `CreateObject` is a
+  blueprint path and does not provide the `CSWSTrigger` trap fields; using it for a mine would require
+  the raw field writes above.
+* The dynamic id cannot cross the wire. A host serial and a per-instance `serial -> dynamic id` map
+  are required, plus a module epoch so a stale serial cannot target a newly allocated object.
+* A mine's `OnTrapTriggered` script damages the local entering object. Mirroring the destroy event is
+  straightforward once the serial map exists, but forwarding damage requires an explicit authority
+  rule for mirrored enemies. Reusing the existing enemy-damage ledger without proving that the trap
+  effect is captured exactly once would either double-apply damage or lose it.
+
+Accordingly this pass adds no engine writes, hooks, or packet types. The one-way GIT-mine mirror remains
+the only enabled path. The concrete next implementation step is a disposable, host-only main-thread
+spawn probe that verifies the returned id, `+0x314` creator marker, `+0x2BC` trap gate, geometry, and
+one walk-on damage event before any serial transport or peer apply code is enabled.
+
+## 8. Live-proof recipe (two instances, GOG rig, both with `mine_sync = 1`)
+
+Every WRITE here is behind `mine_sync` (default ON). The live results are recorded in §9; these
+steps remain the reproducible setup for a future regression pass.
 
 Setup: `mine_sync = 1` in both `coop.ini`; host `host`, client `connect`; host `warp tar_m10aa` (the client
 follows). `tar_m10aa` has GIT mines `0x71` (173.26, 127.53) and `0x74`, `0x75`, `0x76` (~102.8, 128.9-134.1);
@@ -224,8 +282,9 @@ follows). `tar_m10aa` has GIT mines `0x71` (173.26, 127.53) and `0x74`, `0x75`, 
 7. **A party-placed mine stays local.** `scriptgive g_i_trapkit004` (a minor fragmentation mine, `traps.2da`
    row 3), lay it from the inventory or radial menu, then detonate or recover it: the peer must NOT lose any
    mine, and the placing instance must publish nothing (its `+0x314` is 1).
-8. **Off switch.** Remove `mine_sync` (or `= 0`) from one side and repeat step 2: that side must log nothing and
-   keep its mine, i.e. it is exactly today's behaviour.
+8. **Off switch.** Set `mine_sync = 0` explicitly on the receiving side and repeat step 2:
+   that side must keep its mine. Removing the key enables the shipped default and does not
+   switch the feature off.
 
 Things to read off the live game that this pass could not: whether a freed trigger's memory really stops
 carrying the `0x00749A38` vtable within the 1 s scan (the absence detector relies on it; if it keeps it, mines
@@ -239,4 +298,15 @@ Both instances with `mine_sync = 1`, host `warp tar_m10aa`: step 1 (`resolve 0x7
 **Steps 3 and 4 VERIFIED (second run, same day).** `tools/click.ps1 -HoverOnly` to give the window focus, then `walkto`: the host walked onto `0x71` (173.26, 127.53): `0x71` was gone on the host and the client's plugin logged `mine 0x71: removed on the session's authority (engine DestroyObject)`. The client then walked toward `0x74` (102.83, 134.06) and detonated `0x75` on the way (the trio sits together): the host's plugin logged `mine 0x75: removed on the session's authority`, `0x75` was gone on both, `0x74` still existed on both when checked. Both games stayed up.
 
 **`mine_sync` is now ON by default** (three readers agree: `PluginConfig.ReadBool("mine_sync", true)`, `CoopConfig.MineSync` and its absent-key parse, `AgentComposition`'s `?? true`). Still not built: mines a party member PLACES.
+
+## 10. Static hardening (2026-09-21)
+
+The apply side now rejects IDs outside the publisher's deterministic `1..0xFFFF` range and
+refuses a trigger whose party-placed field (`+0x314`) is set. This protects local dynamic mines
+even if an incoming removal resolves to one. The shared 32-slot list reserves at most four
+entries per pass for mines and rotates both mine and placeable backlogs, so neither list's tail
+is permanently omitted by the publisher. The off-switch test now actually writes `= 0`.
+
+All 27 mine tests pass, including both selection cursors and party-placed refusal. These checks
+do not replace a live busy-module test of slot consumption, and do not implement mine placement.
 

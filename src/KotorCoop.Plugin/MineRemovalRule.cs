@@ -18,13 +18,17 @@ internal enum MineRemovalDecision
     /// transition trigger. An id that drifted between instances must never delete one.</summary>
     NotAMine = 3,
 
+    /// <summary>The trigger is a party-placed mine (+0x314 != 0). Its object id is dynamic and
+    /// local to this game instance, so a shared GIT-mine flag must never delete it.</summary>
+    PartyPlaced = 4,
+
     /// <summary>The engine's own DestroyObject handler skips an object whose is_destroyable
     /// (+0xEC) is 0, so posting it would be a no-op (CSWSTrigger::EventHandler event 11).</summary>
-    NotDestroyable = 4,
+    NotDestroyable = 5,
 
     /// <summary>A destroy was already posted for this id and the trigger has not been reaped
     /// yet; do not post a second one.</summary>
-    AlreadyRequested = 5,
+    AlreadyRequested = 6,
 }
 
 internal static class MineRemovalRule
@@ -34,7 +38,8 @@ internal static class MineRemovalRule
         bool alreadyRequested,
         bool resolvedAsTrigger,
         bool trapGateSet,
-        bool destroyable)
+        bool destroyable,
+        bool partyPlaced = false)
     {
         if (!enabled)
         {
@@ -54,6 +59,11 @@ internal static class MineRemovalRule
         if (!trapGateSet)
         {
             return MineRemovalDecision.NotAMine;
+        }
+
+        if (partyPlaced)
+        {
+            return MineRemovalDecision.PartyPlaced;
         }
 
         return destroyable ? MineRemovalDecision.Remove : MineRemovalDecision.NotDestroyable;

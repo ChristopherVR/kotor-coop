@@ -60,6 +60,40 @@ public class MineSyncTests
             MineFlags.MakeKey(MineFlags.HashModule("tar_m02ab"), 0x77));
     }
 
+    [Fact]
+    public void MineSlotsRotateWhenTheSharedListIsSaturated()
+    {
+        uint module = MineFlags.HashModule("tar_m02aa");
+        List<KeyValuePair<ulong, sbyte>> flags = [];
+        for (uint id = 1; id <= 6; id++)
+        {
+            flags.Add(new(MineFlags.MakeKey(module, id), MineFlags.MakeValue(removed: true)));
+        }
+
+        int cursor = 0;
+        Assert.Equal([1u, 2u], MineSlotPlanner.Select(flags, module, ref cursor, capacity: 2));
+        Assert.Equal([3u, 4u], MineSlotPlanner.Select(flags, module, ref cursor, capacity: 2));
+        Assert.Equal([5u, 6u], MineSlotPlanner.Select(flags, module, ref cursor, capacity: 2));
+    }
+
+    [Fact]
+    public void ReservedMineSlotsDoNotStarveTheTailOfPlaceables()
+    {
+        uint module = PlaceableFlags.HashModule("tar_m02aa");
+        List<KeyValuePair<ulong, sbyte>> flags = [];
+        for (uint id = 1; id <= 6; id++)
+        {
+            flags.Add(new(PlaceableFlags.MakeKey(module, id), PlaceableFlags.MakeValue(
+                open: true, unlocked: false, disarmed: false)));
+        }
+
+        int cursor = 0;
+        Assert.Equal([1u, 2u, 3u, 4u],
+            MineSlotPlanner.SelectPlaceables(flags, module, ref cursor, capacity: 4));
+        Assert.Equal([5u, 6u, 1u, 2u],
+            MineSlotPlanner.SelectPlaceables(flags, module, ref cursor, capacity: 4));
+    }
+
     // ---- MineVanishTracker -------------------------------------------------------------------
 
     private static HashSet<uint> Ids(params uint[] ids) => [.. ids];
@@ -271,6 +305,15 @@ public class MineSyncTests
     }
 
     [Fact]
+    public void APartyPlacedTrapIsNeverDeletedByAGitMineFlag()
+    {
+        Assert.Equal(
+            MineRemovalDecision.PartyPlaced,
+            MineRemovalRule.Decide(true, false, true, trapGateSet: true, destroyable: true,
+                partyPlaced: true));
+    }
+
+    [Fact]
     public void ADestroyAlreadyPostedIsNotPostedTwice()
     {
         Assert.Equal(
@@ -309,10 +352,10 @@ public class MineSyncTests
     public void MineSyncTurnsOffWhenTheKeyIsZero()
     {
         string path = Path.Combine(Path.GetTempPath(), $"coop-mine-{Guid.NewGuid():N}.ini");
-        File.WriteAllText(path, "mode = host\nmine_sync = 1");
+        File.WriteAllText(path, "mode = host\nmine_sync = 0");
         try
         {
-            Assert.True(CoopConfig.TryLoad(path)!.MineSync);
+            Assert.False(CoopConfig.TryLoad(path)!.MineSync);
         }
         finally
         {

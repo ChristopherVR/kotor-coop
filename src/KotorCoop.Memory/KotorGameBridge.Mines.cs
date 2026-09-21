@@ -37,6 +37,7 @@ public sealed partial class KotorGameBridge
     private string _mineModule = string.Empty;
     private uint _mineModuleHash;
     private long _nextMineScanTicks;
+    private int _mineSlotCursor;
 
     public bool SupportsMineSync => _pluginBlock != 0;
 
@@ -60,6 +61,7 @@ public sealed partial class KotorGameBridge
             _mineModuleHash = MineFlags.HashModule(module);
             _mineTracker.Reset();
             _nextMineScanTicks = 0;
+            _mineSlotCursor = 0;
         }
 
         long now = Environment.TickCount64;
@@ -130,22 +132,16 @@ public sealed partial class KotorGameBridge
     private bool AppendMineSlots(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags, ref int slot)
     {
         bool ok = true;
+        List<uint> selected = MineSlotPlanner.Select(
+            flags, _placeableModuleHash, ref _mineSlotCursor, BlockPlaceableCapacity - slot);
 
-        foreach (KeyValuePair<ulong, sbyte> flag in flags)
+        foreach (uint objectId in selected)
         {
             if (slot >= BlockPlaceableCapacity)
             {
                 break;
             }
 
-            if (!MineFlags.IsMineKey(flag.Key)
-                || MineFlags.ModuleHashOf(flag.Key) != _placeableModuleHash
-                || !MineFlags.RemovedOf(flag.Value))
-            {
-                continue;
-            }
-
-            uint objectId = MineFlags.ObjectIdOf(flag.Key);
             _mineTracker.MarkKnownGone(objectId);
 
             nint address = _pluginBlock + BlockPlaceableSlots + (slot * BlockPlaceableStride);

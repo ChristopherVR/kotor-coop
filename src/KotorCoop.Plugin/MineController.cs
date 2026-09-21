@@ -3,7 +3,7 @@ namespace KotorCoop.Plugin;
 /// <summary>
 /// Applies "this floor mine was disarmed or detonated on a peer" (a kind-1 entry in the
 /// placeable slot list, SharedBlock.Mines.cs) by removing the same mine here. coop.ini
-/// <c>mine_sync</c>, default OFF, NEEDS-LIVE — see docs/research/mines.md.
+/// <c>mine_sync</c>, default ON since the two-way live proof in docs/research/mines.md §9.
 ///
 /// The removal is the engine's OWN path, not a field poke: <see cref="Odyssey.DestroyObjectById"/>
 /// runs the NWScript DestroyObject command, whose tail
@@ -37,7 +37,10 @@ internal sealed class MineController
             return;
         }
 
-        if (objectId == 0 || objectId == Odyssey.ObjectInvalid)
+        // The publisher only emits deterministic GIT ids (0..0xFFFF). Keep the same bound on
+        // the receive side before ResolveServerObject/ResolveTrigger touches an engine pointer;
+        // dynamic ids belong to party-placed mines and are never valid shared mine targets.
+        if (objectId == 0 || objectId == Odyssey.ObjectInvalid || objectId > 0xFFFF)
         {
             return;
         }
@@ -45,17 +48,19 @@ internal sealed class MineController
         nint trigger = OdysseyTriggers.ResolveTrigger(objectId);
         bool isTrap = false;
         bool destroyable = false;
+        bool partyPlaced = false;
         if (trigger != 0)
         {
             unsafe
             {
                 isTrap = *(int*)(trigger + TriggerTrapGate) != 0;
                 destroyable = *(int*)(trigger + ObjectIsDestroyable) != 0;
+                partyPlaced = *(int*)(trigger + TriggerPlacedByParty) != 0;
             }
         }
 
         MineRemovalDecision decision = MineRemovalRule.Decide(
-            Enabled, _requested.Contains(objectId), trigger != 0, isTrap, destroyable);
+            Enabled, _requested.Contains(objectId), trigger != 0, isTrap, destroyable, partyPlaced);
 
         switch (decision)
         {
@@ -77,6 +82,10 @@ internal sealed class MineController
                 LogFew($"mine 0x{objectId:X}: refused - a trigger with no trap gate, not deleting it");
                 break;
 
+            case MineRemovalDecision.PartyPlaced:
+                LogFew($"mine 0x{objectId:X}: refused - party-placed mine has a local dynamic id");
+                break;
+
             case MineRemovalDecision.NotDestroyable:
                 LogFew($"mine 0x{objectId:X}: refused - is_destroyable is 0");
                 break;
@@ -85,6 +94,11 @@ internal sealed class MineController
 
     /// <summary>CSWSTrigger + this = trap/mine gate; nonzero = mine. VERIFIED (docs/research/mines.md §2).</summary>
     private const int TriggerTrapGate = 0x2BC;
+
+    /// <summary>CSWSTrigger + this = "placed by the player's party". Nonzero means the id is
+    /// dynamic and local to this instance, so it cannot be targeted by a shared GIT-mine flag.
+    /// VERIFIED in docs/research/mines.md §2.</summary>
+    private const int TriggerPlacedByParty = 0x314;
 
     /// <summary>CSWSObject + this = is_destroyable (symbol database; read by
     /// CSWSTrigger::EventHandler's event-11 branch at 0x0058F19F).</summary>
