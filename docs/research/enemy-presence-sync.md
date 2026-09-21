@@ -133,6 +133,17 @@ conversation) fights the script's own movement — the owner's positions win by 
 the visual result needs eyes; and a census-over-32 module to see the prioritisation shed
 gracefully.
 
+### Census overflow is now observable (2026-09-21)
+
+The combat block remains a fixed 32 entries. `KotorGameBridge.ReadEnemies` now records the
+candidate count, selected count and capacity in `LastEnemyCensus`, emits a heartbeat-limited
+diagnostic when candidates exceed that capacity, and uses object id only as the final
+tie-breaker after the existing in-combat and nearest-player priorities. The diagnostic is a
+bounded detection aid; an omitted candidate is not interpreted as dead. The liveness scan is
+still the path that covers out-of-census deaths. This closes the silent part of the review
+item while leaving the known over-32 combat limitation explicit until a live crowded-module
+pass establishes a safe larger-channel design.
+
 ## Combat participation — the options this sets up, none built
 
 The remaining seam: enemy threat to the mirroring player. Recorded so the next session

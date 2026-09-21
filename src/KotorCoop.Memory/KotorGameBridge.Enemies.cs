@@ -19,6 +19,7 @@ public sealed partial class KotorGameBridge
 
         if (_player is null)
         {
+            LastEnemyCensus = default;
             return enemies;
         }
 
@@ -182,13 +183,22 @@ public sealed partial class KotorGameBridge
 
         candidates.Sort((a, b) => a.Fighting != b.Fighting
             ? (a.Fighting ? -1 : 1)
-            : a.DistanceSquared.CompareTo(b.DistanceSquared));
+            : a.DistanceSquared != b.DistanceSquared
+                ? a.DistanceSquared.CompareTo(b.DistanceSquared)
+                // Equal-distance ties used to inherit object-array enumeration order. That
+                // order is not a stable policy, so a crowded module could shed a different
+                // creature after a harmless object-array reshuffle. The id is only a final
+                // tie-breaker; fighting-first and nearest-player ordering remain unchanged.
+                : a.State.ObjectId.CompareTo(b.State.ObjectId));
 
         // _enemyCensusCap, not BlockEnemyCapacity directly: normally the same 32, but a debug
         // session can lower it (AgentOptions.EnemyCensusCap) to exercise the "beyond the cap"
         // shedding this truncation performs without needing a module that legitimately places
         // 33+ creatures. See _enemyCensusCap's own doc comment.
         int count = Math.Min(candidates.Count, _enemyCensusCap);
+        LastEnemyCensus = new(candidates.Count, count, _enemyCensusCap);
+        ReportEnemyCensus(LastEnemyCensus);
+
         for (int i = 0; i < count; i++)
         {
             enemies.Add(candidates[i].State);

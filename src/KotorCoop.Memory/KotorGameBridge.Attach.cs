@@ -252,12 +252,42 @@ public sealed partial class KotorGameBridge
     public CensusGateReport LastCensusGate { get; private set; } =
         new(CensusGateState.NeverRun, 0, 0, 0, 0, []);
 
+    /// <summary>
+    /// The most recent enemy combat census size before the live-object publish gate. This is
+    /// deliberately separate from <see cref="LastCensusGate"/>, which validates ids rather
+    /// than reporting the fixed 32-slot combat capacity. A dropped candidate is not a death:
+    /// the full liveness pass and the next combat census remain the authorities for that.
+    /// </summary>
+    public EnemyCensusStatus LastEnemyCensus { get; private set; }
+
     /// <summary>However quiet the state is, say it at least this often. A log that has said
     /// nothing for a minute is then provably a log whose agent is not running this code.</summary>
     private const int GateHeartbeatMs = 30_000;
 
     private long _gateSpokeAtMs;
     private string _gateLastLine = string.Empty;
+
+    private long _enemyCensusSpokeAtMs = long.MinValue;
+
+    /// <summary>Reports a real over-cap census at most once per heartbeat. The combat pump
+    /// runs several times a second; letting this diagnostic follow that cadence would turn a
+    /// useful bounded warning into a source of the very logging stalls it is meant to find.</summary>
+    private void ReportEnemyCensus(EnemyCensusStatus status)
+    {
+        if (!status.Overflow)
+        {
+            return;
+        }
+
+        long nowMs = Environment.TickCount64;
+        if (!EnemyCensusStatus.ShouldReport(nowMs, _enemyCensusSpokeAtMs, GateHeartbeatMs))
+        {
+            return;
+        }
+
+        _enemyCensusSpokeAtMs = nowMs;
+        CensusDiagnostic?.Invoke(status.ToString());
+    }
 
     /// <summary>
     /// Drops the creature-shaped memory the engine does not actually own.
