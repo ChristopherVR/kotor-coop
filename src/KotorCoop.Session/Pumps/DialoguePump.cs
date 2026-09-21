@@ -116,10 +116,11 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// script-item-sync section. Updated on EVERY <see cref="PumpDialogue"/> call, ahead of
     /// the <see cref="AgentSettings.DialogueFastJoin"/> tick-gate's possible early return, so
     /// an unchanged-fingerprint tick mid-conversation never leaves this stale — the property
-    /// still reflects this tick's true state even when nothing else about the call runs. Set
-    /// unconditionally, independent of <see cref="AgentSettings.DialogueItemSync"/>: the two
-    /// channels must never both diff the same inventory change regardless of whether the
-    /// dialogue channel itself is configured to report from it.
+    /// still reflects this tick's true state even when nothing else about the call runs. During
+    /// the short deferred-close window, the dialogue item pump still owns the inventory
+    /// baseline, so the script-item pump must wait instead of sampling the transient world. If
+    /// the runtime dialogue-item flag is disabled, that deferred state is cleared and this
+    /// falls back to the active-only meaning.
     /// </summary>
     public bool IsOwningConversation { get; private set; }
 
@@ -245,7 +246,13 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         // engine every call the way _dialogueLastActiveMs/_dialogueHeldPartnerTag above do —
         // see the property's own doc for why staleness here would be a real bug, not just an
         // inefficiency.
-        IsOwningConversation = active;
+        bool dialogueItemSyncEnabled = IsDialogueItemSyncEnabled;
+        if (!dialogueItemSyncEnabled)
+        {
+            ClearDialogueGrantState();
+        }
+
+        IsOwningConversation = active || (dialogueItemSyncEnabled && _dialogueGrantOwning);
 
         if (!active)
         {
@@ -300,7 +307,10 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         // The item-grant channel needs "do WE own an active conversation right now", which is
         // exactly what `active` already means (debounced across the engine's between-entries
         // flicker) — computed once here rather than re-derived, so the two never drift apart.
-        PumpDialogueItemGrants(active, active ? _dialogueHeldPartnerTag : string.Empty);
+        PumpDialogueItemGrants(
+            active, active ? _dialogueHeldPartnerTag : string.Empty, local.Module);
+        IsOwningConversation = active
+            || (IsDialogueItemSyncEnabled && _dialogueGrantOwning);
 
         // The other direction: when a peer owns a conversation, hand the plugin who they are
         // talking to and which reply they last picked, so this instance runs the SAME
@@ -325,6 +335,12 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// Empty means "no baseline yet" (conversation just started, or sampling is off).</summary>
     private List<(string Resref, ItemIdentity Identity)> _dialogueGrantBaseline = [];
 
+    private bool _dialogueGrantHasBaseline;
+
+    private string _dialogueGrantBaselineModule = string.Empty;
+
+    private int _dialogueGrantBaselineWorldEpoch;
+
     private bool _dialogueGrantOwning;
 
     private long _dialogueGrantLastSampleMs;
@@ -336,6 +352,13 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// conversation that grants mid-way is still caught without sweeping every ~150 ms.
     /// </summary>
     private const long DialogueGrantSampleIntervalMs = 1000;
+
+    private enum DialogueGrantSampleResult
+    {
+        Completed,
+        Deferred,
+        WorldReplaced,
+    }
 
     /// <summary>Single-element set handed to <see cref="IGameBridge.ReadPossessedItems"/> every
     /// sample. A field rather than a fresh allocation per call — the method is on a cadence
@@ -355,27 +378,88 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// grant once it arrives back over the wire (which <see cref="ICoopSession.DrainDialogueGrants"/>
     /// already filters by origin, but there is no reason to also generate the false positive).
     /// </summary>
-    private void PumpDialogueItemGrants(bool ownsActiveConversation, string partnerTag)
+    private void PumpDialogueItemGrants(
+        bool ownsActiveConversation, string partnerTag, string localModule)
     {
         // A client adopts the host's dialogue_item_sync at runtime when they differ —
         // docs/research/mod-compatibility.md's "Behaviour-flag negotiation".
-        if (!(session.Overrides.DialogueItemSync ?? settings.DialogueItemSync))
+        if (!IsDialogueItemSyncEnabled)
         {
+            ClearDialogueGrantState();
+            return;
+        }
+
+        // A dialogue can close on the same tick that the engine tears down its world. The
+        // final inventory read in that window is either empty or only partly rebuilt; diffing
+        // it against the old conversation baseline publishes the new world's starter items as
+        // rewards. Keep the baseline tied to both the module and bridge epoch, and never read
+        // or diff while either lifecycle signal says the item view is provisional.
+        string observedModule = localModule;
+        if (bridge.TryReadCurrentModule(out string currentModule) && currentModule.Length > 0)
+        {
+            observedModule = currentModule;
+        }
+
+        int worldEpoch = bridge.WorldEpoch;
+        bool moduleChanged = observedModule.Length > 0
+            && !ModuleNameGuard.IsFallbackModuleName(observedModule)
+            && _dialogueGrantBaselineModule.Length > 0
+            && !string.Equals(
+                observedModule, _dialogueGrantBaselineModule, StringComparison.OrdinalIgnoreCase);
+        bool worldReplaced = _dialogueGrantHasBaseline
+            && (moduleChanged || worldEpoch != _dialogueGrantBaselineWorldEpoch);
+        if (worldReplaced)
+        {
+            _dialogueGrantBaseline = [];
+            _dialogueGrantHasBaseline = false;
+            _dialogueGrantBaselineModule = observedModule;
+            _dialogueGrantBaselineWorldEpoch = worldEpoch;
+        }
+
+        if (bridge.IsWorldBetweenLives)
+        {
+            // The old baseline cannot survive a world edge, but the transient read cannot
+            // become the new baseline either. Keep ownership while the conversation still
+            // reports active so the first settled tick reseeds it silently.
+            _dialogueGrantBaseline = [];
+            _dialogueGrantHasBaseline = false;
+            if (!ownsActiveConversation)
+            {
+                _dialogueGrantOwning = false;
+            }
+
+            return;
+        }
+
+        if (!bridge.IsItemViewSettled)
+        {
+            // An unsettled item cache on the SAME world is different from a world edge: the
+            // existing conversation baseline remains valid, and a closing reward must still be
+            // diffed once the cache settles. Do not replace it with the transient empty/partial
+            // read and do not end ownership while the final sample is deferred.
             return;
         }
 
         if (!ownsActiveConversation)
         {
-            if (_dialogueGrantOwning)
+            if (_dialogueGrantOwning && !worldReplaced && _dialogueGrantHasBaseline)
             {
                 // The conversation just ended: one last diff so a reward on the FINAL node
                 // (the common case — most reward scripts run on the closing entry) is caught,
                 // then the baseline is cleared so the next conversation starts fresh.
-                SampleAndPublishDialogueGrant(partnerTag);
+                DialogueGrantSampleResult result = SampleAndPublishDialogueGrant(
+                    partnerTag, observedModule, worldEpoch);
+                if (result == DialogueGrantSampleResult.Deferred)
+                {
+                    // Keep the owner/baseline so a closing reward is sampled after the item
+                    // view settles. A world replacement clears the baseline below instead.
+                    return;
+                }
             }
 
             _dialogueGrantOwning = false;
             _dialogueGrantBaseline = [];
+            _dialogueGrantHasBaseline = false;
             return;
         }
 
@@ -385,8 +469,12 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             // nothing to diff against on the very first sample).
             _dialogueGrantOwning = true;
             _dialogueGrantLastSampleMs = Environment.TickCount64;
-            _dialogueGrantBaseline = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
-                .Select(i => (i.Resref, i.Identity))];
+        }
+
+        if (!_dialogueGrantHasBaseline)
+        {
+            _dialogueGrantLastSampleMs = Environment.TickCount64;
+            SeedDialogueGrantBaseline(observedModule, worldEpoch);
             return;
         }
 
@@ -397,24 +485,122 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         }
 
         _dialogueGrantLastSampleMs = nowMs;
-        SampleAndPublishDialogueGrant(partnerTag);
+        SampleAndPublishDialogueGrant(partnerTag, observedModule, worldEpoch);
     }
 
-    private void SampleAndPublishDialogueGrant(string partnerTag)
+    private DialogueGrantSampleResult SampleAndPublishDialogueGrant(
+        string partnerTag, string expectedModule, int expectedWorldEpoch)
     {
-        List<(string Resref, ItemIdentity Identity)> after =
-            [.. bridge.ReadPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
+        DialogueGrantSampleResult readResult = TryReadStableDialogueItems(
+            expectedModule, expectedWorldEpoch, out List<(string Resref, ItemIdentity Identity)> after,
+            out string observedModule, out int worldEpoch);
+        if (readResult != DialogueGrantSampleResult.Completed)
+        {
+            if (readResult == DialogueGrantSampleResult.WorldReplaced)
+            {
+                ResetDialogueGrantBaseline(observedModule, worldEpoch);
+            }
+
+            return readResult;
+        }
 
         List<MaterialisedLootItem> gained = DialogueItemDiff.Compute(_dialogueGrantBaseline, after);
         _dialogueGrantBaseline = after;
+        _dialogueGrantHasBaseline = true;
 
         if (gained.Count == 0)
         {
-            return;
+            return DialogueGrantSampleResult.Completed;
         }
 
         log($"dialogue grant: {gained.Count} new item(s) in the local speaker's inventory "
             + $"('{partnerTag}'): {string.Join(", ", gained.Select(i => i.Resref))}");
         session.PublishDialogueGrant(partnerTag, gained);
+        return DialogueGrantSampleResult.Completed;
+    }
+
+    private void SeedDialogueGrantBaseline(string expectedModule, int expectedWorldEpoch)
+    {
+        DialogueGrantSampleResult result = TryReadStableDialogueItems(
+            expectedModule, expectedWorldEpoch,
+            out List<(string Resref, ItemIdentity Identity)> baseline,
+            out string observedModule, out int worldEpoch);
+        if (result == DialogueGrantSampleResult.Completed)
+        {
+            _dialogueGrantBaseline = baseline;
+            _dialogueGrantHasBaseline = true;
+            _dialogueGrantBaselineModule = observedModule;
+            _dialogueGrantBaselineWorldEpoch = worldEpoch;
+        }
+        else if (result == DialogueGrantSampleResult.WorldReplaced)
+        {
+            ResetDialogueGrantBaseline(observedModule, worldEpoch);
+        }
+    }
+
+    private DialogueGrantSampleResult TryReadStableDialogueItems(
+        string expectedModule, int expectedWorldEpoch,
+        out List<(string Resref, ItemIdentity Identity)> items,
+        out string observedModule, out int worldEpoch)
+    {
+        items = [];
+        observedModule = expectedModule;
+        worldEpoch = bridge.WorldEpoch;
+
+        if (bridge.IsWorldBetweenLives)
+        {
+            return DialogueGrantSampleResult.WorldReplaced;
+        }
+
+        if (!bridge.IsItemViewSettled)
+        {
+            return DialogueGrantSampleResult.Deferred;
+        }
+
+        items = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+            .Select(i => (i.Resref, i.Identity))];
+
+        if (bridge.TryReadCurrentModule(out string currentModule) && currentModule.Length > 0)
+        {
+            observedModule = currentModule;
+        }
+
+        worldEpoch = bridge.WorldEpoch;
+        bool moduleChanged = observedModule.Length > 0
+            && !ModuleNameGuard.IsFallbackModuleName(observedModule)
+            && expectedModule.Length > 0
+            && !ModuleNameGuard.IsFallbackModuleName(expectedModule)
+            && !string.Equals(observedModule, expectedModule, StringComparison.OrdinalIgnoreCase);
+        if (worldEpoch != expectedWorldEpoch || moduleChanged || bridge.IsWorldBetweenLives)
+        {
+            return DialogueGrantSampleResult.WorldReplaced;
+        }
+
+        // The read itself can cross the settling edge. Its rows are not a coherent snapshot,
+        // so retain the prior baseline and retry on the next tick.
+        if (!bridge.IsItemViewSettled)
+        {
+            return DialogueGrantSampleResult.Deferred;
+        }
+
+        return DialogueGrantSampleResult.Completed;
+    }
+
+    private void ResetDialogueGrantBaseline(string module, int worldEpoch)
+    {
+        _dialogueGrantBaseline = [];
+        _dialogueGrantHasBaseline = false;
+        _dialogueGrantBaselineModule = module;
+        _dialogueGrantBaselineWorldEpoch = worldEpoch;
+    }
+
+    private bool IsDialogueItemSyncEnabled =>
+        session.Overrides.DialogueItemSync ?? settings.DialogueItemSync;
+
+    private void ClearDialogueGrantState()
+    {
+        _dialogueGrantOwning = false;
+        _dialogueGrantBaseline = [];
+        _dialogueGrantHasBaseline = false;
     }
 }
