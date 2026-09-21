@@ -77,6 +77,65 @@ Set `class_grant_sync = 1` in both installs' `coop.ini`; host + joiner in a Sold
 6. Regression: the joiner's own log must show `replayed a peer's class 3 ... (not republished)` and the host must NOT receive a second grant.
 7. Check no crash on a rapid `addclass` burst and that the peer applies exactly once.
 
+## 7a. Real Dantooine recipe (static resource evidence; NEEDS-LIVE)
+
+The following is a recipe for the shipped path, not a live result. It was extracted from the
+GOG resources `modules\\danm13_s.rim` and `dialog.tlk` on 2026-09-22. The module resref is
+`danm13`; the placed NPC tags and conversations are both `dan13_dorak` and `dan13_zhar`.
+
+First reach `dan13_zhar.dlg` EntryList **61**, whose journal marker is `dan_trials` entry 20
+(the line beginning “Blue is the color of the Jedi Guardian”). Its entry script is
+`k_pdan_saber06`, which sets `DAN_DORAK_DONE`. End that conversation, then talk to Dorak.
+`dan13_dorak.dlg` StartingList entry **0** points to EntryList **57**, gated by
+`k_pdan_saber01` reading `DAN_DORAK_DONE`. Entry 57 runs `k_pdan_saber02`, resets the three
+score globals, and sets `DAN_SABER_DONE`.
+
+For the currently observed council node, `dan13_zhar.dlg` EntryList **74** is the
+conversation node that introduces the council members. Its `RepliesList` is already in
+display order; the visible ordinal and the shipped GFF reply member are:
+
+| Visible ordinal | Visible text | GFF reply member | Next entry |
+| ---: | --- | ---: | ---: |
+| 0 | What do you want from me? | 108 | 83 |
+| 1 | So you've drawn me into your little trap, Bastila. What now? | 107 | 82 |
+| 2 | Isn't the Jedi Council on Coruscant? | 106 | 81 |
+| 3 | I've got some questions for all of you. | 96 | 75 |
+
+These IDs are resource member IDs, not UI ordinals. The direct training branch is ordinal 0
+to Entry 83, then Entry 83's first visible reply (ordinal 0, GFF reply 129) to Entry 84.
+Entry 84 is spoken by the placed `dan13_vrook` creature and its next unlabelled reply has
+two gender-selected targets: Entry 86 (`Speaker=Bastila`, “this man”) and Entry 85
+(`Speaker=Bastila`, “this woman”). The `Bastila` speaker is the party companion tag, while
+the council speakers use their placed tags (`dan13_vrook`, `dan13_vandar`, and
+`dan13_dorak`). If the conversation closes after Entry 84, record that as a live party
+speaker/target-resolution issue; do not jump directly to Entry 61 or force the class grant.
+
+Continue the class questionnaire to EntryList **76**, then click the visible choice matching
+the desired path. The numbers below are GFF `ReplyList` member IDs, not the ordinal reply slot
+shown by the dialogue UI; blank auto-replies and filtered conditions mean the visible slot can
+have a different number.
+
+| Visible text | GFF reply member | Next entry | Shipped entry script | Journal/item |
+| --- | ---: | ---: | --- | --- |
+| Green. The path of the Jedi Consular. | 102 | 77 | `k_pdan_saber13` | `dan_trials` 27; `dan13_grncryst` |
+| Yellow. The path of the Jedi Sentinel. | 103 | 78 | `k_pdan_saber14` | `dan_trials` 26; `dan13_goldcryst` |
+| Blue. The path of the Jedi Guardian. | 104 | 79 | `k_pdan_saber12` | `dan_trials` 25; `dan13_bluecryst` |
+
+Entries 77-79 each link to GFF ReplyList member **105**, an unlabelled terminal reply whose
+script is `k_pdan_makejedi`. That script is the real `AddMultiClass` path described above; do
+not substitute `addclass`, `setglobal`, `scriptgive`, or `giveloot` when testing it. The four
+question answers before Entry 76 only score the suggested path; the final three visible choices
+are the deterministic class selection.
+
+After the Dorak conversation, talk to `dan13_zhar` again. `dan13_zhar.dlg` StartingList entry
+**2** points to EntryList **100**, gated by `k_pdan_saber07` reading `DAN_SABER_DONE`. Continue
+the shipped chain Entry 100 -> ReplyList **130** -> Entry 101 -> ReplyList **131** -> Entry
+102 -> ReplyList **132** -> Entry 103 -> ReplyList **133**. The final reply runs `k_pdan_saber16`,
+which uses the engine's `CreateItemOnObject` routine to build the path-specific saber:
+`g_w_lghtsbr01` (blue), `g_w_lghtsbr04` (yellow), or `g_w_lghtsbr03` (green). Again, these are
+GFF member IDs, not visible UI slot numbers. Verify the joiner's class, journal/item result, and
+level-up screen on the peer; this recipe has not yet been live-verified.
+
 ## 8. Not done / could not resolve statically
 
 - Feat and Force-power grants (§1, §5).
@@ -90,3 +149,18 @@ Both instances, `class_grant_sync=1`: the AddMultiClass splice installs on both 
 ## Feats and Force powers: closed as by-design, not as a missing channel (2026-09-19)
 
 The 2026-09-18 report listed feat and power grants as "incomplete". Re-reading §3 with the live result in hand: `AddMultiClass` opens the second class slot at level 0 and hands out one level's XP; it never grants a feat or power (the joiner's live before/after shows only the class row change, `[1,-1] -> [1,3]`). Feats and powers enter through the level-up screen each player runs for themselves (`CSWSCreatureStats::LevelUp` 0x005AABF0 -> `AddFeat` 0x005AA810), and K1 has no `GrantFeat`/`GrantSpell` VM routine for a script to call. So the relay is complete for the Jedi path: the joiner gets the class, the shared XP (max-merge) lets them level, and they choose their own feats and powers, which is also what a single-player Jedi does. Consequences: the limitations page says so; `class_grant_sync` needs no feat channel. The one case that WOULD need one is a third-party mod that writes feats directly (K1SE's `KSE_GrantFeatArrayA`, feat array at creature-stats +0xA74 in its Steam build); that is out of scope until such a mod is in use, and the offsets would need verifying on the GOG executable first (see the K1SE note in the project memory).
+
+## Real dialogue checks (2026-09-22)
+
+Host-led Guardian acquisition at 05:42:23 changed the peer from Soldier only to
+Soldier plus class 3 at level 0. Joiner-led Sentinel acquisition at 05:47:27 changed
+the host from Soldier only to class 5 at level 0. Both directions ran the shipped
+Dorak terminal reply and AddMultiClass; named saves on both instances confirm the
+class rows. Eligibility was staged with DAN_DORAK_DONE, so this does not verify all
+preceding council/training steps. Feat/power selection in the level-up UI remains a
+separate player action.
+
+Zhar entries 100-103 completed near the workbench, but reward correctness is still
+under investigation: two live saber rows were published. The Sentinel run correctly
+gave g_w_lghtsbr04 (GOLD in upcrystals.2da); the earlier recipe swapped green/yellow IDs. Do not count the earlier recipe as a proven
+single-item, correct-color construction result.

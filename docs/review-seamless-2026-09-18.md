@@ -503,3 +503,104 @@ Further campaign checks exposed stale world serving: `BuildWorldSnapshot` select
 older AUTOSAVE even after a newer host quicksave. Repeated adoption returned the joiner
 to Manaan while the host stood on Dantooine. This is being corrected separately; no
 seamless-campaign completion is claimed.
+
+Dantooine follow-up: the old test characters already contain Guardian class 3 at level 0
+(host Soldier + Guardian, joiner Scout + Guardian). With `DAN_DORAK_DONE=true` staged to
+enter the questionnaire, the host completed Dorak's shipped choices at 05:07:29. The actual
+`k_pdan_makejedi` path published Guardian grant #1; the joiner received it and correctly
+acknowledged “already has it.” The blue crystal was created by the shipped reward script
+and materialised once on the joiner at 05:07:36. This proves real-dialogue capture and
+idempotence, not first acquisition on a character without a Jedi class. The latter and a
+joiner-driven run remain open. Zhar's construction reached Entry 101 but stalled there;
+no completed lightsaber claim is made.
+
+The council test also exposed a missed scripted announcement: at 05:01:45 the host entered
+`STUNT_00`, correctly classified as a transition, but the joiner refused to follow because
+rendered-frame polling never saw its pending flag. The native request observer now also
+recovers the announcement across a verified world-epoch change, before client teardown.
+It does not publish cancelled requests while the same world remains valid. Built, pending
+restart/live verification. This test save's old story globals sent the dream to `tar_m02af`;
+it is not evidence for a natural Dantooine campaign sequence.
+
+### Campaign continuation: class grants and remaining story failures (2026-09-22)
+
+The stale snapshot selection described above was corrected in `e9fccbe`: serving and
+compatibility use the same newest live save resolver. A fresh host save in `manm28aa`
+was served to the joiner at 05:20, rather than the older Dantooine AUTOSAVE. The real
+Manaan airlock and locked `28bw` door then completed the host's solo round trip without
+a false HostReload. However, the returned host had a different object map (`W_GIT`),
+so automatic safe reunion is still open; the recovery draft is under review.
+
+First acquisition through Dorak's shipped dialogue is now verified in both directions:
+
+- At 05:42:23, the host chose Guardian. The joiner changed from one Soldier class to
+  Soldier plus Guardian (class 3, level 0); no class echo was published. Both
+  `campaign_fresh_guardian_*` saves preserve the result.
+- At 05:47:27, after restarting both games and agents with fresh original Game1
+  characters, the joiner chose Sentinel. The host changed from one class to Soldier
+  plus Sentinel (class 5, level 0). Both `campaign_sentinel_*` saves independently
+  extract with these classes and XP 1000. The questionnaire eligibility flag was
+  staged; this is a real-dialogue grant check, not a natural full training run.
+
+Zhar's construction completed through entries 100-103 on both a host-led and a
+joiner-led run after positioning the driver near the workbench. The prior entry-101
+stall involved the scripted movement sequence. Reward correctness remains open:
+ScriptItemGrantPump published two saber rows each time. The Guardian checkpoint
+contains one saved saber per instance, but the Sentinel run explicitly observed two
+live joiner IDs (0x15A and 0x15B) and produced the correct yellow `g_w_lghtsbr04`. `campaign_sentinel_saber_*` preserves this follow-up. Eventual pool
+convergence alone does not prove the reward path is correct.
+
+The staged Leviathan capture and transformer dialogue ran, including recruitment of
+Canderous before entry, but control did not switch to him. Waiting beyond the shipped
+three-second delay did not resolve it. Rescue and gear return remain unverified.
+The actual STUNT_56a script/movie chain advanced both games independently to STUNT_57
+(15 seconds apart), but both remained there with CREDITPLAY=0. Terminal credits are
+not verified. Rendering worked in fresh Endar Spire and Dantooine scenes; the black
+ending view must not be dismissed as a general screenshot limitation.
+
+The command parser now rejects a combined dialogue tag/resref over the native 31-byte
+buffer, with a numeric object-ID alternative (`d1d09da`). Fresh warnings-as-errors
+validation passed 176 command/travel/STUNT tests before the final unreadable-peer-state
+regression extension. Solo-return, inventory lifecycle, and cinematic changes remain
+separate from these live results until reviewed, built, and deployed.
+
+### Campaign follow-up: evidence and recovery blockers (2026-09-22, 06:20)
+
+Reviewed changes are committed locally: repeated cinematic-leg admission (`eca8e21`),
+inventory reconciliation during world teardown (`533708e`), retained global shadows and
+reload rebinding (`2c29951`), server-resolver validation of possessed reward items
+(`36f81bf`), and solo-return adoption (`ce0e41e`). The fresh campaign-checks9 managed
+build passed 213 focused tests with warnings as errors. These tests do not close the
+remaining live campaign checks.
+
+The two raw Zhar item IDs are not proof of two active engine objects: both named saves
+contain one saber. The reward scan previously lacked server-object liveness validation;
+the new filter and incomplete-scan guards still need a fresh real-dialogue run.
+
+A later ending run differs from the earlier result above. At 05:57 the host progressed
+through STUNT_56a, movie 56b and STUNT_57's ceremony. The joiner stayed on STUNT_56a
+dialogue node 0. Both saved CREDITPLAY=1 because globals synchronize, so that flag alone
+does not prove either player saw credits. Client party-selection suppression is under
+an A/B check, not an established cause. Full local cinematic completion remains open.
+
+Leviathan's failed switch checkpoint contains Lev_Escape=-88. A fresh native-to-save
+probe preserved value 4; runtime descriptor index 88 and saved category index 83 are
+different index spaces. Global shadow fixes address independently verified reload gaps,
+but have not proven the cause of the earlier -88 value. Rescue and gear return remain
+open pending a new run.
+
+At 06:12:55 the aligned Manaan host returned through the shipped locked-door script.
+Its automatic fresh return save crashed at 0x5EA16D; the same fault reproduced at
+06:20:05. The retail StallEventSaveGame path resolves the real PC, calls GetArea at
+0x4B351C, then dereferences its localized name without checking for null. Logs show
+the local player's rendered body was still unavailable. Detached-area timing is the
+leading explanation; the crash record did not capture registers to prove the exact
+pointer. The joiner captured its character successfully but its adoption timed out
+after the host exited. Save-readiness guards and bounded adoption retries are being
+validated; seamless Manaan reunion is not yet closed.
+
+Dark-side summit auditing also found that active-party reconciliation never cleared
+availability bits for removed companions. Native RemoveAvailableNPC has now been
+traced, with a reconciliation draft under review. Hostile-companion faction handoff
+remains separate: party ownership, enemy ID translation, damage and death must agree
+before a retained companion body can safely become a replicated enemy.
