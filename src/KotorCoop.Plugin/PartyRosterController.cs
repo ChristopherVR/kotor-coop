@@ -238,17 +238,26 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         // the PC within its own bounded budget regardless, and the clamp resumes the instant it
         // does — the ordinary, safe case.
         bool controllingCompanion = IsControllingRosterCompanion();
-        if (!PartyTogetherClampRule.ShouldClamp(controllingCompanion, clientCount, tableCount))
+        // A client can arrive with the PC beyond the current CSWParty count (the live
+        // 0x7FFFFFFE case had a companion in member[0], stale/unresolved entries above it, and
+        // no PC in the bound). Dropping the count to the table's companion count would make that
+        // absence permanent from every bounded consumer. Defer until the PC is visible in the
+        // proposed bound; this is a read-only safety check and leaves the existing recovery path
+        // responsible for a malformed/reordered client array.
+        int targetCount = Math.Max(1, tableCount); // Even a solo party must retain its PC.
+        bool playerWithinTargetCount = Odyssey.IsPlayerCharacterWithinClientPartyCount(targetCount);
+        if (!PartyTogetherClampRule.ShouldClamp(
+                controllingCompanion, clientCount, targetCount, playerWithinTargetCount))
         {
             return;
         }
 
-        if (Odyssey.TryClampClientPartyCount(tableCount, out int before))
+        if (Odyssey.TryClampClientPartyCount(targetCount, out int before))
         {
             PluginHost.Log(
                 $"party together: CSWParty's own member count read {before} against "
-                + $"CSWPartyTable's {tableCount} - clamping the client-side struct down to "
-                + "match (this is the field CSWParty::IsPartyTogether actually checks, and the "
+                + $"CSWPartyTable's {tableCount} - clamping the client-side struct to {targetCount} "
+                + "with the PC retained (this is the field CSWParty::IsPartyTogether actually checks, and the "
                 + "one a real door transition gates on)");
         }
     }

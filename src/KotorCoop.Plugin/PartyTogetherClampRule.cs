@@ -43,8 +43,14 @@ internal static class PartyTogetherClampRule
     ///
     /// Once it is false again (control is back, or was never lost), the ordinary rule applies
     /// unchanged: clamp only when CSWParty's own count reads higher than CSWPartyTable's — never
-    /// lower, and never when the two already agree.
+    /// lower, and never when the two already agree. The caller also supplies whether the PC is
+    /// visible inside the proposed bound; an array with no visible PC is a transition/control
+    /// recovery state, not safe stale count to trim.
     /// </summary>
-    public static bool ShouldClamp(bool controllingSessionOwnedCompanion, int clientCount, int tableCount) =>
-        !controllingSessionOwnedCompanion && clientCount > tableCount;
+    public static bool ShouldClamp(
+        bool controllingSessionOwnedCompanion,
+        int clientCount,
+        int tableCount,
+        bool playerWithinTargetCount = true) =>
+        !controllingSessionOwnedCompanion && playerWithinTargetCount && clientCount > tableCount;
 }

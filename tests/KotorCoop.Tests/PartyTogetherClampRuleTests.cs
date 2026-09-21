@@ -71,4 +71,17 @@ public class PartyTogetherClampRuleTests
         Assert.False(PartyTogetherClampRule.ShouldClamp(
             controllingSessionOwnedCompanion: true, clientCount: 9, tableCount: 0));
     }
+
+    [Fact]
+    public void ACountClampCannotHideThePcBeyondItsTargetBound()
+    {
+        // The live failure shape: a companion occupies member[0], the PC is outside the
+        // proposed count, and stale/unresolved records occupy the remaining slots. Preserve
+        // the higher count until recovery makes the PC visible within the bound.
+        Assert.False(PartyTogetherClampRule.ShouldClamp(
+            controllingSessionOwnedCompanion: false,
+            clientCount: 2,
+            tableCount: 1,
+            playerWithinTargetCount: false));
+    }
 }

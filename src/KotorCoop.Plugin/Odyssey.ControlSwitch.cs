@@ -69,6 +69,11 @@ internal static unsafe partial class Odyssey
     /// own <c>imul eax,eax,0x88</c> index arithmetic).</summary>
     private const int SwPartyMemberStride = 0x88;
 
+    /// <summary>CClientExoApp + this = CClientExoAppInternal*. The internal control id at
+    /// +0x20 is the same verified id-only field the memory bridge pins each client tick.</summary>
+    private const int ClientInternalOffset = 0x04;
+    private const int ClientInternalControlledCharacterId = 0x20;
+
     /// <summary>The "party npc" flag bit a member's client-space id carries while it names a
     /// companion (live finding: <c>party.member0.client_object_id</c> read
     /// <c>0x80000127</c> for Trask). Masked off before every id comparison in this file so the
@@ -229,6 +234,108 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    /// <summary>
+    /// Repairs the one connect-time shape observed in the live rig: the server already
+    /// owns a verified PC, while the client's CSWParty array has a clamped count and no PC
+    /// entry at all. The candidate is derived from that live server id, resolved back to the
+    /// exact same creature, and written only into an out-of-count slot that is not a live
+    /// creature. The table count plus the PC bounds the new count, so a stale third entry is
+    /// never made visible to engine loops. MAIN THREAD ONLY.
+    /// </summary>
+    private static bool TryRecoverMissingPcMember(
+        nint party,
+        int tableCount,
+        out int index,
+        out uint pcId)
+    {
+        index = -1;
+        pcId = 0;
+
+        nint serverPc = GetPlayerCreaturePointer();
+        if (serverPc == 0 || !IsPlayerCharacter(serverPc))
+        {
+            return false;
+        }
+
+        uint serverPcId = GetObjectId(serverPc);
+        uint candidateId = ControlPcRecoveryRule.ToClientId(serverPcId);
+        if (candidateId == 0)
+        {
+            return false;
+        }
+
+        uint candidateServerId = candidateId & ~ControlPartyNpcFlag;
+        nint resolved = ResolveServerObject(candidateServerId);
+        if (resolved == 0 || resolved != serverPc || !IsPlayerCharacter(resolved))
+        {
+            PluginHost.Log($"control: refusing PC recovery candidate 0x{candidateId:X}; "
+                + $"server id 0x{serverPcId:X} did not resolve back to the server PC");
+            return false;
+        }
+
+        Span<ControlPcRecoveryRule.Slot> slots = stackalloc ControlPcRecoveryRule.Slot[SwPartyMemberCapacity];
+        for (int i = 0; i < SwPartyMemberCapacity; i++)
+        {
+            uint rawId = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
+            uint maskedId = rawId & ~ControlPartyNpcFlag;
+            nint objectPointer = maskedId is 0 or ObjectInvalid
+                ? 0
+                : ResolveServerObject(maskedId);
+            bool liveCreature = objectPointer != 0 && *(nint*)objectPointer == ServerCreatureVtable;
+            slots[i] = new(rawId, liveCreature);
+        }
+
+        int liveCount = *(int*)(party + SwPartyMemberCount);
+        int maximumCount = tableCount is >= 0 and < SwPartyMemberCapacity
+            ? tableCount + 1
+            : 0;
+        ControlPcRecoveryRule.PlanResult plan = ControlPcRecoveryRule.Plan(
+            slots,
+            liveCount,
+            maximumCount,
+            serverPcId,
+            serverPcVerified: true);
+        if (plan.HasExisting || !plan.CanWrite)
+        {
+            return false;
+        }
+
+        uint* destination = (uint*)(party + SwPartyMember0ClientId + (plan.SlotToWrite * SwPartyMemberStride));
+        uint previousSlotId = *destination;
+        int previousCount = *(int*)(party + SwPartyMemberCount);
+        *destination = plan.ClientId;
+        *(int*)(party + SwPartyMemberCount) = plan.NewCount;
+
+        if (*destination != plan.ClientId || *(int*)(party + SwPartyMemberCount) != plan.NewCount)
+        {
+            *destination = previousSlotId;
+            *(int*)(party + SwPartyMemberCount) = previousCount;
+            PluginHost.Log("control: PC recovery read-back failed; leaving control unchanged");
+            return false;
+        }
+
+        index = plan.SlotToWrite;
+        pcId = plan.ClientId;
+        PluginHost.Log($"control: recovered missing PC member[{index}] from server id "
+            + $"0x{serverPcId:X} as client id 0x{pcId:X}; CSWParty count {liveCount}->{plan.NewCount}");
+        return true;
+    }
+
+    /// <summary>Updates the client input field after the CSWParty reorder. This is the same
+    /// crash-safe id write used by the bridge, but uses the verified live PC client id rather
+    /// than assuming all PCs are the all-ones sentinel.</summary>
+    private static bool TrySyncClientControlledId(nint client, uint clientId)
+    {
+        nint internalClient = client == 0 ? 0 : *(nint*)(client + ClientInternalOffset);
+        if (internalClient == 0 || clientId == 0)
+        {
+            return false;
+        }
+
+        *(uint*)(internalClient + ClientInternalControlledCharacterId) = clientId;
+        return *(uint*)(internalClient + ClientInternalControlledCharacterId) == clientId;
+    }
+
     /// <summary>CSWSPlayer::SetGameObject (0x00561C40, thiscall, <c>ret 4</c>): the server's
     /// own "this human now drives THAT creature" write. Stores the creature's id at
     /// <c>player+0x28</c> (<c>game_object_id</c> — the field <c>CServerExoApp::GetPlayerCreature</c>
@@ -329,6 +436,15 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // A recovered CSWParty entry can be missing while the server-side player already
+        // points at the verified PC. Do not exchange perception ranges or call the engine
+        // setter with the same object merely because the array's old leader was a companion.
+        if (registered == newId)
+        {
+            PluginHost.Log($"control: server player already points at 0x{registered:X}; no re-point needed");
+            return true;
+        }
+
         nint newLeader = ResolveServerObject(newId);
         if (newLeader == 0)
         {
@@ -403,16 +519,32 @@ internal static unsafe partial class Odyssey
             index = FindPlayerCharacterMemberIndex(party, withinLiveCount: false, out pcId);
             if (index < 0)
             {
-                return false;
-            }
+                if (!TryGetPartyTableMemberCount(out int tableCount)
+                    || !TryRecoverMissingPcMember(party, tableCount, out index, out pcId))
+                {
+                    return false;
+                }
 
-            PluginHost.Log($"control: your PC sits at member[{index}], beyond CSWParty's count of "
-                + $"{*(int*)(party + SwPartyMemberCount)} — rotating it to the front");
+                // Recovery already placed the verified PC id in this slot and raised the
+                // count to cover it. Continue through the same id-only rotation and server
+                // identity sync as the ordinary path.
+                PluginHost.Log($"control: recovered PC member[{index}] is ready for rotation");
+            }
+            else
+            {
+                PluginHost.Log($"control: your PC sits at member[{index}], beyond CSWParty's count of "
+                    + $"{*(int*)(party + SwPartyMemberCount)} — rotating it to the front");
+            }
         }
 
         uint previousLeaderId = *(uint*)(party + SwPartyMember0ClientId);
         RotateControlToFront(party, index);
         SyncServerPlayerToLeader(previousLeaderId, pcId);
+        if (!TrySyncClientControlledId(client, pcId))
+        {
+            PluginHost.Log($"control: client control id could not be updated to 0x{pcId:X}; "
+                + "the recovered party array remains in place");
+        }
         RestoreCameraToControlledCreature();
         return true;
     }
@@ -477,6 +609,11 @@ internal static unsafe partial class Odyssey
         int count = withinLiveCount ? *(int*)(party + SwPartyMemberCount) : SwPartyMemberCapacity;
         if (count is <= 0 or > SwPartyMemberCapacity)
         {
+            if (withinLiveCount)
+            {
+                memberId = 0;
+                return -1;
+            }
             count = SwPartyMemberCapacity;
         }
 

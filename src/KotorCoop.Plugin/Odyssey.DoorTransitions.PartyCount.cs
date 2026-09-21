@@ -217,6 +217,46 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Whether the client's own PC resolves as a player character inside the first
+    /// <paramref name="memberCount"/> CSWParty entries. The party-together clamp writes its
+    /// target count directly; if the PC is beyond that bound (or absent/unresolvable), the
+    /// write would make the PC disappear from every consumer that walks the live count. Read
+    /// only, and deliberately false while the client world is unsettled so the caller defers.
+    /// </summary>
+    public static bool IsPlayerCharacterWithinClientPartyCount(int memberCount)
+    {
+        if (memberCount <= 0 || memberCount > SwPartyMemberCapacity)
+        {
+            return false;
+        }
+
+        nint client = GetClient();
+        nint party = client == 0 ? 0 : GetSWPartyFn(client);
+        if (party == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < memberCount; i++)
+        {
+            uint id = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
+            uint masked = id & ~ControlPartyNpcFlag;
+            if (masked is 0 or ObjectInvalidClientId)
+            {
+                continue;
+            }
+
+            nint creature = ResolveServerObject(masked);
+            if (creature != 0 && IsPlayerCharacter(creature))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Clamps CSWParty's own member count DOWN to <paramref name="maxCount"/> when it currently
     /// reads higher. NEVER raises it — this only removes staleness the engine's own remove path
     /// was supposed to clear and measured live not to (<see cref="SwPartyMemberCount"/>); it can

@@ -613,9 +613,6 @@ public sealed partial class KotorGameBridge
     /// <summary>CClientExoAppInternal + this = the controlled-character id (PC = 0xFFFFFFFF).</summary>
     private const int ControlledCharacterId = 0x20;
 
-    private const uint ControlPc = 0xFFFFFFFF;
-    private const uint ControlPartyNpcFlag = 0x80000000;
-
     /// <summary>
     /// Pins the player's input control to their own PC, reverting any switch to a shared,
     /// host-owned companion. Object-id write only (crash-proof); a no-op while the PC (or any
@@ -629,11 +626,19 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        // Revert ONLY an explicit party-NPC selection (0x8000xxxx). PC control is 0xFFFFFFFF
-        // (all-ones) which we leave alone, as is any value without the party-NPC flag.
-        if (controlled != ControlPc && (controlled & ControlPartyNpcFlag) != 0)
+        // The PC's id can change on a reload (live: 0x7FFFFFFE). All-ones is only the
+        // client-space encoding of 0x7FFFFFFF, not a universal "my player" sentinel.
+        // Never redirect input until the current creature is independently verified.
+        CreatureRef? player = _player;
+        if (player is null || !StillLooksLikeThePlayer(player.Address)
+            || !_memory.TryReadUInt32(player.Address + 4, out uint playerId))
         {
-            return _memory.TryWrite(clientInternal + ControlledCharacterId, ControlPc);
+            return false;
+        }
+
+        if (PlayerControlIdentity.TryGetCorrection(controlled, playerId, out uint corrected))
+        {
+            return _memory.TryWrite(clientInternal + ControlledCharacterId, corrected);
         }
 
         return true;
