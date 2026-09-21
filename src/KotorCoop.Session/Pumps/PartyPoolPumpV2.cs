@@ -215,7 +215,7 @@ internal sealed class PartyPoolPumpV2(
         }
         else
         {
-            PumpClient();
+            PumpClient(localModule);
         }
     }
 
@@ -317,8 +317,18 @@ internal sealed class PartyPoolPumpV2(
         log($"party pool trace: host snapshot {line}");
     }
 
-    private void PumpClient()
+    private void PumpClient(string localModule)
     {
+        // A client in a stunt module or between lives has no authoritative local pool
+        // observation. Its host snapshot still describes the last real world, so treating
+        // the stunt/load pool as empty would manufacture removes/adds during HostReload.
+        // Keep all ledgers and pending intents intact; the first valid scan after adoption
+        // will resume reconciliation against the host snapshot.
+        if (StuntModuleRule.IsStuntModule(localModule) || bridge.IsWorldBetweenLives)
+        {
+            return;
+        }
+
         long now = SessionClock.NowMs;
 
         foreach (PartyPoolIntentResultV2 result in session.DrainPartyPoolIntentResultsV2())

@@ -55,6 +55,10 @@ public class SharedInventoryV2PumpTests
         /// IPartyPoolBridge.LastPartyPoolScanWasStale for why the difference matters.</summary>
         public bool PoolScanStale { get; set; }
 
+        public bool WorldBetweenLives { get; set; }
+
+        public bool IsWorldBetweenLives => WorldBetweenLives;
+
         public bool LastPartyPoolScanWasStale { get; private set; }
 
         private Dictionary<PartyPoolStackKey, int> _lastGoodPool = [];
@@ -648,6 +652,38 @@ public class SharedInventoryV2PumpTests
         Assert.Single(session.PoolIntents);
         Assert.Equal(PartyPoolOpKind.Add, session.PoolIntents[0].Kind);
         Assert.Equal(3, session.PoolIntents[0].Count);
+    }
+
+    /// <summary>
+    /// A host reload leaves the client briefly in a stunt/loading world whose local pool is
+    /// empty while the received snapshot still describes the previous real world. That window
+    /// must not publish a synthetic removal or reconcile the old snapshot into the new world.
+    /// </summary>
+    [Theory]
+    [InlineData("STUNT_57", false)]
+    [InlineData("end_m01aa", true)]
+    public void AClientInAStuntWorldDoesNotReconcileAgainstThePreviousSnapshot(
+        string module, bool betweenLives)
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new();
+        session.PoolSnapshot[Medpac] = 2;
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        bridge.Pool[Medpac] = 2;
+        pump.Pump(Caps, "end_m01aa");
+        bridge.Pool.Clear();
+        bridge.WorldBetweenLives = betweenLives;
+        pump.Pump(Caps, module);
+        Assert.Empty(session.PoolIntents);
+        Assert.False(pump.TryDequeuePendingApply(out _));
+
+        // Once the real world is available, an unchanged pool must still be inert; the stunt
+        // tick must not have advanced bookkeeping in a way that replays the old snapshot.
+        bridge.Pool[Medpac] = 2;
+        bridge.WorldBetweenLives = false;
+        pump.Pump(Caps, "end_m01aa");
+        Assert.Empty(session.PoolIntents);
     }
 
     [Fact]
