@@ -236,8 +236,13 @@ public static class ProtocolConstants
     /// an object whose id was reused after a transition. Container-loot history/digests are
     /// full per-module sets while the game bridge uses an acknowledged, fair 24-slot page
     /// mailbox. See docs/review-seamless-2026-09-18.md (2026-09-21 recovery pass).
+    ///
+    /// Version 60: saved-world GIT digests canonicalize explicit object IDs, preserving each
+    /// ID/template association while ignoring runtime save list order. Pristine placement
+    /// order remains significant. Older peers use a different digest meaning, so reject that
+    /// mixed session at the version handshake instead of reporting a false content mismatch.
     /// </summary>
-    public const byte Version = 59;
+    public const byte Version = 60;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

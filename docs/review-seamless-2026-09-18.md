@@ -353,3 +353,20 @@ is still pending; these changes do not yet close the user's visual movement repo
 Final independent review also cleared stale optional phase-recovery baselines after pause or
 disable. That final native adjustment builds successfully but awaits the next game restart;
 the installed timing/heading/publication fixes above are already active.
+
+### Saved-world compatibility ordering (2026-09-21)
+
+Independent host/client saves of `tar_m10aa` produced a false `W_GIT`: installed module archives
+matched, and all 26 creature IDs agreed, but runtime movement reordered four saved creature-list
+entries. Saved-GIT hashing now sorts explicit IDs within each object list while retaining their
+template associations. Pristine placement order remains significant. Missing/duplicate saved
+IDs yield unknown rather than a misleading pristine fallback; the existing unknown-is-not-mismatch
+policy is unchanged. Protocol 60 prevents mixed digest schemes from reporting misleading content
+mismatches; both peers need the matching agent build.
+
+The two agents were restarted without reloading either game. Read-only checks of their current
+staged saves returned the same nonzero module digest `0x33441F5F` and save identity `0xA9CE77B0`.
+Neither restarted agent reports `W_GIT`. **238 focused tests passed**, including follow,
+publication, compatibility, digest and packet-codec coverage; the native x86 build passes with
+warnings as errors. This closes the measured ordering false positive, not every mod-compatibility
+or save-lineage scenario.

@@ -127,6 +127,78 @@ public sealed class SaveDigestTests : IDisposable
     }
 
     [Fact]
+    public void SavedGitReorderingByObjectIdIsEquivalent()
+    {
+        string gameDir = BuildGameDirectory("tar_m02aa", PristineGit([("n_a", 0)]));
+        string first = BuildSaveDirectory("tar_m02aa", 295, [(7u, "n_b"), (2u, "n_a")]);
+        string reordered = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_a"), (7u, "n_b")]);
+
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, first, "tar_m02aa", out uint a));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, reordered, "tar_m02aa", out uint b));
+        Assert.Equal(a, b);
+
+        Assert.True(SaveDigest.TryComputeSaveIdentity(first, out uint saveA));
+        Assert.True(SaveDigest.TryComputeSaveIdentity(reordered, out uint saveB));
+        Assert.Equal(saveA, saveB);
+    }
+
+    [Fact]
+    public void SavedGitAddedRemovedOrChangedObjectIdsPerturbTheDigest()
+    {
+        string gameDir = BuildGameDirectory("tar_m02aa", PristineGit([("n_a", 0)]));
+        string baseline = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_a"), (7u, "n_b")]);
+        string added = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_a"), (7u, "n_b"), (9u, "n_c")]);
+        string removed = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_a")]);
+        string changed = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_a"), (8u, "n_b")]);
+        string remapped = BuildSaveDirectory("tar_m02aa", 295, [(2u, "n_b"), (7u, "n_a")]);
+
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, baseline, "tar_m02aa", out uint expected));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, added, "tar_m02aa", out uint addedDigest));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, removed, "tar_m02aa", out uint removedDigest));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, changed, "tar_m02aa", out uint changedDigest));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, remapped, "tar_m02aa", out uint remappedDigest));
+
+        Assert.NotEqual(expected, addedDigest);
+        Assert.NotEqual(expected, removedDigest);
+        Assert.NotEqual(expected, changedDigest);
+        Assert.NotEqual(expected, remappedDigest);
+    }
+
+    [Fact]
+    public void SavedGitMissingOrDuplicateObjectIdIsUnknown()
+    {
+        string gameDir = BuildGameDirectory("tar_m02aa", PristineGit([("n_a", 0)]));
+        string missing = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(missing, "SAVEGAME.sav"),
+            BuildSavegameErf(
+                "tar_m02aa", 295,
+                SavedGit((null, "n_a")),
+                moduleSavType: 2057));
+        string duplicate = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(duplicate, "SAVEGAME.sav"),
+            BuildSavegameErf(
+                "tar_m02aa", 295,
+                SavedGit((2u, "n_a"), (2u, "n_b")),
+                moduleSavType: 2057));
+        string crossListDuplicate = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(crossListDuplicate, "SAVEGAME.sav"),
+            BuildSavegameErf(
+                "tar_m02aa", 295,
+                SavedGitWithCrossListDuplicate(),
+                moduleSavType: 2057));
+
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, missing, "tar_m02aa", out _));
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, duplicate, "tar_m02aa", out _));
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, crossListDuplicate, "tar_m02aa", out _));
+        Assert.False(SaveDigest.TryComputeSaveIdentity(missing, out _));
+        Assert.False(SaveDigest.TryComputeSaveIdentity(duplicate, out _));
+        Assert.False(SaveDigest.TryComputeSaveIdentity(crossListDuplicate, out _));
+    }
+
+    [Fact]
     public void PristinePredictionCountsBlueprintOwnedItemsIntoTheIds()
     {
         // Two creatures; the first's blueprint owns 3 items (2 equipped + 1 carried), so
@@ -347,6 +419,52 @@ public sealed class SaveDigestTests : IDisposable
         return BuildErf("SAV ",
             ("GLOBALVARS", 0 /* res */, [0xAA, 0xBB]),
             (module, moduleSavType, inner));
+    }
+
+    private static byte[] BuildSavegameErf(
+        string module, uint nextObjId, byte[] gitBytes, int moduleSavType)
+    {
+        GffWriter ifo = new("IFO ");
+        ifo.Root.SetDword("Mod_NextObjId0", nextObjId);
+        ifo.Root.SetDword("Mod_NextObjId1", 0);
+
+        byte[] inner = BuildErf("SAV ",
+            ("Module", 2014 /* ifo */, ifo.ToBytes()),
+            (module, 2023 /* git */, gitBytes));
+
+        return BuildErf("SAV ",
+            ("GLOBALVARS", 0 /* res */, [0xAA, 0xBB]),
+            (module, moduleSavType, inner));
+    }
+
+    private static byte[] SavedGit(params (uint? Id, string Resref)[] creatures)
+    {
+        GffWriter git = new("GIT ");
+        GffWriterList list = git.Root.AddList("Creature List");
+        foreach ((uint? id, string resref) in creatures)
+        {
+            var entry = list.Add(4).SetResRef("TemplateResRef", resref);
+            if (id.HasValue)
+            {
+                entry.SetDword("ObjectId", id.Value);
+            }
+        }
+
+        return git.ToBytes();
+    }
+
+    private static byte[] SavedGitWithCrossListDuplicate()
+    {
+        GffWriter git = new("GIT ");
+        git.Root.AddList("Creature List")
+            .Add(4)
+            .SetResRef("TemplateResRef", "n_a")
+            .SetDword("ObjectId", 2);
+        git.Root.AddList("Door List")
+            .Add(4)
+            .SetResRef("TemplateResRef", "door_a")
+            .SetDword("ObjectId", 2);
+        return git.ToBytes();
     }
 
     /// <summary>A pristine (never-saved) GIT: entries without ObjectId fields, the way the

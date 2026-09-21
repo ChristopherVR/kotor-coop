@@ -145,7 +145,12 @@ public static class SaveDigest
             uint h = FnvString(FnvOffset, moduleSav.Resref.ToLowerInvariant());
             h = FnvUInt(h, nextObjId0);
             h = FnvUInt(h, nextObjId1);
-            h = HashSavedGit(h, Gff.Parse(gitBytes));
+            if (!TryHashSavedGit(h, Gff.Parse(gitBytes), out h))
+            {
+                // A visited save must carry a complete, unique ObjectId list. Falling back to
+                // the pristine module here could produce a believable but wrong id mapping.
+                return false;
+            }
 
             // 0 is the wire's "unknown"; a real digest must never collide with it.
             digest = h == 0 ? 1u : h;
@@ -178,14 +183,21 @@ public static class SaveDigest
         {
             try
             {
-                uint h = HashSavedGit(FnvOffset, Gff.Parse(savedGit));
+                if (!TryHashSavedGit(FnvOffset, Gff.Parse(savedGit), out uint h))
+                {
+                    // The save was visited, so its explicit ids are authoritative. A missing
+                    // or duplicate id is corruption/ambiguity, not an invitation to compare
+                    // against the pristine module and risk a false match.
+                    return false;
+                }
                 digest = h == 0 ? 1u : h;
                 return true;
             }
             catch (InvalidDataException)
             {
-                // A corrupt stored GIT falls through to the pristine file, which is what
-                // the engine would fall back on failing to restore the area too.
+                // A corrupt stored GIT is unknown. The engine's pristine fallback is not a
+                // safe compatibility identity for a save that claims to have visited it.
+                return false;
             }
         }
 
@@ -299,31 +311,50 @@ public static class SaveDigest
     }
 
     /// <summary>
-    /// Folds a save-stored GIT's explicit ObjectId list into the digest. File order is
-    /// hashed as-is: the save writes its GIT sorted by X, but two copies of the same save
-    /// are byte-identical, which is exactly the identity being tested — the order is never
-    /// interpreted as the engine's load order (Handoff 4.9's warning).
+    /// Folds a save-stored GIT's explicit ObjectId list into the digest. Each list is sorted
+    /// by ObjectId before hashing: the save writes runtime creature entries in position order,
+    /// so two peers that moved the same creatures can have different file order while retaining
+    /// the same id mapping. Pristine GITs use <see cref="TryComputePristineModuleGit"/>'s
+    /// separate order-sensitive engine-dealing path. Missing or duplicate ids are rejected so
+    /// an ambiguous saved state never degrades into a plausible compatibility fingerprint.
     /// </summary>
-    private static uint HashSavedGit(uint seed, Gff git)
+    private static bool TryHashSavedGit(uint seed, Gff git, out uint digest)
     {
+        digest = seed;
         uint h = seed;
+        HashSet<uint> seenIds = [];
 
         foreach ((string list, _) in AreaLoadOrder)
         {
             h = FnvString(h, list);
 
+            List<(uint Id, string Resref)> entries = [];
             foreach (GffStruct entry in git.Root.GetList(list))
             {
-                // A save GIT entry always carries its id; 0xFFFFFFFF marks a malformed
-                // one so it still perturbs the digest rather than vanishing.
-                h = FnvUInt(h, entry.TryGetDword("ObjectId", out uint id) ? id : 0xFFFFFFFF);
+                if (!entry.TryGetDword("ObjectId", out uint id) || id == uint.MaxValue)
+                {
+                    return false;
+                }
+
+                if (!seenIds.Add(id))
+                {
+                    return false;
+                }
 
                 entry.TryGetString("TemplateResRef", out string resref);
-                h = FnvString(h, resref.ToLowerInvariant());
+                entries.Add((id, resref.ToLowerInvariant()));
+            }
+
+            entries.Sort(static (a, b) => a.Id.CompareTo(b.Id));
+            for (int i = 0; i < entries.Count; i++)
+            {
+                h = FnvUInt(h, entries[i].Id);
+                h = FnvString(h, entries[i].Resref);
             }
         }
 
-        return h;
+        digest = h;
+        return true;
     }
 
     /// <summary>How many ids a blueprint's contents consume: the combined length of its
