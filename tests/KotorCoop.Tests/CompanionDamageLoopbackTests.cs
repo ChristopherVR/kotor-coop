@@ -91,4 +91,39 @@ public class CompanionDamageLoopbackTests
 
         Assert.Empty(host.GetCompanionDamage());
     }
+
+    [Fact]
+    public async Task AnExpiredCompanionReportIsRemovedFromTheHostRetentionMap()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        IPEndPoint hostEndPoint = new(IPAddress.Loopback, host.ListenEndPoint.Port);
+
+        using CoopClient client = new(new SessionSettings { PlayerName = "Bastila", TickRate = 30 }, hostEndPoint);
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        PlayerState state = new(new Vector3f(10f, 20f, 0f), 0f, "end_m01aa", 100, 0);
+
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish), "client must be admitted");
+
+        client.ReportCompanionDamage(1, [new CompanionDamageEntry(1, 12)]);
+        Assert.True(
+            await WaitForAsync(() => host.CompanionDamageReportCount == 1, Timeout, Publish),
+            "the host must retain a fresh companion report");
+
+        // The report is intentionally not refreshed. GetCompanionDamage is the host's normal
+        // read path, so it should both return no stale rows and reclaim the transport snapshot.
+        await Task.Delay(CompanionDamageFreshnessWindow().Add(TimeSpan.FromMilliseconds(100)));
+        Assert.Empty(host.GetCompanionDamage());
+        Assert.Equal(0, host.CompanionDamageReportCount);
+    }
+
+    private static TimeSpan CompanionDamageFreshnessWindow() => TimeSpan.FromSeconds(2);
 }

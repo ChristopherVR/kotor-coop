@@ -107,6 +107,18 @@ internal sealed class PartyPoolPumpV2(
 
     private readonly Dictionary<uint, PartyPoolStackKey> _outstandingBySerial = [];
 
+    // A refused engine apply must never make the next reconcile delete the item that the player
+    // still owns locally. Retry a few times, then hold that key out of automatic reconciliation
+    // and leave the item visible for manual recovery.
+    private readonly Dictionary<PartyPoolStackKey, FailedIntentState> _failedIntentStates = [];
+
+    private const int MaxFailedIntentRetries = 3;
+
+    private sealed class FailedIntentState(int failures)
+    {
+        public int Failures { get; set; } = failures;
+    }
+
     /// <summary>Generous past the dispatcher's own single-slot cheat-answer timeout — see
     /// <see cref="PartyPoolPump"/>'s identical <c>ApplyInFlightTimeoutMs</c> reasoning. If a
     /// client's own detect step is slow to notice the underlying movement is still unexplained,
@@ -262,7 +274,16 @@ internal sealed class PartyPoolPumpV2(
         bool queuedAny = false;
         foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
         {
-            queuedAny |= EnqueueApply(intent.Kind, intent.Key, intent.Count);
+            bool queued = EnqueueApply(intent.Kind, intent.Key, intent.Count, expected: null,
+                intentPeerId: intent.PeerId, intentSerial: intent.IntentSerial);
+            queuedAny |= queued;
+            if (!queued)
+            {
+                // The wire layer deduped this intent, so it will not be delivered again as a
+                // new queue entry. Refuse it explicitly; otherwise the sender retransmits it
+                // forever with no result and its local stack remains permanently outstanding.
+                session.CompletePartyPoolIntentV2(intent.PeerId, intent.IntentSerial, accepted: false);
+            }
         }
 
         if (queuedAny)
@@ -300,6 +321,20 @@ internal sealed class PartyPoolPumpV2(
     {
         long now = SessionClock.NowMs;
 
+        foreach (PartyPoolIntentResultV2 result in session.DrainPartyPoolIntentResultsV2())
+        {
+            if (result.Accepted)
+            {
+                _failedIntentStates.Remove(result.Intent.Key);
+                MarkAcked(result.Intent.IntentSerial, now);
+            }
+            else
+            {
+                HandleRejectedIntent(result.Intent, now);
+            }
+        }
+
+        // Compatibility for sessions that still expose only the serial drain.
         foreach (uint serial in session.DrainAckedPartyPoolIntentsV2())
         {
             MarkAcked(serial, now);
@@ -466,6 +501,11 @@ internal sealed class PartyPoolPumpV2(
             // moves again while an earlier reconcile is still in flight is caught the very next
             // tick, and a target that is already fully covered by what is already queued queues
             // nothing further.
+            if (IsFailedIntentProtected(key, actual, snapshotValue))
+            {
+                continue;
+            }
+
             int target = ReconcileTarget(key, actual, snapshotValue);
             int expectedNet = ExpectedFromReconcileNet(key);
             int projected = actual + expectedNet;
@@ -675,7 +715,8 @@ internal sealed class PartyPoolPumpV2(
 
     private bool EnqueueApply(
         PartyPoolOpKind kind, PartyPoolStackKey key, ushort count,
-        ExpectedReconcileMovement? expected = null)
+        ExpectedReconcileMovement? expected = null,
+        uint intentPeerId = 0, uint intentSerial = 0)
     {
         lock (_pendingGate)
         {
@@ -686,7 +727,8 @@ internal sealed class PartyPoolPumpV2(
                 return false;
             }
 
-            _pendingApplies.Enqueue(new CoopAgent.PendingPartyPoolApply(kind, key, count));
+            _pendingApplies.Enqueue(new CoopAgent.PendingPartyPoolApply(
+                kind, key, count, intentPeerId, intentSerial));
             _dispatchOrder.Enqueue(expected);
             return true;
         }
@@ -802,6 +844,52 @@ internal sealed class PartyPoolPumpV2(
             ? entries
             : _outstanding[key] = []).Add(new OutstandingIntent(serial, delta, nowMs));
         _outstandingBySerial[serial] = key;
+    }
+
+    private void HandleRejectedIntent(PartyPoolIntentPacketV2 intent, long nowMs)
+    {
+        RemoveOutstanding(intent.IntentSerial);
+
+        _failedIntentStates.TryGetValue(intent.Key, out FailedIntentState? state);
+        state ??= _failedIntentStates[intent.Key] = new FailedIntentState(0);
+        state.Failures++;
+
+        if (state.Failures <= MaxFailedIntentRetries)
+        {
+            uint retrySerial = session.PublishPartyPoolIntentV2(intent.Kind, intent.Key, intent.Count);
+            if (retrySerial != 0)
+            {
+                int delta = intent.Kind == PartyPoolOpKind.Add ? intent.Count : -intent.Count;
+                AddOutstanding(intent.Key, retrySerial, delta, nowMs);
+                log($"party pool: host refused {intent.Kind.ToString().ToLowerInvariant()} of "
+                    + $"{intent.Count}x '{intent.Key.Resref}' (engine apply failed); retry "
+                    + $"{state.Failures}/{MaxFailedIntentRetries} (serial {retrySerial})");
+                return;
+            }
+        }
+
+        log($"party pool: host refused {intent.Kind.ToString().ToLowerInvariant()} of "
+            + $"{intent.Count}x '{intent.Key.Resref}'; preserving the local item and stopping "
+            + $"automatic retries after {MaxFailedIntentRetries} failures");
+    }
+
+    private bool IsFailedIntentProtected(PartyPoolStackKey key, int actual, int snapshot)
+    {
+        if (!_failedIntentStates.ContainsKey(key))
+        {
+            return false;
+        }
+
+        // Once the host snapshot independently catches up, the failure has been resolved and the
+        // key can return to normal reconciliation. Until then, preserve the player's local
+        // stack rather than silently rolling it back to the stale host value.
+        if (actual == snapshot)
+        {
+            _failedIntentStates.Remove(key);
+            return false;
+        }
+
+        return true;
     }
 
     private void RemoveOutstanding(uint serial)

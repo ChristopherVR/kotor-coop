@@ -145,7 +145,8 @@ internal partial struct SharedBlock
     /// 2026-09-03 relay addendum): version 66 left no free bytes before 0x4C00 at all, so the
     /// region starts cleanly at the old boundary and uses 0x18 of the new 0x100.
     /// </summary>
-    public const int TotalSize = 0x4D00;
+    /// <summary>Grown for the acknowledged 24-slot container-loot mailbox (protocol 59).</summary>
+    public const int TotalSize = 0x4F00;
 
     public const int ProfileVisibleSize = 0x250;
 

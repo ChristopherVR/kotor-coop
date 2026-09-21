@@ -22,18 +22,37 @@ public sealed partial class KotorGameBridge
     /// <summary>CItemRepository + this = item count.</summary>
     private const int RepositoryItemCount = 0x10;
 
-    // Container-loot removal region, pre-reserved at 0xD00..0xE00 in the shared block (the
-    // block's TotalSize and version already cover it, so nothing there changes).
+    // Legacy container-loot removal region, retained for old plugin readers.
     private const int BlockLootCount = 0xD00;
     private const int BlockLootSlots = 0xD08;
     private const int BlockLootStride = 0x08;
     private const int BlockLootCapacity = 24;
+
+    // Protocol 59 acknowledged mailbox. Mirrors SharedBlock.Items.cs exactly.
+    private const int BlockLootMailboxModuleHash = 0x4D00;
+    private const int BlockLootMailboxAckSerial = 0x4D04;
+    private const int BlockLootMailboxPageSerial = 0x4D08;
+    private const int BlockLootMailboxCount = 0x4D0C;
+    private const int BlockLootMailboxSlots = 0x4D10;
+    private const int BlockLootMailboxStride = 0x0C;
+    private const int BlockLootMailboxCapacity = 24;
+    private const int BlockLootMailboxConsumedCount = 0x4E30;
+    private const int BlockLootMailboxEpoch = 0x4E34;
+    private const int BlockLootMailboxAckEpoch = 0x4E38;
+
 
     /// <summary>Last observed item-id set per container in the current module.</summary>
     private readonly Dictionary<uint, HashSet<uint>> _containerShadow = [];
     private string _lootModule = string.Empty;
     private bool _lootBaselined;
     private long _nextLootScanTicks;
+    private string _lootPageModule = string.Empty;
+    private int _lootPageCursor;
+    private uint _lootPageSerial;
+    private uint _lootPageEpoch;
+    private bool _lootPageEpochInitialized;
+    private bool _lootPagePending;
+    private readonly List<ContainerLootRemoval> _lootQueuedEntries = [];
 
     /// <summary>Applying loot removal needs the plugin (RemoveItem is a main-thread engine call).</summary>
     public bool SupportsContainerLoot => _pluginBlock != 0;
@@ -60,6 +79,8 @@ public sealed partial class KotorGameBridge
             _containerShadow.Clear();
             _lootBaselined = false;
             _nextLootScanTicks = 0;
+            // Keep an outstanding page owned by the plugin until it acknowledges or drops it
+            // under its own settled-module guard. Resetting here would overwrite that page.
         }
 
         long now = Environment.TickCount64;
@@ -141,8 +162,9 @@ public sealed partial class KotorGameBridge
     /// Publishes the session's container-loot removals into the plugin, which deletes each
     /// looted item from its own copy of the container on the game's thread. Idempotent — an
     /// item already gone resolves to a no-op — so re-declaring the set every tick is safe.
-    /// Writes at most <see cref="BlockLootCapacity"/>, the newest (the store keeps them
-    /// oldest-first, and the newest are the ones least likely to be applied yet).
+    /// Delivers the input in oldest-first pages through the acknowledged mailbox. A page is
+    /// never overwritten while the plugin still owns it, so all 24-slot pages get a chance to
+    /// be consumed; this fixes the former newest-only starvation.
     /// </summary>
     public bool TryWriteContainerLoot(IReadOnlyList<ContainerLootRemoval> removals)
     {
@@ -151,23 +173,106 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
+        // Protocol 59 owns the acknowledged mailbox; keep the pre-59 level inert if a
+        // plugin process survived an agent restart.
+        _memory.TryWrite(_pluginBlock + BlockLootCount, 0u);
+
+        string module = _lootModule;
+        if (module.Length == 0)
+            return false;
+
+        bool sameModule = string.Equals(module, _lootPageModule, StringComparison.OrdinalIgnoreCase);
+        if (!_lootPagePending && (!sameModule || !HasPrefix(removals)))
+        {
+            _lootPageModule = module;
+            _lootQueuedEntries.Clear();
+            _lootQueuedEntries.AddRange(removals);
+            _lootPageCursor = 0;
+        }
+        else if (!_lootPagePending && sameModule)
+        {
+            _lootQueuedEntries.AddRange(removals.Skip(_lootQueuedEntries.Count));
+        }
+
+        if (_lootPagePending)
+        {
+            if (!_memory.TryReadUInt32(_pluginBlock + BlockLootMailboxAckSerial, out uint ack)
+                || !_memory.TryReadUInt32(_pluginBlock + BlockLootMailboxAckEpoch, out uint ackEpoch)
+                || ack != _lootPageSerial || ackEpoch != _lootPageEpoch)
+                return false;
+            _lootPagePending = false;
+            if (!sameModule || !HasPrefix(removals))
+            {
+                _lootPageModule = module;
+                _lootQueuedEntries.Clear();
+                _lootQueuedEntries.AddRange(removals);
+                _lootPageCursor = 0;
+            }
+            else
+            {
+                _lootQueuedEntries.AddRange(removals.Skip(_lootQueuedEntries.Count));
+            }
+        }
+
+        if (_lootPageCursor >= _lootQueuedEntries.Count)
+            return true;
+
         bool ok = true;
-        int count = Math.Min(removals.Count, BlockLootCapacity);
-        int start = removals.Count - count;
+        int count = Math.Min(_lootQueuedEntries.Count - _lootPageCursor, BlockLootMailboxCapacity);
 
         for (int i = 0; i < count; i++)
         {
-            ContainerLootRemoval removal = removals[start + i];
-            nint slot = _pluginBlock + BlockLootSlots + (i * BlockLootStride);
-
+            ContainerLootRemoval removal = _lootQueuedEntries[_lootPageCursor + i];
+            nint slot = _pluginBlock + BlockLootMailboxSlots + (i * BlockLootMailboxStride);
             ok &= _memory.TryWrite(slot + 0x04, removal.ItemId);
-
-            // Container id last, so the plugin never reads a slot whose id and payload disagree.
             ok &= _memory.TryWrite(slot + 0x00, removal.ContainerId);
         }
 
-        ok &= _memory.TryWrite(_pluginBlock + BlockLootCount, (uint)count);
-        return ok;
+        if (!_lootPageEpochInitialized)
+        {
+            _memory.TryReadUInt32(_pluginBlock + BlockLootMailboxEpoch, out uint oldEpoch);
+            _lootPageEpoch = oldEpoch + 1;
+            if (_lootPageEpoch == 0)
+                _lootPageEpoch = (uint)Environment.TickCount64 | 1u;
+            _lootPageEpochInitialized = true;
+        }
+
+        if (_lootPageSerial == 0)
+        {
+            _memory.TryReadUInt32(_pluginBlock + BlockLootMailboxPageSerial, out uint oldSerial);
+            _lootPageSerial = oldSerial + 1;
+            if (_lootPageSerial == 0) _lootPageSerial = 1;
+        }
+
+        ok &= _memory.TryWrite(_pluginBlock + BlockLootMailboxModuleHash, ModuleIdentity.Hash(module));
+        ok &= _memory.TryWrite(_pluginBlock + BlockLootMailboxEpoch, _lootPageEpoch);
+        ok &= _memory.TryWrite(_pluginBlock + BlockLootMailboxCount, (uint)count);
+        _lootPageSerial++;
+        if (_lootPageSerial == 0) _lootPageSerial = 1;
+        if (!ok)
+            return false;
+
+        // Serial last is the mailbox publication barrier. Never expose a page whose slots or
+        // metadata had a failed write: the previous serial remains owned by the plugin, and a
+        // later retry rewrites the complete payload before publishing a new serial.
+        if (!_memory.TryWrite(_pluginBlock + BlockLootMailboxPageSerial, _lootPageSerial))
+            return false;
+
+        _lootPageCursor += count;
+        _lootPagePending = true;
+        return true;
+    }
+
+    private bool HasPrefix(IReadOnlyList<ContainerLootRemoval> desired)
+    {
+        if (desired.Count < _lootQueuedEntries.Count)
+            return false;
+        for (int i = 0; i < _lootQueuedEntries.Count; i++)
+        {
+            if (_lootQueuedEntries[i] != desired[i])
+                return false;
+        }
+        return true;
     }
 
 }

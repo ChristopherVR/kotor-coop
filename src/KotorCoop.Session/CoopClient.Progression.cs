@@ -38,14 +38,10 @@ public sealed partial class CoopClient
         // Sent every tick even when nothing changed, and unreliable, for the same reason the
         // damage ledger is: the totals are cumulative, so a lost datagram costs a tick of
         // staleness rather than a purchase, and a repeat applies nothing.
-        int length = PacketCodec.Write(
-            _sendBuffer,
-            new ProgressionReportPacket(_localPeerId, generation, goldEarned, goldSpent, experience));
-
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
-        }
+        // Caller's thread, not the tick thread — see CoopClient._apiBuffer.
+        SendFromCaller(
+            new ProgressionReportPacket(_localPeerId, generation, goldEarned, goldSpent, experience),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>The host merges reports; a client only sends its own.</summary>

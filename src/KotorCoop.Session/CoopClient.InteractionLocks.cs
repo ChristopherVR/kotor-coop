@@ -133,20 +133,18 @@ public sealed partial class CoopClient
             return;
         }
 
-        // A PRIVATE buffer, not _sendBuffer: this is called from the plugin-pump thread while
-        // RunAsync's tick loop is encoding its own packets into _sendBuffer on another thread.
-        // Sharing it corrupted the request (the host dropped it as malformed), so the first
-        // click silently lost the race it was supposed to win.
-        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
-        int length = PacketCodec.Write(
-            buffer,
+        // NOT _sendBuffer: this is called from the plugin-pump thread while RunAsync's tick
+        // loop is encoding its own packets into _sendBuffer on another thread. Sharing it
+        // corrupted the request (the host dropped it as malformed), so the first click
+        // silently lost the race it was supposed to win. This was the first sighting of the
+        // hazard and used to fix itself alone with a freshly allocated buffer; every
+        // caller-thread sender now shares one guarded buffer instead — see
+        // CoopClient._apiBuffer.
+        SendFromCaller(
             new InteractionClaimPacket(
                 _localPeerId, module, string.Empty, InteractionKind.Container, true, targetId,
-                requestSerial));
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, buffer.AsSpan(0, length));
-        }
+                requestSerial),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>The most recent <see cref="LockResponsePacket"/> the host sent us, if its

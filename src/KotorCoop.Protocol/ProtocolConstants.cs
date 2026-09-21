@@ -230,8 +230,14 @@ public static class ProtocolConstants
     /// <see cref="PeerEffectKind"/>). Client to host only; the other clients see it through the
     /// ordinary enemy census. Off by default (<c>enemy_effect_sync</c>), NEEDS-LIVE. See
     /// docs/research/enemy-effects.md.
+    ///
+    /// Version 59: container and materialised-loot packets carry the authoritative module
+    /// name. A receiver refuses an op for another module, so an old retransmit cannot delete
+    /// an object whose id was reused after a transition. Container-loot history/digests are
+    /// full per-module sets while the game bridge uses an acknowledged, fair 24-slot page
+    /// mailbox. See docs/review-seamless-2026-09-18.md (2026-09-21 recovery pass).
     /// </summary>
-    public const byte Version = 58;
+    public const byte Version = 59;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

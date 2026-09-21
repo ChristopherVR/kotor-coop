@@ -51,6 +51,13 @@ public sealed partial class CoopHost
 
     private readonly Queue<(uint Peer, uint Serial)> _partyPoolIntentDedupHistoryV2 = new();
 
+    // An intent is not acknowledged until the engine answer arrives. Keep the sender and the
+    // verdict while the dedup entry is retained so a retransmit after a lost ACK gets the same
+    // result without queueing a second engine apply.
+    private readonly Dictionary<(uint Peer, uint Serial), IPEndPoint> _partyPoolIntentSourcesV2 = [];
+    private readonly Dictionary<(uint Peer, uint Serial), bool> _partyPoolIntentResultsV2 = [];
+    private readonly Dictionary<(uint Peer, uint Serial), PartyPoolIntentPacketV2> _partyPoolIntentPacketsV2 = [];
+
     private const int MaxRememberedIntentsV2 = 4096;
 
     /// <summary>Accepted intents this instance's own engine still owes an apply, drained by
@@ -129,15 +136,24 @@ public sealed partial class CoopHost
 
         (uint Peer, uint Serial) dedupKey = (intent.PeerId, intent.IntentSerial);
         bool isNew;
+        bool haveResult;
+        bool result = false;
         lock (_gate)
         {
+            _partyPoolIntentSourcesV2[dedupKey] = from;
+            _partyPoolIntentPacketsV2[dedupKey] = intent;
+            haveResult = _partyPoolIntentResultsV2.TryGetValue(dedupKey, out result);
             isNew = _partyPoolIntentDedupV2.Add(dedupKey);
             if (isNew)
             {
                 _partyPoolIntentDedupHistoryV2.Enqueue(dedupKey);
                 while (_partyPoolIntentDedupHistoryV2.Count > MaxRememberedIntentsV2)
                 {
-                    _partyPoolIntentDedupV2.Remove(_partyPoolIntentDedupHistoryV2.Dequeue());
+                    (uint Peer, uint Serial) evicted = _partyPoolIntentDedupHistoryV2.Dequeue();
+                    _partyPoolIntentDedupV2.Remove(evicted);
+                    _partyPoolIntentSourcesV2.Remove(evicted);
+                    _partyPoolIntentResultsV2.Remove(evicted);
+                    _partyPoolIntentPacketsV2.Remove(evicted);
                 }
             }
         }
@@ -150,12 +166,45 @@ public sealed partial class CoopHost
             }
         }
 
-        int length = PacketCodec.Write(
-            _replyBuffer, new PartyPoolIntentAckPacketV2(intent.PeerId, intent.IntentSerial, Accepted: true));
-        if (length > 0)
+        // New and still-pending intents have no ACK yet. A duplicate of a completed intent is
+        // answered from the retained result cache, which makes the delayed ACK reliable.
+        if (haveResult)
         {
-            _channel.Send(from, _replyBuffer.AsSpan(0, length));
+            SendPartyPoolIntentAck(from, intent, result);
         }
+    }
+
+    public void CompletePartyPoolIntentV2(uint peerId, uint intentSerial, bool accepted)
+    {
+        (uint Peer, uint Serial) key = (peerId, intentSerial);
+        IPEndPoint? destination;
+        PartyPoolIntentPacketV2? intent;
+        lock (_gate)
+        {
+            if (!_partyPoolIntentDedupV2.Contains(key))
+            {
+                return;
+            }
+
+            _partyPoolIntentResultsV2[key] = accepted;
+            _partyPoolIntentSourcesV2.TryGetValue(key, out destination);
+            if (!_partyPoolIntentPacketsV2.TryGetValue(key, out intent))
+            {
+                return;
+            }
+        }
+
+        if (destination is not null)
+        {
+            SendPartyPoolIntentAck(destination, intent, accepted);
+        }
+    }
+
+    private void SendPartyPoolIntentAck(IPEndPoint destination, PartyPoolIntentPacketV2 intent, bool accepted)
+    {
+        SendFromCaller(destination,
+            new PartyPoolIntentAckPacketV2(intent.PeerId, intent.IntentSerial, accepted),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>

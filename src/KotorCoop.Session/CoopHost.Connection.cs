@@ -126,15 +126,9 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
-            // Match a returning peer by its stable nonce first, then by endpoint. The nonce
-            // is what makes reconnection seamless: a client that dropped and came back —
-            // possibly from a new ephemeral port — reclaims its existing slot (same id,
-            // same name, its phantom never doubled) instead of joining as a stranger while
-            // its old slot lingers until timeout. Hello is also retransmitted until Welcome
-            // lands, so a plain repeat must return the same id too.
-            PeerConnection? existing =
-                _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce)
-                ?? _peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from));
+            // A nonce is the identity. Matching a new nonce by source endpoint can hand a
+            // stranger the departed player's id and all cumulative ledgers keyed by it.
+            PeerConnection? existing = _peers.Values.FirstOrDefault(p => p.Nonce == hello.ClientNonce);
 
             if (existing is not null)
             {
@@ -145,6 +139,14 @@ public sealed partial class CoopHost
             }
             else
             {
+                // A new nonce on an endpoint still held by a live peer proves that endpoint
+                // was reissued. Retire the old peer immediately instead of keeping a ghost
+                // until the normal timeout; the old nonce remains reclaimable.
+                if (_peers.Values.FirstOrDefault(p => p.EndPoint.Equals(from)) is { } replaced)
+                {
+                    ForgetPeer(replaced.Id, now);
+                }
+
                 if (_peers.Count + 1 >= ProtocolConstants.MaxPeers)
                 {
                     int rejectLength = PacketCodec.Write(_replyBuffer, new RejectPacket("session full"));
@@ -342,6 +344,23 @@ public sealed partial class CoopHost
 
             _retired.Remove(oldest);
         }
+    }
+
+    /// <summary>Retires and removes one peer, including every table keyed by its id.</summary>
+    private void ForgetPeer(uint id, long nowMs)
+    {
+        if (_peers.TryGetValue(id, out PeerConnection? gone))
+        {
+            Retire(gone, nowMs);
+        }
+
+        _peers.Remove(id);
+        _buffer.Remove(id);
+        ReleaseDialogueIfOwnedBy(id);
+        ForgetPhantomDamageFor(id);
+        _encounterTriggers.Forget(id);
+        _triggerRelay.Forget(id);
+        _interactionLocks.Forget(id);
     }
 
     private void HandleBye(IPEndPoint from, ReadOnlySpan<byte> span, long now)

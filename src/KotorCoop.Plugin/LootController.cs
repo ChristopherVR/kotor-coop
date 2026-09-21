@@ -1,3 +1,5 @@
+using KotorCoop.Protocol;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -12,7 +14,7 @@ namespace KotorCoop.Plugin;
 /// no-op, never a crash. Applying is idempotent, so the agent re-declaring the same set every
 /// tick is harmless.
 /// </summary>
-internal sealed class LootController(SharedBlockView block)
+internal sealed unsafe class LootController(SharedBlockView block)
 {
     /// <summary>Frames between passes; loot removals are rare and never urgent.</summary>
     private const int IntervalFrames = 20;
@@ -21,7 +23,13 @@ internal sealed class LootController(SharedBlockView block)
     private int _logged;
 
     /// <summary>Forgets everything on a module change; ids now name different objects.</summary>
-    public void Invalidate() => block.LootCount = 0;
+    public void Invalidate()
+    {
+        block.LootCount = 0;
+        block.SetLootMailboxConsumedCount(0);
+        block.SetLootMailboxAckEpoch(block.LootMailboxEpoch);
+        block.SetLootMailboxAckSerial(block.LootMailboxPageSerial);
+    }
 
     public void OnFrame()
     {
@@ -38,9 +46,43 @@ internal sealed class LootController(SharedBlockView block)
             return;
         }
 
-        uint count = Math.Min(block.LootCount, (uint)SharedBlock.LootCapacity);
+        uint pageSerial = block.LootMailboxPageSerial;
+        if (pageSerial != 0 && (pageSerial != block.LootMailboxAckSerial
+            || block.LootMailboxEpoch != block.LootMailboxAckEpoch))
+        {
+            byte* module = stackalloc byte[SharedBlock.ModuleNameLength];
+            int length = Odyssey.ReadCurrentModuleName(module, SharedBlock.ModuleNameLength);
+            string current = length > 0
+                ? System.Text.Encoding.ASCII.GetString(module, length)
+                : string.Empty;
 
-        for (int i = 0; i < count; i++)
+            // A page for another module is consumed as a DROP once the local engine has
+            // settled in that other module. This releases the producer to publish its new
+            // module page without ever applying stale object ids.
+            if (current.Length > 0 && ModuleIdentity.Hash(current) != block.LootMailboxModuleHash)
+            {
+                block.SetLootMailboxConsumedCount(0);
+                block.SetLootMailboxAckEpoch(block.LootMailboxEpoch);
+                block.SetLootMailboxAckSerial(pageSerial);
+            }
+            else if (current.Length > 0)
+            {
+                uint count = Math.Min(block.LootMailboxCount,
+                    (uint)SharedBlock.LootMailboxCapacity);
+                for (int i = 0; i < count; i++)
+                    Apply(block.GetLootMailbox(i));
+
+                // Publish consumption only after the complete page has been walked. The
+                // agent will not overwrite these slots until this serial is acknowledged.
+                block.SetLootMailboxConsumedCount(count);
+                block.SetLootMailboxAckEpoch(block.LootMailboxEpoch);
+                block.SetLootMailboxAckSerial(pageSerial);
+            }
+        }
+
+        uint legacyCount = Math.Min(block.LootCount, (uint)SharedBlock.LootCapacity);
+
+        for (int i = 0; i < legacyCount; i++)
         {
             Apply(block.GetLoot(i));
         }

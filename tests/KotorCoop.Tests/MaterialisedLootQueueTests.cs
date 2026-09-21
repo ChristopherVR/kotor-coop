@@ -55,12 +55,19 @@ public class MaterialisedLootQueueTests
         /// off the wire.</summary>
         public List<MaterialisedLootPacket> Incoming { get; } = [];
 
+        public List<MaterialisedLootPacket> Acknowledged { get; } = [];
+
+        public void AcknowledgeMaterialisedLoot(MaterialisedLootPacket packet) => Acknowledged.Add(packet);
+
         public IReadOnlyList<MaterialisedLootPacket> DrainMaterialisedLoot()
         {
             List<MaterialisedLootPacket> ready = [.. Incoming];
             Incoming.Clear();
             return ready;
         }
+
+        public void RequeueMaterialisedLoot(IReadOnlyList<MaterialisedLootPacket> packets) =>
+            Incoming.AddRange(packets);
 
         /// <summary>Dialogue-grant packets waiting to be handed to the agent - rides the SAME
         /// pending-give queue as materialised loot, but targets the local PC directly and must
@@ -182,6 +189,10 @@ public class MaterialisedLootQueueTests
 
     private static MaterialisedLootPacket Packet(uint ownerEnemyId, params MaterialisedLootItem[] items) =>
         new(OriginPeerId: 0, OpSequence: 0, ownerEnemyId, items);
+
+    private static MaterialisedLootPacket Packet(
+        uint ownerEnemyId, string module, params MaterialisedLootItem[] items) =>
+        new(OriginPeerId: 0, OpSequence: 0, ownerEnemyId, items, module);
 
     [Fact]
     public void NothingQueuedUntilAPacketArrives()
@@ -326,6 +337,30 @@ public class MaterialisedLootQueueTests
         agent.PumpOnce();
 
         Assert.False(agent.TryDequeuePendingLoot(out _));
+    }
+
+    [Fact]
+    public void ModuleTaggedLootRetriesWhileStandInMappingIsBeingPublished()
+    {
+        (CoopAgent agent, MinimalBridge bridge, StubSession session) = BuildWithBridge();
+        bridge.MaterialisedOwnerIds = new HashSet<uint>();
+        session.Incoming.Add(Packet(0xE, ClientModule, Item("g_w_blstrpstl001")));
+
+        agent.PumpOnce();
+        for (int i = 0; i < 40; i++)
+        {
+            agent.PumpOnce();
+        }
+
+        Assert.False(agent.TryDequeuePendingLoot(out _));
+        Assert.Empty(session.Acknowledged);
+
+        bridge.MaterialisedOwnerIds = new HashSet<uint> { 0xE };
+        agent.PumpOnce();
+
+        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
+        Assert.Equal(0xEu, give.TargetObjectId);
+        Assert.Single(session.Acknowledged);
     }
 
     /// <summary>The positive case sitting right next to the negative one above: an owner id the

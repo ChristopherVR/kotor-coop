@@ -13,6 +13,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.OpSequence);
         w.WriteUInt32(packet.ContainerId);
         w.WriteUInt32(packet.ItemId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -28,7 +29,8 @@ public static partial class PacketCodec
         uint opSeq = r.ReadUInt32();
         uint containerId = r.ReadUInt32();
         uint itemId = r.ReadUInt32();
-        return r.Failed ? null : new ContainerLootPacket(origin, opSeq, containerId, itemId);
+        string module = r.ReadString();
+        return r.Failed ? null : new ContainerLootPacket(origin, opSeq, containerId, itemId, module);
     }
 
     public static int Write(Span<byte> buffer, ContainerLootAckPacket packet)
@@ -37,6 +39,7 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.ContainerLootAck);
         w.WriteUInt32(packet.PeerId);
         w.WriteUInt32(packet.OpSequence);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -50,7 +53,8 @@ public static partial class PacketCodec
 
         uint peerId = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
-        return r.Failed ? null : new ContainerLootAckPacket(peerId, opSeq);
+        string module = r.ReadString();
+        return r.Failed ? null : new ContainerLootAckPacket(peerId, opSeq, module);
     }
 
     public static int Write(Span<byte> buffer, LootSyncRequestPacket packet)
@@ -60,6 +64,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.PeerId);
         w.WriteUInt32(packet.KnownVersion);
         w.WriteUInt64(packet.KnownDigest);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -74,7 +79,8 @@ public static partial class PacketCodec
         uint peerId = r.ReadUInt32();
         uint version = r.ReadUInt32();
         ulong digest = r.ReadUInt64();
-        return r.Failed ? null : new LootSyncRequestPacket(peerId, version, digest);
+        string module = r.ReadString();
+        return r.Failed ? null : new LootSyncRequestPacket(peerId, version, digest, module);
     }
 
     public static int Write(Span<byte> buffer, MaterialisedLootPacket packet)
@@ -84,6 +90,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.OriginPeerId);
         w.WriteUInt32(packet.OpSequence);
         w.WriteUInt32(packet.OwnerEnemyId);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
 
         IReadOnlyList<MaterialisedLootItem> items = packet.Items;
         int count = Math.Min(items.Count, MaterialisedLootPacket.MaxItems);
@@ -117,6 +124,7 @@ public static partial class PacketCodec
         uint origin = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
         uint ownerEnemyId = r.ReadUInt32();
+        string module = r.ReadString();
 
         int count = r.ReadUInt8();
         if (count > MaterialisedLootPacket.MaxItems)
@@ -139,7 +147,7 @@ public static partial class PacketCodec
                 resref, new ItemIdentity(stack, charges, maxCharges, upgrades, flags));
         }
 
-        return r.Failed ? null : new MaterialisedLootPacket(origin, opSeq, ownerEnemyId, items);
+        return r.Failed ? null : new MaterialisedLootPacket(origin, opSeq, ownerEnemyId, items, module);
     }
 
     public static int Write(Span<byte> buffer, MaterialisedLootAckPacket packet)
@@ -148,6 +156,7 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.MaterialisedLootAck);
         w.WriteUInt32(packet.PeerId);
         w.WriteUInt32(packet.OpSequence);
+        w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -161,6 +170,7 @@ public static partial class PacketCodec
 
         uint peerId = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
-        return r.Failed ? null : new MaterialisedLootAckPacket(peerId, opSeq);
+        string module = r.ReadString();
+        return r.Failed ? null : new MaterialisedLootAckPacket(peerId, opSeq, module);
     }
 }

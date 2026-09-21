@@ -21,10 +21,10 @@ namespace KotorCoop.Session;
 /// </summary>
 public sealed class MaterialisedLootHistory(int maxEntries = 256)
 {
-    private readonly Dictionary<uint, IReadOnlyList<MaterialisedLootItem>> _byOwner = [];
+    private readonly Dictionary<(string Module, uint OwnerEnemyId), IReadOnlyList<MaterialisedLootItem>> _byOwner = [];
 
     /// <summary>Insertion order, oldest first — what eviction and replay both walk.</summary>
-    private readonly List<uint> _order = [];
+    private readonly List<(string Module, uint OwnerEnemyId)> _order = [];
 
     private readonly Lock _gate = new();
 
@@ -46,22 +46,29 @@ public sealed class MaterialisedLootHistory(int maxEntries = 256)
     /// or disturbing the eviction order.
     /// </summary>
     public void Record(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
+        => Record(string.Empty, ownerEnemyId, items);
+
+    /// <summary>Remembers an owner id in the module that assigned it. Owner ids are only
+    /// meaningful inside that module, so the module is part of the history key.</summary>
+    public void Record(string module, uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
     {
         lock (_gate)
         {
-            if (!_byOwner.ContainsKey(ownerEnemyId))
+            string identity = (module ?? string.Empty).ToUpperInvariant();
+            (string Module, uint OwnerEnemyId) key = (identity, ownerEnemyId);
+            if (!_byOwner.ContainsKey(key))
             {
-                _order.Add(ownerEnemyId);
+                _order.Add(key);
 
                 if (_order.Count > maxEntries)
                 {
-                    uint evicted = _order[0];
+                    (string Module, uint OwnerEnemyId) evicted = _order[0];
                     _order.RemoveAt(0);
                     _byOwner.Remove(evicted);
                 }
             }
 
-            _byOwner[ownerEnemyId] = items;
+            _byOwner[key] = items;
         }
     }
 
@@ -72,9 +79,26 @@ public sealed class MaterialisedLootHistory(int maxEntries = 256)
         lock (_gate)
         {
             List<(uint, IReadOnlyList<MaterialisedLootItem>)> result = new(_order.Count);
-            foreach (uint ownerEnemyId in _order)
+            foreach (var key in _order)
             {
-                result.Add((ownerEnemyId, _byOwner[ownerEnemyId]));
+                result.Add((key.OwnerEnemyId, _byOwner[key]));
+            }
+
+            return result;
+        }
+    }
+
+    /// <summary>Returns only entries belonging to one module, oldest first.</summary>
+    public List<(uint OwnerEnemyId, IReadOnlyList<MaterialisedLootItem> Items)> SnapshotForModule(
+        string module)
+    {
+        lock (_gate)
+        {
+            List<(uint, IReadOnlyList<MaterialisedLootItem>)> result = [];
+            foreach ((string Module, uint OwnerEnemyId) key in _order)
+            {
+                if (string.Equals(key.Module, module, StringComparison.OrdinalIgnoreCase))
+                    result.Add((key.OwnerEnemyId, _byOwner[key]));
             }
 
             return result;

@@ -83,4 +83,19 @@ internal partial struct SharedBlock
 
     public const int LootCapacity = 24; // occupies 0xD08..0xDC8, inside the 0xD00..0xE00 region
 
+    // ---- acknowledged container-loot mailbox (protocol 59) -------------------
+    // The old level above is retained for readers built before protocol 59. The mailbox is a
+    // single producer/consumer page: the agent writes all slots and publishes PageSerial last;
+    // the plugin applies the page and writes AckSerial only after every slot was consumed.
+    public const int OffsetLootMailboxModuleHash = 0x4D00;
+    public const int OffsetLootMailboxAckSerial = 0x4D04;
+    public const int OffsetLootMailboxPageSerial = 0x4D08;
+    public const int OffsetLootMailboxCount = 0x4D0C;
+    public const int OffsetLootMailboxSlots = 0x4D10;
+    public const int LootMailboxSlotStride = 0x0C;
+    public const int LootMailboxCapacity = 24;
+    public const int OffsetLootMailboxConsumedCount = 0x4E30;
+    public const int OffsetLootMailboxEpoch = 0x4E34;
+    public const int OffsetLootMailboxAckEpoch = 0x4E38;
+
 }

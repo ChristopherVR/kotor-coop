@@ -159,6 +159,8 @@ public class SharedInventoryV2PumpTests
 
         public List<(PartyPoolOpKind Kind, PartyPoolStackKey Key, ushort Count)> PoolIntents { get; } = [];
 
+        public Queue<PartyPoolIntentResultV2> PoolResults { get; } = new();
+
         public List<(StoreOpKind Kind, StoreStackKey Key, ushort Count)> StoreIntents { get; } = [];
 
         public bool TryGetPartyPoolSnapshotV2(out IReadOnlyDictionary<PartyPoolStackKey, int> totals)
@@ -171,6 +173,13 @@ public class SharedInventoryV2PumpTests
         {
             PoolIntents.Add((kind, key, count));
             return _nextSerial++;
+        }
+
+        public IReadOnlyList<PartyPoolIntentResultV2> DrainPartyPoolIntentResultsV2()
+        {
+            List<PartyPoolIntentResultV2> results = [.. PoolResults];
+            PoolResults.Clear();
+            return results;
         }
 
         public bool TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> totals)
@@ -639,6 +648,33 @@ public class SharedInventoryV2PumpTests
         Assert.Single(session.PoolIntents);
         Assert.Equal(PartyPoolOpKind.Add, session.PoolIntents[0].Kind);
         Assert.Equal(3, session.PoolIntents[0].Count);
+    }
+
+    [Fact]
+    public void ARefusedIntentRetriesThreeTimesAndPreservesTheLocalStack()
+    {
+        ScriptedBridge bridge = new();
+        bridge.Pool[Medpac] = 3;
+        StubClientSession session = new();
+        List<string> log = [];
+        PartyPoolPumpV2 pump = new(bridge, session, log.Add);
+
+        pump.Pump(Caps);
+        Assert.Single(session.PoolIntents);
+
+        for (int refusal = 0; refusal < 4; refusal++)
+        {
+            (PartyPoolOpKind kind, PartyPoolStackKey key, ushort count) = session.PoolIntents[^1];
+            session.PoolResults.Enqueue(new PartyPoolIntentResultV2(
+                new PartyPoolIntentPacketV2(2, (uint)(refusal + 1), kind, key, count),
+                Accepted: false));
+            pump.Pump(Caps);
+        }
+
+        Assert.Equal(4, session.PoolIntents.Count);
+        Assert.Equal(3, bridge.Pool[Medpac]);
+        Assert.Contains(log, line => line.Contains("preserving the local item", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, line => line.Contains("reconcile", StringComparison.OrdinalIgnoreCase));
     }
 
     // ---- defect B2: the scan cache -------------------------------------------------------

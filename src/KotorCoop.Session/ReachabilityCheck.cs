@@ -3,8 +3,8 @@ using System.Net;
 namespace KotorCoop.Session;
 
 /// <summary>
-/// The peer-free reachability self-probe behind a host's "reachable from the internet" /
-/// "NOT reachable" / "could not confirm" status wording — docs/research/network-topology.md
+/// The peer-free self-probe behind a host's local-test and possible additional-NAT status
+/// wording. It cannot prove internet reachability — docs/research/network-topology.md
 /// §17 (2026-09-18), the follow-up to §16's finding that "UPnP mapped" was reported while the
 /// port was unreachable.
 ///

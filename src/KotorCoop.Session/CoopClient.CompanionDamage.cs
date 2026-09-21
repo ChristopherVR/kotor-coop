@@ -19,12 +19,10 @@ public sealed partial class CoopClient
         // Unreliable and re-sent every tick, like ReportEnemyDamage: safe because the totals
         // are cumulative, so a lost datagram costs one tick of staleness and a duplicate
         // applies nothing extra.
-        int length = PacketCodec.Write(
-            _sendBuffer, new CompanionDamagePacket(_localPeerId, generation, damage));
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
-        }
+        // Caller's thread, not the tick thread — see CoopClient._apiBuffer.
+        SendFromCaller(
+            new CompanionDamagePacket(_localPeerId, generation, damage),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>Only the host applies a peer's companion damage; a client never does.</summary>

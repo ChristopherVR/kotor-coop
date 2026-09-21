@@ -7,8 +7,7 @@ namespace KotorCoop.Session;
 /// distinct from <see cref="UpnpMappingStatus"/>, which only says whether the ROUTER agreed to
 /// open a port. The 2026-09-10 internet test (docs/research/network-topology.md §16) showed
 /// the two are not the same thing: the router reported the mapping as a success while the
-/// address was unreachable from outside, because the ISP put the home behind its own address
-/// sharing (carrier-grade NAT) that no home router can map through.
+/// address was unreachable from outside. Additional NAT was suspected, not established.
 /// </summary>
 public enum ReachabilityVerdict
 {
@@ -16,14 +15,14 @@ public enum ReachabilityVerdict
     Pending,
 
     /// <summary>A probe datagram sent to the public address came back in through the
-    /// session's own listener — the port is open end to end.</summary>
-    Reachable,
+    /// session's own listener. This proves local NAT hairpinning, not WAN ingress or TCP.</summary>
+    HairpinConfirmed,
 
     /// <summary>The address the internet sees (STUN) is not the address the router thinks it
-    /// has on its WAN side, or that WAN address is itself a private/shared one: the ISP is
-    /// sharing one public address between homes, and no port mapping on the home router can
-    /// make this host reachable. A tunnel (playit.gg or similar) is the only way through.</summary>
-    CarrierNat,
+    /// has on its WAN side, or that WAN address is itself a private/shared one. There may be
+    /// another router, carrier NAT, a VPN or a different egress route. This does not prove
+    /// that inbound forwarding is impossible or that the ISP is responsible.</summary>
+    AdditionalNatSuspected,
 
     /// <summary>Nothing proved it either way. The common reason is a router that does not
     /// "hairpin" (route its own public address back inside), which many home routers do
@@ -41,12 +40,9 @@ public enum ReachabilityVerdict
 ///   3. Whether a probe datagram sent from a SECOND local socket to that public address came
 ///      back in through the session's listener (a "hairpin" through the router's NAT).
 ///
-/// Carrier NAT is judged FIRST and is final: when (1) and (2) disagree, or (1) is itself a
-/// private or shared-address-space address, the home router is not the last NAT between this
-/// host and the internet, and no mapping it agreed to can be reached from outside — whatever
-/// the hairpin probe happened to do (a probe can hairpin through the home router's own NAT
-/// and still never have crossed the carrier's). Only then does a received probe count as
-/// proof of reachability; anything else is honestly "unconfirmed" rather than a guess.
+/// An address mismatch or private WAN address takes precedence as a possible additional-NAT
+/// warning. A received probe proves only the local hairpin path. None of these observations
+/// establishes whether an external peer can reach the host; that needs an external probe.
 /// </summary>
 public static class ReachabilityRule
 {
@@ -54,15 +50,15 @@ public static class ReachabilityRule
     {
         if (routerExternal is not null && IsPrivateOrShared(routerExternal))
         {
-            return ReachabilityVerdict.CarrierNat;
+            return ReachabilityVerdict.AdditionalNatSuspected;
         }
 
         if (routerExternal is not null && stunPublic is not null && !routerExternal.Equals(stunPublic))
         {
-            return ReachabilityVerdict.CarrierNat;
+            return ReachabilityVerdict.AdditionalNatSuspected;
         }
 
-        return hairpinReceived == true ? ReachabilityVerdict.Reachable : ReachabilityVerdict.Unconfirmed;
+        return hairpinReceived == true ? ReachabilityVerdict.HairpinConfirmed : ReachabilityVerdict.Unconfirmed;
     }
 
     /// <summary>

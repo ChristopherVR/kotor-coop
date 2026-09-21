@@ -34,13 +34,26 @@ namespace KotorCoop.Protocol;
 /// </summary>
 public sealed class RecentlySyncedItems(long windowMs = 20_000)
 {
-    private readonly record struct Entry(string Resref, long ExpiresAtMs);
+    public readonly record struct Reservation(long Id);
+
+    private readonly record struct Entry(string Resref, long ExpiresAtMs, long Id);
 
     private readonly List<Entry> _entries = [];
+    private readonly Lock _gate = new();
+    private long _nextId;
 
     /// <summary>How many entries are currently live, for tests only — production code has no
     /// reason to ask.</summary>
-    public int Count => _entries.Count;
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _entries.Count;
+            }
+        }
+    }
 
     /// <summary>
     /// Records <paramref name="count"/> units of budget for <paramref name="resref"/>, each
@@ -54,10 +67,31 @@ public sealed class RecentlySyncedItems(long windowMs = 20_000)
             return;
         }
 
-        long expiresAtMs = nowMs + windowMs;
-        for (int i = 0; i < count; i++)
+        lock (_gate)
         {
-            _entries.Add(new Entry(resref, expiresAtMs));
+            long expiresAtMs = nowMs + windowMs;
+            for (int i = 0; i < count; i++)
+            {
+                _entries.Add(new Entry(resref, expiresAtMs, NextId()));
+            }
+        }
+    }
+
+    /// <summary>Records one row and returns its cancellation token. A failed staging request
+    /// can therefore release exactly its own reservation even when another same-resref add was
+    /// recorded or consumed concurrently.</summary>
+    public Reservation RecordReservation(string resref, long nowMs)
+    {
+        if (resref.Length == 0)
+        {
+            return default;
+        }
+
+        lock (_gate)
+        {
+            long id = NextId();
+            _entries.Add(new Entry(resref, nowMs + windowMs, id));
+            return new Reservation(id);
         }
     }
 
@@ -70,23 +104,59 @@ public sealed class RecentlySyncedItems(long windowMs = 20_000)
     /// </summary>
     public bool TryConsume(string resref, long nowMs)
     {
-        Prune(nowMs);
-
-        for (int i = 0; i < _entries.Count; i++)
+        lock (_gate)
         {
-            if (string.Equals(_entries[i].Resref, resref, StringComparison.OrdinalIgnoreCase))
+            Prune(nowMs);
+
+            for (int i = 0; i < _entries.Count; i++)
             {
-                _entries.RemoveAt(i);
-                return true;
+                if (string.Equals(_entries[i].Resref, resref, StringComparison.OrdinalIgnoreCase))
+                {
+                    _entries.RemoveAt(i);
+                    return true;
+                }
             }
+
+            return false;
+        }
+    }
+
+    /// <summary>Removes one previously recorded unit when the channel that was expected to
+    /// create it was refused or timed out. This prevents a failed automatic apply from hiding a
+    /// later genuine inventory row behind the normal suppression window.</summary>
+    public bool TryCancel(Reservation reservation)
+    {
+        if (reservation.Id == 0)
+        {
+            return false;
         }
 
-        return false;
+        lock (_gate)
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (_entries[i].Id == reservation.Id)
+                {
+                    _entries.RemoveAt(i);
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>Discards every unit of budget — a module change makes any pending entry
     /// meaningless (the item ids and even the sweep it was about to explain are gone).</summary>
-    public void Clear() => _entries.Clear();
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _entries.Clear();
+        }
+    }
 
     private void Prune(long nowMs) => _entries.RemoveAll(e => e.ExpiresAtMs <= nowMs);
+
+    private long NextId() => ++_nextId == 0 ? ++_nextId : _nextId;
 }

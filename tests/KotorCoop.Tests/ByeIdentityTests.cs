@@ -151,6 +151,10 @@ public class ByeIdentityTests
 
         Assert.Equal(40u, ledger.OwedFor(0x14));
 
+        // Caller-thread reports must not race the tick encoder: a torn damage packet can
+        // lower a cumulative baseline and make the next valid report bank damage twice.
+        Assert.Equal(0, host.GetStats().PacketsDropped);
+
         await secondRun.CancelAsync();
         await rejoinTask;
         await hostCts.CancelAsync();

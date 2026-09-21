@@ -116,4 +116,16 @@ public class MaterialisedLootHistoryTests
         Assert.Equal(0, history.Count);
         Assert.Empty(history.Snapshot());
     }
+
+    [Fact]
+    public void OwnerIdsAreIndependentAcrossModules()
+    {
+        MaterialisedLootHistory history = new();
+        history.Record("end_m01aa", 7, [Item("end_item")]);
+        history.Record("tar_m03aa", 7, [Item("tar_item")]);
+
+        Assert.Equal(2, history.Count);
+        Assert.Equal("end_item", Assert.Single(history.SnapshotForModule("end_m01aa")).Items.Single().Resref);
+        Assert.Equal("tar_item", Assert.Single(history.SnapshotForModule("tar_m03aa")).Items.Single().Resref);
+    }
 }

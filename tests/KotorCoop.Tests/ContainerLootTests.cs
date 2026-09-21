@@ -136,6 +136,37 @@ public class ContainerLootTests
         Assert.Equal(0, store.Count);
     }
 
+    [Fact]
+    public void ModuleIdentityQueuesStaleOpsWithoutApplyingThemToTheActiveModule()
+    {
+        ContainerLootStore store = new();
+        store.SetModule("end_m01aa");
+
+        Assert.True(store.ApplyOp(new ContainerLootPacket(1, 1, 0x10, 0x20, "end_m01aa")));
+        Assert.True(store.ApplyOp(new ContainerLootPacket(1, 2, 0x10, 0x20, "tar_m03aa")));
+        Assert.Single(store.HistorySnapshot());
+
+        store.SetModule("tar_m03aa");
+        Assert.True(store.ApplyOp(new ContainerLootPacket(1, 3, 0x10, 0x21, "tar_m03aa")));
+        Assert.Equal(2, store.HistorySnapshot().Count);
+
+        store.SetModule("end_m01aa");
+        Assert.Single(store.HistorySnapshot());
+    }
+
+    [Fact]
+    public void HistorySurvivesTheBoundedGameWindow()
+    {
+        ContainerLootStore store = new();
+        for (uint i = 0; i < 600; i++)
+            Assert.True(store.Add(new ContainerLootRemoval(0x10, i + 1)));
+
+        Assert.Equal(512, store.Snapshot().Count);
+        Assert.Equal(600, store.HistorySnapshot().Count);
+        Assert.Equal(600u, store.Version);
+        Assert.False(store.Add(new ContainerLootRemoval(0x10, 1)));
+    }
+
     // ---- sender ---------------------------------------------------------------
 
     [Fact]
@@ -228,5 +259,19 @@ public class ContainerLootTests
         Assert.Single(sender.CollectDue(recipients, 0));   // first send
         Assert.Empty(sender.CollectDue(recipients, 100));  // too soon
         Assert.Single(sender.CollectDue(recipients, 300)); // interval elapsed
+    }
+
+    [Fact]
+    public void AckFromAnotherModuleCannotRetireAReusedSequence()
+    {
+        ReliableLootSender sender = new(retransmitIntervalMs: 10);
+        ContainerLootPacket op = sender.Enqueue(CoopHost.HostPeerId, 0x53, 0xC9, 0, "end_m01aa")!;
+
+        Assert.Single(sender.CollectDue([2u], 0));
+        sender.Acknowledge(2, op.OpSequence, "tar_m03aa");
+        Assert.Single(sender.CollectDue([2u], 20));
+
+        sender.Acknowledge(2, op.OpSequence, "end_m01aa");
+        Assert.Empty(sender.CollectDue([2u], 40));
     }
 }

@@ -91,14 +91,15 @@ public class StoreLoopbackTests
 
         public bool TryScanOpenStore(out uint storeObjectId, out IReadOnlyDictionary<StoreStackKey, int> totals)
         {
-            if (OpenStoreId == 0)
+            // The test driver can switch shops while this pump thread scans. Capture the
+            // selected ID once, matching the production scanner, so the returned ID and
+            // inventory slice cannot describe different shops.
+            storeObjectId = OpenStoreId;
+            if (storeObjectId == 0)
             {
-                storeObjectId = 0;
                 totals = EmptyTotals;
                 return false;
             }
-
-            storeObjectId = OpenStoreId;
 
             // A store's own scan is always a COMPLETE snapshot (ContainerLoot/PartyPool's own
             // convention, docs/research/store-sync.md §2.3) — a fully-depleted stack is UNLINKED
@@ -106,7 +107,7 @@ public class StoreLoopbackTests
             Dictionary<StoreStackKey, int> slice = [];
             foreach ((StoreStackKey key, int value) in TrueEngineState)
             {
-                if (key.StoreObjectId == OpenStoreId && value > 0)
+                if (key.StoreObjectId == storeObjectId && value > 0)
                 {
                     slice[key] = value;
                 }
@@ -429,79 +430,88 @@ public class StoreLoopbackTests
         (Rig rig, CancellationTokenSource cts, Task hostTask, Task clientTask) = await BuildConnectedRigAsync();
         using (rig)
         {
-            // Both instances open BOTH a store they will transact in (StoreId) and a completely
-            // separate one they never will (OtherStoreId) — establishing a pristine local baseline
-            // for each, exactly like a player who has looked into two different shops.
-            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
-            rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
-            rig.HostAgent.Bridge.TrueEngineState[OtherStoreItem] = 100;
-            rig.ClientAgent.Bridge.TrueEngineState[OtherStoreItem] = 100;
+            try
+            {
+                // Both instances open BOTH a store they will transact in (StoreId) and a completely
+                // separate one they never will (OtherStoreId) — establishing a pristine local baseline
+                // for each, exactly like a player who has looked into two different shops.
+                rig.HostAgent.Bridge.TrueEngineState[Blaster] = 40;
+                rig.ClientAgent.Bridge.TrueEngineState[Blaster] = 40;
+                rig.HostAgent.Bridge.TrueEngineState[OtherStoreItem] = 100;
+                rig.ClientAgent.Bridge.TrueEngineState[OtherStoreItem] = 100;
 
-            rig.HostAgent.Bridge.OpenStoreId = StoreId;
-            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
-            await Task.Delay(300);
+                rig.HostAgent.Bridge.OpenStoreId = StoreId;
+                rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+                await Task.Delay(300);
 
-            rig.HostAgent.Bridge.OpenStoreId = OtherStoreId;
-            rig.ClientAgent.Bridge.OpenStoreId = OtherStoreId;
-            await Task.Delay(300);
+                rig.HostAgent.Bridge.OpenStoreId = OtherStoreId;
+                rig.ClientAgent.Bridge.OpenStoreId = OtherStoreId;
+                await Task.Delay(300);
 
-            // Back to the transacted store, then the host buys one unit — converges to the client
-            // exactly like BuyOnHostDecrementsClientsCopy.
-            rig.HostAgent.Bridge.OpenStoreId = StoreId;
-            rig.ClientAgent.Bridge.OpenStoreId = StoreId;
-            await Task.Delay(300);
+                // Back to the transacted store, then the host buys one unit — converges to the client
+                // exactly like BuyOnHostDecrementsClientsCopy.
+                rig.HostAgent.Bridge.OpenStoreId = StoreId;
+                rig.ClientAgent.Bridge.OpenStoreId = StoreId;
+                await Task.Delay(300);
 
-            rig.HostAgent.Bridge.TrueEngineState[Blaster] = 39;
+                rig.HostAgent.Bridge.TrueEngineState[Blaster] = 39;
 
-            Assert.True(
-                await WaitForAsync(
-                    () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39, Timeout),
-                "client never converged on the host's buy before the reconnect");
+                Assert.True(
+                    await WaitForAsync(
+                        () => rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39, Timeout),
+                    "client never converged on the host's buy before the reconnect");
 
-            uint originalId = rig.Client.LocalPeerId;
+                uint originalId = rig.Client.LocalPeerId;
 
-            // A real blackout past the peer timeout — the client drops off the host's roster
-            // entirely and has to rejoin, exactly HandleHello's resync-on-(re)admission path
-            // (ResyncStore) firing again.
-            rig.Client.Network.StartBlackout(6_000);
+                // A real blackout past the peer timeout — the client drops off the host's roster
+                // entirely and has to rejoin, exactly HandleHello's resync-on-(re)admission path
+                // (ResyncStore) firing again.
+                rig.Client.Network.StartBlackout(6_000);
 
-            Assert.True(
-                await WaitForAsync(() => !rig.Client.IsConnected, TimeSpan.FromSeconds(10)),
-                "client never noticed the blackout");
-            Assert.True(
-                await WaitForAsync(() => rig.Host.GetRemotePeers().Count == 0, TimeSpan.FromSeconds(10)),
-                "host never expired the blacked-out peer");
+                Assert.True(
+                    await WaitForAsync(() => !rig.Client.IsConnected, TimeSpan.FromSeconds(10)),
+                    "client never noticed the blackout");
+                Assert.True(
+                    await WaitForAsync(() => rig.Host.GetRemotePeers().Count == 0, TimeSpan.FromSeconds(10)),
+                    "host never expired the blacked-out peer");
 
-            Assert.True(
-                await WaitForAsync(() => rig.Client.IsConnected, TimeSpan.FromSeconds(30)),
-                "client never rejoined after the blackout ended");
-            Assert.Equal(originalId, rig.Client.LocalPeerId);
+                Assert.True(
+                    await WaitForAsync(() => rig.Client.IsConnected, TimeSpan.FromSeconds(30)),
+                    "client never rejoined after the blackout ended");
+                Assert.Equal(originalId, rig.Client.LocalPeerId);
 
-            // The TRANSACTED store: resync must leave it correctly converged (39), not double it,
-            // not zero it.
-            Assert.True(
-                await StaysAsync(
-                    () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39
-                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39,
-                    TimeSpan.FromSeconds(5)),
-                "the reconnect resync disturbed the already-converged transacted store - "
-                + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
-                + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
+                // The TRANSACTED store: resync must leave it correctly converged (39), not double it,
+                // not zero it.
+                Assert.True(
+                    await StaysAsync(
+                        () => rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39
+                            && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster) == 39,
+                        TimeSpan.FromSeconds(5)),
+                    "the reconnect resync disturbed the already-converged transacted store - "
+                    + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}, "
+                    + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(Blaster)}");
 
-            // The UNTRANSACTED store: resync must never touch it at all - neither instance's own
-            // pristine engine copy moves, and the host's own wire-side bookkeeping never learned
-            // any of its keys (nobody ever transacted there to make it "known").
-            Assert.True(
-                rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem) == 100
-                    && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem) == 100,
-                "the reconnect resync touched a store nobody ever transacted in - "
-                + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem)}, "
-                + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem)}");
-            Assert.False(rig.Host.StoreKnownKeys.Contains(OtherStoreItem));
-            Assert.Equal(0, rig.Host.Store.Get(OtherStoreItem));
+                // The UNTRANSACTED store: resync must never touch it at all - neither instance's own
+                // pristine engine copy moves, and the host's own wire-side bookkeeping never learned
+                // any of its keys (nobody ever transacted there to make it "known").
+                Assert.True(
+                    rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem) == 100
+                        && rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem) == 100,
+                    "the reconnect resync touched a store nobody ever transacted in - "
+                    + $"host={rig.HostAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem)}, "
+                    + $"client={rig.ClientAgent.Bridge.TrueEngineState.GetValueOrDefault(OtherStoreItem)}");
+                Assert.False(rig.Host.StoreKnownKeys.Contains(OtherStoreItem));
+                Assert.Equal(0, rig.Host.Store.Get(OtherStoreItem));
 
-            await cts.CancelAsync();
-            await Task.WhenAll(hostTask, clientTask);
+            }
+            finally
+            {
+                // Always stop the session tasks, including when an assertion fails before the
+                // normal success-path cancellation. Otherwise disposing the rig leaves both
+                // socket loops alive against disposed sessions and can contaminate later tests.
+                await cts.CancelAsync();
+                await Task.WhenAll(hostTask, clientTask);
+            }
         }
     }
 

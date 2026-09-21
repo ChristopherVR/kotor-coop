@@ -13,6 +13,21 @@ public class PublicAddressAnnouncerTests
 {
     private static readonly IPEndPoint Endpoint = new(IPAddress.Parse("203.0.113.5"), 27015);
 
+    [Theory]
+    [InlineData(UpnpMappingStatus.Mapped)]
+    [InlineData(UpnpMappingStatus.Unavailable)]
+    [InlineData(UpnpMappingStatus.Disabled)]
+    public void LocalProbeEvidenceNeverPromisesWanIngressOrDiagnosesTheIsp(UpnpMappingStatus mapping)
+    {
+        string hairpin = PublicAddressAnnouncer.UpnpNote(mapping, 27015, ReachabilityVerdict.HairpinConfirmed);
+        Assert.Contains("internet access unconfirmed", hairpin);
+        string nat = PublicAddressAnnouncer.UpnpNote(mapping, 27015, ReachabilityVerdict.AdditionalNatSuspected);
+        Assert.Contains("possible additional NAT", nat);
+        Assert.Contains("upstream routers", nat);
+        Assert.DoesNotContain("ISP", nat);
+        Assert.DoesNotContain("NOT reachable", nat);
+    }
+
     [Fact]
     public void UnknownAddressAndDisabledUpnpProducesTheForwardHint()
     {
@@ -24,22 +39,22 @@ public class PublicAddressAnnouncerTests
     }
 
     [Fact]
-    public void MappedAndReachableNamesBothAndSaysReachable()
+    public void MappedAndHairpinConfirmedStillLeavesInternetUnconfirmed()
     {
-        string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable);
+        string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address 203.0.113.5:27015 (UPnP mapped - reachable from the internet)",
+            "co-op: hosting on port 27015 - public address 203.0.113.5:27015 (UPnP mapped - local self-test passed; internet access unconfirmed)",
             line);
     }
 
     [Fact]
-    public void MappedBehindCarrierNatSaysNotReachableAndNamesTheTunnel()
+    public void MappedWithAdditionalNatSuggestsUpstreamChecksOrTunnel()
     {
-        string note = PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Mapped, 27015, ReachabilityVerdict.CarrierNat);
+        string note = PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Mapped, 27015, ReachabilityVerdict.AdditionalNatSuspected);
 
         Assert.Equal(
-            "UPnP mapped but NOT reachable (your ISP shares your address - use a tunnel such as playit.gg)",
+            "UPnP mapped - possible additional NAT; check upstream routers or use a tunnel such as playit.gg",
             note);
     }
 
@@ -71,20 +86,20 @@ public class PublicAddressAnnouncerTests
     }
 
     [Fact]
-    public void UnavailableUpnpBehindCarrierNatSaysAForwardWillNotHelp()
+    public void UnavailableUpnpWithAdditionalNatDoesNotRuleOutForwarding()
     {
-        string note = PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Unavailable, 27015, ReachabilityVerdict.CarrierNat);
+        string note = PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Unavailable, 27015, ReachabilityVerdict.AdditionalNatSuspected);
 
-        Assert.Contains("manual port forward will not help", note);
+        Assert.Contains("possible additional NAT", note);
         Assert.Contains("playit.gg", note);
     }
 
     [Fact]
-    public void UnavailableUpnpWithAWorkingManualForwardSaysSo()
+    public void UnavailableUpnpWithHairpinSuccessDoesNotPromiseInternetAccess()
     {
         Assert.Equal(
-            "UPnP unavailable but port 27015 is reachable from the internet",
-            PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Unavailable, 27015, ReachabilityVerdict.Reachable));
+            "UPnP unavailable - local self-test passed on port 27015; internet access unconfirmed",
+            PublicAddressAnnouncer.UpnpNote(UpnpMappingStatus.Unavailable, 27015, ReachabilityVerdict.HairpinConfirmed));
     }
 
     [Fact]
@@ -100,9 +115,9 @@ public class PublicAddressAnnouncerTests
         PublicAddressAnnouncer announcer = new();
         List<string> lines = [];
 
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable, lines.Add);
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable, lines.Add);
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed, lines.Add);
 
         Assert.Single(lines);
     }
@@ -115,12 +130,12 @@ public class PublicAddressAnnouncerTests
 
         announcer.Observe(27015, Endpoint, UpnpMappingStatus.Pending, ReachabilityVerdict.Pending, lines.Add);
         announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Pending, lines.Add);
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.CarrierNat, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.AdditionalNatSuspected, lines.Add);
 
         Assert.Equal(3, lines.Count);
         Assert.Contains("checking UPnP", lines[0]);
         Assert.Contains("checking reachability", lines[1]);
-        Assert.Contains("NOT reachable", lines[2]);
+        Assert.Contains("possible additional NAT", lines[2]);
     }
 
     [Fact]
@@ -129,9 +144,9 @@ public class PublicAddressAnnouncerTests
         PublicAddressAnnouncer announcer = new();
         List<string> lines = [];
 
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed, lines.Add);
         announcer.Reset();
-        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.Reachable, lines.Add);
+        announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed, lines.Add);
 
         Assert.Equal(2, lines.Count);
     }

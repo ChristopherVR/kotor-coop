@@ -375,9 +375,9 @@ public class MineSyncTests
         Assert.Contains("PluginConfig.ReadBool(\"mine_sync\", true)", plugin);
     }
 
-    private static string RepositoryRoot()
+    private static string RepositoryRoot([System.Runtime.CompilerServices.CallerFilePath] string sourcePath = "")
     {
-        string? dir = AppContext.BaseDirectory;
+        string? dir = Path.GetDirectoryName(sourcePath);
         while (dir is not null && !File.Exists(Path.Combine(dir, "KotorCoop.slnx")))
         {
             dir = Path.GetDirectoryName(dir);

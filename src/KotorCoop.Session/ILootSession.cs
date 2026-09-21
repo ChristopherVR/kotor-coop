@@ -5,6 +5,10 @@ namespace KotorCoop.Session;
 
 public interface ILootSession
 {
+    /// <summary>Publishes the settled local module to the loot channels. Empty or transitional
+    /// names are ignored by the implementations so old object ids cannot be reused early.</summary>
+    void SetLootModule(string module) { }
+
     /// <summary>
     /// Announces that THIS peer looted <paramref name="itemId"/> out of container
     /// <paramref name="containerId"/>, delivered reliably to every OTHER peer so the item
@@ -25,6 +29,10 @@ public interface ILootSession
     /// </summary>
     IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => [];
 
+    /// <summary>Full current-module history for the acknowledged game mailbox. Unlike the
+    /// bounded compatibility view, this can replay pages older than the last 512 arrivals.</summary>
+    IReadOnlyList<ContainerLootRemoval> ContainerLootHistory => ContainerLootRemovals;
+
     /// <summary>
     /// Host only: announces that <paramref name="ownerEnemyId"/> — one of the host's own
     /// enemies — just died holding <paramref name="items"/>, delivered reliably to every client
@@ -40,6 +48,15 @@ public interface ILootSession
     /// this (it is the only sender). Matches <see cref="DrainTransitionMovies"/>'s shape.
     /// </summary>
     IReadOnlyList<MaterialisedLootPacket> DrainMaterialisedLoot() => [];
+
+    /// <summary>Client only: confirms a materialised-loot packet after its owner mapping has
+    /// been resolved and every item has been queued for the local give channel. Keeping this
+    /// separate from receipt prevents a low-FPS mapping delay from ACKing and losing the loot.</summary>
+    void AcknowledgeMaterialisedLoot(MaterialisedLootPacket packet) { }
+
+    /// <summary>Returns module-tagged materialised loot to the inbox when the local stand-in
+    /// table is still being published. Legacy untagged packets retain their one-shot behavior.</summary>
+    void RequeueMaterialisedLoot(IReadOnlyList<MaterialisedLootPacket> packets) { }
 
     /// <summary>
     /// Client only: forgets every owner-enemy id already deduped by

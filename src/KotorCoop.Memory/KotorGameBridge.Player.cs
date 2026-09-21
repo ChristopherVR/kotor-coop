@@ -475,6 +475,13 @@ public sealed partial class KotorGameBridge
         ("door census", BlockDoorCount),
         ("placeable census", BlockPlaceableCount),
         ("ground loot", BlockLootCount),
+        ("loot mailbox module", BlockLootMailboxModuleHash),
+        ("loot mailbox ack", BlockLootMailboxAckSerial),
+        ("loot mailbox page", BlockLootMailboxPageSerial),
+        ("loot mailbox count", BlockLootMailboxCount),
+        ("loot mailbox consumed", BlockLootMailboxConsumedCount),
+        ("loot mailbox epoch", BlockLootMailboxEpoch),
+        ("loot mailbox ack epoch", BlockLootMailboxAckEpoch),
 
         // A leftover override would keep telling the plugin the host still wants
         // effect_sync/trigger_relay/liveness_sync/map_reveal_sync/dialogue_recruit_sync

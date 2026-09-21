@@ -4,40 +4,31 @@ using Xunit;
 
 namespace KotorCoop.Tests;
 
-/// <summary>
-/// <see cref="ReachabilityRule"/> — the decision behind the host's "reachable from the
-/// internet" / "NOT reachable (your ISP shares your address)" / "could not confirm" status
-/// wording (docs/research/network-topology.md §17). Pins: carrier NAT is judged first and
-/// overrides a received probe; a received probe with consistent addresses is the only way to
-/// "reachable"; everything else is honestly unconfirmed; and the private/shared address
-/// classifier covers exactly the four blocks a home router's WAN side must never be in.
-/// </summary>
+/// <summary>Local probe evidence and additional-NAT hints; no WAN connectivity guarantee.</summary>
 public sealed class ReachabilityRuleTests
 {
     private static readonly IPAddress Public = IPAddress.Parse("203.0.113.5");
     private static readonly IPAddress OtherPublic = IPAddress.Parse("198.51.100.7");
 
     [Fact]
-    public void AReceivedProbeWithMatchingAddressesIsReachable()
+    public void AReceivedProbeWithMatchingAddressesConfirmsOnlyHairpinning()
     {
-        Assert.Equal(ReachabilityVerdict.Reachable, ReachabilityRule.Decide(Public, Public, hairpinReceived: true));
+        Assert.Equal(ReachabilityVerdict.HairpinConfirmed, ReachabilityRule.Decide(Public, Public, hairpinReceived: true));
     }
 
     [Fact]
-    public void AReceivedProbeWithNoRouterAddressIsStillReachable()
+    public void AReceivedProbeWithNoRouterAddressConfirmsOnlyHairpinning()
     {
         // UPnP off or refused, STUN on, the router hairpins: nothing contradicts the probe.
-        Assert.Equal(ReachabilityVerdict.Reachable, ReachabilityRule.Decide(null, Public, hairpinReceived: true));
+        Assert.Equal(ReachabilityVerdict.HairpinConfirmed, ReachabilityRule.Decide(null, Public, hairpinReceived: true));
     }
 
     [Fact]
-    public void RouterAndStunDisagreeingIsCarrierNatEvenIfTheProbeCameBack()
+    public void RouterAndStunDisagreeingSuggestsAdditionalNatEvenIfTheProbeCameBack()
     {
-        // The 2026-09-10 shape: the home router mapped the port and even hairpinned the probe
-        // through its own NAT, but the address the internet sees belongs to the carrier's NAT
-        // in front of it, which nothing on the home side can map through.
-        Assert.Equal(ReachabilityVerdict.CarrierNat, ReachabilityRule.Decide(OtherPublic, Public, hairpinReceived: true));
-        Assert.Equal(ReachabilityVerdict.CarrierNat, ReachabilityRule.Decide(OtherPublic, Public, hairpinReceived: false));
+        // Address disagreement suggests another NAT or egress route; its cause is unknown.
+        Assert.Equal(ReachabilityVerdict.AdditionalNatSuspected, ReachabilityRule.Decide(OtherPublic, Public, hairpinReceived: true));
+        Assert.Equal(ReachabilityVerdict.AdditionalNatSuspected, ReachabilityRule.Decide(OtherPublic, Public, hairpinReceived: false));
     }
 
     [Theory]
@@ -47,11 +38,11 @@ public sealed class ReachabilityRuleTests
     [InlineData("172.16.0.1")]
     [InlineData("172.31.255.1")]
     [InlineData("192.168.1.1")]
-    public void ARouterWanAddressInPrivateOrSharedSpaceIsCarrierNatWhateverElseIsKnown(string wan)
+    public void ARouterWanAddressInPrivateOrSharedSpaceSuggestsAdditionalNatWhateverElseIsKnown(string wan)
     {
         IPAddress router = IPAddress.Parse(wan);
-        Assert.Equal(ReachabilityVerdict.CarrierNat, ReachabilityRule.Decide(router, null, null));
-        Assert.Equal(ReachabilityVerdict.CarrierNat, ReachabilityRule.Decide(router, Public, hairpinReceived: true));
+        Assert.Equal(ReachabilityVerdict.AdditionalNatSuspected, ReachabilityRule.Decide(router, null, null));
+        Assert.Equal(ReachabilityVerdict.AdditionalNatSuspected, ReachabilityRule.Decide(router, Public, hairpinReceived: true));
     }
 
     [Fact]

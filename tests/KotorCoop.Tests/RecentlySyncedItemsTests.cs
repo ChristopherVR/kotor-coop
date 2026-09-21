@@ -83,6 +83,19 @@ public sealed class RecentlySyncedItemsTests
     }
 
     [Fact]
+    public void ARefusedApplyCanReleaseItsReservedEchoBudget()
+    {
+        RecentlySyncedItems ledger = new();
+        ledger.Record("g_w_blstrpstl001", 1, nowMs: 0);
+        RecentlySyncedItems.Reservation reservation = ledger.RecordReservation("g_w_blstrpstl001", nowMs: 0);
+
+        Assert.True(ledger.TryCancel(reservation));
+        Assert.Equal(1, ledger.Count);
+        Assert.False(ledger.TryCancel(reservation));
+        Assert.True(ledger.TryConsume("g_w_blstrpstl001", nowMs: 0));
+    }
+
+    [Fact]
     public void ClearDropsEveryPendingEntry()
     {
         RecentlySyncedItems ledger = new();

@@ -69,11 +69,10 @@ public sealed partial class CoopClient
 
     private void SendJournalOp(JournalOpPacket op)
     {
-        int length = PacketCodec.Write(_sendBuffer, op);
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
-        }
+        // ⚠ Called from the CALLER's thread (SetFlag/DropItem/SetJournalEntry are public API
+        // the agent pump drives) as well as from Tick's retransmit pass, so it never touches
+        // the tick thread's _sendBuffer. See CoopClient._apiBuffer.
+        SendFromCaller(op, static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     private void HandleJournalAck(IPEndPoint from, ReadOnlySpan<byte> span, long now)

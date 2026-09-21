@@ -32,8 +32,53 @@ public sealed partial class CoopClient : ICoopSession
     private readonly Lock _gate = new();
     private readonly uint _nonce;
 
+    /// <summary>⚠ OWNED BY THE TICK THREAD (<see cref="Tick"/> and everything it calls), and by
+    /// nothing else. See <see cref="_apiBuffer"/>.</summary>
     private readonly byte[] _sendBuffer = new byte[ProtocolConstants.MaxPacketSize];
+
+    /// <summary>⚠ OWNED BY THE RECEIVE-LOOP THREAD (every <c>Handle*</c> method and the replies
+    /// they send). See <see cref="_apiBuffer"/>.</summary>
     private readonly byte[] _replyBuffer = new byte[ProtocolConstants.MaxPacketSize];
+
+    /// <summary>
+    /// The encode buffer for packets sent from a CALLER's thread rather than from this
+    /// client's own tick or receive loop — <see cref="SetFlag"/>, <see cref="DropItem"/>,
+    /// <see cref="SetJournalEntry"/>, <see cref="ReportEnemyDamage"/> and friends, every one
+    /// of which <c>CoopAgent.PumpOnce</c> calls on the agent pump thread while
+    /// <see cref="Tick"/> is encoding its own packets on another.
+    ///
+    /// ⚠ THIS IS NOT DEFENSIVE. Two threads encoding into one array produce a datagram whose
+    /// header comes from one packet and whose body comes from another: it still carries the
+    /// magic and the version, so the far end parses it as whatever type won the header byte
+    /// and either rejects it as malformed or — worse — accepts a plausible-looking wrong
+    /// value. It was first found as a container-lock request the host dropped as malformed
+    /// (<see cref="RequestContainerLock"/>, which fixed it for that one method with a private
+    /// buffer) and again as a peer's damage total arriving lower than it had ever been, which
+    /// a ledger reads as a fresh fight and banks twice. Guarded by <see cref="_apiGate"/>
+    /// rather than allocated per call because the busiest of these runs every tick.
+    /// </summary>
+    private readonly byte[] _apiBuffer = new byte[ProtocolConstants.MaxPacketSize];
+
+    /// <summary>Guards <see cref="_apiBuffer"/>. Never taken while <see cref="_gate"/> is
+    /// held — it is the innermost lock in this class, held only across one encode and one
+    /// socket send.</summary>
+    private readonly Lock _apiGate = new();
+
+    /// <summary>Encodes and sends one packet to the host from a caller's thread — see
+    /// <see cref="_apiBuffer"/>. The tick thread's own retransmits route through here too
+    /// (the reliable senders' <c>Send*Op</c> helpers are called from both), which costs an
+    /// uncontended lock and removes the "which thread is this?" question entirely.</summary>
+    private void SendFromCaller<T>(T packet, Func<byte[], T, int> write)
+    {
+        lock (_apiGate)
+        {
+            int length = write(_apiBuffer, packet);
+            if (length > 0)
+            {
+                _channel.Send(_hostEndPoint, _apiBuffer.AsSpan(0, length));
+            }
+        }
+    }
 
     private PlayerState _localState = PlayerState.Empty;
     private uint _localPeerId;
@@ -111,7 +156,24 @@ public sealed partial class CoopClient : ICoopSession
     /// across an outage — but this forced flag stays: an outage is still the one window where
     /// bumping-and-breaking-the-tie cannot be relied on at all, on either side.
     /// </summary>
-    private bool _resyncOnConnect;
+    /// <remarks>
+    /// ⚠ ONE FLAG PER CHANNEL, SPENT WHERE THE REQUEST GOES OUT. There used to be a single
+    /// <c>_resyncOnConnect</c> disarmed only once all four reliable senders were quiet, on the
+    /// theory that a forced resync should "wait its turn" rather than be spent unused. Three
+    /// of the four channels have nothing to wait for (their snapshots merge rather than
+    /// replace — see <see cref="WorldResyncRule"/>), so all that rule did was tie every
+    /// channel's forced ask to the slowest sender on the link.
+    /// </remarks>
+    private bool _forceFlagResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceItemResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceJournalResync;
+
+    /// <inheritdoc cref="_forceFlagResync"/>
+    private bool _forceLootResync;
 
     /// <summary>
     /// The tick rate actually driving <see cref="RunAsync"/>'s send/poll loop right now.

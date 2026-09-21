@@ -97,6 +97,25 @@ public sealed partial class CoopHost : ICoopSession
     private readonly byte[] _sendBuffer = new byte[ProtocolConstants.MaxPacketSize];
     private readonly byte[] _replyBuffer = new byte[ProtocolConstants.MaxPacketSize];
 
+    /// <summary>Encode buffer for an answer emitted by a caller thread (for example the agent's
+    /// engine-result callback). Receive handlers own <see cref="_replyBuffer"/> and Tick owns
+    /// <see cref="_sendBuffer"/>; keeping this path separate prevents a delayed intent ACK from
+    /// corrupting either stream.</summary>
+    private readonly byte[] _apiBuffer = new byte[ProtocolConstants.MaxPacketSize];
+    private readonly Lock _apiGate = new();
+
+    private void SendFromCaller<T>(IPEndPoint destination, T packet, Func<byte[], T, int> write)
+    {
+        lock (_apiGate)
+        {
+            int length = write(_apiBuffer, packet);
+            if (length > 0)
+            {
+                _channel.Send(destination, _apiBuffer.AsSpan(0, length));
+            }
+        }
+    }
+
     private PlayerState _localState = PlayerState.Empty;
 
     /// <summary>
@@ -370,20 +389,7 @@ public sealed partial class CoopHost : ICoopSession
             {
                 foreach (uint id in expired)
                 {
-                    // Retire before removing: the identity has to survive the connection, or
-                    // the same player comes back as a stranger (see RetiredPeer).
-                    if (_peers.TryGetValue(id, out PeerConnection? gone))
-                    {
-                        Retire(gone, now);
-                    }
-
-                    _peers.Remove(id);
-                    _buffer.Remove(id);
-                    ReleaseDialogueIfOwnedBy(id);
-                    ForgetPhantomDamageFor(id);
-                    _encounterTriggers.Forget(id);
-                    _triggerRelay.Forget(id);
-                    _interactionLocks.Forget(id);
+                    ForgetPeer(id, now);
                 }
             }
 

@@ -139,6 +139,16 @@ public sealed class UdpChannel : IDisposable
             int sent = _socket.SendTo(data, SocketFlags.None, destination);
             Interlocked.Increment(ref _packetsSent);
             Interlocked.Add(ref _bytesSent, sent);
+
+            // A simulated duplicate is the same datagram sent a second time, after the
+            // original survived the loss decision. This exercises the session deduplication
+            // rules without turning a dropped datagram into a delivery.
+            if (Sim.Armed && Sim.DuplicateOutbound())
+            {
+                int again = _socket.SendTo(data, SocketFlags.None, destination);
+                Interlocked.Increment(ref _packetsSent);
+                Interlocked.Add(ref _bytesSent, again);
+            }
         }
         catch (SocketException)
         {
@@ -158,9 +168,23 @@ public sealed class UdpChannel : IDisposable
         try
         {
             await Task.Delay(delayMs).ConfigureAwait(false);
+
+            // A blackout also consumes packets that were already delayed in flight.
+            if (Sim.BlackedOut(SessionClock.NowMs, outbound: true))
+            {
+                return;
+            }
+
             int sent = _socket.SendTo(data, SocketFlags.None, destination);
             Interlocked.Increment(ref _packetsSent);
             Interlocked.Add(ref _bytesSent, sent);
+
+            if (Sim.Armed && Sim.DuplicateOutbound())
+            {
+                int again = _socket.SendTo(data, SocketFlags.None, destination);
+                Interlocked.Increment(ref _packetsSent);
+                Interlocked.Add(ref _bytesSent, again);
+            }
         }
         catch (SocketException)
         {
@@ -197,11 +221,10 @@ public sealed class UdpChannel : IDisposable
                         continue;
                     }
 
-                    int delay = Sim.DelayMs();
-                    if (delay > 0)
-                    {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                    }
+                    // Delay is applied on the sender side, where every datagram has its own
+                    // fire-and-forget timer and can genuinely reorder. Delaying this single
+                    // receive loop would head-of-line block all later packets and double-count
+                    // the one-way latency.
                 }
 
                 // A STUN reply (see StunClient/SendStunRequestAsync) shares this socket with

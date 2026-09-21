@@ -56,6 +56,14 @@ public class SharedBlockNewRegionOffsetMirrorTests
         // compatibility check into a warning — exactly the failure mode this test exists for.
         ("ExeImageDigest", "SharedBlock.ExeImage.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ExeImageDigestKnown", "SharedBlock.ExeImage.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("LootMailboxModuleHash", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxAckSerial", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxPageSerial", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxCount", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxSlots", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxConsumedCount", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+        ("LootMailboxAckEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
     ];
 
     [Fact]
@@ -106,11 +114,24 @@ public class SharedBlockNewRegionOffsetMirrorTests
     /// reads as a moved test project.</summary>
     private static string RepositoryRoot()
     {
+        string? configured = Environment.GetEnvironmentVariable("KOTOR_COOP_ROOT");
+        if (configured is not null && File.Exists(Path.Combine(configured, "KotorCoop.slnx")))
+            return configured;
+
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
 
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "KotorCoop.slnx")))
         {
             directory = directory.Parent;
+        }
+
+        // Focused validation deliberately builds into an ignored directory outside the
+        // repository, so the binary path may not have the source tree as an ancestor.
+        if (directory is null)
+        {
+            directory = new(Environment.CurrentDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "KotorCoop.slnx")))
+                directory = directory.Parent;
         }
 
         Assert.True(directory is not null, $"no KotorCoop.slnx above {AppContext.BaseDirectory}");

@@ -46,13 +46,10 @@ public sealed partial class CoopClient
         // Sent every tick, unreliable, same discipline as ReportProgression: this is a LEVEL
         // (this peer's current reading), not an event, so a lost datagram costs a tick and a
         // repeat applies nothing extra.
-        int length = PacketCodec.Write(
-            _sendBuffer, new CompanionXpReportPacket(_localPeerId, presentMask, xp));
-
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
-        }
+        // Caller's thread, not the tick thread — see CoopClient._apiBuffer.
+        SendFromCaller(
+            new CompanionXpReportPacket(_localPeerId, presentMask, xp),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>The host merges reports; a client only sends its own.</summary>

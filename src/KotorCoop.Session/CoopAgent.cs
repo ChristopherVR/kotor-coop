@@ -835,7 +835,7 @@ public sealed partial class CoopAgent
         // past it. See docs/research/dialogue-consequences.md's script-item-sync section for
         // the live evidence (Controls 2/3).
         PerfPhaseStart();
-        _lootPump.PumpContainerLoot(caps);
+        _lootPump.PumpContainerLoot(caps, local.Module);
         PerfPhaseEnd(PumpPhase.ContainerLoot);
 
         // Script-item grants: called every tick, same as the two fast-path calls above, so it
@@ -915,7 +915,7 @@ public sealed partial class CoopAgent
             _worldStatePump.PumpPlaceables(caps);
         }
 
-        // Off by default (coop.ini mine_sync); see docs/research/mines.md.
+        // Enabled by default (coop.ini mine_sync); see docs/research/mines.md §9.
         if (_settings.MineSync)
         {
             _worldStatePump.PumpMines(caps);
@@ -1081,7 +1081,16 @@ public sealed partial class CoopAgent
     /// <see cref="PendingMaterialisedLootGive"/> is: <c>KotorCoop.Agent</c>, a separate
     /// assembly, needs to see it.</summary>
     public readonly record struct PendingPartyPoolApply(
-        KotorCoop.Protocol.PartyPoolOpKind Kind, KotorCoop.Protocol.PartyPoolStackKey Key, ushort Count);
+        KotorCoop.Protocol.PartyPoolOpKind Kind, KotorCoop.Protocol.PartyPoolStackKey Key, ushort Count,
+        uint IntentPeerId = 0, uint IntentSerial = 0);
+
+    /// <summary>Completes a host-side v2 intent after the plugin has answered the engine apply.
+    /// The wire ACK is sent only for this result, so a queued-but-refused spawn cannot leave the
+    /// client believing it was accepted.</summary>
+    public void CompletePartyPoolIntentV2(uint peerId, uint intentSerial, bool accepted)
+    {
+        _session.CompletePartyPoolIntentV2(peerId, intentSerial, accepted);
+    }
 
     /// <summary>
     /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most
@@ -1183,14 +1192,21 @@ public sealed partial class CoopAgent
     /// re-broadcast as if a script had just created it"); the party-pool channel was simply never
     /// wired into the ledger that says so.
     /// </summary>
-    public void NoteLocalPartyPoolAdd(string resref)
+    public RecentlySyncedItems.Reservation NoteLocalPartyPoolAdd(string resref)
     {
         if (string.IsNullOrEmpty(resref))
         {
-            return;
+            return default;
         }
 
-        _recentlySyncedItems.Record(resref, 1, Environment.TickCount64);
+        return _recentlySyncedItems.RecordReservation(resref, Environment.TickCount64);
+    }
+
+    /// <summary>Releases the exact echo-suppression unit reserved for a party-pool add when its
+    /// staging-cheat result is refused or times out before creating an item.</summary>
+    public void UnnoteLocalPartyPoolAdd(RecentlySyncedItems.Reservation reservation)
+    {
+        _recentlySyncedItems.TryCancel(reservation);
     }
 
     /// <summary>The innermost frame of an exception's stack, one line, for the pump's failure

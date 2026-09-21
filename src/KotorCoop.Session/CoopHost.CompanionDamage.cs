@@ -24,6 +24,21 @@ public sealed partial class CoopHost
     /// a companion's local fight goes stale exactly when its owning peer does.</summary>
     private const int CompanionDamageFreshMs = 2000;
 
+    /// <summary>
+    /// Number of peer reports currently retained. Internal visibility keeps the bounded-state
+    /// invariant observable in tests without exposing transport bookkeeping to callers.
+    /// </summary>
+    internal int CompanionDamageReportCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _companionDamage.Count;
+            }
+        }
+    }
+
     /// <summary>The host does not report to itself; its own companions are already
     /// authoritative.</summary>
     public void ReportCompanionDamage(uint generation, IReadOnlyList<CompanionDamageEntry> damage)
@@ -37,12 +52,20 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
+            List<uint>? stale = null;
             foreach (KeyValuePair<uint, CompanionDamageReport> entry in _companionDamage)
             {
                 CompanionDamageReport report = entry.Value;
 
                 if (now - report.ReceivedMs > CompanionDamageFreshMs)
                 {
+                    // Freshness already kept an expired report out of the wire result, but
+                    // leaving it in this dictionary meant every peer identity ever admitted
+                    // occupied a slot for the rest of the process. The cumulative ledger keeps
+                    // the peer's baseline separately, so dropping this transport snapshot is
+                    // safe: a returning peer replaces it with its next report under the same
+                    // stable id, while this map remains bounded by currently active peers.
+                    (stale ??= []).Add(entry.Key);
                     continue;
                 }
 
@@ -50,6 +73,14 @@ public sealed partial class CoopHost
                 {
                     merged.Add(new PeerCompanionDamage(
                         entry.Key, report.Generation, damage.RosterSlotPlusOne, damage.CumulativeDamage));
+                }
+            }
+
+            if (stale is not null)
+            {
+                foreach (uint peerId in stale)
+                {
+                    _companionDamage.Remove(peerId);
                 }
             }
         }

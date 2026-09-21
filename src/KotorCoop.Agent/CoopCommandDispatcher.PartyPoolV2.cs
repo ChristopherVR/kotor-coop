@@ -1,4 +1,5 @@
 using KotorCoop.Memory;
+using KotorCoop.Protocol;
 using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
@@ -41,14 +42,35 @@ public sealed partial class CoopCommandDispatcher
             $"party pool v2: submitting {next.Kind.ToString().ToLowerInvariant()} of {next.Count}x "
             + $"'{next.Key.Resref}' through the party-pool channel");
 
+        RecentlySyncedItems.Reservation partyPoolReservation = default;
         if (next.Kind == KotorCoop.Protocol.PartyPoolOpKind.Add)
         {
-            // Our own cheat channel is about to CREATE this item, and a party-pool add lands in
-            // the PC's own item repository — so ScriptItemGrantPump would otherwise sweep it up
-            // and re-broadcast it as a fresh script grant. See CoopAgent.NoteLocalPartyPoolAdd
-            // for the live trace this closes.
-            agent.NoteLocalPartyPoolAdd(next.Key.Resref);
+            // Reserve the echo guard before the engine frame runs, so a fast inventory sweep
+            // cannot observe a successful add before the callback below. Refusals remove this
+            // exact unit immediately and therefore never leave a phantom 20-second budget.
+            partyPoolReservation = agent.NoteLocalPartyPoolAdd(next.Key.Resref);
         }
+
+        Action? complete = () =>
+        {
+            if (next.IntentSerial != 0)
+            {
+                agent.CompletePartyPoolIntentV2(next.IntentPeerId, next.IntentSerial, accepted: true);
+            }
+        };
+        Action? refuse = () =>
+        {
+            if (next.Kind == KotorCoop.Protocol.PartyPoolOpKind.Add)
+            {
+                agent.UnnoteLocalPartyPoolAdd(partyPoolReservation);
+            }
+
+            if (next.IntentSerial != 0)
+            {
+                Log?.Invoke($"party pool v2: engine refused intent {next.IntentSerial} for '{next.Key.Resref}'");
+                agent.CompletePartyPoolIntentV2(next.IntentPeerId, next.IntentSerial, accepted: false);
+            }
+        };
 
         SendCheat(new CheatRequest(
             kind,
@@ -57,6 +79,6 @@ public sealed partial class CoopCommandDispatcher
             Charges: next.Key.Charges,
             MaxCharges: next.Key.MaxCharges,
             Upgrades: next.Key.Upgrades,
-            ItemFlags: next.Key.Flags), quiet: true);
+            ItemFlags: next.Key.Flags), onApplied: complete, onRefused: refuse, quiet: true);
     }
 }

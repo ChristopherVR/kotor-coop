@@ -54,13 +54,15 @@ public sealed class ReliableLootSender(
     /// missing does not enqueue a duplicate — that case is not the cap contract and is not
     /// logged, since it is routine.
     /// </summary>
-    public ContainerLootPacket? Enqueue(uint originPeerId, uint containerId, uint itemId, long nowMs)
+    public ContainerLootPacket? Enqueue(
+        uint originPeerId, uint containerId, uint itemId, long nowMs, string module = "")
     {
         lock (_gate)
         {
             foreach (Pending existing in _pending.Values)
             {
-                if (existing.Packet.ContainerId == containerId && existing.Packet.ItemId == itemId)
+                if (existing.Packet.ContainerId == containerId && existing.Packet.ItemId == itemId
+                    && string.Equals(existing.Packet.Module, module, StringComparison.OrdinalIgnoreCase))
                 {
                     return null;
                 }
@@ -85,7 +87,7 @@ public sealed class ReliableLootSender(
             _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
-            ContainerLootPacket packet = new(originPeerId, sequence, containerId, itemId);
+            ContainerLootPacket packet = new(originPeerId, sequence, containerId, itemId, module);
 
             // LastSentMs = 0 so CollectDue emits it on the very next tick.
             _pending[sequence] = new Pending { Packet = packet, LastSentMs = 0, Attempts = 0 };
@@ -93,11 +95,12 @@ public sealed class ReliableLootSender(
         }
     }
 
-    public void Acknowledge(uint peerId, uint sequence)
+    public void Acknowledge(uint peerId, uint sequence, string module = "")
     {
         lock (_gate)
         {
-            if (_pending.TryGetValue(sequence, out Pending? pending))
+            if (_pending.TryGetValue(sequence, out Pending? pending)
+                && string.Equals(pending.Packet.Module, module, StringComparison.OrdinalIgnoreCase))
             {
                 pending.Acked.Add(peerId);
             }

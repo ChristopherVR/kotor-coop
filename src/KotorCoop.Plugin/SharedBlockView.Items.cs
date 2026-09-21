@@ -24,6 +24,26 @@ internal sealed unsafe partial class SharedBlockView
         return new LootView(*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
     }
 
+    public uint LootMailboxAckSerial => *U32(SharedBlock.OffsetLootMailboxAckSerial);
+    public uint LootMailboxPageSerial => *U32(SharedBlock.OffsetLootMailboxPageSerial);
+    public uint LootMailboxModuleHash => *U32(SharedBlock.OffsetLootMailboxModuleHash);
+    public uint LootMailboxCount => *U32(SharedBlock.OffsetLootMailboxCount);
+    public uint LootMailboxEpoch => *U32(SharedBlock.OffsetLootMailboxEpoch);
+    public uint LootMailboxAckEpoch => *U32(SharedBlock.OffsetLootMailboxAckEpoch);
+    public void SetLootMailboxAckSerial(uint serial) =>
+        *U32(SharedBlock.OffsetLootMailboxAckSerial) = serial;
+    public void SetLootMailboxAckEpoch(uint epoch) =>
+        *U32(SharedBlock.OffsetLootMailboxAckEpoch) = epoch;
+    public void SetLootMailboxConsumedCount(uint count) =>
+        *U32(SharedBlock.OffsetLootMailboxConsumedCount) = count;
+
+    public LootView GetLootMailbox(int index)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetLootMailboxSlots
+            + (Clamp(index, SharedBlock.LootMailboxCapacity) * SharedBlock.LootMailboxSlotStride);
+        return new LootView(*(uint*)(slot + 0x00), *(uint*)(slot + 0x04));
+    }
+
 
     public ItemSlotView GetItemSlot(int index) =>
         new(baseAddress + SharedBlock.OffsetItemSlots

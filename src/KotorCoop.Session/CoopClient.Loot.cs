@@ -1,5 +1,6 @@
 using System.Net;
 using KotorCoop.Protocol;
+using KotorCoop.Session.Pumps;
 
 namespace KotorCoop.Session;
 
@@ -11,11 +12,26 @@ public sealed partial class CoopClient
 {
     private readonly ContainerLootStore _lootStore = new();
     private readonly ReliableLootSender _lootSender = new();
+    private string _lootModule = string.Empty;
+    private bool _lootModuleTransitioning = true;
 
     /// <summary>The container-loot store, exposed the way <see cref="Flags"/>/<see cref="Items"/>
     /// already are, so a caller (a test, the resync tripwire) can read its Version/Digest
     /// without a separate accessor per field.</summary>
     public ContainerLootStore Loot => _lootStore;
+
+    public void SetLootModule(string module)
+    {
+        if (module.Length == 0 || ModuleNameGuard.IsFallbackModuleName(module))
+        {
+            _lootModuleTransitioning = true;
+            return;
+        }
+
+        _lootModule = module;
+        _lootModuleTransitioning = false;
+        _lootStore.SetModule(module);
+    }
 
     /// <summary>
     /// The loot sender's one recipient: the host, which applies the removal, re-attributes
@@ -46,11 +62,14 @@ public sealed partial class CoopClient
 
         // Queued under the last admitted identity so a chest emptied during an outage still
         // reaches the host afterwards — see SetFlag.
-        _lootSender.Enqueue(_sessionPeerId, containerId, itemId, SessionClock.NowMs);
+        _lootSender.Enqueue(
+            _sessionPeerId, containerId, itemId, SessionClock.NowMs, _lootStore.Module);
     }
 
     /// <summary>The container-loot removals received from the host, for the agent to apply.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
+    public IReadOnlyList<ContainerLootRemoval> ContainerLootHistory =>
+        _lootStore.HistorySnapshot();
 
     private void SendContainerLoot(ContainerLootPacket op)
     {
@@ -74,10 +93,12 @@ public sealed partial class CoopClient
             return;
         }
 
+        // ApplyOp records the packet in its module ledger even when the game has already moved
+        // to another module.  The active bridge view remains guarded by SetLootModule.
         _lootStore.ApplyOp(op);
 
         int length = PacketCodec.Write(
-            _replyBuffer, new ContainerLootAckPacket(_localPeerId, op.OpSequence));
+            _replyBuffer, new ContainerLootAckPacket(_localPeerId, op.OpSequence, op.Module));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
@@ -96,7 +117,7 @@ public sealed partial class CoopClient
     /// <see cref="_gate"/>, the same lock <see cref="_materialisedLootInbox"/> uses: this set is
     /// mutated from the receive loop and now also cleared from the agent's thread via the
     /// session interface, so an unsynchronised HashSet is no longer safe.</summary>
-    private readonly HashSet<uint> _materialisedLootSeen = [];
+    private readonly HashSet<(string Module, uint OwnerEnemyId)> _materialisedLootSeen = [];
 
     private readonly Queue<MaterialisedLootPacket> _materialisedLootInbox = new();
 
@@ -114,20 +135,39 @@ public sealed partial class CoopClient
             return;
         }
 
+        if (!_lootStore.AcceptModule(loot.Module))
+        {
+            // A legitimate packet for the arriving module can beat the first stable module
+            // read by the agent. Keep it in the sender's retry loop while the local module is
+            // blank/fallback; once stable, an actually stale packet is safely acknowledged.
+            if (_lootModuleTransitioning)
+                return;
+
+            int staleAckLength = PacketCodec.Write(
+                _replyBuffer, new MaterialisedLootAckPacket(_localPeerId, loot.OpSequence, loot.Module));
+            if (staleAckLength > 0)
+                _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, staleAckLength));
+            return;
+        }
+
         lock (_gate)
         {
-            if (_materialisedLootSeen.Add(loot.OwnerEnemyId))
+            if (_materialisedLootSeen.Add((loot.Module.ToUpperInvariant(), loot.OwnerEnemyId)))
             {
                 _materialisedLootInbox.Enqueue(loot);
             }
         }
 
-        int length = PacketCodec.Write(
-            _replyBuffer, new MaterialisedLootAckPacket(_localPeerId, loot.OpSequence));
-        if (length > 0)
-        {
-            _channel.Send(_hostEndPoint, _replyBuffer.AsSpan(0, length));
-        }
+        // The agent pump acknowledges only after the owner mapping is present and every item
+        // has been queued. A receipt ACK here would let the host retire the packet while a
+        // low-FPS mapping delay still had it parked locally.
+    }
+
+    public void AcknowledgeMaterialisedLoot(MaterialisedLootPacket loot)
+    {
+        SendFromCaller(
+            new MaterialisedLootAckPacket(_localPeerId, loot.OpSequence, loot.Module),
+            static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
     /// <summary>
@@ -166,13 +206,23 @@ public sealed partial class CoopClient
         }
     }
 
+    public void RequeueMaterialisedLoot(IReadOnlyList<MaterialisedLootPacket> packets)
+    {
+        if (packets.Count == 0) return;
+        lock (_gate)
+        {
+            foreach (MaterialisedLootPacket packet in packets)
+                _materialisedLootInbox.Enqueue(packet);
+        }
+    }
+
     private void HandleContainerLootAck(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
         if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
         {
             // The ack names its sender (the host) so the shared per-recipient
             // sender can mark exactly that recipient done.
-            _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+            _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence, lootAck.Module);
         }
     }
 }

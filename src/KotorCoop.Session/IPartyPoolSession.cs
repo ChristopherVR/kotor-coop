@@ -82,9 +82,21 @@ public interface IPartyPoolSession
     /// <summary>Host only: every intent this instance's wire layer has accepted (deduped by
     /// (peer, serial)) since the last drain, oldest first — <c>Pumps.PartyPoolPumpV2</c> applies
     /// each one to the local engine through the identical staging-cheat primitive v1 already
-    /// uses. The ack (or refusal) itself is sent synchronously by whatever accepted or refused
-    /// the intent, not exposed as a separate call here.</summary>
+    /// uses. The host calls <see cref="CompletePartyPoolIntentV2"/> from the engine result
+    /// callback; this is intentionally separate so queue admission is never reported as a
+    /// successful spawn.</summary>
     IReadOnlyList<PartyPoolIntentPacketV2> DrainPartyPoolIntentsV2() => [];
+
+    /// <summary>Reports the result of the host engine apply for one accepted intent. The wire
+    /// ACK is deliberately delayed until this result arrives, so an intent is never told it
+    /// succeeded merely because it reached the host's queue. A client implementation turns a
+    /// negative result into a bounded retry/failure event for its pump.</summary>
+    void CompletePartyPoolIntentV2(uint peerId, uint intentSerial, bool accepted) { }
+
+    /// <summary>Client only: complete results for intents previously sent by this instance.
+    /// Unlike the legacy serial-only drain this preserves the original operation and verdict,
+    /// allowing the pump to retry a refused engine apply without deleting the local item.</summary>
+    IReadOnlyList<PartyPoolIntentResultV2> DrainPartyPoolIntentResultsV2() => [];
 
     /// <summary>Client only: every intent serial this client has seen acked OR refused since the
     /// last drain, oldest first — both clear the same way
@@ -93,6 +105,9 @@ public interface IPartyPoolSession
     /// reconcile-target adjustment.</summary>
     IReadOnlyList<uint> DrainAckedPartyPoolIntentsV2() => [];
 }
+
+public readonly record struct PartyPoolIntentResultV2(
+    PartyPoolIntentPacketV2 Intent, bool Accepted);
 
 /// <summary>A reusable empty dictionary singleton for the default interface member above, so a
 /// bridge/session that never overrides <see cref="IPartyPoolSession.PartyPoolTotals"/> does not

@@ -53,13 +53,15 @@ public sealed class MaterialisedLootSender(
     /// reliable sender in this file family shares.
     /// </summary>
     public MaterialisedLootPacket? Enqueue(
-        uint originPeerId, uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items, long nowMs)
+        uint originPeerId, uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items, long nowMs,
+        string module = "")
     {
         lock (_gate)
         {
             foreach (Pending existing in _pending.Values)
             {
-                if (existing.Packet.OwnerEnemyId == ownerEnemyId)
+                if (existing.Packet.OwnerEnemyId == ownerEnemyId
+                    && string.Equals(existing.Packet.Module, module, StringComparison.OrdinalIgnoreCase))
                 {
                     return null;
                 }
@@ -84,7 +86,7 @@ public sealed class MaterialisedLootSender(
             _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
-            MaterialisedLootPacket packet = new(originPeerId, sequence, ownerEnemyId, items);
+            MaterialisedLootPacket packet = new(originPeerId, sequence, ownerEnemyId, items, module);
 
             // LastSentMs = 0 so CollectDue emits it on the very next tick.
             _pending[sequence] = new Pending { Packet = packet, LastSentMs = 0, Attempts = 0 };
@@ -92,11 +94,12 @@ public sealed class MaterialisedLootSender(
         }
     }
 
-    public void Acknowledge(uint peerId, uint sequence)
+    public void Acknowledge(uint peerId, uint sequence, string module = "")
     {
         lock (_gate)
         {
-            if (_pending.TryGetValue(sequence, out Pending? pending))
+            if (_pending.TryGetValue(sequence, out Pending? pending)
+                && string.Equals(pending.Packet.Module, module, StringComparison.OrdinalIgnoreCase))
             {
                 pending.Acked.Add(peerId);
             }

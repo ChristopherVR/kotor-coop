@@ -1,5 +1,6 @@
 using System.Net;
 using KotorCoop.Protocol;
+using KotorCoop.Session.Pumps;
 
 namespace KotorCoop.Session;
 
@@ -19,6 +20,20 @@ public sealed partial class CoopHost
     /// without a separate accessor per field.</summary>
     public ContainerLootStore Loot => _lootStore;
 
+    public void SetLootModule(string module)
+    {
+        if (module.Length == 0 || ModuleNameGuard.IsFallbackModuleName(module)
+            || string.Equals(_lootStore.Module, module, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _lootStore.SetModule(module);
+        // A packet captured during the previous module is retained under its own identity. The
+        // newly active module must be re-offered once, without relabelling that old packet.
+        ResyncContainerLoot(SessionClock.NowMs, module);
+        ResyncMaterialisedLoot(SessionClock.NowMs);
+        _lootSender.ResetBackoff();
+    }
+
     /// <summary>
     /// Someone looted an item out of a shared container here; broadcast the removal reliably so
     /// it vanishes from every client's copy too. Enqueue-only — the tick loop, which owns the
@@ -35,12 +50,14 @@ public sealed partial class CoopHost
             return;
         }
 
-        _lootSender.Enqueue(HostPeerId, containerId, itemId, SessionClock.NowMs);
+        _lootSender.Enqueue(HostPeerId, containerId, itemId, SessionClock.NowMs, _lootStore.Module);
     }
 
     /// <summary>Every removal known here, host-discovered and client-reported alike, for the
     /// agent to re-declare to the game.</summary>
     public IReadOnlyList<ContainerLootRemoval> ContainerLootRemovals => _lootStore.Snapshot();
+    public IReadOnlyList<ContainerLootRemoval> ContainerLootHistory =>
+        _lootStore.HistorySnapshot();
 
     private readonly MaterialisedLootSender _materialisedLootSender = new();
 
@@ -72,8 +89,9 @@ public sealed partial class CoopHost
     /// </summary>
     public void PublishMaterialisedLoot(uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
     {
-        _materialisedLootHistory.Record(ownerEnemyId, items);
-        _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, SessionClock.NowMs);
+        _materialisedLootHistory.Record(_lootStore.Module, ownerEnemyId, items);
+        _materialisedLootSender.Enqueue(
+            HostPeerId, ownerEnemyId, items, SessionClock.NowMs, _lootStore.Module);
     }
 
     /// <summary>
@@ -146,12 +164,16 @@ public sealed partial class CoopHost
             return;
         }
 
-        // PublishContainerLoot is the same door the host's own scanner comes through: it adds to
-        // the store and enqueues the broadcast only when the pair is new.
-        PublishContainerLoot(op.ContainerId, op.ItemId);
+        // Capture under the packet's module even when a load transition has already moved the
+        // active view.  It is safe to acknowledge immediately: inactive history is never fed to
+        // the game bridge, and will be replayed only if that module becomes active later.
+        bool added = _lootStore.ApplyOp(op);
+        if (added && _lootStore.IsActiveModule(op.Module))
+            _lootSender.Enqueue(HostPeerId, op.ContainerId, op.ItemId, now, op.Module);
 
         // Ack unconditionally: a duplicate op means the previous ack was lost.
-        int length = PacketCodec.Write(_replyBuffer, new ContainerLootAckPacket(HostPeerId, op.OpSequence));
+        int length = PacketCodec.Write(
+            _replyBuffer, new ContainerLootAckPacket(HostPeerId, op.OpSequence, op.Module));
         if (length > 0)
         {
             _channel.Send(from, _replyBuffer.AsSpan(0, length));
@@ -170,13 +192,13 @@ public sealed partial class CoopHost
     /// </summary>
     private void HandleLootSyncRequest(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
-        if (PacketCodec.ReadLootSyncRequest(span) is null)
+        if (PacketCodec.ReadLootSyncRequest(span) is not { } request)
         {
             _channel.NoteMalformed();
             return;
         }
 
-        ResyncContainerLoot(SessionClock.NowMs);
+        ResyncContainerLoot(SessionClock.NowMs, request.Module);
         _lootSender.ResetBackoff();
     }
 
@@ -188,11 +210,14 @@ public sealed partial class CoopHost
     /// counter cannot always see (docs/research/disconnect-reconnect.md §4.1). See the call
     /// sites for why this channel needs it and the flag/item/journal channels do not.
     /// </summary>
-    private void ResyncContainerLoot(long nowMs)
+    private void ResyncContainerLoot(long nowMs, string? module = null)
     {
-        foreach (ContainerLootRemoval removal in _lootStore.Snapshot())
+        string target = module is { Length: > 0 } ? module : _lootStore.Module;
+        if (!string.Equals(target, _lootStore.Module, StringComparison.OrdinalIgnoreCase))
+            return;
+        foreach (ContainerLootRemoval removal in _lootStore.HistorySnapshot(target))
         {
-            _lootSender.Enqueue(HostPeerId, removal.ContainerId, removal.ItemId, nowMs);
+            _lootSender.Enqueue(HostPeerId, removal.ContainerId, removal.ItemId, nowMs, target);
         }
     }
 
@@ -218,9 +243,9 @@ public sealed partial class CoopHost
     private void ResyncMaterialisedLoot(long nowMs)
     {
         foreach ((uint ownerEnemyId, IReadOnlyList<MaterialisedLootItem> items)
-            in _materialisedLootHistory.Snapshot())
+            in _materialisedLootHistory.SnapshotForModule(_lootStore.Module))
         {
-            _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, nowMs);
+            _materialisedLootSender.Enqueue(HostPeerId, ownerEnemyId, items, nowMs, _lootStore.Module);
         }
     }
 
@@ -228,7 +253,7 @@ public sealed partial class CoopHost
     {
         if (PacketCodec.ReadContainerLootAck(span) is { } lootAck)
         {
-            _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence);
+            _lootSender.Acknowledge(lootAck.PeerId, lootAck.OpSequence, lootAck.Module);
         }
     }
 
@@ -237,7 +262,7 @@ public sealed partial class CoopHost
         if (PacketCodec.ReadMaterialisedLootAck(span) is { } materialisedLootAck)
         {
             _materialisedLootSender.Acknowledge(
-                materialisedLootAck.PeerId, materialisedLootAck.OpSequence);
+                materialisedLootAck.PeerId, materialisedLootAck.OpSequence, materialisedLootAck.Module);
         }
     }
 }

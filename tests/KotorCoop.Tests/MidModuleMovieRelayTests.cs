@@ -213,8 +213,9 @@ public class MidModuleMovieRelayTests
         // N-slot local_combat's excluded-id array (61, 0x4800), per-attacker damage attribution
         // (62, 0x4900) and the companion-damage channel (63, 0x4A00), then to 0x4C00 the same
         // day for the materialised-owner-id table (65, 0x4B00), then to 0x4D00 on 2026-09-03
-        // for the galaxy-map departure relay (67, 0x4C00) — see SharedBlock.TotalSize.
-        Assert.Equal(0x4D00, SharedBlock.TotalSize);
+        // for the galaxy-map departure relay (67, 0x4C00), then to 0x4F00 for the protocol-59
+        // acknowledged container-loot mailbox (0x4D00..0x4E3B) — see SharedBlock.TotalSize.
+        Assert.Equal(0x4F00, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

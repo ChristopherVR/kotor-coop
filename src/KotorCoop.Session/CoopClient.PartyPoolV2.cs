@@ -59,7 +59,7 @@ public sealed partial class CoopClient
 
     private byte _partyPoolSnapshotV2ExpectedPageCount = 1;
 
-    private readonly Queue<uint> _partyPoolIntentAckDrainV2 = new();
+    private readonly Queue<PartyPoolIntentResultV2> _partyPoolIntentResultDrainV2 = new();
 
     private readonly Lock _partyPoolIntentAckDrainV2Gate = new();
 
@@ -112,13 +112,36 @@ public sealed partial class CoopClient
     {
         lock (_partyPoolIntentAckDrainV2Gate)
         {
-            if (_partyPoolIntentAckDrainV2.Count == 0)
+            if (_partyPoolIntentResultDrainV2.Count == 0)
             {
                 return [];
             }
 
-            List<uint> drained = [.. _partyPoolIntentAckDrainV2];
-            _partyPoolIntentAckDrainV2.Clear();
+            List<uint> drained = [];
+            int count = _partyPoolIntentResultDrainV2.Count;
+            for (int i = 0; i < count; i++)
+            {
+                PartyPoolIntentResultV2 result = _partyPoolIntentResultDrainV2.Dequeue();
+                if (result.Accepted)
+                {
+                    drained.Add(result.Intent.IntentSerial);
+                }
+            }
+            return drained;
+        }
+    }
+
+    public IReadOnlyList<PartyPoolIntentResultV2> DrainPartyPoolIntentResultsV2()
+    {
+        lock (_partyPoolIntentAckDrainV2Gate)
+        {
+            if (_partyPoolIntentResultDrainV2.Count == 0)
+            {
+                return [];
+            }
+
+            List<PartyPoolIntentResultV2> drained = [.. _partyPoolIntentResultDrainV2];
+            _partyPoolIntentResultDrainV2.Clear();
             return drained;
         }
     }
@@ -163,14 +186,21 @@ public sealed partial class CoopClient
             return;
         }
 
+        PartyPoolIntentPacketV2? packet = null;
         lock (_gate)
         {
-            _pendingPartyPoolIntentsV2.Remove(ack.IntentSerial);
+            if (_pendingPartyPoolIntentsV2.Remove(ack.IntentSerial, out PendingIntentV2? pending))
+            {
+                packet = (PartyPoolIntentPacketV2)pending.Packet;
+            }
         }
 
-        lock (_partyPoolIntentAckDrainV2Gate)
+        if (packet is { } intent)
         {
-            _partyPoolIntentAckDrainV2.Enqueue(ack.IntentSerial);
+            lock (_partyPoolIntentAckDrainV2Gate)
+            {
+                _partyPoolIntentResultDrainV2.Enqueue(new PartyPoolIntentResultV2(intent, ack.Accepted));
+            }
         }
     }
 

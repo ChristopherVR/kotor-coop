@@ -58,6 +58,11 @@ internal sealed class LootPump(
     /// (<c>CoopClient._materialisedLootSeen</c>) would otherwise remember an id from the last
     /// module forever and silently swallow a same-numbered enemy's real loot here.</summary>
     private string _materialisedLootDedupModule = string.Empty;
+    // A tagged packet remains here until its owner mapping is actually visible. The sender has
+    // not received an ACK during this interval, so it keeps retransmitting safely. Retiring it
+    // after a pump-count timeout loses loot on low-FPS loads where the mapping can take several
+    // seconds to appear. A module change is the only safe eviction boundary.
+    private readonly List<MaterialisedLootPacket> _deferredMaterialisedLoot = [];
 
     /// <summary>
     /// Takes the materialised-loot packets a connected host has published since the last
@@ -83,6 +88,16 @@ internal sealed class LootPump(
         {
             _materialisedLootDedupModule = module;
             session.ResetMaterialisedLootDedup();
+
+            for (int i = _deferredMaterialisedLoot.Count - 1; i >= 0; i--)
+            {
+                MaterialisedLootPacket deferred = _deferredMaterialisedLoot[i];
+                if (!string.Equals(deferred.Module, module, StringComparison.OrdinalIgnoreCase))
+                {
+                    session.AcknowledgeMaterialisedLoot(deferred);
+                    _deferredMaterialisedLoot.RemoveAt(i);
+                }
+            }
         }
 
         // Read once per pump, not once per packet or per item: MaterialisedEnemies' own table
@@ -92,41 +107,73 @@ internal sealed class LootPump(
         // several deaths landing in one datagram window.
         IReadOnlySet<uint>? materialisedOwnerIds = bridge.ReadMaterialisedOwnerIds();
 
-        foreach (MaterialisedLootPacket packet in session.DrainMaterialisedLoot())
+        _deferredMaterialisedLoot.AddRange(session.DrainMaterialisedLoot());
+
+        for (int packetIndex = 0; packetIndex < _deferredMaterialisedLoot.Count;)
         {
+            MaterialisedLootPacket packet = _deferredMaterialisedLoot[packetIndex];
+            bool tagged = packet.Module.Length > 0;
+
+            if (tagged && (module.Length == 0 || ModuleNameGuard.IsFallbackModuleName(module)))
+            {
+                packetIndex++;
+                continue;
+            }
+
+            if (tagged && !string.Equals(packet.Module, module, StringComparison.OrdinalIgnoreCase))
+            {
+                // The packet belongs to a completed prior module. It can no longer be applied
+                // against this module's object-id space, so retire it only at this safe boundary.
+                session.AcknowledgeMaterialisedLoot(packet);
+                _deferredMaterialisedLoot.RemoveAt(packetIndex);
+                continue;
+            }
+
             if (!MaterialisedLootFilterRule.ShouldQueue(packet.OwnerEnemyId, materialisedOwnerIds))
             {
-                // Skip the WHOLE packet before it ever reaches the single-slot giveloot cheat
-                // channel — the overwhelmingly common case is a peer holding the real,
-                // GIT-identical creature, which already rolled its own equivalent loot, so
-                // MaterialisedEnemies has no stand-in for this owner id and never will for this
-                // one. One line per owner id, not one per item: measured live 2026-09-02, six
-                // wasted round trips (twelve log lines, one refusal each) in one second on a
-                // client rejoining after a wipe reload — see
-                // docs/research/enemy-materialisation.md's 2026-09-02 section.
+                if (tagged)
+                {
+                    // A known-but-currently-empty table is still allowed to fill later during
+                    // low-FPS stand-in construction. Keep the packet and its unacknowledged
+                    // sender state until either the mapping appears or the module changes.
+                    packetIndex++;
+                    continue;
+                }
+
+                session.AcknowledgeMaterialisedLoot(packet);
                 log($"materialised loot: 0x{packet.OwnerEnemyId:X} has no local stand-in here - "
-                    + $"skipping {packet.Items.Count} item(s), never queueing a doomed giveloot round trip");
+                    + $"skipping {packet.Items.Count} legacy item(s)");
+                _deferredMaterialisedLoot.RemoveAt(packetIndex);
                 continue;
             }
 
             log($"materialised loot: received {packet.Items.Count} item(s) for owner 0x{packet.OwnerEnemyId:X}, queueing");
 
-            foreach (MaterialisedLootItem item in packet.Items)
+            int available;
+            lock (_pendingGate)
             {
-                // Count-check-and-enqueue must be one atomic operation under the SAME lock
-                // TryDequeuePendingLoot takes — see _pendingGate's own doc comment.
-                lock (_pendingGate)
+                available = Math.Min(packet.Items.Count, MaxPendingLoot - _pendingLoot.Count);
+                for (int i = 0; i < available; i++)
                 {
-                    if (_pendingLoot.Count >= MaxPendingLoot)
-                    {
-                        log($"dropping materialised loot '{item.Resref}' for owner 0x{packet.OwnerEnemyId:X}: "
-                            + $"already holding {MaxPendingLoot} queued gives, the drain has fallen behind");
-                        return;
-                    }
-
-                    _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(packet.OwnerEnemyId, item));
+                    _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(
+                        packet.OwnerEnemyId, packet.Items[i]));
                 }
             }
+
+            if (available < packet.Items.Count)
+            {
+                // Keep the unqueued tail attached to the same wire operation. No ACK is sent
+                // until every item has a place in the bounded give queue.
+                _deferredMaterialisedLoot[packetIndex] = packet with
+                {
+                    Items = packet.Items.Skip(available).ToArray(),
+                };
+                packetIndex++;
+                continue;
+            }
+
+            session.AcknowledgeMaterialisedLoot(packet);
+            _deferredMaterialisedLoot.RemoveAt(packetIndex);
         }
 
         // The receiving half of the dialogue item-grant channel: a peer's conversation put
@@ -183,12 +230,14 @@ internal sealed class LootPump(
     /// re-broadcast. Shares the Doors capability gate because it rests on the same
     /// object-id-across-the-same-save assumption doors do.
     /// </summary>
-    public void PumpContainerLoot(SessionCapabilities caps)
+    public void PumpContainerLoot(SessionCapabilities caps, string module = "")
     {
         if (!bridge.SupportsContainerLoot || (caps & SessionCapabilities.Doors) == 0)
         {
             return;
         }
+
+        session.SetLootModule(module);
 
         // Detect whatever THIS instance's player removed locally and announce it — the host's
         // own scan and a client's own scan are treated identically now.
@@ -211,7 +260,7 @@ internal sealed class LootPump(
         // Re-declare the merged set — everyone's removals, this instance's own plus every peer
         // reported through the session — so each side's copy of every shared container
         // converges. Idempotent: an already-removed item resolves to a no-op.
-        bridge.TryWriteContainerLoot(session.ContainerLootRemovals);
+        bridge.TryWriteContainerLoot(session.ContainerLootHistory);
     }
 
     /// <summary>
