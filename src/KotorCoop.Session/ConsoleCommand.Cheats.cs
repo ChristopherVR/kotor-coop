@@ -484,6 +484,13 @@ public static partial class ConsoleCommand
                 CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a dialog resref - {usage}");
         }
 
+        if (rest.Length == 2 && !TryParseObjectId(rest[0], out _)
+            && rest[0].Length + 1 + rest[1].Length > 31)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid,
+                Error: "The tag and dialog resref exceed the command buffer; use the object's numeric id.");
+        }
+
         return new CoopCommand(
             CoopCommandKind.StartDialog, Address: rest[0], Password: rest.Length == 2 ? rest[1] : string.Empty);
     }

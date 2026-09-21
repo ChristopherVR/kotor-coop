@@ -6,6 +6,17 @@ namespace KotorCoop.Tests;
 
 public class ConsoleCommandTests
 {
+    [Fact]
+    public void StartDialogRejectsTruncatedTagAndResourceButAcceptsObjectId()
+    {
+        CoopCommand tooLong = ConsoleCommand.Parse("startdialog lev40_transformer lev40_transform");
+        Assert.Equal(CoopCommandKind.Invalid, tooLong.Kind);
+        Assert.Contains("numeric id", tooLong.Error);
+        CoopCommand byId = ConsoleCommand.Parse("startdialog 0x134 lev40_transform");
+        Assert.Equal(CoopCommandKind.StartDialog, byId.Kind);
+        Assert.Equal("lev40_transform", byId.Password);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
