@@ -200,6 +200,12 @@ public static class PluginMenuLoader
             {
                 file.CopyTo(Path.Combine(autosave, file.Name));
             }
+
+            // File.Copy may preserve the source archive timestamp. The staged autosave is a
+            // newly activated baseline, so stamp the archive after the complete copy. The live
+            // resolver compares the conventional quicksave against this boundary.
+            File.SetLastWriteTimeUtc(
+                Path.Combine(autosave, "SAVEGAME.sav"), DateTime.UtcNow);
         }
         catch (Exception ex)
         {

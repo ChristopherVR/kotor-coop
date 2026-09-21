@@ -300,6 +300,39 @@ public static class SaveDigest
         Invalid,
     }
 
+    /// <summary>Resolves the file-backed identity of the world currently served by the
+    /// running game. The compatibility cache uses this live-world view; the legacy
+    /// <see cref="FindSessionSave"/> view remains staged-autosave-first for load lineage and
+    /// capture bookkeeping. A named historical save is never treated as live merely because
+    /// its archive timestamp is newer; only the engine's conventional quicksave can cross the
+    /// staged/autosave boundary.</summary>
+    public static string? FindLiveSessionSave(string gameDirectory)
+    {
+        string? staged = FindSessionSave(gameDirectory);
+        if (staged is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            string quick = Path.Combine(gameDirectory, "saves", "000000 - QUICKSAVE");
+            FileInfo quickFile = new(Path.Combine(quick, "SAVEGAME.sav"));
+            FileInfo stagedFile = new(Path.Combine(staged, "SAVEGAME.sav"));
+            if (quickFile.Exists && stagedFile.Exists
+                && quickFile.LastWriteTimeUtc > stagedFile.LastWriteTimeUtc)
+            {
+                return quick;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+        }
+
+        return staged;
+    }
+
     /// <summary>The stored GIT for one module out of a save, when that save has visited
     /// it. An absent module or save has no saved state and may use the pristine archive;
     /// a present but unreadable/ambiguous module is unknown and must not silently fall back
@@ -551,8 +584,9 @@ public sealed class SaveDigestCache(string gameDirectory)
     /// checked" forever, so the very first refresh would never run.</summary>
     private long _lastStampCheckMs = -2 * StampCheckIntervalMs;
 
-    /// <summary>The staged/current save's identity digest, 0 while unknown (including "not
-    /// computed yet" — the first ask starts the work and answers on a later tick).</summary>
+    /// <summary>The live/staged save's identity digest, preferring a complete quicksave
+    /// written after the staged baseline, and 0 while unknown (including "not computed yet" —
+    /// the first ask starts the work and answers on a later tick).</summary>
     public uint SaveIdentity
     {
         get
@@ -671,7 +705,7 @@ public sealed class SaveDigestCache(string gameDirectory)
             }
         }
 
-        string? directory = SaveDigest.FindSessionSave(gameDirectory);
+        string? directory = SaveDigest.FindLiveSessionSave(gameDirectory);
         (string Path, long Length, long Ticks) stamp = StampOf(directory);
 
         lock (_gate)

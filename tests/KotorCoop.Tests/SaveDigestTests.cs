@@ -399,6 +399,105 @@ public sealed class SaveDigestTests : IDisposable
         Assert.Equal(expected, cache.SaveIdentity);
     }
 
+    [Fact]
+    public void LiveResolverAndCacheChooseTheSameFreshQuicksaveWhenFolderMtimeStaysPut()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        string quick = Path.Combine(gameDir, "saves", "000000 - QUICKSAVE");
+        Directory.CreateDirectory(staged);
+        Directory.CreateDirectory(quick);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"),
+            BuildSavegameErf("tar_m02aa", 833, [(2u, "n_sith")], 2057));
+        DateTime stagedTime = DateTime.UtcNow.AddMinutes(-2);
+        DateTime quickTime = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(Path.Combine(staged, "SAVEGAME.sav"), stagedTime);
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), quickTime);
+        DateTime folderTime = Directory.GetLastWriteTimeUtc(quick);
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"),
+            BuildSavegameErf("tar_m02aa", 833, [(2u, "n_sith")], 2057));
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), quickTime.AddMinutes(1));
+        Directory.SetLastWriteTimeUtc(quick, folderTime);
+
+        string? selected = SaveDigest.FindLiveSessionSave(gameDir);
+        Assert.Equal(quick, selected);
+        Assert.True(SaveDigest.TryComputeSaveIdentity(quick, out uint expected));
+
+        SaveDigestCache cache = new(gameDir);
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.Equal(expected, cache.SaveIdentity);
+    }
+
+    [Fact]
+    public void OlderHistoricalQuicksaveDoesNotDisplaceFreshStagedBaseline()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        string quick = Path.Combine(gameDir, "saves", "000000 - QUICKSAVE");
+        Directory.CreateDirectory(staged);
+        Directory.CreateDirectory(quick);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"),
+            BuildSavegameErf("tar_m02aa", 833, [(2u, "n_sith")], 2057));
+        File.SetLastWriteTimeUtc(Path.Combine(staged, "SAVEGAME.sav"), DateTime.UtcNow);
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), DateTime.UtcNow.AddDays(-1));
+
+        Assert.Equal(staged, SaveDigest.FindLiveSessionSave(gameDir));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CorruptFreshQuicksaveRemainsUnknownInsteadOfFallingBackToStagedBytes(bool empty)
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        string quick = Path.Combine(gameDir, "saves", "000000 - QUICKSAVE");
+        Directory.CreateDirectory(staged);
+        Directory.CreateDirectory(quick);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"), empty ? [] : [1, 2, 3]);
+        File.SetLastWriteTimeUtc(Path.Combine(staged, "SAVEGAME.sav"), DateTime.UtcNow.AddMinutes(-2));
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), DateTime.UtcNow);
+
+        Assert.Equal(quick, SaveDigest.FindLiveSessionSave(gameDir));
+        Assert.False(SaveDigest.TryComputeSaveIdentity(quick, out _));
+        SaveDigestCache cache = new(gameDir);
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0u, cache.SaveIdentity);
+    }
+
+    [Fact]
+    public void StagingAnOlderSaveMakesItNewerThanTheHistoricalQuicksave()
+    {
+        string gameDir = TempDirectory();
+        string saves = Path.Combine(gameDir, "saves");
+        string older = Path.Combine(saves, "000002 - Older");
+        string quick = Path.Combine(saves, "000000 - QUICKSAVE");
+        Directory.CreateDirectory(older);
+        Directory.CreateDirectory(quick);
+        byte[] olderBytes = BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057);
+        File.WriteAllBytes(Path.Combine(older, "SAVEGAME.sav"), olderBytes);
+        File.WriteAllBytes(Path.Combine(quick, "SAVEGAME.sav"),
+            BuildSavegameErf("tar_m02aa", 833, [(2u, "n_sith")], 2057));
+        DateTime now = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(Path.Combine(older, "SAVEGAME.sav"), now.AddDays(-2));
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), now.AddDays(-1));
+        Directory.SetLastWriteTimeUtc(older, now.AddDays(-2));
+        Directory.SetLastWriteTimeUtc(quick, now.AddDays(-1));
+
+        Assert.True(PluginMenuLoader.TryStageSaveAsAutosave(gameDir, 1, out string diagnostic), diagnostic);
+        string staged = Path.Combine(saves, PluginMenuLoader.AutosaveSlot);
+        Assert.Equal(olderBytes, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
+        Assert.Equal(staged, SaveDigest.FindLiveSessionSave(gameDir));
+    }
+
     private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;

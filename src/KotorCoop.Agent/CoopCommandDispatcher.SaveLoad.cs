@@ -603,18 +603,22 @@ public sealed partial class CoopCommandDispatcher
 
     /// <summary>Reads the CURRENT session save fresh — the world+identity pair a rejoining
     /// client should receive if it connects RIGHT NOW, never a snapshot captured when serving
-    /// started. Same resolution <see cref="MaintainSessionSave"/>'s client branch already uses
-    /// for its own capture (<see cref="SaveDigest.FindSessionSave"/>).</summary>
+    /// started. Snapshot selection uses the shared staged-versus-quicksave resolver; an
+    /// unreadable selected archive yields an unknown snapshot rather than raw partial bytes.</summary>
     private static (IReadOnlyList<WorldFile> World, uint SaveIdentity) BuildWorldSnapshot(string gameDirectory)
     {
-        string? currentSave = SaveDigest.FindSessionSave(gameDirectory);
+        string? currentSave = SaveDigest.FindLiveSessionSave(gameDirectory);
         if (currentSave is null)
         {
             return ([], 0);
         }
 
+        if (!SaveDigest.TryComputeSaveIdentity(currentSave, out uint identity))
+        {
+            return ([], 0);
+        }
+
         IReadOnlyList<WorldFile> world = WorldTransfer.ReadSaveDirectory(currentSave);
-        uint identity = SaveDigest.TryComputeSaveIdentity(currentSave, out uint computed) ? computed : 0;
         return (world, identity);
     }
 
