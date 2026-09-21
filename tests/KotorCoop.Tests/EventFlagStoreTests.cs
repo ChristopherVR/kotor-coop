@@ -90,6 +90,31 @@ public class EventFlagStoreTests
     }
 
     [Fact]
+    public void HostLoadDecreaseOutranksADelayedClientBelief()
+    {
+        EventFlagStore host = new();
+
+        // This is the value from the old host world.  A client that was disconnected during
+        // the load can still retransmit an op carrying its old belief, even with a serial the
+        // host has already observed.
+        Assert.True(host.Set(9001, 1, originPeerId: CoopHost.HostPeerId));
+        Assert.True(host.ApplyOp(new FlagOpPacket(
+            OriginPeerId: 2, OpSequence: 7, FlagId: 9001, Value: 1, Serial: 40)));
+
+        // The first post-load world scan reports the genuine true -> false change.  Set mints
+        // above every serial observed so far, which makes the restored host save authoritative
+        // without discarding unrelated flag entries or requiring a new packet epoch.
+        Assert.True(host.Set(9001, 0, originPeerId: CoopHost.HostPeerId));
+        Assert.True(host.TryGetStamp(9001, out uint loadedSerial, out _));
+        Assert.True(loadedSerial > 40);
+
+        // A delayed retransmission from before the load must not put the old world back.
+        Assert.False(host.ApplyOp(new FlagOpPacket(
+            OriginPeerId: 2, OpSequence: 8, FlagId: 9001, Value: 1, Serial: 40)));
+        Assert.True(host.TryGet(9001, out sbyte value) && value == 0);
+    }
+
+    [Fact]
     public void ANonMonotonicRemoteDecreaseIsAcceptedWhenItIsGenuinelyNewer()
     {
         // The core fix: a peer's remote op carrying a LOWER value must still win when its

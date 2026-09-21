@@ -6,6 +6,9 @@ namespace KotorCoop.Memory;
 
 public sealed partial class KotorGameBridge
 {
+    internal static bool RetainWorldStateShadow(bool hadShadow, uint previousCatalogueDigest, uint catalogueDigest) =>
+        hadShadow && previousCatalogueDigest == catalogueDigest;
+
     /// <summary>Live engine read, never retained — see the interface remarks. The "areaXX"
     /// fallback is deliberately NOT applied here: a caller labelling a census wants "the
     /// name is unreadable" reported as failure, not disguised as a placeholder name.</summary>
@@ -288,14 +291,29 @@ public sealed partial class KotorGameBridge
     /// </summary>
     private void TryResolveGlobals()
     {
+        // TryResolve is retried from the ordinary attach/resolve loop, including after a
+        // same-module save load.  GlobalVariableTable currently clears and rebuilds its
+        // catalogue on every successful call, so taking a fresh shadow unconditionally here
+        // would swallow the entire post-load delta before WorldStatePump can publish the
+        // restored host value (for example true -> false).  Keep the old shadow while the
+        // catalogue identity is unchanged; an explicit ForgetWorldShadows or a new catalogue
+        // still gets the required silent baseline.
+        uint previousCatalogueDigest = _globals.CatalogueDigest;
+        bool hadShadow = _shadowBooleans is not null && _shadowNumbers is not null;
+
         if (!_globals.TryResolve(out _))
         {
             return;
         }
 
-        _shadowBooleans = new byte[GlobalVariableTable.BooleanByteCount];
-        _shadowNumbers = new sbyte[GlobalVariableTable.NumberCount];
-        _globals.TryReadValues(_shadowBooleans, _shadowNumbers);
+        if (!RetainWorldStateShadow(hadShadow, previousCatalogueDigest, _globals.CatalogueDigest))
+        {
+            byte[] booleans = new byte[GlobalVariableTable.BooleanByteCount];
+            sbyte[] numbers = new sbyte[GlobalVariableTable.NumberCount];
+            bool read = _globals.TryReadValues(booleans, numbers);
+            _shadowBooleans = read ? booleans : null;
+            _shadowNumbers = read ? numbers : null;
+        }
 
         _excludedFlags.Clear();
         foreach (GlobalVariable variable in _globals.Catalogue)
@@ -331,9 +349,13 @@ public sealed partial class KotorGameBridge
         // one this fixes.
         if (_shadowBooleans is null || _shadowNumbers is null)
         {
-            _shadowBooleans = new byte[GlobalVariableTable.BooleanByteCount];
-            _shadowNumbers = new sbyte[GlobalVariableTable.NumberCount];
-            _globals.TryReadValues(_shadowBooleans, _shadowNumbers);
+            byte[] baselineBooleans = new byte[GlobalVariableTable.BooleanByteCount];
+            sbyte[] baselineNumbers = new sbyte[GlobalVariableTable.NumberCount];
+            if (_globals.TryReadValues(baselineBooleans, baselineNumbers))
+            {
+                _shadowBooleans = baselineBooleans;
+                _shadowNumbers = baselineNumbers;
+            }
             return changed;
         }
 

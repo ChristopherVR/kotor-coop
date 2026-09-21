@@ -35,6 +35,16 @@ public class WorldStatePumpItemsTests
 
         public bool SupportsGroundItems => true;
 
+        public bool SupportsWorldState => true;
+
+        public bool IsWorldBetweenLives { get; set; }
+
+        public List<KeyValuePair<ulong, sbyte>> WorldChanges { get; } = [];
+
+        public int CollectWorldStateCalls { get; private set; }
+
+        public List<KeyValuePair<ulong, sbyte>> AppliedWorldState { get; } = [];
+
         /// <summary>What <c>TryWriteGroundItems</c> was last asked to materialise — the
         /// session's own belief about what should be on the ground, mirrored back so the test
         /// can assert on it without a real plugin block.</summary>
@@ -82,6 +92,20 @@ public class WorldStatePumpItemsTests
             return VanishedToReport;
         }
 
+        public List<KeyValuePair<ulong, sbyte>> CollectChangedWorldState()
+        {
+            CollectWorldStateCalls++;
+            List<KeyValuePair<ulong, sbyte>> changes = [.. WorldChanges];
+            WorldChanges.Clear();
+            return changes;
+        }
+
+        public bool TryApplyWorldState(ulong flagId, sbyte value)
+        {
+            AppliedWorldState.Add(new(flagId, value));
+            return true;
+        }
+
         public void Dispose()
         {
         }
@@ -95,6 +119,8 @@ public class WorldStatePumpItemsTests
     private sealed class StubSession : ICoopSession
     {
         public List<uint> RemoveItemCalls { get; } = [];
+
+        public List<KeyValuePair<ulong, sbyte>> SetFlagCalls { get; } = [];
 
         public GroundItemStore Items { get; } = new();
 
@@ -124,6 +150,8 @@ public class WorldStatePumpItemsTests
 
         public void SetFlag(ulong flagId, sbyte value)
         {
+            SetFlagCalls.Add(new(flagId, value));
+            Flags.Set(flagId, value, LocalPeerId);
         }
 
         public uint DropItem(
@@ -263,5 +291,40 @@ public class WorldStatePumpItemsTests
         Assert.Equal(2, session.RemoveItemCalls.Count);
         Assert.False(session.Items.TryGet(0x30001, out _));
         Assert.False(session.Items.TryGet(0x30002, out _));
+    }
+
+    /// <summary>
+    /// A module/save teardown must be silent for globals as well as items. In particular, a
+    /// stale/reused global-table byte must not become a signed flag op, and the session's old
+    /// value must not be written into the transient table. Once the bridge reports a stable
+    /// world, both directions resume on the next heavy pump.
+    /// </summary>
+    [Fact]
+    public void WorldStateSkipsTeardownAndResumesWhenStable()
+    {
+        const ulong levEscape = (1u << 16) | 88u;
+        (CoopAgent agent, ItemsBridge bridge, StubSession session) = Build();
+
+        // A stale session value stands in for the value carried by the existing world. The
+        // bridge's transient read is deliberately a different value, as a reused byte could
+        // be during a teardown (Lev_Escape's observed 0xA8/-88 was this exact shape).
+        session.Flags.Seed([new KeyValuePair<ulong, sbyte>(levEscape, -88)]);
+        bridge.WorldChanges.Add(new(levEscape, 4));
+        bridge.IsWorldBetweenLives = true;
+
+        agent.PumpOnce();
+
+        Assert.Equal(0, bridge.CollectWorldStateCalls);
+        Assert.Empty(bridge.AppliedWorldState);
+        Assert.Empty(session.SetFlagCalls);
+
+        // The settled pass is allowed to publish the real local edge and apply the resulting
+        // session value. This proves the gate is a pause, not a permanent disable.
+        bridge.IsWorldBetweenLives = false;
+        agent.PumpOnce();
+
+        Assert.Equal(1, bridge.CollectWorldStateCalls);
+        Assert.Equal([new KeyValuePair<ulong, sbyte>(levEscape, 4)], session.SetFlagCalls);
+        Assert.Contains(new KeyValuePair<ulong, sbyte>(levEscape, 4), bridge.AppliedWorldState);
     }
 }

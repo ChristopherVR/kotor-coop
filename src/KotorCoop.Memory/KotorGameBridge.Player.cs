@@ -189,6 +189,14 @@ public sealed partial class KotorGameBridge
         bool moduleChanged = module.Length > 0
             && !string.Equals(module, _cachedForModule, StringComparison.OrdinalIgnoreCase);
         bool worldReloaded = worldSerial != _cachedForWorldSerial;
+        // A fresh engine player can be adopted without running the full attach resolver.
+        // Rebind the globals table too: a save load may have replaced its owning server.
+        // TryResolveGlobals retains same-catalogue shadows so restored quest deltas survive.
+        if (moduleChanged || worldReloaded || !_globals.IsResolved)
+        {
+            TryResolveGlobals();
+        }
+
         if (moduleChanged || worldReloaded)
         {
             _cachedForModule = module;

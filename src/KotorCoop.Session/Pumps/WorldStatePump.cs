@@ -274,6 +274,17 @@ internal sealed class WorldStatePump(
             return;
         }
 
+        // The global table is rebuilt while a module/save is being torn down.  Reading it
+        // in that window can produce a plausible signed byte from freed/reused memory and
+        // publish it as a real local quest change; applying the session snapshot in the same
+        // window writes into that transient table.  Ground items already use this gate, and
+        // globals need the same edge discipline.  The next stable pump performs the normal
+        // collect/apply pass, so no settled world change is lost.
+        if (bridge.IsWorldBetweenLives)
+        {
+            return;
+        }
+
         foreach (KeyValuePair<ulong, sbyte> change in bridge.CollectChangedWorldState())
         {
             session.SetFlag(change.Key, change.Value);
