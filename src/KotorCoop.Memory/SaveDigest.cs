@@ -179,25 +179,38 @@ public static class SaveDigest
             return false;
         }
 
-        if (saveDirectory is not null && TryReadSavedModuleGit(saveDirectory, module, out byte[] savedGit))
+        if (saveDirectory is not null)
         {
-            try
+            SavedModuleGitReadResult saved = TryReadSavedModuleGit(saveDirectory, module, out byte[] savedGit);
+            if (saved == SavedModuleGitReadResult.Invalid)
             {
-                if (!TryHashSavedGit(FnvOffset, Gff.Parse(savedGit), out uint h))
+                // A save that contains this module but cannot provide a trustworthy GIT is
+                // unknown. Falling through to pristine here would compare a visited world
+                // against the module's untouched archive and can produce a believable but
+                // wrong object-id mapping.
+                return false;
+            }
+
+            if (saved == SavedModuleGitReadResult.Present)
+            {
+                try
                 {
-                    // The save was visited, so its explicit ids are authoritative. A missing
-                    // or duplicate id is corruption/ambiguity, not an invitation to compare
-                    // against the pristine module and risk a false match.
+                    if (!TryHashSavedGit(FnvOffset, Gff.Parse(savedGit), out uint h))
+                    {
+                        // The save was visited, so its explicit ids are authoritative. A
+                        // missing or duplicate id is corruption/ambiguity, not an invitation
+                        // to compare against the pristine module and risk a false match.
+                        return false;
+                    }
+                    digest = h == 0 ? 1u : h;
+                    return true;
+                }
+                catch (InvalidDataException)
+                {
+                    // A corrupt stored GIT is unknown. The engine's pristine fallback is not
+                    // a safe compatibility identity for a save that claims to have visited it.
                     return false;
                 }
-                digest = h == 0 ? 1u : h;
-                return true;
-            }
-            catch (InvalidDataException)
-            {
-                // A corrupt stored GIT is unknown. The engine's pristine fallback is not a
-                // safe compatibility identity for a save that claims to have visited it.
-                return false;
             }
         }
 
@@ -280,10 +293,19 @@ public static class SaveDigest
 
     // ---- pieces ----------------------------------------------------------------
 
+    private enum SavedModuleGitReadResult
+    {
+        Unvisited,
+        Present,
+        Invalid,
+    }
+
     /// <summary>The stored GIT for one module out of a save, when that save has visited
-    /// it. False (never a throw) when the save is unreadable or the module is unvisited —
-    /// the caller cannot tell those apart, and both mean "use the pristine file".</summary>
-    private static bool TryReadSavedModuleGit(string saveDirectory, string module, out byte[] git)
+    /// it. An absent module or save has no saved state and may use the pristine archive;
+    /// a present but unreadable/ambiguous module is unknown and must not silently fall back
+    /// to pristine object ids.</summary>
+    private static SavedModuleGitReadResult TryReadSavedModuleGit(
+        string saveDirectory, string module, out byte[] git)
     {
         git = [];
 
@@ -292,21 +314,41 @@ public static class SaveDigest
             string savegame = Path.Combine(saveDirectory, "SAVEGAME.sav");
             if (!File.Exists(savegame))
             {
-                return false;
+                return SavedModuleGitReadResult.Unvisited;
             }
 
             ErfArchive outer = ErfArchive.Open(savegame);
-            ArchiveResource? moduleSav = outer.Resources.FirstOrDefault(
+            ArchiveResource[] moduleSaves = outer.Resources.Where(
                 r => r.ResourceType is ModuleSavTypeThisBuild or ModuleSavTypeClassic
-                    && string.Equals(r.Resref, module, StringComparison.OrdinalIgnoreCase));
+                    && string.Equals(r.Resref, module, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-            return moduleSav is not null
-                && outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner)
-                && TryFindErfMember(inner, GitType, resref: null, out git);
+            if (moduleSaves.Length == 0)
+            {
+                return SavedModuleGitReadResult.Unvisited;
+            }
+
+            // Duplicate module members make the saved state ambiguous even if one happens
+            // to be readable. Choosing the first would make compatibility depend on archive
+            // enumeration order.
+            if (moduleSaves.Length != 1)
+            {
+                return SavedModuleGitReadResult.Invalid;
+            }
+
+            ArchiveResource moduleSav = moduleSaves[0];
+            if (!outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner)
+                || !TryFindErfMember(inner, GitType, resref: null, out git))
+            {
+                return SavedModuleGitReadResult.Invalid;
+            }
+
+            return SavedModuleGitReadResult.Present;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return false;
+            // SAVEGAME.sav exists, so an unreadable archive is not evidence that the module
+            // was never visited. Preserve the unknown result rather than using pristine data.
+            return SavedModuleGitReadResult.Invalid;
         }
     }
 

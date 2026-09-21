@@ -228,6 +228,52 @@ public sealed class SaveDigestTests : IDisposable
     }
 
     [Fact]
+    public void AVisitedModuleWithMissingOrUnreadableGitDoesNotFallBackToPristine()
+    {
+        string gameDir = BuildGameDirectory("tar_m02aa", PristineGit([("n_a", 0)]));
+
+        string missingGit = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(missingGit, "SAVEGAME.sav"),
+            BuildSavegameErfWithoutGit("tar_m02aa", 295));
+
+        string unreadableInner = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(unreadableInner, "SAVEGAME.sav"),
+            BuildErf("SAV ",
+                ("tar_m02aa", 2057, [1, 2, 3, 4])));
+
+        string malformedOuter = TempDirectory();
+        File.WriteAllBytes(Path.Combine(malformedOuter, "SAVEGAME.sav"), [1, 2, 3, 4]);
+
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, missingGit, "tar_m02aa", out _));
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, unreadableInner, "tar_m02aa", out _));
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, malformedOuter, "tar_m02aa", out _));
+
+        // No SAVEGAME.sav still means the module is unvisited, so the pristine archive is
+        // the correct source for a newly-created save directory.
+        string noSave = TempDirectory();
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, noSave, "tar_m02aa", out _));
+    }
+
+    [Fact]
+    public void DuplicateSavedModuleMembersAreUnknownRatherThanOrderDependent()
+    {
+        string gameDir = BuildGameDirectory("tar_m02aa", PristineGit([("n_a", 0)]));
+        byte[] one = BuildSavegameErf("tar_m02aa", 295, [(2u, "n_a")], 2057);
+        Assert.True(ErfArchive.TryFindMember(one, 2057, "tar_m02aa", out byte[] module));
+
+        string duplicate = TempDirectory();
+        File.WriteAllBytes(
+            Path.Combine(duplicate, "SAVEGAME.sav"),
+            BuildErf("SAV ",
+                ("tar_m02aa", 2057, module),
+                ("tar_m02aa", 2057, module)));
+
+        Assert.False(SaveDigest.TryComputeModuleGit(gameDir, duplicate, "tar_m02aa", out _));
+    }
+
+    [Fact]
     public void PristinePredictionCountsBlueprintOwnedItemsIntoTheIds()
     {
         // Two creatures; the first's blueprint owns 3 items (2 equipped + 1 carried), so
@@ -464,6 +510,18 @@ public sealed class SaveDigestTests : IDisposable
         return BuildErf("SAV ",
             ("GLOBALVARS", 0 /* res */, [0xAA, 0xBB]),
             (module, moduleSavType, inner));
+    }
+
+    private static byte[] BuildSavegameErfWithoutGit(string module, uint nextObjId)
+    {
+        GffWriter ifo = new("IFO ");
+        ifo.Root.SetDword("Mod_NextObjId0", nextObjId);
+        ifo.Root.SetDword("Mod_NextObjId1", 0);
+
+        byte[] inner = BuildErf("SAV ", ("Module", 2014 /* ifo */, ifo.ToBytes()));
+        return BuildErf("SAV ",
+            ("GLOBALVARS", 0 /* res */, [0xAA, 0xBB]),
+            (module, 2057, inner));
     }
 
     private static byte[] SavedGit(params (uint? Id, string Resref)[] creatures)
