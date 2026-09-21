@@ -20,7 +20,8 @@ public sealed class WindowsFirewallTests
         IReadOnlyList<string> commands = WindowsFirewall.AddCommands(@"C:\Games\swkotor\KotorCoop.Agent.exe", 27140);
 
         Assert.Equal(2, commands.Count);
-        Assert.All(commands, c => Assert.StartsWith("netsh advfirewall firewall add rule name=\"KotorCoop Agent\"", c));
+        string name = WindowsFirewall.RuleNameFor(@"C:\Games\swkotor\KotorCoop.Agent.exe");
+        Assert.All(commands, c => Assert.StartsWith($"netsh advfirewall firewall add rule name=\"{name}\"", c));
         Assert.All(commands, c => Assert.Contains("program=\"C:\\Games\\swkotor\\KotorCoop.Agent.exe\"", c));
         Assert.All(commands, c => Assert.Contains("dir=in action=allow", c));
 
@@ -31,10 +32,29 @@ public sealed class WindowsFirewallTests
     }
 
     [Fact]
-    public void DeleteAndShowNameTheSameRule()
+    public void InstallingOrRemovingOneCopyCannotDeleteAnotherCopysRules()
     {
-        Assert.Equal("netsh advfirewall firewall delete rule name=\"KotorCoop Agent\"", WindowsFirewall.DeleteCommand());
-        Assert.Equal("netsh advfirewall firewall show rule name=\"KotorCoop Agent\"", WindowsFirewall.ShowCommand());
+        string first = Path.GetFullPath(Path.Combine("game-one", "KotorCoop.Agent.exe"));
+        string second = Path.GetFullPath(Path.Combine("game-two", "KotorCoop.Agent.exe"));
+        Assert.NotEqual(WindowsFirewall.RuleNameFor(first), WindowsFirewall.RuleNameFor(second));
+        Assert.NotEqual(WindowsFirewall.ShowCommand(first), WindowsFirewall.ShowCommand(second));
+        Assert.All(WindowsFirewall.DeleteCommands(first), command =>
+        {
+            Assert.Contains($"program=\"{first}\"", command);
+            Assert.Contains("dir=in", command);
+            Assert.DoesNotContain(second, command);
+        });
+        Assert.Contains(WindowsFirewall.DeleteCommands(first), command =>
+            command.Contains($"name=\"{WindowsFirewall.RuleName}\"", StringComparison.Ordinal));
+        Assert.Contains(WindowsFirewall.RuleNameFor(first), WindowsFirewall.ShowCommand(first));
+    }
+
+    [Fact]
+    public void WindowsPathCaseDoesNotCreateAnotherRuleName()
+    {
+        string executable = Path.GetFullPath(Path.Combine("game-one", "KotorCoop.Agent.exe"));
+        Assert.Equal(WindowsFirewall.RuleNameFor(executable), WindowsFirewall.RuleNameFor(executable.ToUpperInvariant()));
+        Assert.Equal(WindowsFirewall.RuleNameFor(executable), WindowsFirewall.RuleNameFor(executable.ToLowerInvariant()));
     }
 
     [Fact]

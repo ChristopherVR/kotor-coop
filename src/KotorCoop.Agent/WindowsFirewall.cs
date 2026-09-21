@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
@@ -16,10 +18,11 @@ namespace KotorCoop.Agent;
 /// run once as Administrator; <c>install --check</c> reports whether the rule exists;
 /// <c>uninstall</c> removes it.
 ///
-/// One program-scoped rule name, two <c>netsh</c> entries: UDP on the session port plus the
+/// One installation-specific rule name, two <c>netsh</c> entries: UDP on the session port plus the
 /// LAN browser's discovery port (<see cref="ServerDiscovery.DiscoveryPort"/>), and TCP on the
 /// session port (the world-transfer listener shares the number — <c>WorldTransfer</c>'s own
-/// doc). Both carry the same name so one <c>delete rule</c> removes both. Program-scoped so a
+/// doc). Both carry the same name; deletion also filters by program, including legacy rules,
+/// so installing or removing one copy cannot delete another copy's rules. Program-scoped so a
 /// player who later changes <c>port</c> only needs to re-run <c>install</c>, and so the rule
 /// never opens the port for anything but this exe.
 ///
@@ -34,18 +37,32 @@ public static class WindowsFirewall
 
     public static string AgentExecutable(string gameDirectory) => Path.Combine(gameDirectory, AgentExecutableName);
 
+    /// <summary>Stable per-installation identity, independent of Windows path case.</summary>
+    public static string RuleNameFor(string agentExePath)
+    {
+        string canonical = Path.GetFullPath(agentExePath).Replace('/', '\\').ToUpperInvariant();
+        string suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];
+        return $"{RuleName} {suffix}";
+    }
+
     /// <summary>The two <c>netsh</c> commands that create the rule, as a player would type them.</summary>
     public static IReadOnlyList<string> AddCommands(string agentExePath, int port) =>
     [
-        $"netsh advfirewall firewall add rule name=\"{RuleName}\" dir=in action=allow program=\"{agentExePath}\" "
+        $"netsh advfirewall firewall add rule name=\"{RuleNameFor(agentExePath)}\" dir=in action=allow program=\"{agentExePath}\" "
         + $"protocol=UDP localport={port},{ServerDiscovery.DiscoveryPort} enable=yes profile=any",
-        $"netsh advfirewall firewall add rule name=\"{RuleName}\" dir=in action=allow program=\"{agentExePath}\" "
+        $"netsh advfirewall firewall add rule name=\"{RuleNameFor(agentExePath)}\" dir=in action=allow program=\"{agentExePath}\" "
         + $"protocol=TCP localport={port} enable=yes profile=any",
     ];
 
-    public static string DeleteCommand() => $"netsh advfirewall firewall delete rule name=\"{RuleName}\"";
+    public static IReadOnlyList<string> DeleteCommands(string agentExePath) =>
+    [
+        $"netsh advfirewall firewall delete rule name=\"{RuleNameFor(agentExePath)}\" dir=in program=\"{agentExePath}\"",
+        // Upgrade/removal of the former shared name must also be limited to this executable.
+        $"netsh advfirewall firewall delete rule name=\"{RuleName}\" dir=in program=\"{agentExePath}\"",
+    ];
 
-    public static string ShowCommand() => $"netsh advfirewall firewall show rule name=\"{RuleName}\"";
+    public static string ShowCommand(string agentExePath) =>
+        $"netsh advfirewall firewall show rule name=\"{RuleNameFor(agentExePath)}\"";
 
     /// <summary>
     /// The session port a <c>coop.ini</c> names (<c>port = N</c>, comments and blanks ignored),
@@ -128,14 +145,14 @@ public static class WindowsFirewall
 
     /// <summary>Whether the rule exists right now, or null when <c>netsh</c> could not be
     /// asked (not Windows, Wine's stub, no netsh on PATH).</summary>
-    public static bool? Exists()
+    public static bool? Exists(string agentExePath)
     {
         if (!OperatingSystem.IsWindows() || KotorCoop.Memory.WineDetection.IsWine)
         {
             return null;
         }
 
-        int? exit = RunNetsh($"advfirewall firewall show rule name=\"{RuleName}\"");
+        int? exit = RunNetsh(ShowCommand(agentExePath)["netsh ".Length..]);
         return exit is null ? null : RuleListed(exit.Value);
     }
 
@@ -169,7 +186,10 @@ public static class WindowsFirewall
             return;
         }
 
-        RunNetsh($"advfirewall firewall delete rule name=\"{RuleName}\"");
+        foreach (string command in DeleteCommands(exe))
+        {
+            RunNetsh(command["netsh ".Length..]);
+        }
         bool added = true;
         foreach (string command in commands)
         {
@@ -187,7 +207,7 @@ public static class WindowsFirewall
     /// commands when it does not, nothing when <c>netsh</c> cannot be asked.</summary>
     public static void Report(string gameDirectory, Action<string> log)
     {
-        bool? exists = Exists();
+        bool? exists = Exists(AgentExecutable(gameDirectory));
         if (exists is null)
         {
             return;
@@ -195,7 +215,7 @@ public static class WindowsFirewall
 
         if (exists.Value)
         {
-            log($"PASS: Windows Firewall inbound rule '{RuleName}' exists");
+            log($"PASS: Windows Firewall inbound rule for {AgentExecutable(gameDirectory)} exists (port/profile settings not verified)");
             return;
         }
 
@@ -210,24 +230,33 @@ public static class WindowsFirewall
 
     /// <summary>The <c>uninstall</c> step: deletes the rule when elevated, prints the command
     /// otherwise; nothing to say when there is no rule.</summary>
-    public static void Remove(Action<string> log)
+    public static void Remove(string gameDirectory, Action<string> log)
     {
-        bool? exists = Exists();
-        if (exists is not true)
+        if (!OperatingSystem.IsWindows() || KotorCoop.Memory.WineDetection.IsWine)
         {
             return;
         }
 
+        string exe = AgentExecutable(gameDirectory);
+        IReadOnlyList<string> commands = DeleteCommands(exe);
         if (!IsElevated())
         {
-            log($"Windows Firewall: rule '{RuleName}' left in place (not running as Administrator) - remove it with: {DeleteCommand()}");
+            log($"Windows Firewall: rules for {exe} left in place if present (not running as Administrator) - remove them with:");
+            foreach (string command in commands)
+            {
+                log($"    {command}");
+            }
             return;
         }
 
-        int? exit = RunNetsh($"advfirewall firewall delete rule name=\"{RuleName}\"");
-        log(exit == 0
-            ? $"removed Windows Firewall rule '{RuleName}'"
-            : $"Windows Firewall: could not remove rule '{RuleName}' - run this as Administrator: {DeleteCommand()}");
+        bool removed = false;
+        foreach (string command in commands)
+        {
+            removed |= RunNetsh(command["netsh ".Length..]) == 0;
+        }
+        log(removed
+            ? $"removed Windows Firewall rules for {exe}"
+            : $"Windows Firewall: no matching rule removed for {exe}; other installations were left alone");
     }
 
     /// <summary>Runs <c>netsh</c> with <paramref name="arguments"/> and returns its exit code,

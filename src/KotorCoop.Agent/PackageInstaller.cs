@@ -630,7 +630,7 @@ public static partial class PackageInstaller
 
         if (FirewallEnabled)
         {
-            WindowsFirewall.Remove(log);
+            WindowsFirewall.Remove(game, log);
         }
     }
 

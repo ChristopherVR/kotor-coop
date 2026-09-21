@@ -1215,6 +1215,15 @@ still leave internet access unconfirmed. An outside connection is the deciding t
 
 ### Windows Firewall (same day)
 
+**2026-09-21 correction:** firewall rules now have a stable name derived from the agent's
+absolute executable path. Installation and removal filter deletion by that executable,
+including cleanup of the former shared rule name. Previously installing or uninstalling a
+second game copy could delete the first copy's inbound rules. The status check now queries
+the selected installation's rule and explicitly does not claim to verify port/profile settings.
+Local `netsh ... delete rule help` confirms the program filter is supported; regression tests
+cover two separate installations and Windows path-case equivalence. No live firewall rules
+were changed during this pass; external connectivity still needs the separate-network check.
+
 A separate, dumber way for the same symptom: the agent starts windowless behind a fullscreen
 game, so Windows' "allow this app?" prompt on the first listen is never seen, and an
 unanswered prompt is a silent deny. `WindowsFirewall` (in the installer) adds one inbound
