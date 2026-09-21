@@ -300,6 +300,35 @@ public static class SaveDigest
         Invalid,
     }
 
+    /// <summary>Reads the active module named by a save's LASTMODULE metadata and selected
+    /// nested module member. Used by the live host transfer provider to reject an archive
+    /// whose file identity has settled but whose contents still describe the prior solo leg.</summary>
+    public static bool TryReadActiveModuleName(string saveDirectory, out string module)
+    {
+        module = string.Empty;
+        try
+        {
+            string savegame = Path.Combine(saveDirectory, "SAVEGAME.sav");
+            if (!File.Exists(savegame))
+            {
+                return false;
+            }
+
+            ErfArchive outer = ErfArchive.Open(savegame);
+            if (!SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource selected))
+            {
+                return false;
+            }
+
+            module = selected.Resref;
+            return module.Length > 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Resolves the file-backed identity of the world currently served by the
     /// running game. The compatibility cache uses this live-world view; the legacy
     /// <see cref="FindSessionSave"/> view remains staged-autosave-first for load lineage and

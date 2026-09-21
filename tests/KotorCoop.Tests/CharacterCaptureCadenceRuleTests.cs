@@ -57,4 +57,18 @@ public class CharacterCaptureCadenceRuleTests
         Assert.False(CharacterCaptureCadenceRule.WaitExpired(1000, 5999));
         Assert.True(CharacterCaptureCadenceRule.WaitExpired(1000, 6000));
     }
+
+    [Fact]
+    public void PendingReturnCaptureWaitsForLandingAndNeverUsesTheOldArchive()
+    {
+        DateTime before = new(2026, 9, 22, 5, 0, 0, DateTimeKind.Utc);
+
+        Assert.False(CharacterCaptureCadenceRule.SaveLanded("old", before, "old", before));
+        Assert.False(CharacterCaptureCadenceRule.WaitExpired(1000, 4999));
+
+        // A timeout aborts rather than authorizing CaptureNow against the old archive.
+        Assert.True(CharacterCaptureCadenceRule.WaitExpired(1000, 6000));
+        Assert.True(CharacterCaptureCadenceRule.SaveLanded(
+            "old", before, "quick", before.AddMilliseconds(1)));
+    }
 }

@@ -207,6 +207,22 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// request has landed (or its wait expired). Same idempotence.</summary>
     public string? CaptureNow(string? currentSaveDirectory) => CaptureOnDisconnect(currentSaveDirectory);
 
+    /// <summary>Captures the requested source and reports whether a new sidecar was actually
+    /// written. A kept/older sidecar is insufficient for a live solo-return adoption.</summary>
+    public bool CaptureNowWritten(string? currentSaveDirectory, out string? outcome)
+    {
+        if (currentSaveDirectory is null)
+        {
+            outcome = null;
+            return false;
+        }
+
+        CharacterCapture result = ClientCharacterPersistence.Capture(
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic);
+        outcome = $"session-saved character{(result == CharacterCapture.Failed ? " NOT" : string.Empty)} captured: {diagnostic}";
+        return result == CharacterCapture.Written;
+    }
+
     private string? Capture(string currentSaveDirectory) =>
         ClientCharacterPersistence.Capture(
             SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic) switch

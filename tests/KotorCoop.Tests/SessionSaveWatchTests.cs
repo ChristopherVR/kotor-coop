@@ -340,6 +340,22 @@ public sealed class SessionSaveWatchTests : IDisposable
             SaveOrLoadVerdict.None, watch.ObserveRemoteVerdict(0x8888, remoteLoadSerialNow: 8, nowMs: 200, out _));
     }
 
+    [Fact]
+    public void FreshCaptureReportsWrittenAndKeptCaptureIsNotAcceptedAsFresh()
+    {
+        string save = BuildSave("Fresh Return");
+        string saves = TempDirectory();
+        SessionSaveWatch watch = new(saves);
+
+        Assert.True(watch.CaptureNowWritten(save, out string? first));
+        Assert.Contains("captured", first, StringComparison.OrdinalIgnoreCase);
+
+        // Reusing the same archive leaves the sidecar newer/equal; this is a retained
+        // character, not evidence that the requested return quicksave produced new data.
+        Assert.False(watch.CaptureNowWritten(save, out string? second));
+        Assert.Contains("captured", second, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private string BuildSave(string name)

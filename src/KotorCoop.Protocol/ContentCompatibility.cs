@@ -347,17 +347,19 @@ public static class ContentCompatibility
         }
         else if (moduleGitMismatch)
         {
-            // Same save, but a mod edited THIS module's placements — ids shift here only,
-            // so the channels come back by themselves in the next module that agrees.
+            // The module's saved/object placement fingerprint differs. This can be an
+            // install mod, or a same-lineage solo/save excursion that rewrote explicit ids;
+            // either way the id-keyed channels are unsafe until the worlds are re-adopted or
+            // the next module agrees.
             caps &= ~ObjectIdKeyed;
             notes.Add(new CompatibilityNote(
                 CompatibilityCode.ModuleGit,
                 ObjectIdKeyed,
                 string.IsNullOrEmpty(module)
-                    ? "this module is modded differently on the two installs: enemies, doors and "
-                        + "items are off here, and come back in the next module that matches"
-                    : $"module {module} is modded differently on the two installs: enemies, doors "
-                        + "and items are off here, and come back in the next module that matches"));
+                    ? "this module's object mapping differs between the worlds: enemies, doors "
+                        + "and items are off here until the worlds are re-adopted or a matching module is reached"
+                    : $"module {module}'s object mapping differs between the worlds: enemies, doors "
+                        + "and items are off here until the worlds are re-adopted or a matching module is reached"));
         }
 
         if (globalsCatalogueMismatch)

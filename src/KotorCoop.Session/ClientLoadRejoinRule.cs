@@ -32,6 +32,10 @@ public enum RejoinTrigger
     /// wipe parked everyone at the game-over menu. Gated like <see cref="HostReload"/> — it IS
     /// a host reload, one the classifiers cannot see (see that rule's own doc comment).</summary>
     WipeRecovery,
+
+    /// <summary>The host returned from a known single-seat module and its saved object
+    /// mapping no longer matches the client's origin world.</summary>
+    SoloReturn,
 }
 
 /// <summary>Where a rejoin attempt is: <see cref="Idle"/> (nothing running, a new trigger is

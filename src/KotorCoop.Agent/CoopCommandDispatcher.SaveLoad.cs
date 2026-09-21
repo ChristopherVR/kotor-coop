@@ -251,6 +251,32 @@ public sealed partial class CoopCommandDispatcher
 
     private Task? _rejoinTask;
 
+    // A host's solo Manaan/mini-game leg is intentionally not followed. If it returns to
+    // the origin after rewriting its saved object map, one bounded adoption restores the
+    // id-keyed channels without treating the expected leg as a generic host reload.
+    private SoloReturnRejoinState _soloReturnState = SoloReturnRejoinState.Initial;
+    private bool _soloCapturePending;
+    private bool _soloCaptureWaiting;
+    private long _soloCaptureRequestedMs;
+    private string? _soloCaptureSourceBefore;
+    private DateTime _soloCaptureStampBefore;
+    private string _soloCaptureModuleBefore = string.Empty;
+    private string _soloCaptureHostModuleBefore = string.Empty;
+    private string _soloObservedHostModule = string.Empty;
+    private uint? _soloCaptureLocalSerialBefore;
+    private uint? _soloCaptureHostSerialBefore;
+
+    private string _hostSoloOriginModule = string.Empty;
+    private string _hostLastModule = string.Empty;
+    private bool _hostSoloLeg;
+    private uint? _hostSoloLoadSerialBaseline;
+    private bool _hostReturnSavePending;
+    private long _hostReturnSaveRequestedMs;
+    private long _hostReturnSaveRetryMs;
+    private string? _hostReturnSaveSourceBefore;
+    private DateTime _hostReturnSaveStampBefore;
+    private bool _hostReturnSaveReady = true;
+
     /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
     /// Held only so the fire-and-forget <c>Task.Run</c> is not flagged as unobserved; nothing
     /// reads it back (a second <c>loadgame</c> before the first settles just starts a second
@@ -303,6 +329,24 @@ public sealed partial class CoopCommandDispatcher
             _saveLineageAnnounced = false;
             _wipeRecoveryState = WipeRecoveryState.Initial;
             _hostWorldReplacedState = HostWorldReplacedState.Initial;
+            _soloReturnState = SoloReturnRejoinState.Initial;
+            _soloCapturePending = false;
+            _soloCaptureWaiting = false;
+            _soloCaptureRequestedMs = 0;
+            _soloCaptureSourceBefore = null;
+            _soloCaptureStampBefore = default;
+            _soloCaptureModuleBefore = string.Empty;
+            _soloCaptureHostModuleBefore = string.Empty;
+            _soloObservedHostModule = string.Empty;
+            _soloCaptureLocalSerialBefore = null;
+            _soloCaptureHostSerialBefore = null;
+            _hostSoloOriginModule = string.Empty;
+            _hostLastModule = string.Empty;
+            _hostSoloLeg = false;
+            _hostSoloLoadSerialBaseline = null;
+            _hostReturnSavePending = false;
+            _hostReturnSaveRetryMs = 0;
+            _hostReturnSaveReady = true;
             _captureLastMs = 0;
             _captureRequestedMs = 0;
             return;
@@ -323,6 +367,49 @@ public sealed partial class CoopCommandDispatcher
             _sessionSaveWatch.ObserveHost(digest);
 
             SaveOrLoadVerdict verdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);
+
+            string hostModule = bridge.TryReadCurrentModule(out string liveHostModule)
+                ? liveHostModule : string.Empty;
+            if (hostModule.Length > 0)
+            {
+                if (_hostSoloLeg && _hostSoloLoadSerialBaseline.HasValue
+                    && loadSerial.HasValue && loadSerial.Value != _hostSoloLoadSerialBaseline.Value)
+                {
+                    _hostSoloLeg = false;
+                    _hostSoloOriginModule = string.Empty;
+                    _hostReturnSavePending = false;
+                    _hostReturnSaveReady = true;
+                    _hostReturnSaveRetryMs = 0;
+                    Log?.Invoke("session-save: host solo-return watch cancelled by a host load edge");
+                }
+
+                if (!_hostSoloLeg
+                    && MinigameModuleRule.IsMinigameModule(hostModule)
+                    && _hostLastModule.Length > 0
+                    && !MinigameModuleRule.IsMinigameModule(_hostLastModule))
+                {
+                    _hostSoloOriginModule = _hostLastModule;
+                    _hostSoloLeg = true;
+                    _hostSoloLoadSerialBaseline = loadSerial;
+                }
+                else if (_hostSoloLeg
+                    && string.Equals(hostModule, _hostSoloOriginModule, StringComparison.OrdinalIgnoreCase))
+                {
+                    _hostSoloLeg = false;
+                    _hostSoloLoadSerialBaseline = null;
+                    BeginHostReturnFreshSave(nowMs);
+                }
+                else if (_hostSoloLeg && !MinigameModuleRule.IsMinigameModule(hostModule))
+                {
+                    _hostSoloLeg = false;
+                    _hostSoloOriginModule = string.Empty;
+                    _hostSoloLoadSerialBaseline = null;
+                }
+
+                _hostLastModule = hostModule;
+            }
+
+            MaintainHostReturnFreshSave(nowMs);
             if (verdict == SaveOrLoadVerdict.Load)
             {
                 Log?.Invoke("session-save: host-side load verdict"
@@ -375,10 +462,36 @@ public sealed partial class CoopCommandDispatcher
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
                 hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs, out bool hostLoadEdge);
 
+            string localModule = bridge.TryReadCurrentModule(out string liveModule)
+                ? liveModule : string.Empty;
+            uint localGit = localModule.Length == 0 ? 0 : bridge.ModuleGitDigest(localModule);
+            _soloObservedHostModule = hostDigest.Module;
+
+            if (hostLoadEdge)
+            {
+                _soloReturnState = SoloReturnRejoinState.Initial;
+                _soloCapturePending = false;
+                _soloCaptureWaiting = false;
+            }
+
+            (SoloReturnRejoinState nextSolo, bool soloReturn) = SoloReturnRejoinRule.Observe(
+                _soloReturnState,
+                localModule,
+                localGit,
+                hostDigest.Module,
+                hostDigest.ModuleGit,
+                bridge.TryReadWorldLoadSerial(out uint localSerial) ? localSerial : null,
+                hostDigest.LoadSerial,
+                hostDigest.SaveIdentity,
+                nowMs,
+                AutoAdoptWorldEnabled);
+            _soloReturnState = nextSolo;
+
             // The wipe watch runs every tick regardless of the verdicts below: its latch must
             // be armed during the ~13 s both parties lie wiped before the game-over teardown,
             // and it fires on the host's reappearance, which neither classifier reports.
             PlayerState? localState = bridge.TryReadLocalState(out PlayerState localNow) ? localNow : null;
+            bool soloCaptureReady = MaintainSoloReturnCapture(localState, nowMs);
             PlayerState? hostState = null;
             IReadOnlyList<RemotePeer> peersNow = session.GetRemotePeers();
             for (int i = 0; i < peersNow.Count; i++)
@@ -424,6 +537,20 @@ public sealed partial class CoopCommandDispatcher
             {
                 Reply("the host's world was reloaded - rejoining their world");
                 TriggerRejoin(RejoinTrigger.HostReload);
+            }
+            else if (soloReturn || soloCaptureReady)
+            {
+                if (soloReturn)
+                {
+                    _soloCaptureWaiting = true;
+                    soloCaptureReady = MaintainSoloReturnCapture(localState, nowMs);
+                }
+
+                if (soloCaptureReady)
+                {
+                    Reply("the host returned from a solo section - rejoining their fresh world");
+                    TriggerRejoin(RejoinTrigger.SoloReturn);
+                }
             }
             else if (bridge.TryGetNewCharacterCapture(out uint chargenState, out _, out _)
                 && chargenState is ChargenStateArmed or ChargenStateSaving)
@@ -579,6 +706,194 @@ public sealed partial class CoopCommandDispatcher
         });
     }
 
+    private void BeginSoloReturnCapture(long nowMs)
+    {
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        _soloCaptureSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+        _soloCaptureStampBefore = SaveStamp(_soloCaptureSourceBefore);
+        _soloCaptureModuleBefore = bridge.TryReadCurrentModule(out string captureModule)
+            ? captureModule : string.Empty;
+        _soloCaptureHostModuleBefore = _soloObservedHostModule;
+        _soloCaptureLocalSerialBefore = bridge.TryReadWorldLoadSerial(out uint captureSerial)
+            ? captureSerial : null;
+        _soloCaptureHostSerialBefore = _soloReturnState.HostLoadSerialKnown
+            ? _soloReturnState.BaselineHostLoadSerial : null;
+        if (!bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
+        {
+            Log?.Invoke("session-save: solo return adoption waiting - fresh client quicksave was refused");
+            return;
+        }
+
+        _soloCaptureWaiting = false;
+        _soloCapturePending = true;
+        _soloCaptureRequestedMs = nowMs;
+        Log?.Invoke("session-save: requesting a fresh client quicksave before solo-return adoption");
+    }
+
+    private bool MaintainSoloReturnCapture(PlayerState? localState, long nowMs)
+    {
+        if ((_soloCaptureWaiting || _soloCapturePending)
+            && (!AutoAdoptWorldEnabled || !_soloReturnState.InSoloLeg
+                || !string.Equals(_soloObservedHostModule, _soloReturnState.OriginModule,
+                    StringComparison.OrdinalIgnoreCase)
+                || localState is not { } captureState
+                || !string.Equals(captureState.Module, _soloReturnState.OriginModule,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            _soloCaptureWaiting = false;
+            _soloCapturePending = false;
+            Log?.Invoke("session-save: solo return capture cancelled before save by a lifecycle change");
+            return false;
+        }
+
+        if (_soloCaptureWaiting && !_soloCapturePending)
+        {
+            if (!CaptureIsAllowed(localState) || !bridge.SupportsCheats)
+            {
+                return false;
+            }
+
+            BeginSoloReturnCapture(nowMs);
+        }
+
+        if (!_soloCapturePending)
+        {
+            return false;
+        }
+
+        if (!AutoAdoptWorldEnabled
+            || !_soloCaptureHostModuleBefore.Equals(_soloObservedHostModule, StringComparison.OrdinalIgnoreCase)
+            || !bridge.TryReadCurrentModule(out string currentModule)
+            || !_soloCaptureModuleBefore.Equals(currentModule, StringComparison.OrdinalIgnoreCase)
+            || (_soloCaptureLocalSerialBefore.HasValue
+                && bridge.TryReadWorldLoadSerial(out uint currentSerial)
+                && currentSerial != _soloCaptureLocalSerialBefore.Value)
+            || (_soloCaptureHostSerialBefore.HasValue
+                && _soloReturnState.HostLoadSerialKnown
+                && _soloReturnState.BaselineHostLoadSerial != _soloCaptureHostSerialBefore.Value)
+            || !_soloReturnState.InSoloLeg)
+        {
+            _soloCapturePending = false;
+            _soloCaptureWaiting = false;
+            Log?.Invoke("session-save: solo return adoption capture cancelled by a lifecycle change");
+            return false;
+        }
+
+        if (!CaptureIsAllowed(localState))
+        {
+            return false;
+        }
+
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+        bool landed = CharacterCaptureCadenceRule.SaveLanded(
+            _soloCaptureSourceBefore,
+            _soloCaptureStampBefore,
+            sourceNow,
+            SaveStamp(sourceNow))
+            && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
+        if (!landed && !CharacterCaptureCadenceRule.WaitExpired(_soloCaptureRequestedMs, nowMs))
+        {
+            return false;
+        }
+
+        if (!landed)
+        {
+            _soloCapturePending = false;
+            Log?.Invoke("session-save: solo return adoption aborted - fresh client quicksave did not land");
+            return false;
+        }
+
+        sourceNow = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, sourceNow);
+        string? outcome = null;
+        bool captured = _sessionSaveWatch is not null
+            && _sessionSaveWatch.CaptureNowWritten(sourceNow, out outcome);
+        if (outcome is not null)
+        {
+            Log?.Invoke(outcome);
+        }
+
+        _soloCapturePending = false;
+        if (!captured)
+        {
+            Log?.Invoke("session-save: solo return adoption aborted - fresh character sidecar was not written");
+        }
+        return captured;
+    }
+
+    private static bool CaptureIsAllowed(PlayerState? state) =>
+        state is { IsInCombat: false, IsInDialogue: false, IsInMinigame: false,
+            IsDowned: false, IsPartyWiped: false };
+
+    private void BeginHostReturnFreshSave(long nowMs)
+    {
+        _hostReturnSaveReady = false;
+        _hostReturnSavePending = false;
+        _hostReturnSaveRequestedMs = 0;
+
+        if (!bridge.SupportsCheats
+            || !bridge.TryReadLocalState(out PlayerState state)
+            || !CaptureIsAllowed(state))
+        {
+            _hostReturnSaveRetryMs = nowMs + 1000;
+            Log?.Invoke("session-save: host returned from a solo section but is not save-ready; "
+                + "world serving held until a fresh return save can be written");
+            return;
+        }
+
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        _hostReturnSaveSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+        _hostReturnSaveStampBefore = SaveStamp(_hostReturnSaveSourceBefore);
+        if (bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
+        {
+            _hostReturnSavePending = true;
+            _hostReturnSaveRequestedMs = nowMs;
+            Log?.Invoke("session-save: host returned from a solo section - requesting a fresh return save");
+        }
+        else
+        {
+            _hostReturnSaveRetryMs = nowMs + 1000;
+        }
+    }
+
+    private void MaintainHostReturnFreshSave(long nowMs)
+    {
+        if (!_hostReturnSaveReady && !_hostReturnSavePending
+            && _hostReturnSaveRetryMs != 0 && nowMs >= _hostReturnSaveRetryMs)
+        {
+            BeginHostReturnFreshSave(nowMs);
+        }
+
+        if (!_hostReturnSavePending)
+        {
+            return;
+        }
+
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+        bool landed = CharacterCaptureCadenceRule.SaveLanded(
+            _hostReturnSaveSourceBefore,
+            _hostReturnSaveStampBefore,
+            sourceNow,
+            SaveStamp(sourceNow))
+            && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
+
+        if (landed)
+        {
+            _hostReturnSavePending = false;
+            _hostReturnSaveReady = true;
+            Log?.Invoke($"session-save: fresh host return save landed after {nowMs - _hostReturnSaveRequestedMs} ms");
+            return;
+        }
+
+        if (CharacterCaptureCadenceRule.WaitExpired(_hostReturnSaveRequestedMs, nowMs))
+        {
+            _hostReturnSavePending = false;
+            _hostReturnSaveRetryMs = nowMs + 1000;
+            Log?.Invoke("session-save: fresh host return save did not land; world serving remains held");
+        }
+    }
+
     /// <summary>
     /// Runs one of the character-creation drive verbs (<c>newgame</c>, <c>chargen quick</c>,
     /// <c>chargen accept</c>) by asking the plugin to call the engine's own button handler.
@@ -605,8 +920,13 @@ public sealed partial class CoopCommandDispatcher
     /// client should receive if it connects RIGHT NOW, never a snapshot captured when serving
     /// started. Snapshot selection uses the shared staged-versus-quicksave resolver; an
     /// unreadable selected archive yields an unknown snapshot rather than raw partial bytes.</summary>
-    private static (IReadOnlyList<WorldFile> World, uint SaveIdentity) BuildWorldSnapshot(string gameDirectory)
+    private (IReadOnlyList<WorldFile> World, uint SaveIdentity) BuildWorldSnapshot(string gameDirectory)
     {
+        if (!_hostReturnSaveReady || _hostReturnSavePending)
+        {
+            return ([], 0);
+        }
+
         string? currentSave = SaveDigest.FindLiveSessionSave(gameDirectory);
         if (currentSave is null)
         {
@@ -615,6 +935,26 @@ public sealed partial class CoopCommandDispatcher
 
         if (!SaveDigest.TryComputeSaveIdentity(currentSave, out uint identity))
         {
+            return ([], 0);
+        }
+
+        if (!SaveDigest.TryReadActiveModuleName(currentSave, out string savedModule)
+            || !bridge.TryReadCurrentModule(out string liveModule)
+            || !string.Equals(savedModule, liveModule, StringComparison.OrdinalIgnoreCase))
+        {
+            Log?.Invoke("session-save: refusing world snapshot whose saved module is not the live return module");
+            return ([], 0);
+        }
+
+        // The provider is invoked at transfer time, not when the listener starts. If the
+        // resolver still points at a stale staged archive while the live bridge has already
+        // observed the return-module save, refuse to serve that archive rather than handing a
+        // client the solo-leg world. The next request retries after the cache settles.
+        uint liveIdentity = bridge.SaveIdentityDigest;
+        if (liveIdentity != 0 && liveIdentity != identity)
+        {
+            Log?.Invoke($"session-save: refusing stale world snapshot identity 0x{identity:X8}; "
+                + $"live world is 0x{liveIdentity:X8}");
             return ([], 0);
         }
 
@@ -644,6 +984,7 @@ public sealed partial class CoopCommandDispatcher
             // the host's", which is a different question from "put me back after I load a
             // save", and had no gate of its own until it needed one for join_mode.
             RejoinTrigger.SaveMismatch => AutoAdoptWorldEnabled,
+            RejoinTrigger.SoloReturn => AutoAdoptWorldEnabled,
             _ => false,
         };
 
