@@ -414,3 +414,32 @@ side deck was empty in this live case; nonempty deck preservation is covered by 
 tests, not a played Pazaak hand. A subsequent normal reload of `kcoop_currentverify` reached the
 same module successfully. Current characters' blank name field was present before testing and
 was preserved rather than replaced with the old tutorial name.
+
+### Rejoin safety and corrupt saved-state handling (2026-09-21)
+
+The normal reload above reached the right character, but its subsequent automatic rejoin
+crashed at `CSWParty::Update` (`0x6374AD`). The recovery path had promoted a server-verified
+PC ID before its client body existed. Disassembly shows the leader result cached at
+`0x6370AC` and dereferenced without a later null check at `0x6374AD`; the following instruction
+also dereferences the member result. The earlier claim that all ID consumers are null-safe
+was incorrect and has been corrected in the control-lock research.
+
+Recovery and control rotations now validate the complete resulting live prefix through the
+engine's client creature resolver before exposing it. Native follow work also waits for a
+resolvable client party, including downstream follow-point and per-member calls. An
+out-of-count duplicate of an already-exposed companion may be reclaimed for the PC; a
+distinct live creature remains protected. The duplicate case was observed after a second
+rejoin left Trask in slots 0 and 1 with count 1. **95 focused control/count/follow tests** and
+the x86 warnings-as-errors build pass. The first guarded retry deferred control until the
+client PC existed and restored it without crashing; the duplicate-slot extension still
+requires the next restart. This does not close every rejoin path or the visual follow report.
+
+The live retry also exposed two managed lifecycle issues under investigation: quicksave
+readiness could be reported while `SAVEGAME.sav` was being replaced, and the agent's own
+adoption load could trigger a redundant `OwnLoad` rejoin. Fresh named saves and full backups
+were retained before restarting either game.
+
+Saved-module compatibility now distinguishes unvisited modules from unreadable or ambiguous
+saved state. A present nested module with missing GIT, malformed data, or duplicate members
+returns unknown instead of falling back to pristine object IDs. **18 save-digest tests** pass
+with warnings as errors; commit `d46b316`. Truly unvisited modules retain pristine prediction.

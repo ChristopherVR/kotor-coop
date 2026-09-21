@@ -318,6 +318,21 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // CSWParty::Update does not tolerate the connect/reload shape where its raw count
+        // exposes a stale slot whose CLIENT object has not been materialised yet.  Its own
+        // leader lookup is CClientExoApp::GetCreatureByGameObjectID (0x005ED5B0), so use the
+        // same resolver and the same leading-array rule here.  ResolveServerObject is not an
+        // equivalent check: the live crash had a server-side PC identity while the client
+        // lookup used by Update was still null.  This is read-only and deliberately refuses
+        // the native call rather than lowering the count or repairing an array in this hot
+        // path; the control/reconciliation owners decide when a write is justified.
+        int memberCount = *(int*)(party + 0x00);
+        if (memberCount is <= 0 or > SwPartyMemberCapacity
+            || CountResolvableClientPartyMembers(client, party) < memberCount)
+        {
+            return false;
+        }
+
         PartyUpdateFn(party, deltaTimeSeconds);
         return true;
     }

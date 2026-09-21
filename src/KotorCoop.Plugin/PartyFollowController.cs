@@ -414,26 +414,45 @@ internal sealed unsafe class PartyFollowController(SharedBlockView block)
         _lastUpdateTime = nowForUpdate;
         int followStepMilliseconds = FollowStepTimingRule.Consume(
             ref _followStepFractionalMilliseconds, elapsedSeconds);
-        if (dt > 0f && dt < 1f) // skip the first frame (dt==0) and any huge stall/load gap
+        if (dt <= 0f || dt >= 1f) // skip the first frame and any huge stall/load gap
         {
-            Odyssey.PumpPartyUpdate(dt);
-
-            // ROUND 73 CONTINUED: live-measured that PumpPartyUpdate alone refreshes the
-            // PARTY-LEVEL reference position (CSWParty+0x2B0..0x2B8) correctly — it now tracks
-            // a teleported leader within one frame — but does NOT, by itself, unstick a
-            // long-stalled member's PER-MEMBER target/prior fields
-            // (record+0x28/record+0x18, WalkUpdateLocation_QuickWalk_FollowLeader's own
-            // input). CSWParty::Update's own body only forwards the refreshed reference
-            // position into RecaulateFollowPoint conditionally, gated behind
-            // CSWParty::TestAndResetPath() returning zero (see PartyUpdateFn's remarks) — and
-            // live data shows that gate staying shut for a companion that has been stalled
-            // this long. Round 72 already built and verified-safe an UNCONDITIONAL direct
-            // call to the same RecaulateFollowPoint (bypassing that gate entirely, 0 stack
-            // args) but measured zero effect BEFORE this round's fix existed, because its own
-            // input (the reference position) was itself still frozen at that time. Retried now
-            // that PumpPartyUpdate keeps the reference position genuinely live.
-            Odyssey.RecalculateFollowPoint();
+            // The native party consumer is not the only unsafe work below: the per-member
+            // index lookup, follow-target writes, and stall recovery all walk the same raw
+            // CSWParty array.  A first frame or a load gap therefore skips the whole pass,
+            // rather than merely skipping CSWParty::Update and continuing with stale timing.
+            ResetFrameTimingBaselines();
+            // Keep this frame as the new timing origin.  ResetFrameTimingBaselines clears the
+            // previous origin by design; leaving it at -1 here would make every following
+            // frame look like the first frame and permanently suppress the pump.
+            _lastUpdateTime = nowForUpdate;
+            return;
         }
+
+        if (!Odyssey.PumpPartyUpdate(dt))
+        {
+            // PumpPartyUpdate validates the client-side resolution of every exposed member
+            // before entering the native function.  Its false result is a whole-frame
+            // readiness barrier: RecalculateFollowPoint and every per-member native helper
+            // below use the same array and must not run until it resolves consistently.
+            ResetFrameTimingBaselines();
+            return;
+        }
+
+        // ROUND 73 CONTINUED: live-measured that PumpPartyUpdate alone refreshes the
+        // PARTY-LEVEL reference position (CSWParty+0x2B0..0x2B8) correctly — it now tracks
+        // a teleported leader within one frame — but does NOT, by itself, unstick a
+        // long-stalled member's PER-MEMBER target/prior fields
+        // (record+0x28/record+0x18, WalkUpdateLocation_QuickWalk_FollowLeader's own
+        // input). CSWParty::Update's own body only forwards the refreshed reference
+        // position into RecaulateFollowPoint conditionally, gated behind
+        // CSWParty::TestAndResetPath() returning zero (see PartyUpdateFn's remarks) — and
+        // live data shows that gate staying shut for a companion that has been stalled
+        // this long. Round 72 already built and verified-safe an UNCONDITIONAL direct
+        // call to the same RecaulateFollowPoint (bypassing that gate entirely, 0 stack
+        // args) but measured zero effect BEFORE this round's fix existed, because its own
+        // input (the reference position) was itself still frozen at that time. Retried now
+        // that PumpPartyUpdate keeps the reference position genuinely live.
+        Odyssey.RecalculateFollowPoint();
 
         nint appManager = *(nint*)AppManagerPtr;
         if (appManager == 0)

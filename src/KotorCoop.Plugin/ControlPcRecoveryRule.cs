@@ -19,6 +19,52 @@ internal static class ControlPcRecoveryRule
     }
 
     /// <summary>
+    /// Checks the CSWParty entries that would remain exposed after moving one entry to
+    /// member[0].  The native caller supplies <see cref="Slot.IsLiveCreature"/> from
+    /// the client-side resolver used by the engine's party consumer; a server-side
+    /// object match alone is not sufficient.  <paramref name="replacementClientId"/>
+    /// is used for a verified entry that has not been written yet (the connect-time
+    /// PC recovery path).
+    /// </summary>
+    internal static bool CanExposeAfterFrontRotation(
+        ReadOnlySpan<Slot> slots,
+        int targetIndex,
+        int exposedCount,
+        uint replacementClientId = 0)
+    {
+        if (slots.Length == 0
+            || targetIndex is < 0
+            || targetIndex >= slots.Length
+            || exposedCount is <= 0
+            || exposedCount > slots.Length)
+        {
+            return false;
+        }
+
+        for (int outputIndex = 0; outputIndex < exposedCount; outputIndex++)
+        {
+            int sourceIndex = outputIndex == 0
+                ? targetIndex
+                : outputIndex <= targetIndex
+                    ? outputIndex - 1
+                    : outputIndex;
+            Slot source = slots[sourceIndex];
+            if (sourceIndex == targetIndex && replacementClientId != 0)
+            {
+                source = new(replacementClientId, true);
+            }
+
+            uint maskedId = source.RawClientId & ~ClientNpcFlag;
+            if (maskedId is 0 or ObjectInvalid || !source.IsLiveCreature)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Converts a verified server object id to the client-space id used by CSWParty.
     /// KOTOR's client representation is the server id with the party/client bit set;
     /// this deliberately derives the value from the live server id instead of assuming
@@ -77,7 +123,27 @@ internal static class ControlPcRecoveryRule
 
         for (int i = boundedLiveCount; i < boundedMaximum; i++)
         {
-            if (!slots[i].IsLiveCreature)
+            // A reconnect can leave the same client id copied into an out-of-count
+            // slot.  It is not a second creature: the engine's visible prefix already
+            // owns that id, so reclaiming this duplicate cannot remove an exposed body.
+            // Keep refusing a distinct live creature; that may still be a real member
+            // waiting for the table/count view to settle.
+            bool duplicateOfExposed = false;
+            uint candidateId = slots[i].RawClientId & ~ClientNpcFlag;
+            if (candidateId is not 0 and not ObjectInvalid)
+            {
+                for (int exposed = 0; exposed < boundedLiveCount; exposed++)
+                {
+                    uint exposedId = slots[exposed].RawClientId & ~ClientNpcFlag;
+                    if (exposedId == candidateId && slots[exposed].IsLiveCreature)
+                    {
+                        duplicateOfExposed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!slots[i].IsLiveCreature || duplicateOfExposed)
             {
                 return new(-1, i, i + 1, clientId);
             }

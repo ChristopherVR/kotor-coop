@@ -53,15 +53,16 @@ internal static unsafe partial class Odyssey
     // <see cref="SetCameraFollowServerObject"/>/<see cref="RestoreCameraToControlledCreature"/>
     // (both wrap the real `CSWCModule::SetCameraFollow`, 0x0063F9D0 — the same call
     // `ChangeCharacter` itself would have made). Every write is id-only — Recipe A
-    // (client-control-lock.md): "VERIFIED crash-proof... every consumer resolves it through
-    // the null-safe GetCreatureByGameObjectID" — so this is exactly as safe as the primitive it
-    // replaces, just applied to the WHOLE array instead of only member[0].
+    // (client-control-lock.md): the write is safe only after every id that will remain under
+    // CSWParty's exposed count has been checked through the same client-side creature lookup
+    // used by the engine consumer. This applies the verified id-only reorder to the whole array
+    // without exposing an unresolved entry.
 
     /// <summary>CSWParty (client-side) + this = member[0]'s client-space object id — the SAME
     /// field <c>GetSWPartyFn</c>/<see cref="SwPartyMemberCount"/>'s struct exposes at +0x00,
-    /// documented in docs/research/client-control-lock.md's "Recipe A" (id-only, VERIFIED
-    /// crash-proof: every consumer resolves it through the null-safe
-    /// <c>GetCreatureByGameObjectID</c>).</summary>
+    /// documented in docs/research/client-control-lock.md's "Recipe A" (id-only; callers
+    /// validate the exposed range through the client-side <c>GetCreatureByGameObjectID</c>
+    /// lookup before changing the array).</summary>
     private const int SwPartyMember0ClientId = 0x24;
 
     /// <summary>Byte distance between successive <c>CSWPartyMemberData</c> entries
@@ -135,13 +136,13 @@ internal static unsafe partial class Odyssey
     /// other member, matching what <c>SetControlledCreature</c>'s own rotate loop does for the
     /// common case.
     ///
-    /// ID-ONLY (Recipe A, client-control-lock.md: "VERIFIED crash-proof... every consumer
-    /// resolves it through the null-safe GetCreatureByGameObjectID"). The per-member "extra"
+    /// ID-ONLY (Recipe A). Callers validate every member that remains under the exposed count
+    /// through the client-side GetCreatureByGameObjectID lookup. The per-member "extra"
     /// field at <c>+0x80</c> — which the real engine ALSO shifts alongside the id, per
-    /// disassembly of <c>SetControlledCreature</c> — is deliberately left in place: the same
-    /// "member[0]'s id only, cosmetic desync at worst, never a crash risk" precedent already
-    /// accepted elsewhere applies here too, and adding a second field write would only trade
-    /// verification effort for a cosmetic gain nothing has asked for yet.
+    /// disassembly of <c>SetControlledCreature</c> — is deliberately left in place. The
+    /// resulting extra-field mismatch is a known cosmetic limitation; the id-resolution guard
+    /// above is independent of that field, and adding a second write would require separate
+    /// verification of its semantics.
     ///
     /// A no-op when <paramref name="targetIndex"/> is already 0.
     /// </summary>
@@ -161,6 +162,41 @@ internal static unsafe partial class Odyssey
         }
 
         *(uint*)(party + SwPartyMember0ClientId) = targetId;
+    }
+
+    /// <summary>
+    /// Validates the ids that will be visible to the engine after the selected member is
+    /// moved to the front.  The lookup is deliberately the client-side
+    /// <c>GetCreatureByGameObjectID</c> call used by CSWParty's consumer; the server
+    /// resolver used to identify a PC or roster member cannot prove that this client has
+    /// materialised the corresponding body yet.  <paramref name="replacementClientId"/>
+    /// represents a verified id that the recovery path is about to write.
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    private static bool TryValidateClientPartyRotation(
+        nint client,
+        nint party,
+        int targetIndex,
+        int exposedCount,
+        uint replacementClientId = 0)
+    {
+        if (client == 0 || party == 0)
+        {
+            return false;
+        }
+
+        Span<ControlPcRecoveryRule.Slot> slots = stackalloc ControlPcRecoveryRule.Slot[SwPartyMemberCapacity];
+        for (int i = 0; i < SwPartyMemberCapacity; i++)
+        {
+            uint rawId = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
+            uint maskedId = rawId & ~ControlPartyNpcFlag;
+            bool resolves = maskedId is not 0 and not ObjectInvalid
+                && GetCreatureByClientIdFn(client, rawId) != 0;
+            slots[i] = new(rawId, resolves);
+        }
+
+        return ControlPcRecoveryRule.CanExposeAfterFrontRotation(
+            slots, targetIndex, exposedCount, replacementClientId);
     }
 
     /// <summary>Switches the LOCAL player's control to the party-roster companion in
@@ -219,12 +255,21 @@ internal static unsafe partial class Odyssey
             {
                 return false;
             }
+        }
 
-            int* countField = (int*)(party + SwPartyMemberCount);
-            if (*countField <= index)
-            {
-                *countField = index + 1;
-            }
+        int* countField = (int*)(party + SwPartyMemberCount);
+        int previousCount = *countField;
+        int exposedCount = previousCount <= index ? index + 1 : previousCount;
+        if (!TryValidateClientPartyRotation(client, party, index, exposedCount))
+        {
+            PluginHost.Log($"control: refusing party slot {slot}; CSWParty rotation would expose "
+                + $"an unresolved client member (target {index}, count {previousCount}->{exposedCount})");
+            return false;
+        }
+
+        if (exposedCount != previousCount)
+        {
+            *countField = exposedCount;
         }
 
         uint previousLeaderId = *(uint*)(party + SwPartyMember0ClientId);
@@ -243,6 +288,7 @@ internal static unsafe partial class Odyssey
     /// never made visible to engine loops. MAIN THREAD ONLY.
     /// </summary>
     private static bool TryRecoverMissingPcMember(
+        nint client,
         nint party,
         int tableCount,
         out int index,
@@ -264,6 +310,14 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // The server identity proves which PC should be recovered, but it does not
+        // prove that this client has a body for that id.  The engine consumer at
+        // 0x6374AD dereferences that client-side result while walking CSWParty.
+        if (GetCreatureByClientIdFn(client, candidateId) == 0)
+        {
+            return false;
+        }
+
         uint candidateServerId = candidateId & ~ControlPartyNpcFlag;
         nint resolved = ResolveServerObject(candidateServerId);
         if (resolved == 0 || resolved != serverPc || !IsPlayerCharacter(resolved))
@@ -278,10 +332,8 @@ internal static unsafe partial class Odyssey
         {
             uint rawId = *(uint*)(party + SwPartyMember0ClientId + (i * SwPartyMemberStride));
             uint maskedId = rawId & ~ControlPartyNpcFlag;
-            nint objectPointer = maskedId is 0 or ObjectInvalid
-                ? 0
-                : ResolveServerObject(maskedId);
-            bool liveCreature = objectPointer != 0 && *(nint*)objectPointer == ServerCreatureVtable;
+            bool liveCreature = maskedId is not 0 and not ObjectInvalid
+                && GetCreatureByClientIdFn(client, rawId) != 0;
             slots[i] = new(rawId, liveCreature);
         }
 
@@ -296,6 +348,16 @@ internal static unsafe partial class Odyssey
             serverPcId,
             serverPcVerified: true);
         if (plan.HasExisting || !plan.CanWrite)
+        {
+            return false;
+        }
+
+        // Validate the complete post-recovery exposed range before changing either
+        // the slot id or the count.  Checking only the candidate still permits an
+        // older unresolved entry to remain under the raised count and crash the same
+        // consumer on its next iteration.
+        if (!TryValidateClientPartyRotation(
+                client, party, plan.SlotToWrite, plan.NewCount, plan.ClientId))
         {
             return false;
         }
@@ -520,7 +582,7 @@ internal static unsafe partial class Odyssey
             if (index < 0)
             {
                 if (!TryGetPartyTableMemberCount(out int tableCount)
-                    || !TryRecoverMissingPcMember(party, tableCount, out index, out pcId))
+                    || !TryRecoverMissingPcMember(client, party, tableCount, out index, out pcId))
                 {
                     return false;
                 }
@@ -535,6 +597,12 @@ internal static unsafe partial class Odyssey
                 PluginHost.Log($"control: your PC sits at member[{index}], beyond CSWParty's count of "
                     + $"{*(int*)(party + SwPartyMemberCount)} — rotating it to the front");
             }
+        }
+
+        int exposedCount = *(int*)(party + SwPartyMemberCount);
+        if (!TryValidateClientPartyRotation(client, party, index, exposedCount))
+        {
+            return false;
         }
 
         uint previousLeaderId = *(uint*)(party + SwPartyMember0ClientId);
@@ -573,6 +641,11 @@ internal static unsafe partial class Odyssey
         string playerText = player == 0
             ? "server player: none"
             : $"server player: 0x{player:X} id 0x{GetObjectId(player):X} is_pc={IsPlayerCharacter(player)} hp {GetCurrentHitPoints(player)}";
+        uint playerClientId = player == 0 ? 0 : ControlPcRecoveryRule.ToClientId(GetObjectId(player));
+        if (playerClientId != 0)
+        {
+            playerText += $" client body 0x{GetCreatureByClientIdFn(client, playerClientId):X}";
+        }
         string tableText = TryGetPartyTableMemberCount(out int tableCount) ? tableCount.ToString() : "?";
 
         var text = new System.Text.StringBuilder();
@@ -588,6 +661,7 @@ internal static unsafe partial class Odyssey
                 continue;
             }
 
+            text.Append($" client body 0x{GetCreatureByClientIdFn(client, id):X}");
             nint obj = ResolveServerObject(masked);
             if (obj == 0)
             {

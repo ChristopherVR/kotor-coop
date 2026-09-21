@@ -14,9 +14,11 @@ ID**, not a pointer: `party_member_datas[0].client_object_id`, i.e. the dword at
    APP_MANAGER   app    internal  CSWParty*   member[0].client_object_id
 ```
 
-Because every consumer re-resolves that id through `GetCreatureByGameObjectID`
-(null-safe), **writing the client's PC object id there each frame is crash-proof** and
-pins control to the PC. That is the external (WriteProcessMemory) lever. The cleaner
+Writing a verified, rendered PC's object id there pins control to the PC. The lookup
+itself is null-safe, but not every consumer checks its result: the reload crash on
+2026-09-21 disproved the earlier blanket safety claim. Party recovery must verify client
+creatures before exposing IDs through the live count or rotating a new leader into place.
+That is the external (WriteProcessMemory) lever. The cleaner
 in-process lever is to early-return the switch handler so the reorder never happens.
 
 Server-side `pt_leader_id`/`pt_controlled_npc` (party table +0xEC/+0xF0) are **slot
@@ -72,9 +74,10 @@ GUI). Two resolvers turn the returned CSWParty into the driven creature, both ke
 - `CSWParty::GetMember(idx)` (0x006346C0): `[party + 0x88*idx + 0x24]`; the input dispatch
   at 0x004EF840 loops `idx = 0..party_count` and resolves each.
 
-`GetCreatureByGameObjectID` (0x005F1180) is a null-safe map lookup (default 0), and every
-caller null-checks. **This is why an id write is benign: a wrong-but-invalid id resolves to
-null and is ignored, never dereferenced blindly.**
+`GetCreatureByGameObjectID` (0x005F1180) is a null-safe map lookup (default 0).
+**Its callers are not all null-safe.** `CSWParty::Update` dereferences resolved leader
+and member positions at `0x6374AD` and `0x6374B0`. A server creature can exist before its
+client body does, so server-side ID verification alone is insufficient for party writes.
 
 `player_creature_id` (`internal+0x20`) is likewise an object id — `GetPlayerCreature`
 (0x005F1420) compares it against a cache key at +0x3BC and, on miss, re-resolves via
