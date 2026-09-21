@@ -153,6 +153,11 @@ public sealed class WorldAdoptionTests : IDisposable
         Assert.True(PluginMenuLoader.TryReadSaveModuleName(
             Path.Combine(joinerGame, "saves", PluginMenuLoader.AutosaveSlot), out string module));
         Assert.Equal("tar_m02aa", module, ignoreCase: true);
+
+        GffStruct cards = Gff.Parse(File.ReadAllBytes(Path.Combine(
+            joinerGame, "saves", PluginMenuLoader.AutosaveSlot, "PARTYTABLE.res"))).Root;
+        Assert.Equal(0x127, (int)cards.GetList("PT_PAZAAKCARDS")[0].Fields["PT_PAZAAKCOUNT"]);
+        Assert.Equal(0x341, (int)cards.Fields["PT_GOLD"]);
     }
 
     [Fact]
@@ -401,7 +406,8 @@ public sealed class WorldAdoptionTests : IDisposable
         // And the character in them is the one that was handed in, not a blank stranger.
         Assert.True(PlayerIfo.TryExtractPlayerFromPifoBytes(
             File.ReadAllBytes(stash), out GffStruct staged, out _));
-        Assert.Equal(created.Count, staged.Count);
+        Assert.Equal(created.FieldNames.Count(label => label != "KC_Pazaak"), staged.Count);
+        Assert.False(staged.Fields.ContainsKey("KC_Pazaak"));
     }
 
     // ---- helpers ---------------------------------------------------------------
@@ -493,7 +499,11 @@ public sealed class WorldAdoptionTests : IDisposable
             BuildErf("SAV ", (module, 2057 /* module .sav */, inner)));
 
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
-        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), [5, 6, 7, 8]);
+        GffWriter party = new("PT");
+        party.Root.SetInt("PT_GOLD", (int)nextObjId);
+        party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", (int)nextObjId);
+        party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", -1);
+        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), party.ToBytes());
         File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), [9]);
 
         return directory;

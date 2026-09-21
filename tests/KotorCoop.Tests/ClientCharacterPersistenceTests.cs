@@ -199,6 +199,23 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         Assert.Equal(0x42u, meta.HostSaveIdentity);
     }
 
+    [Fact]
+    public void CapturedPazaakCardsSurviveTheCharacterSidecarRoundTrip()
+    {
+        string save = BuildSave("end_m01aa", nextObjId: 0x99, "Trask Ulgo", pazaakCount: 7, sideCard: 4);
+        string saves = TempDirectory();
+
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+            saves, save, hostSaveIdentity: 0x42, out _));
+
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(
+            saves, out GffStruct read, out _, out _));
+
+        GffStruct cards = read.GetStruct("KC_Pazaak")!;
+        Assert.Equal(7, (int)cards.GetList("PT_PAZAAKCARDS")[0].Fields["PT_PAZAAKCOUNT"]);
+        Assert.Equal(4, (int)cards.GetList("PT_PAZSIDELIST")[0].Fields["PT_PAZSIDECARD"]);
+    }
+
     // ---- the staged-copy guard (2026-09-03 live bug) --------------------------------
     //
     // World adoption stages the HOST's save — host PC included — into the autosave slot, and
@@ -269,6 +286,26 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         Assert.Equal(staged, ClientCharacterPersistence.FindCaptureSource(saves));
 
         Assert.Null(ClientCharacterPersistence.FindCaptureSource(Path.Combine(saves, "missing")));
+    }
+
+    [Fact]
+    public void CaptureBoundaryRefreshPrefersAQuicksaveThatLandedAfterTheInitialObservation()
+    {
+        string saves = TempDirectory();
+        string quick = BuildSaveIn(saves, "000000 - QUICKSAVE", "end_m01aa", 0x10, "Trask Ulgo");
+        string named = BuildSaveIn(saves, "000003 - cardprobe", "end_m01aa", 0x11, "Trask Ulgo");
+        DateTime baseline = DateTime.UtcNow.AddMinutes(-10);
+
+        // The named slot was newest when the quicksave request began.
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), baseline);
+        File.SetLastWriteTimeUtc(Path.Combine(named, "SAVEGAME.sav"), baseline.AddMinutes(1));
+        string? observed = ClientCharacterPersistence.FindCaptureSource(saves);
+        Assert.Equal(named, observed);
+
+        // The engine's quicksave lands after the initial resolver read. The capture boundary
+        // must re-resolve it instead of extracting the stale named slot carried by the wait.
+        File.SetLastWriteTimeUtc(Path.Combine(quick, "SAVEGAME.sav"), baseline.AddMinutes(2));
+        Assert.Equal(quick, ClientCharacterPersistence.RefreshCaptureSource(saves, observed));
     }
 
     [Fact]
@@ -405,9 +442,10 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         }
     }
 
-    private string BuildSave(string module, uint nextObjId, string name)
+    private string BuildSave(
+        string module, uint nextObjId, string name, int pazaakCount = 2, int sideCard = -1)
     {
-        string directory = BuildSaveStatic(module, nextObjId, name);
+        string directory = BuildSaveStatic(module, nextObjId, name, pazaakCount, sideCard);
         _tempDirectories.Add(directory);
         return directory;
     }
@@ -415,10 +453,11 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     /// <summary>A save directory holding one player, in the exact shape
     /// <see cref="PlayerIfo.TryExtractPlayer"/> reads — trimmed from
     /// <c>WorldAdoptionTests.BuildSave</c> to just what a character-only test needs.</summary>
-    private static string BuildSaveStatic(string module, uint nextObjId, string name) =>
+    private static string BuildSaveStatic(
+        string module, uint nextObjId, string name, int pazaakCount = 2, int sideCard = -1) =>
         BuildSaveAt(
             Path.Combine(Path.GetTempPath(), "kotorcoop-charpersist-" + Guid.NewGuid().ToString("N")),
-            module, nextObjId, name);
+            module, nextObjId, name, pazaakCount: pazaakCount, sideCard: sideCard);
 
     /// <summary>A named slot under a <c>saves\</c> directory the test already owns — the
     /// shape <see cref="ClientCharacterPersistence.FindCaptureSource"/> and the staged
@@ -432,7 +471,8 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     /// renames the host's to (<see cref="PlayerIfo.TryNeutralisePifo"/>); null is a manual
     /// save, or a staged copy of one.</param>
     private static string BuildSaveAt(
-        string directory, string module, uint nextObjId, string name, string? pifoMember = null)
+        string directory, string module, uint nextObjId, string name, string? pifoMember = null,
+        int pazaakCount = 2, int sideCard = -1)
     {
         Directory.CreateDirectory(directory);
 
@@ -461,7 +501,10 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"), BuildErf("SAV ", [.. members]));
 
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
-        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), [5, 6, 7, 8]);
+        GffWriter party = new("PT");
+        party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", pazaakCount);
+        party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", sideCard);
+        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), party.ToBytes());
         File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), [9]);
 
         return directory;

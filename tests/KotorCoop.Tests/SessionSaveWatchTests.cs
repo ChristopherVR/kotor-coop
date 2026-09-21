@@ -369,7 +369,10 @@ public sealed class SessionSaveWatchTests : IDisposable
             BuildErf("SAV ", ("end_m01aa", 2057, inner)));
 
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
-        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), [5, 6, 7, 8]);
+        GffWriter party = new("PT");
+        party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", 2);
+        party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", -1);
+        File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), party.ToBytes());
         File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), [9]);
 
         return directory;

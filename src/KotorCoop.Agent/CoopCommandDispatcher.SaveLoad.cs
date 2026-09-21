@@ -87,9 +87,11 @@ public sealed partial class CoopCommandDispatcher
     private string? _captureSourceBefore;
     private DateTime _captureStampBefore;
 
-    /// <summary>The newest write inside a save directory. The DIRECTORY's own time is not
-    /// enough: a quicksave over an existing QUICKSAVE folder rewrites files in place, which on
-    /// NTFS leaves the folder's timestamp alone.</summary>
+    /// <summary>The main archive's write time. The DIRECTORY's own time is not enough: a
+    /// quicksave over an existing QUICKSAVE folder rewrites files in place, which on NTFS
+    /// leaves the folder's timestamp alone. Watching auxiliary files made an intermediate
+    /// write look like a landed save before the SAVEGAME.sav that character extraction reads
+    /// had been replaced.</summary>
     private static DateTime SaveStamp(string? saveDirectory)
     {
         if (saveDirectory is null)
@@ -99,17 +101,7 @@ public sealed partial class CoopCommandDispatcher
 
         try
         {
-            DateTime newest = DateTime.MinValue;
-            foreach (string file in Directory.EnumerateFiles(saveDirectory))
-            {
-                DateTime written = File.GetLastWriteTimeUtc(file);
-                if (written > newest)
-                {
-                    newest = written;
-                }
-            }
-
-            return newest;
+            return File.GetLastWriteTimeUtc(Path.Combine(saveDirectory, "SAVEGAME.sav"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
@@ -148,7 +140,13 @@ public sealed partial class CoopCommandDispatcher
                 ? $"character capture: quicksave landed after {nowMs - _captureRequestedMs} ms - capturing"
                 : "character capture: no save appeared within the wait (the engine may refuse to save here) - capturing the newest save as before");
 
-            string? outcome = _sessionSaveWatch.CaptureNow(sourceNow);
+            // Resolve once more after the wait. The engine can publish the quicksave's
+            // SAVEGAME.sav after another file has already made SaveLanded true; carrying
+            // sourceNow across that boundary would capture the previously newest named save
+            // even though the requested quicksave is now newer. Keep the observed source as a
+            // fallback when the save tree is being torn down concurrently.
+            string? captureSource = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, sourceNow);
+            string? outcome = _sessionSaveWatch.CaptureNow(captureSource);
             if (outcome is not null)
             {
                 Log?.Invoke(outcome);
@@ -968,6 +966,11 @@ public sealed partial class CoopCommandDispatcher
             Log?.Invoke(landed
                 ? $"character capture: pre-disconnect quicksave landed after {SessionClock.NowMs - requestedMs} ms"
                 : "character capture: pre-disconnect quicksave did not land within the wait - capturing the newest save as before");
+
+            // The loop can observe an intermediate write before the engine updates the
+            // quicksave's SAVEGAME.sav timestamp. Re-resolve at the capture boundary so a
+            // newly landed quicksave wins over the path selected before the request.
+            currentSave = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, currentSave);
         }
 
         string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);

@@ -138,6 +138,16 @@ public static class ClientCharacterPersistence
     }
 
     /// <summary>
+    /// Rechecks the source at the capture boundary after an engine save request. The
+    /// quicksave can make an intermediate file visible before its <c>SAVEGAME.sav</c>
+    /// timestamp moves; callers that observed a source while waiting must therefore resolve
+    /// again immediately before extraction. Keep the observed source as a teardown fallback
+    /// when the save tree disappears between the two reads.
+    /// </summary>
+    public static string? RefreshCaptureSource(string savesDirectory, string? observedSource) =>
+        FindCaptureSource(savesDirectory) ?? observedSource;
+
+    /// <summary>
     /// Extracts the player out of <paramref name="saveDirectory"/> — this install's own,
     /// most recently written save (<see cref="FindCaptureSource"/>) — and writes it as the
     /// sidecar. Best-effort: every failure reports through <paramref name="diagnostic"/>

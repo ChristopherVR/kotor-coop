@@ -117,7 +117,7 @@ public static class PlayerIfo
                 return false;
             }
 
-            player = SelectPrimary(players);
+            player = PersonalPazaak.Capture(SelectPrimary(players), saveDirectory);
             diagnostic = $"carried the character from '{Path.GetFileName(saveDirectory)}' "
                 + $"({player.Count} fields, module '{moduleSav.Resref}')";
             return true;
@@ -189,7 +189,7 @@ public static class PlayerIfo
             string temp = Path.Combine(gameDirectory, "Temp");
             Directory.CreateDirectory(temp);
 
-            byte[] pifo = BuildPifo(player);
+            byte[] pifo = BuildPifo(PersonalPazaak.WithoutMetadata(player));
 
             // BOTH files. The pifo is what the engine reads; the stash is what survives
             // LoadPCAutoSave truncating the pifo, and is what the plugin copies back over it

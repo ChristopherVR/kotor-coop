@@ -311,8 +311,9 @@ public static class WorldAdoption
         try
         {
             WorldTransfer.WriteSaveDirectory(slot, world);
+            PersonalPazaak.Restore(player, slot);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             log?.Invoke($"world adoption: could not stage the world — {ex.Message}");
             return null;
