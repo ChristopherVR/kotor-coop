@@ -47,23 +47,12 @@ internal sealed unsafe class ConnectionIndicatorController(SharedBlockView block
     // only ever one bad connect-burst away from this exact collision — swapping columns, not
     // hunting for a taller gap, is what actually avoids it.
     //
-    // Column 8 is the fix: ChatOverlayController only ever posts at column 3 (left anchors) or
-    // column 50 (right anchors) — never column 8, by construction, regardless of the player's
-    // `chat_overlay_anchor` setting. So column 8 cannot collide with chat/toasts no matter how a
-    // player configures it, which is a stronger guarantee than "clears the minimap" alone gave
-    // (3, 11). Row 3 is shallow (near the top, as requested); live-verified with
-    // tools\textqueue.ps1 against a running two-instance demo (no working screenshot tool on
-    // this rig — see docs/research/console-overlay.md's 2026-09-10 addendum for the actual
-    // queue dumps): (8, 3) never collided with the column-3 toast burst on connect, and the
-    // burst itself faded out on its own life countdown a few seconds later, leaving only this
-    // controller's line.
-    //
-    // Other reserved slots, so a future controller does not collide either: console prompt/line
-    // own rows 0-2; ConsoleAssistController's hint sits at (3, 3); AgentLivenessController's
-    // stale/failed-to-start warning sits at (3, 5); ServerBrowserController uses column 8 (title
-    // row 6, entries from row 8) and DialogueSpectateController / InteractionLockController use
-    // column 8 rows 4/6/7, SoloSegmentSpectateController row 10 — all below this row 3.
-    private const int MessageColumn = 8;
+    // The 2026-09-17 worktree's 800x600 capture showed column 8 starting near x=81,
+    // inside the minimap (right edge near x=132). Column 14 starts near x=146 and
+    // clears it. Text-queue probes alone did not establish visual clearance.
+    // Row 3 remains above browser/dialogue/spectate rows; chat uses columns 3/50.
+    // Other resolutions and long connection-status text still need visual checks.
+    private const int MessageColumn = 14;
     private const int MessageRow = 3;
     private const float MessageAlpha = 0.9f;
 
