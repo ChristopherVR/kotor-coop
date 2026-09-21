@@ -171,6 +171,74 @@ public class SoloSegmentMachineTests
         Assert.True(machine.Active);
     }
 
+    // ---- verified Taris duel-player pin -------------------------------------------
+
+    [Fact]
+    public void TarisPlayerPinBeginsWithNoCompanionsAndClearsAtDuelEnd()
+    {
+        SoloSegmentMachine machine = new();
+
+        // The player can enter the ring already alone, so there is no roster drop edge or
+        // two-call RemovePartyMember burst to observe.
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("tar_m02ae", 0)));
+        Assert.Equal(SoloSegmentEvent.Began,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: true, partySelectionOpen: false));
+        Assert.True(machine.Active);
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("tar_m02ae", 0)));
+
+        // k_ptar_duelend/k_ptar_duelend2 clear the same PC pin. The empty roster is allowed to
+        // remain empty; this boundary does not wait for a companion to be recruited again.
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: false, partySelectionOpen: false));
+        Assert.Equal(SoloSegmentEvent.Ended, machine.Step(Catalogue, Inputs("tar_m02ae", 0)));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void TarisPlayerPinBeginsWithOneCompanionAndEndsOnPinClear()
+    {
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("tar_m02ae", 1)));
+        Assert.Equal(SoloSegmentEvent.Began,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: true, partySelectionOpen: false));
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Inputs("tar_m02ae", 1)));
+        Assert.True(machine.Active);
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: false, partySelectionOpen: false));
+        Assert.Equal(SoloSegmentEvent.Ended, machine.Step(Catalogue, Inputs("tar_m02ae", 1)));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void PlayerPinRiseWhileManualPartySelectionIsOpenDoesNotPark()
+    {
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: true, partySelectionOpen: true));
+        Assert.False(machine.Active);
+
+        // The rise was consumed while the optional manual-solo UI was open; closing the UI while
+        // the same flag remains set does not replay it as a story event.
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("tar_m02ae", pinned: true, partySelectionOpen: false));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
+    public void NPCPinOrPinInAnotherModuleNeverStartsTheDuelSegment()
+    {
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("korr_m35aa", pinned: true, partySelectionOpen: false));
+        Assert.Equal(SoloSegmentEvent.None,
+            machine.NoteDuelPlayerPin("end_m01aa", pinned: true, partySelectionOpen: false));
+        Assert.False(machine.Active);
+    }
+
     // ---- Invalidate ---------------------------------------------------------------
 
     [Fact]

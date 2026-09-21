@@ -6,6 +6,13 @@ namespace KotorCoop.Protocol;
 /// two modules docs/research/star-forge-finale.md §3.3/§3.5 traced out of the real compiled
 /// scripts:
 ///
+///   tar_m02ae — Taris's duel ring. `k_ptar_duelring.ncs` removes active companions in its
+///     party loop and pins the player with `SetMinOneHP` for the duel; `k_ptar_duelend*` clears
+///     that pin. The module is the real Upper City Cantina, not the similarly named Lower City
+///     modules.
+///   korr_m35aa — Korriban's Sith Academy student-duel sequence. `k_pkor_partyleav.ncs`
+///     removes active companions in its party loop; `k_pkor_duelend.ncs` clears the scripted
+///     duel actor's pin (it does not target the player).
 ///   sta_m45ac — the shield-generator floor and Bastila's chamber. `k_psta_door.ncs`, at the
 ///     door tagged `k45_door_bast1` (its twin `k45_door_bast2` on the far side of the same
 ///     chamber), fires NINE consecutive `RemovePartyMember` calls — every possible companion,
@@ -29,9 +36,19 @@ namespace KotorCoop.Protocol;
 /// </summary>
 public sealed class SoloSegmentCatalogue
 {
-    /// <summary>The two modules docs/research/star-forge-finale.md §3.3/§3.5 verified by
-    /// reading the compiled scripts directly. See this class's own doc comment.</summary>
-    public static readonly IReadOnlyList<string> BaseModules = ["sta_m45ac", "sta_m45ad"];
+    /// <summary>Modules with a shipped, script-backed forced-solo or duel removal path. The
+    /// two Star Forge modules are from docs/research/star-forge-finale.md §3.3/§3.5; the Taris
+    /// and Korriban entries are pinned by docs/research/duel-rings.md.</summary>
+    public static readonly IReadOnlyList<string> BaseModules =
+        ["tar_m02ae", "korr_m35aa", "sta_m45ac", "sta_m45ad"];
+
+    /// <summary>Modules where the shipped duel script pins the PLAYER (not a named NPC) with
+    /// <c>SetMinOneHP(GetFirstPC(), TRUE)</c>. This is a separate, exact list rather than a
+    /// property of <see cref="BaseModules"/>: Korriban's duel resource contains a
+    /// <c>SetMinOneHP</c> call for a scripted creature, but no <c>GetFirstPC</c> operand. The
+    /// player-pin edge is therefore a verified trigger only for Taris's <c>tar_m02ae</c> ring.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DuelPinBaseModules = ["tar_m02ae"];
 
     /// <summary>Modules where a script hands the PLAYER over to a companion with
     /// <c>SwitchPlayerCharacter</c> (<c>CSWPartyTable+0xF0</c> goes from -1 to the slot): the
@@ -72,6 +89,14 @@ public sealed class SoloSegmentCatalogue
     public static bool ContainsControlledNpcModule(string module) =>
         !string.IsNullOrEmpty(module)
         && ControlledNpcBaseModules.Contains(module, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True when the module's shipped duel script pins the local player with the
+    /// exact <c>SetMinOneHP(GetFirstPC(), TRUE)</c> sequence. This narrow evidence-backed
+    /// trigger covers entering the Taris ring with zero or one companion, where no two-call
+    /// <c>RemovePartyMember</c> burst exists.</summary>
+    public static bool ContainsDuelPinModule(string module) =>
+        !string.IsNullOrEmpty(module)
+        && DuelPinBaseModules.Contains(module, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Parses coop.ini's <c>solo_segment_modules</c> value: comma-separated, blank
     /// entries and surrounding whitespace dropped. A null/blank/whitespace-only value parses to

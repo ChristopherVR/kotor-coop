@@ -18,6 +18,23 @@ public class SoloSegmentCatalogueTests
         Assert.True(catalogue.Contains(module));
     }
 
+    [Theory]
+    [InlineData("tar_m02ae")]
+    [InlineData("korr_m35aa")]
+    public void ContainsTheScriptBackedDuelRingModules(string module)
+    {
+        SoloSegmentCatalogue catalogue = new();
+        Assert.True(catalogue.Contains(module));
+    }
+
+    [Fact]
+    public void OnlyTarisIsProvenToPinThePlayerForTheDuelTrigger()
+    {
+        Assert.True(SoloSegmentCatalogue.ContainsDuelPinModule("tar_m02ae"));
+        Assert.False(SoloSegmentCatalogue.ContainsDuelPinModule("korr_m35aa"));
+        Assert.False(SoloSegmentCatalogue.ContainsDuelPinModule("end_m01aa"));
+    }
+
     [Fact]
     public void DoesNotContainAnOrdinaryModuleByDefault()
     {

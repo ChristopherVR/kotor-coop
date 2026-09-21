@@ -162,6 +162,25 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
             PluginHost.Log("solo segment: ended (the player is back in their own body, or the module changed)");
         }
 
+        // Taris's duel-ring script has an exact player-targeted boundary that remains visible
+        // even when its RemovePartyMember loop removes zero or one companion:
+        // SetMinOneHP(GetFirstPC(), TRUE), cleared by k_ptar_duelend*. Korriban's similarly
+        // named call targets an NPC, so SoloSegmentMachine keeps this trigger Taris-only.
+        nint player = Odyssey.GetPlayerCreaturePointer();
+        SoloSegmentEvent duelPinEvent = _machine.NoteDuelPlayerPin(
+            module,
+            player != 0 && Odyssey.GetMinOneHitPoint(player),
+            partySelectionOpen);
+        if (duelPinEvent == SoloSegmentEvent.Began)
+        {
+            PluginHost.Log($"solo segment: began in {module} — the shipped duel script pinned the player; "
+                + "a peer here will spectate even when fewer than two companions were removed");
+        }
+        else if (duelPinEvent == SoloSegmentEvent.Ended)
+        {
+            PluginHost.Log("solo segment: ended (the shipped duel script cleared the player pin, or the module changed)");
+        }
+
         SoloSegmentEvent evt = _machine.Step(_catalogue, new SoloSegmentInputs(
             module, companionCount, removedAlive, partySelectionOpen));
 

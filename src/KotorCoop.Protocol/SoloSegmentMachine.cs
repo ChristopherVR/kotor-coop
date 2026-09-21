@@ -83,6 +83,16 @@ public sealed class SoloSegmentMachine
 
     private bool _lastControlled;
 
+    /// <summary>True while the segment was begun by the Taris duel's verified
+    /// <c>SetMinOneHP(GetFirstPC(), TRUE)</c> edge. Unlike a roster-drop segment, this trigger
+    /// is useful when the player entered the ring with zero or one companion: the script's
+    /// removal loop then produces fewer than two hook calls. It ends when the matching duel-end
+    /// script clears the PC pin or the module changes.</summary>
+    private bool _duelPinTrigger;
+
+    private bool _duelPinStillSet;
+    private bool _lastDuelPin;
+
     /// <summary>Recent <c>Environment.TickCount</c>-style timestamps of
     /// <see cref="NoteRemovePartyMemberCall"/> calls, oldest first, capped at
     /// <see cref="MaxRecentCalls"/> (a real wipe fires exactly nine — see
@@ -120,6 +130,21 @@ public sealed class SoloSegmentMachine
             {
                 // Owned by NoteControlledNpc — see _controlledTrigger.
                 return SoloSegmentEvent.None;
+            }
+
+            if (_duelPinTrigger)
+            {
+                bool duelModuleChanged = !string.Equals(_activeModule, inputs.Module, StringComparison.OrdinalIgnoreCase);
+                if (!duelModuleChanged && _duelPinStillSet)
+                {
+                    return SoloSegmentEvent.None;
+                }
+
+                Active = false;
+                _duelPinTrigger = false;
+                _duelPinStillSet = false;
+                _activeModule = string.Empty;
+                return SoloSegmentEvent.Ended;
             }
 
             if (after == 0)
@@ -279,6 +304,52 @@ public sealed class SoloSegmentMachine
     }
 
     /// <summary>
+    /// Notes the local PC's <c>CSWSObject +0x200</c> min-one-hit-point flag. The caller must
+    /// pass the flag read from the local player creature, not from a companion or phantom.
+    /// Only a rising edge in a module whose shipped script is proven to call
+    /// <c>SetMinOneHP(GetFirstPC(), TRUE)</c> can begin a segment. A rise while the party
+    /// selection GUI is open is deliberately consumed and never replays when that GUI closes,
+    /// so an optional manual solo/bench action cannot become a story duel. A later clear is the
+    /// matching <c>k_ptar_duelend*</c> boundary and ends the segment even when the roster remains
+    /// at one or zero companions.
+    /// </summary>
+    public SoloSegmentEvent NoteDuelPlayerPin(string module, bool pinned, bool partySelectionOpen)
+    {
+        bool supported = SoloSegmentCatalogue.ContainsDuelPinModule(module);
+        if (!supported)
+        {
+            _lastDuelPin = false;
+            _duelPinStillSet = false;
+            return SoloSegmentEvent.None;
+        }
+
+        bool wasPinned = _lastDuelPin;
+        _lastDuelPin = pinned;
+
+        if (Active)
+        {
+            if (_duelPinTrigger)
+            {
+                _duelPinStillSet = pinned;
+            }
+
+            return SoloSegmentEvent.None;
+        }
+
+        if (!pinned || wasPinned || partySelectionOpen)
+        {
+            return SoloSegmentEvent.None;
+        }
+
+        Active = true;
+        _duelPinTrigger = true;
+        _duelPinStillSet = true;
+        _activeModule = module;
+        _sawEmptyRosterSinceActive = true;
+        return SoloSegmentEvent.Began;
+    }
+
+    /// <summary>
     /// Module change or session teardown: forget everything, including the companion-count
     /// baseline. The NEXT <see cref="Step"/> call only establishes a fresh baseline — it can
     /// never itself read as a drop, however different the new module's starting count is from
@@ -292,6 +363,9 @@ public sealed class SoloSegmentMachine
         _sawEmptyRosterSinceActive = false;
         _controlledTrigger = false;
         _lastControlled = false;
+        _duelPinTrigger = false;
+        _duelPinStillSet = false;
+        _lastDuelPin = false;
         _recentCallCount = 0;
     }
 }
