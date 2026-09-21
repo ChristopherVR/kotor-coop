@@ -57,9 +57,8 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "kind=$kind"     >> "$GITHUB_OUTPUT"
 
-      # CI's upload step is continue-on-error (a full artifact store must not fail a green
-      # build), so the packages may simply not be there. In that case say so and publish
-      # nothing rather than failing the run.
+      # CI can pass without uploaded packages. Publishing is a separate promise: missing
+      # artifacts must fail this workflow so a green Release cannot hide a stale download.
       - name: Download the CI packages
         id: download
         if: steps.what.outputs.kind != 'skip'
@@ -67,9 +66,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist; then
-            echo "CI run ${{ steps.what.outputs.run_id }} stored no packages (artifact quota?); nothing to publish"
+            echo "::error::CI run ${{ steps.what.outputs.run_id }} has no downloadable packages; the release was not updated. Check the CI artifact upload and repository artifact quota."
             echo "have=no" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Release not updated: CI packages could not be downloaded. Existing release assets are unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
           ls -l dist
           test -f dist/kotor-coop-*-windows.zip && test -f dist/kotor-coop-*-linux.tar.gz
