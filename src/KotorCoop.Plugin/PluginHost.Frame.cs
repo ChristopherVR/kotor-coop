@@ -456,6 +456,18 @@ internal static unsafe partial class PluginHost
             bool moduleMoveRequested = moduleMoveSerial != _observedModuleMoveSerial;
             _observedModuleMoveSerial = moduleMoveSerial;
 
+            // A script may have consumed the pending flag before any rendered frame saw
+            // it. STUNT followers require its announcement, not just correct load detection.
+            // Only recover an announcement across an actual world edge: a request cancelled
+            // while the same world remains readable must not send peers to its destination.
+            if (moduleMoveRequested && !_moveToModulePendingSeen
+                && _transitionAnnounceScriptedEnabled && !_doorTransitionAnnouncedThisEpoch
+                && !(_travel?.OwnWarpPending ?? false) && _view is { } missedAnnounceView
+                && (!Odyssey.TryGetWorldEpoch(out ulong requestedEpoch) || requestedEpoch != _epoch))
+            {
+                TransitionAnnounceWatch.OnScriptedTransitionBegan(missedAnnounceView);
+            }
+
             if (_closeClientWorldOnTransition && Odyssey.CloseClientWorldIfServerModuleGone())
             {
                 Log("transition: closed the client world ahead of the map init");
