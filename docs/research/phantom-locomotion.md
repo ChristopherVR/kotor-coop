@@ -1079,6 +1079,11 @@ left exactly as round 61/62 left them.
 different client-side sync gap found and partially fixed (the model, not the weapon class);
 still not fixed end to end
 
+The `gait-class`, `gait-name`, and periodic `gait:` probes described below are opt-in through
+`phantom_gait_diagnostics=1`. They are disabled by default because each diagnostic line is
+written synchronously from the game frame path; the gate does not change gait selection or any
+animation/position write.
+
 Two decisive experiments per this round's brief: **X1**, a live diagnostic reading
 `GetAnimationName`'s actual resolved string (not just the classifier booleans) on the phantom
 AND, side by side, on the local player's own animbase; **X2**, testing whether the phantom's

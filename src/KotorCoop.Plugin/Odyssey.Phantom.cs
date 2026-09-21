@@ -5,6 +5,14 @@ namespace KotorCoop.Plugin;
 
 internal static unsafe partial class Odyssey
 {
+    /// <summary>
+    /// Rig-only gait diagnostics. Disabled by default because the name/class probes and their
+    /// synchronous log writes run on the game's frame thread; enabling this does not alter the
+    /// gait decision or any animation/position write.
+    /// </summary>
+    private static readonly bool GaitDiagnosticsEnabled =
+        PluginConfig.ReadBool("phantom_gait_diagnostics", false);
+
     // ---- driving a phantom in real time -------------------------------------------
     //
     // The renderer does NOT read the server creature. It reads the client twin, and the twin
@@ -276,7 +284,7 @@ internal static unsafe partial class Odyssey
                     // a directly-driven phantom. The real fix needs the per-model row a
                     // normally AI/waypoint-driven creature would resolve through — not found
                     // this pass; kept as a live, capped diagnostic for whoever picks it up.
-                    if (_gaitClassLogged < 30)
+                    if (GaitDiagnosticsEnabled && _gaitClassLogged < 30)
                     {
                         _gaitClassLogged++;
                         int loop = AnimationLoopingFn(twin, (ushort)want);
@@ -314,7 +322,8 @@ internal static unsafe partial class Odyssey
                     // before this diagnostic got a turn. See docs/research/phantom-locomotion.md §11.
                     nint animBase = *(nint*)(twin + TwinAnimBase);
                     int gaitSlot = GaitSlotOf(creature);
-                    if (animBase != 0 && gaitSlot >= 0 && GaitNameLogged[gaitSlot] < 20)
+                    if (GaitDiagnosticsEnabled && animBase != 0 && gaitSlot >= 0
+                        && GaitNameLogged[gaitSlot] < 20)
                     {
                         GaitNameLogged[gaitSlot]++;
                         byte weaponClass = *(byte*)(animBase + 0xC5);
@@ -378,7 +387,7 @@ internal static unsafe partial class Odyssey
         // driven, which is what "every so often, tell me what the gait looks like" always
         // meant.
         long nowMs = Environment.TickCount64;
-        if (moving && nowMs - _gaitLoggedAtMs >= GaitLogIntervalMs)
+        if (GaitDiagnosticsEnabled && moving && nowMs - _gaitLoggedAtMs >= GaitLogIntervalMs)
         {
             long intervalMs = _gaitLoggedAtMs == 0 ? GaitLogIntervalMs : nowMs - _gaitLoggedAtMs;
             _gaitLoggedAtMs = nowMs;
