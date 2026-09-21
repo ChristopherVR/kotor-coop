@@ -137,6 +137,7 @@ public sealed partial class CoopCommandDispatcher
 
     private void HostCommand(CoopCommand command)
     {
+        CancelRejoinForExternalSessionChange();
         _pendingAddress = null;
         _pendingEndpoint = null;
         _promptedForPassword = false;
@@ -146,8 +147,15 @@ public sealed partial class CoopCommandDispatcher
 
     private void ReconnectCommand(CoopCommand command)
     {
+        CancelRejoinForExternalSessionChange();
         _promptedForPassword = false;
         manager.Reconnect();
+    }
+
+    private void DisconnectCommand()
+    {
+        CancelRejoinForExternalSessionChange();
+        manager.Disconnect();
     }
 
     private void Join(string? address, string? password)
@@ -206,6 +214,7 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void Dial(string? address, IPEndPoint endpoint, string password, bool locked)
     {
+        CancelRejoinForExternalSessionChange();
         _pendingAddress = address ?? endpoint.ToString();
         _pendingEndpoint = endpoint;
         _password = password;
@@ -248,6 +257,7 @@ public sealed partial class CoopCommandDispatcher
         _password = password;
         _promptedForPassword = false; // a wrong one must be able to ask again
         Reply($"retrying {_pendingAddress}...");
+        CancelRejoinForExternalSessionChange();
         manager.Connect(host: false, endpoint, settingsForPassword(password));
     }
 

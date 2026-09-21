@@ -458,6 +458,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             return null;
         }
 
+        // The transfer may complete after an external reset cancelled this generation. Do not
+        // ask the native engine to load a late world after ownership has already been revoked.
+        cancellationToken.ThrowIfCancellationRequested();
+
         // inSession: true — a rejoin can start from either side of a world. Parked at the
         // game-over menu after a wipe (WipeRecoveryRule) there is no server and the plugin
         // takes its main-menu route regardless; standing in a world of our own (the host

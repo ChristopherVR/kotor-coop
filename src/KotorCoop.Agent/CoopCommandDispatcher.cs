@@ -272,7 +272,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Connect] = c => Join(c.Address, c.Password),
         [CoopCommandKind.Host] = HostCommand,
         [CoopCommandKind.Password] = c => AnswerPasswordPrompt(c.Password ?? string.Empty),
-        [CoopCommandKind.Disconnect] = _ => manager.Disconnect(),
+        [CoopCommandKind.Disconnect] = _ => DisconnectCommand(),
         [CoopCommandKind.Reconnect] = ReconnectCommand,
         [CoopCommandKind.Say] = SayCommand,
         [CoopCommandKind.Clear] = _ => _kotor?.PostChatClear(),

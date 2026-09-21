@@ -250,6 +250,32 @@ public sealed partial class CoopCommandDispatcher
     private HostWorldReplacedState _hostWorldReplacedState = HostWorldReplacedState.Initial;
 
     private Task? _rejoinTask;
+    private CancellationTokenSource? _rejoinCts;
+    private int _rejoinGeneration;
+    // RejoinAfterLoadAsync deliberately disconnects before fetching the adopted world. Keep the
+    // watchdog from treating that owned gap as an external disconnect and cancelling its fetch.
+    private bool _rejoinOwnsDisconnect;
+
+    private const int SoloReturnRejoinMaxAttempts = 5;
+    private const int SoloReturnRejoinRetryDelayMs = 20_000;
+
+    /// <summary>Cancel a rejoin only for an explicit external session change.</summary>
+    private void CancelRejoinForExternalSessionChange()
+    {
+        _rejoinOwnsDisconnect = false;
+        _rejoinGeneration++;
+        CancellationTokenSource? cancellation = _rejoinCts;
+        _rejoinCts = null;
+        try
+        {
+            cancellation?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The worker can finish and dispose its owned source concurrently.
+        }
+        _rejoinState = RejoinDecisionState.Idle;
+    }
 
     // A host's solo Manaan/mini-game leg is intentionally not followed. If it returns to
     // the origin after rewriting its saved object map, one bounded adoption restores the
@@ -273,6 +299,7 @@ public sealed partial class CoopCommandDispatcher
     private bool _hostReturnSavePending;
     private long _hostReturnSaveRequestedMs;
     private long _hostReturnSaveRetryMs;
+    private long _hostReturnSaveLastBlockedLogMs;
     private string? _hostReturnSaveSourceBefore;
     private DateTime _hostReturnSaveStampBefore;
     private bool _hostReturnSaveReady = true;
@@ -323,6 +350,12 @@ public sealed partial class CoopCommandDispatcher
 
         if (manager.Current is not { } session)
         {
+            if (_rejoinOwnsDisconnect)
+            {
+                return;
+            }
+
+            CancelRejoinForExternalSessionChange();
             _sessionSaveWatch.Reset();
             _rejoinState = RejoinDecisionState.Idle;
             _mismatchRejoinState = MismatchRejoinWatchState.Initial;
@@ -346,6 +379,7 @@ public sealed partial class CoopCommandDispatcher
             _hostSoloLoadSerialBaseline = null;
             _hostReturnSavePending = false;
             _hostReturnSaveRetryMs = 0;
+            _hostReturnSaveLastBlockedLogMs = 0;
             _hostReturnSaveReady = true;
             _captureLastMs = 0;
             _captureRequestedMs = 0;
@@ -380,6 +414,7 @@ public sealed partial class CoopCommandDispatcher
                     _hostReturnSavePending = false;
                     _hostReturnSaveReady = true;
                     _hostReturnSaveRetryMs = 0;
+                    _hostReturnSaveLastBlockedLogMs = 0;
                     Log?.Invoke("session-save: host solo-return watch cancelled by a host load edge");
                 }
 
@@ -836,8 +871,12 @@ public sealed partial class CoopCommandDispatcher
             || !CaptureIsAllowed(state))
         {
             _hostReturnSaveRetryMs = nowMs + 1000;
-            Log?.Invoke("session-save: host returned from a solo section but is not save-ready; "
-                + "world serving held until a fresh return save can be written");
+            if (_hostReturnSaveLastBlockedLogMs == 0 || nowMs - _hostReturnSaveLastBlockedLogMs >= 30_000)
+            {
+                _hostReturnSaveLastBlockedLogMs = nowMs;
+                Log?.Invoke("session-save: host returned from a solo section but is not save-ready; "
+                    + "world serving held until a fresh return save can be written");
+            }
             return;
         }
 
@@ -846,6 +885,7 @@ public sealed partial class CoopCommandDispatcher
         _hostReturnSaveStampBefore = SaveStamp(_hostReturnSaveSourceBefore);
         if (bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
         {
+            _hostReturnSaveLastBlockedLogMs = 0;
             _hostReturnSavePending = true;
             _hostReturnSaveRequestedMs = nowMs;
             Log?.Invoke("session-save: host returned from a solo section - requesting a fresh return save");
@@ -1007,6 +1047,12 @@ public sealed partial class CoopCommandDispatcher
 
         Log?.Invoke($"session-save: starting rejoin ({trigger})");
 
+        _rejoinCts?.Cancel();
+        CancellationTokenSource rejoinCts = new();
+        _rejoinCts = rejoinCts;
+        int rejoinGeneration = ++_rejoinGeneration;
+        _rejoinOwnsDisconnect = true;
+
         (GffStruct Player, SidecarMetadata Metadata)? carried = null;
         if (ClientCharacterPersistence.TryReadSidecar(
             Path.Combine(gameDirectory, "saves"), out GffStruct sidecarPlayer, out SidecarMetadata sidecarMeta, out _))
@@ -1018,16 +1064,37 @@ public sealed partial class CoopCommandDispatcher
         {
             try
             {
-                AdoptedWorld? adopted = await manager
-                    .RejoinAfterLoadAsync(
-                        bridge, gameDirectory, carried, CancellationToken.None,
-                        carriedIsAuthoritative: JoinModeSetting == JoinMode.Auto,
-                        worldTransferUdpFallback: WorldTransferUdpFallbackEnabled)
-                    .ConfigureAwait(false);
+                AdoptedWorld? adopted = null;
+                int maxAttempts = trigger == RejoinTrigger.SoloReturn
+                    ? SoloReturnRejoinMaxAttempts : 1;
+                bool adoptedSuccessfully = await RejoinRetryRunner.RunAsync(
+                    maxAttempts,
+                    TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
+                    async (attempt, cancellationToken) =>
+                    {
+                        adopted = await manager
+                        .RejoinAfterLoadAsync(
+                            bridge, gameDirectory, carried, cancellationToken,
+                            carriedIsAuthoritative: trigger == RejoinTrigger.SoloReturn
+                                || JoinModeSetting == JoinMode.Auto,
+                            worldTransferUdpFallback: WorldTransferUdpFallbackEnabled)
+                        .ConfigureAwait(false);
+                        if (adopted is null && attempt < maxAttempts)
+                        {
+                            Log?.Invoke($"session-save: SoloReturn adoption attempt {attempt} failed; "
+                                + $"retrying in {SoloReturnRejoinRetryDelayMs / 1000}s");
+                        }
+                        return adopted is not null;
+                    },
+                    () => !rejoinCts.IsCancellationRequested
+                        && rejoinGeneration == _rejoinGeneration
+                        && _rejoinState.Phase == RejoinPhase.InFlight,
+                    rejoinCts.Token).ConfigureAwait(false);
 
-                if (adopted is null)
+                if (!adoptedSuccessfully || adopted is null)
                 {
-                    Reply("rejoin failed - see the log; reconnect manually if it does not recover");
+                    Reply($"rejoin failed after {maxAttempts} attempt(s) - "
+                        + "see the log; reconnect manually if it does not recover");
                     return;
                 }
 
@@ -1042,6 +1109,13 @@ public sealed partial class CoopCommandDispatcher
                 bool settled = false;
                 while (DateTime.UtcNow < deadline)
                 {
+                    if (rejoinCts.IsCancellationRequested
+                        || rejoinGeneration != _rejoinGeneration
+                        || _rejoinState.Phase != RejoinPhase.InFlight)
+                    {
+                        return;
+                    }
+
                     if (bridge.TryGetAdoptedWorldLoadStatus(out uint applied, out int status) && applied != 0)
                     {
                         if (status != 0)
@@ -1054,7 +1128,7 @@ public sealed partial class CoopCommandDispatcher
                         break;
                     }
 
-                    await Task.Delay(500).ConfigureAwait(false);
+                    await Task.Delay(500, rejoinCts.Token).ConfigureAwait(false);
                 }
 
                 if (!settled)
@@ -1071,6 +1145,13 @@ public sealed partial class CoopCommandDispatcher
                 // announces the difference as our own changes, with a Lamport serial that
                 // outranks the host's. Safe here because the session is torn down for the whole
                 // load window, so nothing has scanned since. See ForgetWorldShadows.
+                if (rejoinCts.IsCancellationRequested
+                    || rejoinGeneration != _rejoinGeneration
+                    || _rejoinState.Phase != RejoinPhase.InFlight)
+                {
+                    return;
+                }
+
                 bridge.ForgetWorldShadows();
 
                 manager.Reconnect();
@@ -1082,7 +1163,13 @@ public sealed partial class CoopCommandDispatcher
             }
             finally
             {
-                _rejoinState = ClientLoadRejoinRule.Complete(_rejoinState);
+                if (rejoinGeneration == _rejoinGeneration)
+                {
+                    _rejoinState = ClientLoadRejoinRule.Complete(_rejoinState);
+                    _rejoinCts = null;
+                    _rejoinOwnsDisconnect = false;
+                }
+                rejoinCts.Dispose();
             }
         });
     }
