@@ -119,7 +119,15 @@ public class MaterialisedLootResyncTests
             host.PublishLocalState(Somewhere);
             clientA.PublishLocalState(Somewhere);
             clientB.PublishLocalState(Somewhere);
-            receivedByB.AddRange(clientB.DrainMaterialisedLoot());
+            foreach (MaterialisedLootPacket packet in clientA.DrainMaterialisedLoot())
+            {
+                clientA.AcknowledgeMaterialisedLoot(packet);
+            }
+            foreach (MaterialisedLootPacket packet in clientB.DrainMaterialisedLoot())
+            {
+                receivedByB.Add(packet);
+                clientB.AcknowledgeMaterialisedLoot(packet);
+            }
         }
 
         Assert.True(await WaitForAsync(() => clientA.IsConnected && clientB.IsConnected, Timeout, Publish));
@@ -191,7 +199,11 @@ public class MaterialisedLootResyncTests
         {
             host.PublishLocalState(Somewhere);
             client.PublishLocalState(Somewhere);
-            received.AddRange(client.DrainMaterialisedLoot());
+            foreach (MaterialisedLootPacket packet in client.DrainMaterialisedLoot())
+            {
+                received.Add(packet);
+                client.AcknowledgeMaterialisedLoot(packet);
+            }
         }
 
         Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
@@ -250,7 +262,11 @@ public class MaterialisedLootResyncTests
         {
             host.PublishLocalState(Somewhere);
             clientA.PublishLocalState(Somewhere);
-            receivedByA.AddRange(clientA.DrainMaterialisedLoot());
+            foreach (MaterialisedLootPacket packet in clientA.DrainMaterialisedLoot())
+            {
+                receivedByA.Add(packet);
+                clientA.AcknowledgeMaterialisedLoot(packet);
+            }
         }
 
         Assert.True(await WaitForAsync(() => clientA.IsConnected, Timeout, PublishA));
@@ -280,7 +296,11 @@ public class MaterialisedLootResyncTests
         {
             PublishA();
             clientB.PublishLocalState(Somewhere);
-            receivedByB.AddRange(clientB.DrainMaterialisedLoot());
+            foreach (MaterialisedLootPacket packet in clientB.DrainMaterialisedLoot())
+            {
+                receivedByB.Add(packet);
+                clientB.AcknowledgeMaterialisedLoot(packet);
+            }
         }
 
         Assert.True(await WaitForAsync(() => clientB.IsConnected, Timeout, PublishBoth));

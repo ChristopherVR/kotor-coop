@@ -1,8 +1,9 @@
 # Playtest checklist: the things only a person at the keyboard can prove
 
-Everything below is built and passes the automatic tests, but has not been watched working in the
-game, because the test rig cannot click, cannot reach a save past Taris, or cannot start the story
-script. Each item says what to do, what should happen, and what to look for. After each session run
+This checklist mixes verification of implemented features with exploratory checks of known gaps
+(including duel rings and the dark-side branch). A passing unit suite does not prove these game
+paths, and some earlier rig limitations have since been overcome; see the dated review log.
+Each item says what to do, what should happen, and what to look for. After each session run
 `KotorCoop.Agent.exe logs` (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)) and attach the zip, whether it
 worked or not: a "worked" report is as useful as a bug.
 
@@ -54,9 +55,16 @@ log; "the joiner's log" means the joining player's copy.
 
 | # | Do this | It should | Look for |
 | --- | --- | --- | --- |
-| 21 | Host on a **home connection with UPnP** and read the status line. | It says whether the port is reachable, NOT reachable, or could not confirm, and it is right. | The status line wording, and whether a friend can actually join. |
+| 21 | Host on a **home connection with UPnP** and read the status line. | It reports local self-test evidence or possible additional NAT. Internet access stays unconfirmed until an outside friend connects. | The status wording and a real connection from another network; a local probe cannot prove WAN ingress. |
 | 22 | Install on a fresh Windows PC as a normal user, host once. | A Windows Firewall prompt or the rule is added; a LAN friend can join. | Whether the game freezes behind a hidden prompt. |
 | 23 | Run the game on **Linux / Steam Deck** (see the package README). | It loads and connects. | The `running under Wine` line and how far it got. |
 | 24 | Plug in a **physical Xbox pad**. | Walk, fight, menus. | Anything that double-drives on Steam Input. |
 
 If something here crashes the game, `KotorCoop.Agent.exe logs` includes the crash record that survives a hard crash.
+
+## Card persistence regression
+
+Buy a Pazaak card and select a distinctive side deck as the joiner. Save, disconnect,
+and rejoin the same host; check the collection counts and selected deck. Repeat after
+a module transition and agent restart. Host gold and party composition must remain
+host-owned. An old character sidecar needs one fresh save capture to acquire card data.

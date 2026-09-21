@@ -138,15 +138,15 @@ The server browser only finds games on your own network. To play with someone el
 1. The host presses Host as usual, then checks status (or types public_address) at
    the ~ console. It prints something like:
 
-       public address: 203.0.113.5:27140 - UPnP mapped - reachable from the internet
+       public address: 203.0.113.5:27140 - UPnP mapped - local self-test passed; internet access unconfirmed
 
-   That means it worked automatically -- nothing else to do. A few seconds after hosting
-   starts the mod checks its own address from outside, so the line tells you honestly:
-   - "reachable from the internet": share the address.
-   - "NOT reachable (your ISP shares your address - use a tunnel such as playit.gg)": your
-     home connection sits behind your ISP's own address sharing, and no port forward on
-     your router can get through it. A free tunnel program (playit.gg or similar, UDP AND
-     TCP on the same port) is the way; the mod copes with a UDP-only tunnel on its own.
+   The router accepted the mapping. The self-test runs from your own PC, not outside:
+   - "local self-test passed; internet access unconfirmed": share the address and have
+     your friend try connecting. This tests a local UDP path, not internet access or TCP.
+   - "possible additional NAT": check upstream routers or use a tunnel such as playit.gg.
+     A private or different router address can mean another router, ISP address sharing,
+     or another egress route. It does not establish that forwarding is impossible.
+     The mod also handles a UDP-only tunnel on its own.
    - "could not confirm": nothing contradicted the mapping, but the check could not prove
      it either (many routers don't route their own public address back inside). Try it
      with your friend; if they can't connect, use a tunnel.

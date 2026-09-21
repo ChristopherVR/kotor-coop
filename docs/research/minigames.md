@@ -3528,3 +3528,33 @@ when the host loads a world.
 **Next.** Run with a human at the turret so the ambush ends through its own script and returns to `ebo_m12aa`, or `travel ebo_m12aa`
 from the host within about 60 s of entry (before the unattended loss) to test the convergence leg. Consider clearing the client's
 minigame lock when the host reports no module.
+
+## Personal Pazaak cards during world adoption (2026-09-21)
+
+The installed GOG quicksave stores cards outside `Mod_PlayerList`: `PARTYTABLE.res`
+contains `PT_PAZAAKCARDS` (19 rows, `PT_PAZAAKCOUNT`) and `PT_PAZSIDELIST`
+(10 rows, `PT_PAZSIDECARD`). The measured collection mixes INT and BYTE fields;
+selected side-deck entries use signed INT, including -1 for empty slots.
+
+`PersonalPazaak` captures these two lists alongside the selected character in the
+co-op sidecar. Adoption overlays only those lists into the staged host party file;
+host gold, roster and world data are retained. Field types and nested struct IDs
+are preserved. The private metadata is stripped before writing either engine-facing
+IFO. Malformed metadata or party files fail adoption before loading. Legacy sidecars
+remain readable and gain card metadata on the next capture of their own save;
+previously lost cards cannot be reconstructed.
+
+Validation: 67 focused character/adoption/save-watch tests passed, including sidecar
+round trip, a TCP world adoption preserving personal cards and host gold, malformed
+metadata refusing to overwrite the staged file, and engine metadata exclusion.
+A live buy-card/save/rejoin check is still required.
+
+A read-only probe also extracted the installed GOG quicksave, round-tripped its carried
+character and restored the card lists into a temporary party file: 19 collection rows,
+10 side-deck rows, all 21 root fields retained, original save bytes unchanged. This
+checks compatibility with real save data, not the engine's post-load card UI.
+
+The waiting-player lock now also releases on the racer's away flag. A game-over keeps
+the last known track module/minigame bit in its network snapshot; that stale bit can no
+longer freeze the joiner until host-away timeout. All 30 minigame-lock tests passed,
+including a real UDP case where local player reads stop while the minigame bit stays set.

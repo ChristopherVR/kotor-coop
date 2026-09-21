@@ -1,5 +1,9 @@
 # Seamless-playthrough review (2026-09-18)
 
+**Reading this on 2026-09-21:** the ranked tables below preserve the original review.
+Use the dated running log and the current remaining-work table at the end for present status;
+several original blockers have since been implemented or live-tested.
+
 Eight parallel read-only reviews, one per slice (session lifecycle, world and movement, combat,
 dialogue and story, party and inventory, platforms and networking, a planet-by-planet walk of
 KOTOR 1's scripted mechanics, and verification/test coverage), each cross-checking the docs'
@@ -158,7 +162,7 @@ Manaan: the joiner refuses the follow into `manm28ab` (live); the wait notice no
 
 **Crash tooling (§2, closed 2026-09-19).** `KotorCoop.Agent.exe logs` zips the plugin and agent logs (with rotated copies), the crash record, a `coop.ini` with `password` and `host` blanked and a system note into one file on the Desktop; 17 unit tests, run against the rig's install. The dev-only `crashbin.ps1`/`crashlog.ps1` are no longer needed for a player report.
 
-**What is left is human-only.** The remaining unproven items (STUNT-follow's trigger, the address box, companion equip, the party-select and turret completions, the real Dantooine class script, the Leviathan and Manaan story paths, the dark-side branch, Taris duel ring, internet, Linux and pad) are listed with exact steps in [PLAYTEST.md](PLAYTEST.md).
+**Live verification remains, alongside missing implementation.** [PLAYTEST.md](PLAYTEST.md) lists the story paths, UI and hardware checks. Player-placed mines, partner healing, per-object locals, story re-locks, Pazaak card persistence and dark-side faction handling still require code or research; a playtest checklist does not close those gaps. Later entries below supersede earlier status claims.
 
 ### Live proof pass 4 (2026-09-19)
 
@@ -170,3 +174,142 @@ Three RE agents reported (branches not yet merged at the time of writing): **min
 
 **Crowd control (#2): capture round trip VERIFIED for Stunned** (client cast -> client agent -> host agent -> host plugin applies it to the enemy body; `research/enemy-effects.md` 7.1-7.2). **Mines: VERIFIED both directions** (destroy, walk-on detonation each way, no false removal across four warps; `research/mines.md` 9) and `mine_sync` is now ON by default; party-placed mines are still not built. `enemy_effect_sync` stays OFF until a real Force-power cast has been seen to stop an enemy.
 
+
+### Recovery and hardening pass (2026-09-21)
+
+The starting checkout was `3509e13` on `main`, with only the untracked `scratchpad_pids.txt`.
+Two older worktrees still contain unmerged work: `agent-a88027634bb33b578` (live evidence and
+an uncommitted HUD correction) and `agent-aede2af70aa6bd907` (network recovery and an uncommitted
+Bye-identity test). Their files and branches are preserved; reviewed changes are recovered into
+this checkout without replacing newer main features or claiming that either entire branch merged.
+
+- Floor-mine removal was already merged and enabled (`386c1af`), with two-way live evidence in
+  mines.md §9. This pass adds apply-side rejection of party-placed mines and fair shared-slot
+  rotation so mine removals and ordinary placeables both progress beyond slot capacity. These
+  new safeguards are statically tested; they do not implement player-placed mine replication.
+- The old mine off-switch test accidentally set `mine_sync = 1`; it now exercises `= 0`.
+- Recovered network changes isolate caller-thread packet encoding, match returning players by
+  nonce instead of reused endpoints, decouple reconnect resync by channel, and bound unreliable
+  relay queues. Network simulation now exercises duplicate datagrams and deterministic loss.
+- Expired companion-damage transport reports are pruned; cumulative ledger baselines remain.
+- Full-history container-loot replay is **not integrated**. Review found two further barriers:
+  the game bridge accepts only the newest 24 removals, and the wire carries container/item IDs
+  without module identity or a module-change reset. Expanding replay could delete an item whose
+  IDs were reused in another module. The older worktree's full-set digest change is therefore
+  also excluded: it would advertise history the current replay path cannot recover. This needs
+  module-scoped wire identity plus fair, acknowledged game-side delivery before the 512-entry
+  retention gap can be closed.
+- The store loopback fixture now captures its selected shop ID once per scan, avoiding a race
+  where a test-driven shop switch returned a different shop's inventory. Reconnect test teardown
+  now cancels and awaits both session tasks even on assertion failure.
+- Recovered the 2026-09-17 three-player soak evidence: eight doors, four warps, about 30 minutes,
+  all three processes alive and all six peer bodies dressed. This is historical evidence from
+  commit `5aafa27`, not a new live run of today's build. The saved HUD change moves the connection
+  line clear of the minimap at the measured 800x600 layout; other resolutions remain unverified.
+- Corrected reachability claims: a local UDP hairpin test is not an outside connection test.
+  The status now reports local success with internet access unconfirmed, or possible additional
+  NAT. Address disagreement does not establish ISP CGNAT or rule out upstream port forwarding.
+- Earlier commit `cbaa0bf` already added companion equipment suppression, companion-heal
+  forwarding, XP join baselines and periodic character capture. The original §2 bullets were
+  stale; the remaining companion equipment and save-cadence checks are live verification.
+
+#### Current remaining work, in dependency order
+
+| Order | Work | Completion criterion |
+|---|---|---|
+| 1 | Verify today's mine/slot and network changes in a two-player game, then repeat three-player door/rejoin soak | Real disarm/recover/detonation, busy module, reconnect and no unintended removal or missing state |
+| 2 | Player-placed mines | Authoritative spawn serial mapped to each engine's dynamic object ID, single item consumption and single authoritative enemy damage; mines.md §7 |
+| 3 | Real client crowd-control casts and partner buffs/heals | Confirm enemy behaviour changes, not just effect delivery; confirm real Valor targeting; design partner healing separately; keep unproven opt-ins off |
+| 4 | Early story/UI checks | Address box, companion equip suppression, client-led party selection, turret completion, Dorak's actual class-grant dialogue |
+| 5 | Duel-ring parking and dark-side faction handling | Trace real script transitions and implement safe ownership/parking/faction changes; observation alone cannot close missing channels |
+| 6 | Later story completion | Leviathan rescue/gear return, real Manaan return trigger and full multi-hop ending chain, both players converged afterwards |
+| 7 | Persistent world/character gaps | Per-object locals, story re-locks, Pazaak cards on adoption; module-scoped container-loot identity and delivery through the real 24-slot game buffer are prerequisites for safe long-session loot recovery |
+| 8 | Broader compatibility | Difficulty agreement, census overflow, mod matrix, localized executables, Linux/Deck, physical pad, resolution/layout and multi-hour soak |
+| 9 | Distribution | Recheck CI/release availability; private-repo visibility or deleting unrelated repositories' artifacts remains a separate user decision |
+
+No end-to-end seamless full-playthrough claim is justified until the story and missing-channel
+rows above close. [PLAYTEST.md](PLAYTEST.md) supplies live steps and explicitly distinguishes
+implemented features from exploratory checks.
+
+#### Validation for this pass
+
+- Broad integration snapshot: **4,082 passed**, no failures (9 m 27 s),
+  `tests/KotorCoop.Tests/TestResults/integration-final.trx`. This run preceded the final exclusion
+  of the provisional loot-history extension and the final test-fixture cleanup.
+- Final focused build with warnings as errors: **154 passed**, including mine selection,
+  caller-thread sends, peer identity, resync rules, network simulation, relay bounds,
+  reachability, companion pruning, Bye identity, baseline loot rules and the corrected store
+  reconnect fixture (`final-focused.trx` beside the integration result).
+- Explicit opt-in three-peer network soak: **passed**, 120 s churn plus convergence (2 m 2 s),
+  `TestResults/network-soak-120s.trx`. Loss, jitter, duplication, outages and repeated rejoins
+  use real loopback UDP sockets. This is not a game session or the full ten-minute soak.
+- Current NativeAOT plugin: `src/KotorCoop.Plugin/build.ps1 -WarnAsError` passed;
+  emitted DLL verified x86, 2,497,024 bytes. No installation or release publication performed.
+- `git diff --check` passed. Both original worktrees retain their original uncommitted edits;
+  the user's `scratchpad_pids.txt` is untouched. Changes in this checkout are uncommitted.
+
+Two initial broad runs aborted unexpectedly; another integration attempt also exited its
+host process. The diagnostic rerun completed successfully. The abort cause was not established,
+so this pass does not claim to have fixed a test-host crash. One initial store assertion failure
+led to the concrete fixture race/cleanup corrections above; final focused coverage passed.
+
+### Continued implementation and live checks (2026-09-21)
+
+This section supersedes the earlier recovery-pass exclusions where noted. Work is being
+committed in reviewed groups; a full campaign remains unverified.
+
+- Door state now carries current lock state, including a closed/locked zero value. The plugin
+  applies each desired-state edge once so an old snapshot cannot undo a new local script change.
+  Live in `sta_m45ac`, door `0x3E` opened on both instances; a host lock and client unlock each
+  propagated to the other instance. Closing through a real story script remains to be checked.
+- Pazaak collection and side-deck lists travel as private character metadata, are restored into
+  the adopted world's party table, and are stripped from the engine-facing character IFO.
+  File-level and TCP adoption regressions pass. A real card grant changed the joining player's
+  saved collection; its full in-game adoption/reload check is still pending.
+- Taris duel parking now observes the retail script's player min-one-HP edge, covering zero
+  and one companion. Korriban's corresponding pin belongs to an NPC; its smaller-party case
+  remains open rather than using the Taris assumption.
+- Partner Cure/Heal mirroring is implemented behind `partner_buffs` (still off by default),
+  using the existing heal event path and deduplicating the local roster's effects per cast.
+  Pure rule checks pass; a real Force-power cast remains required before enabling it by default.
+- Minigame locking releases when the host becomes away, even if its last in-world snapshot
+  retained the minigame bit. Loopback coverage includes this game-over/menu path.
+- The two-player mine regression removed mine `0x75` from both instances after host removal,
+  detonated `0x74` from the client with a real short walk (HP 9 to -11), and retained untouched
+  mine `0x76` across a `tar_m10aa` / `tar_m10ab` round trip. These checks do not implement
+  player-placed mines or prove inventory recovery/disarm rewards.
+- A release job now fails explicitly if its upstream run has no build packages. The repository
+  visibility and account artifact quota are unchanged.
+- Module-scoped container and materialised-loot recovery is now integrated (protocol 59),
+  superseding the earlier exclusion. Full container history feeds an acknowledged 24-slot
+  mailbox, with module and epoch guards; delayed materialised loot waits for its owner mapping
+  instead of expiring after a few pump ticks. Engine-refused party-pool transfers now return a
+  result, retry a bounded number of times, and retain the client's local item with a diagnostic.
+  This addresses the live refusal of a Manaan-only item blueprint after travel to Star Forge.
+- Current focused integration snapshot: **192 passed**, warnings-as-errors build,
+  `tests/KotorCoop.Tests/TestResults/commit-focused.trx`. Additional inventory and control
+  corrections made after that snapshot need their own final verification.
+
+**Live regression reported by the user:** the joining player's portrait showed Trask and input
+could not move the player. `resolve party` at 21:59:56 showed a valid server PC (`0x7FFFFFFE`,
+9 HP) absent from all three client party slots: Trask occupied slot 0 and slots 1/2 were stale.
+The earlier full-capacity search cannot recover an entry that is absent. A verified ID-only
+repair plus the updated agent restored the portrait and movement, confirmed by the user.
+Automatic plugin recovery and a guard against clamping out the PC are committed in `217dab2`;
+the exact missing-entry fallback still needs an automatic reproduction. Erratic companion
+following remains under investigation.
+
+**Recurring frame stalls:** the user reported freezes approximately every second. A read-only
+frame-counter sample confirmed 220–400 ms gaps, remaining around 220 ms after orphan test hosts
+were stopped. Client agent telemetry stayed around 30 Hz with ordinary update costs below 1 ms.
+Making gait diagnostics opt-in reduced the restarted client's observed gaps to about 140–160 ms,
+but did not eliminate them. This is a partial improvement, not a closed performance defect;
+per-controller frame timing is being added to locate the remaining cost.
+
+Reviewed work is saved in local commits `d0253f6`, `e55f87f`, `f6e97fe`, `934c18e`, `d7d12ea`,
+`97be0e7`, `74c131f`, `217dab2`, and `2acd4cd`. Nothing has been pushed or released.
+Further validation: **67 persistence tests**, **119 control/inventory/mine tests**, and
+**189 integrated channel/gait tests** passed in separate focused snapshots. The network snapshot
+passed 185 tests with one source-location fixture failure when binaries were placed outside the
+repository; the fixture now locates its source via `CallerFilePath`, and its mine suite passed
+in the later integrated run. The current native plugin builds as x86 with warnings as errors.

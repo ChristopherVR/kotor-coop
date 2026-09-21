@@ -197,7 +197,9 @@ lock steal `b40d117`, `newcharacter` starting gear `f58c92c`, solo-mode flicker 
 `0f49f18`, HP mirror `e65b30a`, ranged one-shot `b3751f3`, follow-stall `7bc0aaa`,
 galaxy-map REFUSE `de4bc40`).
 
-New open items, in the order a run hits them (details, evidence and effort in the review):
+Original 2026-09-18 findings, in the order a run hits them. These are historical: subsequent
+implementation and live passes supersede several rows. For current priorities, use the
+2026-09-21 remaining-work table at the end of [the review](review-seamless-2026-09-18.md).
 
 | # | Item | Class |
 |---|---|---|

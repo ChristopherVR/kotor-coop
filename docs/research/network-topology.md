@@ -1180,15 +1180,15 @@ itself, and a rule that turns them into one of three status wordings.
 
 ### The rule (`ReachabilityRule.Decide`, pure, unit-tested)
 
-- **Carrier NAT** — final, judged first: (1) is a private (RFC 1918) or shared (RFC 6598,
-  `100.64/10`) address, or (1) and (2) are both known and differ. Either way the home router is
-  not the last NAT on the way out and no mapping it grants can be reached from outside. A probe
-  that hairpinned through the home router's own NAT does NOT override this — it never crossed
-  the carrier's.
-- **Reachable**: no carrier-NAT evidence and the probe came back.
-- **Unconfirmed**: everything else — including the very common case of a router that does not
-  hairpin its own public address, which says nothing about whether a friend outside can reach
-  the port. The rule never turns silence into "unreachable".
+- **AdditionalNatSuspected**: the router WAN address is private/shared or differs from STUN.
+  This suggests another NAT or egress route, not necessarily ISP CGNAT. Upstream port forwarding
+  may still work. This hint takes precedence over the hairpin result.
+- **HairpinConfirmed**: no address mismatch was found and the local UDP probe came back.
+  This does not prove outside reachability, firewall acceptance of external traffic, or TCP.
+- **Unconfirmed**: no local probe succeeded. A router may simply lack hairpin support.
+
+The verdict names and wording were corrected on 2026-09-21; neither a positive hairpin test nor
+an address mismatch supports the earlier definitive internet-reachability claims.
 
 `ReachabilityCheck` (owned by `CoopHost`, started when STUN or UPnP is on) waits up to 30 s for
 both mechanisms to settle, gathers the three facts, and publishes `CoopHost.Reachability` plus a
@@ -1199,24 +1199,19 @@ so "UPnP mapped" is never printed bare again:
 
 | UPnP | Verdict | Line |
 | --- | --- | --- |
-| Mapped | Reachable | `UPnP mapped - reachable from the internet` |
-| Mapped | CarrierNat | `UPnP mapped but NOT reachable (your ISP shares your address - use a tunnel such as playit.gg)` |
+| Mapped | HairpinConfirmed | `UPnP mapped - local self-test passed; internet access unconfirmed` |
+| Mapped | AdditionalNatSuspected | `UPnP mapped - possible additional NAT; check upstream routers or use a tunnel such as playit.gg` |
 | Mapped | Unconfirmed | `UPnP mapped - could not confirm it is reachable; if a friend cannot connect, use a tunnel such as playit.gg` |
 | Mapped | Pending | `UPnP mapped - checking reachability...` |
-| Unavailable | CarrierNat | `UPnP unavailable and your ISP shares your address - a manual port forward will not help; use a tunnel such as playit.gg` |
-| Unavailable | Reachable | `UPnP unavailable but port N is reachable from the internet` (a manual forward that works) |
+| Unavailable | AdditionalNatSuspected | `UPnP unavailable - possible additional NAT; check upstream routers or use a tunnel such as playit.gg` |
+| Unavailable | HairpinConfirmed | `UPnP unavailable - local self-test passed on port N; internet access unconfirmed` |
 | Unavailable | other | `UPnP unavailable - forward UDP+TCP N manually` (unchanged) |
 
 ### What this would have said on 2026-09-10
 
-Not known for certain — the router's WAN address was never read that day. If the ISP
-connection is CGNAT, the router's `GetExternalIPAddress` answers a `100.64/10` address (or a
-public one that differs from STUN's `103.95.113.80`) and the line would have read "NOT
-reachable ... use a tunnel" before the joiner ever typed `connect`. If it is a double NAT (an
-ISP modem in front of the mapped router), the WAN address is `192.168.x.x` / `10.x.x.x` and the
-verdict is the same. Only a router that answers the SAME public address STUN saw and still
-drops inbound traffic would land on "could not confirm" — which is still an honest answer,
-and one that names the tunnel.
+The router WAN address was not read that day, so its verdict cannot be reconstructed. An
+address mismatch would now produce an additional-NAT hint; a successful self-probe would
+still leave internet access unconfirmed. An outside connection is the deciding test.
 
 ### Windows Firewall (same day)
 
@@ -1234,6 +1229,6 @@ friend's — but nothing here has been watched live; see the NEEDS-LIVE register
 
 - internet-5: the self-probe against the 2026-09-10 router — which of the three verdicts it
   lands on, and whether the router answers `GetExternalIPAddress` at all.
-- internet-6: a router known to hairpin, to see "reachable from the internet" once.
+- internet-6: a router known to hairpin, to see the local self-test result, then verify ingress from a separate network.
 - internet-7: a second PC with the firewall rule absent then present, to confirm the
   unanswered-prompt theory and that the rule fixes it.

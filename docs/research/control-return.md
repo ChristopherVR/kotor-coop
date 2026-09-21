@@ -474,6 +474,38 @@ clamp could corrupt) and flagged the NEW architecture's own correct behavior (th
 resuming, harmlessly, AFTER control is already back) as a failure. Moved the check to the window
 that still matters post-round-70: no clamp before the claim.
 
+### Live confirmation — missing-PC recovery with a non-standard server id (2026-09-21)
+
+The current reconnect failure was a different array shape from the older `0xFFFFFFFF` PC
+sentinel case. The client `resolve party` dump at 21:59:56 showed:
+
+```
+CSWParty count 1 (CSWPartyTable 1)
+server player id 0x7FFFFFFE is_pc=True hp 9
+member[0] 0x80000134 -> Trask hp 36
+member[1] 0x80000119 -> unresolved
+member[2] 0x80000109 -> NOT a creature (vtable 0x748CC0)
+```
+
+The server-side player pointer was a verified PC, but no client-side CSWParty member represented
+it. The safe client id was derived from that observed server id (`0x7FFFFFFE | 0x80000000 =
+0xFFFFFFFE`), resolved back to the same PC pointer, and inserted into the first stale slot
+allowed by `CSWPartyTableCount + 1`. The client control field was updated to the same derived
+id; no `0xFFFFFFFF` assumption or perception-range swap was used.
+
+After deploying the rebuilt client agent (PID 41036), the live repair at 22:10:47 read back:
+
+```
+member[0] 0xFFFFFFFE -> PC hp 9
+member[1] 0x80000134 -> Trask hp 36
+client internal +0x20 = 0xFFFFFFFE
+```
+
+The plugin then logged camera restoration to PC `0x7FFFFFFE`. The user confirmed that the
+portrait and movement worked, closing the observed Trask-portrait/input-lock regression.
+This was a manual in-process repair using the validated engine ids and the new bridge identity
+handling; the automatic plugin fallback has not yet been validated across a full game restart.
+
 `dotnet test tests/KotorCoop.Tests`: **1623/1623**, unchanged from the round-69 baseline (this
 round changed control-switch mechanics, not any pure rule under unit test). Both plugin builds
 clean across five redeploy/relaunch cycles. `callaudit.py --bad`: 161/162 declarations agree
