@@ -138,6 +138,25 @@ internal static unsafe class PhantomEffectHook
         serial = _serial[i];
     }
 
+    /// <summary>Writes one already-classified event into the same OUT ring used by effects
+    /// landing directly on a stand-in. Partner Heal mirroring uses this route so the agent's
+    /// existing phantom-id to peer mapping and PeerEffect packet remain authoritative.</summary>
+    internal static void Capture(uint phantomId, uint kind, uint durationMs, uint magnitude)
+    {
+        if (phantomId == 0 || kind == PeerEffectKindValues.None)
+        {
+            return;
+        }
+
+        int i = _write;
+        _write = (_write + 1) % Capacity;
+        _kind[i] = kind;
+        _durationMs[i] = durationMs;
+        _magnitude[i] = magnitude;
+        _serial[i] = ++_sequence;
+        _phantomId[i] = phantomId;
+    }
+
     /// <summary>A module change reassigns every object id, so a remembered capture would name
     /// a different creature (or nothing at all).</summary>
     public static void Invalidate()
@@ -298,6 +317,11 @@ internal static unsafe class PhantomEffectHook
             uint targetId = *(uint*)(target + ObjId);
             if (!PhantomHitHook.IsWatchedPhantom(targetId))
             {
+                // Force Heal/Cure enumerate the local CSWParty and therefore never target a
+                // remote stand-in. The sender-side mirror is deliberately creator/spell gated
+                // and only enabled by partner_buffs; it writes the existing Heal event ring.
+                PartnerHealMirror.Consider(effect, targetId);
+
                 // Not a peer's stand-in. On the MIRRORING side an effect the local player cast on
                 // an enemy is the client-cast enemy-effect relay's to capture
                 // (docs/research/enemy-effects.md); everywhere else this is one comparison.

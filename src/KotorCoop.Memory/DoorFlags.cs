@@ -13,10 +13,9 @@ namespace KotorCoop.Memory;
 /// The object id is the same number in both instances (same save, deterministic id assignment
 /// in GIT order).
 ///
-/// Value layout (monotonic by construction): bits 0-1 the engine's open state (0 closed, 1/2
-/// open, 3 destroyed), bit 2 set once the door has been unlocked. A door only ever advances:
-/// closed to open, locked to unlocked, anything to destroyed. Closing and re-locking are
-/// deliberately not replicated — the same latch semantics the quest globals use.
+/// Value layout: bits 0-1 are the engine's open state (0 closed, 1/2 open, 3 destroyed),
+/// bit 2 is the current unlocked state. Protocol 59 applies both directions, ordered by
+/// the flag store's Lamport serial. Zero is a meaningful closed-and-locked state.
 /// </summary>
 public static class DoorFlags
 {

@@ -46,7 +46,6 @@ public sealed partial class KotorGameBridge
         // only the dictionaries would leave _doorBaselined true and announce every door in the
         // module as a fresh change.
         _doorShadow.Clear();
-        _doorBaselineLocked.Clear();
         _doorModule = string.Empty;
         _doorBaselined = false;
         _nextDoorScanTicks = 0;

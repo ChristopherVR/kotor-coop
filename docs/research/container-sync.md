@@ -1419,3 +1419,18 @@ channels — 239,616 keys — all distinct from each other and from every global
 entries; prune semantics; the 81-entry page and the 25-byte op round-trip. Existing
 `DoorFlagsTests` / `PlaceableFlagsTests` re-pinned to the new signatures. Build
 `dotnet build KotorCoop.slnx -c Release -warnaserror` clean.
+
+## Door close and re-lock application (2026-09-21)
+
+The flag store has used Lamport revisions since protocol 31, but the game bridge and
+plugin still treated door values as monotonic. Protocol 59 now carries the actual lock
+state, accepts zero (closed and locked), and applies a changed desired state in either
+direction through the engine's deferred door-state setter. The scanner skips unsettled
+swings. The receiver applies each desired state once so its old snapshot cannot undo a
+local script re-lock before the next scan observes it. Destroyed doors are not resurrected.
+
+Ten door-flag/tracker tests pass, including reordered stale snapshots after a re-lock.
+Live two-instance check in `sta_m45ac`, door `0x3E`: host `opendoor` mirrored `0 -> 1`;
+staging the host's verified lock byte to 1 converged to locked=1 on both; clearing the
+joiner's lock byte converged to locked=0 on both within 3.5 seconds each. This tests the
+replication path with a staged state change, not a full story-script door sequence.

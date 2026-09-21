@@ -13,6 +13,7 @@ public sealed partial class KotorGameBridge
 
     /// <summary>CSWSDoor + this = committed open state: 0 closed, 1/2 open, 3 destroyed.</summary>
     private const int DoorOpenState = 0x2CC;
+    private const int DoorPendingOpenState = 0x2CD;
 
     /// <summary>CSWSDoor + this = locked byte.</summary>
     private const int DoorLockedByte = 0x2C4;
@@ -26,10 +27,6 @@ public sealed partial class KotorGameBridge
     /// <summary>Last observed (open, locked) per door id, in the current module.</summary>
     private readonly Dictionary<uint, (byte Open, byte Locked)> _doorShadow = [];
 
-    /// <summary>Lock state each door had when first seen, so "was unlocked during play"
-    /// can be told apart from "ships unlocked" — only the former is worth announcing.</summary>
-    private readonly Dictionary<uint, byte> _doorBaselineLocked = [];
-
     private string _doorModule = string.Empty;
     private uint _doorModuleHash;
     private bool _doorBaselined;
@@ -39,7 +36,7 @@ public sealed partial class KotorGameBridge
     public bool SupportsDoorSync => _pluginBlock != 0;
 
     /// <summary>
-    /// Diffs the local module's doors against the last scan and reports what advanced, as
+    /// Diffs the local module's settled doors against the last scan and reports changes as
     /// door-typed world flags. The first scan after entering a module is a silent
     /// baseline, exactly like the globals: pre-existing state is not worth announcing,
     /// only changes made while the session is live. Scans are throttled to one per
@@ -59,7 +56,6 @@ public sealed partial class KotorGameBridge
             _doorModule = module;
             _doorModuleHash = DoorFlags.HashModule(module);
             _doorShadow.Clear();
-            _doorBaselineLocked.Clear();
             _doorBaselined = false;
             _nextDoorScanTicks = 0;
         }
@@ -77,14 +73,11 @@ public sealed partial class KotorGameBridge
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
                 || !_memory.TryRead(address + DoorOpenState, out byte open)
+                || !_memory.TryRead(address + DoorPendingOpenState, out byte pending)
+                || pending != open
                 || !_memory.TryRead(address + DoorLockedByte, out byte locked))
             {
                 continue;
-            }
-
-            if (!_doorBaselineLocked.ContainsKey(objectId))
-            {
-                _doorBaselineLocked[objectId] = locked;
             }
 
             if (_doorShadow.TryGetValue(objectId, out (byte Open, byte Locked) last)
@@ -101,12 +94,11 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
-            // The value is absolute; the store's max-merge discards anything that is not
-            // an advance, so a door closing again simply produces a no-op.
-            bool unlockedDuringPlay = locked == 0 && _doorBaselineLocked[objectId] != 0;
+            // Lamport ordering in EventFlagStore permits story closes and re-locks. Carry
+            // the actual lock state, including a door that originally shipped unlocked.
             changed.Add(new KeyValuePair<ulong, sbyte>(
                 DoorFlags.MakeKey(_doorModuleHash, objectId),
-                DoorFlags.MakeValue(open, unlockedDuringPlay)));
+                DoorFlags.MakeValue(open, locked == 0)));
         }
 
         _doorBaselined = true;
@@ -137,7 +129,7 @@ public sealed partial class KotorGameBridge
 
             if (!DoorFlags.IsDoorKey(flag.Key)
                 || DoorFlags.ModuleHashOf(flag.Key) != _doorModuleHash
-                || flag.Value <= 0)
+                || flag.Value is < 0 or > 7)
             {
                 continue;
             }

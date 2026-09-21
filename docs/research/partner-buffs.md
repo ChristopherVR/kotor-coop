@@ -228,29 +228,47 @@ a stand-in) captures and forwards for real, both directions live-verified (`effe
 
 Recipe step 2 on the rig with `partner_buffs = 1`: the plugin logged `phantom 0x115: joined the friendly faction (partner_buffs)` and `faction 0x115 me` on the host read `0x115(faction 2) vs 0x7FFFFFFF(faction 0): GetAIStateReputation(0x115,0x7FFFFFFF)=1 GetAIStateReputation(0x7FFFFFFF,0x115)=1` - friendly both ways (the stand-in was raw faction 5 / neutral without the key). Steps 3-5 (a hostile still attacking the stand-in, the Valor cast itself, the negative controls) were NOT run: there is no console verb that casts a Force power, so they need a save with Valor and a quickbar click. `partner_buffs` stays OFF.
 
-## 8. The design that would actually heal a partner (not built)
+## 8. The design that would actually heal a partner
 
 Because Heal, Cure and the stim iterate the `CSWParty` roster, only a cast MIRROR can reach a
 partner: when the local player's Heal or Cure lands on a local party member, also apply the same
 amount to the partner's real body, provided the partner's stand-in is within 15 m of the caster
 (Valor: 30 m). The existing pieces cover most of it:
 
-- Capture point: `PhantomEffectHook`'s `OnEffectApplied` splice already sees every effect. The new
-  case is `engineType == 39`, `effect.creator == local PC`, `effect.spellId` in {28, 10}, target
-  not a stand-in. The creator and spell-id fields of `CGameEffect` need reading from
-  `ExecuteCommandGetEffectCreator` (`0x00537AA0`) and `GetEffectSpellId` (`0x00537B90`); they
-  were not disassembled in this pass.
+- Capture point: `PhantomEffectHook`'s `OnEffectApplied` splice already sees every effect. The
+  sender-side case is `engineType == 39`, `effect.creator == local PC`, `effect.spellId` in
+  `{28, 10}`, a positive `integer_list[0]`, and a target in the local PC/party identity set.
+  A target that is already a watched stand-in is refused.
 - Publish: reuse the `PeerEffectKind.Heal` record with the amount from `integer_list[0]`; the
   receive side (`OdysseyEffects.ApplyEffect`, live-verified) already heals the real body.
 - Distance check on the sender from the stand-in's and the caster's positions.
 - No protocol change is required; the new state is a sender-side rule.
 
-Not built because it needs one more live-read of `CGameEffect` and a splice change inside the
-hottest dispatcher in the engine, and this pass could not run the game.
+The creator and spell fields are now supported by an offline disassembly of the installed GOG
+binary. `ExecuteCommandGetEffectCreator` (`0x00537AA0`) resolves the effect, then reads
+`[effect+0x18]` at `0x00537AD7`; `GetEffectSpellId` (`0x00537B90`) resolves the same effect,
+then reads `[effect+0x1C]` at `0x00537BBC`. The hook uses those verified raw offsets rather than
+calling either VM helper from the hot dispatcher. The generic effect hook writes a Heal event
+to the existing OUT ring, once per nearby phantom per frame/spell key, so the agent's existing
+phantom-id-to-peer map and `PeerEffect` packet remain unchanged. The receiver applies the
+instant Heal constructor with its existing `OdysseyEffects.ApplyEffect` path; that synthetic
+effect has no local cast creator and therefore cannot echo back into this mirror.
+
+The retail script source was also read from `data/scripts.bif` (`k_inc_force.nss`) in the same
+offline GOG install. Both Cure and Heal enter a direct `while (nCnt < 3)` loop, resolve each
+`GetPartyMemberByIndex(nCnt)`, and call `ApplyEffectToObject(... EffectHeal(nHeal), oParty)`
+inline after the 15 m test. There is no `DelayCommand` or deferred action around these three
+applications. The frame/spell dedup therefore collapses the repeated roster effects from one
+script invocation while allowing the next frame's cast and a changed phantom slot to claim a
+fresh event.
+
+The implementation is `partner_buffs`-gated and remains **NEEDS-LIVE**: no game cast was run
+in this pass. The dedup key remains conservative until the rig watches an actual cast.
 
 ## 9. Status line
 
 Friendship of the stand-in is fixable with one faction id behind `partner_buffs` (OFF,
-NEEDS-LIVE) and reaches only the Valor family, locally; healing your partner is not a
-target-validation problem (the party-roster loop rejects the stand-in) and needs the section 8
-mirror. Medpacs are self-only in K1, so that half of the gap was never real.
+NEEDS-LIVE) and reaches only the Valor family, locally. The Heal/Cure sender mirror is now
+implemented behind the same switch (OFF, NEEDS-LIVE); it supplies the remote body through the
+existing Heal event path while preserving the party-roster target check. Medpacs are self-only
+in K1, so that half of the gap was never real.

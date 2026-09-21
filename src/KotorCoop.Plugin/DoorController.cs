@@ -4,14 +4,13 @@ namespace KotorCoop.Plugin;
 /// Applies the session's door truth to this instance, once per frame batch, on the game's
 /// thread. A door open for one player and shut for the other is the most visible desync
 /// co-op can produce, and doors are cheap to agree on: their object ids match across
-/// instances (same save, deterministic id assignment) and their state only ever advances
-/// (closed -&gt; open, locked -&gt; unlocked, destroyed), so the reliable max-merge flag
-/// channel carries them without any new transport.
+/// instances (same save, deterministic id assignment). The reliable Lamport-ordered flag
+/// channel carries both ordinary opens and scripted closes/re-locks.
 ///
 /// The agent writes the DESIRED door states for the local module into the shared block;
 /// this class moves each door toward its desired state through the engine's own paths:
 ///
-///   - unlock is a plain byte write (that is what the engine's own unlock does),
+///   - lock/unlock is a plain byte write (the engine's own lock field),
 ///   - opening goes through CSWSDoor::SetOpenState(state, deferred), which plays the
 ///     swing animation and lets the engine commit state and walkmesh when it lands.
 ///
@@ -35,12 +34,14 @@ internal sealed class DoorController(SharedBlockView block)
     private readonly int[] _commandedWait = new int[SharedBlock.DoorCapacity];
     private int _countdown;
     private int _logged;
+    private readonly DoorDesiredStateTracker _desired = new();
 
     /// <summary>Forgets everything on a module change; ids now name different doors.</summary>
     public void Invalidate()
     {
         Array.Clear(_commandedIds);
         Array.Clear(_commandedWait);
+        _desired.Clear();
         block.DoorCount = 0;
     }
 
@@ -80,12 +81,6 @@ internal sealed class DoorController(SharedBlockView block)
             return;
         }
 
-        if (desired.Unlocked && Odyssey.IsDoorLocked(door))
-        {
-            Odyssey.UnlockDoor(door);
-            LogFew($"door 0x{desired.ObjectId:X}: unlocked on the session's authority");
-        }
-
         byte current = Odyssey.GetDoorOpenState(door);
         byte pending = Odyssey.GetDoorPendingOpenState(door);
 
@@ -109,12 +104,18 @@ internal sealed class DoorController(SharedBlockView block)
             return;
         }
 
-        // Only ever move a door forward, and never interrupt a swing the engine is
-        // already mid-way through (pending != current means one is in flight).
-        if (desired.OpenState <= current || pending != current)
+        // Never resurrect destroyed doors or interrupt a swing. Do not keep asserting an
+        // unchanged snapshot: a local story script may have just closed/re-locked this door
+        // and the external scanner needs a chance to publish that newer state.
+        if (desired.OpenState > 3 || current == 3 || pending != current
+            || !_desired.IsNew(desired.ObjectId, desired.OpenState, desired.Unlocked))
         {
             return;
         }
+
+        Odyssey.SetDoorLocked(door, !desired.Unlocked);
+        _desired.Applied(desired.ObjectId, desired.OpenState, desired.Unlocked);
+        if (desired.OpenState == current) return;
 
         Odyssey.SetDoorOpenState(door, desired.OpenState);
         _commandedIds[slot] = desired.ObjectId;

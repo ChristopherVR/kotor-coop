@@ -82,6 +82,7 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
     public void Invalidate()
     {
         PhantomEffectHook.Invalidate();
+        PartnerHealMirror.Invalidate();
         _publishedSequence = 0;
 
         for (int i = 0; i < SharedBlock.PeerEffectCapacity; i++)
@@ -100,12 +101,14 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
     {
         if (!_effectSync.Resolve(block) || block.Command != SharedBlock.CommandSpawnAndDrive)
         {
+            PartnerHealMirror.Invalidate();
             return;
         }
 
         if (_countdown > 0)
         {
             _countdown--;
+            PartnerHealMirror.PrepareNextFrame(block);
             return;
         }
 
@@ -113,6 +116,7 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
 
         PublishCaptured();
         ApplyIncoming();
+        PartnerHealMirror.PrepareNextFrame(block);
     }
 
     /// <summary>Republishes every OUT ring slot whenever the hook's sequence has moved —

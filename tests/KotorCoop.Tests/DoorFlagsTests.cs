@@ -1,4 +1,6 @@
 using KotorCoop.Memory;
+using KotorCoop.Plugin;
+using KotorCoop.Session;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -61,18 +63,37 @@ public class DoorFlagsTests
     }
 
     [Fact]
-    public void ValuesAreMonotonicUnderMaxMerge()
+    public void NewerStoryRelockWinsAndOldSnapshotCannotReopenIt()
     {
-        // Every legal door progression within a module must be an increase, so a value-only
-        // merge (and a stale replay) can never move a door backwards.
-        sbyte closedLocked = DoorFlags.MakeValue(0, false);
-        sbyte closedUnlocked = DoorFlags.MakeValue(0, true);
-        sbyte open = DoorFlags.MakeValue(1, true);
-        sbyte destroyed = DoorFlags.MakeValue(3, true);
+        ulong key = DoorFlags.MakeKey(DoorFlags.HashModule("sta_m45ac"), 42);
+        EventFlagStore owner = new();
+        EventFlagStore peer = new();
+        owner.Set(key, DoorFlags.MakeValue(1, true), 1);
+        var stale = owner.SnapshotEntries();
+        uint staleVersion = owner.Version;
+        peer.MergeSnapshot(stale, staleVersion);
+        owner.Set(key, DoorFlags.MakeValue(0, false), 1);
+        peer.MergeSnapshot(owner.SnapshotEntries(), owner.Version);
+        peer.MergeSnapshot(stale, staleVersion);
+        Assert.True(peer.TryGet(key, out sbyte current));
+        Assert.Equal(0, current);
+    }
 
-        Assert.True(closedUnlocked > closedLocked);
-        Assert.True(open > closedUnlocked);
-        Assert.True(destroyed > open);
+    [Fact]
+    public void UnchangedDesiredStateDoesNotFightLocalStoryChanges()
+    {
+        DoorDesiredStateTracker tracker = new();
+        Assert.True(tracker.IsNew(42, 1, true));
+        tracker.Applied(42, 1, true);
+        // Local engine re-locks now, before its next external scan. The stale open snapshot
+        // must not be applied again, or that scan will never observe the script's change.
+        Assert.False(tracker.IsNew(42, 1, true));
+        Assert.True(tracker.IsNew(42, 0, false));
+        tracker.Applied(42, 0, false);
+        Assert.False(tracker.IsNew(42, 0, false));
+        Assert.True(tracker.IsNew(42, 1, true));
+        tracker.Clear();
+        Assert.True(tracker.IsNew(42, 0, false)); // New module reuses object IDs.
     }
 
     [Fact]

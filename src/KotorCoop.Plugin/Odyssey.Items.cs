@@ -549,6 +549,8 @@ internal static unsafe partial class Odyssey
 
     public static void UnlockDoor(nint door) => *(byte*)(door + DoorLocked) = 0;
 
+    public static void SetDoorLocked(nint door, bool locked) => *(byte*)(door + DoorLocked) = locked ? (byte)1 : (byte)0;
+
     /// <summary>
     /// Asks the door to swing to a state through the engine's own deferred path: the
     /// animation plays and the engine commits state + walkmesh when the swing lands.

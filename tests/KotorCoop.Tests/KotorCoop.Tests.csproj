@@ -22,6 +22,12 @@
     unsafe engine pointers will not compile in a 64-bit test host.
   -->
   <ItemGroup>
+    <!-- Probe artifacts under TestResults are separate temporary projects, not test sources. -->
+    <Compile Remove="TestResults/**/*.cs" />
+    <Compile Remove="**/obj/**/*.cs" />
+    <!-- Custom output paths must not turn earlier validation outputs into source inputs. -->
+    <Compile Remove="bin/**/*.cs" />
+
     <!-- These Win32 guards are tested against dedicated unmanaged pages, never the GC heap.
          The engine-specific address ceiling is preserved using low-address allocations. -->
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeMethods.cs" Link="Plugin\NativeMethods.cs" />
@@ -49,6 +55,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieRelayQueue.cs" Link="Plugin\MovieRelayQueue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DoorDesiredStateTracker.cs" Link="Plugin\DoorDesiredStateTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CrashRecord.cs" Link="Plugin\CrashRecord.cs" />
@@ -67,6 +74,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipRetryRule.cs" Link="Plugin\EquipRetryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomSpawnReadinessRule.cs" Link="Plugin\PhantomSpawnReadinessRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomTargetRule.cs" Link="Plugin\PhantomTargetRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartnerHealMirrorRule.cs" Link="Plugin\PartnerHealMirrorRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightEngageFallbackRule.cs" Link="Plugin\LocalFightEngageFallbackRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightActivityRule.cs" Link="Plugin\LocalFightActivityRule.cs" />
