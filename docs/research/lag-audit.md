@@ -140,7 +140,9 @@ FrameTimeHistogram.cs`) is a pure, allocation-free accumulator — no EWMA, deli
 own doc comment: a smoothed running average would blur a burst of hitches into an innocuous
 long-session mean, which is exactly the failure mode this exists to catch). `PluginHost.OnFrame`
 feeds it one wall-clock delta (`Stopwatch.GetTimestamp()`) per SwapBuffers callback, before
-anything else in the frame runs, and flushes a snapshot to the plugin log every ~10 s:
+anything else in the frame runs, and flushes a snapshot to the plugin log every ~10 s. The
+presentation-hold pump that `MenuFrame` can invoke is deliberately excluded from this interval
+histogram, so a menu callback cannot replace the measured gap between rendered frames:
 
 ```
 frame stats: 601 frames, 16.84 ms average, 212.3 ms worst, 3 over 33 ms
@@ -149,6 +151,17 @@ frame stats: 601 frames, 16.84 ms average, 212.3 ms worst, 3 over 33 ms
 `SampleCount` / `AverageMs` / `MaxMs` / `OverThresholdCount` (frames slower than 33 ms — one
 dropped frame at 30 fps, two at 60 fps) reset after every flush, so each line is exactly what
 happened in the last ~10 s, not a running total.
+
+The same ten-second line includes average/max wall time for the total `OnFrame` call, its prelude
+(all work before the six controller groups), and the fixed lifecycle, phantom, combat, relay,
+world, and control groups in `PluginHost.Frame.cs`. The combat group also reports detail counters
+for scaling, mirror, liveness, enemy presence, fire watch, party presence, companion damage,
+follow, roster, solo, and suppression. Total and prelude timings are closed with `finally`, so
+world-transition early returns and controller failures still contribute to the appropriate
+diagnostic. These timings run only while `frame_stats` is enabled and use fixed accumulators; they
+add no per-frame allocation when the diagnostic is off. A group or detail maximum near the frame
+histogram's worst value identifies where the game-thread stall occurred. If total is high while
+the groups and prelude stay low, the gap is outside the measured controller schedule.
 
 ### `lagstats` — the console verb
 
@@ -1174,3 +1187,35 @@ the publish output in each), `dotnet build` clean with 0 warnings.
 `SharedInventoryV2LoopbackTests.ClientBuyBackAppliesToTheHostExactlyOnceAndStaysThatWay`, passes
 on its own (16/16 in that class) — a fixed-port loopback flake of the kind this document's
 sibling notes already list, untouched by anything in this pass.
+
+## 2026-09-21: recurring scaling scan stalls
+
+The joining player reported a freeze roughly every second. Initial frame-counter samples showed
+220–400 ms gaps. Stopping two orphaned test hosts did not remove the recurring stalls. Agent
+telemetry stayed near 30 Hz with ordinary updates below 1 ms; stopping the agent while leaving
+its last scaling word in the shared block did not fix the game-thread stalls either.
+
+Gating expensive gait-name/model diagnostics behind `phantom_gait_diagnostics` reduced the
+restarted client's recurring gaps to roughly 140–180 ms. The new `frame_stats` group timings
+then attributed them to combat. `EnemyScalingController` was copying/scanning all private game
+memory every 90 rendered frames to find creatures. At the measured ~290 fps this ran about
+three times per second. An A/B with health scaling temporarily changed from 150% to 100%
+(damage stayed 115%) removed the recurring spikes: a settled 10-second window peaked at 12 ms,
+with combat below 0.2 ms. Restoring 150% brought the stalls back.
+
+The controller now enumerates the existing 8192-bucket server object table, with a 64-entry
+chain bound and a 512-creature capacity. The existing vtable, exact resolver, player/party,
+plot, living and hostility guards still precede every write. No full-memory fallback runs.
+After installing the reviewed x86 build on both instances, a simultaneous 20-second read-only
+sample recorded 6,577 host frames and 6,856 client frames; both had a largest sampled gap of
+22 ms and zero gaps above 50 ms. Nearby native 10-second windows peaked at 8.7 ms (host) and
+11.1 ms (client), with zero frames above 33 ms. The user confirmed that the freezes were gone.
+
+Startup ghost cleanup and initial phantom creation still produced isolated larger frames;
+this result closes the recurring steady-state scaling scan, not every possible loading hitch.
+Trask's immediate catch-up and incorrect running direction remain separately under review.
+Save/load health scaling also compounds an already-scaled ceiling; see
+[player-count-scaling.md](player-count-scaling.md) for the confirmed persistence defect.
+
+Validation: 49 focused scaling, object-table arithmetic, frame timing and solo-segment tests
+passed (`lagfix-focused.trx`), and the NativeAOT x86 build passed with warnings as errors.

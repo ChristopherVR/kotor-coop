@@ -38,6 +38,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionHealSampleRule.cs" Link="Plugin\CompanionHealSampleRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EnemyScalingRule.cs" Link="Plugin\EnemyScalingRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\CreatureObjectTableRule.cs" Link="Plugin\CreatureObjectTableRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MotionSmoother.cs" Link="Plugin\MotionSmoother.cs" />
@@ -70,6 +71,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantCaptureRule.cs" Link="Plugin\ClassGrantCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantApplyRule.cs" Link="Plugin\ClassGrantApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FrameTimeHistogram.cs" Link="Plugin\FrameTimeHistogram.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\FrameSectionTiming.cs" Link="Plugin\FrameSectionTiming.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyCreatureIdentity.cs" Link="Plugin\PartyCreatureIdentity.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PeerIdentityRule.cs" Link="Plugin\PeerIdentityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipRetryRule.cs" Link="Plugin\EquipRetryRule.cs" />

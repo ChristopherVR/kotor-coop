@@ -304,7 +304,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 
 | Key | Default (code) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `frame_stats` | OFF | frame-time histogram diagnostic (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |
+| `frame_stats` | OFF | SwapBuffers frame-time histogram plus total/prelude, six controller-group, and combat-detail average/max timings (pairs with the `lagstats` verb) | [lag-audit.md](research/lag-audit.md) |
 | `phantom_gait_diagnostics` | OFF | opt-in gait name/class and periodic speed diagnostics; synchronous and can stall the game while enabled | [phantom-locomotion.md](research/phantom-locomotion.md) |
 | `delay_probe` | OFF | DIAGNOSTIC-only: install `DelayEventProbeHook`'s read-only splices, log-only | [minigames.md §24](research/minigames.md) |
 | `delay_probe_events` | OFF | DIAGNOSTIC-only, with `delay_probe`: also log every delayed-event enqueue/dispatch (high volume) | [minigames.md §24](research/minigames.md) |

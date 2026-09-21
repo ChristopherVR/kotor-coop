@@ -37,8 +37,8 @@ namespace KotorCoop.Plugin;
 internal sealed unsafe class EnemyScalingController(SharedBlockView block)
 {
     /// <summary>Frames between hit-point scans. A creature spawned between two scans fights
-    /// at vanilla for at most this long; the object-table walk is the same one
-    /// <see cref="GhostSweepController"/> makes once per world, kept off the per-frame path.</summary>
+    /// at vanilla for at most this long; each scan walks the engine's bounded live object table,
+    /// kept off the per-frame path.</summary>
     private const int ScanIntervalFrames = 90;
 
     /// <summary>Frames between refreshes of the damage-target set. Cheap (ten block reads),
@@ -156,7 +156,7 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
         }
 
         nint* creatures = stackalloc nint[CreatureCapacity];
-        int count = CreatureFinder.CollectByVtable(CreatureFinder.CreatureVtable, creatures, CreatureCapacity);
+        int count = Odyssey.CollectCreaturesByObjectTable(creatures, CreatureCapacity);
 
         byte* tagBuf = stackalloc byte[64];
 

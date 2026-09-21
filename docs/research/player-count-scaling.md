@@ -1,7 +1,7 @@
 # Player-count scaling (review blocker #9, roadmap #41)
 
 Every fight was vanilla-balanced for two PCs. Four coop.ini keys now scale with the number of
-connected players. **Status: built, NEEDS-LIVE.** Nothing here has run in the game.
+connected players. **Status: built, NEEDS-LIVE; save/load health idempotence remains open.**
 
 ## Keys and curve
 
@@ -57,7 +57,49 @@ no `TotalSize` growth, cleared on disconnect.
 
 `store_prices`; the in-game status line for the economy word; a live A/B of every apply point.
 The stored-max write (health) and the in-place effect-list write (damage) are the two writes
-new to this codebase.
+new to this codebase. Health scaling also needs save/load persistence before the reload checklist
+item can be closed.
+
+## Save/load health compounding (confirmed defect; open)
+
+The per-epoch latch prevents repeated writes while a world is running, but it is deliberately
+cleared by `EnemyScalingController.Invalidate()` at every world epoch. The health write stores the
+scaled value directly in the creature's `+0xE0` maximum field, and no vanilla/base maximum is
+retained in the engine object. A save therefore contains the already-scaled maximum while the
+next load starts with an empty latch.
+
+This was reproduced in the restart/load probe with health scaling at 150%: a creature logged
+`131/197 -> 197/296` after the new epoch, showing that the saved 197 maximum was multiplied a
+second time. This is separate from the object-table scan performance fix; replacing the process
+sweep does not make the stored value idempotent.
+
+Inferring whether a creature was previously scaled from its current maximum or current/max ratio
+is unsafe. For example, a vanilla creature with maximum 23 is indistinguishable from a creature
+whose vanilla maximum was 15 and was scaled to 23 at 150%. Reusing a game global would corrupt
+story state, and per-object local variables remain unverified and explicitly out of scope in
+`docs/research/quest-sync.md` §8. No engine marker or new native address has been added.
+
+The practical design is a mod-owned sidecar, still unimplemented:
+
+1. After a save has landed, record an exact fingerprint of the stable `SAVEGAME.sav`, with the
+   existing `SaveIdentity` as a secondary guard. `SaveIdentity` alone is intentionally stable for
+   the same module/object layout and is not unique across revisions of a save slot.
+2. Associate records with the saved module and object identity (object id plus tag/template), and
+   retain the original maximum and the applied percentage. The existing `SaveFlushHook` capture
+   and `ReissueServerSaveGame` path can identify a held save request, but a successful reissue
+   only means the engine accepted it; the sidecar must wait for the archive write to settle before
+   recording the fingerprint. Writes should use the existing temp-file/replace pattern.
+3. Establish the exact loaded archive key before the first health scan. If the loaded save or the
+   sidecar cannot be identified or parsed, fail closed for health scaling for that epoch rather
+   than risk multiplying a persisted maximum. This needs a coordinated plugin/agent load mailbox;
+   the ordinary menu-load source is not currently exposed by a verified plugin API.
+4. For a matching record, seed the applied-object latch and preserve the saved ceiling. Apply the
+   current percentage only to newly seen objects. Re-scaling an existing saved body when the
+   player count changes needs a separate baseline/current-health design so it does not heal or
+   over-damage the creature.
+
+Until that sidecar and exact-load routing exist, reload idempotence remains open and the health
+setting must retain its live-verification gate.
 
 ## NEEDS-LIVE checklist
 
