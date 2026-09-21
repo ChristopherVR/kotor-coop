@@ -111,10 +111,10 @@ public static class SaveDigest
 
             ErfArchive outer = ErfArchive.Open(savegame);
 
-            // The nested module .sav names the module the save is standing in.
-            ArchiveResource? moduleSav = outer.Resources.FirstOrDefault(
-                r => r.ResourceType is ModuleSavTypeThisBuild or ModuleSavTypeClassic);
-            if (moduleSav is null || !outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
+            // A save retains previously visited modules. Only the active module's counters
+            // and IDs describe this world; archive ordering can point at an old tutorial.
+            if (!SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource moduleSav)
+                || !outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
             {
                 return false;
             }

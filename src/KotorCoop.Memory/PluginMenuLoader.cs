@@ -67,9 +67,9 @@ public static class PluginMenuLoader
     /// its argument — an empty name is the silent stall.
     ///
     /// savenfo.res's <c>LASTMODULE</c> is the answer when it is readable: it is the field
-    /// retail's own save list shows and loads from. The SAVEGAME.sav ERF key list (the first
-    /// entry typed 2055/2057 IS a module, e.g. END_M01AA) is only the fallback, and it is
-    /// wrong for exactly one class of save — one the engine wrote AT a module transition
+    /// retail's own save list shows and loads from. A single SAVEGAME.sav module member is
+    /// the fallback when the metadata is absent. Picking the first of multiple members is
+    /// ambiguous, including one the engine wrote AT a module transition
     /// (the autosave a <c>warp</c> triggers, live 2026-09-02): the nested module .sav there
     /// is still the module being LEFT (END_M01AA), while LASTMODULE already names the one
     /// being entered (tar_m10aa). Loading that save through the ERF answer put the client in
@@ -85,50 +85,27 @@ public static class PluginMenuLoader
             return true;
         }
 
-        string erfPath = Path.Combine(saveDirectory, "SAVEGAME.sav");
-
         try
         {
-            using FileStream stream = File.OpenRead(erfPath);
-            using BinaryReader reader = new(stream);
-
-            byte[] magic = reader.ReadBytes(8);
-            if (magic.Length < 8)
+            ErfArchive outer = ErfArchive.Open(Path.Combine(saveDirectory, "SAVEGAME.sav"));
+            if (SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource module))
             {
-                return false;
-            }
-
-            stream.Position = 0x10;
-            int entryCount = reader.ReadInt32();
-            stream.Position = 0x18;
-            int keyListOffset = reader.ReadInt32();
-
-            stream.Position = keyListOffset;
-            for (int i = 0; i < entryCount && i < 4096; i++)
-            {
-                byte[] resref = reader.ReadBytes(16);
-                reader.ReadUInt32();
-                ushort resType = reader.ReadUInt16();
-                reader.ReadUInt16();
-
-                // 2057 is what the retail GOG build writes for the module .sav inside
-                // SAVEGAME.sav (measured); 2055 is what older restype tables claim.
-                if (resType is 2057 or 2055)
-                {
-                    int length = Array.IndexOf(resref, (byte)0);
-                    moduleName = System.Text.Encoding.ASCII
-                        .GetString(resref, 0, length < 0 ? resref.Length : length);
-                    return moduleName.Length > 0;
-                }
+                moduleName = module.Resref;
+                return moduleName.Length > 0;
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return false;
         }
 
         return false;
     }
+    /// <summary>Reads only <c>savenfo.res:LASTMODULE</c>, without falling back to the first
+    /// nested module member. Callers selecting a module state must use this distinction:
+    /// enumeration order is not an identity, especially for transition autosaves.</summary>
+    internal static bool TryReadSaveLastModuleName(string saveDirectory, out string moduleName) =>
+        TryReadLastModule(saveDirectory, out moduleName);
 
     /// <summary>savenfo.res's <c>LASTMODULE</c> (a "NFO " GFF), or false when the file is
     /// missing, not a GFF (the test fixtures write a placeholder byte), or has no such

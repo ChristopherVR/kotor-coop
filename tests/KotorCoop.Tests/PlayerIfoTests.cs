@@ -145,6 +145,36 @@ public sealed class PlayerIfoTests : IDisposable
     }
 
     [Fact]
+    public void SelectsLastModuleInsteadOfTheFirstNestedModule()
+    {
+        // A transition autosave can retain the module being left as the first nested .sav.
+        // savenfo.res:LASTMODULE is the module the save will actually load.
+        string save = BuildSaveDirectoryWithModules(
+            "tar_m10aa",
+            ("end_m01aa", "Old tutorial PC", (short)3, 111u),
+            ("tar_m10aa", "Current Taris PC", (short)12, 222u));
+
+        Assert.True(PlayerIfo.TryExtractPlayer(save, out GffStruct player, out _));
+        Assert.Equal("Current Taris PC", player.GetLocString("FirstName")!.Text());
+        Assert.True(player.TryGetShort("CurrentHitPoints", out short hitPoints));
+        Assert.Equal((short)12, hitPoints);
+        Assert.True(player.TryGetDword("Experience", out uint experience));
+        Assert.Equal(222u, experience);
+    }
+
+    [Fact]
+    public void RefusesMultipleNestedModulesWhenLastModuleMetadataIsMissing()
+    {
+        string save = BuildSaveDirectoryWithModules(
+            null,
+            ("end_m01aa", "Old tutorial PC", (short)3, 111u),
+            ("tar_m10aa", "Current Taris PC", (short)12, 222u));
+
+        Assert.False(PlayerIfo.TryExtractPlayer(save, out _, out string diagnostic));
+        Assert.Contains("unambiguous active module", diagnostic);
+    }
+
+    [Fact]
     public void AnEmptyPlayerListIsRefusedRatherThanCarried()
     {
         // The measured failure this guards: the engine's 0xF login branch ignores
@@ -422,7 +452,12 @@ public sealed class PlayerIfoTests : IDisposable
 
     /// <summary>Fills a list member so it looks like a real player entry: the sentinel
     /// ObjectId, the two PC marks, a nested struct with a VECTOR and a couple of lists.</summary>
-    private static void PopulatePlayer(GffWriterStruct player, string name, bool isPrimary)
+    private static void PopulatePlayer(
+        GffWriterStruct player,
+        string name,
+        bool isPrimary,
+        short currentHitPoints = 12,
+        uint experience = 150)
     {
         player
             .SetDword("ObjectId", 0x7FFFFFFF)
@@ -431,8 +466,8 @@ public sealed class PlayerIfoTests : IDisposable
             .SetString("Mod_CommntyName", name)
             .SetLocString("FirstName", -1, (0, name))
             .SetDword("AreaId", 1)
-            .SetDword("Experience", 150)
-            .SetShort("CurrentHitPoints", 12)
+            .SetDword("Experience", experience)
+            .SetShort("CurrentHitPoints", currentHitPoints)
             .SetFloat("XPosition", 21.013109f)
             .SetFloat("YPosition", 21.150425f)
             .SetFloat("ZPosition", -1.275f)
@@ -471,6 +506,43 @@ public sealed class PlayerIfoTests : IDisposable
         File.WriteAllBytes(
             Path.Combine(directory, "SAVEGAME.sav"),
             BuildErf("SAV ", (module, 2057 /* module .sav */, inner)));
+
+        return directory;
+    }
+
+    /// <summary>Builds a transition-shaped save with more than one nested module state.
+    /// <c>LASTMODULE</c> is optional so the selector's ambiguity failure can be tested.</summary>
+    private string BuildSaveDirectoryWithModules(
+        string? lastModule,
+        params (string Module, string Name, short HitPoints, uint Experience)[] modules)
+    {
+        string directory = TempDirectory();
+        List<(string Resref, int Type, byte[] Data)> outerMembers = [];
+
+        foreach ((string module, string name, short hitPoints, uint experience) in modules)
+        {
+            GffWriter ifo = new("IFO ");
+            ifo.Root.SetDword("Mod_NextObjId0", 0x127).SetDword("Mod_NextObjId1", 0);
+            GffWriterStruct player = ifo.Root.AddList("Mod_PlayerList").Add(48813);
+            PopulatePlayer(player, name, true, hitPoints, experience);
+
+            byte[] inner = BuildErf(
+                "SAV ",
+                ("Module", 2014, ifo.ToBytes()),
+                (module, 2023, new GffWriter("GIT ").ToBytes()));
+            outerMembers.Add((module, 2057, inner));
+        }
+
+        File.WriteAllBytes(
+            Path.Combine(directory, "SAVEGAME.sav"),
+            BuildErf("SAV ", [.. outerMembers]));
+
+        if (lastModule is not null)
+        {
+            GffWriter nfo = new("NFO ");
+            nfo.Root.SetString("LASTMODULE", lastModule);
+            File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), nfo.ToBytes());
+        }
 
         return directory;
     }

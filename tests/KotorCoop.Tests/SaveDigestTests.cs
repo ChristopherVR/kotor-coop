@@ -102,6 +102,35 @@ public sealed class SaveDigestTests : IDisposable
     // ---- per-module GIT --------------------------------------------------------
 
     [Fact]
+    public void SaveIdentityUsesTheActiveModuleInsteadOfTheFirstVisitedModule()
+    {
+        byte[] oldSave = BuildSavegameErf("end_m01aa", 295, [(2u, "old")], 2057);
+        byte[] currentSave = BuildSavegameErf("tar_m10aa", 400, [(5u, "current")], 2057);
+        Assert.True(ErfArchive.TryFindMember(oldSave, 2057, "end_m01aa", out byte[] oldModule));
+        Assert.True(ErfArchive.TryFindMember(currentSave, 2057, "tar_m10aa", out byte[] currentModule));
+        string multiple = TempDirectory();
+        File.WriteAllBytes(Path.Combine(multiple, "SAVEGAME.sav"), BuildErf("SAV ",
+            ("end_m01aa", 2057, oldModule), ("tar_m10aa", 2057, currentModule)));
+        GffWriter nfo = new("NFO ");
+        nfo.Root.SetString("LASTMODULE", "TAR_M10AA");
+        File.WriteAllBytes(Path.Combine(multiple, "savenfo.res"), nfo.ToBytes());
+
+        string activeOnly = BuildSaveDirectory("tar_m10aa", 400, [(5u, "current")]);
+        Assert.True(SaveDigest.TryComputeSaveIdentity(activeOnly, out uint expected));
+        Assert.True(SaveDigest.TryComputeSaveIdentity(multiple, out uint actual));
+        Assert.Equal(expected, actual);
+
+        // Without an active-module marker, visited-module order cannot identify the world.
+        File.Delete(Path.Combine(multiple, "savenfo.res"));
+        Assert.False(SaveDigest.TryComputeSaveIdentity(multiple, out _));
+        // A transition save can name a destination it has not stored yet. Unknown is safer
+        // than presenting the old module as the new world's identity.
+        nfo.Root.SetString("LASTMODULE", "tar_m10ab");
+        File.WriteAllBytes(Path.Combine(multiple, "savenfo.res"), nfo.ToBytes());
+        Assert.False(SaveDigest.TryComputeSaveIdentity(multiple, out _));
+    }
+
+    [Fact]
     public void ModuleGitPrefersTheSavesStoredStateWhenVisited()
     {
         // The save has visited end_m01aa (a stored module .sav exists), so its explicit

@@ -128,9 +128,7 @@ public static class WorldAdoption
                     return (ownPlayer, ownSource);
                 }
 
-                DateTime ownSaveLastWriteUtc = Directory.Exists(ownSaveDirectory)
-                    ? Directory.GetLastWriteTimeUtc(ownSaveDirectory)
-                    : DateTime.MinValue;
+                DateTime ownSaveLastWriteUtc = TryGetOwnSaveLastWriteUtc(ownSaveDirectory);
 
                 bool prefer = ClientCharacterPersistence.ShouldPreferSidecar(
                     sidecarValid: true,
@@ -226,6 +224,20 @@ public static class WorldAdoption
         catch (Exception ex) when (ex is System.Net.Sockets.SocketException or OperationCanceledException)
         {
             return false;
+        }
+    }
+
+    private static DateTime TryGetOwnSaveLastWriteUtc(string saveDirectory)
+    {
+        try
+        {
+            string savegame = Path.Combine(saveDirectory, "SAVEGAME.sav");
+            return File.Exists(savegame) ? File.GetLastWriteTimeUtc(savegame) : DateTime.MinValue;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            return DateTime.MinValue;
         }
     }
 

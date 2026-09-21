@@ -36,11 +36,8 @@ public enum PifoPresence
 /// </summary>
 public static class PlayerIfo
 {
-    // Container type ids, matching SaveDigest's (the module .sav nested inside SAVEGAME.sav
-    // is typed 2057 in this build; the classic tables say 2055, so both are accepted).
+    // Container type id for module.ifo inside the selected module .sav.
     private const int IfoType = 2014;
-    private const int ModuleSavTypeThisBuild = 2057;
-    private const int ModuleSavTypeClassic = 2055;
 
     /// <summary>The resource the engine looks for, and the file it becomes: restype 0x7DE
     /// ("ifo") under resref "pifo" is <c>&lt;game&gt;\Temp\pifo.ifo</c>.</summary>
@@ -89,12 +86,10 @@ public static class PlayerIfo
 
             ErfArchive outer = ErfArchive.Open(savegame);
 
-            ArchiveResource? moduleSav = outer.Resources.FirstOrDefault(
-                r => r.ResourceType is ModuleSavTypeThisBuild or ModuleSavTypeClassic);
-
-            if (moduleSav is null || !outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
+            if (!SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource moduleSav)
+                || !outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
             {
-                diagnostic = $"'{saveDirectory}' holds no module .sav";
+                diagnostic = $"'{saveDirectory}' has no unambiguous active module .sav";
                 return false;
             }
 

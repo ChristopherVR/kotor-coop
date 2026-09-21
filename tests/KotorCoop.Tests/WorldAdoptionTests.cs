@@ -134,8 +134,10 @@ public sealed class WorldAdoptionTests : IDisposable
     public async Task TheJoinerKeepsTheirOwnCharacter()
     {
         // The whole point of carrying a pifo: the world is the host's, the body is not.
-        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
-        string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+        string hostSave = BuildSave(
+            "tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")], pazaakCount: 0x341, sideCard: 0x11);
+        string joinerSave = BuildSave(
+            "end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")], pazaakCount: 0x127, sideCard: 0x2A);
         string joinerGame = BuildGameDirectory();
 
         int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave));
@@ -157,7 +159,15 @@ public sealed class WorldAdoptionTests : IDisposable
         GffStruct cards = Gff.Parse(File.ReadAllBytes(Path.Combine(
             joinerGame, "saves", PluginMenuLoader.AutosaveSlot, "PARTYTABLE.res"))).Root;
         Assert.Equal(0x127, (int)cards.GetList("PT_PAZAAKCARDS")[0].Fields["PT_PAZAAKCOUNT"]);
+        Assert.Equal(0x2A, (int)cards.GetList("PT_PAZSIDELIST")[0].Fields["PT_PAZSIDECARD"]);
         Assert.Equal(0x341, (int)cards.Fields["PT_GOLD"]);
+
+        // The private overlay is for adoption only; the engine-facing character file must
+        // remain an ordinary pifo even though its card data was restored into PARTYTABLE.res.
+        GffStruct engineCharacter = Gff
+            .Parse(File.ReadAllBytes(Path.Combine(joinerGame, "Temp", "pifo.ifo")))
+            .Root.GetList("Mod_PlayerList")[0];
+        Assert.False(engineCharacter.Fields.ContainsKey("KC_Pazaak"));
     }
 
     [Fact]
@@ -170,10 +180,18 @@ public sealed class WorldAdoptionTests : IDisposable
         string joinerSave = BuildSave("end_m01aa", 0x127, "Old Character", [(2u, "n_trask")]);
         string joinerGame = BuildGameDirectory();
 
+        // A save file update need not move its containing directory timestamp. Conversely,
+        // unrelated directory activity can move that timestamp without changing the save.
+        // Adoption must compare the sidecar with SAVEGAME.sav itself.
+        DateTime oldSave = DateTime.UtcNow.AddDays(-2);
+        File.SetLastWriteTimeUtc(Path.Combine(joinerSave, "SAVEGAME.sav"), oldSave);
+        Directory.SetLastWriteTimeUtc(joinerSave, oldSave.AddDays(3));
+
         Assert.True(SaveDigest.TryComputeSaveIdentity(hostSave, out uint hostIdentity));
 
         // Give the sidecar a distinguishable name so the test can tell WHICH character rode.
-        string sessionSavedPath = BuildSave("end_m01aa", 0x999, "New Character", [(2u, "n_trask")]);
+        string sessionSavedPath = BuildSave(
+            "end_m01aa", 0x999, "New Character", [(2u, "n_trask")], pazaakCount: 0x999, sideCard: 0x3B);
         Assert.True(PlayerIfo.TryExtractPlayer(sessionSavedPath, out GffStruct newerPlayer, out _));
 
         SidecarMetadata metadata = new(hostIdentity, DateTime.UtcNow);
@@ -192,6 +210,51 @@ public sealed class WorldAdoptionTests : IDisposable
             .Parse(File.ReadAllBytes(Path.Combine(joinerGame, "Temp", "pifo.ifo")))
             .Root.GetList("Mod_PlayerList")[0];
         Assert.Equal("New Character", carried.GetLocString("FirstName")!.Text());
+
+        GffStruct cards = Gff.Parse(File.ReadAllBytes(Path.Combine(
+            joinerGame, "saves", PluginMenuLoader.AutosaveSlot, "PARTYTABLE.res"))).Root;
+        Assert.Equal(0x999, (int)cards.GetList("PT_PAZAAKCARDS")[0].Fields["PT_PAZAAKCOUNT"]);
+        Assert.Equal(0x3B, (int)cards.GetList("PT_PAZSIDELIST")[0].Fields["PT_PAZSIDECARD"]);
+    }
+
+    [Fact]
+    public async Task ANewerOwnSaveBeatsAStaleSessionSidecarRegardlessOfDirectoryTimestamp()
+    {
+        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        string ownSave = BuildSave(
+            "end_m01aa", 0x127, "Current Character", [(2u, "n_trask")],
+            pazaakCount: 0x127, sideCard: 0x2A);
+        string sidecarSource = BuildSave(
+            "end_m01aa", 0x999, "Stale Character", [(2u, "n_trask")],
+            pazaakCount: 0x999, sideCard: 0x3B);
+        string joinerGame = BuildGameDirectory();
+
+        DateTime newerSave = DateTime.UtcNow.AddDays(2);
+        File.SetLastWriteTimeUtc(Path.Combine(ownSave, "SAVEGAME.sav"), newerSave);
+        Directory.SetLastWriteTimeUtc(ownSave, DateTime.UtcNow.AddDays(-2));
+
+        Assert.True(PlayerIfo.TryExtractPlayer(sidecarSource, out GffStruct sidecarPlayer, out _));
+        SidecarMetadata metadata = new(0, DateTime.UtcNow);
+        Assert.True(SaveDigest.TryComputeSaveIdentity(hostSave, out uint hostIdentity));
+        metadata = metadata with { HostSaveIdentity = hostIdentity };
+
+        int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), hostIdentity);
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            joinerGame, ownSave, (sidecarPlayer, metadata), Local(port), SessionPassword.None,
+            expectedSaveIdentity: 0, log: null, _cts.Token);
+
+        Assert.NotNull(adopted);
+        Assert.Contains("own save", adopted!.Value.CharacterSource, StringComparison.OrdinalIgnoreCase);
+
+        GffStruct carried = Gff
+            .Parse(File.ReadAllBytes(Path.Combine(joinerGame, "Temp", "pifo.ifo")))
+            .Root.GetList("Mod_PlayerList")[0];
+        Assert.Equal("Current Character", carried.GetLocString("FirstName")!.Text());
+
+        GffStruct cards = Gff.Parse(File.ReadAllBytes(Path.Combine(
+            joinerGame, "saves", PluginMenuLoader.AutosaveSlot, "PARTYTABLE.res"))).Root;
+        Assert.Equal(0x127, (int)cards.GetList("PT_PAZAAKCARDS")[0].Fields["PT_PAZAAKCOUNT"]);
+        Assert.Equal(0x2A, (int)cards.GetList("PT_PAZSIDELIST")[0].Fields["PT_PAZSIDECARD"]);
     }
 
     [Fact]
@@ -462,7 +525,12 @@ public sealed class WorldAdoptionTests : IDisposable
     /// null.
     /// </summary>
     private string BuildSave(
-        string module, uint nextObjId, string? name, (uint Id, string Resref)[] creatures)
+        string module,
+        uint nextObjId,
+        string? name,
+        (uint Id, string Resref)[] creatures,
+        int? pazaakCount = null,
+        int? sideCard = null)
     {
         string directory = TempDirectory();
 
@@ -501,8 +569,8 @@ public sealed class WorldAdoptionTests : IDisposable
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
         GffWriter party = new("PT");
         party.Root.SetInt("PT_GOLD", (int)nextObjId);
-        party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", (int)nextObjId);
-        party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", -1);
+        party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", pazaakCount ?? (int)nextObjId);
+        party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", sideCard ?? -1);
         File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), party.ToBytes());
         File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), [9]);
 

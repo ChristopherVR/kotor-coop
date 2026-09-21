@@ -370,3 +370,47 @@ Neither restarted agent reports `W_GIT`. **238 focused tests passed**, including
 publication, compatibility, digest and packet-codec coverage; the native x86 build passes with
 warnings as errors. This closes the measured ordering false positive, not every mod-compatibility
 or save-lineage scenario.
+
+### Further persistence and installation fixes (2026-09-21)
+
+- **Character freshness:** adoption now compares the saved character sidecar against
+  `SAVEGAME.sav`'s write time, not its parent folder. Tests cover both misleading timestamp
+  directions and preserve the joiner's Pazaak collection/side deck while retaining host gold.
+- **Active-module extraction:** the live adoption check exposed a second rollback path:
+  `PlayerIfo` and the save-identity digest selected the first nested module, an old `END_M01AA`
+  entry, from a save actually standing in `tar_m10aa`. Both now select `savenfo.res:LASTMODULE`.
+  A single nested module is the only fallback when metadata is missing; ambiguous archives or
+  a missing active member are refused rather than carrying an old character. The menu loader
+  retains a valid transition destination even if not yet stored, but no longer guesses the
+  first of several visited modules when metadata is missing. Protocol 61 separates the updated
+  identity scheme from earlier agents.
+- **Health scaling mitigation:** vanilla `enemy_health = 100` is again the consistent default,
+  including the shipped template and behaviour negotiation. Explicit `auto` is preserved.
+  The two test installations also use 100%, confirmed by their running agents. This prevents
+  additional default scaling on reload; it neither implements persistent scaling baselines nor
+  repairs already-inflated saved HP. Damage scaling remains enabled.
+- **Multiple installs:** firewall rules have per-executable names, and install/uninstall cleanup
+  filters by executable even for legacy rules. Updating one copy cannot remove another copy's
+  rules. Tests cover isolation; no live firewall mutation or outside-network verification occurred.
+- **Crowded modules:** census overflow now reports candidate/selected/dropped counts with a
+  real 30-second throttle even when counts change. Equal-priority candidates use an object-ID
+  tie-breaker. The 32-object combat capacity remains; this makes its limit observable and stable,
+  rather than claiming full over-cap combat replication. Runtime difficulty agreement remains
+  open; its read-only research is in `research/difficulty-agreement.md`.
+
+Validation: **149 focused persistence/scaling/installer/census tests**, **49 configuration and
+documentation checks**, and **198 active-module/adoption/digest/protocol checks** passed in
+separate warnings-as-errors snapshots. A source-location fixture was corrected so the config
+checks work with isolated build outputs. Both games now have the previously pending native
+pause-recovery safeguard. The live tests preserved the original named saves and full backups.
+
+**Live adoption/save evidence:** before the fix, extraction from `kcoop_lagprobe` reported the
+old `END_M01AA` character (max HP 12, XP 1,000). After the fix it selected the saved active
+`tar_m10aa` character (max HP 9, XP 7,320,369 from the existing test rig). The engine loaded that
+character and wrote `kcoop_currentverify`; direct extraction from the resulting nested TAR
+`module.ifo` preserved those values and `Min1HP=0`. The extra Pazaak card at collection index 13
+also survived actual adoption and engine serialization, while the host lacked that card. The
+side deck was empty in this live case; nonempty deck preservation is covered by integration
+tests, not a played Pazaak hand. A subsequent normal reload of `kcoop_currentverify` reached the
+same module successfully. Current characters' blank name field was present before testing and
+was preserved rather than replaced with the old tutorial name.

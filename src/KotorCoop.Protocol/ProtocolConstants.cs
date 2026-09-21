@@ -241,8 +241,11 @@ public static class ProtocolConstants
     /// ID/template association while ignoring runtime save list order. Pristine placement
     /// order remains significant. Older peers use a different digest meaning, so reject that
     /// mixed session at the version handshake instead of reporting a false content mismatch.
+    ///
+    /// Version 61: save identity uses LASTMODULE to select the active module's stored state,
+    /// rather than the first visited module in the archive. Mixed identity schemes are refused.
     /// </summary>
-    public const byte Version = 60;
+    public const byte Version = 61;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
