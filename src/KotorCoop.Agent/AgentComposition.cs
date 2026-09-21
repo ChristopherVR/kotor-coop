@@ -149,11 +149,11 @@ internal static class AgentComposition
             FollowLeadMode = config?.FollowLead ?? FollowLeadMode.Host,
 
             // Player-count scaling (docs/research/player-count-scaling.md). The fallbacks are
-            // the same numbers CoopConfig's record defaults and parse fallbacks carry
-            // (docs/CONFIG.md footnote ³): enemy health/damage 100 while their engine writes
-            // are NEEDS-LIVE, xp/store on the auto curve.
+            // the same numbers CoopConfig's record defaults and parse fallbacks carry:
+            // health 100 until save/load idempotence exists (explicit `auto` opts in),
+            // damage/xp/store on the auto curve.
             Scaling = new PlayerCountScalingSettings(
-                config?.EnemyHealth ?? PlayerCountScalingRule.Auto,
+                config?.EnemyHealth ?? PlayerCountScalingRule.Vanilla,
                 config?.EnemyDamage ?? PlayerCountScalingRule.Auto,
                 config?.XpRate ?? PlayerCountScalingRule.Auto,
                 config?.StoreStock ?? PlayerCountScalingRule.Auto),

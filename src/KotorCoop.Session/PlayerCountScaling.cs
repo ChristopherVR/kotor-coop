@@ -12,10 +12,10 @@ public sealed record PlayerCountScalingSettings(int EnemyHealth, int EnemyDamage
 {
     /// <summary>The code fallbacks — the same numbers <c>CoopConfig</c>'s record defaults,
     /// its parse fallbacks and <c>BehaviourDigest.Default</c> carry (docs/CONFIG.md footnote
-    /// ³): enemy health and damage at 100 because their engine writes are NEEDS-LIVE, XP and
-    /// store stock on the auto curve.</summary>
+    /// ³): enemy health at 100 because persisted scaled maxima are not yet idempotent across
+    /// load, enemy damage on the auto curve, and XP/store stock on the auto curve.</summary>
     public static PlayerCountScalingSettings Default { get; } = new(
-        PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto,
+        PlayerCountScalingRule.Vanilla, PlayerCountScalingRule.Auto,
         PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto);
 }
 

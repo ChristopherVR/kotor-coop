@@ -206,19 +206,19 @@ public class CoopIniExampleDocSyncTests
         return keys;
     }
 
-    /// <summary>Walks up from the test binary to the directory holding the solution file.
+    /// <summary>Walks up from the test source to support isolated build output directories.
     /// Fails with the path it reached rather than a null reference, so a moved test project
     /// reads as a moved test project.</summary>
-    private static string RepositoryRoot()
+    private static string RepositoryRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "")
     {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        DirectoryInfo? directory = new(Path.GetDirectoryName(sourceFile)!);
 
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "KotorCoop.slnx")))
         {
             directory = directory.Parent;
         }
 
-        Assert.True(directory is not null, $"no KotorCoop.slnx above {AppContext.BaseDirectory}");
+        Assert.True(directory is not null, $"no KotorCoop.slnx above {sourceFile}");
         return directory!.FullName;
     }
 }

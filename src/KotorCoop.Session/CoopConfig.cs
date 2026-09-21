@@ -502,19 +502,22 @@ public sealed record CoopConfig
 
     // ── Player-count scaling (docs/research/player-count-scaling.md) ─────────────────────
     // Four SETTINGS, each PlayerCountScalingRule.Auto (0, "resolve from the live player
-    // count") or a fixed percent clamped 50-400. Host-authoritative on the wire
+    // count") or a fixed percent clamped 50-400. Health defaults to vanilla 100% because
+    // saved scaled maxima are not yet idempotent across load; `auto` remains an explicit opt-in.
+    // Host-authoritative on the wire
     // (BehaviourDigest); resolved to a percent by CoopAgent's PlayerCountScaling every tick.
     // Defaults must agree across the three readers (docs/CONFIG.md footnote ³): this record,
     // TryLoad's parse below, AgentComposition.Compose's `?? fallback`, and the shipped
     // profiles/coop.ini.example.
 
     /// <summary>coop.ini <c>enemy_health</c>: enemy hit points, percent of vanilla, or
-    /// <c>auto</c>. Default <c>auto</c> since 2026-09-19 (the max-hit-point write was live-verified: a Sith soldier 15 -> 23 at two players, read back on both instances).</summary>
-    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Auto;
+    /// <c>auto</c>. Default <c>100</c> until save/load idempotence exists; set <c>auto</c>
+    /// explicitly to opt into the live player-count curve.</summary>
+    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Vanilla;
 
     /// <summary>coop.ini <c>enemy_damage</c>: damage enemies deal to players, percent of
-    /// vanilla, or <c>auto</c>. Default 100 (vanilla) — the in-hook damage rewrite this drives
-    /// is NEEDS-LIVE; flips to <c>auto</c> once that pass is done.</summary>
+    /// vanilla, or <c>auto</c>. Default <c>auto</c>; the in-hook rewrite was live-verified with
+    /// the two-player 115% curve.</summary>
     public int EnemyDamage { get; init; } = PlayerCountScalingRule.Auto;
 
     /// <summary>coop.ini <c>xp_rate</c>: the host's own experience gains, percent of vanilla,
@@ -1023,7 +1026,7 @@ public sealed record CoopConfig
             // Player-count scaling: "auto", a percent (with or without %), clamped 50-400;
             // absent or unparseable -> the record's own default (see the property group).
             EnemyHealth = PlayerCountScalingRule.ParseSetting(
-                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Auto),
+                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Vanilla),
             EnemyDamage = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Auto),
             XpRate = PlayerCountScalingRule.ParseSetting(

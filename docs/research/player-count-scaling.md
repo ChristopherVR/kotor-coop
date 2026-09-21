@@ -1,7 +1,11 @@
 # Player-count scaling (review blocker #9, roadmap #41)
 
 Every fight was vanilla-balanced for two PCs. Four coop.ini keys now scale with the number of
-connected players. **Status: built, NEEDS-LIVE; save/load health idempotence remains open.**
+connected players. **Status: built; health save/load idempotence remains open.** The safe default
+for `enemy_health` is currently vanilla 100%; `auto` remains an explicit opt-in until persisted
+scaled maxima can be identified without multiplying them after reload. This prevents another
+automatic multiplication on future loads but does not restore saves that already contain a
+scaled maximum.
 
 ## Keys and curve
 
@@ -17,9 +21,9 @@ count (this instance + connected peers) in `PlayerCountScalingRule.Curve`:
 | 4+ | 250 | 135 | 100 | 250 |
 
 Defaults (three readers agree: `CoopConfig`, `AgentComposition ??`, `BehaviourDigest.Default`,
-shipped ini): `enemy_health = 100`, `enemy_damage = 100` (**OFF until live-verified**, because
-they are the two new engine writes), `xp_rate = auto`, `store_stock = auto`. Set them to `auto`
-once the checklist passes. `store_prices` is NOT built: the price lookup behind
+shipped ini): `enemy_health = 100` (safe vanilla fallback while reload idempotence is open),
+`enemy_damage = auto` (live-verified), `xp_rate = auto`, `store_stock = auto`. Set
+`enemy_health = auto` explicitly to opt into the player-count health curve. `store_prices` is NOT built: the price lookup behind
 `CSWGuiStore::BuyItem` was never traced and needs RE.
 
 ## Wire
@@ -118,7 +122,7 @@ setting must retain its live-verification gate.
 
 ## Live verification (2026-09-19)
 
-Two players on the Endar Spire deck, `enemy_health = auto`: `scaling: enemy health 150%, enemy damage 115%`, then `enemy 0xE 'sithsoldier' hp 15/15 -> 23/23 (150%), read back 23/23` (0x10 the same, `end_gensith` 12 -> 18) on BOTH instances; both agents logged the resolved policy (`2 player(s): enemy health 150% (auto) ...`). Watch item: the host's agent briefly resolved `1 player(s)` about 5 s after the join (12:13:52) before returning to 2; an enemy first sighted in that window keeps 100% for the module. `enemy_health` now defaults `auto`. Not exercised: the damage rewrite at the hit detour (needs a real hostile hit on a player; `hurt` is not one), XP delta scaling, store stock top-up, 3+ players.
+Two players on the Endar Spire deck, with explicit `enemy_health = auto`: `scaling: enemy health 150%, enemy damage 115%`, then `enemy 0xE 'sithsoldier' hp 15/15 -> 23/23 (150%), read back 23/23` (0x10 the same, `end_gensith` 12 -> 18) on BOTH instances; both agents logged the resolved policy (`2 player(s): enemy health 150% (auto) ...`). Watch item: the host's agent briefly resolved `1 player(s)` about 5 s after the join (12:13:52) before returning to 2; an enemy first sighted in that window keeps 100% for the module. The shipped default is now 100% because the saved maximum is currently multiplied again after reload; the explicit auto path remains live-verified. Not exercised: the damage rewrite at the hit detour (needs a real hostile hit on a player; `hurt` is not one), XP delta scaling, store stock top-up, 3+ players.
 
 ## The player-count flap, closed (2026-09-19)
 
