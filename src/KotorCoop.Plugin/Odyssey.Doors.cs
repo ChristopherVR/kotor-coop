@@ -144,6 +144,32 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, uint, void> SendUseObjectInputFn =
         (delegate* unmanaged[Thiscall]<nint, uint, void>)0x00677D10;
 
+    /// <summary>CSWCMessage::SendPlayerToServerInput_ChangeDoorState 0x00677D70;
+    /// __thiscall, two stack arguments, ret 8. CSWCDoor::ToggleDoorState passes the door
+    /// object id and 0x2725 for the native open/change-state request.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, uint, void>
+        SendChangeDoorStateInputFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, uint, void>)0x00677D70;
+
+    /// <summary>Sends native door-state input without unlocking or writing door state.</summary>
+    public static bool ChangeDoorState(uint doorId, uint operation = 0x2725)
+    {
+        nint client = GetClient();
+        if (client == 0)
+        {
+            return false;
+        }
+
+        nint message = GetSWCMessageFn(client);
+        if (message == 0)
+        {
+            return false;
+        }
+
+        SendChangeDoorStateInputFn(message, doorId, operation);
+        return true;
+    }
+
     /// <summary>
     /// CSWParty::IsPartyTogether 0x00635350 — <c>__thiscall</c>, NO arguments (bare <c>ret</c>
     /// at 0x0063538D). Reads the player's position and compares every party member's against

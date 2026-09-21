@@ -469,3 +469,37 @@ Saved-module compatibility now distinguishes unvisited modules from unreadable o
 saved state. A present nested module with missing GIT, malformed data, or duplicate members
 returns unknown instead of falling back to pristine object IDs. **18 save-digest tests** pass
 with warnings as errors; commit `d46b316`. Truly unvisited modules retain pristine prediction.
+
+### Campaign continuation: Manaan and transition detection (2026-09-22)
+
+Both games were backed up before staging; named `campaign_before` saves and the
+host's `campaign_seafloor` preserve the checkpoints. At 04:41 the host entered
+`manm28ab` through the shipped airlock dialogue and walked from (127.3,98.2) to
+(127.3,97.5). The joiner stayed in `manm28aa`, but the host's teardown was falsely
+classified as Load Game and forced an unnecessary HostReload rejoin.
+
+Rendered-frame polling can miss a native module request that the engine consumes
+between frames. `ModuleMoveRequestHook` now observes the byte-verified retail
+`SetMoveToModulePending` setter without changing its behavior. Its serial supplements
+the existing pending flags and is consumed on stable frames too, preventing a cancelled
+request from hiding a later genuine load. The x86 stub preserves flags and the retail
+register/stack effects; its full setter bytes were verified against the local binary.
+
+The explicit `usedoor <tag|id>` developer instrument now sends the native door-change
+message for ordinary doors. It preserves locks and OnFailToOpen scripts, while the
+existing linked-door path remains intact. Fresh disassembly confirmed the sender's
+thiscall ABI, two arguments, `ret 8`, and the retail caller's operation 0x2725.
+
+At 04:50:21 `usedoor 28bw` targeted the locked sea-floor door; its shipped
+`k_pman_28b_at01` path returned the host to `manm28aa`. At 04:50:22 the native request
+was observed before teardown and no false HostReload occurred. A subsequent real
+`loadgame campaign_dantooine` at 04:52:50 still produced the expected unannounced-load
+signal. Native warnings-as-errors build and 45 focused door/load-classification tests
+passed. This is engine/log evidence, not visual verification: Windows game capture was
+black. The independently restored host/client saves differed on the first return, so
+that run does not close the complete co-op return check.
+
+Further campaign checks exposed stale world serving: `BuildWorldSnapshot` selected an
+older AUTOSAVE even after a newer host quicksave. Repeated adoption returned the joiner
+to Manaan while the host stood on Dantooine. This is being corrected separately; no
+seamless-campaign completion is claimed.

@@ -483,6 +483,9 @@ internal static unsafe partial class PluginHost
         // every save reaches (CServerExoAppInternal::SaveGame) while the plugin's own spawns
         // are destroyed, then re-issued unchanged. Verify-bytes-or-refuse; coop.ini
         // save_flush=0 opts out. NEEDS-LIVE — the recipe is in the hook's header.
+        bool moveObserverInstalled = ModuleMoveRequestHook.Install(out string moveObserverDiagnostic);
+        Log($"module move observer {(moveObserverInstalled ? "ready" : "NOT installed")}: {moveObserverDiagnostic}");
+
         if (SaveFlushHook.Install(out string saveFlushDiagnostic))
         {
             Log($"save flush: {saveFlushDiagnostic}");

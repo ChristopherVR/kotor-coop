@@ -456,6 +456,14 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void UseDoor(nint player, uint playerId)
     {
+        // An explicitly named/id'd ordinary door uses the native client input path. This
+        // preserves linked-door behavior below while allowing locked-door OnFailToOpen scripts
+        // (for example the Manaan airlock) to run through the real server handler.
+        if (TryUseExplicitOrdinaryDoor(player))
+        {
+            return;
+        }
+
         if (!ResolveOpenAndGatherForDoorTransition(
                 player, playerId, "the walk",
                 out nint door, out uint doorId, out string module, out string entry,
@@ -506,6 +514,82 @@ internal sealed unsafe partial class CheatController
             together
                 ? $"walking through door 0x{doorId:X} ({distance:F1}m) -> '{module}'"
                 : $"door 0x{doorId:X} -> '{module}' BUT the party is not together");
+    }
+
+    /// <summary>Handles only an explicitly targeted ordinary door. Missing and linked targets
+    /// fall through to the established transition path and its existing refusal text.</summary>
+    private bool TryUseExplicitOrdinaryDoor(nint player)
+    {
+        uint requestedId = block.CheatTarget;
+        string text = ReadCheatText();
+        if (requestedId == 0 && text.Length == 0)
+        {
+            return false;
+        }
+
+        nint door;
+        string what;
+        if (requestedId != 0)
+        {
+            door = Odyssey.ResolveDoor(requestedId);
+            what = $"0x{requestedId:X}";
+            if (door == 0 && Odyssey.ResolveServerObject(requestedId) != 0)
+            {
+                Answer(SharedBlock.CheatStatusNoTarget,
+                    DoorUse.Explain(DoorUseVerdict.RefuseNotADoor, what, 0f));
+                return true;
+            }
+        }
+        else
+        {
+            byte* tag = block.CheatText;
+            int length = 0;
+            while (length < SharedBlock.CheatTextLength - 1 && tag[length] != 0)
+            {
+                length++;
+            }
+
+            door = Odyssey.FindDoorByTag(tag, length);
+            what = $"'{text}'";
+        }
+
+        if (door == 0 || Odyssey.DoorIsLinked(door))
+        {
+            return false;
+        }
+
+        float distance = player != 0
+            ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door))
+            : 0f;
+        DoorUseVerdict verdict = DoorUse.Decide(
+            hasPlayer: player != 0,
+            found: true,
+            isDoor: true,
+            linked: true, // bypass only the linked-transition restriction for this instrument
+            openState: Odyssey.GetDoorOpenState(door),
+            transitionPending: Odyssey.IsAreaTransitionPending(),
+            moviePlaying: Odyssey.IsMoviePlaying(),
+            distance: distance);
+
+        if (verdict != DoorUseVerdict.Use)
+        {
+            Answer(SharedBlock.CheatStatusRefused, DoorUse.Explain(verdict, what, distance));
+            return true;
+        }
+
+        uint doorId = *(uint*)(door + 0x04);
+        bool locked = Odyssey.IsDoorLocked(door);
+        PluginHost.Log(
+            $"door: sending native ChangeDoorState 0x2725 to ordinary door 0x{doorId:X} "
+            + $"({distance:F1}m)" + (locked ? ", LOCKED" : string.Empty));
+
+        bool sent = Odyssey.ChangeDoorState(doorId);
+        Answer(
+            sent ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            sent
+                ? $"door 0x{doorId:X}: native ChangeDoorState sent"
+                : $"door 0x{doorId:X}: could not send native ChangeDoorState");
+        return true;
     }
 
     /// <summary>

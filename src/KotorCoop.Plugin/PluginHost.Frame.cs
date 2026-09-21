@@ -53,6 +53,7 @@ internal static unsafe partial class PluginHost
     /// raises neither of those two, and was misclassified as an unannounced Load without this).
     /// Reset at the same two points <see cref="_transitionPending"/> is.</summary>
     private static bool _moveToModulePendingSeen;
+    private static uint _observedModuleMoveSerial;
 
     /// <summary>Party-table probe window (docs/research/transition-crashes.md, 2026-09-03, the
     /// two-companion host warp crash): for the first few seconds after every world change the
@@ -448,6 +449,13 @@ internal static unsafe partial class PluginHost
             // flag rather than by guesswork. Setting the key to 0 restores the pre-fix behaviour
             // (and, with it, travel-map-init-crash.md's own map-init fault), which is exactly what
             // a clean A/B needs.
+            // Consume once per frame, including stable frames: a cancelled request must
+            // not suppress a later real load. The native observer catches requests that
+            // were already drained before this rendered frame (Manaan airlock, for example).
+            uint moduleMoveSerial = ModuleMoveRequestHook.Serial;
+            bool moduleMoveRequested = moduleMoveSerial != _observedModuleMoveSerial;
+            _observedModuleMoveSerial = moduleMoveSerial;
+
             if (_closeClientWorldOnTransition && Odyssey.CloseClientWorldIfServerModuleGone())
             {
                 Log("transition: closed the client world ahead of the map init");
@@ -460,6 +468,11 @@ internal static unsafe partial class PluginHost
                 // against freed objects on the first frame of the new module.
                 if (_epoch != 0)
                 {
+                    if (moduleMoveRequested)
+                    {
+                        Log($"world: native module move request {moduleMoveSerial} preceded teardown");
+                    }
+
                     // Roadmap item 14 phase 2's load-detection primitive (see WorldLoadRule.cs):
                     // judged HERE, before _transitionPending/_travelAnnounced/
                     // _moveToModulePendingSeen are reset below, because that reset is exactly what
@@ -489,7 +502,7 @@ internal static unsafe partial class PluginHost
                     // transition — not the softer, already-fixed SaveIdentityMismatch path
                     // SaveLineage absorbs, but the harder edge-triggered one it does not touch.
                     if (WorldLoadRule.IsUnannouncedTeardown(
-                    _transitionPending || _travelAnnounced || _moveToModulePendingSeen))
+                    _transitionPending || _travelAnnounced || _moveToModulePendingSeen || moduleMoveRequested))
                     {
                         _view?.PublishWorldLoadObserved();
                         Log("world: unannounced teardown - treating as a load, not a transition");
