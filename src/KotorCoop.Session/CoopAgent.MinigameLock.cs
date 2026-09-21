@@ -60,8 +60,10 @@ public sealed partial class CoopAgent
         _minigameLockPeers.Clear();
         foreach (RemotePeer peer in peers)
         {
+            // Away snapshots retain the last module and minigame bit. A turret game-over
+            // must release the waiting player as soon as that absence is announced.
             _minigameLockPeers.Add(new MinigameLockPeer(
-                peer.PeerId, peer.Name, peer.State.IsInMinigame, peer.State.Module));
+                peer.PeerId, peer.Name, peer.State.IsInMinigame && !peer.State.IsAway, peer.State.Module));
         }
 
         MinigameLockRule rule = new(Enabled: true, TimeoutMs: _settings.MinigameLockTimeoutMs);

@@ -44,6 +44,8 @@ public class MinigameLockLoopbackTests
     {
         public bool InMinigame { get; set; }
 
+        public bool ReadFails { get; set; }
+
         public bool LockAsserted { get; private set; }
 
         public string LockOwnerName { get; private set; } = string.Empty;
@@ -61,7 +63,7 @@ public class MinigameLockLoopbackTests
             state = new PlayerState(
                 Vector3f.Zero, 0f, Module, 100, 0,
                 Flags: InMinigame ? PlayerState.FlagInMinigame : 0);
-            return true;
+            return !ReadFails;
         }
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers)
@@ -98,8 +100,10 @@ public class MinigameLockLoopbackTests
         return false;
     }
 
-    [Fact]
-    public async Task TheHostRacingLocksTheClientAndNamesTheRacer()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheHostRacingLocksTheClientAndNamesTheRacer(bool leavesWorld)
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
         using CoopClient client = new(
@@ -165,11 +169,20 @@ public class MinigameLockLoopbackTests
             // And the racer is never locked by their own race.
             Assert.False(hostBridge.LockAsserted, "the racer locked itself");
 
-            hostBridge.InMinigame = false;
+            if (leavesWorld)
+                hostBridge.ReadFails = true; // Game over: stale minigame bit survives in last state.
+            else
+                hostBridge.InMinigame = false;
 
             Assert.True(
                 await WaitForAsync(() => !clientBridge.LockAsserted, Timeout),
                 "the client's lock never released when the host left the minigame");
+
+            if (leavesWorld)
+            {
+                Assert.True(hostAgent.IsAway);
+                Assert.False(client.HostLost); // Release precedes the separate host-away timeout.
+            }
         }
         finally
         {
