@@ -1,7 +1,10 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using KotorCoop.Agent;
 using KotorCoop.Memory;
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 using Xunit;
@@ -26,6 +29,7 @@ public class CoopCommandDispatcherTests
     private sealed class MenuBridge : IGameBridge
     {
         public volatile bool InWorld;
+        public volatile bool HasReadableModule;
 
         public string Description => "menu-test";
 
@@ -37,6 +41,12 @@ public class CoopCommandDispatcherTests
         {
             state = new PlayerState(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
             return InWorld;
+        }
+
+        public bool TryReadCurrentModule(out string module)
+        {
+            module = "lev_m40aa";
+            return HasReadableModule;
         }
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
@@ -302,12 +312,12 @@ public class CoopCommandDispatcherTests
             Path.GetTempPath(), "kotorcoop-worldserve-" + Guid.NewGuid().ToString("N"));
         string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
         Directory.CreateDirectory(saveDirectory);
-        byte[] saveBytes = "not a real save, just bytes to round-trip"u8.ToArray();
+        byte[] saveBytes = BuildValidWorldSave("lev_m40aa");
         File.WriteAllBytes(Path.Combine(saveDirectory, "SAVEGAME.sav"), saveBytes);
 
         int port = FreePort();
 
-        MenuBridge bridge = new();
+        MenuBridge bridge = new() { HasReadableModule = true };
         using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
         CoopConfig config = new() { ClientLoadRejoin = true };
         CoopCommandDispatcher dispatcher = new(
@@ -365,12 +375,12 @@ public class CoopCommandDispatcherTests
             Path.GetTempPath(), "kotorcoop-worldserve-adopt-" + Guid.NewGuid().ToString("N"));
         string saveDirectory = Path.Combine(gameDirectory, "saves", "000001 - AUTOSAVE");
         Directory.CreateDirectory(saveDirectory);
-        byte[] saveBytes = "the host's world, as a first-time joiner would receive it"u8.ToArray();
+        byte[] saveBytes = BuildValidWorldSave("lev_m40aa");
         File.WriteAllBytes(Path.Combine(saveDirectory, "SAVEGAME.sav"), saveBytes);
 
         int port = FreePort();
 
-        MenuBridge bridge = new();
+        MenuBridge bridge = new() { HasReadableModule = true };
         using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
         CoopConfig config = new()
         {
@@ -497,6 +507,63 @@ public class CoopCommandDispatcherTests
     /// in a fixed high range instead and binds BOTH protocols explicitly on each: two adjacent
     /// draws share nothing, and an excluded block costs one attempt, not fifty.
     /// </summary>
+    /// <summary>A minimal but parseable save, so the host-serving path exercises the same
+    /// identity and active-module guards used for a real adopted world.</summary>
+    private static byte[] BuildValidWorldSave(string module)
+    {
+        GffWriter ifo = new("IFO ");
+        ifo.Root.SetDword("Mod_NextObjId0", 295);
+        ifo.Root.SetDword("Mod_NextObjId1", 0);
+
+        GffWriter git = new("GIT ");
+        git.Root.AddList("Creature List")
+            .Add(4)
+            .SetResRef("TemplateResRef", "n_sith")
+            .SetDword("ObjectId", 2);
+
+        byte[] moduleSave = BuildErf("SAV ",
+            ("Module", 2014, ifo.ToBytes()),
+            (module, 2023, git.ToBytes()));
+        return BuildErf("SAV ", (module, 2057, moduleSave));
+    }
+
+    /// <summary>Minimal ERF builder matching the archive header/table decoded by
+    /// <see cref="ErfArchive"/>.</summary>
+    private static byte[] BuildErf(string fileType, params (string Resref, int Type, byte[] Data)[] members)
+    {
+        int keysOffset = 160;
+        int valuesOffset = keysOffset + 24 * members.Length;
+        int dataOffset = valuesOffset + 8 * members.Length;
+        byte[] file = new byte[dataOffset + members.Sum(member => member.Data.Length)];
+        Encoding.ASCII.GetBytes(fileType.PadRight(4)).CopyTo(file, 0);
+        Encoding.ASCII.GetBytes("V1.0").CopyTo(file, 4);
+        WriteU32(file, 0x10, (uint)members.Length);
+        WriteU32(file, 0x18, (uint)keysOffset);
+        WriteU32(file, 0x1C, (uint)valuesOffset);
+
+        int nextData = dataOffset;
+        for (int i = 0; i < members.Length; i++)
+        {
+            (string resref, int type, byte[] data) = members[i];
+            int key = keysOffset + 24 * i;
+            Encoding.ASCII.GetBytes(resref).CopyTo(file, key);
+            WriteU32(file, key + 16, (uint)i);
+            file[key + 20] = (byte)type;
+            file[key + 21] = (byte)(type >> 8);
+
+            int value = valuesOffset + 8 * i;
+            WriteU32(file, value, (uint)nextData);
+            WriteU32(file, value + 4, (uint)data.Length);
+            data.CopyTo(file, nextData);
+            nextData += data.Length;
+        }
+
+        return file;
+    }
+
+    private static void WriteU32(byte[] destination, int offset, uint value) =>
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(offset, 4), value);
+
     private static int FreePort()
     {
         for (int attempt = 0; attempt < 50; attempt++)
