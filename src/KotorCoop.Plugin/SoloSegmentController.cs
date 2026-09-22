@@ -46,6 +46,10 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
 
     private readonly SoloSegmentMachine _machine = new();
 
+    // Separate exact-event latch for the zero/one-companion Korriban final test. The generic
+    // solo detector remains unchanged and continues to handle its existing catalogued events.
+    private readonly KorribanFinalTestMachine _korriban = new();
+
     /// <summary>Highest <see cref="RemovePartyMemberHook"/> serial already drained, so a capture
     /// already fed to <see cref="_machine"/> is never fed twice. Same dedup shape
     /// <see cref="ItemTemplateSpawnController"/> already uses for its own hook ring.</summary>
@@ -86,16 +90,28 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
     public void Invalidate()
     {
         _machine.Invalidate();
+        // PluginHost invalidates on ordinary module changes as well as world teardown. Keep
+        // the exact Korriban route latch across ordinary travel, but a world-load serial edge
+        // proves that this is a different world/session lineage.
+        if (_korriban.Active && block.WorldLoadSerial != _korriban.StartWorldLoadSerial)
+        {
+            _korriban.Reset();
+        }
         RemovePartyMemberHook.Invalidate();
         _lastDrainedRemovePartySerial = 0;
         Array.Clear(_lastKnownAlive);
         _lastPartyMask = 0;
-        block.LocalInSoloSegment = 0;
+        block.LocalInSoloSegment = _korriban.Active ? 1u : 0u;
     }
 
     /// <summary>Session end: same as a module change for this controller's own state — there
     /// is no engine write to undo here (unlike the spectate half), only the level to drop.</summary>
-    public void ReleaseSession() => Invalidate();
+    public void ReleaseSession()
+    {
+        Invalidate();
+        _korriban.Reset();
+        block.LocalInSoloSegment = 0;
+    }
 
     public void OnFrame()
     {
@@ -121,11 +137,19 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
             Invalidate();
         }
 
+        byte* moduleBuf = stackalloc byte[SharedBlock.ModuleNameLength];
+        int moduleLength = Odyssey.ReadCurrentModuleName(moduleBuf, SharedBlock.ModuleNameLength);
+        string module = moduleLength > 0
+            ? Encoding.ASCII.GetString(moduleBuf, moduleLength)
+            : string.Empty;
+
         if (!Odyssey.TryReadPartyRoster(out _, out uint partyMask))
         {
-            // No party table to read yet (main menu, mid-transition) — nothing to decide this
-            // pass. Deliberately does NOT touch block.LocalInSoloSegment: a transient read
-            // failure must not blink an active segment off and back on.
+            // The generic detector needs the roster, but Korriban can still record verified
+            // route modules through a transient roster-read failure. A pending return waits
+            // until both the native roster and KOR_FINAL_TEST value are readable.
+            AdvanceKorriban(module, partyRosterKnown: false, partyMask: 0);
+            block.LocalInSoloSegment = _machine.Active || _korriban.Active ? 1u : 0u;
             return;
         }
 
@@ -134,13 +158,12 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
 
         int companionCount = System.Numerics.BitOperations.PopCount(partyMask);
 
-        byte* moduleBuf = stackalloc byte[SharedBlock.ModuleNameLength];
-        int moduleLength = Odyssey.ReadCurrentModuleName(moduleBuf, SharedBlock.ModuleNameLength);
-        string module = moduleLength > 0 ? Encoding.ASCII.GetString(moduleBuf, moduleLength) : string.Empty;
-
         bool partySelectionOpen = IsPartySelectionOpen();
 
-        SoloSegmentEvent burstEvent = DrainRemovePartyMemberHook(module);
+        bool allowGenericKorribanTrigger =
+            !string.IsNullOrEmpty(module)
+            && !string.Equals(module, KorribanFinalTestMachine.StartModule, StringComparison.OrdinalIgnoreCase);
+        SoloSegmentEvent burstEvent = DrainRemovePartyMemberHook(module, allowGenericKorribanTrigger);
         if (burstEvent == SoloSegmentEvent.Began)
         {
             PluginHost.Log($"solo segment: began in {module} — script trigger "
@@ -182,9 +205,11 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
         }
 
         SoloSegmentEvent evt = _machine.Step(_catalogue, new SoloSegmentInputs(
-            module, companionCount, removedAlive, partySelectionOpen));
+            module, companionCount, removedAlive, partySelectionOpen),
+            allowRosterDropTrigger: allowGenericKorribanTrigger);
 
-        block.LocalInSoloSegment = _machine.Active ? 1u : 0u;
+        AdvanceKorriban(module, partyRosterKnown: true, partyMask);
+        block.LocalInSoloSegment = _machine.Active || _korriban.Active ? 1u : 0u;
 
         switch (evt)
         {
@@ -198,6 +223,119 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
         }
     }
 
+    /// <summary>Receives the exact pre-VM dialogue-action dispatch from the shared
+    /// CSWSDialog::RunScript observer. `isClient` is intentionally not inverted into host
+    /// proof; the agent-published role word is the positive authority source.</summary>
+    public void ObserveKorribanDialogueScript(
+        ReadOnlySpan<byte> module,
+        ReadOnlySpan<byte> scriptResref,
+        uint objectSelf,
+        bool isClient,
+        uint sequence)
+    {
+        _ = objectSelf;
+        _ = isClient;
+        if (!_enabled
+            || !module.SequenceEqual("korr_m35aa"u8)
+            || !scriptResref.SequenceEqual("k_pkor_partyleav"u8)
+            || !IsPositiveHostSession())
+        {
+            return;
+        }
+
+        // Capture before the VM executes the exact script that removes the companions. If
+        // native party-table access is unavailable, fail closed and let no later event infer
+        // the missing starting identities.
+        if (!Odyssey.TryReadPartyRoster(out _, out uint partyMask))
+        {
+            return;
+        }
+
+        if (_korriban.TryBegin(
+            KorribanFinalTestMachine.StartModule,
+            KorribanFinalTestMachine.StartScript,
+            sessionActive: true,
+            block.WorldLoadSerial,
+            partyMask,
+            sequence))
+        {
+            // The observer runs before the dialogue VM removes companions or starts the route
+            // transition. Publish ownership at this exact edge so the agent can mirror the
+            // host's solo state even when no later frame occurs in m35.
+            block.LocalInSoloSegment = 1u;
+            PluginHost.Log($"solo segment: began in {KorribanFinalTestMachine.StartModule} — exact final-test dialogue action; initial party mask 0x{partyMask:X3}");
+        }
+    }
+
+    /// <summary>Receives the exact m35 area OnEnter dispatch before `kor35_enter` runs.</summary>
+    public void ObserveKorribanAreaScript(
+        ReadOnlySpan<byte> module,
+        ReadOnlySpan<byte> scriptResref,
+        uint objectSelf,
+        bool isClient,
+        uint sequence)
+    {
+        _ = objectSelf;
+        _ = isClient;
+        if (!_enabled
+            || !module.SequenceEqual("korr_m35aa"u8)
+            || !scriptResref.SequenceEqual("kor35_enter"u8)
+            || !IsPositiveHostSession())
+        {
+            return;
+        }
+
+        _korriban.ObserveAreaScript(
+            KorribanFinalTestMachine.StartModule,
+            KorribanFinalTestMachine.ReturnScript,
+            sessionActive: true,
+            block.WorldLoadSerial,
+            sequence);
+    }
+
+    private void AdvanceKorriban(string module, bool partyRosterKnown, uint partyMask)
+    {
+        bool sessionActive = IsPositiveHostSession();
+        bool finalKnown = true;
+        int finalTestValue = 0;
+        if (_korriban.HasPendingReturnDispatch
+            && string.Equals(module, KorribanFinalTestMachine.StartModule, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!partyRosterKnown)
+            {
+                finalKnown = false;
+            }
+            else
+            {
+                byte* name = stackalloc byte[14];
+                "KOR_FINAL_TEST"u8.CopyTo(new Span<byte>(name, 14));
+                finalKnown = Odyssey.TryReadGlobalNumber(name, 14, out finalTestValue);
+            }
+        }
+
+        bool wasActive = _korriban.Active;
+        bool ended = _korriban.Step(
+            module,
+            sessionActive,
+            block.WorldLoadSerial,
+            partyMask,
+            finalTestValue,
+            partyRosterKnown,
+            finalKnown);
+        if (ended && wasActive && _korriban.CompletedLastStep)
+        {
+            PluginHost.Log("solo segment: ended — Korriban final-test progress exceeded 3 and the original companion slots returned");
+        }
+    }
+
+    private bool IsPositiveHostSession()
+    {
+        return block.Command == SharedBlock.CommandSpawnAndDrive
+            && block.TryGetLocalSessionRole(out bool isHost)
+            && isHost
+            && AgentLiveness.Evaluate(block.AgentHeartbeat, Environment.TickCount64) == AgentLivenessState.Live;
+    }
+
     /// <summary>
     /// Moves every fresh <see cref="RemovePartyMemberHook"/> capture into
     /// <see cref="_machine"/>'s own burst detector, one call at a time and in capture order (the
@@ -209,7 +347,7 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
     /// any — there is at most one real one per drain, since the machine no-ops every call after
     /// the first while already active.
     /// </summary>
-    private SoloSegmentEvent DrainRemovePartyMemberHook(string module)
+    private SoloSegmentEvent DrainRemovePartyMemberHook(string module, bool allowTrigger)
     {
         // Walk every slot rather than tracking which ones wrapped since last pass — the ring is
         // small (RemovePartyMemberHook.Capacity) and this runs once a frame, the same reasoning
@@ -262,7 +400,8 @@ internal sealed unsafe class SoloSegmentController(SharedBlockView block)
 
             PluginHost.Log($"solo segment debug: RemovePartyMember slot {npcSlot} in {module}");
 
-            SoloSegmentEvent evt = _machine.NoteRemovePartyMemberCall(_catalogue, module, _anyModule, tickMs);
+            SoloSegmentEvent evt = _machine.NoteRemovePartyMemberCall(
+                _catalogue, module, _anyModule, tickMs, allowTrigger);
             if (evt == SoloSegmentEvent.Began)
             {
                 lastBegan = evt;

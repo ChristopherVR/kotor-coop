@@ -397,7 +397,8 @@ internal static unsafe partial class PluginHost
         //      sequence. Readers accept only stable even generations, so a position and
         //      facing cannot come from different agent updates. No size/offset growth.
         // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
-        _block->Version = 72;
+        // 73 adds the agent-published local session role word at 0x4E44.
+        _block->Version = 73;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

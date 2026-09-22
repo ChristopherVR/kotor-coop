@@ -384,13 +384,32 @@ internal static unsafe partial class PluginHost
         // The gate shares the single CSWSDialog::RunScript splice with the optional observer
         // below, and skips only two exact resrefs in the proven Leviathan module on a proven
         // client. Unknown role/module/name and any byte mismatch fail open.
-        if (DialogueNodeActionGateHook.Install(_view!, out string leviathanGateDiagnostic))
+        bool dialogueScriptHookInstalled = DialogueNodeActionGateHook.Install(_view!, out string leviathanGateDiagnostic);
+        if (dialogueScriptHookInstalled)
         {
             Log($"Leviathan dialogue actions: {leviathanGateDiagnostic}");
         }
         else
         {
             Log($"Leviathan dialogue action gate NOT installed: {leviathanGateDiagnostic}");
+        }
+
+        // Korriban's zero/one-companion solo boundary has two exact script cues: the Uthar
+        // dialogue action begins the latch, and the later m35 area OnEnter can complete it
+        // only after the final-test global and original roster identities are restored.
+        bool areaScriptHookInstalled = KorribanAreaEnterHook.Install(_view!, out string korribanAreaDiagnostic);
+        if (areaScriptHookInstalled)
+        {
+            Log($"Korriban area scripts: {korribanAreaDiagnostic}");
+        }
+        else
+        {
+            Log($"Korriban area-script observer NOT installed: {korribanAreaDiagnostic}");
+        }
+        SetKorribanScriptObserversReady(dialogueScriptHookInstalled && areaScriptHookInstalled);
+        if (!dialogueScriptHookInstalled || !areaScriptHookInstalled)
+        {
+            Log("Korriban exact solo-segment detection disabled because both verified script observers are required");
         }
 
         // A default-OFF diagnostic, not a feature: four read-only splices on the delayed-

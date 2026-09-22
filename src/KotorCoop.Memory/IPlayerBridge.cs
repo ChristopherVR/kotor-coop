@@ -28,6 +28,11 @@ public interface IPlayerBridge
     /// </summary>
     void ClearCoopState() { }
 
+    /// <summary>Agent -> plugin. Publishes a valid local session role atomically: known host,
+    /// known client, or unknown when no live session role can be proven. Default is a no-op on
+    /// bridges without an in-process plugin block.</summary>
+    void SetLocalSessionRole(bool sessionActive, bool isHost) { }
+
     /// <summary>How many remote-player slots this bridge publishes into.</summary>
     int RemoteSlotCapacity => 0;
 

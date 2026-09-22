@@ -66,6 +66,8 @@
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentCatalogue.cs" Link="Shared\SoloSegmentCatalogue.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentMachine.cs" Link="Shared\SoloSegmentMachine.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentRule.cs" Link="Shared\SoloSegmentRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\KorribanFinalTestMachine.cs" Link="Shared\KorribanFinalTestMachine.cs" />
+    <Compile Include="..\KotorCoop.Protocol\LocalSessionRoleRule.cs" Link="Shared\LocalSessionRoleRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\Packets\CompanionDamageSlots.cs" Link="Shared\CompanionDamageSlots.cs" />
     <Compile Include="..\KotorCoop.Protocol\PartyCensusRule.cs" Link="Shared\PartyCensusRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ExeImageDigestRule.cs" Link="Shared\ExeImageDigestRule.cs" />

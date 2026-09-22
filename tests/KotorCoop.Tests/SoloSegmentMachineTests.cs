@@ -171,6 +171,21 @@ public class SoloSegmentMachineTests
         Assert.True(machine.Active);
     }
 
+    [Fact]
+    public void KorribanGenericRosterDropCanBeDisabledWithoutChangingOtherModules()
+    {
+        SoloSegmentMachine machine = new();
+
+        machine.Step(Catalogue, Inputs("korr_m35aa", 1));
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(
+            Catalogue, Inputs("korr_m35aa", 0), allowRosterDropTrigger: false));
+        Assert.False(machine.Active);
+
+        machine.Invalidate();
+        machine.Step(Catalogue, Inputs("sta_m45ac", 1));
+        Assert.Equal(SoloSegmentEvent.Began, machine.Step(Catalogue, Inputs("sta_m45ac", 0)));
+    }
+
     // ---- verified Taris duel-player pin -------------------------------------------
 
     [Fact]
@@ -300,6 +315,21 @@ public class SoloSegmentMachineTests
         Assert.Equal(SoloSegmentEvent.Began,
             machine.NoteRemovePartyMemberCall(Catalogue, "sta_m45ac", anyModuleAllowed: false, nowTicks: 1_200));
         Assert.True(machine.Active);
+    }
+
+    [Fact]
+    public void KorribanGenericBurstCanBeDisabledWithoutChangingOtherCataloguedModules()
+    {
+        SoloSegmentMachine machine = new();
+
+        Assert.Equal(SoloSegmentEvent.None, machine.NoteRemovePartyMemberCall(
+            Catalogue, "korr_m35aa", anyModuleAllowed: false, nowTicks: 1_000, allowTrigger: false));
+        Assert.Equal(SoloSegmentEvent.None, machine.NoteRemovePartyMemberCall(
+            Catalogue, "korr_m35aa", anyModuleAllowed: false, nowTicks: 1_100, allowTrigger: false));
+        Assert.False(machine.Active);
+
+        SoloSegmentMachine otherModule = new();
+        Assert.Equal(SoloSegmentEvent.Began, NoteBurst(otherModule, "sta_m45ac"));
     }
 
     [Fact]

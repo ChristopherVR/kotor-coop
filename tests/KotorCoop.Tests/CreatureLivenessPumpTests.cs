@@ -29,6 +29,8 @@ public class CreatureLivenessPumpTests
 
         public uint AnomalyCount { get; set; }
 
+        public List<(bool Active, bool IsHost)> SessionRoles { get; } = [];
+
         public string Description => "liveness-test";
 
         public bool IsAttached => true;
@@ -51,6 +53,11 @@ public class CreatureLivenessPumpTests
 
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
 
+        public void SetLocalSessionRole(bool sessionActive, bool isHost) =>
+            SessionRoles.Add((sessionActive, isHost));
+
+        public void ClearCoopState() => SetLocalSessionRole(sessionActive: false, isHost: false);
+
         public List<CreatureLivenessEntry> ReadCreatureLiveness() => Scan;
 
         public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries)
@@ -70,6 +77,10 @@ public class CreatureLivenessPumpTests
     {
         public bool EnemyAuthority { get; set; }
 
+        public bool Connected { get; set; } = true;
+
+        public bool Lost { get; set; }
+
         public List<(string Module, IReadOnlyList<CreatureLivenessEntry> Entries)> Published { get; } = [];
 
         public IReadOnlyList<CreatureLivenessEntry> ToDeliver { get; set; } = [];
@@ -80,7 +91,9 @@ public class CreatureLivenessPumpTests
 
         public uint LocalPeerId => EnemyAuthority ? CoopHost.HostPeerId : 2;
 
-        public bool IsConnected => true;
+        public bool IsConnected => Connected;
+
+        public bool HostLost => Lost;
 
         public string LocalName => "test";
 
@@ -178,6 +191,38 @@ public class CreatureLivenessPumpTests
         Assert.Equal(2, entries.Count);
         Assert.Contains(entries, e => e.ObjectId == 0x14 && e.State == CreatureLivenessState.Alive);
         Assert.Contains(entries, e => e.ObjectId == 0x35 && e.State == CreatureLivenessState.Dead);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void AgentPublishesRoleFromSessionAuthorityEvenWhenPartyRosterChannelIsUnavailable(
+        bool authority,
+        bool expectedHost)
+    {
+        (CoopAgent agent, LivenessBridge bridge, _) = Build(authority);
+
+        // LivenessBridge does not implement party-roster publication, so this checks the role
+        // comes from the actual session authority predicate and remains available to clients
+        // before any host-party-roster snapshot exists.
+        agent.PumpOnce();
+
+        Assert.Contains((true, expectedHost), bridge.SessionRoles);
+    }
+
+    [Fact]
+    public void AgentClearsRoleForInactiveSessionAndHostLoss()
+    {
+        (CoopAgent agent, LivenessBridge bridge, LivenessSession session) = Build(authority: true);
+        session.Connected = false;
+        agent.PumpOnce();
+        Assert.Contains((false, false), bridge.SessionRoles);
+
+        bridge.SessionRoles.Clear();
+        session.Connected = true;
+        session.Lost = true;
+        agent.PumpOnce();
+        Assert.Contains((false, false), bridge.SessionRoles);
     }
 
     [Fact]

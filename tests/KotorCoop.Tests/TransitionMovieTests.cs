@@ -255,8 +255,9 @@ public class TransitionMovieTests
         // docs/research/class-and-power-grants.md); 69 = the player-count scaling words (0x4C38);
         // 70 = the client-cast enemy-effect relay (0x4C60..0x4C80, docs/research/enemy-effects.md).
         // 71 = companion presence publication sequences in the existing slot padding;
-        // 72 = live runtime difficulty sample in the container-loot region's free tail.
-        Assert.Equal(72, int.Parse(version.Groups[1].Value));
+        // 72 = live runtime difficulty sample in the container-loot region's free tail;
+        // 73 = agent-published local session role at 0x4E44.
+        Assert.Equal(73, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

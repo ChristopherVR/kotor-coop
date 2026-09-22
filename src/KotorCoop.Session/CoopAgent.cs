@@ -540,6 +540,14 @@ public sealed partial class CoopAgent
             return;
         }
 
+        // Publish an explicit local role proof rather than inferring host from the absence of
+        // the host-party-roster valid bit (which is also false before a client's first roster,
+        // when the channel is disabled, or during teardown). The packed field is a level and
+        // is refreshed every pump; ClearCoopState zeros it on disconnect/host-loss.
+        _bridge.SetLocalSessionRole(
+            sessionActive: _session.IsConnected,
+            isHost: _session.IsConnected && _session.IsEnemyAuthority);
+
         // Each channel is gated on the negotiated capability set: a mod difference that
         // would corrupt a channel disables that channel for the session (a different
         // globals catalogue drops world state; a different save drops enemies/doors/items)

@@ -435,6 +435,7 @@ public sealed partial class KotorGameBridge
     /// </summary>
     internal static readonly (string Name, int Offset)[] SessionScopedBlockLevels =
     [
+        ("local session role", BlockLocalSessionRole),
         ("remote peers", BlockRemoteCount),
         ("enemy census", BlockEnemyCount),
         ("enemy presence", BlockEnemyPresenceCount),

@@ -20,7 +20,6 @@ public class SoloSegmentCatalogueTests
 
     [Theory]
     [InlineData("tar_m02ae")]
-    [InlineData("korr_m35aa")]
     public void ContainsTheScriptBackedDuelRingModules(string module)
     {
         SoloSegmentCatalogue catalogue = new();
@@ -45,6 +44,7 @@ public class SoloSegmentCatalogueTests
         // feature's brief named it in error; this pins that the catalogue does NOT include it.
         Assert.False(catalogue.Contains("sta_m45ab"));
         Assert.False(catalogue.Contains("tar_m03aa"));
+        Assert.False(catalogue.Contains("korr_m35aa")); // exact-script Korriban machine owns this boundary
     }
 
     [Fact]

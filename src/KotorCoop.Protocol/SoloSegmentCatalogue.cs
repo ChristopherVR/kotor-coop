@@ -10,9 +10,10 @@ namespace KotorCoop.Protocol;
 ///     party loop and pins the player with `SetMinOneHP` for the duel; `k_ptar_duelend*` clears
 ///     that pin. The module is the real Upper City Cantina, not the similarly named Lower City
 ///     modules.
-///   korr_m35aa — Korriban's Sith Academy student-duel sequence. `k_pkor_partyleav.ncs`
-///     removes active companions in its party loop; `k_pkor_duelend.ncs` clears the scripted
-///     duel actor's pin (it does not target the player).
+///   Korriban's final-test path is intentionally handled by <see cref="KorribanFinalTestMachine"/>
+///     rather than this generic roster-drop detector. `k_pkor_partyleav.ncs` can remove zero
+///     or one companion, so a generic drop/burst signal can miss the exact start or misclassify
+///     an unrelated roster edit in the same module.
 ///   sta_m45ac — the shield-generator floor and Bastila's chamber. `k_psta_door.ncs`, at the
 ///     door tagged `k45_door_bast1` (its twin `k45_door_bast2` on the far side of the same
 ///     chamber), fires NINE consecutive `RemovePartyMember` calls — every possible companion,
@@ -37,10 +38,10 @@ namespace KotorCoop.Protocol;
 public sealed class SoloSegmentCatalogue
 {
     /// <summary>Modules with a shipped, script-backed forced-solo or duel removal path. The
-    /// two Star Forge modules are from docs/research/star-forge-finale.md §3.3/§3.5; the Taris
-    /// and Korriban entries are pinned by docs/research/duel-rings.md.</summary>
+    /// two Star Forge modules are from docs/research/star-forge-finale.md §3.3/§3.5; Taris is
+    /// pinned by docs/research/duel-rings.md. Korriban uses its exact script machine.</summary>
     public static readonly IReadOnlyList<string> BaseModules =
-        ["tar_m02ae", "korr_m35aa", "sta_m45ac", "sta_m45ad"];
+        ["tar_m02ae", "sta_m45ac", "sta_m45ad"];
 
     /// <summary>Modules where the shipped duel script pins the PLAYER (not a named NPC) with
     /// <c>SetMinOneHP(GetFirstPC(), TRUE)</c>. This is a separate, exact list rather than a

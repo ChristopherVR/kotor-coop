@@ -94,6 +94,38 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Reads a numeric script global through the engine's own type-checked getter. The engine
+    /// getter zeroes the out value when the name is absent or has another type; callers that
+    /// need positive proof must use a nonzero threshold (Korriban's <c>KOR_FINAL_TEST &gt; 3</c>
+    /// return gate does). This deliberately does not claim to distinguish a genuine zero from a
+    /// missing/type-mismatched global.
+    ///
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool TryReadGlobalNumber(byte* nameAscii, int nameLength, out int value)
+    {
+        value = 0;
+        if (nameAscii == null || nameLength <= 0 || nameLength > 22)
+        {
+            return false;
+        }
+
+        nint table = GetGlobalVariableTable();
+        if (table == 0)
+        {
+            return false;
+        }
+
+        byte* exoString = stackalloc byte[8];
+        BuildGlobalNameExoString(exoString, nameAscii, nameLength);
+        sbyte nativeValue = 0;
+        GetGlobalValueNumberFn(table, exoString, &nativeValue);
+        CExoStringDtorFn(exoString);
+        value = nativeValue;
+        return true;
+    }
+
+    /// <summary>
     /// Writes a boolean or number script global by NAME through the engine's own type-checked
     /// setter (never a raw table poke — see the file header). <paramref name="asBoolean"/>
     /// picks the setter; <paramref name="value"/> is 0/1 for a boolean (any nonzero is coerced

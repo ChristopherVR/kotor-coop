@@ -118,7 +118,10 @@ public sealed class SoloSegmentMachine
     /// <summary>Runs one pass. Call this every frame/tick regardless of whether anything looks
     /// like it changed — the drop-edge detection needs to see every companion-count sample to
     /// tell a real drop from having simply missed a call.</summary>
-    public SoloSegmentEvent Step(SoloSegmentCatalogue catalogue, SoloSegmentInputs inputs)
+    public SoloSegmentEvent Step(
+        SoloSegmentCatalogue catalogue,
+        SoloSegmentInputs inputs,
+        bool allowRosterDropTrigger = true)
     {
         int before = _lastCompanionCount;
         int after = inputs.CompanionCount;
@@ -174,7 +177,8 @@ public sealed class SoloSegmentMachine
         // satisfies this — the baseline pass alone must never look like a drop.
         bool dropEdge = before >= 1 && after == 0;
 
-        if (!dropEdge
+        if (!allowRosterDropTrigger
+            || !dropEdge
             || !catalogue.Contains(inputs.Module)
             || !inputs.RemovedCompanionsAlive
             || inputs.PartySelectionOpen)
@@ -214,7 +218,8 @@ public sealed class SoloSegmentMachine
     /// conditions once a segment is running, exactly as it already does for the drop-edge path.
     /// </summary>
     public SoloSegmentEvent NoteRemovePartyMemberCall(
-        SoloSegmentCatalogue catalogue, string module, bool anyModuleAllowed, int nowTicks)
+        SoloSegmentCatalogue catalogue, string module, bool anyModuleAllowed, int nowTicks,
+        bool allowTrigger = true)
     {
         if (_recentCallCount < MaxRecentCalls)
         {
@@ -226,7 +231,7 @@ public sealed class SoloSegmentMachine
             _recentCallTicks[MaxRecentCalls - 1] = nowTicks;
         }
 
-        if (Active)
+        if (Active || !allowTrigger)
         {
             return SoloSegmentEvent.None;
         }
