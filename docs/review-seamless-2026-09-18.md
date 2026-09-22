@@ -2,6 +2,27 @@
 
 This checklist contains the open or partly verified campaign, system, and external-work items. A status of **Needs live** means implementation exists but the specified game or hardware path has not been proved on the current build. A **Missing** status means implementation or a safe design is still required. Historical findings, run logs, and supporting detail are preserved in [the dated review archive](review-seamless-2026-09-18-history.md); this checklist is the current index.
 
+## Immediate blockers and acceptance order
+
+The experience is **not yet verified seamless**. Work through these groups in parallel,
+then use the detailed tables below as the acceptance checklist:
+
+1. **Campaign blockers:** diagnose the real Leviathan rescuer-switch crash; finish and
+   live-test the dark-side hostile-companion handoff; recover safely from a selected
+   terminal-credits save; verify the Korriban final-test solo boundary.
+2. **Current-build regressions:** repeat joiner-led Zhar reward, companion following,
+   automatic missing-PC recovery, save-menu ghost flushing, and fresh transition/movie
+   announcements after agent restart. Passing unit tests does not close these live checks.
+3. **Missing systems:** player-placed mines, per-object local variables, an exact saved
+   enemy-scaling baseline, store prices, and difficulty agreement still require implementation
+   or an explicit scope decision. Their detailed rows remain open.
+4. **End-to-end and external acceptance:** a natural new-game campaign, long-session and
+   three-player checks, separate-network joining, controllers, Linux/Deck, and supported mod
+   combinations are not proved by the local two-instance rig.
+
+The dated archive is supporting evidence, not a second completion checklist. A staged pass
+closes only the exact behavior observed; it does not close its natural prerequisite path.
+
 ## Campaign
 
 | Area | State | Next action / evidence |
@@ -12,11 +33,11 @@ This checklist contains the open or partly verified campaign, system, and extern
 | Recruitment coverage across all companions | **Partial; needs live** | Recruitment sync is on by default; Carth and Zaalbar are live-confirmed. Exercise the seven remaining story recruits—Bastila, Mission, T3, Canderous, Juhani, HK-47, and Jolee—on the real dialogue path and confirm both rosters. See [dialogue-consequences.md](research/dialogue-consequences.md). |
 | Jedi class grant through Dorak | **Verified, staged path** | Real Dorak choices granted Guardian host→joiner and Sentinel joiner→host. The questionnaire eligibility flag was staged; run the natural prerequisite path and verify the joiner's level-up screen. Each player chooses their own feats/powers. See [class-and-power-grants.md](research/class-and-power-grants.md). |
 | Zhar saber construction reward | **Live verified, host-led Sentinel** | `6495505` corrects the item liveness pointer offset. The real Zhar 100–103 chain at 06:59:33–53 produced one yellow `g_w_lghtsbr04` grant and one peer apply. Both saved shared inventories contain exactly one saber, with stack 1 and DELETING 0; neither pre-reward save contains it. Recheck the joiner-led direction on this corrected build; natural training prerequisites remain part of the full campaign check. |
-| Leviathan capture, rescuer control, escape, and gear return | **Unresolved; needs live diagnosis** | The earlier staged capture/transformer dialogue did not switch control to Canderous and its saved `Lev_Escape` value was invalid. A fresh value-4 save is verified; repeat the real transformer path before attributing failure to missing implementation. Rescue and gear restoration remain unverified on both instances. See [leviathan.md](research/leviathan.md). |
+| Leviathan capture, rescuer control, escape, and gear return | **Unresolved; needs live diagnosis** | The 2026-09-23 real interrogation reached entry 106 and `k_plev_transfrm1` with live `Lev_Escape=4`. At 07:17:19 the engine froze the party and the controlled-NPC edge began the solo segment; 125 ms later the host crashed at `0x005678B2`. The joiner released its locks and resumed solo play. Diagnose the saved crash dump before repeating; rescuer usability, rescue, and gear return remain unverified. See [leviathan.md](research/leviathan.md). |
 | Sith-fighter turret ambush completion | **Needs live; prior failure** | The joiner refused and parked as designed, but a prior unattended host run returned to the main menu. Complete the mandatory turret sequence with both players and verify host completion, follower return, and no teardown. See [minigames.md](research/minigames.md). |
 | Client-led party-select departure | **Needs live** | No completed run proves the joiner can initiate the Ebon Hawk departure through the party-select screen. Test from an eligible post-Endar Spire save; verify either successful departure or a clean refusal with no stuck session. See [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md). |
 | Taris duel-ring parking | **Needs live** | The retail player-pin boundary and zero/one-companion handling are implemented. Exercise the real duel and confirm the peer is parked and released without entering the ring. See [duel-rings.md](research/duel-rings.md). |
-| Korriban duel-ring parking with zero/one companion | **Missing safe trigger; needs research/live evidence** | Existing removal-burst detection needs at least two removals; no safe player-targeted boundary is verified for the Korriban script. Map the guarded `k35_init_duel` state or another exact signal before enabling parking. See [duel-rings.md](research/duel-rings.md). |
+| Korriban final-test solo boundary | **Missing runtime signal; resource flow verified** | The named `k35_init_duel`/`k_pkor_duelend` flow is an NPC-versus-NPC scene, not the player's solo boundary. Uthar's “Then we go now” dialogue entry 93 calls `k_pkor_partyleav`; one companion yields one removal (the existing sampled roster-drop path may detect it, but the two-call burst cannot), while zero companions yields no roster edge. Both cases still need a stale-state-safe story start signal for peer spectating. Return restoration is on `m35aa` entry when `KOR_FINAL_TEST > 3` (`KOR_ADD_PARTY` and `AddPartyMember`). Verify exact start/restore cues live before enabling parking across areas. See [duel-rings.md](research/duel-rings.md). |
 | Dark-side companion availability removal | **Needs live** | `c907120` mirrors confirmed companion removals through the engine; test the summit party-removal path and resulting roster on both instances. |
 | Dark-side hostile companion handoff | **Missing** | No runtime faction/ownership promotion is implemented. Safe handoff must cover body identity, movement, damage, death, and clearing companion follow state. See [dark-side-branch.md](research/dark-side-branch.md). |
 | Real Star Forge Bastila/Malak fights | **Needs live** | Forced-trigger evidence does not prove the shipped real fights. Exercise the actual fights and confirm the joiner parks, watches, and rejoins cleanly. See [star-forge-finale.md](research/star-forge-finale.md). |
@@ -27,7 +48,7 @@ This checklist contains the open or partly verified campaign, system, and extern
 
 Recent campaign changes are committed locally: `678f810` guards party-select panel access; `c907120` mirrors companion availability removals; `68f47f0` retries solo-return adoption while retaining the captured character; `c4bb5dd` waits for native save readiness; and `9f6a8e1` records the campaign grant and recovery state. The related recent series includes inventory reconciliation on world teardown, retained global shadows/reload rebinding, repeated cinematic-leg admission, and possessed-item liveness validation.
 
-The prior `campaign-checks11` managed build passed **138 focused tests with warnings as errors** and its native plugin build passed. The subsequent rejoin and live-item fixes (`79c9492`, `6495505`) passed **66 focused managed tests with warnings as errors** in `campaign-checks12`. Those checks do not close any row marked Needs live.
+The prior `campaign-checks11` managed build passed **138 focused tests with warnings as errors** and its native plugin build passed. The subsequent rejoin and live-item fixes (`79c9492`, `6495505`) passed **66 focused managed tests with warnings as errors** in `campaign-checks12`. The announcement-baseline fix `e521ea4` and the in-progress handoff also passed **149 focused managed tests with warnings as errors** in `campaign-checks13`; that native handoff is still under review and was not deployed for the campaign evidence above. Those checks do not close any row marked Needs live.
 
 | Area | State | Next action / evidence |
 |---|---|---|

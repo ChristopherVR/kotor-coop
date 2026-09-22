@@ -1,10 +1,9 @@
 # Duel-ring solo parking (2026-09-21)
 
-The shipped duel scripts are catalogued for the existing solo-segment detector. This remains a
-bounded detection change: it does not write solo mode, faction, party state, or any new packet
-field. Taris now also has a direct player-pin boundary, which closes the zero/one-companion gap
-for that ring. Korriban remains on the catalogue and RemovePartyMember-burst path until a
-player-targeted boundary is proven for its scripts.
+The shipped Taris duel has an exact player-pin edge for the zero/one-companion case. Korriban
+also strips party members for its final-test departure, but the similarly named duel triggers
+are a separate NPC-versus-NPC scene. Its zero/one-companion final-test path still needs a
+verified start/end signal that remains valid across the Korriban area transitions.
 
 ## Evidence from the shipped KOTOR resources
 
@@ -26,42 +25,116 @@ The edge is consumed while the party-selection GUI is open, so a manual solo/ben
 not replay as a story event. Korriban's named-creature pin is intentionally not treated as a
 player boundary.
 
-## Korriban start-cue research
+## Korriban trigger re-evaluation (2026-09-23)
 
-The Korriban resources do expose a narrower story cue, but it is not yet a safe substitute for a
-player pin read. `korr_m35aa.rim:m35aa.git` has a `TriggerList` entry whose
-`TemplateResRef` is `k35_init_duel` at the duel-room coordinates (185.303, 74.0769, 6.15).
-The compiled `k35_init_duel.ncs` is therefore the actual entry boundary: it is a trigger script,
-not an area OnEnter or a module transition. Its action stream resolves `kor35_sithduel` and
-`kor35_captive9`, then stages the duel conversation. The same GIT has a separate
-`k35_init_duelend` trigger for the exit boundary.
+The trigger named `k35_init_duel` is a real trigger boundary, but it is **not evidence that the
+player has entered a forced-solo duel**. The installed `korr_m35aa` resources identify it as a
+scripted fight between two NPCs:
 
-The trigger fire alone does not prove that the duel branch ran. A fresh disassembly of the
-installed `k35_init_duel.ncs` (4,397 bytes) finds conditional jumps at byte offsets 3125 and
-3149 before the first `kor35_sithduel`/`kor35_captive9` resolutions at 3175 and 3220. Those
-guards include the script's entering-object/global state checks; the plugin has no verified
-read of the corresponding state. Treating every native `k35_init_duel` fire as a parking edge
-would therefore park on a false-positive trigger entry, so the runtime trigger consumer remains
-deferred until the guard is observed and mapped on the live game.
+- `m35aa.git` places `k35_init_duel` at (185.303, 74.077, 6.15); its `.utt` is one-shot and
+  runs `k35_init_duel.ncs`. That script checks that the entering object equals
+  `GetPartyMemberByIndex(0)` and that local boolean 0 on the trigger has not already been set.
+  On the successful path it sets that bit, changes factions for `kor35_sithduel` and
+  `kor35_captive9`, and signals user-defined event 135 to the Sith duelist.
+- The two `.utc` blueprints mark both actors `Min1HP=1`; neither is a party member. The trigger
+  script does not pin the PC. The duel actor's user-defined handler equips its lightsaber, while
+  `kor35_duelconv.dlg` is a short, textless scripted interlude: after its first entry delay it
+  runs `k_pkor_duelend.ncs`, which clears min-one-HP on `kor35_captive9` and commands
+  `kor35_sithduel` to attack that captive. The captive's user-defined event 1007 cancels the
+  Sith's combat, sends it back to its waypoint, changes its faction, and resumes that dialogue.
+- The separate one-shot `k35_init_duelend` trigger runs `k_pkor_initduele.ncs`. Its success path
+  has its own local-boolean-0 guard, requires the captive object to be valid and
+  `KOR_END_HOSTILE` false, then starts `kor35_duelconv`. That dialogue and its scripts are part
+  of the same NPC-on-NPC sequence, not a player-duel end signal.
 
-The party-removal script is a later, script-level cue. `k_pkor_partyleav.ncs` writes the
-transient module globals `KOR_REMOVE_PCS` and `KOR_REMOVE_PC`, loops over active party slots,
-and calls the engine removal action for each valid slot. `KOR_DUEL_NUM` is read by
-`k_pkor_duelnum.ncs`/`k_pkor_hasduels.ncs` and written by `k35_duc_fight.ncs`; it is a duel
-progress counter, not a documented “duel active” latch. `kor35_duelconv.dlg` ends through
-`k_pkor_duelend`, whose `SetMinOneHP` operand is the named duel actor rather than
-`GetFirstPC`.
+This resolves the earlier ambiguity in the trigger names and in `k_pkor_duelend`: their combat
+roles are the Sith duelist and the captive NPC. A `k35_init_duel` trigger observation must not
+start solo spectating, including when the player has zero or one companion. The exact local-bit
+transition can establish that the script passed its one-shot/global/object guards, but it still
+only establishes this NPC scene; no player-duel classification follows from it.
 
-This leaves two evidence-backed facts: the trigger volume is the real Korriban start boundary,
-and the removal loop is the real companion-strip boundary. The plugin has no verified, safe read
-of trigger overlap or a stable PC/local duel flag, so no Korriban position heuristic, global
-write, or speculative native trigger hook is added. With zero or one companion, Korriban remains
-NEEDS-LIVE for a future trigger observation that can be tied to the exact `k35_init_duel` event
-and its script guard state.
+### The separate player final-test party strip
 
-`SoloSegmentCatalogue.BaseModules` now includes both modules. The regular roster-drop edge
-remains catalogue-gated, and `solo_segment_any_module` remains OFF by default. Existing
-Star Forge and Leviathan handling is unchanged.
+The actual Korriban party strip is a different story beat. In `kor35_utharwynn.dlg`, entry 93 is
+Uthar's “Then we go now.” line and runs `k_pkor_partyleav.ncs`; entry 94 then runs
+`k_pkor_finalleav.ncs`. The first script stores `GetPartyMemberCount()` in module global
+`KOR_REMOVE_PCS`, stores each active companion's NPC index in `KOR_REMOVE_PC<n>`, and calls
+`RemovePartyMember` for each one. This is the final-test departure, separate from the NPC duel
+triggers above. With one companion it emits only one removal call; with none it emits none, so
+the existing two-call burst detector cannot be the only way to recognize this beat.
+
+The installed story data also gives a bounded return/restore path. In `kor35_enter.ncs`
+(`m35aa.are` OnEnter), when `KOR_FINAL_TEST > 3`, the script sets `KOR_ADD_PARTY`, re-adds
+each saved NPC index with `AddPartyMember`, and moves the restored companions to the academy
+waypoints. In the `korr_m39aa` final-test dialogue, the terminal exit scripts unlock the acid
+door and starmap door and write distinct progression values: `k39_yth_leave` sets
+`KOR_FINAL_TEST=5`, `k39_uth_leave` sets 6, and `k39_yth_redeem` sets 7. The m36aa area-entry
+script `k36_pkor_enter` also gates door/escape behavior on the final-test and party-restoration
+globals. These resources establish story progression and party restoration, but they do not
+provide a player-readable, verified runtime boundary that can keep a spectate segment continuous
+across the academy, valley, and final-test areas. No Korriban solo-segment trigger is added on
+this evidence alone.
+
+The final-test outcomes also do not expose a Taris-style PC min-one-HP edge. The m39aa combat
+handlers that call `SetMinOneHP` clear it on `OBJECT_SELF` and/or `kor39_yuthura`; none of the
+installed m39aa scripts in this pass target `GetFirstPC()`. The hostile branch is separate:
+`kor36_endsith1.dlg` has replies that run `k_pkor_end_host.ncs`, which closes the academy door,
+sets `KOR_END_HOSTILE`, changes factions, and starts combat against the PC. On later entry to
+m35aa, `kor35_enter` uses that flag to run scene cleanup, including removing the captive NPCs.
+
+The local evidence was read from the installed GOG KOTOR resources: `m35aa.git`, the trigger
+`.utt` files, `kor35_sithduel.utc`, `kor35_captive9.utc`, the named `.ncs` scripts and `.dlg`
+files, plus `m35aa.are`, `m36aa.are`, and the `korr_m39aa` final-test dialogue. The conditional
+control flow was checked against the compiled scripts; names of intermediate values emitted by
+the decompiler are not treated as source evidence.
+
+`KOR_DUEL_NUM` is a separate student/prisoner-combat counter: it is read by
+`k_pkor_duelnum.ncs`/`k_pkor_hasduels.ncs` and written by `k35_duc_fight.ncs`; it is not a
+reliable active flag for the final test or the player duel.
+
+The true player final test is therefore distinct from the zero/one-companion gap at the NPC
+duel trigger. The shipped start and restore scripts give better candidates than that trigger,
+but there is not yet a runtime detector or live coop proof.
+
+### Candidate runtime cue and remaining proof
+
+The narrowest existing-code design to investigate is a story-specific cue from
+`k_pkor_partyleav`, with its removal data correlated against the real removal hook, rather than
+broadening the current two-call burst rule:
+
+1. On the engine thread, read `KOR_REMOVE_PCS` and the corresponding `KOR_REMOVE_PC<n>` values
+   alongside each captured `RemovePartyMember` call in `korr_m35aa`. Require the count to match
+   the party roster observed immediately before the script and require each captured NPC slot to
+   match the saved NPC index. For one companion, the existing sampled `>=1 -> 0` roster-drop
+   path may already start a segment if it observes the transition in `korr_m35aa`; the two-call
+   burst path alone cannot. The correlated story cue would avoid relying on a transient sample
+   and qualify the zero-party case too: even with no NPC to remove, the other player may still
+   need the local solo owner classified for spectating.
+2. Retain this specifically identified segment across only the verified final-test modules;
+   do not use the general machine's current module-change end rule for it. On return to
+   `korr_m35aa`, require both `KOR_FINAL_TEST > 3` and the `KOR_ADD_PARTY` restore path, then end
+   after the saved companion actually appears in the local roster. The final-test threshold
+   alone is persistent progression state, so it must not end a segment in an unrelated module
+   or before a roster restoration is observed.
+
+This is a proposal, not an implementation. It still needs a scan proving these globals and
+their ordering are exclusive to the identified story path, confirmation that local global reads
+on both peers observe the required values at the removal hook, and live zero/one-companion runs
+through the return. In particular, the zero-companion start cue must come from the story action
+itself or an independently verified dialogue/script-context signal; there is no removal or
+roster edge to infer it from. `Odyssey.Globals` currently has engine getter signatures used by its write
+primitive but no general read API; global deltas also exist in the agent-side state bridge, but
+their timing relative to the native removal hook is not established. If the global/roster
+correlation is stale or ambiguous, add a source-specific script-context signal only after its
+engine path is independently identified. Do not implement a guessed VM hook or extend the NPC
+duel trigger.
+
+`SoloSegmentCatalogue.BaseModules` includes `korr_m35aa` because the final-test departure script
+can remove the party there. A single removal can be caught by the existing sampled roster-drop
+edge if that transition is observed; the burst detector itself still requires two calls. The
+regular roster-drop edge remains catalogue-gated, and
+`solo_segment_any_module` remains OFF by default. Existing Star Forge and Leviathan handling is
+unchanged. The NPC-duel triggers documented above are not additional solo-segment boundaries.
 
 ## Dark-side companion authority
 

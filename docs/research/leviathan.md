@@ -530,3 +530,28 @@ as `minigames.md` §13 and `star-forge-finale.md` §9.6. No rig, no game launche
 **A useful accident:** the joiner's plugin log showed `dialogue-node-pub` / `dialogue-node-drive` lines from `lev_m40aa`'s own arrival conversation, i.e. BOTH engines started the forced Saul/torture conversation natively and the joiner published node advances too. That is the double-fire the design (§5.3 #6) predicted; it works through the existing dialogue adopt path, but whether the two copies stay in step through the whole torture scene is still to be watched with a human clicking.
 
 **Still missing (unchanged):** #2 the rescuer's body on the joiner's screen, #3 re-resolving cached player pointers across the two swaps, #4 the `SwitchPlayerCharacter` guard if the joiner's engine executes the node action, #5 gear return.
+
+
+## 9. Real interrogation reaches the rescuer switch, then crashes (2026-09-23)
+
+The staged two-instance run used the current `678f810` native plugin and
+`campaign-checks12` managed agents. Canderous was recruited before the host entered
+`lev_m40aa` at 07:04:07; the live `Lev_Escape` value was verified as 4. Both engines
+entered the shipped capture scene. The host completed the real `lev40_saul403`
+interrogation and reached entry 106 (`k_plev_tortfade`, then `k_plev_transfrm1`).
+No direct writes to the controlled-NPC field were used.
+
+At 07:17:19.827 the host logged the engine's party freeze; at 07:17:19.828 its active
+party became empty and the controlled-NPC edge began the Leviathan solo segment.
+At 07:17:19.953 the game raised access violation `0xC0000005` at `0x005678B2`,
+then exited at 07:17:23. Windows Error Reporting independently records the same
+fault offset (`0x001678B2`). The instruction dereferences `EBP`; the call chain and
+register state still need diagnosis before attributing the fault to the mod or
+incomplete staging. The joiner released its plugin locks and resumed solo play at
+07:17:28.
+
+This proves the real script reached the controlled-NPC boundary. It does **not**
+prove a usable rescuer body, a completed rescue, spectator visuals, or gear return.
+The crash dump and both agent logs were preserved locally under
+`%TEMP%/kotorcoop-leviathan-20260923-071719/`. The next check must diagnose this
+failure and repeat the native switch, rather than replacing it with a field poke.
