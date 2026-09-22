@@ -56,6 +56,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieStaging.cs" Link="Plugin\MovieStaging.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MovieRelayQueue.cs" Link="Plugin\MovieRelayQueue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlReturnRule.cs" Link="Plugin\ControlReturnRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DialogueNodeActionGateRule.cs" Link="Plugin\DialogueNodeActionGateRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlPcRecoveryRule.cs" Link="Plugin\ControlPcRecoveryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorDesiredStateTracker.cs" Link="Plugin\DoorDesiredStateTracker.cs" />

@@ -137,23 +137,6 @@ internal static unsafe class DelayEventProbeHook
 
     private const nint DiscardResume = 0x004B0E25;
 
-    /// <summary>
-    /// <c>CSWSDialog::RunScript 0x0059ED70</c>, immediately before it hands the node's action
-    /// script to <c>CVirtualMachine::RunScript</c> — the ONE place a <c>.dlg</c> node's own
-    /// <c>Script</c> field is executed. Spliced at the <c>mov ecx,[0x7A3A00]</c> that loads the
-    /// VM: at that instruction <c>eax</c> already holds the object id the script will run AS
-    /// (its <c>OBJECT_SELF</c>) and the local <c>CExoString</c> holding the resref sits at
-    /// <c>[esp+4]</c>. Answers, in one line per node, both halves of §22's own open question:
-    /// did the node's script run at all, and if so as WHOM.
-    /// </summary>
-    private const nint DialogScript = 0x0059EDC1;
-
-    private static ReadOnlySpan<byte> DialogScriptAnchor => [0x1C, 0x8B, 0x41, 0x04];
-
-    private static ReadOnlySpan<byte> DialogScriptPrologue => [0x8B, 0x0D, 0x00, 0x3A, 0x7A, 0x00];
-
-    private const nint DialogScriptResume = 0x0059EDC7;
-
     // ---- install -------------------------------------------------------------------------
 
     public static bool Install(out string diagnostic)
@@ -208,16 +191,8 @@ internal static unsafe class DelayEventProbeHook
             return false;
         }
 
-        nint dlgCb = (nint)(delegate* unmanaged[Cdecl]<uint, uint, void>)&OnDialogueScript;
-        if (!Splice(DialogScript, DialogScriptAnchor, DialogScriptPrologue, DialogScriptResume,
-                dlgCb, PushKind.DialogueScript, 0, out string e))
-        {
-            diagnostic = $"dialogue node script: {e}";
-            return false;
-        }
-
         _installed = true;
-        diagnostic = "delayed-event probe armed on all four gates plus the dialogue node script";
+        diagnostic = "delayed-event probe armed on the four delayed-event gates";
         return true;
     }
 
@@ -233,11 +208,6 @@ internal static unsafe class DelayEventProbeHook
         /// same displacement — see <see cref="Install"/>'s own comment.</summary>
         FourStackArgs,
 
-        /// <summary>The <see cref="DialogScript"/> shape: <c>eax</c> (the object id, saved by
-        /// <c>pushad</c> at <c>[esp+0x1C]</c>) and the ADDRESS of the caller's local
-        /// <c>CExoString</c> (<c>[esp+4]</c> before <c>pushad</c>, so <c>esp+0x24</c> after it,
-        /// and <c>esp+0x28</c> once the id has been pushed).</summary>
-        DialogueScript,
     }
 
     private static bool Splice(
@@ -295,13 +265,6 @@ internal static unsafe class DelayEventProbeHook
                 *(int*)(s + n) = displacement;
                 n += 4;
                 args = 1;
-                break;
-
-            case PushKind.DialogueScript:
-                s[n++] = 0xFF; s[n++] = 0x74; s[n++] = 0x24; s[n++] = 0x1C; // push [esp+0x1C]
-                s[n++] = 0x8D; s[n++] = 0x44; s[n++] = 0x24; s[n++] = 0x28; // lea eax,[esp+0x28]
-                s[n++] = 0x50;                                              // push eax
-                args = 2;
                 break;
 
             default:
@@ -442,8 +405,7 @@ internal static unsafe class DelayEventProbeHook
     /// <c>CExoString</c> ({ char* CString; uint Length; }) — read to the first null, never
     /// through the length, per this project's own CExoString-length-includes-the-null rule.
     /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnDialogueScript(uint exoString, uint objectId)
+    private static void RecordDialogueScript(uint exoString, uint objectId)
     {
         try
         {
@@ -481,6 +443,17 @@ internal static unsafe class DelayEventProbeHook
         }
         catch
         {
+        }
+    }
+
+    /// <summary>Called by the single shared CSWSDialog::RunScript splice. This probe only
+    /// records while its own four delayed-event sites are installed; the production action
+    /// gate remains the sole owner of the dialogue splice.</summary>
+    internal static void ObserveDialogueScript(uint exoString, uint objectId)
+    {
+        if (_installed)
+        {
+            RecordDialogueScript(exoString, objectId);
         }
     }
 

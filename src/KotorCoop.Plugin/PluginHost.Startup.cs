@@ -379,6 +379,20 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // The client must let the host execute the two native Leviathan control-transfer
+        // action scripts; running them locally would move/switch the client's own character.
+        // The gate shares the single CSWSDialog::RunScript splice with the optional observer
+        // below, and skips only two exact resrefs in the proven Leviathan module on a proven
+        // client. Unknown role/module/name and any byte mismatch fail open.
+        if (DialogueNodeActionGateHook.Install(_view!, out string leviathanGateDiagnostic))
+        {
+            Log($"Leviathan dialogue actions: {leviathanGateDiagnostic}");
+        }
+        else
+        {
+            Log($"Leviathan dialogue action gate NOT installed: {leviathanGateDiagnostic}");
+        }
+
         // A default-OFF diagnostic, not a feature: four read-only splices on the delayed-
         // script-situation path (DelayCommand -> AddEventDeltaTime -> the AI master's drain),
         // for docs/research/minigames.md §24's root-cause question. See DelayEventProbeHook.
