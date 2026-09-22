@@ -2607,3 +2607,23 @@ The first live proof of `follow_stunt`'s own trigger, on shipped defaults, no sp
 Joiner: `host announced transition to 'stunt_50a'` -> `replaying Lanik's scripted leg into 'stunt_50a' on this engine (announced transition serial 1; follow_stunt)` -> `stunt leg: now in 'stunt_50a'` -> both sides' dialogue gates opened and closed (the scene's conversation ran on both engines) -> `peer's transition movie(s) 50 belong to the stunt leg under way here - not queued for a follow` -> `stunt leg: over - landed in 'sta_m45ac'; the ordinary follow rules apply again` on both. The host also logged the joiner's echoed announce as `a leg this engine is already running ... not replayed` (the de-dup). Both ended in `sta_m45ac` together.
 
 What this does NOT prove: a real script-driven chain of several hops (only the first hop was a warp), the movie carry-over past six, and every other STUNT module (Taris and Bastila visions, romance payoffs); those need a real playthrough (`PLAYTEST.md` 18). It also proves `save <name>`: `save starforge` copied the quicksave to `000005 - starforge`, so this Star Forge state can be reloaded with `loadgame starforge` without replaying anything.
+
+
+### 12.10 Terminal credits with party-select suppression enabled (2026-09-23)
+
+Fresh host/joiner processes used the native GUI-registration guard (`678f810`) and
+`party_select_host_only=1`. From the staged Manaan return checkpoint, host entry
+into `STUNT_56a` at 06:46:26 started the ending chain on both engines. Both reached
+`STUNT_57` at 06:47:44; the joiner logged the later host announcement as already
+inside its own stunt leg, so it did not force a second hop. The ceremony ended
+at approximately 06:49:16. Independent native reads at 06:49 confirmed
+`CClientExoAppInternal+0x4B8` (`creditsActive`) = 1 and `+0x288`
+(`areaNotReady`) = 0 on both processes, in addition to `CREDITPLAY=1`.
+The global alone would not be sufficient evidence because it is mirrored.
+
+The preceding suppression-OFF control run also had scrolling credits visually
+confirmed on both windows. This ON repeat has native completion evidence but no
+new screenshot/visual confirmation. Neither run proves a natural campaign or
+the actual Bastila/Malak fights before the staged ending entry. Logs for this
+run are `agent1-sep23-return.log` and `agent2-sep23-return.log` in the local
+`kotorcoop-review-live` temporary evidence directory.
