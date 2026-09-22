@@ -252,6 +252,11 @@ public sealed partial class CoopCommandDispatcher
     private Task? _rejoinTask;
     private CancellationTokenSource? _rejoinCts;
     private int _rejoinGeneration;
+
+    /// <summary>One warning-only check after an adopted world reconnects: the transferred
+    /// save can match the host's saved map while the host engine is still running a different
+    /// loaded map. This never changes the compatibility verdict or schedules another rejoin.</summary>
+    private readonly PostAdoptionGitMismatchNotice _postAdoptionGitNotice = new();
     // RejoinAfterLoadAsync deliberately disconnects before fetching the adopted world. Keep the
     // watchdog from treating that owned gap as an external disconnect and cancelling its fetch.
     private bool _rejoinOwnsDisconnect;
@@ -363,6 +368,7 @@ public sealed partial class CoopCommandDispatcher
             _wipeRecoveryState = WipeRecoveryState.Initial;
             _hostWorldReplacedState = HostWorldReplacedState.Initial;
             _soloReturnState = SoloReturnRejoinState.Initial;
+            _postAdoptionGitNotice.Reset();
             _soloCapturePending = false;
             _soloCaptureWaiting = false;
             _soloCaptureRequestedMs = 0;
@@ -500,6 +506,17 @@ public sealed partial class CoopCommandDispatcher
             string localModule = bridge.TryReadCurrentModule(out string liveModule)
                 ? liveModule : string.Empty;
             uint localGit = localModule.Length == 0 ? 0 : bridge.ModuleGitDigest(localModule);
+            if (_postAdoptionGitNotice.Observe(
+                localModule,
+                localGit,
+                hostDigest.Module,
+                hostDigest.ModuleGit,
+                manager.LifecycleGeneration,
+                nowMs))
+            {
+                Reply("module data still differs after rejoining. Check matching game data. If the host has not loaded the intended save, have them load it, then rejoin.");
+            }
+
             _soloObservedHostModule = hostDigest.Module;
 
             if (hostLoadEdge)
@@ -1179,6 +1196,15 @@ public sealed partial class CoopCommandDispatcher
                 }
 
                 Reply($"rejoined '{adoption.World.Module}'");
+                long reconnectedGeneration = adoption.Generation + 1;
+                if (!rejoinCts.IsCancellationRequested
+                    && rejoinGeneration == _rejoinGeneration
+                    && manager.LifecycleGeneration == reconnectedGeneration
+                    && manager.Current is not null)
+                {
+                    _postAdoptionGitNotice.Arm(
+                        adoption.World.Module, SessionClock.NowMs, reconnectedGeneration);
+                }
             }
             catch (Exception ex)
             {
