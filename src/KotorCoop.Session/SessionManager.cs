@@ -16,6 +16,9 @@ public enum SessionPhase
     Failed,
 }
 
+/// <summary>A fetched world plus the manager lifecycle generation that owns its pending load.</summary>
+public sealed record RejoinAdoption(AdoptedWorld World, long Generation);
+
 /// <summary>
 /// Owns a co-op session's lifecycle so it can be started, stopped and restarted at runtime
 /// rather than living for the whole process. This is what lets the in-game console (and the
@@ -29,6 +32,7 @@ public enum SessionPhase
 public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettings) : IDisposable
 {
     private readonly Lock _gate = new();
+    private long _lifecycleGeneration;
     private ICoopSession? _session;
     private CoopAgent? _agent;
     private CancellationTokenSource? _cts;
@@ -77,6 +81,30 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     }
 
     public SessionPhase Phase => _phase;
+
+    /// <summary>Identity of the current manager lifecycle, used by background operations that
+    /// must not outlive the session they were triggered from.</summary>
+    public long LifecycleGeneration
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lifecycleGeneration;
+            }
+        }
+    }
+
+    /// <summary>Captures the generation only while <paramref name="expectedSession"/> is
+    /// still the current session, for work queued from a particular pump snapshot.</summary>
+    public bool TryGetCurrentGeneration(ICoopSession expectedSession, out long generation)
+    {
+        lock (_gate)
+        {
+            generation = _lifecycleGeneration;
+            return ReferenceEquals(_session, expectedSession);
+        }
+    }
 
     /// <summary>
     /// Whether <see cref="Reconnect"/> has parameters to reuse — i.e. any
@@ -155,82 +183,88 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     public void Connect(bool host, IPEndPoint? endpoint, SessionSettings settings)
     {
+        lock (_gate)
+        {
+            _lifecycleGeneration++;
+            ConnectCore(host, endpoint, settings);
+        }
+    }
+
+    private void ConnectCore(bool host, IPEndPoint? endpoint, SessionSettings settings)
+    {
         if (!host && endpoint is null)
         {
             Fail("connect: no host address");
             return;
         }
 
-        Disconnect();
+        DisconnectCore();
 
-        lock (_gate)
+        _lastHost = host;
+        _lastEndpoint = endpoint;
+        _lastSettings = settings;
+
+        ICoopSession session;
+        try
         {
-            _lastHost = host;
-            _lastEndpoint = endpoint;
-            _lastSettings = settings;
-
-            ICoopSession session;
-            try
-            {
-                session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
-            }
-            catch (PortInUseException ex)
-            {
-                // Distinct, actionable line rather than a generic bind failure - and Idle,
-                // not Failed: nothing here ever half-started (the socket that would have
-                // backed it never came up), so there is nothing for Disconnect to unwind.
-                Fail(
-                    $"port {ex.Port} is already in use - is another co-op agent already running?",
-                    SessionPhase.Idle);
-                return;
-            }
-            catch (SocketException ex)
-            {
-                Fail($"could not start the session: {ex.Message}", SessionPhase.Idle);
-                return;
-            }
-
-            CoopAgent agent = new(bridge, session, agentSettings);
-
-            // Through a lambda so a sink assigned to this manager AFTER the session started
-            // still hears the agent — the dashboard wires itself up later in startup.
-            agent.Log = line => Log?.Invoke(line);
-
-            CancellationTokenSource cts = new();
-            _session = session;
-            _agent = agent;
-            _cts = cts;
-            _running = agent.RunAsync(cts.Token);
-
-            // A host makes itself discoverable on the LAN so a browsing client can list it
-            // without being told an IP. The player count and current module are read live,
-            // so a browser shows a game in progress (and where) rather than a stale lobby;
-            // the locked flag tells a browsing player a password prompt is coming.
-            if (host)
-            {
-                _discovery = new ServerDiscovery();
-                _discovery.StartAdvertising(
-                    settings.AdvertisedName,
-                    settings.Port,
-                    (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
-                    () => (_session?.GetStats().PeerCount ?? 0) + 1,
-                    locked: settings.Password.Length > 0,
-                    module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty,
-                    // Read live, like the count and the module: a browsing player sees the
-                    // party as it is now, not as it was when the session started.
-                    portraits: bridge.ReadPartyPortraits);
-            }
-
-            // A host has nobody to wait for; only a client's attempt can go unanswered
-            // forever, so only a client arms the timeout.
-            _connectDeadlineMs = host
-                ? 0
-                : SessionClock.NowMs + Math.Max(1, settings.ConnectTimeoutMs);
-
-            SetPhase(SessionPhase.Connecting);
-            _detail = host ? $"hosting on port {settings.Port}" : $"connecting to {endpoint}";
-            Log?.Invoke(_detail);
+            session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
         }
+        catch (PortInUseException ex)
+        {
+            // Distinct, actionable line rather than a generic bind failure - and Idle,
+            // not Failed: nothing here ever half-started (the socket that would have
+            // backed it never came up), so there is nothing for Disconnect to unwind.
+            Fail(
+                $"port {ex.Port} is already in use - is another co-op agent already running?",
+                SessionPhase.Idle);
+            return;
+        }
+        catch (SocketException ex)
+        {
+            Fail($"could not start the session: {ex.Message}", SessionPhase.Idle);
+            return;
+        }
+
+        CoopAgent agent = new(bridge, session, agentSettings);
+
+        // Through a lambda so a sink assigned to this manager AFTER the session started
+        // still hears the agent — the dashboard wires itself up later in startup.
+        agent.Log = line => Log?.Invoke(line);
+
+        CancellationTokenSource cts = new();
+        _session = session;
+        _agent = agent;
+        _cts = cts;
+        _running = agent.RunAsync(cts.Token);
+
+        // A host makes itself discoverable on the LAN so a browsing client can list it
+        // without being told an IP. The player count and current module are read live,
+        // so a browser shows a game in progress (and where) rather than a stale lobby;
+        // the locked flag tells a browsing player a password prompt is coming.
+        if (host)
+        {
+            _discovery = new ServerDiscovery();
+            _discovery.StartAdvertising(
+                settings.AdvertisedName,
+                settings.Port,
+                (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
+                () => (_session?.GetStats().PeerCount ?? 0) + 1,
+                locked: settings.Password.Length > 0,
+                module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty,
+                // Read live, like the count and the module: a browsing player sees the
+                // party as it is now, not as it was when the session started.
+                portraits: bridge.ReadPartyPortraits);
+        }
+
+        // A host has nobody to wait for; only a client's attempt can go unanswered
+        // forever, so only a client arms the timeout.
+        _connectDeadlineMs = host
+            ? 0
+            : SessionClock.NowMs + Math.Max(1, settings.ConnectTimeoutMs);
+
+        SetPhase(SessionPhase.Connecting);
+        _detail = host ? $"hosting on port {settings.Port}" : $"connecting to {endpoint}";
+        Log?.Invoke(_detail);
     }
 
     /// <summary>
@@ -241,22 +275,16 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     private bool TearDownSession()
     {
-        CancellationTokenSource? cts;
-        ICoopSession? session;
-        Task running;
-
-        ServerDiscovery? discovery;
-        lock (_gate)
-        {
-            cts = _cts;
-            session = _session;
-            running = _running;
-            discovery = _discovery;
-            _cts = null;
-            _session = null;
-            _agent = null;
-            _discovery = null;
-        }
+        // Caller holds _gate for the full teardown, including ClearCoopState(), so another
+        // connect cannot install a new session between ownership release and native cleanup.
+        CancellationTokenSource? cts = _cts;
+        ICoopSession? session = _session;
+        Task running = _running;
+        ServerDiscovery? discovery = _discovery;
+        _cts = null;
+        _session = null;
+        _agent = null;
+        _discovery = null;
 
         discovery?.Dispose();
 
@@ -291,7 +319,16 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     public void Disconnect()
     {
-        if (Current is not null)
+        lock (_gate)
+        {
+            _lifecycleGeneration++;
+            DisconnectCore();
+        }
+    }
+
+    private void DisconnectCore()
+    {
+        if (_session is not null)
         {
             OnDisconnecting?.Invoke();
         }
@@ -317,24 +354,23 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     private void TimeoutConnect()
     {
-        IPEndPoint? endpoint;
         lock (_gate)
         {
-            endpoint = _lastEndpoint;
+            IPEndPoint? endpoint = _lastEndpoint;
+
+            TearDownSession();
+            _connectDeadlineMs = 0;
+
+            // A silent LAN address usually means a typo or the host simply isn't up; a silent
+            // address that had to cross a router is much more likely to mean the port was never
+            // forwarded, so name that possibility explicitly rather than leaving a player who
+            // typed a real internet address stuck guessing what "no reply" could mean.
+            string hint = endpoint is not null && !IsLikelyLan(endpoint.Address)
+                ? $" - is UDP port {endpoint.Port} forwarded on the host?"
+                : string.Empty;
+
+            Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}{hint}", SessionPhase.Idle);
         }
-
-        TearDownSession();
-        _connectDeadlineMs = 0;
-
-        // A silent LAN address usually means a typo or the host simply isn't up; a silent
-        // address that had to cross a router is much more likely to mean the port was never
-        // forwarded, so name that possibility explicitly rather than leaving a player who
-        // typed a real internet address stuck guessing what "no reply" could mean.
-        string hint = endpoint is not null && !IsLikelyLan(endpoint.Address)
-            ? $" - is UDP port {endpoint.Port} forwarded on the host?"
-            : string.Empty;
-
-        Fail($"no reply from {(endpoint is null ? "the host" : endpoint.ToString())}{hint}", SessionPhase.Idle);
     }
 
     /// <summary>
@@ -374,7 +410,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// composes for the FIRST join, reused rather than re-derived. Does NOT itself reopen the
     /// co-op socket: the local engine load this kicks off is asynchronous, so the caller polls
     /// <paramref name="bridge"/>'s <c>TryGetAdoptedWorldLoadStatus</c> and calls
-    /// <see cref="Reconnect"/> once it settles (mirrors how <see cref="Poll"/>/<see cref="Connect"/>
+    /// <see cref="CompleteRejoin"/> once it settles (mirrors how <see cref="Poll"/>/<see cref="Connect"/>
     /// are already split for exactly this "cannot block on the game" reason).
     ///
     /// ⚠ NEEDS-LIVE: see <c>KotorGameBridge.TryRequestAdoptedWorldLoad</c>'s own doc comment
@@ -393,31 +429,20 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// install that joined through character creation may have no own save to resolve, and a
     /// single-player save written since must never outrank the co-op character on age. Ignored
     /// when <paramref name="carriedCharacter"/> is null.</param>
-    public async Task<AdoptedWorld?> RejoinAfterLoadAsync(
+    public async Task<RejoinAdoption?> RejoinAfterLoadAsync(
         IGameBridge bridge,
         string gameDirectory,
         (GffStruct Player, SidecarMetadata Metadata)? carriedCharacter,
+        long expectedGeneration,
         CancellationToken cancellationToken,
         bool carriedIsAuthoritative = false,
         bool worldTransferUdpFallback = false)
     {
-        bool host;
-        IPEndPoint? endpoint;
-        SessionSettings? settings;
-        lock (_gate)
+        if (!TryBeginRejoin(expectedGeneration, cancellationToken, out IPEndPoint endpoint,
+                out SessionSettings settings, out long generation))
         {
-            host = _lastHost;
-            endpoint = _lastEndpoint;
-            settings = _lastSettings;
-        }
-
-        if (host || endpoint is null || settings is null)
-        {
-            Log?.Invoke("rejoin: nothing to rejoin (not a joined client, or never connected)");
             return null;
         }
-
-        Disconnect();
 
         AdoptedWorld? adopted;
         if (carriedIsAuthoritative && carriedCharacter is { } coop)
@@ -460,7 +485,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
         // The transfer may complete after an external reset cancelled this generation. Do not
         // ask the native engine to load a late world after ownership has already been revoked.
-        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryRequestAdoptedWorldLoad(bridge, generation, cancellationToken, out string diagnostic))
+        {
+            return null;
+        }
 
         // inSession: true — a rejoin can start from either side of a world. Parked at the
         // game-over menu after a wipe (WipeRecoveryRule) there is no server and the plugin
@@ -469,14 +497,96 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         // all — the main-menu-only request is acked and mooted the instant a server exists.
         // The mid-session replay itself is the path join_mode=newcharacter live-verified
         // 2026-08-29 (docs/research/world-adoption.md).
-        if (!bridge.TryRequestAdoptedWorldLoad(inSession: true, out string diagnostic))
-        {
-            Log?.Invoke($"rejoin: {diagnostic}");
-            return null;
-        }
-
         Log?.Invoke($"rejoin: {diagnostic}");
-        return adopted;
+        return new RejoinAdoption(adopted.Value, generation);
+    }
+
+    private bool TryBeginRejoin(
+        long expectedGeneration,
+        CancellationToken cancellationToken,
+        out IPEndPoint endpoint,
+        out SessionSettings settings,
+        out long generation)
+    {
+        lock (_gate)
+        {
+            endpoint = null!;
+            settings = null!;
+            generation = _lifecycleGeneration;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            if (expectedGeneration != _lifecycleGeneration)
+            {
+                return false;
+            }
+            if (_lastHost || _lastEndpoint is null || _lastSettings is null)
+            {
+                Log?.Invoke("rejoin: nothing to rejoin (not a joined client, or never connected)");
+                return false;
+            }
+
+            endpoint = _lastEndpoint;
+            settings = _lastSettings;
+            DisconnectCore();
+            return true;
+        }
+    }
+
+    private bool TryRequestAdoptedWorldLoad(
+        IGameBridge targetBridge,
+        long generation,
+        CancellationToken cancellationToken,
+        out string diagnostic)
+    {
+        lock (_gate)
+        {
+            if (cancellationToken.IsCancellationRequested || generation != _lifecycleGeneration)
+            {
+                diagnostic = "rejoin cancelled by a session change";
+                return false;
+            }
+
+            if (!targetBridge.TryRequestAdoptedWorldLoad(inSession: true, out diagnostic))
+            {
+                Log?.Invoke($"rejoin: {diagnostic}");
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Runs settled-load bookkeeping and reopens the session only if no user session
+    /// change superseded the adoption while the game was loading. The callback executes under
+    /// the same lifecycle lock as connect/disconnect, before the replacement socket starts.</summary>
+    public bool CompleteRejoin(
+        long generation,
+        CancellationToken cancellationToken,
+        Action onAdoptedLoadSettled)
+    {
+        lock (_gate)
+        {
+            if (cancellationToken.IsCancellationRequested || generation != _lifecycleGeneration)
+            {
+                return false;
+            }
+
+            bool host = _lastHost;
+            IPEndPoint? endpoint = _lastEndpoint;
+            SessionSettings? settings = _lastSettings;
+            if (settings is null)
+            {
+                return false;
+            }
+
+            onAdoptedLoadSettled();
+            _lifecycleGeneration++;
+            Log?.Invoke("reconnecting...");
+            ConnectCore(host, endpoint, settings);
+            return true;
+        }
     }
 
     /// <summary>
@@ -554,25 +664,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// <summary>Reconnects with the parameters of the last <see cref="Connect"/>.</summary>
     public void Reconnect()
     {
-        bool host;
-        IPEndPoint? endpoint;
-        SessionSettings? settings;
-
         lock (_gate)
         {
-            host = _lastHost;
-            endpoint = _lastEndpoint;
-            settings = _lastSettings;
-        }
+            if (_lastSettings is null)
+            {
+                Fail("reconnect: nothing to reconnect to");
+                return;
+            }
 
-        if (settings is null)
-        {
-            Fail("reconnect: nothing to reconnect to");
-            return;
+            _lifecycleGeneration++;
+            Log?.Invoke("reconnecting...");
+            ConnectCore(_lastHost, _lastEndpoint, _lastSettings);
         }
-
-        Log?.Invoke("reconnecting...");
-        Connect(host, endpoint, settings);
     }
 
     /// <summary>Refreshes the phase from the live session each tick (Connecting -&gt;

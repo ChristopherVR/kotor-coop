@@ -80,7 +80,10 @@ public class SessionManagerTests
         ICoopSession firstSession = manager.Current!;
 
         // Disconnect: the session is gone, the game's co-op state is cleared.
+        bool callbackSawLiveClient = false;
+        manager.OnDisconnecting = () => callbackSawLiveClient = manager.Current is CoopClient;
         manager.Disconnect();
+        Assert.True(callbackSawLiveClient, "the disconnect callback could not inspect the live session");
         Assert.Equal(SessionPhase.Disconnected, manager.Phase);
         Assert.Null(manager.Current);
         Assert.Null(manager.Agent);
@@ -127,6 +130,50 @@ public class SessionManagerTests
 
         Assert.Equal(SessionPhase.Failed, manager.Phase);
         Assert.Null(manager.Current);
+    }
+
+    [Fact]
+    public async Task QueuedRejoinFromOldGenerationCannotDisconnectOrReplaceNewSession()
+    {
+        using UdpChannel firstDeadEnd = new(0);
+        using UdpChannel replacementDeadEnd = new(0);
+        LifecycleBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        SessionSettings settings = new() { PlayerName = "Malak", TickRate = 30 };
+
+        manager.Connect(host: false, new IPEndPoint(IPAddress.Loopback, firstDeadEnd.LocalEndPoint.Port), settings);
+        ICoopSession oldSession = manager.Current!;
+        long oldGeneration = manager.LifecycleGeneration;
+        TaskCompletionSource allowStaleRejoin = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The retry owner check has already happened when its delegate is scheduled, but it
+        // has not entered SessionManager yet. A manager generation captured before scheduling
+        // must prevent the worker from tearing down the replacement even if cancellation has
+        // not reached it yet.
+        Task<RejoinAdoption?> staleRejoin = Task.Run(async () =>
+        {
+            await allowStaleRejoin.Task;
+            return await manager.RejoinAfterLoadAsync(
+                bridge, Path.GetTempPath(), carriedCharacter: null, oldGeneration, CancellationToken.None);
+        });
+
+        manager.Connect(
+            host: false,
+            new IPEndPoint(IPAddress.Loopback, replacementDeadEnd.LocalEndPoint.Port),
+            settings);
+        ICoopSession replacement = manager.Current!;
+        Assert.NotSame(oldSession, replacement);
+
+        allowStaleRejoin.SetResult();
+        Assert.Null(await staleRejoin.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Same(replacement, manager.Current);
+        bool staleCompletionCallbackRan = false;
+        Assert.False(manager.CompleteRejoin(
+            oldGeneration, CancellationToken.None, () => staleCompletionCallbackRan = true));
+        Assert.False(staleCompletionCallbackRan);
+        Assert.Same(replacement, manager.Current);
+
+        manager.Disconnect();
     }
 
     /// <summary>

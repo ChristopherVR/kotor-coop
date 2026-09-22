@@ -556,22 +556,22 @@ public sealed partial class CoopCommandDispatcher
             if (ownVerdict == SaveOrLoadVerdict.Load)
             {
                 Reply("you loaded a save - rejoining the host's world");
-                TriggerRejoin(RejoinTrigger.OwnLoad);
+                TriggerRejoin(RejoinTrigger.OwnLoad, session);
             }
             else if (remoteVerdict == SaveOrLoadVerdict.Load)
             {
                 Reply("host loaded a save - rejoining their world");
-                TriggerRejoin(RejoinTrigger.HostReload);
+                TriggerRejoin(RejoinTrigger.HostReload, session);
             }
             else if (hostBackAfterWipe)
             {
                 Reply("the host is back in the world after the wipe - rejoining their world");
-                TriggerRejoin(RejoinTrigger.WipeRecovery);
+                TriggerRejoin(RejoinTrigger.WipeRecovery, session);
             }
             else if (hostWorldReplaced)
             {
                 Reply("the host's world was reloaded - rejoining their world");
-                TriggerRejoin(RejoinTrigger.HostReload);
+                TriggerRejoin(RejoinTrigger.HostReload, session);
             }
             else if (soloReturn || soloCaptureReady)
             {
@@ -584,7 +584,7 @@ public sealed partial class CoopCommandDispatcher
                 if (soloCaptureReady)
                 {
                     Reply("the host returned from a solo section - rejoining their fresh world");
-                    TriggerRejoin(RejoinTrigger.SoloReturn);
+                    TriggerRejoin(RejoinTrigger.SoloReturn, session);
                 }
             }
             else if (bridge.TryGetNewCharacterCapture(out uint chargenState, out _, out _)
@@ -632,7 +632,7 @@ public sealed partial class CoopCommandDispatcher
                     Reply(
                         $"your world still differs from the host's - rejoining automatically "
                         + $"(attempt {nextMismatchState.Attempts} of {PersistentSaveMismatchRule.MaxAttemptsPerWorld})");
-                    TriggerRejoin(RejoinTrigger.SaveMismatch);
+                    TriggerRejoin(RejoinTrigger.SaveMismatch, session);
                 }
                 else if (nextMismatchState.GaveUp && _rejoinState.Phase != RejoinPhase.InFlight)
                 {
@@ -1012,8 +1012,13 @@ public sealed partial class CoopCommandDispatcher
     /// currently holds as the character to bring in — <see cref="SessionSaveWatch.ObserveClient"/>
     /// already wrote it fresh this same tick for an own-load trigger.
     /// </summary>
-    private void TriggerRejoin(RejoinTrigger trigger)
+    private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession)
     {
+        if (!manager.TryGetCurrentGeneration(expectedSession, out long managerGeneration))
+        {
+            return;
+        }
+
         bool gateEnabled = trigger switch
         {
             RejoinTrigger.OwnLoad => ClientLoadRejoinEnabled,
@@ -1047,6 +1052,8 @@ public sealed partial class CoopCommandDispatcher
 
         Log?.Invoke($"session-save: starting rejoin ({trigger})");
 
+        // A queued worker carries the manager epoch captured synchronously with this trigger,
+        // so it cannot adopt against a newer session even if cancellation has not reached it.
         _rejoinCts?.Cancel();
         CancellationTokenSource rejoinCts = new();
         _rejoinCts = rejoinCts;
@@ -1064,7 +1071,7 @@ public sealed partial class CoopCommandDispatcher
         {
             try
             {
-                AdoptedWorld? adopted = null;
+                RejoinAdoption? adoption = null;
                 int maxAttempts = trigger == RejoinTrigger.SoloReturn
                     ? SoloReturnRejoinMaxAttempts : 1;
                 bool adoptedSuccessfully = await RejoinRetryRunner.RunAsync(
@@ -1072,26 +1079,27 @@ public sealed partial class CoopCommandDispatcher
                     TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
                     async (attempt, cancellationToken) =>
                     {
-                        adopted = await manager
+                        adoption = await manager
                         .RejoinAfterLoadAsync(
-                            bridge, gameDirectory, carried, cancellationToken,
+                            bridge, gameDirectory, carried, managerGeneration, cancellationToken,
                             carriedIsAuthoritative: trigger == RejoinTrigger.SoloReturn
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled)
                         .ConfigureAwait(false);
-                        if (adopted is null && attempt < maxAttempts)
+                        if (adoption is null && attempt < maxAttempts)
                         {
                             Log?.Invoke($"session-save: SoloReturn adoption attempt {attempt} failed; "
                                 + $"retrying in {SoloReturnRejoinRetryDelayMs / 1000}s");
                         }
-                        return adopted is not null;
+                        return adoption is not null;
                     },
                     () => !rejoinCts.IsCancellationRequested
                         && rejoinGeneration == _rejoinGeneration
+                        && manager.LifecycleGeneration == managerGeneration
                         && _rejoinState.Phase == RejoinPhase.InFlight,
                     rejoinCts.Token).ConfigureAwait(false);
 
-                if (!adoptedSuccessfully || adopted is null)
+                if (!adoptedSuccessfully || adoption is null)
                 {
                     Reply($"rejoin failed after {maxAttempts} attempt(s) - "
                         + "see the log; reconnect manually if it does not recover");
@@ -1111,6 +1119,7 @@ public sealed partial class CoopCommandDispatcher
                 {
                     if (rejoinCts.IsCancellationRequested
                         || rejoinGeneration != _rejoinGeneration
+                        || manager.LifecycleGeneration != adoption.Generation
                         || _rejoinState.Phase != RejoinPhase.InFlight)
                     {
                         return;
@@ -1145,17 +1154,31 @@ public sealed partial class CoopCommandDispatcher
                 // announces the difference as our own changes, with a Lamport serial that
                 // outranks the host's. Safe here because the session is torn down for the whole
                 // load window, so nothing has scanned since. See ForgetWorldShadows.
+                // The manager serializes this generation check with external connect and
+                // disconnect commands. Its callback rebases the local load watch and world
+                // shadows only while this adoption still owns the lifecycle.
                 if (rejoinCts.IsCancellationRequested
                     || rejoinGeneration != _rejoinGeneration
-                    || _rejoinState.Phase != RejoinPhase.InFlight)
+                    || manager.LifecycleGeneration != adoption.Generation
+                    || _rejoinState.Phase != RejoinPhase.InFlight
+                    || !manager.CompleteRejoin(adoption.Generation, rejoinCts.Token, () =>
+                    {
+                        // This load belongs to this rejoin. The session watch is intentionally
+                        // suspended while the socket is down, so consume the settled local world
+                        // identity and serial as its new baseline before the first post-reconnect
+                        // tick can mistake the adoption for another player load.
+                        uint? adoptedLoadSerial = bridge.TryReadWorldLoadSerial(out uint settledSerial)
+                            ? settledSerial : null;
+                        _sessionSaveWatch?.RebaseOwnVerdictAfterAdoptedLoad(
+                            bridge.SaveIdentityDigest, adoptedLoadSerial);
+
+                        bridge.ForgetWorldShadows();
+                    }))
                 {
                     return;
                 }
 
-                bridge.ForgetWorldShadows();
-
-                manager.Reconnect();
-                Reply($"rejoined '{adopted.Value.Module}'");
+                Reply($"rejoined '{adoption.World.Module}'");
             }
             catch (Exception ex)
             {

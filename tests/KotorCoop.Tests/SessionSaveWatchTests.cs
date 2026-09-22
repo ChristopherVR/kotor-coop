@@ -243,6 +243,20 @@ public sealed class SessionSaveWatchTests : IDisposable
     }
 
     [Fact]
+    public void AdoptedWorldLoadBecomesNewBaselineButTheNextRealLoadStillClassifies()
+    {
+        SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
+        watch.ObserveOwnVerdict(0x1234, loadSerialNow: 7, nowMs: 0);
+
+        // This digest/serial pair is the rejoin's own adopted-world load. The session is
+        // intentionally disconnected while it happens, so no regular tick consumed it.
+        watch.RebaseOwnVerdictAfterAdoptedLoad(0x5678, loadSerialNow: 8);
+
+        Assert.Equal(SaveOrLoadVerdict.None, watch.ObserveOwnVerdict(0x5678, loadSerialNow: 8, nowMs: 100));
+        Assert.Equal(SaveOrLoadVerdict.Load, watch.ObserveOwnVerdict(0x9ABC, loadSerialNow: 9, nowMs: 200));
+    }
+
+    [Fact]
     public void ObserveOwnVerdictSkipsATickWithNoSerialReadingInsteadOfEdgingOnAZero()
     {
         // The live 2026-09-02 shape (wipe -> host reload -> the client's own rejoin load):

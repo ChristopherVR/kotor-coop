@@ -69,6 +69,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
     private SaveIdentityWatchState _ownClassifyWatch = SaveIdentityWatchState.Initial;
     private SerialEdgeWatchState _ownLoadWatch = SerialEdgeWatchState.Initial;
     private readonly SaveOrLoadClassifier _ownClassifier = new();
+    private readonly Lock _ownVerdictGate = new();
 
     /// <summary>The REMOTE peer's digest/load-edge — meaningful only on a CLIENT watching the
     /// HOST's reported <see cref="KotorCoop.Protocol.WorldDigest"/> for <c>host_load_readopt</c>
@@ -125,14 +126,37 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// </summary>
     public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint? loadSerialNow, long nowMs)
     {
-        if (loadSerialNow is null)
+        lock (_ownVerdictGate)
         {
-            return SaveOrLoadVerdict.None;
-        }
+            if (loadSerialNow is null)
+            {
+                return SaveOrLoadVerdict.None;
+            }
 
-        (_ownClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
-        (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow.Value);
-        return _ownClassifier.Observe(nowMs, loadEdge, digestChanged);
+            (_ownClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
+            (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow.Value);
+            return _ownClassifier.Observe(nowMs, loadEdge, digestChanged);
+        }
+    }
+
+    /// <summary>Consumes the digest and load serial produced by a rejoin's own adopted-world
+    /// load as the new local classifier baseline. The manager stays disconnected during that
+    /// load, so the ordinary tick watch cannot observe it; without this rebase the first tick
+    /// after reconnect mistakes the adoption for a fresh user load and starts another rejoin.</summary>
+    public void RebaseOwnVerdictAfterAdoptedLoad(uint digestNow, uint? loadSerialNow)
+    {
+        lock (_ownVerdictGate)
+        {
+            _ownClassifyWatch = SaveIdentityWatchState.Initial;
+            _ownLoadWatch = SerialEdgeWatchState.Initial;
+            _ownClassifier.Reset();
+
+            (_ownClassifyWatch, _) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
+            if (loadSerialNow is { } serial)
+            {
+                (_ownLoadWatch, _) = SerialEdgeWatch.Observe(_ownLoadWatch, serial);
+            }
+        }
     }
 
     /// <summary>
