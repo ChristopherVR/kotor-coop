@@ -1,9 +1,8 @@
 # Duel-ring solo parking (2026-09-21)
 
-The shipped Taris duel has an exact player-pin edge for the zero/one-companion case. Korriban
-also strips party members for its final-test departure, but the similarly named duel triggers
-are a separate NPC-versus-NPC scene. Its zero/one-companion final-test path still needs a
-verified start/end signal that remains valid across the Korriban area transitions.
+The shipped Taris duel has an exact player-pin edge for the zero/one-companion case. Korriban's
+similarly named duel triggers are a separate NPC-versus-NPC scene; the player final-test path
+now uses its own exact dialogue-start and area-return signals, with live validation still pending.
 
 ## Evidence from the shipped KOTOR resources
 
@@ -70,10 +69,9 @@ waypoints. In the `korr_m39aa` final-test dialogue, the terminal exit scripts un
 door and starmap door and write distinct progression values: `k39_yth_leave` sets
 `KOR_FINAL_TEST=5`, `k39_uth_leave` sets 6, and `k39_yth_redeem` sets 7. The m36aa area-entry
 script `k36_pkor_enter` also gates door/escape behavior on the final-test and party-restoration
-globals. These resources establish story progression and party restoration, but they do not
-provide a player-readable, verified runtime boundary that can keep a spectate segment continuous
-across the academy, valley, and final-test areas. No Korriban solo-segment trigger is added on
-this evidence alone.
+globals. These resources establish story progression and party restoration. The runtime
+observers described below now identify their exact dispatches; a persistent quest value alone
+is not treated as proof that a new solo segment began or ended.
 
 The final-test outcomes also do not expose a Taris-style PC min-one-HP edge. The m39aa combat
 handlers that call `SetMinOneHP` clear it on `OBJECT_SELF` and/or `kor39_yuthura`; none of the
@@ -92,49 +90,59 @@ the decompiler are not treated as source evidence.
 `k_pkor_duelnum.ncs`/`k_pkor_hasduels.ncs` and written by `k35_duc_fight.ncs`; it is not a
 reliable active flag for the final test or the player duel.
 
-The true player final test is therefore distinct from the zero/one-companion gap at the NPC
-duel trigger. The shipped start and restore scripts give better candidates than that trigger,
-but there is not yet a runtime detector or live coop proof.
+The true player final test is distinct from the NPC duel trigger. Its runtime detector is now
+implemented in `KorribanFinalTestMachine` and wired to the shared dialogue-action observer plus
+the verified `CSWSArea::EventHandler` OnEnter call site:
 
-### Candidate runtime cue and remaining proof
+1. The exact `k_pkor_partyleav` dialogue action in `korr_m35aa` begins the latch. The observer
+   runs before the VM call, so the host snapshots the local active-party NPC-slot mask before
+   the script removes anyone and publishes the solo-owner level before a transition can begin.
+   This also covers zero companions, where no `RemovePartyMember` call or roster-drop edge
+   exists. Korriban is excluded from the generic removal-burst and roster-drop catalogue so an
+   unrelated party edit in m35 cannot start this segment.
+2. The latch remains active only through the verified `korr_m36aa`, `korr_m37aa`, `korr_m38aa`,
+   `korr_m38ab`, and `korr_m39aa` route. An empty module read holds the latch during a transition;
+   an unrelated module, session loss, or changed `WorldLoadSerial` clears it. Ordinary module
+   transitions do not change that serial, so they do not look like a save/load.
+3. The exact `kor35_enter` OnEnter dispatch in returned `korr_m35aa` is accepted only after one
+   of those route modules was observed. Completion then waits for both a readable party roster
+   and readable `KOR_FINAL_TEST > 3`, and requires every slot present before departure to have
+   returned. Missing roster/global reads keep the exact return cue pending rather than consuming
+   it.
+4. The agent publishes an explicit valid/host role word in shared-block version 73. Korriban
+   starts only with positive host proof and a fresh agent heartbeat; the absent host-party-roster
+   bit is never treated as host evidence. If either exact observer fails its native anchor check,
+   the Korriban feature stays disabled rather than starting a segment it cannot close.
 
-The narrowest existing-code design to investigate is a story-specific cue from
-`k_pkor_partyleav`, with its removal data correlated against the real removal hook, rather than
-broadening the current two-call burst rule:
+The machine and role publication tests cover exact cue matching, zero/one-companion paths,
+original-slot identity, route ordering, unreadable return evidence, stale dispatches, session/load
+resets, generic-trigger isolation, and host/client publication/clear behavior. The NativeAOT x86
+warnings-as-errors build passed on 2026-09-23. Root validation passed 97 focused tests plus
+10 liveness/role-publication tests. Commit `980cabc` was deployed to both games with native
+SHA-256 `C03D00D3A5C2045613B41B5ED4F2B3EE0E777312401414C862C89463AC9A4F63`.
 
-1. On the engine thread, read `KOR_REMOVE_PCS` and the corresponding `KOR_REMOVE_PC<n>` values
-   alongside each captured `RemovePartyMember` call in `korr_m35aa`. Require the count to match
-   the party roster observed immediately before the script and require each captured NPC slot to
-   match the saved NPC index. For one companion, the existing sampled `>=1 -> 0` roster-drop
-   path may already start a segment if it observes the transition in `korr_m35aa`; the two-call
-   burst path alone cannot. The correlated story cue would avoid relying on a transient sample
-   and qualify the zero-party case too: even with no NPC to remove, the other player may still
-   need the local solo owner classified for spectating.
-2. Retain this specifically identified segment across only the verified final-test modules;
-   do not use the general machine's current module-change end rule for it. On return to
-   `korr_m35aa`, require both `KOR_FINAL_TEST > 3` and the `KOR_ADD_PARTY` restore path, then end
-   after the saved companion actually appears in the local roster. The final-test threshold
-   alone is persistent progression state, so it must not end a segment in an unrelated module
-   or before a roster restoration is observed.
+### Staged live boundary checks (2026-09-23)
 
-This is a proposal, not an implementation. It still needs a scan proving these globals and
-their ordering are exclusive to the identified story path, confirmation that local global reads
-on both peers observe the required values at the removal hook, and live zero/one-companion runs
-through the return. In particular, the zero-companion start cue must come from the story action
-itself or an independently verified dialogue/script-context signal; there is no removal or
-roster edge to infer it from. `Odyssey.Globals` currently has engine getter signatures used by its write
-primitive but no general read API; global deltas also exist in the agent-side state bridge, but
-their timing relative to the native removal hook is not established. If the global/roster
-correlation is stale or ambiguous, add a source-specific script-context signal only after its
-engine path is independently identified. Do not implement a guessed VM hook or extend the NPC
-duel trigger.
+Both observer installs passed their byte checks in both engines. With zero companions,
+the actual Uthar dialogue entry 93 began the host latch at 09:09:52 with mask `0x000`.
+The joiner announced spectating, and the script-driven transition reached `korr_m39aa`.
+Runtime fields in the tomb showed host `LocalInSoloSegment=1`, role word 3 (host), and
+joiner solo level 0, role word 1 (client). Returning early to the academy with
+`KOR_FINAL_TEST=1` kept the host latch active. After another tomb visit and staging the
+completion value to 4, the native `kor35_enter` return ended it at 09:12:44; the joiner
+announced the segment over.
 
-`SoloSegmentCatalogue.BaseModules` includes `korr_m35aa` because the final-test departure script
-can remove the party there. A single removal can be caught by the existing sampled roster-drop
-edge if that transition is observed; the burst detector itself still requires two calls. The
-regular roster-drop edge remains catalogue-gated, and
-`solo_segment_any_module` remains OFF by default. Existing Star Forge and Leviathan handling is
-unchanged. The NPC-duel triggers documented above are not additional solo-segment boundaries.
+A clean checkpoint reload then staged prestige/eligibility and recruited Carth in slot 2.
+The actual departure at 09:14:46 captured mask `0x004`, removed Carth, and again started
+only the host latch. After staging the completion value to 4, the native academy return
+at 09:15:47 restored slot 2 and ended the latch. Both engines had one active companion
+(their own local Carth object IDs) and both solo levels were 0. The load serial stayed
+unchanged through ordinary module travel in each run.
+
+These checks verify zero/one-companion entry, continued ownership across the scripted
+trip, refusal to end on an early return, and restoration/release at the exact return cue.
+They used staged prestige/eligibility, completion globals and return warps. The natural
+tomb puzzles, combat, end-state branches and visual spectator presentation remain unverified.
 
 ## Dark-side companion authority
 
