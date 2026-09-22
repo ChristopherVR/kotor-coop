@@ -24,6 +24,16 @@ internal static unsafe partial class Odyssey
     /// <see cref="PartySelectSuppressionController"/> already reads live.</summary>
     private const int PartySelectGuiPanelOffset = 0x78;
 
+    /// <summary>CGuiInGame + this = CSWGuiManager*. This manager's registration list is the
+    /// safe open-panel test; the cached +0x78 field can retain a freed panel.</summary>
+    private const int PartySelectGuiManagerOffset = 0x38;
+
+    // CSWGuiManager::PanelExists's helper at 0x40ABA0 reads count at +0x8C and an
+    // address array at +0x88. Bound both fields and the full array before entering native code.
+    private const int PartyManagerPanelArrayOffset = 0x88;
+    private const int PartyManagerPanelCountOffset = 0x8C;
+    private const int MaximumRegisteredPanels = 512;
+
     /// <summary>CSWGuiPartySelection's own vtable (symbol database) — the guard that a +0x78
     /// pointer really is this class before anything calls through it.</summary>
     private const nint PartySelectionVtableAddr = 0x00756D28;
@@ -54,26 +64,39 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> ConfirmPartySelectionFn =
         (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006BEC90;
 
+    /// <summary>CSWGuiManager::PanelExists(manager, panel); compares the value against its
+    /// registered panel array without dereferencing the candidate.</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, int> PanelExistsFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, int>)0x0040BD70;
+
     /// <summary>Resolves the GUI root (CGuiInGame*) once, guarded at every hop — the shared
     /// first half both <see cref="GetPartySelectPanel"/> and <see cref="ConfirmPartySelect"/>
     /// need, so the panel and its message-box sibling are always read from the SAME resolved
     /// gui pointer rather than two independent walks that could observe different frames.</summary>
     private static nint ResolveGuiInGame()
     {
+        if (!NativeMethods.IsReadable(PartySelectAppManagerPtr, (nuint)sizeof(nint)))
+        {
+            return 0;
+        }
+
         nint appManager = Deref(PartySelectAppManagerPtr);
-        if (appManager == 0)
+        if (!LooksLikeHeapPointer(appManager)
+            || !NativeMethods.IsReadable(appManager + PartySelectAppClientOffset, (nuint)sizeof(nint)))
         {
             return 0;
         }
 
         nint client = Deref(appManager + PartySelectAppClientOffset);
-        if (client == 0)
+        if (!LooksLikeHeapPointer(client)
+            || !NativeMethods.IsReadable(client + PartySelectClientInternalOffset, (nuint)sizeof(nint)))
         {
             return 0;
         }
 
         nint clientInternal = Deref(client + PartySelectClientInternalOffset);
-        if (!LooksLikeHeapPointer(clientInternal))
+        if (!LooksLikeHeapPointer(clientInternal)
+            || !NativeMethods.IsReadable(clientInternal + PartySelectClientInternalGui, (nuint)sizeof(nint)))
         {
             return 0;
         }
@@ -95,8 +118,10 @@ internal static unsafe partial class Odyssey
             return 0;
         }
 
-        nint panel = Deref(gui + PartySelectGuiPanelOffset);
-        if (!LooksLikeHeapPointer(panel))
+        if (!TryReadGuiPanelPointers(gui, out nint manager, out nint panel)
+            || !TryPanelIsRegistered(manager, panel, out bool registered)
+            || !registered
+            || !NativeMethods.IsReadable(panel, 4))
         {
             return 0;
         }
@@ -108,10 +133,9 @@ internal static unsafe partial class Odyssey
     /// Confirms the currently-open native party-selection screen with its current on-screen
     /// selection, exactly as a real Done/Accept click would. Pokes the shared message-box
     /// precondition bit first (see the class comment) — a no-op if it is already set, so this
-    /// is safe to call repeatedly. Returns false with no panel resolvable; true means
-    /// <c>ConfirmPartySelectionFn</c> was actually called (not a guarantee the roster changed —
-    /// the caller reads the party roster back to confirm that, the same way every other
-    /// staging cheat's own "applied" answer is a request made, not a downstream fact proven).
+    /// is safe to call repeatedly. It verifies manager registration before dereferencing the
+    /// panel, snapshots its exit_script string, and reports whether the panel remains registered
+    /// after the call. It does not claim that the script's effects completed.
     /// MAIN THREAD ONLY - do not call while the script VM is mid-call.
     /// </summary>
     public static bool ConfirmPartySelect(out string detail)
@@ -123,18 +147,35 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        nint panel = Deref(gui + PartySelectGuiPanelOffset);
-        if (!LooksLikeHeapPointer(panel) || Deref(panel) != PartySelectionVtableAddr)
+        if (!TryReadGuiPanelPointers(gui, out nint manager, out nint panel)
+            || !TryPanelIsRegistered(manager, panel, out bool registered)
+            || !registered
+            || !NativeMethods.IsReadable(panel, 0x7C)
+            || Deref(panel) != PartySelectionVtableAddr)
         {
-            detail = "no party-selection panel is open on this instance";
+            detail = "no registered party-selection panel is open on this instance";
+            return false;
+        }
+
+        if (!TryReadExitScript(panel, out string exitScript, out bool exitScriptEmpty))
+        {
+            detail = "registered party-selection panel found, but its exit_script CExoString "
+                + "did not pass bounded pointer/length checks - refusing to confirm";
+            return false;
+        }
+
+        if (!NativeMethods.IsReadable(gui + PartySelectMessageBoxOffset, (nuint)sizeof(nint)))
+        {
+            detail = "party-selection panel found, but the message-box pointer field is unreadable";
             return false;
         }
 
         nint messageBox = Deref(gui + PartySelectMessageBoxOffset);
-        if (!LooksLikeHeapPointer(messageBox))
+        if (!LooksLikeHeapPointer(messageBox)
+            || !NativeMethods.IsWritable(messageBox + PartySelectMessageBoxBit0Offset, 1))
         {
             detail = "party-selection panel found, but the message-box precondition object "
-                + "(gui+0x98) did not resolve - refusing rather than guessing";
+                + "(gui+0x98) or writable bit did not resolve - refusing rather than guessing";
             return false;
         }
 
@@ -144,9 +185,163 @@ internal static unsafe partial class Odyssey
 
         ConfirmPartySelectionFn(panel, 0);
 
-        detail = wasSet
-            ? "confirmed (message-box precondition was already set)"
-            : "confirmed (poked the message-box precondition bit first, same as loadgame's own workaround)";
+        // PanelExists is safe with the captured pointer even if native code freed the panel:
+        // it only compares the address against the manager's current registered addresses.
+        string panelState;
+        nint currentGui = ResolveGuiInGame();
+        if (currentGui != gui || !TryReadGuiManager(currentGui, out nint currentManager)
+            || currentManager != manager)
+        {
+            // An exit script can transition the module and free the captured GUI and manager.
+            // Do not call PanelExists on the old manager after that callback.
+            panelState = "gui-changed";
+        }
+        else if (TryPanelIsRegistered(currentManager, panel, out bool stillRegistered))
+        {
+            panelState = stillRegistered ? "registered" : "gone";
+        }
+        else
+        {
+            panelState = "unknown";
+        }
+        bool dispatchExpected = !exitScriptEmpty;
+        PluginHost.Log($"party-select confirm diagnostic: exit_script="
+            + (exitScriptEmpty ? "<empty>" : exitScript)
+            + $"; confirm call returned; native VM dispatch expected={(dispatchExpected ? "yes (nonempty script field)" : "no (empty field)")}; "
+            + $"dispatch directly observed=no; panel registration after call={panelState}; "
+            + $"message-box bit initially {(wasSet ? "set" : "clear")}.");
+
+        // This is the 64-byte shared cheat-detail field with its `partyselect ok: ` prefix;
+        // keep the exact exit resref first so the useful fact survives truncation.
+        detail = $"exit={(exitScriptEmpty ? "<empty>" : exitScript)};call=ok;panel={panelState}";
+        return true;
+    }
+
+    /// <summary>Reads the panel's native CExoString { char* at +0, length at +4 }. The
+    /// verified CExoString constructor at 0x5E5B00 scans through NUL, increments the stored
+    /// length and copies the terminator, so the length includes NUL. A resref is capped at 16.</summary>
+    private static bool TryReadExitScript(nint panel, out string value, out bool isEmpty)
+    {
+        value = string.Empty;
+        isEmpty = false;
+
+        nint field = panel + 0x74;
+        if (!NativeMethods.IsReadable(field, 8))
+        {
+            return false;
+        }
+
+        nint chars = Deref(field);
+        uint length = *(uint*)(field + 4);
+        if (chars == 0 && length == 0)
+        {
+            isEmpty = true;
+            return true;
+        }
+
+        if (!LooksLikeHeapPointer(chars) || length is 0 or > 17
+            || !NativeMethods.IsReadable(chars, (nuint)length))
+        {
+            return false;
+        }
+
+        Span<byte> bytes = stackalloc byte[16];
+        int written = 0;
+        bool terminated = false;
+        for (uint i = 0; i < length; i++)
+        {
+            byte b = *(byte*)(chars + i);
+            if (b == 0)
+            {
+                if (i != length - 1)
+                {
+                    return false;
+                }
+
+                terminated = true;
+                break;
+            }
+
+            if (i >= (uint)bytes.Length || b is < 0x21 or > 0x7E)
+            {
+                return false;
+            }
+
+            bytes[written++] = b;
+        }
+
+        if (!terminated)
+        {
+            return false;
+        }
+
+        if (written == 0)
+        {
+            isEmpty = true;
+            return true;
+        }
+
+        value = System.Text.Encoding.ASCII.GetString(bytes[..written]);
+        return true;
+    }
+
+    private static bool TryReadGuiPanelPointers(nint gui, out nint manager, out nint panel)
+    {
+        manager = 0;
+        panel = 0;
+        if (!TryReadGuiManager(gui, out manager)
+            || !NativeMethods.IsReadable(gui + PartySelectGuiPanelOffset, (nuint)sizeof(nint)))
+        {
+            return false;
+        }
+
+        panel = Deref(gui + PartySelectGuiPanelOffset);
+        return LooksLikeHeapPointer(panel);
+    }
+
+    private static bool TryReadGuiManager(nint gui, out nint manager)
+    {
+        manager = 0;
+        if (!LooksLikeHeapPointer(gui)
+            || !NativeMethods.IsReadable(gui + PartySelectGuiManagerOffset, (nuint)sizeof(nint)))
+        {
+            return false;
+        }
+
+        manager = Deref(gui + PartySelectGuiManagerOffset);
+        return LooksLikeHeapPointer(manager);
+    }
+
+    /// <summary>Reproduces the exact data reads made by PanelExists's 0x40ABA0 helper before
+    /// calling it: manager+0x8C count, manager+0x88 array pointer, then count pointer slots.</summary>
+    private static bool TryPanelIsRegistered(nint manager, nint panel, out bool registered)
+    {
+        registered = false;
+        if (!LooksLikeHeapPointer(manager) || !LooksLikeHeapPointer(panel)
+            || !NativeMethods.IsReadable(manager + PartyManagerPanelArrayOffset, 8))
+        {
+            return false;
+        }
+
+        nint entries = Deref(manager + PartyManagerPanelArrayOffset);
+        int count = *(int*)(manager + PartyManagerPanelCountOffset);
+        if (count is < 0 or > MaximumRegisteredPanels)
+        {
+            return false;
+        }
+
+        if (count == 0)
+        {
+            return true;
+        }
+
+        nuint bytes = (nuint)count * (nuint)sizeof(nint);
+        if (!LooksLikeHeapPointer(entries) || !NativeMethods.IsReadable(entries, bytes))
+        {
+            return false;
+        }
+
+        registered = PanelExistsFn(manager, panel) != 0;
         return true;
     }
 }
