@@ -118,6 +118,11 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        if (!NativeMethods.IsReadable(gui + GuiParticipantA, (nuint)(sizeof(uint) * 2)))
+        {
+            return false;
+        }
+
         foreach (uint raw in stackalloc uint[] { *(uint*)(gui + GuiParticipantA), *(uint*)(gui + GuiParticipantB) })
         {
             uint id = raw & 0x7FFFFFFF;
@@ -128,7 +133,9 @@ internal static unsafe partial class Odyssey
         }
 
         nint panel = GetDialoguePanel();
-        return panel != 0 && *(int*)(panel + DialogPanelReplyCount) > 0;
+        return panel != 0
+            && NativeMethods.IsReadable(panel + DialogPanelReplyCount, (nuint)sizeof(int))
+            && *(int*)(panel + DialogPanelReplyCount) > 0;
     }
 
     /// <summary>

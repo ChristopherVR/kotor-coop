@@ -64,21 +64,45 @@ internal static unsafe partial class Odyssey
     /// <summary>The live in-game GUI (CGuiInGame), or 0 when not in a loaded module.</summary>
     private static nint GetInGameGui()
     {
-        nint client = GetClient();
-        if (client == 0)
+        // Mid-session loads tear down and replace this chain. A pointer that merely falls in
+        // the process heap range can still name an uncommitted/freed region, so validate each
+        // field before reading it. This is a readability check, not proof of object identity.
+        if (!NativeMethods.IsReadable(AppManagerPtr, (nuint)sizeof(nint)))
+        {
+            return 0;
+        }
+
+        nint appManager = Deref(AppManagerPtr);
+        if (!LooksLikeHeapPointer(appManager)
+            || !NativeMethods.IsReadable(appManager + AppClientOffset, (nuint)sizeof(nint)))
+        {
+            return 0;
+        }
+
+        nint client = Deref(appManager + AppClientOffset);
+        if (!LooksLikeHeapPointer(client)
+            || !NativeMethods.IsReadable(client + AppClientOffset, (nuint)sizeof(nint)))
         {
             return 0;
         }
 
         nint clientInternal = Deref(client + AppClientOffset);
-        if (!LooksLikeHeapPointer(clientInternal))
+        if (!LooksLikeHeapPointer(clientInternal)
+            || !NativeMethods.IsReadable(clientInternal + ClientInternalGuiOffset, (nuint)sizeof(nint)))
         {
             return 0;
         }
 
-        nint gui = Deref(clientInternal + 0x40);
-        return LooksLikeHeapPointer(gui) ? gui : 0;
+        nint gui = Deref(clientInternal + ClientInternalGuiOffset);
+        // DialogueHasContent reads participant ids through +0x174. Requiring that complete
+        // prefix makes the flag and participant fields safe for every dialogue reader.
+        return LooksLikeHeapPointer(gui) && NativeMethods.IsReadable(gui, MinimumDialogueGuiReadableBytes)
+            ? gui
+            : 0;
     }
+
+    private const int ClientInternalGuiOffset = 0x40;
+    private const nuint MinimumDialogueGuiReadableBytes = 0x178;
 
     /// <summary>True while the player is in a loaded module (not a menu/load screen), so a chat
     /// key should open the chat prompt rather than do nothing at the main menu.</summary>
@@ -140,8 +164,9 @@ internal static unsafe partial class Odyssey
     /// participants both reading OBJECT_INVALID — see <see cref="CloseDialogue"/>, which is
     /// where that case has to be ended.
     /// </summary>
-    private static bool ConversationLive(nint gui) =>
-        *(int*)(gui + GuiConversationActive) != 0;
+    private static bool ConversationLive(nint gui) => gui != 0
+        && NativeMethods.IsReadable(gui + GuiConversationActive, (nuint)sizeof(int))
+        && *(int*)(gui + GuiConversationActive) != 0;
 
     /// <summary>
     /// Reads the speaker and line of the conversation the local player is currently in, into

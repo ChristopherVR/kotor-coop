@@ -401,10 +401,23 @@ internal static unsafe partial class Odyssey
 
         foreach (int offset in GuiDialogPanels)
         {
+            if (!NativeMethods.IsReadable(gui + offset, (nuint)sizeof(nint)))
+            {
+                return 0;
+            }
+
             nint panel = Deref(gui + offset);
             if (!LooksLikeHeapPointer(panel))
             {
                 continue;
+            }
+
+            // A range-only heap test does not exclude a freed or uncommitted panel. Validate
+            // the object header before reading its vtable. The preserved reload crash's source
+            // mapping is provisional because its exact-age PDB is unavailable.
+            if (!NativeMethods.IsReadable(panel, (nuint)sizeof(nint)))
+            {
+                return 0;
             }
 
             nint vtable = *(nint*)panel;
@@ -424,6 +437,11 @@ internal static unsafe partial class Odyssey
             }
 
             identified = identified == 0 ? panel : identified;
+
+            if (!NativeMethods.IsReadable(panel + DialogPanelReplyCount, (nuint)sizeof(int)))
+            {
+                return 0;
+            }
 
             int count = *(int*)(panel + DialogPanelReplyCount);
             if (count is > 0 and <= 64)
