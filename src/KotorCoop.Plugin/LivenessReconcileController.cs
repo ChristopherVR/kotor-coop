@@ -150,7 +150,21 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
         // Same collision guard every other consumer of MaterialisedEnemies applies: an
         // unmapped owner id that numerically equals one of our own stand-ins' local ids must
         // never be resolved as if it were GIT-identical — that would reconcile the wrong body.
-        uint mapped = MaterialisedEnemies.ToLocal(entry.ObjectId);
+        bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(entry.ObjectId, block);
+        bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(entry.ObjectId);
+        uint mapped;
+        if (retainedCandidate || retainedAlias)
+        {
+            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(entry.ObjectId, block, out mapped))
+            {
+                return false; // defer kills/destroys until the current owner/local proof is restored
+            }
+        }
+        else
+        {
+            mapped = MaterialisedEnemies.ToLocal(entry.ObjectId);
+        }
+
         if (mapped == 0 && MaterialisedEnemies.ToOwner(entry.ObjectId) != 0)
         {
             return false;

@@ -1,3 +1,5 @@
+using KotorCoop.Protocol;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -315,18 +317,15 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         _lastLocalAvailable = available;
         block.SetLocalPartyRoster(available, party);
 
-        // docs/research/dialogue-consequences.md's 2026-08-24 "stale mirrored body" entry: one
-        // object id per slot, alongside the masks, so a peer recruiting the same slot can
-        // recognise its own already-placed copy of that companion (GIT-identical id) and reuse
-        // it instead of spawning a duplicate — see Reconcile's own use of the mirror image of
-        // this field. Only ACTIVE party slots have a meaningful id (party table +0x0C is only
-        // ever written by AddMember); a slot this instance has never added — even one it has
-        // recruited but benched — publishes 0, the same "nothing to reuse" value an older build
-        // that never populated this field at all would read as.
+        // Publish the party table's body identity for every slot, including dismissed or benched
+        // members. AddMember writes +0x0C and RemovePartyMember/RemoveAvailableNPC leave the
+        // retained native body and its slot identity available for a later faction handoff.
+        // Reconcile still consults ids only when the host says a slot is actively in party.
         for (int slot = 0; slot < SharedBlock.PartyRosterSlots; slot++)
         {
-            bool inParty = (party & (1u << slot)) != 0;
-            block.SetLocalPartyRosterObjectId(slot, inParty ? Odyssey.GetPartyRosterObjectId(slot) : 0);
+            uint objectId = Odyssey.GetPartyRosterObjectId(slot);
+            block.SetLocalPartyRosterObjectId(
+                slot, PartyCensusRule.IsRosterId(objectId) ? objectId : 0);
         }
 
         if (party != _lastLocalParty)

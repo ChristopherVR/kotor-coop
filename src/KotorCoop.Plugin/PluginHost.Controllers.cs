@@ -10,6 +10,7 @@ internal static unsafe partial class PluginHost
     private static void ConstructControllers(string directory)
     {
         _view = new SharedBlockView((byte*)_block);
+        MaterialisedEnemies.BindSharedBlock(_view);
         _controller = new PhantomController(_view);
         _items = new ItemController(_view);
         _focus = new FocusKeeper(_view);

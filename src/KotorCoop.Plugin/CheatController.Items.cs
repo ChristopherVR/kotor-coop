@@ -75,7 +75,7 @@ internal sealed unsafe partial class CheatController
     private void GiveLoot()
     {
         uint ownerEnemyId = block.CheatTarget;
-        uint localId;
+        uint localId = 0;
 
         if (ownerEnemyId == SharedBlock.CheatTargetLocalPlayer)
         {
@@ -97,7 +97,20 @@ internal sealed unsafe partial class CheatController
         }
         else
         {
-            localId = MaterialisedEnemies.ToLocal(ownerEnemyId);
+            bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(ownerEnemyId, block);
+            bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(ownerEnemyId);
+            if ((retainedCandidate || retainedAlias)
+                && !MaterialisedEnemies.TryGetCurrentRetainedLocal(ownerEnemyId, block, out localId))
+            {
+                Answer(SharedBlock.CheatStatusRefused, "retained enemy body is not current here - nothing to give");
+                return;
+            }
+
+            if (!retainedCandidate && !retainedAlias)
+            {
+                localId = MaterialisedEnemies.ToLocal(ownerEnemyId);
+            }
+
             if (localId == 0)
             {
                 // Not an error: the overwhelmingly common case is a peer holding the REAL

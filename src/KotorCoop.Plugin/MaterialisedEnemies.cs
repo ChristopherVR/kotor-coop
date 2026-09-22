@@ -51,6 +51,8 @@ internal static unsafe class MaterialisedEnemies
 
     private static readonly uint[] OwnerIds = new uint[SharedBlock.EnemyCapacity];
     private static readonly uint[] LocalIds = new uint[SharedBlock.EnemyCapacity];
+    private static readonly RetainedEnemyBodyMap RetainedBodies = new(SharedBlock.EnemyCapacity);
+    private static SharedBlockView? _sharedBlock;
     private static readonly nint[] Bodies = new nint[SharedBlock.EnemyCapacity];
     private static readonly double[] LastSeen = new double[SharedBlock.EnemyCapacity];
     private static readonly double[] SpawnedAt = new double[SharedBlock.EnemyCapacity];
@@ -109,6 +111,12 @@ internal static unsafe class MaterialisedEnemies
     /// expected to resolve directly (the ordinary GIT-identity case).</summary>
     public static uint ToLocal(uint ownerId)
     {
+        uint retained = RetainedBodies.ToLocal(ownerId, Odyssey.GetPartyRosterObjectId);
+        if (retained != 0)
+        {
+            return retained;
+        }
+
         for (int i = 0; i < OwnerIds.Length; i++)
         {
             if (OwnerIds[i] == ownerId)
@@ -126,6 +134,12 @@ internal static unsafe class MaterialisedEnemies
     /// of our own spawned bodies and must not be resolved as if it were GIT-identical.</summary>
     public static uint ToOwner(uint localId)
     {
+        uint retained = RetainedBodies.ToOwner(localId, Odyssey.GetPartyRosterObjectId);
+        if (retained != 0)
+        {
+            return retained;
+        }
+
         for (int i = 0; i < LocalIds.Length; i++)
         {
             if (LocalIds[i] == localId)
@@ -137,9 +151,192 @@ internal static unsafe class MaterialisedEnemies
         return 0;
     }
 
+    public static bool IsRetainedOwner(uint ownerId) =>
+        RetainedBodies.ContainsOwner(ownerId, Odyssey.GetPartyRosterObjectId);
+
+    public static bool IsRetainedLocal(uint localId) =>
+        RetainedBodies.ContainsLocal(localId, Odyssey.GetPartyRosterObjectId);
+
+    public static int RetainedCount => RetainedBodies.Count;
+
+    public static bool QuarantineRetainedLocal(uint localId, int rosterSlot) =>
+        RetainedBodies.QuarantineLocal(localId, rosterSlot);
+
+    public static bool IsQuarantinedRetainedLocal(uint localId) =>
+        RetainedBodies.IsQuarantinedLocal(localId);
+
+    public static bool ReleaseRetainedQuarantineIfActive(
+        uint localId, int rosterSlot, bool positivelyProvenActive) =>
+        RetainedBodies.ReleaseQuarantineIfActive(localId, rosterSlot, positivelyProvenActive);
+
+    /// <summary>Reserves any current or previously retained Lehon slot-4/5 owner id, regardless
+    /// of mask readability/state. Consumers defer raw-id health/death writes until the stricter
+    /// dismissed-roster and hostile-row predicate in <see cref="TryGetCurrentRetainedLocal"/>
+    /// succeeds.</summary>
+    public static bool IsRetainedOwnerCandidate(uint ownerId, SharedBlockView block)
+    {
+        if (!PartyCensusRule.IsRosterId(ownerId) || !IsLehonModule())
+        {
+            return false;
+        }
+
+        if (RetainedBodies.IsOwnerTombstoned(ownerId))
+        {
+            return true; // a formerly retained owner never falls through to a raw local id
+        }
+
+        for (int slot = 4; slot <= 5; slot++)
+        {
+            if (block.GetHostPartyRosterObjectId(slot) == ownerId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Validates the current owner/local retained alias against module, both party
+    /// tables, the host enemy row, local live-creature identity and current hostile faction.</summary>
+    public static bool TryGetCurrentRetainedLocal(uint ownerId, SharedBlockView block, out uint localId)
+    {
+        localId = 0;
+        if (!RetainedBodies.TryGetOwnerEntry(ownerId, out RetainedEnemyBody entry)
+            || !IsLehonModule()
+            || !block.TryGetHostPartyRoster(out uint hostAvailable, out uint hostParty)
+            || !Odyssey.TryReadPartyRoster(out uint localAvailable, out uint localParty))
+        {
+            return false;
+        }
+
+        uint enemyCount = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
+        bool hasHostEnemyRow = false;
+        for (int i = 0; i < enemyCount; i++)
+        {
+            EnemyPresenceView enemy = block.GetEnemyPresence(i);
+            if (enemy.ObjectId == ownerId
+                && enemy.Faction == DarkSideHostileCompanionRule.HostileFaction)
+            {
+                hasHostEnemyRow = true;
+                break;
+            }
+        }
+
+        nint creature = Odyssey.ResolveServerObject(entry.LocalId);
+        if (creature == 0
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + ObjId), entry.LocalId)
+            || !RetainedEnemyHandoffProof.IsCurrent(
+                lehonModule: true,
+                entry.RosterSlot,
+                ownerId,
+                entry.LocalId,
+                block.GetHostPartyRosterObjectId(entry.RosterSlot),
+                block.GetLocalPartyRosterObjectId(entry.RosterSlot),
+                Odyssey.GetPartyRosterObjectId(entry.RosterSlot),
+                hostAvailable,
+                hostParty,
+                localAvailable,
+                localParty,
+                hasHostEnemyRow,
+                DarkSideHostileCompanionRule.HostileFaction,
+                Odyssey.GetCreatureFaction(creature),
+                requireHostileLocalFaction: true))
+        {
+            return false;
+        }
+
+        localId = entry.LocalId;
+        return true;
+    }
+
+    public static bool TryGetCurrentRetainedOwner(uint localId, SharedBlockView block, out uint ownerId)
+    {
+        ownerId = 0;
+        if (!RetainedBodies.TryGetLocalEntry(localId, out RetainedEnemyBody entry)
+            || !TryGetCurrentRetainedLocal(entry.OwnerId, block, out uint currentLocalId)
+            || currentLocalId != localId)
+        {
+            return false;
+        }
+
+        ownerId = entry.OwnerId;
+        return true;
+    }
+
+    public static bool TryGetCurrentRetainedOwner(uint localId, out uint ownerId)
+    {
+        SharedBlockView? block = _sharedBlock;
+        if (block is null)
+        {
+            ownerId = 0;
+            return false;
+        }
+
+        return TryGetCurrentRetainedOwner(localId, block, out ownerId);
+    }
+
+    public static void BindSharedBlock(SharedBlockView block) => _sharedBlock = block;
+
+    private static bool IsLehonModule()
+    {
+        byte* module = stackalloc byte[9];
+        module[0] = (byte)'u';
+        module[1] = (byte)'n';
+        module[2] = (byte)'k';
+        module[3] = (byte)'_';
+        module[4] = (byte)'m';
+        module[5] = (byte)'4';
+        module[6] = (byte)'4';
+        module[7] = (byte)'a';
+        module[8] = (byte)'c';
+        return Odyssey.ModuleNameEquals(module, 9);
+    }
+
+    /// <summary>Registers an existing local roster body as the local representation of an
+    /// owner's hostile roster body. The party-table slot and authoritative object resolver are
+    /// checked first. This never spawns, dresses, or destroys the native body.</summary>
+    public static bool RegisterRetained(uint ownerId, uint localId, int rosterSlot)
+    {
+        if (!PartyCensusRule.IsRosterId(ownerId)
+            || !PartyCensusRule.IsRosterId(localId)
+            || rosterSlot is not (4 or 5)
+            || Odyssey.GetPartyRosterObjectId(rosterSlot) != localId)
+        {
+            return false;
+        }
+
+        nint body = Odyssey.ResolveServerObject(localId);
+        if (body == 0
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)body, *(uint*)(body + ObjId), localId))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < OwnerIds.Length; i++)
+        {
+            if (OwnerIds[i] == ownerId || LocalIds[i] == localId)
+            {
+                return false;
+            }
+        }
+
+        return RetainedBodies.Register(ownerId, localId, rosterSlot, 0);
+    }
+
+    /// <summary>Revalidates every alias against positive current-frame campaign evidence. The
+    /// caller must supply a predicate that includes the active module, both roster states, and
+    /// the host enemy row; absence of evidence invalidates the damage/presence translation.</summary>
+    public static int PruneUnprovenRetained(Func<RetainedEnemyBody, bool> isCurrentlyProven) =>
+        RetainedBodies.PruneUnproven(isCurrentlyProven);
+
+    public static int ClearRetainedAliases() => RetainedBodies.ReleaseSession();
+
+    public static int DisableRetainedAliases() => RetainedBodies.ClearAliasesKeepGuards();
+
     /// <summary>
-    /// Every currently-mapped owner id, in fixed slot order (0 = unused) — the SAME array
-    /// <see cref="ToLocal"/> walks, exposed read-only so <see cref="EnemyPresenceController"/>
+    /// Owner ids for plugin-spawned stand-ins, in fixed slot order (0 = unused) — retained
+    /// native party aliases live in <see cref="RetainedBodies"/> and are deliberately absent.
+    /// The array is exposed read-only so <see cref="EnemyPresenceController"/>
     /// can publish it verbatim into the shared block
     /// (<c>SharedBlockView.SetMaterialisedOwnerIds</c>, version 65) every pass it sweeps this
     /// table. Lets the agent tell, BEFORE spending a giveloot round trip on the single-slot
@@ -153,6 +350,7 @@ internal static unsafe class MaterialisedEnemies
     /// body) alive. Called for every published slot every frame.</summary>
     public static void Seen(uint ownerId, double now)
     {
+        RetainedBodies.Seen(ownerId, now);
         for (int i = 0; i < OwnerIds.Length; i++)
         {
             if (OwnerIds[i] == ownerId)
@@ -170,7 +368,8 @@ internal static unsafe class MaterialisedEnemies
     /// </summary>
     public static void TryMaterialise(in EnemyPresenceView enemy, double now)
     {
-        if (!Enabled || _spawnDisabled || enemy.Dead || enemy.Appearance == 0)
+        if (!Enabled || _spawnDisabled || enemy.Dead || enemy.Appearance == 0
+            || RetainedBodies.ContainsOwner(enemy.ObjectId, Odyssey.GetPartyRosterObjectId))
         {
             return;
         }
@@ -465,6 +664,7 @@ internal static unsafe class MaterialisedEnemies
     /// </summary>
     public static void ForgetOwner(uint ownerId)
     {
+        RetainedBodies.ForgetOwner(ownerId);
         for (int i = 0; i < OwnerIds.Length; i++)
         {
             if (OwnerIds[i] == ownerId)
@@ -482,6 +682,8 @@ internal static unsafe class MaterialisedEnemies
     /// </summary>
     public static void Sweep(double now)
     {
+        RetainedBodies.PruneInvalidSlots(Odyssey.GetPartyRosterObjectId);
+        RetainedBodies.Sweep(now, StaleSeconds);
         if (_spawnCooldown > 0)
         {
             _spawnCooldown--;
@@ -518,6 +720,7 @@ internal static unsafe class MaterialisedEnemies
     /// </summary>
     public static bool FlushOneBody()
     {
+        // RetainedEnemyBodyMap is deliberately not part of this plugin-owned flush table.
         for (int i = 0; i < OwnerIds.Length; i++)
         {
             if (OwnerIds[i] != 0)
@@ -554,6 +757,7 @@ internal static unsafe class MaterialisedEnemies
     /// a new module may succeed where the last one failed.</summary>
     public static void Invalidate()
     {
+        RetainedBodies.Clear();
         for (int i = 0; i < OwnerIds.Length; i++)
         {
             Clear(i);
@@ -576,10 +780,15 @@ internal static unsafe class MaterialisedEnemies
     public static int ReleaseSession()
     {
         int standing = 0;
-
+        RetainedBodies.ReleaseSession();
         for (int i = 0; i < OwnerIds.Length; i++)
         {
-            if (OwnerIds[i] != 0 && !Destroy(i, "session released"))
+            if (OwnerIds[i] == 0)
+            {
+                continue;
+            }
+
+            if (!Destroy(i, "session released"))
             {
                 standing++;
             }
@@ -649,6 +858,9 @@ internal static unsafe class MaterialisedEnemies
     /// phantom repaint writes (docs/research/phantom-equip-crash.md: any write here must
     /// be followed by RebuildAppearance).</summary>
     private const int CreAppearanceType = 0xA60;
+
+    /// <summary>CSWSObject + this = its current object id, revalidated after resolution.</summary>
+    private const int ObjId = 0x04;
 
     /// <summary>repute.2da has ~20 rows in the shipped game; anything far beyond that is
     /// a misread, and the blueprint's Neutral is the safe stand-in.</summary>

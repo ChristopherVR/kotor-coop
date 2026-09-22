@@ -100,6 +100,7 @@ public sealed partial class KotorGameBridge
     private const int PartySoloMode = 0x190;
     private const int PartyMaxCompanions = 2;
     private const int PartyNpcSlots = 9;
+    private const int PartyAvailableSlots = 0x30;
 
     private bool _partyFrozen;
 
@@ -164,6 +165,49 @@ public sealed partial class KotorGameBridge
         }
 
         return ids;
+    }
+
+    /// <summary>Reads the complete party-table state used by the tightly-scoped Lehon hostile
+    /// handoff. A partial read is not evidence of dismissal: every field must succeed before
+    /// the caller may relax the ordinary own-party census exclusion.</summary>
+    private bool TryReadPartyCensusRoster(out uint[] objectIds, out ushort availableMask, out ushort partyMask)
+    {
+        objectIds = new uint[PartyNpcSlots];
+        availableMask = 0;
+        partyMask = 0;
+        if (!TryGetPartyTable(out nint partyTable)
+            || !_memory.TryReadInt32(partyTable + PartyCount, out int count)
+            || count is < 0 or > PartyMaxCompanions)
+        {
+            return false;
+        }
+
+        for (int slot = 0; slot < PartyNpcSlots; slot++)
+        {
+            if (!_memory.TryReadUInt32(partyTable + PartyObjectIds + (slot * 4), out objectIds[slot])
+                || !_memory.TryReadInt32(partyTable + PartyAvailableSlots + (slot * 4), out int available))
+            {
+                return false;
+            }
+
+            if (available != 0)
+            {
+                availableMask |= (ushort)(1 << slot);
+            }
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
+                || slot is < 0 or >= PartyNpcSlots)
+            {
+                return false;
+            }
+
+            partyMask |= (ushort)(1 << slot);
+        }
+
+        return true;
     }
 
     // ---- shared progression (gold + experience) ---------------------------------

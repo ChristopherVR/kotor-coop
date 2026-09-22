@@ -34,15 +34,14 @@ internal sealed unsafe partial class SharedBlockView
     }
 
     /// <summary>Plugin-written; this instance's own party-table object id for
-    /// <paramref name="slot"/> — see SharedBlock's "party-roster body identity" region comment.
-    /// Callers are expected to pass 0 for a slot not currently in the local party (the
-    /// convention the field itself documents), not to gate the call on that here.</summary>
+    /// <paramref name="slot"/>. A retained body remains named after it leaves the active party
+    /// or availability roster. Callers pass 0 only when no valid local body id exists.</summary>
     public void SetLocalPartyRosterObjectId(int slot, uint objectId) =>
         *U32(SharedBlock.OffsetLocalPartyRosterObjectIds
             + (Clamp(slot, SharedBlock.PartyRosterSlots) * 4)) = objectId;
 
     /// <summary>Reads back what <see cref="SetLocalPartyRosterObjectId"/> last wrote for
-    /// <paramref name="slot"/> — 0 for a slot not in the local party. In-process consumer:
+    /// <paramref name="slot"/> — 0 when no body id is known. In-process consumer:
     /// <see cref="EnemyScalingController"/>, which needs "is this id one of our own party's
     /// bodies" without re-walking the party table itself.</summary>
     public uint GetLocalPartyRosterObjectId(int slot) =>
@@ -50,8 +49,8 @@ internal sealed unsafe partial class SharedBlockView
             + (Clamp(slot, SharedBlock.PartyRosterSlots) * 4));
 
     /// <summary>Agent-written; the HOST's own party-table object id for <paramref name="slot"/>,
-    /// or 0 if never published (an older peer build) or the host has no live body for that slot
-    /// right now. Not gated on <see cref="TryGetHostPartyRoster"/>'s own valid bit here — a
+    /// or 0 if never published (an older peer build) or the host has no body id for that slot.
+    /// Not gated on <see cref="TryGetHostPartyRoster"/>'s own valid bit here — a
     /// stale, no-longer-authoritative id is exactly as harmless as a stale roster mask, because
     /// every consumer (<c>PartyRosterController.Reconcile</c>) only ever reads this alongside a
     /// mask it already checked.</summary>

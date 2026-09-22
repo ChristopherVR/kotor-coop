@@ -114,20 +114,15 @@ reaches the enemy channel as hostile). The joiner keeps its own PC and fights no
 ### Bounded implementation boundary (2026-09-21)
 
 The verified `HOSTILE_1` standard faction (ID 1) can identify a hostile companion even
-when the party table still contains the body during the script's short removal window. The existing `EnemyState.Faction` field is sufficient for a future
-promotion through the enemy channel, but that promotion is intentionally not enabled here.
-The receiver must first map the host object id to the retained local companion body and coordinate
-CombatController, PhantomHitHook, health/death, and materialisation ownership; a DriveOne-only
-mapping would show motion while still dropping or misattributing combat. No runtime faction
-filter or native write ships from this research pass.
+when the party table still contains the body during the script's short removal window. The existing `EnemyState.Faction` field is sufficient for promotion through the enemy channel. As of 2026-09-23, the bounded retained-body receiver path is implemented but still **NEEDS-LIVE** validation. It maps a host object id to the existing local roster body only after current host/local roster proof and a successful local hostile-faction write; it does not spawn or destroy that campaign body. The enemy receiver drops the alias when current proof disappears, and the alias feeds the existing combat/damage owner translation. Static build and tests do not establish the timing or behavior of the actual summit dialogue.
 
 Unknown faction reads must retain conservative party exclusion. The unused classifier prototype
 was removed rather than shipping disconnected code. The complete handoff remains **NEEDS-LIVE**
 for the summit fight and the engine's timing between faction flip, roster removal, follow-state clearing, and
-owner-id translation in every combat path.
+owner-id translation in every combat path. This 2026-09-23 implementation does not change the shared-block protocol or the host's campaign ownership.
 
-The bounded implementation candidate is design 1 with a census-time faction read and a
-retained-body handoff. It remains staged until the full owner-id translation is proven. The following
+The bounded implementation is design 1 with a census-time faction read and a
+retained-body handoff. It remains staged for live validation. The following
 options remain as historical alternatives if the live summit pass exposes a timing or body-reuse
 problem:
 
@@ -184,3 +179,26 @@ stay in the room; the party is not emptied), the two-call `RemovePartyMember(4)/
    creature faction with `blockpoke` resolve), `partystate` companion count dropping 2 -> 1..0,
    the joiner's roster (does it drop Jolee/Juhani), and whether the joiner's mirrored Jolee
    attacks or stays neutral. Do not use `firescript`.
+
+### Implementation checkpoint (2026-09-23; live run pending)
+
+The receiver now recognizes only `unk_m44ac`, roster slots 4/5, `HOSTILE_1`, and positive
+host/local dismissed-slot state. It defers the owner/local alias until PartyPresence validates
+the live local creature and successfully writes its hostile faction. Combat health/death and
+liveness reconciliation defer retained-owner IDs until that same current owner/local proof is
+available, so an unmapped owner id cannot fall through to an unrelated local id. Outgoing damage
+and enemy-effect capture require the same current proof for committed retained aliases, and
+quarantine the local roster id when its owner translation is unavailable. EnemyPresence
+revalidates routable aliases every active pass; an empty census or missing proof revokes the
+alias immediately. The receiver does not spawn or destroy the campaign-owned body and does not
+change shared-block protocol or host campaign ownership.
+
+The warnings-as-errors NativeAOT x86 build and all 42 focused rule/lifecycle tests pass. The
+actual E63 / `k_punk_bastjoin` scene still **NEEDS-LIVE** validation for
+handoff timing, companion combat, damage ownership, local faction-write retry, plugin-owned
+min-HP pin cleanup, and gear state when the companions return to the party.
+
+The Sith Bastila templates use native slots 15..19 while the documented party roster table
+covers 0..8 and `PartyRoster.AvailableMask` is 16-bit. Whether those native writes reach separate
+party-table storage, adjacent fields, or are translated elsewhere remains an **unverified
+resource/engine question**; this handoff does not claim the slot-width issue is solved.

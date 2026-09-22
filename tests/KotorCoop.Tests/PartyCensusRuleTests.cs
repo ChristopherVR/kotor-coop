@@ -125,4 +125,22 @@ public class PartyCensusRuleTests
         Assert.False(PartyCensusRule.CoincidesWithOwnCompanion(
             appearance: 0, companionAppearance: 0, distanceSquared: 0f));
     }
+
+    [Theory]
+    [InlineData("unk_m44ac", 4, false, true, 1, false, false, true)]
+    [InlineData("unk_m44ac", 5, false, true, 1, false, false, true)]
+    [InlineData("UNK_M44AC", 4, false, true, 1, false, false, true)]
+    [InlineData("unk_m44ac", 3, false, true, 1, false, false, false)]
+    [InlineData("unk_m44ac", 6, false, true, 1, false, false, false)]
+    [InlineData("unk_m44ac", 4, true, true, 1, false, false, false)]
+    [InlineData("unk_m44ac", 4, false, false, 1, false, false, false)]
+    [InlineData("unk_m44ac", 4, false, true, 2, false, false, false)]
+    [InlineData("unk_m44ac", 4, false, true, 1, true, false, false)]
+    [InlineData("unk_m44ac", 4, false, true, 1, false, true, false)]
+    [InlineData("tar_m03aa", 4, false, true, 1, false, false, false)]
+    public void DarkSideHandoffRequiresTheExactHostileDismissedState(
+        string module, int slot, bool isPlayer, bool factionRead, ushort faction,
+        bool available, bool inParty, bool expected) =>
+        Assert.Equal(expected, DarkSideHostileCompanionRule.IsEligible(
+            module, slot, isPlayer, factionRead, faction, available, inParty));
 }

@@ -183,6 +183,31 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
+        if (MaterialisedEnemies.IsRetainedOwnerCandidate(targetId, block))
+        {
+            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(targetId, block, out uint localRetainedId))
+            {
+                Answer(SharedBlock.CheatStatusRefused, "retained companion handoff is not current yet");
+                return;
+            }
+
+            targetId = localRetainedId;
+            creature = Odyssey.ResolveServerObject(localRetainedId);
+            if (creature == 0
+                || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), localRetainedId))
+            {
+                Answer(SharedBlock.CheatStatusNoTarget, "retained companion body is not live here");
+                return;
+            }
+        }
+        else if ((MaterialisedEnemies.IsRetainedLocal(targetId)
+                || MaterialisedEnemies.IsQuarantinedRetainedLocal(targetId))
+            && !MaterialisedEnemies.TryGetCurrentRetainedOwner(targetId, block, out _))
+        {
+            Answer(SharedBlock.CheatStatusRefused, "retained companion owner mapping is not current yet");
+            return;
+        }
+
         SlayVerdict verdict = CheatAuthority.ForSlay(
             targetResolved: creature != 0,
             targetIsLocalPlayer: targetId == playerId,

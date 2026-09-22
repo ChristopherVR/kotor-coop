@@ -53,17 +53,16 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// behind the player. Read from party table +0x00 (count, max 2) and +0x04
 /// (<c>int[2]</c> of NPC slot indices — slot indices, NOT object ids).
 ///
-/// <paramref name="ObjectIds"/> (2026-08-24, docs/research/dialogue-consequences.md's
-/// "stale mirrored body" entry) = the sender's own party-table object id per slot (party
-/// table +0x0C, <c>int[9]</c>, written only by <c>AddMember</c> — see
-/// <c>Odyssey.GetPartyRosterObjectId</c>'s own doc comment), 0 for a slot not currently in
-/// <paramref name="PartyMask"/>. Object ids are assigned deterministically in GIT order, so
+/// <paramref name="ObjectIds"/> = the sender's own party-table object id per slot (party
+/// table +0x0C, <c>int[9]</c>, written by <c>AddMember</c> and retained after dismissal). A
+/// nonzero id may name a body even when its slot is absent from <paramref name="PartyMask"/>
+/// or <paramref name="AvailableMask"/>. Object ids are assigned deterministically in GIT order, so
 /// (the same assumption <c>EnemyPresenceController</c>/<c>MaterialisedEnemies</c> already lean
 /// on throughout this project) a companion who was ALSO a placed NPC before recruitment has the
 /// SAME id on every instance that loaded the same save — this is what lets a peer recognise its
 /// own already-placed copy of a just-recruited companion and reuse it instead of spawning a
 /// second, duplicate body next to it. <c>null</c> means the field was never populated (an older
-/// build, or the sender is not currently in party for that slot) — callers must not treat that
+/// build) — callers must not treat that
 /// as "the id is 0" the way <see cref="ObjectIdFor"/> reports it; 0 either way means "do not
 /// reuse", so no separate check is needed in practice.
 /// </summary>
@@ -82,8 +81,8 @@ public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask
     public bool IsInParty(int slot) => (PartyMask & (1 << slot)) != 0;
 
     /// <summary>This roster's own object id for <paramref name="slot"/>, or 0 if unknown, out
-    /// of range, or the slot has no id published (not in this roster's party, or the sender
-    /// predates this field). Never throws on a malformed index — the same defensive shape
+    /// of range, or the slot has no id published (no body exists, or the sender predates this
+    /// field). Never throws on a malformed index — the same defensive shape
     /// <see cref="IsAvailable"/>/<see cref="IsInParty"/> already use.</summary>
     public uint ObjectIdFor(int slot) =>
         ObjectIds is not null && (uint)slot < (uint)ObjectIds.Length ? ObjectIds[slot] : 0;

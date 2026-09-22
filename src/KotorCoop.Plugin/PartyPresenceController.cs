@@ -255,6 +255,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// </summary>
     public void ReleaseSession()
     {
+        ReleaseRetainedHostileBodies();
         foreach (PartyPresenceReleaseStep step in PartyPresenceReleaseOrderRule.Steps(_phase7Release))
         {
             switch (step)
@@ -327,6 +328,22 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             }
 
             uint objectId = _trackedId[i];
+            int retainedSlot = FindDismissedLehonRosterSlot(objectId);
+            if (MaterialisedEnemies.IsQuarantinedRetainedLocal(objectId)
+                && !MaterialisedEnemies.ReleaseRetainedQuarantineIfActive(
+                    objectId,
+                    retainedSlot,
+                    retainedSlot >= 0 && IsCurrentActiveRosterProof(objectId, retainedSlot)))
+            {
+                continue; // stale party state cannot restore a quarantined retained body
+            }
+
+            if (MaterialisedEnemies.IsRetainedLocal(objectId)
+                || (retainedSlot >= 0 && HostRosterConfirmsDismissal(retainedSlot)))
+            {
+                continue; // hostile handoff owns this body; never restore it to PLAYER here
+            }
+
             nint creature = Odyssey.ResolveServerObject(objectId);
             if (creature == 0 || *(uint*)(creature + 0x04) != objectId)
             {
@@ -388,6 +405,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // follow-AI firing on the party members the script is NOT driving, which is the bug this
         // whole channel exists to prevent. See docs/research/party-reconciliation.md, dated
         // entry 2026-08-21, for the full reasoning.
+        // EnemyPresence runs first in PluginHost.Frame. Relinquish a host-proven hostile body
+        // before any freeze edge can run ReleaseAllHeld and restore its old companion faction.
+        ReleaseRetainedHostileBodies();
+
         PartyFreezeAction freezeAction = PartyFreezeRule.Decide(Odyssey.IsPartyRosterFrozen(), _rosterFrozen);
         switch (freezeAction)
         {
@@ -445,7 +466,22 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 continue;
             }
 
-            uint mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
+            bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(locallyFightingOwnerId, block);
+            bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(locallyFightingOwnerId);
+            uint mappedEnemyId;
+            if (retainedCandidate || retainedAlias)
+            {
+                if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(
+                        locallyFightingOwnerId, block, out mappedEnemyId))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                mappedEnemyId = MaterialisedEnemies.ToLocal(locallyFightingOwnerId);
+            }
+
             uint localEnemyId = mappedEnemyId != 0 ? mappedEnemyId : locallyFightingOwnerId;
             nint enemyCreature = Odyssey.ResolveServerObject(localEnemyId);
             if (enemyCreature == 0)
@@ -505,6 +541,37 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             || (member.Position.X == 0f && member.Position.Y == 0f))
         {
             return false;
+        }
+
+        int rosterSlot = (int)member.RosterSlotPlusOne - 1;
+        uint retainedBodyId = Odyssey.GetPartyRosterObjectId(rosterSlot);
+        if (rosterSlot is 4 or 5 && TryGetCurrentHostileProof(retainedBodyId, out uint currentOwner))
+        {
+            CompleteRetainedHandoff(slot, retainedBodyId, rosterSlot, currentOwner);
+            return false;
+        }
+
+        if (rosterSlot is 4 or 5 && HostRosterConfirmsDismissal(rosterSlot))
+        {
+            return false; // positive host dismissal suppresses stale party snapshots; no native writes
+        }
+
+        if (rosterSlot is 4 or 5 && MaterialisedEnemies.IsQuarantinedRetainedLocal(retainedBodyId))
+        {
+            bool activeProof = IsCurrentActiveRosterProof(retainedBodyId, rosterSlot);
+            if (!MaterialisedEnemies.ReleaseRetainedQuarantineIfActive(retainedBodyId, rosterSlot, activeProof))
+            {
+                return false; // stale retained ids are never reclaimed by party snapshots
+            }
+        }
+
+        if (MaterialisedEnemies.IsRetainedLocal(retainedBodyId))
+        {
+            uint staleOwnerId = MaterialisedEnemies.ToOwner(retainedBodyId);
+            if (staleOwnerId != 0)
+            {
+                MaterialisedEnemies.ForgetOwner(staleOwnerId);
+            }
         }
 
         // The host can be tearing down a creature while its position is still readable. Never
@@ -927,6 +994,245 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             _appliedEquip[slot, j] = 0;
             _equipFailures[slot, j] = 0;
         }
+    }
+
+    private void ReleaseRetainedHostileBodies()
+    {
+        if (!IsLehonModule())
+        {
+            return;
+        }
+
+        // Iterate the authoritative local slots, not only PartyPresence's cache: the enemy
+        // may arrive mid-fight or an earlier safe proof loss may have forgotten the alias.
+        for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+        {
+            uint localId = Odyssey.GetPartyRosterObjectId(rosterSlot);
+            if (localId == 0)
+            {
+                continue;
+            }
+
+            int presenceSlot = Array.IndexOf(_trackedId, localId);
+            if (TryGetCurrentHostileProof(localId, out uint ownerId))
+            {
+                CompleteRetainedHandoff(presenceSlot, localId, rosterSlot, ownerId);
+            }
+            else if (presenceSlot >= 0 && HostRosterConfirmsDismissal(rosterSlot))
+            {
+                // Keep both the campaign body and our ownership latch until current host
+                // enemy proof arrives. No alias is published without a successful faction
+                // write, and no stale party snapshot can drive this positively dismissed slot.
+                _creature[presenceSlot] = 0;
+                PhantomHitHook.WatchCompanion(presenceSlot, 0, 0);
+            }
+        }
+    }
+
+    private static int FindDismissedLehonRosterSlot(uint localId)
+    {
+        if (localId == 0 || !IsLehonModule())
+        {
+            return -1;
+        }
+
+        for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+        {
+            if (Odyssey.GetPartyRosterObjectId(rosterSlot) == localId)
+            {
+                return rosterSlot;
+            }
+        }
+
+        return -1;
+    }
+
+    private bool TryGetCurrentHostileProof(uint localId, out uint ownerId)
+    {
+        ownerId = 0;
+        if (!IsLehonModule()
+            || !block.TryGetHostPartyRoster(out uint hostAvailable, out uint hostParty)
+            || !Odyssey.TryReadPartyRoster(out uint localAvailable, out uint localParty))
+        {
+            return false;
+        }
+
+        for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+        {
+            uint hostId = block.GetHostPartyRosterObjectId(rosterSlot);
+            uint enemyCount = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
+            bool hasHostEnemyRow = false;
+            for (int i = 0; i < enemyCount; i++)
+            {
+                EnemyPresenceView enemy = block.GetEnemyPresence(i);
+                if (enemy.ObjectId == hostId
+                    && enemy.Faction == DarkSideHostileCompanionRule.HostileFaction)
+                {
+                    hasHostEnemyRow = true;
+                    break;
+                }
+            }
+
+            nint localBody = Odyssey.ResolveServerObject(localId);
+            int localFaction = localBody != 0
+                && PartyCreatureIdentity.IsLiveMatch(*(nint*)localBody, *(uint*)(localBody + 0x04), localId)
+                ? Odyssey.GetCreatureFaction(localBody)
+                : 0;
+            if (RetainedEnemyHandoffProof.IsCurrent(
+                lehonModule: true,
+                rosterSlot,
+                hostId,
+                localId,
+                block.GetHostPartyRosterObjectId(rosterSlot),
+                block.GetLocalPartyRosterObjectId(rosterSlot),
+                Odyssey.GetPartyRosterObjectId(rosterSlot),
+                hostAvailable,
+                hostParty,
+                localAvailable,
+                localParty,
+                hasHostEnemyRow,
+                DarkSideHostileCompanionRule.HostileFaction,
+                localFaction,
+                requireHostileLocalFaction: false))
+            {
+                ownerId = hostId;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool HostRosterConfirmsDismissal(int rosterSlot)
+    {
+        if (rosterSlot is not (4 or 5)
+            || !IsLehonModule()
+            || !block.TryGetHostPartyRoster(out uint hostAvailable, out uint hostParty))
+        {
+            return false;
+        }
+
+        uint bit = 1u << rosterSlot;
+        return (hostAvailable & bit) == 0 && (hostParty & bit) == 0;
+    }
+
+    /// <summary>Allows a quarantined Lehon native body back into ordinary party drive only
+    /// after both rosters positively show this same slot/body active, the host no longer
+    /// publishes that owner as a hostile enemy, and the live local creature has returned to the
+    /// player faction. Missing or mismatched evidence keeps the quarantine closed.</summary>
+    private bool IsCurrentActiveRosterProof(uint localId, int rosterSlot)
+    {
+        if (rosterSlot is not (4 or 5)
+            || !IsLehonModule()
+            || !block.TryGetHostPartyRoster(out uint hostAvailable, out uint hostParty)
+            || !Odyssey.TryReadPartyRoster(out uint localAvailable, out uint localParty))
+        {
+            return false;
+        }
+
+        uint hostId = block.GetHostPartyRosterObjectId(rosterSlot);
+        uint sharedLocalId = block.GetLocalPartyRosterObjectId(rosterSlot);
+        uint enemyCount = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
+        bool hasHostileEnemyRow = false;
+        for (int i = 0; i < enemyCount; i++)
+        {
+            EnemyPresenceView enemy = block.GetEnemyPresence(i);
+            if (enemy.ObjectId == hostId
+                && enemy.Faction == DarkSideHostileCompanionRule.HostileFaction)
+            {
+                hasHostileEnemyRow = true;
+                break;
+            }
+        }
+
+        nint creature = Odyssey.ResolveServerObject(localId);
+        return creature != 0
+            && PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), localId)
+            && RetainedEnemyHandoffProof.IsCurrentActive(
+                lehonModule: true,
+                rosterSlot,
+                hostId,
+                localId,
+                sharedLocalId,
+                Odyssey.GetPartyRosterObjectId(rosterSlot),
+                hostAvailable,
+                hostParty,
+                localAvailable,
+                localParty,
+                hasHostileEnemyRow,
+                Odyssey.GetCreatureFaction(creature),
+                Odyssey.FactionPlayer);
+    }
+
+    private void CompleteRetainedHandoff(int presenceSlot, uint localId, int rosterSlot, uint ownerId)
+    {
+        bool ownsPartyState = presenceSlot >= 0 && _trackedId[presenceSlot] == localId;
+        bool wasMapped = MaterialisedEnemies.IsRetainedOwner(ownerId);
+        if (wasMapped && !ownsPartyState)
+        {
+            return; // EnemyPresence revalidates the committed alias; do not touch it per frame.
+        }
+
+        bool wasCoopPinned = ownsPartyState
+            && _factionKnown[presenceSlot]
+            && _heldNeutral[presenceSlot];
+        nint creature = Odyssey.ResolveServerObject(localId);
+        if (creature == 0
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), localId))
+        {
+            return;
+        }
+
+        // Reserve the local id against raw-ID forwarding before the faction write. The
+        // authoritative snapshot can change between EnemyPresence's earlier pass and this
+        // handoff; if proof is revoked immediately after faction change (or alias registration
+        // fails), hooks must still defer this local id until the next proof check.
+        MaterialisedEnemies.QuarantineRetainedLocal(localId, rosterSlot);
+
+        RetainedEnemyHandoffResult result = RetainedEnemyHandoff.TryCommit(
+            currentProof: true,
+            setHostileFaction: () =>
+                Odyssey.GetCreatureFaction(creature) == DarkSideHostileCompanionRule.HostileFaction
+                || Odyssey.SetCreatureFaction(localId, DarkSideHostileCompanionRule.HostileFaction),
+            registerAlias: () => MaterialisedEnemies.RegisterRetained(ownerId, localId, rosterSlot),
+            releaseOwnedPartyProtection: () =>
+            {
+                // Only remove the min-1-hp state this controller itself installed; a native
+                // script's invulnerability belongs to the campaign and survives handoff.
+                if (wasCoopPinned)
+                {
+                    Odyssey.SetMinOneHitPoint(creature, false);
+                }
+
+                Odyssey.ForgetGait(creature);
+                if (ownsPartyState)
+                {
+                    _creature[presenceSlot] = 0;
+                    Forget(presenceSlot);
+                }
+            });
+
+        if (result == RetainedEnemyHandoffResult.Committed && !wasMapped)
+        {
+            PhantomHitHook.ClearCompanionWatch(localId);
+            PluginHost.Log(
+                $"enemy handoff: owner 0x{ownerId:X} -> retained local 0x{localId:X}, roster slot {rosterSlot}");
+        }
+    }
+
+    private static bool IsLehonModule()
+    {
+        byte* module = stackalloc byte[9];
+        module[0] = (byte)'u';
+        module[1] = (byte)'n';
+        module[2] = (byte)'k';
+        module[3] = (byte)'_';
+        module[4] = (byte)'m';
+        module[5] = (byte)'4';
+        module[6] = (byte)'4';
+        module[7] = (byte)'a';
+        module[8] = (byte)'c';
+        return Odyssey.ModuleNameEquals(module, 9);
     }
 
     /// <summary>Maps equip index in the shared block to the engine's inventory slot — same

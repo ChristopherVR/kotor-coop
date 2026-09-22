@@ -85,7 +85,21 @@ internal static unsafe class EnemyEffectCapture
             return;
         }
 
-        uint ownerId = MaterialisedEnemies.ToOwner(targetId);
+        bool retainedLocal = MaterialisedEnemies.IsRetainedLocal(targetId)
+            || MaterialisedEnemies.IsQuarantinedRetainedLocal(targetId);
+        uint ownerId;
+        if (retainedLocal)
+        {
+            if (!MaterialisedEnemies.TryGetCurrentRetainedOwner(targetId, out ownerId))
+            {
+                return; // local roster id has no current host-owner mapping yet
+            }
+        }
+        else
+        {
+            ownerId = MaterialisedEnemies.ToOwner(targetId);
+        }
+
         uint enemyId = ownerId != 0 ? ownerId : targetId;
 
         if (enemyId == EnemyPresenceController.LocalCombatBypassId)

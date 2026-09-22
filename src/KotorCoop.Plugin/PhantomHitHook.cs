@@ -32,8 +32,10 @@ namespace KotorCoop.Plugin;
 /// what, which health cannot express at all.
 ///
 /// This runs inside every damage event in the game, so it does the least possible work:
-/// compare an id against two tiny arrays, read a handful of ints, add. No engine calls, no
-/// allocation, and a catch that can never unwind into the engine.
+/// compare ids, read effect amounts, and add. A target that is a retained Lehon roster body
+/// takes one bounded live-proof read before its damage can be forwarded; all other targets
+/// keep the original fixed-table path. No allocation, and a catch that can never unwind into
+/// the engine.
 /// </summary>
 internal static unsafe class PhantomHitHook
 {
@@ -503,6 +505,26 @@ internal static unsafe class PhantomHitHook
         _companionRosterSlotPlusOne[slot] = objectId == 0 ? 0 : rosterSlotPlusOne;
     }
 
+    /// <summary>Stops companion-damage attribution for a body at the instant it is transferred
+    /// to the enemy channel. The party controller will clear its per-slot caches later in the
+    /// same frame; this closes the interval in which a hit could be counted by both channels.</summary>
+    public static void ClearCompanionWatch(uint objectId)
+    {
+        if (objectId == 0)
+        {
+            return;
+        }
+
+        for (int slot = 0; slot < _companionId.Length; slot++)
+        {
+            if (_companionId[slot] == objectId)
+            {
+                _companionId[slot] = 0;
+                _companionRosterSlotPlusOne[slot] = 0;
+            }
+        }
+    }
+
     public static void ReadCompanionSlot(
         int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial) =>
         ReadCompanionSlot(slot, out rosterSlotPlusOne, out cumulative, out serial, out _);
@@ -727,7 +749,21 @@ internal static unsafe class PhantomHitHook
                 // The ledger travels to the enemy OWNER, so it must be keyed in the
                 // owner's id space: a hit on a materialised stand-in is recorded under
                 // the owner id the body stands in for, not its local spawn id.
-                uint ownerId = MaterialisedEnemies.ToOwner(targetId);
+                bool retainedLocal = MaterialisedEnemies.IsRetainedLocal(targetId)
+                    || MaterialisedEnemies.IsQuarantinedRetainedLocal(targetId);
+                uint ownerId;
+                if (retainedLocal)
+                {
+                    if (!MaterialisedEnemies.TryGetCurrentRetainedOwner(targetId, out ownerId))
+                    {
+                        return; // stale/unfinished retained proof must never become a raw host id
+                    }
+                }
+                else
+                {
+                    ownerId = MaterialisedEnemies.ToOwner(targetId);
+                }
+
                 uint creditId = ownerId != 0 ? ownerId : targetId;
 
                 // ROUND 50: the decisive-control bypass — see

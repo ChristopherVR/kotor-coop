@@ -114,6 +114,21 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
+        bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(enemy.ObjectId, block);
+        bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(enemy.ObjectId);
+        uint mapped;
+        if (retainedCandidate || retainedAlias)
+        {
+            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(enemy.ObjectId, block, out mapped))
+            {
+                return; // no raw-owner fallback until the current retained handoff is committed
+            }
+        }
+        else
+        {
+            mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
+        }
+
         if (enemy.Dead)
         {
             KillOnce(enemy.ObjectId);
@@ -124,7 +139,6 @@ internal sealed class CombatController(SharedBlockView block)
         // owner's instance has a locally-spawned stand-in under a different id. An
         // UNMAPPED owner id colliding with one of those stand-ins' local ids must not be
         // touched at all — resolving it would pin and mirror the wrong body.
-        uint mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
         if (mapped == 0 && MaterialisedEnemies.ToOwner(enemy.ObjectId) != 0)
         {
             return;
@@ -227,6 +241,21 @@ internal sealed class CombatController(SharedBlockView block)
 
     private void KillOnce(uint objectId)
     {
+        bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(objectId, block);
+        bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(objectId);
+        uint mapped;
+        if (retainedCandidate || retainedAlias)
+        {
+            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(objectId, block, out mapped))
+            {
+                return; // defer: never kill a raw owner id that may collide locally
+            }
+        }
+        else
+        {
+            mapped = MaterialisedEnemies.ToLocal(objectId);
+        }
+
         for (int i = 0; i < _killedCount; i++)
         {
             if (_killed[i] == objectId)
@@ -237,7 +266,6 @@ internal sealed class CombatController(SharedBlockView block)
 
         // Same translation as Apply: the death of a materialised enemy is executed on its
         // local stand-in, and a collision with an unrelated stand-in's id is left alone.
-        uint mapped = MaterialisedEnemies.ToLocal(objectId);
         if (mapped == 0 && MaterialisedEnemies.ToOwner(objectId) != 0)
         {
             Remember(objectId);

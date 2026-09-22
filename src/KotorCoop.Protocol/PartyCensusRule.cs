@@ -88,3 +88,23 @@ public static class PartyCensusRule
     public static bool MayMaterialise(bool ownerIdIsOwnRosterBody, bool coincidesWithOwnCompanion) =>
         !ownerIdIsOwnRosterBody && !coincidesWithOwnCompanion;
 }
+
+/// <summary>Exact source-side gate for the two Lehon dark-side companions that become hostile
+/// enemies after the summit confrontation. Their roster bodies remain in PARTYTABLE after
+/// dismissal, so ordinary party census exclusion must yield only for this observed state.</summary>
+public static class DarkSideHostileCompanionRule
+{
+    public const string Module = "unk_m44ac";
+    public const ushort HostileFaction = 1;
+
+    public static bool IsEligible(
+        string? module, int rosterSlot, bool isPlayer, bool factionRead, ushort faction,
+        bool available, bool inParty) =>
+        string.Equals(module, Module, StringComparison.OrdinalIgnoreCase)
+        && rosterSlot is 4 or 5
+        && !isPlayer
+        && factionRead
+        && faction == HostileFaction
+        && !available
+        && !inParty;
+}

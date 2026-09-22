@@ -139,6 +139,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowStepTimingRule.cs" Link="Plugin\FollowStepTimingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceReleaseOrderRule.cs" Link="Plugin\PartyPresenceReleaseOrderRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceResolveCacheRule.cs" Link="Plugin\PartyPresenceResolveCacheRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyBodyMap.cs" Link="Plugin\RetainedEnemyBodyMap.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\TransitionAnnounceKind.cs" Link="Plugin\TransitionAnnounceKind.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerLockArbiter.cs" Link="Plugin\ContainerLockArbiter.cs" />
@@ -155,6 +156,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ThreatTable.cs" Link="Plugin\ThreatTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ThreatRetargetRule.cs" Link="Plugin\ThreatRetargetRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GamepadMapping.cs" Link="Plugin\GamepadMapping.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoff.cs" Link="Plugin\RetainedEnemyHandoff.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoffProof.cs" Link="Plugin\RetainedEnemyHandoffProof.cs" />
   </ItemGroup>
 
   <ItemGroup>

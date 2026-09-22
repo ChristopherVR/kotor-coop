@@ -37,6 +37,9 @@ public sealed partial class KotorGameBridge
         // Trask into the enemy census and the client built a Trask-shaped stand-in next to the
         // party. The roster is a membership record and is right in that window.
         HashSet<uint> partyRoster = ReadPartyRosterIds();
+        bool havePartyState = TryReadPartyCensusRoster(
+            out uint[] rosterObjectIds, out ushort availableMask, out ushort activePartyMask);
+        string censusModule = TryReadCurrentModule(out string liveModule) ? liveModule : string.Empty;
 
         Dictionary<uint, (uint Serial, ushort Animation)>? oneShots = ReadCreatureOneShots();
 
@@ -49,8 +52,19 @@ public sealed partial class KotorGameBridge
 
         foreach (CreatureRef creature in EnumerateCreatures())
         {
+            int rosterSlot = havePartyState ? Array.IndexOf(rosterObjectIds, creature.ObjectId) : -1;
+            ushort rosterFaction = 0;
+            bool factionRead = rosterSlot is 4 or 5
+                && TryReadCreatureFaction(creature.Address, out rosterFaction);
+            ushort faction = factionRead ? rosterFaction : (ushort)0;
+            bool hostileDismissal = DarkSideHostileCompanionRule.IsEligible(
+                censusModule, rosterSlot, creature.IsPlayer, factionRead, faction,
+                rosterSlot >= 0 && (availableMask & (1 << rosterSlot)) != 0,
+                rosterSlot >= 0 && (activePartyMask & (1 << rosterSlot)) != 0);
+
             if (PartyCensusRule.IsOwnParty(
-                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster))
+                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster)
+                && !hostileDismissal)
             {
                 continue;
             }
@@ -134,13 +148,9 @@ public sealed partial class KotorGameBridge
             // means the mirror will not materialise this one.
             _memory.TryRead(creature.Address + OffAppearanceType, out ushort appearance);
 
-            ushort faction = 0;
-            if (_memory.TryReadUInt32(creature.Address + OffCreatureStats, out uint statsPtr)
-                && statsPtr != 0
-                && _memory.TryReadUInt32((nint)statsPtr + StatsFaction, out uint factionId)
-                && factionId <= ushort.MaxValue)
+            if (!factionRead && TryReadCreatureFaction(creature.Address, out ushort readFaction))
             {
-                faction = (ushort)factionId;
+                faction = readFaction;
             }
 
             (uint oneShotSerial, ushort oneShotAnim) =
@@ -208,6 +218,21 @@ public sealed partial class KotorGameBridge
         // this engine can resolve, because that is the only thing that makes it an id a peer
         // can key a forwarded kill or a damage debt by.
         return ConfirmPublished(enemies);
+    }
+
+    private bool TryReadCreatureFaction(nint creature, out ushort faction)
+    {
+        faction = 0;
+        if (!_memory.TryReadUInt32(creature + OffCreatureStats, out uint statsPtr)
+            || statsPtr == 0
+            || !_memory.TryReadUInt32((nint)statsPtr + StatsFaction, out uint factionId)
+            || factionId > ushort.MaxValue)
+        {
+            return false;
+        }
+
+        faction = (ushort)factionId;
+        return true;
     }
 
 

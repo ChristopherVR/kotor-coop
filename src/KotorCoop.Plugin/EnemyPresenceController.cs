@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Plugin;
 
@@ -76,6 +77,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     // creature and reused memory reads as plausible garbage.
     private readonly uint[] _trackedId = new uint[SharedBlock.EnemyCapacity];
     private readonly nint[] _creature = new nint[SharedBlock.EnemyCapacity];
+    private readonly bool[] _retainedCandidateThisPass = new bool[SharedBlock.EnemyCapacity];
 
     // ROUND 46: the engine's own pre-claim state for each slot's creature, captured once on
     // first resolve (see Resolve()) so a creature handed to local_combat can be restored to
@@ -139,6 +141,21 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         Squared(Math.Clamp(PluginConfig.ReadFloat("local_combat_range", 20f), 1f, 200f));
 
     private static float Squared(float value) => value * value;
+
+    private static bool IsLehonModule()
+    {
+        byte* module = stackalloc byte[9];
+        module[0] = (byte)'u';
+        module[1] = (byte)'n';
+        module[2] = (byte)'k';
+        module[3] = (byte)'_';
+        module[4] = (byte)'m';
+        module[5] = (byte)'4';
+        module[6] = (byte)'4';
+        module[7] = (byte)'a';
+        module[8] = (byte)'c';
+        return Odyssey.ModuleNameEquals(module, 9);
+    }
 
     /// <summary>
     /// ROUND 55: how close a hostile census creature must stand to THIS player before it may be
@@ -526,6 +543,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
 
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
+            MaterialisedEnemies.ClearRetainedAliases();
             // Still sweep: a session that ended leaves materialised bodies with nobody
             // refreshing them, and they must not stand around (or reach a save) forever.
             MaterialisedEnemies.Sweep(now);
@@ -535,6 +553,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
 
         if (!_enabled)
         {
+            MaterialisedEnemies.DisableRetainedAliases();
             if (!_offLogged)
             {
                 _offLogged = true;
@@ -544,22 +563,88 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             return;
         }
 
-        // A local conversation owns the stage: the dialogue system positions and disarms
-        // creatures itself, and the owner's agent holds its publication during its own
-        // dialogues for the same reason. No sweep either — a spawn or destroy is a VM
-        // dispatch, refused while a script runs, and the census hold must not read as
-        // staleness.
+        uint count = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
+        bool hostRosterValid = block.TryGetHostPartyRoster(
+            out uint hostAvailable, out uint hostParty);
+        bool localRosterValid = Odyssey.TryReadPartyRoster(out uint localAvailable, out uint localParty);
+        bool lehonModule = IsLehonModule();
+
+        if (lehonModule && hostRosterValid)
+        {
+            for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+            {
+                uint bit = 1u << rosterSlot;
+                uint hostId = block.GetHostPartyRosterObjectId(rosterSlot);
+                uint localId = block.GetLocalPartyRosterObjectId(rosterSlot);
+                if (PartyCensusRule.IsRosterId(hostId)
+                    && localId != 0
+                    && (hostAvailable & bit) == 0
+                    && (hostParty & bit) == 0)
+                {
+                    MaterialisedEnemies.QuarantineRetainedLocal(localId, rosterSlot);
+                }
+            }
+        }
+
+        // Owner/local aliases are routable only while the exact host enemy row and both
+        // dismissed roster states are visible this frame. A zero census or unreadable snapshot
+        // revokes them immediately; the normal five-second lease is not authorization for hits.
+        if (MaterialisedEnemies.RetainedCount != 0)
+        {
+            MaterialisedEnemies.PruneUnprovenRetained(entry =>
+                MaterialisedEnemies.TryGetCurrentRetainedLocal(entry.OwnerId, block, out _));
+        }
+
+        // A local conversation owns the stage: dialogue positions/disarms creatures, so this
+        // pass still does not drive them. Retained translations were nevertheless revalidated
+        // above before any damage hook can use stale campaign state.
         if (Odyssey.IsConversationActive)
         {
             return;
         }
 
-        uint count = Math.Min(block.EnemyPresenceCount, (uint)SharedBlock.EnemyCapacity);
         if (count == 0)
         {
             MaterialisedEnemies.Sweep(now);
             PublishMaterialisedOwnerIds();
             return;
+        }
+
+        Array.Clear(_retainedCandidateThisPass, 0, (int)count);
+
+        // Mark exact host candidates before local-combat candidate selection. Until PartyPresence
+        // successfully writes the local faction, these are deliberately not routable aliases and
+        // never receive an enemy stand-in.
+        for (int i = 0; i < count; i++)
+        {
+            EnemyPresenceView enemy = block.GetEnemyPresence(i);
+            if (enemy.Faction != DarkSideHostileCompanionRule.HostileFaction
+                || !MaterialisedEnemies.IsRetainedOwnerCandidate(enemy.ObjectId, block))
+            {
+                continue;
+            }
+
+            _retainedCandidateThisPass[i] = true;
+            for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+            {
+                if (block.GetHostPartyRosterObjectId(rosterSlot) == enemy.ObjectId)
+                {
+                    uint bit = 1u << rosterSlot;
+                    uint localId = block.GetLocalPartyRosterObjectId(rosterSlot);
+                    if (localId != 0)
+                    {
+                        MaterialisedEnemies.QuarantineRetainedLocal(localId, rosterSlot);
+                        if (localRosterValid
+                            && (localAvailable & bit) == 0
+                            && (localParty & bit) == 0)
+                        {
+                            PhantomHitHook.ClearCompanionWatch(localId);
+                        }
+                    }
+
+                    break;
+                }
+            }
         }
 
         // ROUND 55: decided ONCE, before any slot is claimed or driven this pass, so DriveOne
@@ -571,6 +656,63 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         for (int i = 0; i < count; i++)
         {
             EnemyPresenceView enemy = block.GetEnemyPresence(i);
+
+            bool alreadyRetained = MaterialisedEnemies.IsRetainedOwner(enemy.ObjectId);
+            if (_retainedCandidateThisPass[i] && !alreadyRetained)
+            {
+                continue; // do not resolve/materialise a reserved Lehon slot before handoff commit
+            }
+
+            if (alreadyRetained && (!hostRosterValid || !localRosterValid || !lehonModule))
+            {
+                MaterialisedEnemies.ForgetOwner(enemy.ObjectId);
+                continue;
+            }
+
+            int matchingRosterSlot = -1;
+            if (hostRosterValid)
+            {
+                for (int rosterSlot = 4; rosterSlot <= 5; rosterSlot++)
+                {
+                    if (enemy.ObjectId == block.GetHostPartyRosterObjectId(rosterSlot))
+                    {
+                        matchingRosterSlot = rosterSlot;
+                        break;
+                    }
+                }
+            }
+
+            if (alreadyRetained && matchingRosterSlot < 0)
+            {
+                MaterialisedEnemies.ForgetOwner(enemy.ObjectId);
+                continue;
+            }
+
+            bool retainedCandidate = lehonModule
+                && matchingRosterSlot >= 0
+                && enemy.Faction == DarkSideHostileCompanionRule.HostileFaction
+                && (hostAvailable & (1u << matchingRosterSlot)) == 0
+                && (hostParty & (1u << matchingRosterSlot)) == 0;
+
+            if (matchingRosterSlot >= 0 && !retainedCandidate)
+            {
+                // The host has changed faction or recruited the slot again. Drop only the
+                // translation so the party channel can own its native body again.
+                MaterialisedEnemies.ForgetOwner(enemy.ObjectId);
+                continue;
+            }
+
+            if (retainedCandidate)
+            {
+                if (!alreadyRetained)
+                {
+                    // PartyPresence commits after a successful faction write later in the frame.
+                    // In the meantime this is neither a drive target nor a materialisation target.
+                    continue;
+                }
+
+                PhantomHitHook.ClearCompanionWatch(block.GetLocalPartyRosterObjectId(matchingRosterSlot));
+            }
 
             // ROUND 50: the decisive control. Skip this id COMPLETELY — no Seen (so no
             // materialised-body lease refresh either, if it ever were one), no Resolve, no
@@ -715,6 +857,7 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             if (enemy.ObjectId == 0 || enemy.ObjectId == Odyssey.ObjectInvalid || enemy.Dead
                 || (LocalCombatBypassId != 0 && enemy.ObjectId == LocalCombatBypassId)
                 || (DiagUndrivenObjectId != 0 && enemy.ObjectId == DiagUndrivenObjectId)
+                || _retainedCandidateThisPass[i]
                 || MaterialisedEnemies.ToLocal(enemy.ObjectId) != 0
                 || FindLocalCombatSlot(enemy.ObjectId) >= 0)
             {
@@ -1107,9 +1250,22 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         }
 
         // A mirrored companion is party sync's to move, never ours.
-        if (*(uint*)(creature + CrePartyFollowInfo) != 0)
+        bool retainedHostile = MaterialisedEnemies.IsRetainedOwner(enemy.ObjectId);
+        if (*(uint*)(creature + CrePartyFollowInfo) != 0 && !retainedHostile)
         {
             return false;
+        }
+
+        // Preserve the retained native NPC body and scripts, but restore its hostile faction
+        // after PartyPresenceController relinquishes the old companion ownership this frame.
+        if (retainedHostile
+            && Odyssey.GetCreatureFaction(creature) != DarkSideHostileCompanionRule.HostileFaction)
+        {
+            if (!Odyssey.SetCreatureFaction(
+                    *(uint*)(creature + ObjId), DarkSideHostileCompanionRule.HostileFaction))
+            {
+                return false; // keep party ownership intact and retry the faction handoff next frame
+            }
         }
 
         // ROUND 29 DIAGNOSTIC: this one hand-picked creature is left completely untouched —
