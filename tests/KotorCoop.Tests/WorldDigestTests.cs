@@ -13,8 +13,9 @@ namespace KotorCoop.Tests;
 public class WorldDigestTests
 {
     private static WorldDigest Digest(
-        uint globals = 0xAAAA, uint save = 0xBBBB, string module = "end_m01aa", uint git = 0xCCCC) =>
-        new(globals, save, module, git);
+        uint globals = 0xAAAA, uint save = 0xBBBB, string module = "end_m01aa", uint git = 0xCCCC,
+        byte? difficulty = null) =>
+        new(globals, save, module, git, DifficultyLevel: difficulty);
 
     [Fact]
     public void IdenticalDigestsMismatchNothing()
@@ -30,6 +31,7 @@ public class WorldDigestTests
         Assert.True(WorldDigest.Compare(Digest(globals: 1), Digest(globals: 2)).GlobalsCatalogueMismatch);
         Assert.True(WorldDigest.Compare(Digest(save: 1), Digest(save: 2)).SaveIdentityMismatch);
         Assert.True(WorldDigest.Compare(Digest(git: 1), Digest(git: 2)).ModuleGitMismatch);
+        Assert.True(WorldDigest.Compare(Digest(difficulty: 0), Digest(difficulty: 2)).DifficultyMismatch);
 
         // And none of them bleeds into the others.
         WorldDigestComparison m = WorldDigest.Compare(Digest(git: 1), Digest(git: 2));
@@ -46,7 +48,21 @@ public class WorldDigestTests
         Assert.False(WorldDigest.Compare(Digest(save: 1), Digest(save: 0)).SaveIdentityMismatch);
         Assert.False(WorldDigest.Compare(Digest(git: 0), Digest(git: 2)).ModuleGitMismatch);
         Assert.False(WorldDigest.Compare(Digest(globals: 0), Digest(globals: 2)).GlobalsCatalogueMismatch);
+        Assert.False(WorldDigest.Compare(Digest(difficulty: 0), Digest()).DifficultyMismatch);
+        Assert.False(WorldDigest.Compare(Digest(difficulty: 2), Digest(difficulty: null)).DifficultyMismatch);
         Assert.False(WorldDigest.Compare(WorldDigest.Empty, Digest()).Any);
+    }
+
+    [Fact]
+    public void DifficultyMismatchIsIndependentOfModuleAndDoesNotDegradeChannels()
+    {
+        WorldDigestComparison mismatch = WorldDigest.Compare(
+            Digest(module: "end_m01aa", difficulty: 0),
+            Digest(module: "tar_m10aa", difficulty: 2));
+
+        Assert.True(mismatch.DifficultyMismatch);
+        Assert.False(mismatch.ModuleGitMismatch);
+        Assert.True(mismatch.Any);
     }
 
     [Fact]

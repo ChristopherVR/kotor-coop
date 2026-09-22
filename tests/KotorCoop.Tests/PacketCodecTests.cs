@@ -70,13 +70,29 @@ public class PacketCodecTests
         // SaveIdentity change as a save or a load without a new packet.
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         WorldDigestPacket original = new(
-            4, new WorldDigest(0xDEADBEEF, 0x1234_5678, "end_m01aa", 0x9ABC_DEF0, LoadSerial: 42));
+            4, new WorldDigest(0xDEADBEEF, 0x1234_5678, "end_m01aa", 0x9ABC_DEF0,
+                LoadSerial: 42, DifficultyLevel: 2));
 
         int length = PacketCodec.Write(buffer, original);
         WorldDigestPacket? decoded = PacketCodec.ReadWorldDigest(buffer[..length]);
 
         Assert.NotNull(decoded);
         Assert.Equal(42u, decoded.Digest.LoadSerial);
+        Assert.Equal((byte?)2, decoded.Digest.DifficultyLevel);
+        Assert.Equal(original, decoded);
+    }
+
+    [Fact]
+    public void UnknownDifficultyRoundTripsAsUnknown()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        WorldDigestPacket original = new(4, WorldDigest.Empty with { Module = "end_m01aa" });
+
+        int length = PacketCodec.Write(buffer, original);
+        WorldDigestPacket? decoded = PacketCodec.ReadWorldDigest(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Null(decoded.Digest.DifficultyLevel);
         Assert.Equal(original, decoded);
     }
 

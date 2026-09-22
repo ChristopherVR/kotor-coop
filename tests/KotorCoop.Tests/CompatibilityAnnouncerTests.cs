@@ -40,6 +40,28 @@ public class CompatibilityAnnouncerTests
     }
 
     [Fact]
+    public void RuntimeDifficultyWarningIsRepeatableAfterTheSettingsAgreeAgain()
+    {
+        CompatibilityAnnouncer announcer = new();
+        List<string> lines = [];
+        CompatibilityVerdict warning = Verdict(SessionCapabilities.All,
+            new CompatibilityNote(CompatibilityCode.Difficulty, SessionCapabilities.None,
+                "live difficulty settings differ; PC and party damage scaling may differ, but co-op remains enabled"));
+
+        announcer.Observe(warning, lines.Add);
+        announcer.Observe(warning, lines.Add);
+        Assert.Single(lines);
+        Assert.Contains("W_DIFFICULTY", lines[0], StringComparison.Ordinal);
+
+        announcer.Observe(Verdict(SessionCapabilities.All), lines.Add);
+        lines.Clear();
+        announcer.Observe(warning, lines.Add);
+
+        Assert.Single(lines);
+        Assert.Contains("W_DIFFICULTY", lines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ChannelsComingBackIsNewsToo()
     {
         // Walking out of a mod-edited module into one both installs agree on. A player told

@@ -245,6 +245,8 @@ internal partial struct SharedBlock
     /// <see cref="OffsetScalingCombat"/>/<see cref="OffsetScalingEconomy"/> — the agent's
     /// resolved player-count scaling percents — see SharedBlock.PlayerCountScaling.cs and
     /// docs/research/player-count-scaling.md.
+    /// Version 72 adds the live difficulty level and known byte at 0x4E40..0x4E42 in the
+    /// unused tail after the container-loot mailbox. The block size remains 0x4F00.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

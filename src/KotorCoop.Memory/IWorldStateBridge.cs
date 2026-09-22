@@ -46,6 +46,16 @@ public interface IWorldStateBridge
     uint ModuleGitDigest(string module) => 0;
 
     /// <summary>
+    /// Reads the live client-options difficulty index (0..2). False means unknown; it must
+    /// not be inferred from the startup INI or the server's separate difficulty table index.
+    /// </summary>
+    bool TryReadDifficultyLevel(out byte level)
+    {
+        level = 0;
+        return false;
+    }
+
+    /// <summary>
     /// Roadmap item 14 phase 2's load-detection edge: the plugin's own count of world
     /// teardowns it judged UNANNOUNCED — a Load Game action, not an ordinary module
     /// transition. See <c>KotorCoop.Plugin.WorldLoadRule</c> for the primitive and

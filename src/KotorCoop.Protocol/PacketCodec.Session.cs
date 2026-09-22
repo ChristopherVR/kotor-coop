@@ -278,6 +278,9 @@ public static partial class PacketCodec
         // comment. Appended after the existing fields so a peer running the previous wire
         // shape (protocol version bump handles the mismatch at Hello) is never mis-parsed.
         w.WriteUInt32(packet.Digest.LoadSerial);
+        // The live GUI setting is sampled locally and compared as a warning only. A distinct
+        // protocol version prevents old readers from treating the trailing byte as padding.
+        w.WriteUInt8(packet.Digest.DifficultyLevel ?? WorldDigest.UnknownDifficulty);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -295,8 +298,11 @@ public static partial class PacketCodec
         uint moduleGit = r.ReadUInt32();
         string module = r.ReadString();
         uint loadSerial = r.ReadUInt32();
+        byte rawDifficultyLevel = r.ReadUInt8();
+        byte? difficultyLevel = rawDifficultyLevel <= 2 ? rawDifficultyLevel : null;
         return r.Failed
             ? null
-            : new WorldDigestPacket(peerId, new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial));
+            : new WorldDigestPacket(peerId,
+                new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial, difficultyLevel));
     }
 }

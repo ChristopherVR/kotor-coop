@@ -155,6 +155,26 @@ public class ItemHarnessTests
         Assert.Equal(int.Parse(written.Groups[1].Value), agentVersion);
     }
 
+    [Fact]
+    public void DifficultySharedBlockOffsetsMatchTheAgentReader()
+    {
+        string root = RepositoryRoot();
+        string pluginSource = File.ReadAllText(Path.Combine(root, "src", "KotorCoop.Plugin", "SharedBlock.Difficulty.cs"));
+        string agentSource = File.ReadAllText(Path.Combine(root, "src", "KotorCoop.Memory", "KotorGameBridge.PluginBlock.cs"));
+
+        AssertOffsetMatches(pluginSource, "OffsetDifficultyLevel", agentSource, "BlockDifficultyLevel");
+        AssertOffsetMatches(pluginSource, "OffsetDifficultyKnown", agentSource, "BlockDifficultyKnown");
+    }
+
+    private static void AssertOffsetMatches(string pluginSource, string pluginName, string agentSource, string agentName)
+    {
+        Match plugin = Regex.Match(pluginSource, $@"{pluginName}\s*=\s*0x([0-9A-Fa-f]+)");
+        Match agent = Regex.Match(agentSource, $@"{agentName}\s*=\s*0x([0-9A-Fa-f]+)");
+        Assert.True(plugin.Success, $"could not find {pluginName} in SharedBlock.Difficulty.cs");
+        Assert.True(agent.Success, $"could not find {agentName} in KotorGameBridge.PluginBlock.cs");
+        Assert.Equal(Convert.ToInt32(plugin.Groups[1].Value, 16), Convert.ToInt32(agent.Groups[1].Value, 16));
+    }
+
     /// <summary>Finds source even when test artifacts are built outside the checkout.</summary>
     private static string RepositoryRoot(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "")

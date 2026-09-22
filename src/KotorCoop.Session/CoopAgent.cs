@@ -877,17 +877,21 @@ public sealed partial class CoopAgent
         double perfHeavyStartMs = _perfTrace is null ? 0 : _perfClock.Elapsed.TotalMilliseconds;
         PerfPhaseStart();
 
-        // Report our in-world content fingerprint (the session rate-limits the wire
-        // anyway). The save identity and the current module's GIT digest ride along with
-        // the globals catalogue: passing the LIVE module here is what makes the GIT
-        // comparison per-module — it re-judges itself on every module change, restoring
-        // the id-keyed channels wherever the two installs' GITs agree again.
+        // Report our in-world fingerprint (the session rate-limits the wire anyway). The
+        // runtime difficulty comes from the plugin's live CClientOptions sample, not the
+        // startup INI; it is warning-only and remains unknown when the read is unavailable.
+        // The save identity and current module's GIT digest ride with the globals catalogue:
+        // passing the LIVE module makes the GIT comparison per-module.
+        byte? difficultyLevel = _bridge.TryReadDifficultyLevel(out byte sampledDifficulty)
+            ? sampledDifficulty
+            : null;
         _session.PublishWorldDigest(new WorldDigest(
             _bridge.GlobalsCatalogueDigest,
             _bridge.SaveIdentityDigest,
             local.Module,
             _bridge.ModuleGitDigest(local.Module),
-            _bridge.WorldLoadSerial));
+            _bridge.WorldLoadSerial,
+            difficultyLevel));
 
         _worldStatePump.PumpItems(local, caps);
 

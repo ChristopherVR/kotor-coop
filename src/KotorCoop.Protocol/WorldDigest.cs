@@ -3,8 +3,8 @@ namespace KotorCoop.Protocol;
 /// <summary>
 /// A peer's in-world content fingerprint — the facts about the running game that only
 /// exist once a save is loaded, as opposed to the install-time <see cref="ContentDigest"/>
-/// exchanged at Hello. Three fields, each answering one question the id-keyed channels
-/// depend on:
+/// exchanged at Hello. The digest answers questions about the id-keyed channels, plus the
+/// local runtime difficulty that affects player damage:
 ///
 /// <list type="bullet">
 /// <item><see cref="GlobalsCatalogue"/> — do the two saves' (type, index) global-variable
@@ -27,26 +27,34 @@ namespace KotorCoop.Protocol;
 /// peer's reported pair. A plain counter, not a bool, survives a lost datagram on this 1 Hz
 /// channel without losing the edge — the receiver's own <c>SerialEdgeWatch</c> only cares
 /// that the value it last saw differs, not by how much.</item>
+/// <item><see cref="DifficultyLevel"/> — the live client-options difficulty slider (0..2).
+/// A disagreement warns that PC/party damage scaling differs; it never disables a channel.</item>
 /// </list>
 ///
-/// Every field follows the house convention: 0 (or an empty module) means "not resolved",
+/// Digest fields follow the house convention: 0 (or an empty module) means "not resolved",
 /// and per the Unknown-is-not-mismatch rule an unresolved field can never degrade
 /// anything — only two peers that both computed a value can disagree. <see cref="LoadSerial"/>
 /// is the one exception to "0 means not resolved": 0 is its legitimate starting value (no
 /// load observed yet this process), so it is read only as an EDGE (did it change), never
-/// compared for equality/mismatch the way the other three are.
+/// compared for equality/mismatch. <see cref="DifficultyLevel"/> is nullable for the same
+/// reason that a missing sample must remain distinct from the valid Easy value 0.
 /// </summary>
 public readonly record struct WorldDigest(
     uint GlobalsCatalogue,
     uint SaveIdentity,
     string Module,
     uint ModuleGit,
-    uint LoadSerial = 0)
+    uint LoadSerial = 0,
+    byte? DifficultyLevel = null)
 {
-    public static WorldDigest Empty => new(0, 0, string.Empty, 0, 0);
+    /// <summary>Sent when the runtime setting could not be read safely.</summary>
+    public const byte UnknownDifficulty = byte.MaxValue;
+
+    public static WorldDigest Empty => new(0, 0, string.Empty, 0, 0, null);
 
     /// <summary>True when nothing here is worth putting on the wire yet.</summary>
-    public bool IsEmpty => GlobalsCatalogue == 0 && SaveIdentity == 0 && ModuleGit == 0;
+    public bool IsEmpty => GlobalsCatalogue == 0 && SaveIdentity == 0 && ModuleGit == 0
+        && DifficultyLevel is null;
 
     /// <summary>
     /// Judges the three in-world mismatches, identically on host and client, for
@@ -91,8 +99,11 @@ public readonly record struct WorldDigest(
 
         bool git = sameModule && local.ModuleGit != 0 && remote.ModuleGit != 0
             && local.ModuleGit != remote.ModuleGit;
+        bool difficulty = local.DifficultyLevel is <= 2 && remote.DifficultyLevel is <= 2
+            && local.DifficultyLevel != remote.DifficultyLevel;
 
-        return new WorldDigestComparison(globals, save, git, sameModule ? localModule : string.Empty);
+        return new WorldDigestComparison(
+            globals, save, git, sameModule ? localModule : string.Empty, difficulty);
     }
 }
 
@@ -105,7 +116,9 @@ public readonly record struct WorldDigestComparison(
     bool GlobalsCatalogueMismatch,
     bool SaveIdentityMismatch,
     bool ModuleGitMismatch,
-    string Module = "")
+    string Module = "",
+    bool DifficultyMismatch = false)
 {
-    public bool Any => GlobalsCatalogueMismatch || SaveIdentityMismatch || ModuleGitMismatch;
+    public bool Any => GlobalsCatalogueMismatch || SaveIdentityMismatch || ModuleGitMismatch
+        || DifficultyMismatch;
 }

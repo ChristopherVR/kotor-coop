@@ -244,8 +244,12 @@ public static class ProtocolConstants
     ///
     /// Version 61: save identity uses LASTMODULE to select the active module's stored state,
     /// rather than the first visited module in the archive. Mixed identity schemes are refused.
+    ///
+    /// Version 62: WorldDigest appends the sampled runtime difficulty level for warning-only
+    /// peer agreement. Older peers are refused at the protocol handshake rather than
+    /// misreading the new field.
     /// </summary>
-    public const byte Version = 61;
+    public const byte Version = 62;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

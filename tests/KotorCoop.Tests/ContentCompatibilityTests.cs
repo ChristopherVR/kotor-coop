@@ -181,6 +181,23 @@ public class ContentCompatibilityTests
     }
 
     [Fact]
+    public void DifferentRuntimeDifficultiesWarnWithoutDroppingAnyChannel()
+    {
+        CompatibilityVerdict install = ContentCompatibility.Compare(Digest(), Digest());
+        WorldDigestComparison mismatch = WorldDigest.Compare(
+            new WorldDigest(0xAAAA, 0xBBBB, "end_m01aa", 0xCCCC, DifficultyLevel: 0),
+            new WorldDigest(0xAAAA, 0xBBBB, "end_m01aa", 0xCCCC, DifficultyLevel: 2));
+
+        CompatibilityVerdict verdict = ContentCompatibility.ApplyWorldMismatch(install, mismatch);
+        CompatibilityNote note = Assert.Single(verdict.Notes, n => n.Code == CompatibilityCode.Difficulty);
+
+        Assert.Equal("W_DIFFICULTY", note.Tag);
+        Assert.Equal(SessionCapabilities.None, note.Dropped);
+        Assert.Equal(SessionCapabilities.All, verdict.Allowed);
+        Assert.Contains("PC and party damage scaling may differ", note.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AnUnresolvedWorldFieldOnlyEverWarnsAndCostsNoChannel()
     {
         // The house rule at the world level: a peer whose game files could not be read

@@ -56,6 +56,16 @@ public sealed class CompatibilityAnnouncer
             }
         }
 
+        // Runtime settings may move back into agreement and diverge again later in the
+        // same session. Re-arm these findings once the mismatch clears.
+        foreach (CompatibilityCode code in RepeatableCodes)
+        {
+            if (!verdict.Notes.Any(note => note.Code == code))
+            {
+                _announced.Remove(code);
+            }
+        }
+
         SessionCapabilities dropped = verdict.Dropped;
         SessionCapabilities restored = _dropped & ~dropped;
 
@@ -78,7 +88,8 @@ public sealed class CompatibilityAnnouncer
     /// <summary>Codes whose finding is about WHERE the players are standing, so it can
     /// legitimately fire again after it has cleared. Everything else is a property of the two
     /// installs and is true for the whole session, so it is said exactly once.</summary>
-    private static readonly CompatibilityCode[] RepeatableCodes = [CompatibilityCode.ModuleGit];
+    private static readonly CompatibilityCode[] RepeatableCodes =
+        [CompatibilityCode.ModuleGit, CompatibilityCode.Difficulty];
 
     /// <summary>The session went away: forget everything, so a reconnect re-announces its
     /// verdict — which a fresh session should do.</summary>

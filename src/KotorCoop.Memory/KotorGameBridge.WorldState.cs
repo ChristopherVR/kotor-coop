@@ -92,6 +92,27 @@ public sealed partial class KotorGameBridge
         return digests.ModuleGit(module);
     }
 
+    /// <summary>Reads the plugin's stable sample of CClientOptions+4. The validity byte is
+    /// written last by the plugin; read it on both sides of the value to reject a torn update.</summary>
+    public bool TryReadDifficultyLevel(out byte level)
+    {
+        level = 0;
+        nint block = _pluginBlock;
+        if (block == 0
+            || !_memory.TryRead(block + BlockDifficultyKnown, out byte before)
+            || before != 1
+            || !_memory.TryRead(block + BlockDifficultyLevel, out byte candidate)
+            || !_memory.TryRead(block + BlockDifficultyKnown, out byte after)
+            || after != 1
+            || candidate > 2)
+        {
+            return false;
+        }
+
+        level = candidate;
+        return true;
+    }
+
     /// <summary>
     /// Roadmap item 14 phase 2's load-detection edge: the plugin's own count of world
     /// teardowns it judged UNANNOUNCED (see <c>WorldLoadRule</c>/<c>SharedBlock.OffsetWorldLoadSerial</c>).

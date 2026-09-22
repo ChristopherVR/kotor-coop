@@ -396,7 +396,8 @@ internal static unsafe partial class PluginHost
         //  71: companion presence slots use their existing +0x24 padding as a publication
         //      sequence. Readers accept only stable even generations, so a position and
         //      facing cannot come from different agent updates. No size/offset growth.
-        _block->Version = 71;
+        // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
+        _block->Version = 72;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

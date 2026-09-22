@@ -230,6 +230,10 @@ internal static unsafe partial class PluginHost
     /// </summary>
     private static void MenuFrame()
     {
+        // CClientExoApp::GetClientOptions is valid at the menu and in-world. Keep the live
+        // difficulty sample fresh without deriving it from the startup INI.
+        DifficultyAgreementController.Sample(_block);
+
         // FIRST, before anything else here: this is the pre-MainLoop point §10.9 verified is
         // safe to call CClientExoApp::PlayMovie from (docs/research/cinematics.md) — outside
         // the script VM's own call, but also outside render and outside SwapBuffers, unlike the

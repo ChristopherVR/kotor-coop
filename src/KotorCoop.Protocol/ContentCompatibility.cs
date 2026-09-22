@@ -55,6 +55,9 @@ public enum CompatibilityCode
 
     /// <summary>The module file censuses differ, so some module may desync later.</summary>
     Modules,
+
+    /// <summary>The live GUI difficulty differs, so PC/party damage scaling can differ.</summary>
+    Difficulty,
 }
 
 /// <summary>
@@ -86,6 +89,7 @@ public readonly record struct CompatibilityNote(
         CompatibilityCode.Override => "W_OVERRIDE",
         CompatibilityCode.TwoDa => "W_2DA",
         CompatibilityCode.Modules => "W_MODULES",
+        CompatibilityCode.Difficulty => "W_DIFFICULTY",
         _ => "W_NONE",
     };
 
@@ -318,7 +322,8 @@ public static class ContentCompatibility
         bool globalsCatalogueMismatch,
         bool saveIdentityMismatch,
         bool moduleGitMismatch,
-        string? module = null)
+        string? module = null,
+        bool difficultyMismatch = false)
     {
         ArgumentNullException.ThrowIfNull(install);
 
@@ -371,6 +376,14 @@ public static class ContentCompatibility
                 "global variable tables differ; quest/world state and doors are not shared"));
         }
 
+        if (difficultyMismatch)
+        {
+            notes.Add(new CompatibilityNote(
+                CompatibilityCode.Difficulty,
+                SessionCapabilities.None,
+                "live difficulty settings differ; PC and party damage scaling may differ, but co-op remains enabled"));
+        }
+
         return new CompatibilityVerdict(RefusalReason.None, caps, notes);
     }
 
@@ -384,7 +397,8 @@ public static class ContentCompatibility
             mismatch.GlobalsCatalogueMismatch,
             mismatch.SaveIdentityMismatch,
             mismatch.ModuleGitMismatch,
-            mismatch.Module);
+            mismatch.Module,
+            mismatch.DifficultyMismatch);
 
     private static bool BothKnow(in ContentDigest a, in ContentDigest b, ContentDigest.Field field) =>
         a.Knows(field) && b.Knows(field);

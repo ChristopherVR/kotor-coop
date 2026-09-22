@@ -596,6 +596,10 @@ public sealed partial class KotorGameBridge
     private const int BlockWorldLoadSerial = 0x396C;
     private const int BlockMidModulePlayStatus = 0x3964;
 
+    // Runtime difficulty agreement (shared block version 72, free tail at 0x4E40).
+    private const int BlockDifficultyLevel = 0x4E40;
+    private const int BlockDifficultyKnown = 0x4E41;
+
     // Staging cheats, mirroring SharedBlock version 41 (region 0x3328..0x33C0).
     private const int BlockCheatSerial = 0x3328;
     private const int BlockCheatKind = 0x332C;
