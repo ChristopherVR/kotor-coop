@@ -11,7 +11,10 @@ public sealed partial class KotorGameBridge
     /// body whose old id/tag bytes have not been overwritten yet; the server object array is
     /// the engine's authoritative id-to-body map.</summary>
     internal static bool IsLiveServerItem(bool serverArrayResolved, nint scannedAddress, nint serverAddress) =>
-        serverArrayResolved && scannedAddress != 0 && scannedAddress == serverAddress;
+        // CGameObjectArray stores the embedded CSWSObject, not the CSWItem base
+        // found by ItemVtable. Live resolve 0x170: base 0x196B0BC8, engine 0x196B0BD8.
+        // Comparing the two directly rejects every valid possessed item.
+        serverArrayResolved && scannedAddress != 0 && scannedAddress + 0x10 == serverAddress;
 
     /// <summary>CSWSItem vtable; every 4-byte occurrence in private memory is an item.</summary>
     private const uint ItemVtable = ItemIdentityLayout.ItemVtable;

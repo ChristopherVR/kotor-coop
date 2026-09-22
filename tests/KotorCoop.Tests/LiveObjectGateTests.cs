@@ -321,8 +321,12 @@ public class LiveObjectGateTests
     [Fact]
     public void PossessedItemRowsRequireTheNativeServerBody()
     {
-        Assert.True(KotorGameBridge.IsLiveServerItem(true, (nint)0x1000, (nint)0x1000));
-        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x1000, (nint)0x2000));
-        Assert.False(KotorGameBridge.IsLiveServerItem(false, (nint)0x1000, (nint)0x1000));
+        // Measured GOG layout: the item scan sees CSWItem; the native object array
+        // points sixteen bytes later at its embedded CSWSObject.
+        Assert.True(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196B0BD8));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196B0BC8));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196ADEB0));
+        Assert.False(KotorGameBridge.IsLiveServerItem(false, (nint)0x196B0BC8, (nint)0x196B0BD8));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, 0, (nint)0x10));
     }
 }
