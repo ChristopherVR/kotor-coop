@@ -8,7 +8,9 @@ pauses mirroring." This pass reads every compiled script of the sequence out of 
 install and says exactly which engine surface each beat touches, what the shipped mod already
 covers, and what is missing.
 
-RESEARCH ONLY. No code changed, no game launched, no rig script run.
+The initial sections record resource and executable research. Section 9 adds staged live
+campaign evidence and implementation follow-up; those checks do not establish a natural
+end-to-end campaign pass.
 
 Tag key: **VERIFIED** = read directly out of the game's compiled bytecode / GFF data or the
 GOG `swkotor.exe` (v1.0.3, no ASLR) · **INFERRED** = a deduction from that evidence ·
@@ -654,7 +656,24 @@ character, but cannot identify/repair an already overwritten sidecar automatical
 The observed sidecar and party table are preserved under
 `%TEMP%/kotorcoop-leviathan-benched-20260923/`.
 
-Remaining implementation: prevent the follower's local interrogation script from taking
-its own player into rescuer control, or restore through the verified native switch path
-with its own character preserved. A direct controlled-NPC field write is not a repair.
-Repeat capture, rescue, gear return, saving and rejoin on both engines after that fix.
+Commit `567a7aa` now suppresses only `k_plev_transform` and `k_plev_transfrm1` dialogue
+actions on a positively identified client in `lev_m40aa`. The host executes the original
+scripts. The shared `CSWSDialog::RunScript` splice checks the overwritten instruction and
+the complete skipped VM-call block; unknown role/module/script and byte mismatches fail
+open. Eleven focused rule tests and the native x86 warnings-as-errors build pass. No
+controlled-NPC field is written directly. Capture, rescue, gear return, saving and rejoin
+still require the corrected-build live repeat.
+
+The first repeat at 08:44 used an older DLL because the build helper preferred a stale
+`bin/x86` artifact over the current `bin/Release` publish output. That run was stopped
+before the rescue switch and is not gate evidence. `81bc732` pins an explicit publish
+directory and removes artifact fallback selection. Both games were restarted at 08:48
+with SHA-256 `610392078DB235F18457F05508C71D226B7AE9DB6D6E3FB08B6B38069D7FED2E`;
+both startup logs confirm installation of the new gate.
+
+Independent native review also confirms a separate gear-return risk: the client's
+party-selection suppression removes the panel through the manager sweep, which never
+executes `AcceptParty`'s `exit_script`. Therefore it skips `k_plev_killbc`. Replaying that
+script unconditionally is not safe: it transfers the entire `lev40_ptylocker` inventory
+to `GetFirstPC`, including companion gear. Local item ownership and shared inventory
+convergence must be proved before implementing a filtered client return.
