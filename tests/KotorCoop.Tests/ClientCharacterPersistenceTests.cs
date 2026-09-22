@@ -382,6 +382,28 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void CompanionControlSaveCannotOverwriteTheOwnCharacterSidecar()
+    {
+        string saves = TempDirectory();
+        Assert.True(ClientCharacterPersistence.TryWriteSidecar(
+            saves, BuildPlayer("Own character"), 7, DateTime.UtcNow.AddHours(-1), out _));
+        string quick = BuildSaveIn(saves, "000000 - QUICKSAVE", "lev_m40aa", 0x10, "Canderous");
+        string partyPath = Path.Combine(quick, "PARTYTABLE.res");
+        GffWriter party = new("PT");
+        GffCopy.CopyInto(Gff.Parse(File.ReadAllBytes(partyPath)).Root, party.Root);
+        party.Root.SetInt("PT_CONTROLLED_NP", 1);
+        File.WriteAllBytes(partyPath, party.ToBytes());
+        byte[] prior = File.ReadAllBytes(Path.Combine(saves, "kotorcoop-character.pifo"));
+
+        Assert.Equal(CharacterCapture.Failed, ClientCharacterPersistence.Capture(
+            saves, quick, 7, out string diagnostic));
+        Assert.Contains("story companion", diagnostic);
+        Assert.Equal(prior, File.ReadAllBytes(Path.Combine(saves, "kotorcoop-character.pifo")));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out _, out _));
+        Assert.Equal("Own character", read.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
     public void CaptureKeepsASidecarNewerThanTheSource()
     {
         // Session 1 ended with a capture from a door autosave at T1; session 2 was joined

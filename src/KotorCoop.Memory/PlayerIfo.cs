@@ -77,6 +77,22 @@ public static class PlayerIfo
 
         try
         {
+            // SwitchPlayerCharacter makes the rescuer the primary saved player. Carrying
+            // that entry would replace the joiner's own character with a companion (observed
+            // during the Leviathan capture). Wait for a save after native control returns.
+            string partyPath = Path.Combine(saveDirectory, "PARTYTABLE.res");
+            if (File.Exists(partyPath))
+            {
+                GffStruct party = Gff.Parse(File.ReadAllBytes(partyPath)).Root;
+                if (party.TryGetFieldType("PT_CONTROLLED_NP", out _)
+                    && (!party.TryGetInt("PT_CONTROLLED_NP", out int controlledNpc)
+                        || controlledNpc != -1))
+                {
+                    diagnostic = "the save controls a story companion rather than the player's own character; use a save after control returns";
+                    return false;
+                }
+            }
+
             string savegame = Path.Combine(saveDirectory, "SAVEGAME.sav");
             if (!File.Exists(savegame))
             {

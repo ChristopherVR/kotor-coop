@@ -116,6 +116,50 @@ public sealed class PlayerIfoTests : IDisposable
 
     // ---- extracting the character ----------------------------------------------
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(8)]
+    [InlineData(-2)]
+    public void RefusesAStoryCompanionAsTheCarriedPlayer(int controlledNpc)
+    {
+        string save = BuildSaveDirectory("lev_m40aa", ("Canderous", true));
+        GffWriter party = new("PT  ");
+        party.Root.AddList("PT_PAZAAKCARDS");
+        party.Root.AddList("PT_PAZSIDELIST");
+        party.Root.SetInt("PT_CONTROLLED_NP", controlledNpc);
+        File.WriteAllBytes(Path.Combine(save, "PARTYTABLE.res"), party.ToBytes());
+
+        Assert.False(PlayerIfo.TryExtractPlayer(save, out _, out string diagnostic));
+        Assert.Contains("story companion", diagnostic);
+    }
+
+    [Fact]
+    public void CarriesThePlayerAfterNativeCompanionControlHasEnded()
+    {
+        string save = BuildSaveDirectory("lev_m40aa", ("Yasuko Kaar", true));
+        GffWriter party = new("PT  ");
+        party.Root.AddList("PT_PAZAAKCARDS");
+        party.Root.AddList("PT_PAZSIDELIST");
+        party.Root.SetInt("PT_CONTROLLED_NP", -1);
+        File.WriteAllBytes(Path.Combine(save, "PARTYTABLE.res"), party.ToBytes());
+
+        Assert.True(PlayerIfo.TryExtractPlayer(save, out _, out _));
+    }
+
+    [Fact]
+    public void RefusesMalformedCompanionControlMetadata()
+    {
+        string save = BuildSaveDirectory("lev_m40aa", ("Canderous", true));
+        GffWriter party = new("PT  ");
+        party.Root.AddList("PT_PAZAAKCARDS");
+        party.Root.AddList("PT_PAZSIDELIST");
+        party.Root.SetString("PT_CONTROLLED_NP", "unknown");
+        File.WriteAllBytes(Path.Combine(save, "PARTYTABLE.res"), party.ToBytes());
+
+        Assert.False(PlayerIfo.TryExtractPlayer(save, out _, out _));
+    }
+
     [Fact]
     public void ExtractsThePlayerFromASave()
     {
