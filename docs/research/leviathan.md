@@ -765,3 +765,22 @@ host was settled in `000036 - lev_gate_host`, the joiner adopted identity `73A65
 09:39:22 and rejoined at 09:39:26 with shared channels available. No new `W_GIT` appeared
 in the subsequent observation. This supports agreement after an actual host load and a
 fresh adoption; it does not fix automatic `HostReload` timing or prove gear return.
+
+### 9.7 Guarded reload and automatic readiness retry (2026-09-23)
+
+With `6f8b6ef` and native DLL SHA-256
+`E9F505CF7F6699F434FE6399F153A8C2840CE9BF7385F11635034C46CB1D6A3E`,
+three further staged host loads completed without a crash. Korriban → Leviathan adopted
+at 09:47:38 and rejoined at 09:47:42; a same-module Leviathan reload adopted at 09:47:55
+and rejoined at 09:47:58. On the reverse Leviathan → Korriban load, the first fetch at
+09:48:25 received the actual no-world refusal. The client displayed one waiting notice,
+retried two seconds later, adopted identity `09405CB6` at 09:48:27, and rejoined at
+09:48:31 automatically. Both engines stayed running and controlled-NPC IDs remained -1;
+no persistent `W_GIT` followed these completed adoptions.
+
+This verifies the previously failing early-fetch path with one real retry and supports
+the dialogue-panel guard across cross-module and same-module loads. It does not establish
+a long reload soak, natural campaign prerequisites, or the separate save-without-host-load
+compatibility case from 08:57. Invalid content and other terminal adoption failures are
+not retried: only the explicit no-world refusal gets up to 30 attempts, two seconds apart.
+The bound is an attempt/backoff limit, not a promised 60-second wall-clock deadline.

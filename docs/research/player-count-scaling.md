@@ -171,3 +171,14 @@ The live pass above saw the host's count read 2, then 1 for about five seconds, 
 ## The damage rewrite, verified (2026-09-19)
 
 `PhantomHitHook.ScaleHostileDamage` now logs its first twelve rewrites (`scaling: enemy damage <before> -> <after> (<percent>%) on a hit to a player body (rewrite #N)`), because until then the only trace was a counter nothing read. Live, two players, `enemy_damage = auto`: `spawncreature n_sithsoldier001 2` beside the host, and the first hostile hits logged `enemy damage 4 -> 5 (115%) (rewrite #1)` and `1 -> 1 (115%) (rewrite #2)`. The rewrite fired on the HOST only (the client's log had none), as designed: the host owns the hostile. Consequences: `enemy_damage` now defaults `auto` (every reader agrees: `CoopConfig` record and parse, `AgentComposition`, `BehaviourDigest.Default`, `PlayerCountScalingSettings.Default`, the shipped template). Known limit: `ScaleDamage` works in whole points, so a 1-point hit is unchanged at 115% and small hits round; the curve matters for the 4-10 point hits that dominate the early game. Not exercised: 3+ players, the client being the one hit (a peer's stand-in on the host), XP delta and store stock.
+
+### Staged direct-directory capture check (2026-09-23)
+
+With `10e2194`, both engines loaded named Korriban checkpoints through the mod’s staged
+autosave path. Each mailbox reported generation 2, source `MainMenuDirectDirectory`,
+status `CapturedDirectory`, no save slot, and exact directory `000001 - AUTOSAVE`.
+Subsequent mid-session loads advanced the generations and recorded their request-time
+world-load serials (host generation 6 / serial 2; client generation 8 / serial 3).
+This validates that replay path and its bounded native CExoString read. Ordinary retail
+selected-row/server-request capture and archive-fingerprint/baseline persistence still
+need their own validation; no HP persistence completion is claimed.
