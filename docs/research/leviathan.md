@@ -261,10 +261,11 @@ back), `ActionJumpToObject(lev40_wppcesc)` on the PC, `CreateObject("p_cand")`, 
 `ActionStartConversation` with `lev40_freetalker` (`lev40_bast400.dlg`). That conversation's
 `k_plev_freecs2` runs **`AddPartyMember(2)` (Carth) and `AddPartyMember(0)` (Bastila)** after
 jumping the scene bodies tagged `bastila`/`carth` to `lev40_wpequiproom*` and destroying
-the cell props; `k_plev_partyhawk` then `AddAvailableNPCByTemplate("p_bastilla", 0)`,
+the cell props. A separate script, `k_plev_partyhawk`, contains `AddAvailableNPCByTemplate("p_bastilla", 0)`,
 `AddAvailableNPCByTemplate("p_carth", 2)` and **`ShowPartySelectionGUI("k_plev_killbc",
 nForceNPC1=2, nForceNPC2=0)`** — the party-select screen with Carth and Bastila forced in.
-Its exit script `k_plev_killbc` destroys the two scene bodies, `SetCommandable`s the party,
+No static caller of `k_plev_partyhawk` was found in the later audit (§9.8); it is not
+established as the next step of this dialogue. Its exit script `k_plev_killbc` destroys the two scene bodies, `SetCommandable`s the party,
 jumps it to `lev40_wpequiproom`/`a`, and gives the locker's ten items back (`GiveItem` ×10).
 
 The trigger `lev40_killparty` at `(48.0, 60.4)` → `k_plev_killparty` destroys any entering
@@ -784,3 +785,25 @@ a long reload soak, natural campaign prerequisites, or the separate save-without
 compatibility case from 08:57. Invalid content and other terminal adoption failures are
 not retried: only the explicit no-world refusal gets up to 30 attempts, two seconds apart.
 The bound is an attempt/backoff limit, not a promised 60-second wall-clock deadline.
+
+### 9.8 Correction: locker retrieval is the acceptance path (2026-09-23)
+
+The earlier assumption that party-selection confirmation must automatically restore the
+gear is not supported by the shipped resource chain. Entry 60 of `lev40_bast400` runs
+`k_plev_freecs1`; its reply 74 runs `k_plev_freecs2`, has no outgoing entries, and the
+dialogue’s end/abort scripts are empty. `freecs2` contains no call to `k_plev_partyhawk`.
+The latter script has no static caller in the audited module/BIF compiled scripts,
+`patch.erf`, or relevant GIT/IFO/UTT/UTP/UTC/DLG fields. An engine-side or dynamically
+constructed invocation remains unproven; do not treat this as proof of dead code.
+
+The shipped GIT places `lev40_ptylocker` at `(9.6115, 69.6777, 9.0)`, Placeable List[17].
+Its template is usable, inventory-bearing and party-interactable. Conversation, OnUsed,
+OnOpen, OnInvDisturbed and OnEndDialogue are empty. After the dialogue ends, the concrete
+next check is to open and loot that locker through the normal inventory interaction.
+Eight retained locker items and an unequipped PC before retrieval do not establish item
+loss or a mod failure. The earlier party-select diagnostic did not prove this interaction.
+
+Acceptance remains open: retrieve the actual stored items, compare both inventories and
+locker removals, and verify original properties, upgrades and ownership without duplication.
+The `loottake` staging command creates a fresh equivalent item after removal, so it cannot
+prove preservation of customized equipment and must not close this check.
