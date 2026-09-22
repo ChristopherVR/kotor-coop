@@ -32,9 +32,16 @@ if ($Uninstall) {
 
 . (Join-Path $repo 'tools\devenv.ps1') -Arch x86
 
+$publishDir = Join-Path $projectDir 'bin\x86\Release\net10.0-windows\win-x86\publish'
+
 Push-Location $projectDir
 try {
-    $publishArgs = @('publish', '-r', 'win-x86', '-c', 'Release')
+    # vcvarsall sets Platform=x86. Depending on how dotnet/MSBuild was launched, that
+    # environment variable can either add an `x86` directory to the default output path or
+    # be ignored. Pin the publish directory so deployment never has to guess which artifact
+    # this invocation just produced (and cannot silently select an older DLL from another
+    # output tree).
+    $publishArgs = @('publish', '-r', 'win-x86', '-c', 'Release', '-o', $publishDir)
     if ($WarnAsError) { $publishArgs += '-warnaserror' }
     dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { throw "publish failed with exit code $LASTEXITCODE" }
@@ -43,13 +50,11 @@ finally {
     Pop-Location
 }
 
-$built = Get-ChildItem "$projectDir\bin\x86\Release\net10.0-windows\win-x86\publish\dinput8.dll" -ErrorAction SilentlyContinue
-if (-not $built) {
-    $built = Get-ChildItem "$projectDir\bin" -Recurse -Filter 'dinput8.dll' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$builtPath = Join-Path $publishDir 'dinput8.dll'
+if (-not (Test-Path -LiteralPath $builtPath -PathType Leaf)) {
+    throw "publish succeeded but dinput8.dll was not found at the configured output path: $builtPath"
 }
-
-if (-not $built) { throw 'build succeeded but dinput8.dll was not found' }
+$built = Get-Item -LiteralPath $builtPath
 
 "built: $($built.FullName)  ($([math]::Round($built.Length / 1KB)) KB)"
 
