@@ -677,3 +677,30 @@ executes `AcceptParty`'s `exit_script`. Therefore it skips `k_plev_killbc`. Repl
 script unconditionally is not safe: it transfers the entire `lev40_ptylocker` inventory
 to `GetFirstPC`, including companion gear. Local item ownership and shared inventory
 convergence must be proved before implementing a filtered client return.
+
+### 9.4 Corrected gate repeat (2026-09-23, 08:48–08:58)
+
+The corrected DLL reached Saul entry 106 at 08:53:51. The host switched to Canderous
+(`PT_CONTROLLED_NP=1`), while the joiner remained `-1` and announced spectating at
+08:53:52. Host rescuer movement from (64.2, 61.3) to (62.0, 61.0) completed. The native
+brig-computer release restored host control to `-1` at 08:54:42; the joiner remained `-1`
+and its spectator state ended. The freed-party conversation reached entry 60 at 08:55:55,
+and host native party-selection confirmation completed at 08:57:08.
+
+Both engines were saved at 08:57:26 as `000036 - lev_gate_host` and
+`000031 - lev_gate_joiner`. The joiner's captured sidecar still identifies Yasuko Kaar,
+not Canderous. Native walking after release/rejoin moved it from (21.5, 44.0) to
+(20.9, 44.0), with normal controlled-NPC value `-1`. These are engine-state and movement
+checks, not a visual portrait/input check. The benched-rescuer prerequisite and teleport
+past combat remain the staging limitations from §9.3.
+
+The same repeat exposed unresolved follow-up work:
+
+- Before confirmation, each engine's `lev40_ptylocker` held eight local item objects
+  with corresponding resource names; both shared party pools were empty. A later
+  read still found the host locker populated. Gear return is not proved by successful
+  party-selection confirmation.
+- The two saves were followed by `W_SAVE` and automatic `SaveMismatch` rejoin at
+  08:57:33. Adoption completed at 08:57:37 with the own character preserved, but
+  `W_GIT` then disabled shared world channels. The ordinary-save baseline fix does not
+  establish correct compatibility across this later re-adoption; investigation remains open.
