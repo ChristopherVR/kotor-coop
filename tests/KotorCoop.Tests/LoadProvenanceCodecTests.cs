@@ -11,7 +11,7 @@ public sealed class LoadProvenanceCodecTests
     {
         byte[] payload = Payload(
             slot: 7,
-            LoadProvenanceSource.MainMenuEntry,
+            LoadProvenanceSource.MainMenuSaveEntry,
             LoadProvenanceStatus.Captured,
             worldSerial: 19,
             "QUICKSAVE"u8);
@@ -19,7 +19,7 @@ public sealed class LoadProvenanceCodecTests
         Assert.True(LoadProvenanceCodec.TryDecode(12, payload, 12, out LoadProvenance? result));
         Assert.NotNull(result);
         Assert.Equal(7, result.Slot);
-        Assert.Equal(LoadProvenanceSource.MainMenuEntry, result.Source);
+        Assert.Equal(LoadProvenanceSource.MainMenuSaveEntry, result.Source);
         Assert.Equal(LoadProvenanceStatus.Captured, result.Status);
         Assert.Equal(19u, result.WorldLoadSerialAtRequest);
         Assert.Equal("QUICKSAVE", result.SaveName);
@@ -75,12 +75,43 @@ public sealed class LoadProvenanceCodecTests
     [Fact]
     public void DecodesValidFailureStatusWithoutInventingAName()
     {
-        byte[] payload = Payload(-1, LoadProvenanceSource.MainMenuEntry,
+        byte[] payload = Payload(-1, LoadProvenanceSource.MainMenuSaveEntry,
             LoadProvenanceStatus.InvalidSaveName, 9, ReadOnlySpan<byte>.Empty);
         Assert.True(LoadProvenanceCodec.TryDecode(6, payload, 6, out LoadProvenance? result));
         Assert.NotNull(result);
         Assert.Equal(LoadProvenanceStatus.InvalidSaveName, result.Status);
         Assert.Empty(result.SaveNameBytes);
+    }
+
+    [Fact]
+    public void SeparatesRealSaveRowsFromDirectDirectoryAndUnsupportedEntries()
+    {
+        Assert.Equal(LoadProvenanceSource.MainMenuSaveEntry, LoadProvenanceCodec.ClassifyMainMenuEntry(0x31));
+        Assert.Equal(LoadProvenanceSource.MainMenuDirectDirectory, LoadProvenanceCodec.ClassifyMainMenuEntry(0x30));
+        Assert.Equal(LoadProvenanceSource.MainMenuUnsupportedEntry, LoadProvenanceCodec.ClassifyMainMenuEntry(0));
+        Assert.Equal(LoadProvenanceSource.MainMenuUnsupportedEntry, LoadProvenanceCodec.ClassifyMainMenuEntry(0x32));
+
+        byte[] directory = Payload(LoadProvenance.NoSaveSlot,
+            LoadProvenanceSource.MainMenuDirectDirectory,
+            LoadProvenanceStatus.CapturedDirectory, 19, "000001 - AUTOSAVE"u8);
+        Assert.True(LoadProvenanceCodec.TryDecode(14, directory, 14, out LoadProvenance? result));
+        Assert.NotNull(result);
+        Assert.False(result.HasSaveSlot);
+        Assert.Null(result.SaveName);
+        Assert.Equal("000001 - AUTOSAVE", result.DirectoryName);
+        Assert.Empty(result.SaveNameBytes);
+
+        byte[] unsupported = Payload(LoadProvenance.NoSaveSlot,
+            LoadProvenanceSource.MainMenuUnsupportedEntry,
+            LoadProvenanceStatus.UnsupportedEntry, 20, ReadOnlySpan<byte>.Empty);
+        Assert.True(LoadProvenanceCodec.TryDecode(16, unsupported, 16, out LoadProvenance? unknown));
+        Assert.NotNull(unknown);
+        Assert.False(unknown.HasSaveSlot);
+        Assert.Empty(unknown.ValueBytes);
+
+        byte[] fakeSlot = Payload(0, LoadProvenanceSource.MainMenuDirectDirectory,
+            LoadProvenanceStatus.CapturedDirectory, 19, "000001 - AUTOSAVE"u8);
+        Assert.False(LoadProvenanceCodec.TryDecode(14, fakeSlot, 14, out _));
     }
 
     [Fact]

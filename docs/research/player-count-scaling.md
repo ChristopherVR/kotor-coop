@@ -107,21 +107,33 @@ remains open and the health setting must retain its live-verification gate.
 
 ### Exact load-request provenance foundation (2026-09-23)
 
-The plugin now has a **read-only** exact-request observer in shared-block version 74. It watches
-the main-menu selected-entry path at `CSWGuiSaveLoad::LoadPCAutoSave` (`0x006CA250`) and the
-server load dispatcher at `CServerExoAppInternal::LoadGame` (`0x004BA640`). The selected menu
-entry supplies `save_number` at `+0x1C8` and its `savegamename` CExoString at `+0x1D8`; the server
-routine receives the slot and CExoString pointer in its first two stack arguments. Both hooks
-capture before the retail load body runs. The string is bounded to 64 bytes, with the engine's
-length-includes-NUL terminator removed from the published bytes.
+The plugin has a **read-only** load-request observer in shared-block version 74. It watches the
+main-menu `CSWGuiSaveLoad::LoadPCAutoSave` call (`0x006CA250`) and the server load dispatcher at
+`CServerExoAppInternal::LoadGame` (`0x004BA640`). The server routine receives the slot and
+CExoString pointer in its first two stack arguments. Both hooks capture before the retail load
+body runs. The string is bounded to 64 bytes, with the engine's length-includes-NUL terminator
+removed from the published bytes.
 
 The v74 mailbox occupies `0x4E50..0x4EA8`: an even/odd stable generation, slot, source, capture
-status, `WorldLoadSerial` observed at request time, byte length, and the bounded save name. The
+status, `WorldLoadSerial` observed at request time, byte length, and bounded value bytes. The
 memory bridge exposes a stable-generation read API. An odd/changed generation, unreadable or
 malformed record, or unsupported plugin version fails closed. This records the exact archive
 request and its relationship to the plugin's then-current world-load serial. It does **not** say
 the request succeeded, identify the world after loading, persist scaling data, or change health
 scaling. No SHA, successful-load acknowledgement, or HP write is inferred from this mailbox.
+
+The first live probe (2026-09-23) exposed a distinct `LoadPCAutoSave` input path. The mailbox
+reported generation 2, main-menu source, slot 0, and `InvalidSaveName`. This was the plugin's
+synthetic entry: its flags at `+0x1C4` are `0x30`, its real-save fields (`+0x1C8/+0x1D8`) are not
+populated, and its direct save-directory CExoString at `+0x210` was `000001 - AUTOSAVE`. This
+record is an invalid capture, **not** evidence that slot 0 or an empty save name was loaded.
+The executable's `ShowGame` at `0x6C89D0` tests bit 0 of `entry+0x1C4` and takes the real-save
+display branch only when it is set; the plugin's direct-directory entry uses exactly flags
+`0x30`. The observer now classifies those cases separately: a real row uses `+0x1C8/+0x1D8`,
+the verified direct-directory path uses `+0x210` with an explicit no-slot sentinel, and other
+flag patterns are marked unsupported. For the direct source, the public API exposes a directory
+name and no save slot/name. This correction is statically verified; a new build still needs a
+live read confirming `MainMenuDirectDirectory / CapturedDirectory / 000001 - AUTOSAVE`.
 
 The remaining persistence work is still substantive: after the engine finishes writing a save,
 fingerprint the stable `SAVEGAME.sav` bytes and atomically store per-creature original maximum,

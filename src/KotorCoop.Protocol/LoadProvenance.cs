@@ -4,8 +4,10 @@ namespace KotorCoop.Protocol;
 public enum LoadProvenanceSource : uint
 {
     None = 0,
-    MainMenuEntry = 1,
+    MainMenuSaveEntry = 1,
     ServerLoadRequest = 2,
+    MainMenuDirectDirectory = 3,
+    MainMenuUnsupportedEntry = 4,
 }
 
 /// <summary>Result of the bounded, read-only native argument capture.</summary>
@@ -16,12 +18,16 @@ public enum LoadProvenanceStatus : uint
     InvalidEntry = 2,
     InvalidSaveName = 3,
     SaveNameTooLong = 4,
+    CapturedDirectory = 5,
+    InvalidDirectoryName = 6,
+    DirectoryNameTooLong = 7,
+    UnsupportedEntry = 8,
 }
 
 /// <summary>
-/// Exact save request observed before the native load routine runs. The save name is the
-/// raw bounded byte sequence from the engine's CExoString; it is not a content hash or an
-/// acknowledgement that loading completed.
+/// Exact load request observed before the native routine runs. ValueBytes are a save name
+/// for ordinary rows/server requests, but a directory name for the direct-directory source.
+/// This is not a content hash or an acknowledgement that loading completed.
 /// </summary>
 public sealed record LoadProvenance(
     uint Generation,
@@ -29,9 +35,21 @@ public sealed record LoadProvenance(
     LoadProvenanceSource Source,
     LoadProvenanceStatus Status,
     uint WorldLoadSerialAtRequest,
-    byte[] SaveNameBytes)
+    byte[] ValueBytes)
 {
-    public string SaveName => System.Text.Encoding.Latin1.GetString(SaveNameBytes);
+    public const int NoSaveSlot = int.MinValue;
+
+    public bool HasSaveSlot => Slot != NoSaveSlot;
+    public byte[] SaveNameBytes => Source is LoadProvenanceSource.MainMenuSaveEntry or LoadProvenanceSource.ServerLoadRequest
+        ? ValueBytes
+        : [];
+    public byte[] DirectoryNameBytes => Source == LoadProvenanceSource.MainMenuDirectDirectory ? ValueBytes : [];
+    public string? SaveName => Source is LoadProvenanceSource.MainMenuSaveEntry or LoadProvenanceSource.ServerLoadRequest
+        ? System.Text.Encoding.Latin1.GetString(ValueBytes)
+        : null;
+    public string? DirectoryName => Source == LoadProvenanceSource.MainMenuDirectDirectory
+        ? System.Text.Encoding.Latin1.GetString(ValueBytes)
+        : null;
 }
 
 /// <summary>Pure decoder for the v74 seqlock mailbox; payload begins after generation.</summary>
@@ -39,6 +57,17 @@ public static class LoadProvenanceCodec
 {
     public const int NameCapacity = 64;
     public const int PayloadLength = 20 + NameCapacity;
+    public const int MainMenuEntryFlagsOffset = 0x1C4;
+    public const uint MainMenuRealSaveFlag = 0x01;
+    public const uint MainMenuDirectDirectoryFlags = 0x30;
+    public const int MainMenuDirectDirectoryOffset = 0x210;
+
+    public static LoadProvenanceSource ClassifyMainMenuEntry(uint flags) =>
+        (flags & MainMenuRealSaveFlag) != 0
+            ? LoadProvenanceSource.MainMenuSaveEntry
+            : flags == MainMenuDirectDirectoryFlags
+                ? LoadProvenanceSource.MainMenuDirectDirectory
+                : LoadProvenanceSource.MainMenuUnsupportedEntry;
 
     /// <summary>Validates the native CExoString convention used by the supported build
     /// (stored length includes exactly one final NUL) and returns the bounded name bytes.</summary>
@@ -77,19 +106,32 @@ public static class LoadProvenanceCodec
         uint worldLoadSerial = ReadUInt32(payload, 12);
         uint nameLength = ReadUInt32(payload, 16);
 
-        if (source is not (LoadProvenanceSource.MainMenuEntry or LoadProvenanceSource.ServerLoadRequest)
+        if (source is not (LoadProvenanceSource.MainMenuSaveEntry
+                or LoadProvenanceSource.ServerLoadRequest
+                or LoadProvenanceSource.MainMenuDirectDirectory
+                or LoadProvenanceSource.MainMenuUnsupportedEntry)
             || status is not (LoadProvenanceStatus.Captured
                 or LoadProvenanceStatus.InvalidEntry
                 or LoadProvenanceStatus.InvalidSaveName
-                or LoadProvenanceStatus.SaveNameTooLong)
+                or LoadProvenanceStatus.SaveNameTooLong
+                or LoadProvenanceStatus.CapturedDirectory
+                or LoadProvenanceStatus.InvalidDirectoryName
+                or LoadProvenanceStatus.DirectoryNameTooLong
+                or LoadProvenanceStatus.UnsupportedEntry)
             || nameLength > NameCapacity)
         {
             return false;
         }
 
-        if (status == LoadProvenanceStatus.Captured)
+        bool savedEntry = source is LoadProvenanceSource.MainMenuSaveEntry or LoadProvenanceSource.ServerLoadRequest;
+        bool directDirectory = source == LoadProvenanceSource.MainMenuDirectDirectory;
+        if (status == LoadProvenanceStatus.Captured || status == LoadProvenanceStatus.CapturedDirectory)
         {
-            if (slot < -1 || nameLength == 0)
+            bool matchingKind = status == LoadProvenanceStatus.Captured ? savedEntry : directDirectory;
+            bool matchingSlot = status == LoadProvenanceStatus.Captured
+                ? slot >= -1 && slot != LoadProvenance.NoSaveSlot
+                : slot == LoadProvenance.NoSaveSlot;
+            if (!matchingKind || !matchingSlot || nameLength == 0)
             {
                 return false;
             }
@@ -105,7 +147,8 @@ public static class LoadProvenanceCodec
             return true;
         }
 
-        if (nameLength != 0)
+        if (nameLength != 0
+            || !IsValidFailure(source, status, slot))
         {
             return false;
         }
@@ -120,6 +163,34 @@ public static class LoadProvenanceCodec
 
     private static int ReadInt32(ReadOnlySpan<byte> data, int offset) =>
         System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4));
+
+    private static bool IsValidFailure(LoadProvenanceSource source, LoadProvenanceStatus status, int slot)
+    {
+        if (status == LoadProvenanceStatus.InvalidEntry)
+        {
+            return source switch
+            {
+                LoadProvenanceSource.MainMenuSaveEntry or LoadProvenanceSource.ServerLoadRequest =>
+                    slot == LoadProvenance.NoSaveSlot || slot >= -1,
+                LoadProvenanceSource.MainMenuDirectDirectory or LoadProvenanceSource.MainMenuUnsupportedEntry =>
+                    slot == LoadProvenance.NoSaveSlot,
+                _ => false,
+            };
+        }
+
+        return source switch
+        {
+            LoadProvenanceSource.MainMenuSaveEntry or LoadProvenanceSource.ServerLoadRequest =>
+                slot >= -1 && slot != LoadProvenance.NoSaveSlot
+                && status is LoadProvenanceStatus.InvalidSaveName or LoadProvenanceStatus.SaveNameTooLong,
+            LoadProvenanceSource.MainMenuDirectDirectory =>
+                slot == LoadProvenance.NoSaveSlot
+                && status is LoadProvenanceStatus.InvalidDirectoryName or LoadProvenanceStatus.DirectoryNameTooLong,
+            LoadProvenanceSource.MainMenuUnsupportedEntry =>
+                slot == LoadProvenance.NoSaveSlot && status == LoadProvenanceStatus.UnsupportedEntry,
+            _ => false,
+        };
+    }
 }
 
 /// <summary>Advances the mailbox's nonzero even generation, reserving the intervening odd

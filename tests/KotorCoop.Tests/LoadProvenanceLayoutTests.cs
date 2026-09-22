@@ -1,4 +1,5 @@
 using KotorCoop.Plugin;
+using KotorCoop.Protocol;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -19,5 +20,11 @@ public sealed class LoadProvenanceLayoutTests
         Assert.Equal(64, SharedBlock.LoadProvenanceNameCapacity);
         Assert.Equal(0x4EA8, SharedBlock.OffsetLoadProvenanceName + SharedBlock.LoadProvenanceNameCapacity);
         Assert.Equal(0x58, SharedBlock.TotalSize - (SharedBlock.OffsetLoadProvenanceName + SharedBlock.LoadProvenanceNameCapacity));
+        Assert.Equal(0x1C8, SharedBlock.LoadEntrySaveNumberOffset);
+        Assert.Equal(0x1D8, SharedBlock.LoadEntrySaveNameOffset);
+        Assert.Equal(0x1C4, LoadProvenanceCodec.MainMenuEntryFlagsOffset);
+        Assert.Equal(0x01u, LoadProvenanceCodec.MainMenuRealSaveFlag);
+        Assert.Equal(0x30u, LoadProvenanceCodec.MainMenuDirectDirectoryFlags);
+        Assert.Equal(0x210, LoadProvenanceCodec.MainMenuDirectDirectoryOffset);
     }
 }

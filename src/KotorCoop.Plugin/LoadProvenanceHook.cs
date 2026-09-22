@@ -17,8 +17,6 @@ internal static unsafe class LoadProvenanceHook
     private const nint ServerResume = 0x004BA646;
     private const uint PageExecuteReadWrite = 0x40;
     private const uint MemCommitReserve = 0x3000;
-    private const int InvalidSlot = int.MinValue;
-
     private static ReadOnlySpan<byte> Prologue => [0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8];
     private static ReadOnlySpan<byte> Following => [0x6A, 0xFF];
 
@@ -128,18 +126,44 @@ internal static unsafe class LoadProvenanceHook
         try
         {
             if (entry is <= 0x10000 or >= 0x7FFF0000
-                || !NativeMethods.IsReadable((nint)entry + 0x1C8, sizeof(int))
-                || !NativeMethods.IsReadable((nint)entry + 0x1D8, 8))
+                || !NativeMethods.IsReadable((nint)entry + LoadProvenanceCodec.MainMenuEntryFlagsOffset, sizeof(uint)))
             {
-                Publish(InvalidSlot, LoadProvenanceSource.MainMenuEntry, LoadProvenanceStatus.InvalidEntry, []);
+                Publish(LoadProvenance.NoSaveSlot, LoadProvenanceSource.MainMenuUnsupportedEntry, LoadProvenanceStatus.InvalidEntry, []);
                 return;
             }
 
-            int slot = *(int*)((byte*)entry + 0x1C8);
-            CaptureName(
-                slot,
-                LoadProvenanceSource.MainMenuEntry,
-                (nint)((byte*)entry + 0x1D8));
+            uint flags = *(uint*)((byte*)entry + LoadProvenanceCodec.MainMenuEntryFlagsOffset);
+            LoadProvenanceSource source = LoadProvenanceCodec.ClassifyMainMenuEntry(flags);
+            if (source == LoadProvenanceSource.MainMenuSaveEntry)
+            {
+                if (!NativeMethods.IsReadable((nint)entry + SharedBlock.LoadEntrySaveNumberOffset, sizeof(int))
+                    || !NativeMethods.IsReadable((nint)entry + SharedBlock.LoadEntrySaveNameOffset, 8))
+                {
+                    Publish(LoadProvenance.NoSaveSlot, source, LoadProvenanceStatus.InvalidEntry, []);
+                    return;
+                }
+
+                int slot = *(int*)((byte*)entry + SharedBlock.LoadEntrySaveNumberOffset);
+                CaptureName(slot, source, (nint)((byte*)entry + SharedBlock.LoadEntrySaveNameOffset));
+                return;
+            }
+
+            if (source == LoadProvenanceSource.MainMenuDirectDirectory)
+            {
+                if (!NativeMethods.IsReadable((nint)entry + LoadProvenanceCodec.MainMenuDirectDirectoryOffset, 8))
+                {
+                    Publish(LoadProvenance.NoSaveSlot, source, LoadProvenanceStatus.InvalidEntry, []);
+                    return;
+                }
+
+                CaptureName(
+                    LoadProvenance.NoSaveSlot,
+                    source,
+                    (nint)((byte*)entry + LoadProvenanceCodec.MainMenuDirectDirectoryOffset));
+                return;
+            }
+
+            Publish(LoadProvenance.NoSaveSlot, source, LoadProvenanceStatus.UnsupportedEntry, []);
         }
         catch { }
     }
@@ -159,7 +183,7 @@ internal static unsafe class LoadProvenanceHook
         if (exoString <= 0x10000 || exoString >= 0x7FFF0000
             || !NativeMethods.IsReadable(exoString, 8))
         {
-            Publish(slot, source, LoadProvenanceStatus.InvalidSaveName, []);
+            Publish(slot, source, NameStatus(source, LoadProvenanceStatus.InvalidSaveName), []);
             return;
         }
 
@@ -167,7 +191,7 @@ internal static unsafe class LoadProvenanceHook
         int length = *(int*)(exoString + 4);
         if ((nint)chars <= 0x10000 || (nint)chars >= 0x7FFF0000 || length <= 0)
         {
-            Publish(slot, source, LoadProvenanceStatus.InvalidSaveName, []);
+            Publish(slot, source, NameStatus(source, LoadProvenanceStatus.InvalidSaveName), []);
             return;
         }
         // CExoString's stored length includes its trailing NUL in this build (constructor
@@ -175,24 +199,35 @@ internal static unsafe class LoadProvenanceHook
         // terminator before bounding the copy.
         if (length > SharedBlock.LoadProvenanceNameCapacity + 1)
         {
-            Publish(slot, source, LoadProvenanceStatus.SaveNameTooLong, []);
+            Publish(slot, source, NameStatus(source, LoadProvenanceStatus.SaveNameTooLong), []);
             return;
         }
         if (!NativeMethods.IsReadable((nint)chars, (nuint)length))
         {
-            Publish(slot, source, LoadProvenanceStatus.InvalidSaveName, []);
+            Publish(slot, source, NameStatus(source, LoadProvenanceStatus.InvalidSaveName), []);
             return;
         }
 
         ReadOnlySpan<byte> stored = new(chars, length);
         if (!LoadProvenanceCodec.TryStripCExoTerminator(stored, out ReadOnlySpan<byte> name))
         {
-            Publish(slot, source, LoadProvenanceStatus.InvalidSaveName, []);
+            Publish(slot, source, NameStatus(source, LoadProvenanceStatus.InvalidSaveName), []);
             return;
         }
 
-        Publish(slot, source, LoadProvenanceStatus.Captured, name);
+        Publish(slot, source,
+            source == LoadProvenanceSource.MainMenuDirectDirectory
+                ? LoadProvenanceStatus.CapturedDirectory
+                : LoadProvenanceStatus.Captured,
+            name);
     }
+
+    private static LoadProvenanceStatus NameStatus(LoadProvenanceSource source, LoadProvenanceStatus saveStatus) =>
+        source == LoadProvenanceSource.MainMenuDirectDirectory
+            ? saveStatus == LoadProvenanceStatus.SaveNameTooLong
+                ? LoadProvenanceStatus.DirectoryNameTooLong
+                : LoadProvenanceStatus.InvalidDirectoryName
+            : saveStatus;
 
     private static void Publish(int slot, LoadProvenanceSource source, LoadProvenanceStatus status, ReadOnlySpan<byte> name)
     {

@@ -13,4 +13,8 @@ internal partial struct SharedBlock
     public const int OffsetLoadProvenanceNameLength = 0x4E64;
     public const int OffsetLoadProvenanceName = 0x4E68;
     public const int LoadProvenanceNameCapacity = 64;
+
+    // Retail CSWGuiSaveLoadEntry layout, verified against docs/research/native-browser-panel.md §3a.
+    public const int LoadEntrySaveNumberOffset = 0x1C8;
+    public const int LoadEntrySaveNameOffset = 0x1D8;
 }
