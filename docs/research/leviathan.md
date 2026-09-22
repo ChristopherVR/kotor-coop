@@ -555,3 +555,106 @@ prove a usable rescuer body, a completed rescue, spectator visuals, or gear retu
 The crash dump and both agent logs were preserved locally under
 `%TEMP%/kotorcoop-leviathan-20260923-071719/`. The next check must diagnose this
 failure and repeat the native switch, rather than replacing it with a field poke.
+
+### 9.1 Dump diagnosis (read-only, 2026-09-23)
+
+The WER dump `swkotor.exe.16304.dmp` has an x86 exception context at `EIP=0x005678B2`,
+`EBP=0`, `ESP=0x001AFC50`. The instruction is `mov edx,[ebp]`, so it dereferences null.
+The nearby caller is `CSWSMessage::SortObjectsForGameObjectUpdate` at `0x00567850`
+(symbol name checked against the installed executable's disassembly). The faulting
+function's second argument is zero: the saved call arguments at `ESP+0x5c` and the
+function prologue both show it was passed as null.
+
+The direct caller at `0x00578200` obtains that argument from
+`CSWSPlayer::GetGameObject` (`0x00561080`) for `CSWSPlayer* 0x1B9F6408`, then passes the
+result to `SortObjectsForGameObjectUpdate` without a null guard. That `CSWSPlayer` pointer
+is on the captured stack; the WER dump did not capture its heap page, so its `+0x28`
+game-object id and whether it was the host or joiner cannot be recovered from this dump.
+`GetGameObject` returns null when the player's object id does not resolve to a valid live
+game object of the expected type. The next caller is
+`CServerExoAppInternal::UpdateClientGameObjectsForPlayer` (`0x004B3EC0`), reached from
+`UpdateClientGameObjects` (`0x004B6950`). This is the stock engine's multiplayer client
+update path. The dump therefore establishes a null game-object lookup reaching an
+unguarded retail sort call; it does not show a malformed plugin pointer or a plugin frame
+at the fault.
+
+The staged primary companion was present before the sequence (`slot 1`, object id `0x162`;
+`LEV_ESCAPE=4` selects Canderous), and the live `+0xF0` transition proves the engine's
+`SwitchPlayerCharacter(1)` routine reached its controlled-NPC state write. Static disassembly
+of that routine also shows it resolves the target NPC object, assigns it through
+`CSWSPlayer::SetGameObject`, changes the old/current creature's stats `+0x6C` player flag to
+zero and the new controlled creature's flag to one, then writes `+0xF0`. These facts weigh
+against “no primary rescuer was staged” as the immediate explanation, but do not prove the
+player object's id still resolved at the later crash: the dump omitted the relevant heap page
+and identifies neither the affected client nor the returned object id. The evidence is
+consistent with a transient or missing player game object during the switch/update boundary;
+it does not yet establish whether the cause is the retail switch sequence, a staging/content
+state, or another teardown. No hook fix is justified from this dump alone.
+
+This diagnosis used only the WER dump, captured plugin log, installed GOG `swkotor.exe`,
+the repository's symbol database (`tools/kotor1_0_3.db`), and offline disassembly. No game
+was launched, no process memory was written, and no code was changed for this diagnosis.
+
+### 9.2 Active-rescuer staging hypothesis
+
+Further static tracing found a plausible staging cause. On the normal PC-to-companion branch,
+`SwitchPlayerCharacter` resolves the selected NPC, sets the `CSWSPlayer` game-object id to that
+creature, and only then iterates the active-party member list. For each slot it successfully
+removes, the cleanup checks whether that slot remains in the active list; if not, it clears the
+slot's stored object id, resolves the former body, and destroys it. The function finally writes
+`CSWPartyTable+0xF0 = nNPC`. Thus the routine's ordering assumes the chosen rescuer is already
+outside the active-party list. If the chosen slot is active at entry, it is eligible for that
+cleanup after its id has just been assigned to the player object.
+
+That condition matches the staged run: Canderous was recruited and left active in slot 1
+(`object id 0x162`) throughout the interrogation; the normal `ebo_m40aa` capture/selection path,
+which strips the active party and spawns the available NPC bodies before the switch, was skipped
+by warping directly into `lev_m40aa`. The observed later null `GetGameObject` is consistent with
+the active rescuer body being destroyed by the switch cleanup. This is a grounded staging
+hypothesis, not yet a confirmed causal diagnosis: the dump does not contain the affected
+`CSWSPlayer+0x28` id, and it cannot show whether that exact slot object was the null lookup.
+
+Before considering any hook or native workaround, rerun the real capture path with Canderous
+selected, which should naturally arrive at the switch with no active members. For a bounded
+comparison, a staged run may remove active slot 1 before warping while confirming Canderous
+remains recruited/available; first verify the NPC body is present in `lev_m40aa`, since the
+native Ebon Hawk script's `SpawnAvailableNPC` step may be necessary to create the exact object
+the switch expects. Compare `CSWSPlayer+0x28` resolution immediately after the switch and the
+next update-loop pass. Do not treat a missing body after direct warp as a plugin failure until
+that native spawn precondition is met.
+
+
+### 9.3 Benched-rescuer comparison and remaining client blocker (2026-09-23)
+
+A corrected staged run used the Ebon Hawk entry cleanup, verified zero active companions,
+and retained available Canderous before entering `lev_m40aa`. The real Saul interrogation
+reached entry 106 at 07:47:56; native control became slot 1 without crashing. At 07:48 the
+host Canderous walked from (64.2, 61.3) to (62.0, 61.0) through `walkto`. This supports the
+active-rescuer staging explanation in §9.2; it does not replace a natural campaign run.
+The prerequisite Ebon Hawk conversation was incomplete because this old staged save still
+had Trask in Bastila's template slot, so `LEV_ESCAPE=4` and the module entry remained staged.
+
+The joining engine also changed `PT_CONTROLLED_NP` to 1 before the spectator lock arrived.
+It announced spectating at 07:47:57. The host then used the real `BrigComputer` dialogue
+`lev40_detcompdlg`; `k_plev_freeparty` restored the host to control -1 at 07:49:13, followed
+by `lev40_bast400`. The native party-selection confirmation completed at 07:51:18, and
+host checkpoint `000034 - lev_rescue_host` was saved at 07:51:21. The joiner announced
+that the fight ended but **remained controlled slot 1**. Thus host rescuer movement and
+native release now have staged evidence; seamless client control return does not.
+Teleporting to the computer skipped the rescuer's combat route. Gear parity still needs
+an inventory comparison and a corrected-client repeat.
+
+A second concrete failure occurred at 07:47:58: periodic character capture wrote the
+joiner's Canderous body into `kotorcoop-character.pifo` (Tag `cand`). Its source quicksave
+has `PARTYTABLE.res/PT_CONTROLLED_NP = 1`. The extraction fix now refuses a present,
+non--1 or malformed controlled-NPC field before selecting the saved primary player;
+49 focused player-extraction/persistence tests pass, including preservation of the prior
+sidecar on refusal. This prevents future companion-control saves replacing the own
+character, but cannot identify/repair an already overwritten sidecar automatically.
+The observed sidecar and party table are preserved under
+`%TEMP%/kotorcoop-leviathan-benched-20260923/`.
+
+Remaining implementation: prevent the follower's local interrogation script from taking
+its own player into rescuer control, or restore through the verified native switch path
+with its own character preserved. A direct controlled-NPC field write is not a repair.
+Repeat capture, rescue, gear return, saving and rejoin on both engines after that fix.
