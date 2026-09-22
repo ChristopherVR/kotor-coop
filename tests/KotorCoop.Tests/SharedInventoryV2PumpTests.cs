@@ -70,6 +70,8 @@ public class SharedInventoryV2PumpTests
 
         public int PoolCacheInvalidations { get; private set; }
 
+        public Action? AfterPoolScanRead { get; set; }
+
         public string Description => "shared-inventory-v2-pump-test";
 
         public bool IsAttached => true;
@@ -109,6 +111,9 @@ public class SharedInventoryV2PumpTests
             LastPartyPoolScanWasStale = false;
             _lastGoodPool = new Dictionary<PartyPoolStackKey, int>(Pool);
             totals = new Dictionary<PartyPoolStackKey, int>(Pool);
+            Action? afterRead = AfterPoolScanRead;
+            AfterPoolScanRead = null;
+            afterRead?.Invoke();
             return true;
         }
 
@@ -149,7 +154,7 @@ public class SharedInventoryV2PumpTests
     {
         private uint _nextSerial = 1;
 
-        public bool IsEnemyAuthority => false;
+        public bool IsEnemyAuthority { get; set; }
 
         public Dictionary<PartyPoolStackKey, int> PoolSnapshot { get; set; } = [];
 
@@ -164,6 +169,12 @@ public class SharedInventoryV2PumpTests
         public List<(PartyPoolOpKind Kind, PartyPoolStackKey Key, ushort Count)> PoolIntents { get; } = [];
 
         public Queue<PartyPoolIntentResultV2> PoolResults { get; } = new();
+
+        public List<PartyPoolIntentPacketV2> HostPoolIntents { get; } = [];
+
+        public List<(uint PeerId, uint Serial, bool Accepted)> HostPoolResults { get; } = [];
+
+        public IReadOnlyDictionary<PartyPoolStackKey, int>? PublishedHostPoolSnapshot { get; private set; }
 
         public List<(StoreOpKind Kind, StoreStackKey Key, ushort Count)> StoreIntents { get; } = [];
 
@@ -185,6 +196,21 @@ public class SharedInventoryV2PumpTests
             PoolResults.Clear();
             return results;
         }
+
+        public void PublishPartyPoolSnapshotV2(IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+        {
+            PublishedHostPoolSnapshot = new Dictionary<PartyPoolStackKey, int>(totals);
+        }
+
+        public IReadOnlyList<PartyPoolIntentPacketV2> DrainPartyPoolIntentsV2()
+        {
+            List<PartyPoolIntentPacketV2> intents = [.. HostPoolIntents];
+            HostPoolIntents.Clear();
+            return intents;
+        }
+
+        public void CompletePartyPoolIntentV2(uint peerId, uint intentSerial, bool accepted) =>
+            HostPoolResults.Add((peerId, intentSerial, accepted));
 
         public bool TryGetStoreSnapshotV2(out IReadOnlyDictionary<StoreStackKey, int> totals)
         {
@@ -711,6 +737,163 @@ public class SharedInventoryV2PumpTests
         Assert.Equal(3, bridge.Pool[Medpac]);
         Assert.Contains(log, line => line.Contains("preserving the local item", StringComparison.Ordinal));
         Assert.DoesNotContain(log, line => line.Contains("reconcile", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void HostAcceptsARefusedRemovalAsNoOpWhenFreshScanProvesKeyAlreadyAbsent()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 77, PartyPoolOpKind.Remove, Medpac, 3));
+        List<string> log = [];
+
+        PartyPoolPumpV2 pump = new(bridge, session, log.Add);
+        pump.Pump(Caps);
+
+        Assert.Equal(new[] { (2u, 77u, true) }, session.HostPoolResults);
+        Assert.Empty(session.PublishedHostPoolSnapshot!);
+        Assert.False(pump.TryDequeuePendingApply(out _));
+        Assert.Contains(log, line => line.Contains("already absent in the current host observation", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AcceptedAbsentRemovalStopsClientRetryAndLeavesLaterHostAdditionsReconciliable()
+    {
+        ScriptedBridge clientBridge = new();
+        clientBridge.Pool[Medpac] = 2;
+        StubClientSession clientSession = new();
+        clientSession.PoolSnapshot[Medpac] = 2;
+        PartyPoolPumpV2 clientPump = new(clientBridge, clientSession, _ => { });
+        clientPump.Pump(Caps); // establish an equal, observed baseline
+
+        clientBridge.Pool.Clear();
+        clientSession.PoolSnapshot.Clear();
+        clientPump.Pump(Caps);
+        Assert.Single(clientSession.PoolIntents);
+        (PartyPoolOpKind kind, PartyPoolStackKey key, ushort count) = clientSession.PoolIntents[0];
+
+        StubClientSession hostSession = new() { IsEnemyAuthority = true };
+        hostSession.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            clientSession.LocalPeerId, 1, kind, key, count));
+        PartyPoolPumpV2 hostPump = new(new ScriptedBridge(), hostSession, _ => { });
+        hostPump.Pump(Caps);
+        Assert.Equal(new[] { (clientSession.LocalPeerId, 1u, true) }, hostSession.HostPoolResults);
+
+        clientSession.PoolResults.Enqueue(new PartyPoolIntentResultV2(
+            new PartyPoolIntentPacketV2(clientSession.LocalPeerId, 1, kind, key, count), Accepted: true));
+        clientPump.Pump(Caps);
+        Assert.Single(clientSession.PoolIntents);
+        Assert.False(clientPump.TryDequeuePendingApply(out _));
+
+        // The host later receives a genuine add; the acknowledged negative delta must not pin
+        // the client at zero and prevent normal reconciliation of that new host truth.
+        clientSession.PoolSnapshot[Medpac] = 1;
+        clientPump.Pump(Caps);
+        Assert.True(clientPump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply reconcile));
+        Assert.Equal(PartyPoolOpKind.Add, reconcile.Kind);
+        Assert.Equal(1, reconcile.Count);
+    }
+
+    [Fact]
+    public void HostStillAppliesRealRemovalWhenFreshScanContainsTheKey()
+    {
+        ScriptedBridge bridge = new();
+        bridge.Pool[Medpac] = 4;
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 78, PartyPoolOpKind.Remove, Medpac, 2));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps);
+
+        Assert.Empty(session.HostPoolResults);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply apply));
+        Assert.Equal(PartyPoolOpKind.Remove, apply.Kind);
+        Assert.Equal(2, apply.Count);
+        Assert.Equal(Medpac, apply.Key);
+    }
+
+    [Fact]
+    public void HostDoesNotNoOpARemovalBehindAnEarlierQueuedAddForTheSameKey()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 80, PartyPoolOpKind.Add, Medpac, 1));
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 81, PartyPoolOpKind.Remove, Medpac, 1));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps);
+
+        Assert.Empty(session.HostPoolResults);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply add));
+        Assert.Equal(PartyPoolOpKind.Add, add.Kind);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply remove));
+        Assert.Equal(PartyPoolOpKind.Remove, remove.Kind);
+    }
+
+    [Fact]
+    public void HostDoesNotNoOpARemovalWhileADequeuedAddIsAwaitingItsEngineResult()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 82, PartyPoolOpKind.Add, Medpac, 1));
+        pump.Pump(Caps);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply add));
+        Assert.Equal(PartyPoolOpKind.Add, add.Kind);
+
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 83, PartyPoolOpKind.Remove, Medpac, 1));
+        pump.Pump(Caps);
+
+        Assert.Empty(session.HostPoolResults);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply remove));
+        Assert.Equal(PartyPoolOpKind.Remove, remove.Kind);
+
+        pump.CompleteHostIntentV2(2, add.IntentSerial);
+    }
+
+    [Fact]
+    public void CompletionDuringHostScanKeepsAddReservedUntilTheFollowingScan()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 84, PartyPoolOpKind.Add, Medpac, 1));
+        pump.Pump(Caps);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply add));
+
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 85, PartyPoolOpKind.Remove, Medpac, 1));
+        bridge.AfterPoolScanRead = () => pump.CompleteHostIntentV2(2, add.IntentSerial);
+        pump.Pump(Caps);
+
+        // The read began before ADD completion and returned an empty view; invalidating the
+        // bridge cache during that read cannot make its already-captured totals authoritative.
+        Assert.Empty(session.HostPoolResults);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply remove));
+        Assert.Equal(PartyPoolOpKind.Remove, remove.Kind);
+    }
+
+    [Fact]
+    public void HostDoesNotAcceptAbsentRemovalFromAStaleScanAsNoOp()
+    {
+        ScriptedBridge bridge = new() { PoolScanStale = true };
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(
+            2, 79, PartyPoolOpKind.Remove, Medpac, 1));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps);
+
+        Assert.Empty(session.HostPoolResults);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply apply));
+        Assert.Equal(PartyPoolOpKind.Remove, apply.Kind);
     }
 
     // ---- defect B2: the scan cache -------------------------------------------------------

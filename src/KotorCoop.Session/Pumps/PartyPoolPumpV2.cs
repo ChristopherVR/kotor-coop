@@ -58,6 +58,21 @@ internal sealed class PartyPoolPumpV2(
 
     private readonly Queue<CoopAgent.PendingPartyPoolApply> _pendingApplies = new();
 
+    /// <summary>Host-side ADD intents already handed to the dispatcher and waiting for their
+    /// cheat result. Their scan effect can lag behind the just-read totals, so an absent-key
+    /// REMOVE must not be acknowledged as a no-op while one of these could still populate it.</summary>
+    private readonly Dictionary<(uint PeerId, uint IntentSerial), PartyPoolStackKey> _hostAddsInFlight = [];
+
+    /// <summary>Completed host ADDs remain reserved until a non-stale scan begun after their
+    /// result observes the engine. The completion invalidates the bridge cache before moving an
+    /// entry here; scan-start versions prevent a concurrently completed ADD from being cleared
+    /// by a scan that started before that invalidation.</summary>
+    private readonly Dictionary<(uint PeerId, uint IntentSerial), HostAddAwaitingScan> _hostAddsAwaitingScan = [];
+
+    private long _hostAddCompletionVersion;
+
+    private readonly record struct HostAddAwaitingScan(PartyPoolStackKey Key, long CompletionVersion);
+
     /// <summary>Client only: the RAW host snapshot value for a key as of the LAST tick — used
     /// only to drive <see cref="RetireOutstandingBy"/> (§7's own evidence-based outstanding
     /// retirement, unchanged by §9) — never consulted by the detect step any more (see the class
@@ -251,12 +266,23 @@ internal sealed class PartyPoolPumpV2(
         _lastScanEpoch = epoch;
         _everPumped = true;
 
+        long hostAddCompletionVersionAtScanStart;
+        lock (_pendingGate)
+        {
+            hostAddCompletionVersionAtScanStart = _hostAddCompletionVersion;
+        }
+
         // A stale scan hands back the last GOOD totals — an honest answer for a client's delta
         // step, but not a fresh statement of truth to broadcast: after a reload it is the old
         // world's pool until the bridge has swept the new one.
         if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> totals))
         {
             return;
+        }
+
+        if (!bridge.LastPartyPoolScanWasStale)
+        {
+            RetireHostAddsObservedByScan(hostAddCompletionVersionAtScanStart);
         }
 
         if (!bridge.LastPartyPoolScanWasStale)
@@ -272,8 +298,49 @@ internal sealed class PartyPoolPumpV2(
         // Intents still drain on a stale tick: an accepted deposit must not wait out a 15 s
         // item-tag rebuild window on the host before it is even attempted.
         bool queuedAny = false;
+        bool absenceVerificationAttempted = false;
+        bool absenceVerificationSucceeded = false;
+        IReadOnlyDictionary<PartyPoolStackKey, int> absenceVerificationTotals = totals;
         foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
         {
+            // A REMOVE is already satisfied when the authoritative engine scan proves that key
+            // is absent. In particular, module scripts can clear the party pool during capture
+            // while clients are still reporting the corresponding local disappearance. Sending
+            // that request through the engine cheat just produces "party pool is empty", which
+            // the client retries even though there is no host-side state left to change. Treat
+            // only this exact case as an idempotent success: a present key (even if it has fewer
+            // than the requested count) still goes through the engine, and a stale observation
+            // never proves absence.
+            bool canVerifyAbsentRemoval = intent.Kind == PartyPoolOpKind.Remove
+                && totals.GetValueOrDefault(intent.Key) <= 0
+                && !HasQueuedOrInFlightHostAdd(intent.Key);
+            if (canVerifyAbsentRemoval && !absenceVerificationAttempted)
+            {
+                // LastPartyPoolScanWasStale distinguishes unreadable data, but a non-stale
+                // answer may still be the bridge's ordinary bounded throttle replay. Force one
+                // fresh read before treating absence as proof; reuse it for all same-tick
+                // absent-key removals so a batch does not trigger a full scan per key.
+                absenceVerificationAttempted = true;
+                bridge.InvalidatePartyPoolScanCache();
+                absenceVerificationSucceeded = bridge.TryScanPartyPoolTotals(
+                        out IReadOnlyDictionary<PartyPoolStackKey, int> verifiedTotals)
+                    && !bridge.LastPartyPoolScanWasStale;
+                if (absenceVerificationSucceeded)
+                {
+                    absenceVerificationTotals = verifiedTotals;
+                }
+            }
+
+            if (canVerifyAbsentRemoval
+                && absenceVerificationSucceeded
+                && absenceVerificationTotals.GetValueOrDefault(intent.Key) <= 0
+                && !HasQueuedOrInFlightHostAdd(intent.Key))
+            {
+                session.CompletePartyPoolIntentV2(intent.PeerId, intent.IntentSerial, accepted: true);
+                log($"party pool v2: accepted remove of {intent.Count}x '{intent.Key.Resref}' as already absent in the current host observation");
+                continue;
+            }
+
             bool queued = EnqueueApply(intent.Kind, intent.Key, intent.Count, expected: null,
                 intentPeerId: intent.PeerId, intentSerial: intent.IntentSerial);
             queuedAny |= queued;
@@ -427,6 +494,13 @@ internal sealed class PartyPoolPumpV2(
             }
 
             _lastSnapshotValue[key] = snapshotValue;
+
+            // An acknowledged REMOVE has settled once the host's absolute truth contains no
+            // units for this key. This is also the confirmation path for the host's idempotent
+            // absent-key no-op above. Retaining its negative outstanding delta beyond that
+            // empty snapshot would incorrectly suppress a later genuine host ADD until the
+            // generic ack grace timer elapsed.
+            RetireAckedRemovalsAtEmptySnapshot(key, snapshotValue);
 
             // §9 (2026-08-29): the belief-delta detect step. Replaces the old single-value
             // `_reconcileInFlight` exclusion — this key is NEVER skipped wholesale any more, so
@@ -856,6 +930,31 @@ internal sealed class PartyPoolPumpV2(
         _outstandingBySerial[serial] = key;
     }
 
+    private void RetireAckedRemovalsAtEmptySnapshot(PartyPoolStackKey key, int snapshotValue)
+    {
+        if (snapshotValue != 0 || !_outstanding.TryGetValue(key, out List<OutstandingIntent>? entries))
+        {
+            return;
+        }
+
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            OutstandingIntent entry = entries[i];
+            if (entry.AckedAtMs < 0 || entry.Delta >= 0)
+            {
+                continue;
+            }
+
+            _outstandingBySerial.Remove(entry.Serial);
+            entries.RemoveAt(i);
+        }
+
+        if (entries.Count == 0)
+        {
+            _outstanding.Remove(key);
+        }
+    }
+
     private void HandleRejectedIntent(PartyPoolIntentPacketV2 intent, long nowMs)
     {
         RemoveOutstanding(intent.IntentSerial);
@@ -991,7 +1090,91 @@ internal sealed class PartyPoolPumpV2(
                 expected.TimerFromMs = SessionClock.NowMs;
             }
 
+            if (session.IsEnemyAuthority
+                && next.Kind == PartyPoolOpKind.Add
+                && next.IntentSerial != 0)
+            {
+                _hostAddsInFlight[(next.IntentPeerId, next.IntentSerial)] = next.Key;
+            }
+
             return true;
+        }
+    }
+
+    /// <summary>Releases the host-add reservation once the dispatcher has received either
+    /// engine result. Must be called for accepted and refused applies alike.</summary>
+    public void CompleteHostIntentV2(uint peerId, uint intentSerial)
+    {
+        lock (_pendingGate)
+        {
+            (uint PeerId, uint IntentSerial) intent = (peerId, intentSerial);
+            if (_hostAddsInFlight.Remove(intent, out PartyPoolStackKey key))
+            {
+                // Invalidate before the queued/in-flight reservation can stop protecting the
+                // key. The next PumpHost scan must observe the completed engine apply.
+                bridge.InvalidatePartyPoolScanCache();
+                _hostAddsAwaitingScan[intent] = new(key, ++_hostAddCompletionVersion);
+            }
+        }
+    }
+
+    private bool HasQueuedOrInFlightHostAdd(PartyPoolStackKey key)
+    {
+        lock (_pendingGate)
+        {
+            foreach (CoopAgent.PendingPartyPoolApply apply in _pendingApplies)
+            {
+                if (apply.Kind == PartyPoolOpKind.Add && apply.Key == key)
+                {
+                    return true;
+                }
+            }
+
+            foreach (PartyPoolStackKey inFlightKey in _hostAddsInFlight.Values)
+            {
+                if (inFlightKey == key)
+                {
+                    return true;
+                }
+            }
+
+            foreach (HostAddAwaitingScan awaitingScan in _hostAddsAwaitingScan.Values)
+            {
+                if (awaitingScan.Key == key)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    private void RetireHostAddsObservedByScan(long scanStartVersion)
+    {
+        lock (_pendingGate)
+        {
+            while (_hostAddsAwaitingScan.Count > 0)
+            {
+                (uint PeerId, uint IntentSerial) intent = default;
+                bool found = false;
+                foreach ((uint PeerId, uint IntentSerial) candidate in _hostAddsAwaitingScan.Keys)
+                {
+                    if (_hostAddsAwaitingScan[candidate].CompletionVersion <= scanStartVersion)
+                    {
+                        intent = candidate;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    return;
+                }
+
+                _hostAddsAwaitingScan.Remove(intent);
+            }
         }
     }
 }

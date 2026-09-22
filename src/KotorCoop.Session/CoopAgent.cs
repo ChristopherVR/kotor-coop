@@ -1089,6 +1089,7 @@ public sealed partial class CoopAgent
     /// client believing it was accepted.</summary>
     public void CompletePartyPoolIntentV2(uint peerId, uint intentSerial, bool accepted)
     {
+        _partyPoolPumpV2.CompleteHostIntentV2(peerId, intentSerial);
         _session.CompletePartyPoolIntentV2(peerId, intentSerial, accepted);
     }
 
