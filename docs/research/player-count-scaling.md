@@ -95,15 +95,43 @@ The practical design is a mod-owned sidecar, still unimplemented:
    recording the fingerprint. Writes should use the existing temp-file/replace pattern.
 3. Establish the exact loaded archive key before the first health scan. If the loaded save or the
    sidecar cannot be identified or parsed, fail closed for health scaling for that epoch rather
-   than risk multiplying a persisted maximum. This needs a coordinated plugin/agent load mailbox;
-   the ordinary menu-load source is not currently exposed by a verified plugin API.
+   than risk multiplying a persisted maximum. This needs a verified load-request source and a
+   separate completion/baseline binding step.
 4. For a matching record, seed the applied-object latch and preserve the saved ceiling. Apply the
    current percentage only to newly seen objects. Re-scaling an existing saved body when the
    player count changes needs a separate baseline/current-health design so it does not heal or
    over-damage the creature.
 
-Until that sidecar and exact-load routing exist, reload idempotence remains open and the health
-setting must retain its live-verification gate.
+Until the sidecar, successful-load binding, and baseline apply behavior exist, reload idempotence
+remains open and the health setting must retain its live-verification gate.
+
+### Exact load-request provenance foundation (2026-09-23)
+
+The plugin now has a **read-only** exact-request observer in shared-block version 74. It watches
+the main-menu selected-entry path at `CSWGuiSaveLoad::LoadPCAutoSave` (`0x006CA250`) and the
+server load dispatcher at `CServerExoAppInternal::LoadGame` (`0x004BA640`). The selected menu
+entry supplies `save_number` at `+0x1C8` and its `savegamename` CExoString at `+0x1D8`; the server
+routine receives the slot and CExoString pointer in its first two stack arguments. Both hooks
+capture before the retail load body runs. The string is bounded to 64 bytes, with the engine's
+length-includes-NUL terminator removed from the published bytes.
+
+The v74 mailbox occupies `0x4E50..0x4EA8`: an even/odd stable generation, slot, source, capture
+status, `WorldLoadSerial` observed at request time, byte length, and the bounded save name. The
+memory bridge exposes a stable-generation read API. An odd/changed generation, unreadable or
+malformed record, or unsupported plugin version fails closed. This records the exact archive
+request and its relationship to the plugin's then-current world-load serial. It does **not** say
+the request succeeded, identify the world after loading, persist scaling data, or change health
+scaling. No SHA, successful-load acknowledgement, or HP write is inferred from this mailbox.
+
+The remaining persistence work is still substantive: after the engine finishes writing a save,
+fingerprint the stable `SAVEGAME.sav` bytes and atomically store per-creature original maximum,
+applied percentage, and object identity under that fingerprint plus the exact slot/name. On a
+later load, pair the request record with the subsequent world-load epoch and verify the loaded
+archive fingerprint before seeding the health latch. A missing, stale, mismatched, or unreadable
+sidecar must leave health scaling disabled for that load epoch. The apply path also needs a
+reviewed baseline/current-health rule for percentage changes that preserves the saved health
+ratio without healing or over-damaging. Until that binding and persistence behavior are tested,
+`enemy_health` remains at the safe default of 100% and its reload checklist stays open.
 
 ## NEEDS-LIVE checklist
 

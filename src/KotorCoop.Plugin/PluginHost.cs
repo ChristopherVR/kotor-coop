@@ -398,7 +398,8 @@ internal static unsafe partial class PluginHost
         //      facing cannot come from different agent updates. No size/offset growth.
         // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
         // 73 adds the agent-published local session role word at 0x4E44.
-        _block->Version = 73;
+        // 74 adds the read-only exact native load-request provenance mailbox at 0x4E50.
+        _block->Version = 74;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

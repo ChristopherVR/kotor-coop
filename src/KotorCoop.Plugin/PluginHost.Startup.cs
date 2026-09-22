@@ -519,6 +519,19 @@ internal static unsafe partial class PluginHost
         bool moveObserverInstalled = ModuleMoveRequestHook.Install(out string moveObserverDiagnostic);
         Log($"module move observer {(moveObserverInstalled ? "ready" : "NOT installed")}: {moveObserverDiagnostic}");
 
+        // Exact save selection/request provenance (v74): observe the retail main-menu
+        // selected-entry call and the server LoadGame dispatcher before either begins. This
+        // is diagnostic input for future save-bound consumers only; it does not claim load
+        // completion and performs no world or hit-point writes.
+        if (LoadProvenanceHook.Install(_view!, out string loadProvenanceDiagnostic))
+        {
+            Log($"load provenance: {loadProvenanceDiagnostic}");
+        }
+        else
+        {
+            Log($"load provenance NOT installed: {loadProvenanceDiagnostic}");
+        }
+
         if (SaveFlushHook.Install(out string saveFlushDiagnostic))
         {
             Log($"save flush: {saveFlushDiagnostic}");

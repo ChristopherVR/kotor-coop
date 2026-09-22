@@ -106,6 +106,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.CompanionDamage.cs" Link="Plugin\SharedBlock.CompanionDamage.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Party.cs" Link="Plugin\SharedBlock.Party.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Session.cs" Link="Plugin\SharedBlock.Session.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.LoadProvenance.cs" Link="Plugin\SharedBlock.LoadProvenance.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Dialogue.cs" Link="Plugin\SharedBlock.Dialogue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.World.cs" Link="Plugin\SharedBlock.World.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Browser.cs" Link="Plugin\SharedBlock.Browser.cs" />

@@ -81,6 +81,14 @@ public interface IWorldStateBridge
         return true;
     }
 
+    /// <summary>Reads the last exact native load request observed by a v74 in-process
+    /// plugin. This is request provenance only; it does not prove the load completed.</summary>
+    bool TryReadLoadProvenance(out LoadProvenance? provenance)
+    {
+        provenance = null;
+        return false;
+    }
+
     /// <summary>
     /// Bumped every time the bridge concludes the WORLD it reads was replaced — a module
     /// change, or a reload of the same module (a <see cref="WorldLoadSerial"/> edge) — and
