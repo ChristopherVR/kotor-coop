@@ -568,9 +568,10 @@ public static class SaveDigest
 }
 
 /// <summary>
-/// Session-lived cache over <see cref="SaveDigest"/> for the bridge: the save identity once,
-/// and each module's GIT digest once per module — the pump asks every heavy tick, and
-/// re-reading archives from disk at 5 Hz would be pure waste.
+/// Session-lived cache over <see cref="SaveDigest"/> for the bridge: the save identity is
+/// refreshed when its archive changes, while each module's GIT digest is held for the
+/// loaded-world generation that produced it. The pump asks every heavy tick, and re-reading
+/// archives from disk at 5 Hz would be pure waste.
 ///
 /// ⚠ NOTHING HERE BLOCKS THE CALLER. Both answers cost real disk work — opening a save's
 /// nested ERFs, or a module's RIMs plus one blueprint per GIT entry — and the caller is the
@@ -587,21 +588,51 @@ public static class SaveDigest
 /// otherwise keep reporting the identity of the save it had before, and be told its save
 /// does not match the host's when in fact it now literally IS the host's.
 /// </summary>
-public sealed class SaveDigestCache(string gameDirectory)
+public sealed class SaveDigestCache
 {
+    private readonly string _gameDirectory;
+    private readonly Func<string, string?, string, (bool Success, uint Digest)> _computeModuleGit;
+    private readonly Func<string?, (bool Success, uint Digest)> _computeSaveIdentity;
+    private readonly object _refreshGate = new();
     private readonly object _gate = new();
     private readonly Dictionary<string, uint> _moduleGit = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _unavailableModuleGit = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<ModuleGitJob> _pendingModuleGit = [];
 
-    /// <summary>The key for the identity job, in the same pending set as the modules so one
-    /// mechanism covers both. Not a legal module name, so it can never collide.</summary>
-    private const string IdentityJob = "\0identity";
+    private readonly record struct ModuleGitJob(string Module, long WorldGeneration);
+
+    public SaveDigestCache(string gameDirectory)
+        : this(gameDirectory, static (directory, save, module) =>
+            SaveDigest.TryComputeModuleGit(directory, save, module, out uint digest)
+                ? (true, digest)
+                : (false, 0u))
+    {
+    }
+
+    internal SaveDigestCache(
+        string gameDirectory,
+        Func<string, string?, string, (bool Success, uint Digest)> computeModuleGit,
+        Func<string?, (bool Success, uint Digest)>? computeSaveIdentity = null)
+    {
+        _gameDirectory = gameDirectory;
+        _computeModuleGit = computeModuleGit;
+        _computeSaveIdentity = computeSaveIdentity ?? ComputeSaveIdentity;
+    }
+
+    private static (bool Success, uint Digest) ComputeSaveIdentity(string? saveDirectory) =>
+        saveDirectory is not null && SaveDigest.TryComputeSaveIdentity(saveDirectory, out uint digest)
+            ? (true, digest)
+            : (false, 0u);
 
     private uint _saveIdentity;
     private string? _saveDirectory;
+    private bool _identityPending;
+    private int? _observedWorldEpoch;
+    private long _moduleGitWorldGeneration;
 
     /// <summary>What the current identity was computed from: the save directory plus its
-    /// SAVEGAME.sav size and write time. A change means a different world was staged.</summary>
+    /// SAVEGAME.sav size and write time. A change refreshes save identity; it does not by
+    /// itself mean the loaded module was replaced.</summary>
     private (string Path, long Length, long Ticks) _identityStamp;
 
     /// <summary>How often the staged save is re-stat'ed. Two file-system calls, far apart
@@ -612,6 +643,7 @@ public sealed class SaveDigestCache(string gameDirectory)
     /// and subtracting the minimum overflows to a negative interval that would read as "just
     /// checked" forever, so the very first refresh would never run.</summary>
     private long _lastStampCheckMs = -2 * StampCheckIntervalMs;
+    private long _saveRefreshSequence;
 
     /// <summary>The live/staged save's identity digest, preferring a complete quicksave
     /// written after the staged baseline, and 0 while unknown (including "not computed yet" —
@@ -639,6 +671,9 @@ public sealed class SaveDigestCache(string gameDirectory)
 
         RefreshSaveIfStale();
 
+        ModuleGitJob job;
+        string? saveDirectory;
+        (string, long, long) stamp;
         lock (_gate)
         {
             if (_moduleGit.TryGetValue(module, out uint digest))
@@ -646,39 +681,106 @@ public sealed class SaveDigestCache(string gameDirectory)
                 return digest;
             }
 
-            if (!_pending.Add(module))
+            if (_unavailableModuleGit.Contains(module))
+            {
+                return 0; // this loaded world changed on disk before a trustworthy baseline was captured
+            }
+
+            // The cache and unavailable set are case-insensitive. Normalize the pending
+            // key too, so casing differences cannot launch duplicate archive reads.
+            job = new ModuleGitJob(module.ToUpperInvariant(), _moduleGitWorldGeneration);
+            if (!_pendingModuleGit.Add(job))
             {
                 return 0; // already being computed; the answer lands on a later tick
             }
-        }
 
-        string? saveDirectory;
-        (string, long, long) stamp;
-        lock (_gate)
-        {
             saveDirectory = _saveDirectory;
             stamp = _identityStamp;
         }
 
-        Run(module, () =>
+        Run(() =>
         {
-            uint computed = SaveDigest.TryComputeModuleGit(gameDirectory, saveDirectory, module, out uint value)
-                ? value
-                : 0;
+            (bool success, uint computed) = _computeModuleGit(_gameDirectory, saveDirectory, module);
+            (string Path, long Length, long Ticks) currentStamp = CurrentSaveStamp();
 
             lock (_gate)
             {
-                // A GIT read out of a save that has since been replaced (an adoption landing
-                // mid-read) describes ids this session will never deal. Drop it silently; the
-                // next tick asks again against the world we actually have.
-                if (_identityStamp == stamp)
+                // A late read from an earlier loaded world can never become the next world's
+                // baseline. Likewise, a save that changed while the first digest was being
+                // computed cannot provide evidence of the mapping that was loaded into memory.
+                // Existing baselines survive ordinary saves; an uncaptured one stays unknown
+                // until a confirmed world generation begins.
+                if (_moduleGitWorldGeneration == job.WorldGeneration)
                 {
-                    _moduleGit[module] = computed;
+                    if (_identityStamp == stamp && currentStamp == stamp)
+                    {
+                        _moduleGit[module] = success ? computed : 0;
+                    }
+                    else if (_identityStamp != stamp || currentStamp != stamp)
+                    {
+                        _unavailableModuleGit.Add(module);
+                    }
                 }
+            }
+        }, () =>
+        {
+            lock (_gate)
+            {
+                _pendingModuleGit.Remove(job);
             }
         });
 
         return 0;
+    }
+
+    /// <summary>
+    /// Marks the bridge's current loaded-world epoch. A module digest describes the mapping
+    /// the engine loaded, not whichever version of its save happened to be written most
+    /// recently. Module transitions and confirmed same-module Load Game actions both advance
+    /// this epoch; ordinary quicksaves do not.
+    /// </summary>
+    public void ObserveLoadedWorld(int worldEpoch)
+    {
+        // Serialize the generation edge with source resolution. Otherwise a concurrent
+        // same-epoch caller could see the epoch already updated, skip its own forced refresh,
+        // and start a baseline against the previous save directory.
+        lock (_refreshGate)
+        {
+            lock (_gate)
+            {
+                if (_observedWorldEpoch == worldEpoch)
+                {
+                    return;
+                }
+
+                _observedWorldEpoch = worldEpoch;
+                _moduleGitWorldGeneration++;
+                _moduleGit.Clear();
+                _unavailableModuleGit.Clear();
+            }
+
+            // The disk source can change as part of a load/adoption. Do not wait for the
+            // ordinary two-second stat interval before the first module baseline in the newly
+            // loaded world captures its source path and stamp.
+            RefreshSaveIfStale(force: true);
+        }
+    }
+
+    /// <summary>Invalidates the module mapping baseline when an adoption replaces the world.</summary>
+    public void InvalidateLoadedWorld()
+    {
+        lock (_refreshGate)
+        {
+            lock (_gate)
+            {
+                _observedWorldEpoch = null;
+                _moduleGitWorldGeneration++;
+                _moduleGit.Clear();
+                _unavailableModuleGit.Clear();
+            }
+
+            RefreshSaveIfStale(force: true);
+        }
     }
 
     /// <summary>
@@ -695,7 +797,7 @@ public sealed class SaveDigestCache(string gameDirectory)
         {
             lock (_gate)
             {
-                if (_pending.Count == 0)
+                if (!_identityPending && _pendingModuleGit.Count == 0)
                 {
                     return true;
                 }
@@ -706,7 +808,7 @@ public sealed class SaveDigestCache(string gameDirectory)
 
         lock (_gate)
         {
-            return _pending.Count == 0;
+            return !_identityPending && _pendingModuleGit.Count == 0;
         }
     }
 
@@ -715,65 +817,124 @@ public sealed class SaveDigestCache(string gameDirectory)
     /// starts a fresh identity job when one appears. Cheap: a stat of one file, at most every
     /// <see cref="StampCheckIntervalMs"/>.
     /// </summary>
-    private void RefreshSaveIfStale()
+    private void RefreshSaveIfStale(bool force = false)
+    {
+        lock (_refreshGate)
+        {
+            RefreshSaveIfStaleCore(force);
+        }
+    }
+
+    private void RefreshSaveIfStaleCore(bool force)
     {
         long now = Environment.TickCount64;
+        long refreshSequence;
 
         lock (_gate)
         {
-            if (now - _lastStampCheckMs < StampCheckIntervalMs)
+            if (!force && now - _lastStampCheckMs < StampCheckIntervalMs)
             {
                 return;
             }
 
             _lastStampCheckMs = now;
-
-            if (_pending.Contains(IdentityJob))
-            {
-                return; // a job is already in flight for whatever is on disk now
-            }
+            refreshSequence = ++_saveRefreshSequence;
         }
 
-        string? directory = SaveDigest.FindLiveSessionSave(gameDirectory);
+        string? directory = SaveDigest.FindLiveSessionSave(_gameDirectory);
         (string Path, long Length, long Ticks) stamp = StampOf(directory);
 
+        bool startIdentityJob = false;
         lock (_gate)
         {
+            // A forced world-generation refresh may have completed while this slower source
+            // lookup was in progress. Do not let its older snapshot replace the newer one.
+            if (refreshSequence != _saveRefreshSequence)
+            {
+                return;
+            }
+
             if (stamp == _identityStamp)
             {
                 return;
             }
 
-            // The staged world changed under us. Everything derived from it is now suspect:
-            // a module GIT read out of the OLD save describes ids this session will never
-            // deal. Drop them and let them be recomputed against the world we actually have.
+            // The save changed under us. Its save identity must be recomputed, but an already
+            // captured module baseline still describes the live in-memory world until a
+            // module/load epoch says that world was replaced.
             _identityStamp = stamp;
             _saveDirectory = directory;
             _saveIdentity = 0;
-            _moduleGit.Clear();
-
-            if (!_pending.Add(IdentityJob))
+            // Keep already-captured module baselines for this loaded world. Any first-time
+            // computation in flight is no longer trustworthy against a changing save and is
+            // blocked for this epoch when its result is fenced below.
+            foreach (ModuleGitJob pending in _pendingModuleGit)
             {
-                return;
+                if (pending.WorldGeneration == _moduleGitWorldGeneration)
+                {
+                    _unavailableModuleGit.Add(pending.Module);
+                }
+            }
+
+            if (!_identityPending)
+            {
+                _identityPending = true;
+                startIdentityJob = true;
             }
         }
 
-        Run(IdentityJob, () =>
+        if (startIdentityJob)
         {
-            uint computed = directory is not null
-                && SaveDigest.TryComputeSaveIdentity(directory, out uint value)
-                    ? value
-                    : 0;
+            StartIdentityJob(directory, stamp);
+        }
+    }
+
+    private void StartIdentityJob(string? directory, (string Path, long Length, long Ticks) stamp)
+    {
+        Run(() =>
+        {
+            (bool success, uint computed) = _computeSaveIdentity(directory);
 
             lock (_gate)
             {
                 // Only publish if the world has not moved on again while we were reading.
                 if (_identityStamp == stamp)
                 {
-                    _saveIdentity = computed;
+                    _saveIdentity = success ? computed : 0;
                 }
             }
+        }, () =>
+        {
+            string? nextDirectory = null;
+            (string Path, long Length, long Ticks) nextStamp = default;
+            bool startNext = false;
+
+            lock (_gate)
+            {
+                _identityPending = false;
+                if (_identityStamp != stamp)
+                {
+                    // A world-generation refresh may have found a new source while this
+                    // identity worker was reading the old one. Chain the current source now;
+                    // the refresh throttle must not leave SaveIdentity unknown indefinitely.
+                    nextDirectory = _saveDirectory;
+                    nextStamp = _identityStamp;
+                    _identityPending = true;
+                    startNext = true;
+                }
+            }
+
+            if (startNext)
+            {
+                StartIdentityJob(nextDirectory, nextStamp);
+            }
         });
+    }
+
+    private (string Path, long Length, long Ticks) CurrentSaveStamp()
+    {
+        string? directory = SaveDigest.FindLiveSessionSave(_gameDirectory);
+        return StampOf(directory);
     }
 
     /// <summary>
@@ -782,9 +943,8 @@ public sealed class SaveDigestCache(string gameDirectory)
     ///
     /// ⚠ A DEDICATED THREAD, NOT <c>Task.Run</c>. This work is synchronous file I/O
     /// (<c>TryComputeModuleGit</c> opens and parses a module's archives), and every module
-    /// a transition passes through — a stunt module, then the real destination — invalidates
-    /// the whole cache (<see cref="RefreshSaveIfStale"/> clears <c>_moduleGit</c> on every
-    /// save-stamp change) and re-queues one job per module. `Task.Run` schedules onto the
+    /// a transition passes through can request a fresh generation's work. `Task.Run` schedules
+    /// onto the
     /// SHARED thread pool, which this same process also uses for every other async
     /// continuation — including the agent's own per-tick loop. The pool's thread-injection
     /// rate is throttled (new threads are added roughly one at a time, seconds apart, under
@@ -794,7 +954,7 @@ public sealed class SaveDigestCache(string gameDirectory)
     /// pump that silently stops for 60-90s and later resumes on its own. A dedicated
     /// background thread per job never competes with the pool at all.
     /// </summary>
-    private void Run(string job, Action work)
+    private void Run(Action work, Action completed)
     {
         Thread thread = new(() =>
         {
@@ -808,15 +968,12 @@ public sealed class SaveDigestCache(string gameDirectory)
             }
             finally
             {
-                lock (_gate)
-                {
-                    _pending.Remove(job);
-                }
+                completed();
             }
         })
         {
             IsBackground = true,
-            Name = $"SaveDigest:{job}",
+            Name = "SaveDigest",
         };
         thread.Start();
     }

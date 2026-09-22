@@ -80,7 +80,17 @@ public sealed partial class KotorGameBridge
     public uint SaveIdentityDigest => SaveDigests?.SaveIdentity ?? 0;
 
     /// <summary>The named module's GIT-id digest for the world handshake; 0 when unknown.</summary>
-    public uint ModuleGitDigest(string module) => SaveDigests?.ModuleGit(module) ?? 0;
+    public uint ModuleGitDigest(string module)
+    {
+        SaveDigestCache? digests = SaveDigests;
+        if (digests is null)
+        {
+            return 0;
+        }
+
+        digests.ObserveLoadedWorld(WorldEpoch);
+        return digests.ModuleGit(module);
+    }
 
     /// <summary>
     /// Roadmap item 14 phase 2's load-detection edge: the plugin's own count of world

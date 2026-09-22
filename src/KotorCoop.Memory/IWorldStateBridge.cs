@@ -37,10 +37,11 @@ public interface IWorldStateBridge
     uint SaveIdentityDigest => 0;
 
     /// <summary>
-    /// A digest of the object ids the named module's GIT hands out — from the save's
-    /// stored module state when this save has visited it, else predicted from the pristine
-    /// module file the engine would load (0 when unknown). Judged per module, because a
-    /// mod that edits one module's placements shifts ids there and nowhere else.
+    /// A digest of the object ids the named module's GIT handed out for the currently
+    /// loaded-world generation — initially from the save's stored module state when present,
+    /// else predicted from the pristine module file. Ordinary saves do not replace this
+    /// baseline; a confirmed load or adoption does (0 when unknown). Judged per module,
+    /// because a mod that edits one module's placements shifts ids there and nowhere else.
     /// </summary>
     uint ModuleGitDigest(string module) => 0;
 

@@ -41,6 +41,8 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public void ForgetWorldShadows()
     {
+        _saveDigests?.InvalidateLoadedWorld();
+
         // Doors. Clearing the module name too is what forces the next scan to take the
         // "entered a new module" path in full, including the silent-baseline flag — clearing
         // only the dictionaries would leave _doorBaselined true and announce every door in the

@@ -202,6 +202,7 @@ public sealed partial class KotorGameBridge
             _cachedForModule = module;
             _cachedForWorldSerial = worldSerial;
             WorldEpoch++;
+            _saveDigests?.ObserveLoadedWorld(WorldEpoch);
             InvalidateCreatureCache();
             _itemTags.Clear();
             _itemAddresses.Clear();

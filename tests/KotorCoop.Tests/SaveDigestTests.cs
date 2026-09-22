@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using KotorCoop.Memory;
 using KotorCoop.Memory.GameFiles;
+using KotorCoop.Protocol;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -397,6 +398,257 @@ public sealed class SaveDigestTests : IDisposable
 
         Assert.True(SaveDigest.TryComputeSaveIdentity(staged, out uint expected));
         Assert.Equal(expected, cache.SaveIdentity);
+    }
+
+    [Fact]
+    public void OrdinarySaveKeepsLoadedModuleBaselineUntilWorldEpochChanges()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        string savegame = Path.Combine(staged, "SAVEGAME.sav");
+        File.WriteAllBytes(savegame, BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        SaveDigestCache cache = new(gameDir);
+        cache.ObserveLoadedWorld(10);
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        uint initialIdentity = cache.SaveIdentity;
+        _ = cache.ModuleGit("end_m01aa");
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        uint loadedBaseline = cache.ModuleGit("end_m01aa");
+        Assert.NotEqual(0u, initialIdentity);
+        Assert.NotEqual(0u, loadedBaseline);
+
+        // An ordinary quicksave writes a progressed module image without replacing the
+        // already-loaded world. Save identity tracks the new disk image, but this module's
+        // W_GIT baseline remains the one observed for world epoch 10.
+        File.WriteAllBytes(savegame, BuildSavegameErf("end_m01aa", 311, [(2u, "n_spawned")], 2057));
+        File.SetLastWriteTimeUtc(savegame, DateTime.UtcNow.AddMinutes(1));
+        Assert.True(WaitFor(() => cache.SaveIdentity != 0 && cache.SaveIdentity != initialIdentity,
+            TimeSpan.FromSeconds(15)));
+        Assert.Equal(loadedBaseline, cache.ModuleGit("end_m01aa"));
+
+        // A confirmed same-module load advances WorldEpoch. Only then may the new saved
+        // mapping replace the in-memory baseline.
+        cache.ObserveLoadedWorld(11);
+        _ = cache.ModuleGit("end_m01aa");
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.True(SaveDigest.TryComputeModuleGit(gameDir, staged, "end_m01aa", out uint reloaded));
+        Assert.NotEqual(loadedBaseline, reloaded);
+        Assert.Equal(reloaded, cache.ModuleGit("end_m01aa"));
+    }
+
+    [Fact]
+    public void LateModuleDigestFromAnOldWorldCannotOverwriteTheNewWorldBaseline()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        using ManualResetEventSlim oldStarted = new();
+        using ManualResetEventSlim releaseOld = new();
+        using ManualResetEventSlim newFinished = new();
+        int calls = 0;
+        SaveDigestCache cache = new(gameDir, (_, _, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                oldStarted.Set();
+                Assert.True(releaseOld.Wait(TimeSpan.FromSeconds(10)));
+                return (true, 111u);
+            }
+
+            newFinished.Set();
+            return (true, 222u);
+        });
+
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        cache.ObserveLoadedWorld(20);
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        Assert.True(oldStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        cache.ObserveLoadedWorld(21);
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        Assert.True(newFinished.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(WaitFor(() => cache.ModuleGit("end_m01aa") == 222u, TimeSpan.FromSeconds(5)));
+
+        releaseOld.Set();
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.Equal(222u, cache.ModuleGit("end_m01aa"));
+    }
+
+    [Fact]
+    public void ModuleDigestPendingKeyIsCaseInsensitive()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        using ManualResetEventSlim computationStarted = new();
+        using ManualResetEventSlim releaseComputation = new();
+        int calls = 0;
+        SaveDigestCache cache = new(gameDir, (_, _, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            computationStarted.Set();
+            Assert.True(releaseComputation.Wait(TimeSpan.FromSeconds(10)));
+            return (true, 444u);
+        });
+
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        cache.ObserveLoadedWorld(50);
+
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        Assert.True(computationStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0u, cache.ModuleGit("END_M01AA"));
+        Assert.Equal(1, Volatile.Read(ref calls));
+
+        releaseComputation.Set();
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.Equal(444u, cache.ModuleGit("End_M01Aa"));
+        Assert.Equal(1, Volatile.Read(ref calls));
+    }
+
+    [Fact]
+    public void DifferentLoadedMappingsStillProduceACompatibilityMismatch()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        File.WriteAllBytes(Path.Combine(staged, "SAVEGAME.sav"),
+            BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        SaveDigestCache first = new(gameDir, (_, _, _) => (true, 111u));
+        SaveDigestCache second = new(gameDir, (_, _, _) => (true, 222u));
+        first.ObserveLoadedWorld(60);
+        second.ObserveLoadedWorld(60);
+        _ = first.ModuleGit("end_m01aa");
+        _ = second.ModuleGit("end_m01aa");
+        Assert.True(first.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.True(second.WaitForPending(TimeSpan.FromSeconds(10)));
+
+        WorldDigest host = new(1, 2, "end_m01aa", first.ModuleGit("end_m01aa"));
+        WorldDigest joiner = new(1, 2, "end_m01aa", second.ModuleGit("end_m01aa"));
+        WorldDigestComparison comparison = WorldDigest.Compare(host, joiner);
+
+        Assert.Equal(111u, host.ModuleGit);
+        Assert.Equal(222u, joiner.ModuleGit);
+        Assert.True(comparison.ModuleGitMismatch);
+    }
+
+    [Fact]
+    public void SaveChangingDuringFirstModuleDigestLeavesThatWorldBaselineUnknown()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        Directory.CreateDirectory(staged);
+        string savegame = Path.Combine(staged, "SAVEGAME.sav");
+        File.WriteAllBytes(savegame, BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+
+        using ManualResetEventSlim computationStarted = new();
+        using ManualResetEventSlim releaseComputation = new();
+        SaveDigestCache cache = new(gameDir, (_, _, _) =>
+        {
+            computationStarted.Set();
+            Assert.True(releaseComputation.Wait(TimeSpan.FromSeconds(10)));
+            return (true, 333u);
+        });
+
+        _ = cache.SaveIdentity;
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        cache.ObserveLoadedWorld(30);
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        Assert.True(computationStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        // The first digest has not established a baseline yet. If the SAVEGAME changes
+        // before that read finishes, neither the old worker nor a retry may label the new
+        // saved snapshot as the still-loaded world's mapping.
+        File.WriteAllBytes(savegame, BuildSavegameErf("end_m01aa", 311, [(2u, "n_spawned")], 2057));
+        File.SetLastWriteTimeUtc(savegame, DateTime.UtcNow.AddMinutes(1));
+        Thread.Sleep(2100);
+        _ = cache.SaveIdentity;
+        releaseComputation.Set();
+
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+    }
+
+    [Fact]
+    public void LoadedWorldResetRefreshesSaveSourceWhileAnOldIdentityJobIsStillRunning()
+    {
+        string gameDir = BuildGameDirectory("end_m01aa", PristineGit([("n_duros", 0)]));
+        string staged = Path.Combine(gameDir, "saves", "000001 - AUTOSAVE");
+        string quick = Path.Combine(gameDir, "saves", "000000 - QUICKSAVE");
+        Directory.CreateDirectory(staged);
+        string stagedSave = Path.Combine(staged, "SAVEGAME.sav");
+        File.WriteAllBytes(stagedSave, BuildSavegameErf("end_m01aa", 295, [(2u, "n_duros")], 2057));
+        File.SetLastWriteTimeUtc(stagedSave, DateTime.UtcNow.AddMinutes(-2));
+
+        using ManualResetEventSlim oldIdentityStarted = new();
+        using ManualResetEventSlim releaseOldIdentity = new();
+        List<string?> identitySources = [];
+        List<string?> gitSources = [];
+        SaveDigestCache cache = new(
+            gameDir,
+            (_, save, _) =>
+            {
+                lock (gitSources)
+                {
+                    gitSources.Add(save);
+                }
+                return (true, 777u);
+            },
+            save =>
+            {
+                lock (identitySources)
+                {
+                    identitySources.Add(save);
+                }
+
+                if (save == staged)
+                {
+                    oldIdentityStarted.Set();
+                    Assert.True(releaseOldIdentity.Wait(TimeSpan.FromSeconds(10)));
+                    return (true, 111u);
+                }
+
+                return (true, 222u);
+            });
+
+        Assert.Equal(0u, cache.SaveIdentity);
+        Assert.True(oldIdentityStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        // The newly loaded world uses a fresh quicksave, but the ordinary stat interval has
+        // not elapsed and the old identity worker is still in flight. Epoch observation must
+        // synchronously select this new source before a module baseline can start.
+        Directory.CreateDirectory(quick);
+        string quickSave = Path.Combine(quick, "SAVEGAME.sav");
+        File.WriteAllBytes(quickSave, BuildSavegameErf("end_m01aa", 311, [(2u, "n_spawned")], 2057));
+        File.SetLastWriteTimeUtc(quickSave, DateTime.UtcNow.AddMinutes(1));
+        cache.ObserveLoadedWorld(41);
+
+        Assert.Equal(0u, cache.ModuleGit("end_m01aa"));
+        releaseOldIdentity.Set();
+        Assert.True(cache.WaitForPending(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(222u, cache.SaveIdentity);
+        Assert.Equal(777u, cache.ModuleGit("end_m01aa"));
+        lock (identitySources)
+        {
+            Assert.Contains(quick, identitySources);
+        }
+        lock (gitSources)
+        {
+            Assert.Contains(quick, gitSources);
+            Assert.DoesNotContain(staged, gitSources);
+        }
     }
 
     [Fact]
