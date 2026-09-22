@@ -329,6 +329,37 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task AnUnreadableSelectedSaveDoesNotSubstituteAnUnboundSidecar()
+    {
+        string selectedSave = BuildSave("end_m01aa", 0x127, "Selected Save Character", [(2u, "n_trask")]);
+        string sidecarSource = BuildSave("end_m01aa", 0x999, "Different Character", [(2u, "n_trask")]);
+        File.WriteAllBytes(Path.Combine(selectedSave, "SAVEGAME.sav"), BuildErf("SAV"));
+        Assert.False(PlayerIfo.TryExtractPlayer(selectedSave, out _, out _));
+        Assert.True(PlayerIfo.TryExtractPlayer(sidecarSource, out GffStruct unrelatedPlayer, out _));
+
+        string joinerGame = BuildGameDirectory();
+        string slot = Path.Combine(joinerGame, "saves", PluginMenuLoader.AutosaveSlot);
+        Directory.CreateDirectory(slot);
+        string sentinel = Path.Combine(slot, "sentinel.txt");
+        File.WriteAllText(sentinel, "preserve existing autosave");
+
+        List<string> log = [];
+        Assert.Null(await WorldAdoption.TryAdoptAsync(
+            joinerGame,
+            selectedSave,
+            (unrelatedPlayer, new SidecarMetadata(0, DateTime.UtcNow.AddYears(1))),
+            new IPEndPoint(IPAddress.Loopback, FreePort()),
+            SessionPassword.None,
+            expectedSaveIdentity: 0,
+            log.Add,
+            _cts.Token));
+
+        Assert.Contains(log, line => line.Contains("does not bind it to the selected save", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(log, line => line.Contains("join_mode = auto", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("preserve existing autosave", File.ReadAllText(sentinel));
+    }
+
+    [Fact]
     public async Task TheHostsOwnStatedIdentityIsEnoughToSelfCheckAnAdoption()
     {
         // The gap this closes: `agent adopt` had no way to learn the host's identity, so it

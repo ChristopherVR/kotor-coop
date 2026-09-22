@@ -104,6 +104,14 @@ public static class WorldAdoption
         if (!PlayerIfo.TryExtractPlayer(ownSaveDirectory, out GffStruct ownPlayer, out string diagnostic))
         {
             log?.Invoke($"world adoption: {diagnostic}");
+            if (sidecar is not null)
+            {
+                log?.Invoke(
+                    "world adoption: refusing to substitute the session-saved character because its metadata "
+                    + $"does not bind it to the selected save '{Path.GetFileName(ownSaveDirectory)}'; "
+                    + "choose a readable own save, or use join_mode = auto to carry this install's co-op character");
+            }
+
             return null;
         }
 
