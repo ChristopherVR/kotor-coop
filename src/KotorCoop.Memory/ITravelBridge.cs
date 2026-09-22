@@ -25,7 +25,8 @@ public interface ITravelBridge
 
     /// <summary>
     /// The movie resrefs this instance's own imminent transition is about to play, with the
-    /// serial the plugin stamped them with, or an empty list when it has announced none.
+    /// serial the plugin stamped them with. A readable serial-zero snapshot is returned with
+    /// an empty list so a new managed agent can baseline the persistent shared block.
     ///
     /// A LEVEL plus a serial rather than a queue: the plugin gets exactly one frame to write
     /// this (the module load drains the engine's queue, and a playing movie then takes its
@@ -42,7 +43,8 @@ public interface ITravelBridge
     /// <summary>
     /// The destination of this instance's own imminent module transition — module and entry
     /// waypoint — with the serial the plugin stamped it with when its engine committed to it,
-    /// or false when it has announced none.
+    /// or an empty module when it has announced none. A readable serial-zero snapshot is
+    /// returned as true so a new managed agent can baseline the persistent shared block.
     ///
     /// The faster, earlier sibling of <see cref="TryReadTransitionMovies"/>: this is knowable
     /// before the load starts (a door's fade window, or the frame immediately before a
@@ -79,7 +81,8 @@ public interface ITravelBridge
     /// The resref this instance's own <c>MoviePlayHook</c> most recently captured from a
     /// mid-module <c>PlayMovie</c> call (no transition involved), with the serial the plugin
     /// stamped it with — already excluded, on the plugin side, against a name the engine's own
-    /// transition queue already carries. False when nothing has been captured yet.
+    /// transition queue already carries. A readable serial-zero snapshot is returned with an
+    /// empty resref so a new managed agent can baseline the persistent shared block.
     ///
     /// The DETECTION half docs/research/trigger-relay.md §6 shipped without a hook for; see
     /// docs/research/cinematics.md's 2026-08-22 section. De-duplicate on the serial, the same

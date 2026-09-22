@@ -20,12 +20,25 @@ internal sealed partial class TransitionPump
 
         // Announce our own. Cheap block reads either way (nothing new most ticks), gated the
         // same as every other block-read pump here.
-        if (bridge.TryReadMidModuleMovie(out uint serial, out string movie)
-            && serial != _announcedMidModuleMovieSerial)
+        if (bridge.TryReadMidModuleMovie(out uint serial, out string movie))
         {
-            _announcedMidModuleMovieSerial = serial;
-            log($"announcing mid-module movie '{movie}'");
-            session.PublishMidModuleMovie(local.Module, serial, movie);
+            if (!_hasObservedMidModuleMovieSerial)
+            {
+                // The plugin block outlives this managed session. Its level-triggered mailbox
+                // may still hold the previous agent's last capture; take the first readable
+                // value as the baseline rather than replaying it onto a new session.
+                _announcedMidModuleMovieSerial = serial;
+                _hasObservedMidModuleMovieSerial = true;
+            }
+            else if (serial != _announcedMidModuleMovieSerial)
+            {
+                _announcedMidModuleMovieSerial = serial;
+                if (serial != 0 && movie.Length > 0)
+                {
+                    log($"announcing mid-module movie '{movie}'");
+                    session.PublishMidModuleMovie(local.Module, serial, movie);
+                }
+            }
         }
 
         // Take everyone else's. Filtered to the local module HERE, cheaply, before ever
@@ -72,24 +85,35 @@ internal sealed partial class TransitionPump
 
         if (bridge.TryReadTransitionAnnounce(out uint serial, out string module, out string waypoint))
         {
-            if (serial != _announcedTransitionSerial)
+            if (!_hasObservedTransitionSerial)
+            {
+                // As with the movie mailboxes below, this shared-block level survives an
+                // agent restart. The first readable snapshot is historical state until a
+                // later serial proves a new transition began in this session.
+                _announcedTransitionSerial = serial;
+                _hasObservedTransitionSerial = true;
+            }
+            else if (serial != _announcedTransitionSerial)
             {
                 _announcedTransitionSerial = serial;
-                _announceRepeatsLeftForTransition = AnnounceRepeats;
-                _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
-                log($"announcing transition to '{module}'"
-                    + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
-
-                // Our own engine committed to a stunt leg (its own script, or the replay warp
-                // we requested — the plugin announces both): from this tick a peer's announce
-                // naming the same module is an echo, not a lead. See TransitionPump.StuntLeg.cs.
-                if (StuntModuleRule.IsStuntModule(module))
+                if (serial != 0 && module.Length > 0)
                 {
-                    BeginStuntLeg(session.LocalPeerId);
+                    _announceRepeatsLeftForTransition = AnnounceRepeats;
+                    _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
+                    log($"announcing transition to '{module}'"
+                        + (waypoint.Length > 0 ? $" at waypoint '{waypoint}'" : string.Empty));
+
+                    // Our own engine committed to a stunt leg (its own script, or the replay warp
+                    // we requested — the plugin announces both): from this tick a peer's announce
+                    // naming the same module is an echo, not a lead. See TransitionPump.StuntLeg.cs.
+                    if (StuntModuleRule.IsStuntModule(module))
+                    {
+                        BeginStuntLeg(session.LocalPeerId);
+                    }
                 }
             }
 
-            if (_announceRepeatsLeftForTransition > 0)
+            if (serial != 0 && module.Length > 0 && _announceRepeatsLeftForTransition > 0)
             {
                 _announceRepeatsLeftForTransition--;
                 session.PublishTransitionAnnounce(module, waypoint, serial);
@@ -146,15 +170,25 @@ internal sealed partial class TransitionPump
         // is least trustworthy, and the names do not depend on it.
         if (bridge.TryReadTransitionMovies(out uint serial, out string[] movies))
         {
-            if (serial != _announcedCinematicSerial)
+            if (!_hasObservedCinematicSerial)
+            {
+                // The shared plugin block outlives CoopAgent. Do not turn its previous
+                // session's last movie queue into a fresh announcement on startup/rejoin.
+                _announcedCinematicSerial = serial;
+                _hasObservedCinematicSerial = true;
+            }
+            else if (serial != _announcedCinematicSerial)
             {
                 _announcedCinematicSerial = serial;
-                _announceRepeatsLeft = AnnounceRepeats;
-                _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
-                log($"announcing {movies.Length} transition movie(s): {string.Join(", ", movies)}");
+                if (serial != 0)
+                {
+                    _announceRepeatsLeft = AnnounceRepeats;
+                    _lastOwnTransitionSignalAtMs = SessionClock.NowMs;
+                    log($"announcing {movies.Length} transition movie(s): {string.Join(", ", movies)}");
+                }
             }
 
-            if (_announceRepeatsLeft > 0)
+            if (serial != 0 && _announceRepeatsLeft > 0)
             {
                 _announceRepeatsLeft--;
                 session.PublishTransitionMovies(local.Module, serial, movies);

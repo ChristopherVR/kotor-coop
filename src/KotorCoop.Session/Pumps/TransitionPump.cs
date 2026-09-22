@@ -24,6 +24,7 @@ internal sealed partial class TransitionPump(IGameBridge bridge, ICoopSession se
     /// <summary>The mid-module movie serial this agent has already announced, so a standing
     /// capture is not re-announced every tick.</summary>
     private uint _announcedMidModuleMovieSerial;
+    private bool _hasObservedMidModuleMovieSerial;
 
     /// <summary>The last mid-module movie serial taken from each peer, so a repeated
     /// announcement is not re-requested every tick.</summary>
@@ -34,6 +35,7 @@ internal sealed partial class TransitionPump(IGameBridge bridge, ICoopSession se
     /// <summary>The cinematic serial this agent has already announced, so the same
     /// transition is published once however long its names sit in the block.</summary>
     private uint _announcedCinematicSerial;
+    private bool _hasObservedCinematicSerial;
 
     /// <summary>How many more ticks to repeat the current announcement. Cheap redundancy in
     /// place of an ack: the channel is unreliable by design, and a single dropped datagram
@@ -149,6 +151,7 @@ internal sealed partial class TransitionPump(IGameBridge bridge, ICoopSession se
     /// <summary>The transition-announce serial this agent has already published, so a
     /// standing destination is not re-announced every tick.</summary>
     private uint _announcedTransitionSerial;
+    private bool _hasObservedTransitionSerial;
 
     /// <summary>Same redundancy shape as <see cref="_announceRepeatsLeft"/>, for the
     /// transition-announce channel.</summary>

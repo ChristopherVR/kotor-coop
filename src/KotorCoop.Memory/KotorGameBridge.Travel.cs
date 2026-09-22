@@ -68,11 +68,17 @@ public sealed partial class KotorGameBridge
 
         if (_pluginBlock == 0
             || !_memory.TryReadUInt32(_pluginBlock + BlockCinematicSerial, out serial)
-            || serial == 0
             || !_memory.TryReadInt32(_pluginBlock + BlockCinematicCount, out int count)
-            || count is <= 0 or > BlockCinematicCapacity)
+            || count is < 0 or > BlockCinematicCapacity)
         {
             return false;
+        }
+
+        // A serial-zero, empty mailbox is still a readable snapshot. TransitionPump uses it
+        // as the baseline so its first nonzero serial is not mistaken for stale state.
+        if (serial == 0 || count == 0)
+        {
+            return true;
         }
 
         List<string> names = new(count);
@@ -100,21 +106,21 @@ public sealed partial class KotorGameBridge
         waypoint = string.Empty;
 
         if (_pluginBlock == 0
-            || !_memory.TryReadUInt32(_pluginBlock + BlockTransitionAnnounceSerial, out serial)
-            || serial == 0)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockTransitionAnnounceSerial, out serial))
         {
             return false;
         }
 
         if (!_memory.TryReadAsciiString(
                 _pluginBlock + BlockTransitionAnnounceModule, BlockTransitionAnnounceNameLength, out module)
-            || module.Length == 0)
+            || !_memory.TryReadAsciiString(
+                _pluginBlock + BlockTransitionAnnounceWaypoint, BlockTransitionAnnounceNameLength, out waypoint))
         {
             return false;
         }
 
-        _memory.TryReadAsciiString(
-            _pluginBlock + BlockTransitionAnnounceWaypoint, BlockTransitionAnnounceNameLength, out waypoint);
+        // Include serial zero in the readable mailbox baseline; module is expected to be
+        // empty then. The pump only publishes a nonzero serial with a nonempty destination.
         return true;
     }
 
@@ -140,15 +146,15 @@ public sealed partial class KotorGameBridge
         resRef = string.Empty;
 
         if (_pluginBlock == 0
-            || !_memory.TryReadUInt32(_pluginBlock + BlockMidModuleMovieSerial, out serial)
-            || serial == 0)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockMidModuleMovieSerial, out serial))
         {
             return false;
         }
 
+        // Same baseline contract as the other native announcement mailboxes: an empty
+        // serial-zero snapshot is readable, but only later nonzero edges carry an event.
         return _memory.TryReadAsciiString(
-                _pluginBlock + BlockMidModuleMovieResRef, BlockMidModuleMovieNameLength, out resRef)
-            && resRef.Length > 0;
+            _pluginBlock + BlockMidModuleMovieResRef, BlockMidModuleMovieNameLength, out resRef);
     }
 
     /// <inheritdoc />

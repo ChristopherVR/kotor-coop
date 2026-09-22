@@ -244,6 +244,10 @@ public class MidModuleMovieRelayTests
         /// something this tick.</summary>
         public (uint Serial, string ResRef)? OwnCapture { get; set; }
 
+        public (uint Serial, string Module, string Waypoint)? OwnTransitionAnnounce { get; set; }
+
+        public (uint Serial, string[] Movies)? OwnTransitionMovies { get; set; }
+
         public bool TryReadMidModuleMovie(out uint serial, out string resRef)
         {
             if (OwnCapture is { } capture)
@@ -254,7 +258,34 @@ public class MidModuleMovieRelayTests
 
             serial = 0;
             resRef = string.Empty;
-            return false;
+            return true; // readable empty mailbox, used to establish the startup baseline
+        }
+
+        public bool TryReadTransitionAnnounce(out uint serial, out string module, out string waypoint)
+        {
+            if (OwnTransitionAnnounce is { } announce)
+            {
+                (serial, module, waypoint) = announce;
+                return true;
+            }
+
+            serial = 0;
+            module = string.Empty;
+            waypoint = string.Empty;
+            return true;
+        }
+
+        public bool TryReadTransitionMovies(out uint serial, out string[] movies)
+        {
+            if (OwnTransitionMovies is { } transitionMovies)
+            {
+                (serial, movies) = transitionMovies;
+                return true;
+            }
+
+            serial = 0;
+            movies = [];
+            return true;
         }
 
         /// <summary>Every resref the agent asked the plugin to act on, in order — what a real
@@ -286,8 +317,18 @@ public class MidModuleMovieRelayTests
         /// <summary>Every announcement this instance published, in order.</summary>
         public List<(string Module, uint Serial, string Movie)> Published { get; } = [];
 
+        public List<(string Module, uint Serial, string[] Movies)> PublishedTransitionMovies { get; } = [];
+
+        public List<(string Module, string Waypoint, uint Serial)> PublishedTransitionAnnounces { get; } = [];
+
         public void PublishMidModuleMovie(string module, uint serial, string movie) =>
             Published.Add((module, serial, movie));
+
+        public void PublishTransitionMovies(string module, uint serial, string[] movies) =>
+            PublishedTransitionMovies.Add((module, serial, movies));
+
+        public void PublishTransitionAnnounce(string module, string waypoint, uint serial) =>
+            PublishedTransitionAnnounces.Add((module, waypoint, serial));
 
         public uint LocalPeerId => 2;
 
@@ -388,6 +429,7 @@ public class MidModuleMovieRelayTests
             // with PumpBarks) instead of waiting out a wall-clock interval.
             CombatPumpIntervalMs = 0,
             MovieRelayEnabled = enabled,
+            TransitionAnnounceEnabled = true,
         });
 
         return (agent, bridge, session);
@@ -397,6 +439,7 @@ public class MidModuleMovieRelayTests
     public void ACapturedMovieIsAnnouncedWithTheLocalModule()
     {
         (CoopAgent agent, MovieRelayBridge bridge, MovieRelayStubSession session) = Build();
+        agent.PumpOnce(); // first readable mailbox snapshot is the baseline
         bridge.OwnCapture = (1, "01c");
 
         agent.PumpOnce();
@@ -411,6 +454,7 @@ public class MidModuleMovieRelayTests
     public void TheSameCaptureSerialIsNotReAnnouncedEveryTick()
     {
         (CoopAgent agent, MovieRelayBridge bridge, MovieRelayStubSession session) = Build();
+        agent.PumpOnce();
         bridge.OwnCapture = (1, "01c");
 
         agent.PumpOnce();
@@ -424,6 +468,7 @@ public class MidModuleMovieRelayTests
     public void ANewCaptureSerialIsAnnouncedAgain()
     {
         (CoopAgent agent, MovieRelayBridge bridge, MovieRelayStubSession session) = Build();
+        agent.PumpOnce();
         bridge.OwnCapture = (1, "01c");
         agent.PumpOnce();
 
@@ -432,6 +477,60 @@ public class MidModuleMovieRelayTests
 
         Assert.Equal(2, session.Published.Count);
         Assert.Equal("01f", session.Published[1].Movie);
+    }
+
+    [Fact]
+    public void PersistentNativeMailboxValuesAreBaselinedAndOnlyLaterEdgesAreAnnounced()
+    {
+        (CoopAgent agent, MovieRelayBridge bridge, MovieRelayStubSession session) = Build();
+
+        // These are nonzero level-triggered values left by the plugin from the prior managed
+        // session. They must not be re-published when this agent starts or rejoins.
+        bridge.OwnCapture = (7, "01c");
+        bridge.OwnTransitionMovies = (15, ["56b"]);
+        bridge.OwnTransitionAnnounce = (22, "danm13", "from_07");
+        agent.PumpOnce();
+        agent.PumpOnce();
+
+        Assert.Empty(session.Published);
+        Assert.Empty(session.PublishedTransitionMovies);
+        Assert.Empty(session.PublishedTransitionAnnounces);
+
+        // A readable first snapshot established the initial high-water values, so the next
+        // real serial edges still flow through the ordinary announcement path.
+        bridge.OwnCapture = (8, "01f");
+        bridge.OwnTransitionMovies = (16, ["01f"]);
+        bridge.OwnTransitionAnnounce = (23, "manm28aa", "from_08");
+        agent.PumpOnce();
+
+        Assert.Equal((LocalModule, 8u, "01f"), Assert.Single(session.Published));
+        (string module, uint serial, string[] movies) = Assert.Single(session.PublishedTransitionMovies);
+        Assert.Equal(LocalModule, module);
+        Assert.Equal(16u, serial);
+        Assert.Equal(["01f"], movies);
+        Assert.Equal(("manm28aa", "from_08", 23u), Assert.Single(session.PublishedTransitionAnnounces));
+    }
+
+    [Fact]
+    public void FreshZeroMailboxesStillPublishTheirFirstSerialOneEvent()
+    {
+        (CoopAgent agent, MovieRelayBridge bridge, MovieRelayStubSession session) = Build();
+
+        // A clean plugin block is serial zero. Reading that snapshot must establish the
+        // baseline without consuming the first real edge that follows it.
+        agent.PumpOnce();
+
+        bridge.OwnCapture = (1, "01c");
+        bridge.OwnTransitionMovies = (1, ["56b"]);
+        bridge.OwnTransitionAnnounce = (1, "danm13", "from_07");
+        agent.PumpOnce();
+
+        Assert.Equal((LocalModule, 1u, "01c"), Assert.Single(session.Published));
+        (string movieModule, uint movieSerial, string[] movies) = Assert.Single(session.PublishedTransitionMovies);
+        Assert.Equal(LocalModule, movieModule);
+        Assert.Equal(1u, movieSerial);
+        Assert.Equal(["56b"], movies);
+        Assert.Equal(("danm13", "from_07", 1u), Assert.Single(session.PublishedTransitionAnnounces));
     }
 
     [Fact]
