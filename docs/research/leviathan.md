@@ -697,10 +697,71 @@ past combat remain the staging limitations from §9.3.
 The same repeat exposed unresolved follow-up work:
 
 - Before confirmation, each engine's `lev40_ptylocker` held eight local item objects
-  with corresponding resource names; both shared party pools were empty. A later
-  read still found the host locker populated. Gear return is not proved by successful
-  party-selection confirmation.
+  with corresponding resource names; both shared party pools were empty. A read of the
+  host's post-confirmation save `000036 - lev_gate_host` still found all eight locker
+  objects, while the host PC had empty `Equip_ItemList` and `ItemList`. The staged save
+  therefore does not show the locker transfer on the host either; this cannot be explained
+  solely by the joiner's party-select suppression. Gear return is unproved, and the exact
+  cause (missing/empty `exit_script`, native call not reached, or script-specific behavior)
+  remains to be diagnosed from the new panel diagnostic and a controlled repeat.
 - The two saves were followed by `W_SAVE` and automatic `SaveMismatch` rejoin at
   08:57:33. Adoption completed at 08:57:37 with the own character preserved, but
   `W_GIT` then disabled shared world channels. The ordinary-save baseline fix does not
   establish correct compatibility across this later re-adoption; investigation remains open.
+
+### 9.5 Party-select exit diagnostic foundation (2026-09-23)
+
+`9616342` hardens native party-panel validation and adds diagnostics to the existing
+`partyselect ok` command. It validates manager registration before reading the panel,
+bounded-reads the panel's `exit_script` CExoString, calls native confirmation, then
+re-resolves the GUI/manager before checking whether the panel remains registered. Its
+compact command result begins with the observed exit resref and reports the call and panel
+state; the plugin log explicitly says that a nonempty field makes VM dispatch *expected*
+but that dispatch itself was not observed. This is instrumentation and pointer safety, not
+a gear-return fix. It neither invokes `k_plev_killbc` separately nor proves that the stored
+script ran or transferred items. Use the diagnostic on both engines before confirmation,
+then compare the locker and PC inventories in a new named save after confirmation. Do not
+replay the locker script without an ownership-aware transfer rule: the script moves all
+locker contents to `GetFirstPC`, including companion equipment.
+
+### 9.6 Mid-session load crash from the Leviathan save (2026-09-23, 09:23)
+
+The host selected `000036 - lev_gate_host` from the mid-session load menu while in
+`korr_m35aa`. `LoadPCAutoSave` ran at 09:23:08.838; the plugin logged world teardown,
+loading `lev_m40aa`, the restored party table, and the first post-load interaction sample.
+The host process then crashed at 09:23:09. The preserved crash record identifies an access
+violation inside the loaded plugin image at absolute EIP `0x6B6E2ADE`, image base
+`0x6B620000`, i.e. image RVA `0xC2ADE`. The exact DLL is preserved with its log and record
+under `%TEMP%/kotorcoop-lev-reload-20260923-092309/`; SHA-256 is
+`C03D00D3A5C2045613B41B5ED4F2B3EE0E777312401414C862C89463AC9A4F63`.
+
+The record has no register context or faulting data pointer, so it cannot name the candidate
+pointer value. Its exact deployed image was independently disassembled: RVA `0xC2ADE` is
+`mov ecx,[ebx]`, inside the `GetDialoguePanel` routine. The routine reads four GUI members
+at RVAs/offsets corresponding to `+0x3C/+0x40/+0x44/+0x48`, range/alignment-checks the
+candidate values, then dereferences each candidate's first word as a vtable before comparing
+against the four known dialogue-panel vtables; it later reads the reply count at `+0x6C`.
+The first dereference is not protected by a committed/readable-memory check. The saved fault
+does not record `EBX`, so it cannot distinguish which candidate was unreadable or identify
+the underlying GUI/panel lifetime event. The CodeView GUID is
+`FC0F8FA8-1C6F-44EA-B32A-68BE77A21E5F`, age 288; the available PDB has the same GUID but
+age 293. The independently verified function attribution comes from exact-image code and
+field constants, not that mismatched PDB's line mapping. The in-image return RVAs trace
+through the dialogue content/follow frame to the main plugin frame.
+
+`e75d1a7` adds readable-region checks to the in-game GUI pointer chain,
+each dialogue-panel field, the panel header/vtable and reply-count reads; dialogue content
+returns false when those regions are unreadable. A guarded-build staged reload at 09:37:50
+survived and the host world was up at 09:37:52, supporting the guard but not closing the
+regression with one pass. The joiner's host-reload fetch arrived before its world existed,
+was refused, and exhausted its single attempt. The retry path is being corrected; prove a
+fresh host fetch after world readiness and repeat the staged reload before calling the
+crash fixed or the joiner adoption recovered.
+
+A later manual recovery separates the compatibility case from that early-fetch failure.
+A plain `reconnect` at 09:38:38 only followed the host into Leviathan and still produced
+`W_GIT`. Loading the joiner’s own checkpoint at 09:39:16 triggered `OwnLoad`; once the
+host was settled in `000036 - lev_gate_host`, the joiner adopted identity `73A650CF` at
+09:39:22 and rejoined at 09:39:26 with shared channels available. No new `W_GIT` appeared
+in the subsequent observation. This supports agreement after an actual host load and a
+fresh adoption; it does not fix automatic `HostReload` timing or prove gear return.

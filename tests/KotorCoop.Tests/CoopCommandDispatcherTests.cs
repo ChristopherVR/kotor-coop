@@ -490,23 +490,6 @@ public class CoopCommandDispatcherTests
         }
     }
 
-    /// <summary>
-    /// A port the host can open BOTH ways: its game channel is UDP and its world-serve
-    /// listener is TCP on the same number. Probing TCP alone (the old helper) handed out ports
-    /// inside Windows' UDP exclusion ranges (`netsh int ipv4 show excludedportrange udp` —
-    /// Hyper-V/WSL reserve 100- and 1000-port blocks in the ephemeral range, and ephemeral
-    /// ports are dealt sequentially), where <c>UdpChannel</c>'s bind fails with WSAEACCES, the
-    /// dispatcher's Host lands on "could not start the session", and every Hosting* test in a
-    /// row failed with `manager.Current` null until the sequence walked out of the block
-    /// (2026-09-03, 3/3 red then 3/3 green with no code change in between).
-    ///
-    /// Second lesson (2026-09-03, full run after the galaxy-map relay): letting the UDP stack
-    /// pick the number is itself the trap — ephemeral ports are dealt SEQUENTIALLY, so when the
-    /// sequence sits inside a TCP-excluded block, all 50 probes land in that same block and four
-    /// Hosting* tests fail with "no port free … after 50 probes". So this picks RANDOM numbers
-    /// in a fixed high range instead and binds BOTH protocols explicitly on each: two adjacent
-    /// draws share nothing, and an excluded block costs one attempt, not fifty.
-    /// </summary>
     /// <summary>A minimal but parseable save, so the host-serving path exercises the same
     /// identity and active-module guards used for a real adopted world.</summary>
     private static byte[] BuildValidWorldSave(string module)
@@ -564,6 +547,23 @@ public class CoopCommandDispatcherTests
     private static void WriteU32(byte[] destination, int offset, uint value) =>
         BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(offset, 4), value);
 
+    /// <summary>
+    /// A port the host can open BOTH ways: its game channel is UDP and its world-serve
+    /// listener is TCP on the same number. Probing TCP alone (the old helper) handed out ports
+    /// inside Windows' UDP exclusion ranges (`netsh int ipv4 show excludedportrange udp` —
+    /// Hyper-V/WSL reserve 100- and 1000-port blocks in the ephemeral range, and ephemeral
+    /// ports are dealt sequentially), where <c>UdpChannel</c>'s bind fails with WSAEACCES, the
+    /// dispatcher's Host lands on "could not start the session", and every Hosting* test in a
+    /// row failed with `manager.Current` null until the sequence walked out of the block
+    /// (2026-09-03, 3/3 red then 3/3 green with no code change in between).
+    ///
+    /// Second lesson (2026-09-03, full run after the galaxy-map relay): letting the UDP stack
+    /// pick the number is itself the trap — ephemeral ports are dealt SEQUENTIALLY, so when the
+    /// sequence sits inside a TCP-excluded block, all 50 probes land in that same block and four
+    /// Hosting* tests fail with "no port free … after 50 probes". So this picks RANDOM numbers
+    /// in a fixed high range instead and binds BOTH protocols explicitly on each: two adjacent
+    /// draws share nothing, and an excluded block costs one attempt, not fifty.
+    /// </summary>
     private static int FreePort()
     {
         for (int attempt = 0; attempt < 50; attempt++)
