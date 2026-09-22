@@ -69,10 +69,11 @@ public static class WorldAdoption
         uint expectedSaveIdentity,
         Action<string>? log,
         CancellationToken cancellationToken,
-        bool udpFallback = false) =>
+        bool udpFallback = false,
+        Action? onNoWorldAvailable = null) =>
         TryAdoptAsync(
             gameDirectory, ownSaveDirectory, sidecar: null, host, passwordHash, expectedSaveIdentity, log,
-            cancellationToken, udpFallback);
+            cancellationToken, udpFallback, onNoWorldAvailable);
 
     /// <summary>
     /// Roadmap item 14 phase 1 overload: also considers a "resume tomorrow" sidecar
@@ -96,7 +97,8 @@ public static class WorldAdoption
         uint expectedSaveIdentity,
         Action<string>? log,
         CancellationToken cancellationToken,
-        bool udpFallback = false)
+        bool udpFallback = false,
+        Action? onNoWorldAvailable = null)
     {
         // 1. Our own character, before anything is touched. Always extracted, whether or not
         //    a sidecar is in play: it is the fallback the moment the sidecar turns out not to
@@ -155,7 +157,7 @@ public static class WorldAdoption
                 log?.Invoke($"world adoption: session-saved character not used — {reason}");
                 return (ownPlayer, ownSource);
             },
-            cancellationToken, udpFallback).ConfigureAwait(false);
+            cancellationToken, udpFallback, onNoWorldAvailable).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -194,13 +196,14 @@ public static class WorldAdoption
         uint expectedSaveIdentity,
         Action<string>? log,
         CancellationToken cancellationToken,
-        bool udpFallback = false)
+        bool udpFallback = false,
+        Action? onNoWorldAvailable = null)
     {
         ArgumentNullException.ThrowIfNull(carriedPlayer);
 
         return FetchStageAndVerifyAsync(
             gameDirectory, host, passwordHash, expectedSaveIdentity, log,
-            _ => (carriedPlayer, characterSource), cancellationToken, udpFallback);
+            _ => (carriedPlayer, characterSource), cancellationToken, udpFallback, onNoWorldAvailable);
     }
 
     /// <summary>How long <see cref="ProbeTcpReachableAsync"/> waits for a bare connect before
@@ -266,7 +269,8 @@ public static class WorldAdoption
         Action<string>? log,
         Func<uint, (GffStruct Player, string Source)> chooseCharacter,
         CancellationToken cancellationToken,
-        bool udpFallback = false)
+        bool udpFallback = false,
+        Action? onNoWorldAvailable = null)
     {
         // 2. The host's world. A bare connect probe first when the UDP fallback is enabled, so
         //    a genuinely unreachable TCP listener (found live 2026-09-10: a UDP-only tunnel/NAT
@@ -296,9 +300,11 @@ public static class WorldAdoption
             // not a bug, a version mismatch or a wrong password, and burying it as "could not
             // fetch the host's world — world transfer: the host has no world to send yet"
             // reads exactly like one. See WorldTransferRefusedException's own doc comment.
-            log?.Invoke(
-                "world adoption: host has no save to share yet - ask them to save once "
-                + "(or reach the first autosave) and try again");
+            log?.Invoke(onNoWorldAvailable is null
+                ? "world adoption: host has no save to share yet - ask them to save once "
+                    + "(or reach the first autosave) and try again"
+                : "world adoption: host has not made a save available yet");
+            onNoWorldAvailable?.Invoke();
             return null;
         }
         catch (Exception ex) when (ex is WorldTransferRefusedException or InvalidDataException

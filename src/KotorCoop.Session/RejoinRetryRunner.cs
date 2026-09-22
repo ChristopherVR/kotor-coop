@@ -10,7 +10,8 @@ public static class RejoinRetryRunner
         TimeSpan retryDelay,
         Func<int, CancellationToken, Task<bool>> attempt,
         Func<bool> ownsAttempt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? shouldRetryFailedAttempt = null)
     {
         for (int number = 1; number <= maxAttempts; number++)
         {
@@ -36,6 +37,11 @@ public static class RejoinRetryRunner
             }
 
             if (number == maxAttempts)
+            {
+                return false;
+            }
+
+            if (shouldRetryFailedAttempt is not null && !shouldRetryFailedAttempt())
             {
                 return false;
             }

@@ -263,6 +263,11 @@ public sealed partial class CoopCommandDispatcher
 
     private const int SoloReturnRejoinMaxAttempts = 5;
     private const int SoloReturnRejoinRetryDelayMs = 20_000;
+    // No-world refusals during an explicit host reload are transient while the host's save
+    // snapshot catches up. Thirty checks with 2 s backoff bound the waiting between attempts;
+    // each network check may itself take longer, so this is not a wall-clock deadline.
+    private const int HostReloadRejoinMaxAttempts = 30;
+    private const int HostReloadRejoinRetryDelayMs = 2_000;
 
     /// <summary>Cancel a rejoin only for an explicit external session change.</summary>
     private void CancelRejoinForExternalSessionChange()
@@ -1089,24 +1094,52 @@ public sealed partial class CoopCommandDispatcher
             try
             {
                 RejoinAdoption? adoption = null;
-                int maxAttempts = trigger == RejoinTrigger.SoloReturn
-                    ? SoloReturnRejoinMaxAttempts : 1;
+                int maxAttempts = trigger switch
+                {
+                    RejoinTrigger.SoloReturn => SoloReturnRejoinMaxAttempts,
+                    RejoinTrigger.HostReload => HostReloadRejoinMaxAttempts,
+                    _ => 1,
+                };
+                TimeSpan retryDelay = trigger switch
+                {
+                    RejoinTrigger.SoloReturn => TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
+                    RejoinTrigger.HostReload => TimeSpan.FromMilliseconds(HostReloadRejoinRetryDelayMs),
+                    _ => TimeSpan.Zero,
+                };
+                bool hostWorldUnavailable = false;
+                bool hostWorldWaitNoticeSent = false;
+                int attemptsMade = 0;
                 bool adoptedSuccessfully = await RejoinRetryRunner.RunAsync(
                     maxAttempts,
-                    TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
+                    retryDelay,
                     async (attempt, cancellationToken) =>
                     {
+                        attemptsMade = attempt;
+                        hostWorldUnavailable = false;
                         adoption = await manager
                         .RejoinAfterLoadAsync(
                             bridge, gameDirectory, carried, managerGeneration, cancellationToken,
                             carriedIsAuthoritative: trigger == RejoinTrigger.SoloReturn
                                 || JoinModeSetting == JoinMode.Auto,
-                            worldTransferUdpFallback: WorldTransferUdpFallbackEnabled)
+                            worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
+                            onHostWorldUnavailable: trigger == RejoinTrigger.HostReload
+                                ? () => hostWorldUnavailable = true
+                                : null)
                         .ConfigureAwait(false);
-                        if (adoption is null && attempt < maxAttempts)
+                        if (adoption is null && attempt < maxAttempts
+                            && (trigger == RejoinTrigger.SoloReturn
+                                || trigger == RejoinTrigger.HostReload && hostWorldUnavailable))
                         {
-                            Log?.Invoke($"session-save: SoloReturn adoption attempt {attempt} failed; "
-                                + $"retrying in {SoloReturnRejoinRetryDelayMs / 1000}s");
+                            string reason = trigger == RejoinTrigger.HostReload
+                                ? "the host has not finished making the reloaded world available"
+                                : "SoloReturn adoption failed";
+                            Log?.Invoke($"session-save: {reason} on attempt {attempt}; "
+                                + $"retrying in {retryDelay.TotalSeconds:0}s");
+                            if (trigger == RejoinTrigger.HostReload && !hostWorldWaitNoticeSent)
+                            {
+                                hostWorldWaitNoticeSent = true;
+                                Reply("the host is finishing the reload; waiting for their world to become available");
+                            }
                         }
                         return adoption is not null;
                     },
@@ -1114,11 +1147,20 @@ public sealed partial class CoopCommandDispatcher
                         && rejoinGeneration == _rejoinGeneration
                         && manager.LifecycleGeneration == managerGeneration
                         && _rejoinState.Phase == RejoinPhase.InFlight,
-                    rejoinCts.Token).ConfigureAwait(false);
+                    rejoinCts.Token,
+                    shouldRetryFailedAttempt: () => trigger != RejoinTrigger.HostReload || hostWorldUnavailable)
+                    .ConfigureAwait(false);
 
                 if (!adoptedSuccessfully || adoption is null)
                 {
-                    Reply($"rejoin failed after {maxAttempts} attempt(s) - "
+                    if (rejoinCts.IsCancellationRequested
+                        || rejoinGeneration != _rejoinGeneration
+                        || manager.LifecycleGeneration != managerGeneration)
+                    {
+                        return;
+                    }
+
+                    Reply($"rejoin failed after {attemptsMade} attempt(s) - "
                         + "see the log; reconnect manually if it does not recover");
                     return;
                 }

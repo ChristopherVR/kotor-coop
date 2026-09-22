@@ -42,6 +42,44 @@ public sealed class RejoinRetryRunnerTests
     }
 
     [Fact]
+    public async Task PolicyCanWaitForMoreThanTheOldShortRetryWindow()
+    {
+        List<int> attempts = [];
+        bool ok = await RejoinRetryRunner.RunAsync(
+            30, TimeSpan.Zero,
+            (number, _) =>
+            {
+                attempts.Add(number);
+                return Task.FromResult(number == 7);
+            },
+            () => true,
+            CancellationToken.None,
+            shouldRetryFailedAttempt: () => true);
+
+        Assert.True(ok);
+        Assert.Equal(Enumerable.Range(1, 7), attempts);
+    }
+
+    [Fact]
+    public async Task TerminalFailureDoesNotConsumeTheRemainingRetryBudget()
+    {
+        int attempts = 0;
+        bool ok = await RejoinRetryRunner.RunAsync(
+            30, TimeSpan.Zero,
+            (_, _) =>
+            {
+                attempts++;
+                return Task.FromResult(false);
+            },
+            () => true,
+            CancellationToken.None,
+            shouldRetryFailedAttempt: () => false);
+
+        Assert.False(ok);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
     public async Task ResetDuringRetryDelayPreventsTheNextAttempt()
     {
         bool owns = true;

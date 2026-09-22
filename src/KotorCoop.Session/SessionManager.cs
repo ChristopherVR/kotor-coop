@@ -436,7 +436,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         long expectedGeneration,
         CancellationToken cancellationToken,
         bool carriedIsAuthoritative = false,
-        bool worldTransferUdpFallback = false)
+        bool worldTransferUdpFallback = false,
+        Action? onHostWorldUnavailable = null)
     {
         if (!TryBeginRejoin(expectedGeneration, cancellationToken, out IPEndPoint endpoint,
                 out SessionSettings settings, out long generation))
@@ -456,7 +457,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 expectedSaveIdentity: 0,
                 Log,
                 cancellationToken,
-                worldTransferUdpFallback).ConfigureAwait(false);
+                worldTransferUdpFallback,
+                onHostWorldUnavailable).ConfigureAwait(false);
         }
         else
         {
@@ -475,7 +477,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 expectedSaveIdentity: 0,
                 Log,
                 cancellationToken,
-                worldTransferUdpFallback).ConfigureAwait(false);
+                worldTransferUdpFallback,
+                onHostWorldUnavailable).ConfigureAwait(false);
         }
 
         if (adopted is null)

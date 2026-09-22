@@ -402,11 +402,14 @@ public sealed class WorldAdoptionTests : IDisposable
         int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave));
 
         List<string> log = [];
+        bool noWorldCallback = false;
         Assert.Null(await WorldAdoption.TryAdoptAsync(
             joinerGame, joinerSave, Local(port), SessionPassword.None,
-            expectedSaveIdentity: 0xDEADBEEF, log.Add, _cts.Token));
+            expectedSaveIdentity: 0xDEADBEEF, log.Add, _cts.Token,
+            onNoWorldAvailable: () => noWorldCallback = true));
 
         Assert.Contains(log, line => line.Contains("refusing to play a world we did not receive"));
+        Assert.False(noWorldCallback);
     }
 
     [Fact]
@@ -420,12 +423,16 @@ public sealed class WorldAdoptionTests : IDisposable
         int port = await ServeAsync([]);
 
         List<string> log = [];
+        bool noWorldCallback = false;
         Assert.Null(await WorldAdoption.TryAdoptAsync(
             joinerGame, joinerSave, Local(port), SessionPassword.None,
-            expectedSaveIdentity: 0, log.Add, _cts.Token));
+            expectedSaveIdentity: 0, log.Add, _cts.Token,
+            onNoWorldAvailable: () => noWorldCallback = true));
 
-        Assert.Contains(log, line => line.Contains("no save to share yet"));
+        Assert.Contains(log, line => line.Contains("not made a save available yet"));
+        Assert.DoesNotContain(log, line => line.Contains("ask them to save once"));
         Assert.DoesNotContain(log, line => line.Contains("could not fetch"));
+        Assert.True(noWorldCallback);
     }
 
     [Fact]
