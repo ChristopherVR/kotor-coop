@@ -164,3 +164,21 @@ Zhar entries 100-103 completed near the workbench, but reward correctness is sti
 under investigation: two live saber rows were published. The Sentinel run correctly
 gave g_w_lghtsbr04 (GOLD in upcrystals.2da); the earlier recipe swapped green/yellow IDs. Do not count the earlier recipe as a proven
 single-item, correct-color construction result.
+
+
+## Corrected host-led saber reward (2026-09-23)
+
+The possessed-item liveness guard compared a scanned CSWItem base to the native
+CSWSObject pointer, which is embedded at base +0x10. Live native resolver and
+read-only memory checks confirmed the mismatch; `6495505` corrects it. The old
+06:54 saves contained no saber in either shared pool or player equipment, so the
+two raw scan IDs from that run are not proof of duplicate inventory rewards.
+
+After fresh pre-reward loads, the shipped Zhar chain ran entries 100–103 at
+06:59:33–46 and granted one yellow `g_w_lghtsbr04` at 06:59:53. The joiner applied
+one grant that same second and its settled pool reported actual=1, belief=1,
+snapshot=1. Named saves `000031 - campaign_zhar_fixed_host` and
+`000027 - campaign_zhar_fixed_joiner` each contain exactly one such row in outer
+`INVENTORY.res`, StackSize 1, DELETING 0. Their player equipment does not contain
+a second saber. This verifies the host-led Sentinel reward after the guard fix;
+joiner-led reward and natural council prerequisites remain separate checks.

@@ -187,3 +187,28 @@ The section that used to sit here said the airlock could not be driven from the 
 **The crash on the way (FIXED).** The first two attempts killed the host at `selectreply`. Cause: `DialogueReplyHook` relocated only five bytes of `CSWGuiDialog::SelectReply` (0x6A7110), cutting the 4-byte `mov edx,[esp+4]` after two bytes, so the stub executed the stray `8B 54` fused with its own `jmp` opcode. Only the BASE panel (computer terminals and computer-type conversations such as this one, `ConversationType 1`) commits through that function; story conversations use the cinematic one, which is why no earlier live test hit it. It is a player-facing crash on every computer terminal reply, now fixed (7 bytes, two whole instructions). Symptom to recognise: eip inside a stub block, return address at stub+0x23.
 
 **Still open here.** Walking the suited host along the sea floor and back through `k_pman_28b_at01`, the Rift death trigger, and the joiner-suited option (B). After the host's `warp` back the joiner agent restarted its join from scratch and adopted the host's stale staged autosave (`END_M01AA`); that is the documented staged-autosave behaviour of a rejoin on this rig, not the airlock.
+
+
+## Real return and one-rejoin recovery (2026-09-23)
+
+With `c4bb5dd` native save readiness, `68f47f0` bounded adoption retries, and
+`79c9492` consuming the owned load edge, the host took the shipped airlock
+conversation into `manm28ab` at 07:01:23. The joiner stayed in `manm28aa`.
+Host `walkto 127.3 97.5 6.2` and ordinary `usedoor 28bw` ran the actual return
+OnFail script, returning at 07:01:44. The host was downed by combat before the
+return save could become ready; serving remained blocked. For this staged
+recovery check, god mode and a safe-position teleport were used at 07:02:01–03.
+
+The joiner captured its own character at 07:01:50. Its first adoption attempt
+was refused because no fresh host return save was ready. The host then wrote
+a fresh save at 07:02:08 in 141 ms. The scheduled retry adopted identity
+`75C1DD5C` at 07:02:10, carried the 07:01:50 character, and completed a single
+rejoin at 07:02:15. Shared enemies, doors, items and party returned; no immediate
+OwnLoad replay occurred. Both processes remained alive, and named
+`campaign_return_fixed_host` / `campaign_return_fixed_joiner` saves were retained.
+
+The earlier 06:45 return on the preceding managed build recovered but repeated
+one unnecessary OwnLoad rejoin. That repeat is the regression addressed by
+`79c9492`. These are staged return checks, not a natural underwater campaign:
+Rift story/death branches, combat recovery without staging, and option B remain
+outside this proof.
