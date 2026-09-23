@@ -25,6 +25,7 @@ public sealed class DialogueGrantPumpTests
         public int ReadItemsCalls { get; private set; }
         public Action? BeforeReadPossessedItems { get; set; }
         public List<(string Resref, ItemIdentity Identity)> Possessed { get; set; } = [];
+        public List<(string Resref, ItemIdentity Identity)>? PersonalPossessed { get; set; }
 
         public bool TryReadLocalState(out PlayerState state)
         {
@@ -68,6 +69,15 @@ public sealed class DialogueGrantPumpTests
             ReadItemsCalls++;
             BeforeReadPossessedItems?.Invoke();
             return [.. Possessed.Select(i => (AgentWellKnownIds.LocalPlayerObjectId, i.Resref, i.Identity))];
+        }
+
+        public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPersonalPossessedItems(
+            IReadOnlySet<uint> possessorIds)
+        {
+            ReadItemsCalls++;
+            BeforeReadPossessedItems?.Invoke();
+            return [.. (PersonalPossessed ?? Possessed)
+                .Select(i => (AgentWellKnownIds.LocalPlayerObjectId, i.Resref, i.Identity))];
         }
 
         public void Dispose()
@@ -152,6 +162,26 @@ public sealed class DialogueGrantPumpTests
 
         MaterialisedLootItem item = Assert.Single(Assert.Single(session.Grants).Items);
         Assert.Equal("g_w_lghtsbr01", item.Resref);
+    }
+
+    [Fact]
+    public void ConversationGrantPumpLeavesSharedPoolItemsToPoolChannel()
+    {
+        (DialoguePump pump, Bridge bridge, Session session) = Build();
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All); // establish empty baseline
+
+        bridge.InDialogue = true;
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+
+        // The item exists in the broad PC possession view but is also in the shared pool,
+        // whose PartyPool V2 snapshot/intents are the authoritative replication channel.
+        bridge.Possessed = [("g_w_lghtsbr04", Identity(4))];
+        bridge.PersonalPossessed = [];
+        bridge.InDialogue = false;
+        Thread.Sleep(350);
+        pump.PumpDialogue(State(bridge), SessionCapabilities.All);
+
+        Assert.Empty(session.Grants);
     }
 
     [Fact]

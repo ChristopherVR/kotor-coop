@@ -684,6 +684,19 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPossessedItems(
         IReadOnlySet<uint> possessorIds)
+        => ReadPossessedItemsCore(possessorIds, excludePartyPool: false);
+
+    /// <summary>
+    /// Reads personal possession only. Shared-pool members are excluded even if the engine's
+    /// current possessor field also names the requested creature: the party pool is replicated
+    /// by PartyPoolPumpV2 and must not be emitted again by dialogue/script grant diffs.
+    /// </summary>
+    public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPersonalPossessedItems(
+        IReadOnlySet<uint> possessorIds)
+        => ReadPossessedItemsCore(possessorIds, excludePartyPool: true);
+
+    private IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPossessedItemsCore(
+        IReadOnlySet<uint> possessorIds, bool excludePartyPool)
     {
         if (possessorIds.Count == 0)
         {
@@ -703,6 +716,15 @@ public sealed partial class KotorGameBridge
         // host re-grant its whole pool to the peer (see TryReadPartyPoolItemIds' remarks).
         HashSet<uint>? poolIds = possessorIds.Contains(CheatKinds.LocalPlayerTarget) ? TryReadPartyPoolItemIds() : null;
 
+        // Personal-vs-pool classification must be complete before a grant pump diffs this
+        // sample. If the repository could not be read, returning the unfiltered possessed
+        // view would reintroduce the duplicate-reward race this API exists to close.
+        if (excludePartyPool && possessorIds.Contains(CheatKinds.LocalPlayerTarget) && poolIds is null)
+        {
+            LastPossessedItemReadWasComplete = false;
+            return [];
+        }
+
         // Keep the expensive scan cache for diagnostics (`items` must continue to show ghosts),
         // but only publish rows that the native server object array still owns.  Resolve the
         // array once per read and do one bounded bucket lookup per candidate; this avoids a
@@ -714,10 +736,17 @@ public sealed partial class KotorGameBridge
         // to trigger.
         foreach (ItemListing item in ListItems(force: false))
         {
+            bool isPartyPoolItem = poolIds is not null && poolIds.Contains(item.ObjectId);
+
+            if (excludePartyPool && isPartyPoolItem)
+            {
+                continue;
+            }
+
             // Apply the cheap ownership filter before the native liveness lookup.  Most of the
             // scan is NPC/party inventory and cannot enter this result anyway.
             if (!possessorIds.Contains(item.Possessor)
-                && (poolIds is null || !poolIds.Contains(item.ObjectId)))
+                && !isPartyPoolItem)
             {
                 continue;
             }

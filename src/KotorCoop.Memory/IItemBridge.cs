@@ -32,6 +32,16 @@ public interface IItemBridge
         IReadOnlySet<uint> possessorIds) => [];
 
     /// <summary>
+    /// Items held in the requested possessor inventories, excluding anything currently in
+    /// the shared party pool. Grant-diff pumps use this view because pool membership has its
+    /// own replication channel; reporting a pool addition as a script/dialogue grant would
+    /// deliver the same item through both channels. Bridges without a distinct pool view may
+    /// safely retain the historical behavior through this default.
+    /// </summary>
+    IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPersonalPossessedItems(
+        IReadOnlySet<uint> possessorIds) => ReadPossessedItems(possessorIds);
+
+    /// <summary>
     /// The blueprint resref of a live item, by object id — the same lookup
     /// <c>KotorGameBridge.TryGetItemResref</c> already offers the console's <c>item</c>/
     /// <c>giveloot</c> staging verbs, exposed here so a pump can resolve what a container/

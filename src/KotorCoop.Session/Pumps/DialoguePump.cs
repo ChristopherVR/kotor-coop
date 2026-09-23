@@ -565,7 +565,7 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             return DialogueGrantSampleResult.Deferred;
         }
 
-        items = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+        items = [.. bridge.ReadPersonalPossessedItems(LocalPlayerIdSet)
             .Select(i => (i.Resref, i.Identity))];
 
         if (!bridge.LastPossessedItemReadWasComplete)

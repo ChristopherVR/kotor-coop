@@ -26,6 +26,10 @@ public sealed class ScriptItemGrantPumpTests
         /// <summary>What <see cref="ReadPossessedItems"/> answers for the local player.</summary>
         public List<(string Resref, ItemIdentity Identity)> Possessed { get; set; } = [];
 
+        /// <summary>Optional personal-only view. Tests can keep a shared-pool item in
+        /// <see cref="Possessed"/> while confirming grant pumps use this channel-specific view.</summary>
+        public List<(string Resref, ItemIdentity Identity)>? PersonalPossessed { get; set; }
+
         public string Description => "script-item-test";
 
         /// <summary>What the bridge reports as <see cref="IWorldStateBridge.WorldEpoch"/> — bumped
@@ -64,6 +68,10 @@ public sealed class ScriptItemGrantPumpTests
         public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPossessedItems(
             IReadOnlySet<uint> possessorIds) =>
             [.. Possessed.Select(i => (0x7FFFFFFFu, i.Resref, i.Identity))];
+
+        public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPersonalPossessedItems(
+            IReadOnlySet<uint> possessorIds) =>
+            [.. (PersonalPossessed ?? Possessed).Select(i => (0x7FFFFFFFu, i.Resref, i.Identity))];
 
         public void Dispose()
         {
@@ -483,6 +491,40 @@ public sealed class ScriptItemGrantPumpTests
         agent.PumpOnce();
 
         Assert.Empty(session.PublishedGrants);
+    }
+
+    [Fact]
+    public void SharedPoolGrantIsLeftToPartyPoolChannelWhilePersonalGrantStillPublishesOnce()
+    {
+        (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build();
+
+        agent.PumpOnce(); // seeds empty personal baseline
+
+        // This is the live Zhar reward shape: the same newly-created item is visible in the
+        // broad possessed view because it belongs to the party pool, while PartyPool V2 also
+        // observes and replicates that pool delta. It must not be sent again as a dialogue
+        // grant from this inventory-diff channel.
+        ItemIdentity pooledIdentity = new(1, 0, 0, 0, ItemIdentity.FlagKnown);
+        bridge.Possessed = [("g_w_lghtsbr04", pooledIdentity)];
+        bridge.PersonalPossessed = [];
+        agent.PumpOnce();
+
+        Assert.Empty(session.PublishedGrants);
+
+        // An item kept in the local PC's own repository still uses the dialogue-grant channel.
+        bridge.Possessed =
+        [
+            ("g_w_lghtsbr04", pooledIdentity),
+            ("g_w_blstrpstl001", new ItemIdentity(2, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        bridge.PersonalPossessed =
+        [
+            ("g_w_blstrpstl001", new ItemIdentity(2, 0, 0, 0, ItemIdentity.FlagKnown)),
+        ];
+        agent.PumpOnce();
+
+        MaterialisedLootItem personal = Assert.Single(Assert.Single(session.PublishedGrants).Items);
+        Assert.Equal("g_w_blstrpstl001", personal.Resref);
     }
 
     [Fact]

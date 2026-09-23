@@ -154,7 +154,7 @@ internal sealed class ScriptItemGrantPump(
 
         if (rebaselineOnly)
         {
-            List<(string Resref, ItemIdentity Identity)> candidate = [.. bridge.ReadPossessedItems(LocalPlayerIdSet)
+            List<(string Resref, ItemIdentity Identity)> candidate = [.. bridge.ReadPersonalPossessedItems(LocalPlayerIdSet)
                 .Select(i => (i.Resref, i.Identity))];
             if (!bridge.LastPossessedItemReadWasComplete)
             {
@@ -173,7 +173,7 @@ internal sealed class ScriptItemGrantPump(
         }
 
         List<(string Resref, ItemIdentity Identity)> current =
-            [.. bridge.ReadPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
+            [.. bridge.ReadPersonalPossessedItems(LocalPlayerIdSet).Select(i => (i.Resref, i.Identity))];
 
         if (!bridge.LastPossessedItemReadWasComplete)
         {
