@@ -95,11 +95,15 @@ internal static class EnemyScalingRule
 internal sealed class ScaledObjectLatch
 {
     private readonly uint[] _ids;
+    private readonly ushort[] _baseMaximums;
+    private readonly ushort[] _appliedPercents;
     private int _count;
 
     public ScaledObjectLatch(int capacity)
     {
         _ids = new uint[capacity];
+        _baseMaximums = new ushort[capacity];
+        _appliedPercents = new ushort[capacity];
     }
 
     public int Count => _count;
@@ -119,16 +123,43 @@ internal sealed class ScaledObjectLatch
         return false;
     }
 
-    /// <summary>Records an id; false when already present or the table is full.</summary>
-    public bool Add(uint objectId)
+    /// <summary>Records the unscaled maximum and percentage alongside the object id. This is
+    /// the controller's in-epoch source of truth for future baseline export; it deliberately
+    /// does not imply that a load has been matched to persisted metadata.</summary>
+    public bool Add(uint objectId, int baseMaximum, int appliedPercent)
     {
-        if (objectId == 0 || Contains(objectId) || IsFull)
+        if (objectId == 0
+            || Contains(objectId)
+            || IsFull
+            || baseMaximum is <= 0 or > ushort.MaxValue
+            || appliedPercent is < EnemyScalingRule.MinPercent or > EnemyScalingRule.MaxPercent)
         {
             return false;
         }
 
-        _ids[_count++] = objectId;
+        _ids[_count] = objectId;
+        _baseMaximums[_count] = (ushort)baseMaximum;
+        _appliedPercents[_count] = (ushort)appliedPercent;
+        _count++;
         return true;
+    }
+
+    /// <summary>Reads the first-sighting baseline retained for an id in this module epoch.</summary>
+    public bool TryGetBaseline(uint objectId, out int baseMaximum, out int appliedPercent)
+    {
+        for (int i = 0; i < _count; i++)
+        {
+            if (_ids[i] == objectId)
+            {
+                baseMaximum = _baseMaximums[i];
+                appliedPercent = _appliedPercents[i];
+                return true;
+            }
+        }
+
+        baseMaximum = 0;
+        appliedPercent = 0;
+        return false;
     }
 
     public void Clear() => _count = 0;

@@ -257,3 +257,20 @@ integration: retain baseline metadata in the controller; capture only after a co
 bind a successful load and its world epoch to the exact archive; preserve valid records for
 visited modules; and define current-health handling when percentages change. The default
 remains 100%, and scaled-save reload correctness is still open.
+
+### Native baseline capture groundwork (2026-09-23)
+
+The controller's existing fixed-capacity, module-epoch latch now retains the original
+maximum HP and applied percentage with each scaled object ID. The actual scaling path
+records this metadata, including when integer rounding leaves HP unchanged. Duplicate
+observations preserve the first baseline; reaching capacity stops further writes, and
+module invalidation clears the records.
+
+This is not save/load persistence. The latch does not yet retain template/tag identity,
+export a sidecar record, or import a verified saved baseline. Those steps require a
+completed-save archive binding and a successful-load binding before the first health
+scan. An import must preserve dead state and define current-HP handling when a percentage
+changes; it must not resurrect an enemy. The default remains 100%.
+
+Validation: the native x86 build passed with warnings as errors. The combined scaling,
+host-world-readiness, and host-away suite passed 30 tests with warnings as errors.

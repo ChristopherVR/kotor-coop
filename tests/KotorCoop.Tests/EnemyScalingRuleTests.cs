@@ -79,22 +79,32 @@ public class EnemyScalingRuleTests
     }
 
     [Fact]
-    public void TheLatchRemembersAnIdOncePerEpochAndFailsFullTowardsVanilla()
+    public void TheLatchRetainsFirstSightingBaselineAndFailsFullTowardsVanilla()
     {
         ScaledObjectLatch latch = new(2);
         Assert.False(latch.Contains(0x14));
-        Assert.True(latch.Add(0x14));
-        Assert.False(latch.Add(0x14));       // already there: the write must not repeat
+        Assert.True(latch.Add(0x14, baseMaximum: 15, appliedPercent: 150));
+        Assert.False(latch.Add(0x14, baseMaximum: 23, appliedPercent: 200)); // keep first baseline
         Assert.True(latch.Contains(0x14));
-        Assert.False(latch.Add(0));           // 0 is never an object
-        Assert.True(latch.Add(0x15));
+        Assert.True(latch.TryGetBaseline(0x14, out int baseMaximum, out int appliedPercent));
+        Assert.Equal(15, baseMaximum);
+        Assert.Equal(150, appliedPercent);
+        Assert.False(latch.Add(0, baseMaximum: 15, appliedPercent: 150)); // 0 is never an object
+        Assert.False(latch.Add(0x15, baseMaximum: 0, appliedPercent: 150));
+        Assert.False(latch.Add(0x15, baseMaximum: 15, appliedPercent: 401));
+        Assert.True(latch.Add(0x15, baseMaximum: 15, appliedPercent: 200));
         Assert.True(latch.IsFull);
-        Assert.False(latch.Add(0x16));        // full: the newcomer stays vanilla
+        Assert.False(latch.Add(0x16, baseMaximum: 15, appliedPercent: 150)); // newcomer stays vanilla
         Assert.False(latch.Contains(0x16));
+        Assert.False(latch.TryGetBaseline(0x16, out _, out _));
 
         latch.Clear();                        // module changed: every id is stale
         Assert.Equal(0, latch.Count);
         Assert.False(latch.Contains(0x14));
-        Assert.True(latch.Add(0x16));
+        Assert.False(latch.TryGetBaseline(0x14, out _, out _));
+        Assert.True(latch.Add(0x16, baseMaximum: 20, appliedPercent: 250));
+        Assert.True(latch.TryGetBaseline(0x16, out baseMaximum, out appliedPercent));
+        Assert.Equal(20, baseMaximum);
+        Assert.Equal(250, appliedPercent);
     }
 }

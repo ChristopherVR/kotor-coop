@@ -203,7 +203,11 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
 
             if (!EnemyScalingRule.ScaledHitPoints(current, max, percent, out int newCurrent, out int newMax))
             {
-                _scaled.Add(objectId);
+                // This object has been considered at this percent even when integer rounding
+                // leaves its current numbers unchanged. Retain the pre-scale maximum so a
+                // future persistence export can distinguish that result from an already-scaled
+                // maximum; this in-epoch latch is not a successful-load baseline import.
+                _scaled.Add(objectId, max, percent);
                 continue;
             }
 
@@ -211,7 +215,7 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
             // the current-hp setter so everything derived from it is rebuilt by the engine.
             *(ushort*)(creature + Odyssey.ObjMaxHitPoints) = (ushort)newMax;
             Odyssey.SetCurrentHitPoints(creature, newCurrent);
-            _scaled.Add(objectId);
+            _scaled.Add(objectId, max, percent);
             _scaledThisEpoch++;
 
             if (_loggedThisEpoch < LogPerEpoch)
