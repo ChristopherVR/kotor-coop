@@ -326,3 +326,45 @@ order and scope, and the native consumer must validate a live party-placed trigg
 using a resolved ID. Main-thread creation, capture of the actual spawned identity, exactly
 one item consumption, recovery rewards, and single-authority damage still require proof.
 
+## 12. Dev-only real recover/disarm action probe (2026-09-23)
+
+The console now has a bounded diagnostic for exercising the retail mine action on an existing
+GIT mine:
+
+```text
+mineaction recover 0x71
+mineaction disarm #115
+```
+
+The target must be explicitly written as `0xN` or `#N`, and must be a deterministic GIT object
+ID in `1..0xFFFF`. The agent records both the current module and `WorldLoadSerial` when it submits
+the mailbox request. On the game thread, the plugin checks both values before resolving any
+object. A request left queued across a reload or same-module world replacement is refused. The
+target must still resolve to the requested server object and be a readable, disarmable GIT mine
+(`CSWSTrigger` vtable, mine gate set, `+0x2C4 != 0`, `+0x314 == 0`); the plugin also checks its
+client-side object identity, current local player identity, and that both are in the same area.
+Player-placed mines and non-mine triggers are refused.
+
+This calls the retail client action-menu entry points, not a plugin implementation of the skill:
+recover uses `0x00691950` and disarm uses `0x00691900`. The installed executable's entry bytes
+are checked before invocation. Both methods use `thiscall` and end in `ret 8`; the recover entry
+passes the local actor to `PerformSkill` (`0x0060EE00`, skill `0x65`), while disarm submits the
+normal use-skill action. The engine owns range, timing, Demolitions roll, trigger destruction,
+and any reward. For a trap row with an item resref, the engine adds that item to the recovering
+actor's repository. The destination matters: the shared party pool is handled by `party_pool_sync`
+(`PartyPoolPumpV2`), while a personal inventory addition is observed by `script_item_sync`'s
+personal-inventory grant diff. Do not assume which channel owns the recovered item until the
+live result identifies its actual destination. The diagnostic's “queued” response only means
+the native request was submitted; it does not claim the skill succeeded, the trigger was removed
+on both peers, or that exactly one item reached the appropriate peer inventory/pool. It never
+grants an item or destroys a trigger directly.
+
+The pure request/rule suite passed 20 tests, and the root's native build completed with
+warnings-as-errors. The build has **not** been deployed or exercised live yet. The next live
+check should use a real disarmable GIT mine and an actor with a legitimate Demolitions rank,
+then confirm: retail skill success/failure; host/client trigger removal; the actual repository
+receiving the expected `traps.2da` recovery item; and exactly one corresponding item in the
+peer's correct inventory or party pool. Existing untrained test characters can prove refusal
+and skill-failure behavior only; do not raise Demolitions or grant a trapkit just to manufacture
+a success case.
+
