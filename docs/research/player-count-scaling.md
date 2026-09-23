@@ -24,7 +24,8 @@ Defaults (three readers agree: `CoopConfig`, `AgentComposition ??`, `BehaviourDi
 shipped ini): `enemy_health = 100` (safe vanilla fallback while reload idempotence is open),
 `enemy_damage = auto` (live-verified), `xp_rate = auto`, `store_stock = auto`. Set
 `enemy_health = auto` explicitly to opt into the player-count health curve. `store_prices` is NOT built: the price lookup behind
-`CSWGuiStore::BuyItem` was never traced and needs RE.
+`CSWGuiStore::BuyItem` is now statically traced in the 2026-09-23 price-path addendum below; a
+co-op multiplier, wire setting, and live verification remain unbuilt.
 
 ## Wire
 
@@ -63,6 +64,63 @@ no `TotalSize` growth, cleared on disconnect.
 The stored-max write (health) and the in-place effect-list write (damage) are the two writes
 new to this codebase. Health scaling also needs save/load persistence before the reload checklist
 item can be closed.
+
+### Store price path (2026-09-23 static GOG trace; no price change implemented)
+
+The GOG executable and `tools/kotor1_0_3.db` identify the retail lookup methods as
+`CSWGuiStore::GetItemBuyValue` (`0x006C0790`) and `GetItemSellValue` (`0x006C07F0`). Fresh
+`tools/disasm.py` output shows both resolve the live store from `panel+0x2278` through
+`CServerExoApp::GetStoreByGameObjectID` (`0x004AE7B0`), call `CSWSItem::GetCost`
+(`0x00554000`), then apply that store's modifier and integer `/100` conversion:
+
+| Method | Retail calculation from the traced instructions |
+| --- | --- |
+| `GetItemBuyValue` | `floor(item.GetCost() * (store.mark_up [+0x248] + store[+0x250]) / 100)` |
+| `GetItemSellValue` | `floor(item.GetCost() * (store.mark_down [+0x244] + store[+0x24C]) / 100)` |
+
+The formulas describe ordinary nonnegative values; the retail multiply retains only the
+low 32 bits before unsigned division, so overflowing inputs do not follow unbounded arithmetic.
+The database names `CSWSStore.mark_up` and `mark_down`; it does not name the additional terms at
+`+0x250` and `+0x24C`. Their arithmetic role is verified, but their exact semantic source is
+unknown, so do not rewrite or replace these per-store fields. `CSWSItem::GetCost` (`+0x260`
+`add_cost`, base-item cost float at base-item `+0xC4`) is the retail base. Its body returns zero
+for an item whose plot flag is set; otherwise it computes the integer item cost. The two store
+lookups then return zero when either the store or item is unresolved.
+
+The getters are the shared price boundary, not just a display helper. Static direct-call xrefs
+show `GetItemBuyValue` at `0x006C0B00` (store-list row text), `0x006C0C68` (`BuyItem` click
+handler), and `0x006C11B9`/`0x006C1205` (other store panel logic); `GetItemSellValue` is called
+at `0x006C0B19` (sell-row text), `0x006C0E0C` (`SellItem` click handler), and `0x006C101C`
+(other panel logic). The transaction handlers recalculate the value when clicked, then update
+the panel's cached credits at `+0x2270`, call `CSWSCreature::SetGold` (`0x004EDD90`), and move
+the item through `CSWSStore::SellItem` (`0x005C6F70`) for a buy or `CSWSStore::AcquireItem`
+(`0x005C7610`) for a sell. The real `BuyItem` handler has no independent affordability check;
+the surrounding panel-action path (`0x006C1130`) reads `GetItemBuyValue` against the cached
+credits and also compares it against a persuasion-derived threshold before continuing. The mod's
+`SellToStore` also calls `GetItemSellValue` directly, so it shares a getter-based price change.
+These facts make a post-retail-price return adjustment at both getters a stronger candidate than
+mutating store markup: row text, panel checks, retail click handlers, and the mod's sell path
+would all observe the same adjusted integer, with the retail per-store formula left intact.
+That interception also changes the price used by the panel's persuasion threshold, so that
+interaction must be explicitly tested at high and low multipliers before adopting this hook
+boundary as the final design.
+
+Implementation still needs a chosen meaning and curve for `store_prices`, an adopted host setting
+in `BehaviourDigest`/`SessionOverrides`, and an agent-to-plugin resolved percent. The current
+economy dword is already packed as XP percent and store-stock percent; it has no spare halfword,
+so a new field needs a verified free SharedBlock location and both protocol/shared-block version
+updates. If player count changes while a store is open, its two item lists need a guarded refresh
+so the displayed values match the getter used by the next click. Do not write `mark_up`,
+`mark_down`, `+0x24C`, or `+0x250` into a running store: it would mutate world state and could
+compound or save differently. For post-return arithmetic use a wide intermediate, clamp to a
+nonnegative `int`, preserve exact value at 100%, and specify rounding and low-price behavior
+before coding; retail's own integer conversion has already happened before a proposed multiplier.
+
+This is static analysis only. There is no live transaction proving the modified return is shown
+and charged identically, nor a round-trip test for integer edge cases. A bounded next step is a
+pure price-scale rule (including overflow, zero, and tiny prices), wire/config agreement, then
+two verified getter-return hooks and a live buy/sell A/B with a known base item and store. Prices remain retail; no `store_prices` setting is implemented yet. Do not enable a
+price adjustment until that entire path passes.
 
 ## Save/load health compounding (confirmed defect; open)
 
