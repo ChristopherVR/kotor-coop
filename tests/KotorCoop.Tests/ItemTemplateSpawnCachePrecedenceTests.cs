@@ -4,12 +4,9 @@ using Xunit;
 namespace KotorCoop.Tests;
 
 /// <summary>
-/// Pins <see cref="KotorGameBridge.TryGetItemResref"/>'s precedence contract for the
-/// (object id -&gt; real resref) fact <see cref="KotorGameBridge.DrainItemTemplateSpawns"/> now
-/// feeds into the SAME cache the 2026-08-28 round's ground-item spawn tracking already
-/// populates: a resref THIS SESSION actually learned (from the plugin's own
-/// <c>CreateItemOnObject</c> ring, or a ground-item spawn record) always wins over the Tag
-/// proxy, and is returned WITHOUT ever needing a memory sweep — see
+/// Pins the object-id-to-resref observation cache fed by
+/// <see cref="KotorGameBridge.DrainItemTemplateSpawns"/> and ground-item spawn tracking: a
+/// learned resref is available only in the world generation where it was observed — see
 /// docs/research/item-identity.md §12/§13.
 ///
 /// Seeds the cache directly through <see cref="KotorGameBridge.RememberSpawnedItemResref"/>
@@ -17,8 +14,8 @@ namespace KotorCoop.Tests;
 /// remarks) rather than through a real plugin block: nothing here needs a game process, and
 /// self-attaching to sweep for the Tag-cache fallback path is deliberately NOT exercised —
 /// <c>MemoryBridgeTests</c>' own header warns that repeatedly scanning the TEST HOST's own GC
-/// heap through <c>ReadProcessMemory</c> can kill the runtime, and the whole point of the
-/// precedence being tested here is that a cache HIT never reaches that scan at all.
+/// heap through <c>ReadProcessMemory</c> can kill the runtime. These tests exercise the
+/// cache rule only; production metadata consumers also require a live object-array match.
 /// </summary>
 public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
 {
@@ -37,11 +34,11 @@ public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
     }
 
     [Fact]
-    public void ASpawnCacheHitAnswersImmediatelyWithTheRealResref()
+    public void ASpawnCacheObservationAnswersForItsCurrentWorld()
     {
         _bridge.RememberSpawnedItemResref(0x135, "g_i_progspike01");
 
-        bool found = _bridge.TryGetItemResref(0x135, out string resref);
+        bool found = _bridge.TryGetSpawnedItemResrefForCurrentWorld(0x135, out string resref);
 
         Assert.True(found);
         Assert.Equal("g_i_progspike01", resref);
@@ -58,7 +55,7 @@ public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
     {
         _bridge.RememberSpawnedItemResref(0x136, "g_i_progspike01");
 
-        bool found = _bridge.TryGetItemResref(0x136, out string resref);
+        bool found = _bridge.TryGetSpawnedItemResrefForCurrentWorld(0x136, out string resref);
 
         Assert.True(found);
         Assert.NotEqual("k_computer_spike", resref);
@@ -71,8 +68,8 @@ public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
         _bridge.RememberSpawnedItemResref(0x201, "g_i_progspike01");
         _bridge.RememberSpawnedItemResref(0x202, "g_w_blstrpstl001");
 
-        Assert.True(_bridge.TryGetItemResref(0x201, out string first));
-        Assert.True(_bridge.TryGetItemResref(0x202, out string second));
+        Assert.True(_bridge.TryGetSpawnedItemResrefForCurrentWorld(0x201, out string first));
+        Assert.True(_bridge.TryGetSpawnedItemResrefForCurrentWorld(0x202, out string second));
 
         Assert.Equal("g_i_progspike01", first);
         Assert.Equal("g_w_blstrpstl001", second);
@@ -88,8 +85,15 @@ public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
         _bridge.RememberSpawnedItemResref(0x300, "g_i_progspike01");
         _bridge.RememberSpawnedItemResref(0x300, "g_w_blstrpstl001");
 
-        Assert.True(_bridge.TryGetItemResref(0x300, out string resref));
+        Assert.True(_bridge.TryGetSpawnedItemResrefForCurrentWorld(0x300, out string resref));
         Assert.Equal("g_i_progspike01", resref);
+    }
+
+    [Fact]
+    public void AnObservedAliasCannotNameAReusedIdAfterWorldLoad()
+    {
+        Assert.True(KotorGameBridge.IsSpawnedItemResrefCurrentWorld(7, 7));
+        Assert.False(KotorGameBridge.IsSpawnedItemResrefCurrentWorld(7, 8));
     }
 
     /// <summary>OBJECT_INVALID and 0 are never real ids — a defensive entry naming either must

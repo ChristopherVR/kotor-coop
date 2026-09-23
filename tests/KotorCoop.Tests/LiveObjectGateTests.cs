@@ -323,10 +323,49 @@ public class LiveObjectGateTests
     {
         // Measured GOG layout: the item scan sees CSWItem; the native object array
         // points sixteen bytes later at its embedded CSWSObject.
-        Assert.True(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196B0BD8));
-        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196B0BC8));
-        Assert.False(KotorGameBridge.IsLiveServerItem(true, (nint)0x196B0BC8, (nint)0x196ADEB0));
+        nint currentItemBase = (nint)0x196B0BC8;
+        nint reusedIdCurrentObject = currentItemBase + 0x10;
+        nint staleFreedBodyWithSameOldId = (nint)0x196ADEA0;
+
+        Assert.True(KotorGameBridge.IsLiveServerItem(true, currentItemBase, reusedIdCurrentObject));
+        // Both bodies can still carry the same old object ID and item vtable after a load;
+        // only the object-array-resolved body is authoritative for that reused ID.
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, staleFreedBodyWithSameOldId, reusedIdCurrentObject));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, currentItemBase, currentItemBase));
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, currentItemBase, (nint)0x196ADEB0));
         Assert.False(KotorGameBridge.IsLiveServerItem(false, (nint)0x196B0BC8, (nint)0x196B0BD8));
         Assert.False(KotorGameBridge.IsLiveServerItem(true, 0, (nint)0x10));
+    }
+
+    [Fact]
+    public void ObjectArrayResolutionRejectsAFreedBodyWhenItsIdHasBeenReused()
+    {
+        const uint itemId = 0x135;
+        nint tree = (nint)0x10000;
+        nint entry = (nint)0x20000;
+        nint liveServerObject = (nint)0x30010;
+        nint currentItemBase = liveServerObject - 0x10;
+        nint staleItemBase = (nint)0x31000;
+        uint bucket = itemId & 0xFFF;
+        Dictionary<nint, uint> words = new()
+        {
+            [tree + (nint)(bucket * 4)] = (uint)entry,
+            [entry] = itemId,
+            [entry + 0x04] = (uint)liveServerObject,
+            [entry + 0x08] = 0,
+        };
+
+        bool resolved = EngineGlobals.TryLookupObject(
+            address => words.TryGetValue(address, out uint value) ? value : null,
+            tree,
+            itemId,
+            out uint actualObject);
+
+        Assert.True(resolved);
+        Assert.Equal((uint)liveServerObject, actualObject);
+        Assert.True(KotorGameBridge.IsLiveServerItem(true, currentItemBase, (nint)actualObject));
+        // The old body can still have the same vtable and ID in freed heap memory. Its
+        // embedded-object address differs from the object-array's current entry.
+        Assert.False(KotorGameBridge.IsLiveServerItem(true, staleItemBase, (nint)actualObject));
     }
 }

@@ -216,8 +216,7 @@ public sealed partial class KotorGameBridge
         if (_itemTagsBuiltAtMs == 0 || _itemSweepProvenance.MustRebuildNow(betweenLives))
         {
             _itemTagsBuiltAtMs = Environment.TickCount64;
-            RebuildItemTagCacheNow();
-            return true;
+            return RebuildItemTagCacheNow();
         }
 
         if (ItemScanWorker.TryTakeHits(ItemVtable, out List<nint> hits))
@@ -234,7 +233,12 @@ public sealed partial class KotorGameBridge
                 return _itemAddresses.Count > 0;
             }
 
-            ApplyItemScanHits(hits);
+            if (!ApplyItemScanHits(hits))
+            {
+                _itemTagsBuiltAtMs = 0;
+                return false;
+            }
+
             _itemSweepProvenance.Swept(betweenLives, _lastSweepFingerprints, Environment.TickCount64);
             _itemTagsBuiltAtMs = Environment.TickCount64;
             return true;
@@ -253,13 +257,19 @@ public sealed partial class KotorGameBridge
     /// <summary>The blocking sweep. Only two callers may reach it: the first build after attach
     /// (see <see cref="ServiceItemTagCache"/>) and an interactive console verb with a human
     /// waiting. Everything on the pump thread goes through the background worker.</summary>
-    private void RebuildItemTagCacheNow()
+    private bool RebuildItemTagCacheNow()
     {
         BytePattern pattern = BytePattern.FromBytes(BitConverter.GetBytes(ItemVtable));
         PatternScanner scanner = new(_memory);
 
-        ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit));
+        if (!ApplyItemScanHits(scanner.ScanAll(pattern, ScanScope.PrivateCommitted, ItemScanLimit)))
+        {
+            _itemTagsBuiltAtMs = 0;
+            return false;
+        }
+
         _itemSweepProvenance.Swept(IsWorldBetweenLives, _lastSweepFingerprints, Environment.TickCount64);
+        return true;
     }
 
     /// <summary>
@@ -267,11 +277,17 @@ public sealed partial class KotorGameBridge
     /// caller's thread on purpose — it is the only part that mutates bridge state, and it is
     /// cheap (a handful of small reads per hit) next to the sweep that produced the list.
     /// </summary>
-    private void ApplyItemScanHits(List<nint> hits)
+    private bool ApplyItemScanHits(List<nint> hits)
     {
         _itemTags.Clear();
         _itemAddresses.Clear();
         _lastSweepFingerprints.Clear();
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            LastItemScanNote = "server object array unavailable; item hits discarded";
+            return false;
+        }
 
         int duplicates = 0;
 
@@ -289,6 +305,17 @@ public sealed partial class KotorGameBridge
                 tagAddress = address + 0x18;
             }
             else
+            {
+                continue;
+            }
+
+            // A committed-heap sweep also finds intact freed CSWSItem bodies. An object ID
+            // can be reused by a later load, so vtable + ID at the scanned address is not
+            // enough to select the live body. Keep only the exact item base whose embedded
+            // CSWSObject (+0x10) is the engine object-array result; otherwise a stale duplicate
+            // can overwrite the current item's tag/identity cache entry.
+            if (!EngineGlobals.TryResolveServerObject(_memory, objectArray, id, out nint serverAddress)
+                || !IsLiveServerItem(true, address, serverAddress))
             {
                 continue;
             }
@@ -327,47 +354,99 @@ public sealed partial class KotorGameBridge
                 ? $" — ⚠ the sweep STOPPED at its {ItemScanLimit} cap, so items above that "
                   + "address are missing"
                 : string.Empty);
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint finalArray)
+            || finalArray != objectArray)
+        {
+            _itemTags.Clear();
+            _itemAddresses.Clear();
+            _lastSweepFingerprints.Clear();
+            LastItemScanNote = "server object array changed while applying item scan; hits discarded";
+            return false;
+        }
+
+        return true;
     }
 
-    /// <summary>
-    /// Makes sure the item caches have had a chance to see <paramref name="itemObjectId"/>,
-    /// rebuilding them once if it is not there yet.
-    ///
-    /// ⚠ THIS IS THE FIX FOR THE BUG THAT BLOCKED ITEM IDENTITY (docs/live-verification.md,
-    /// 2026-08-15). Every lookup used to reach the caches directly, and only ONE of them —
-    /// <see cref="TryReadItemIdentity"/> — could trigger a rebuild. The drop path asks for
-    /// the resref first and the identity second, joined by <c>||</c>, so a miss on the resref
-    /// short-circuited and the rebuild never ran. The caches were last built when the agent
-    /// attached; an item spawned a minute later was therefore permanently unknown, which is
-    /// exactly what `drop #131 -> object 0x131 is not a readable item here` was reporting for
-    /// a ground body the plugin log had just announced creating.
-    ///
-    /// The rate limit stays, and stays for the reason it was added: a sweep of the game's
-    /// committed memory per miss per tick once dropped the pump to about 4 Hz and measured
-    /// as peers lagging by seconds. A caller that must not wait (an interactive console verb)
-    /// passes <paramref name="force"/>.
-    /// </summary>
-    private bool EnsureItemKnown(uint itemObjectId, bool force = false)
+    /// <summary>Reads resref and identity from the body resolved by the native object array.
+    /// Cached scan hits are only a discovery aid: IDs are reused across save loads and freed
+    /// bodies can retain an old vtable, ID, and tag. The caller supplies one object-array
+    /// snapshot so bulk readers do exactly one bounded bucket lookup per item.</summary>
+    private bool TryReadLiveItemMetadata(
+        uint itemObjectId, nint objectArray, out nint address, out string resref, out ItemIdentity identity)
     {
-        if (_itemAddresses.ContainsKey(itemObjectId))
+        address = 0;
+        resref = string.Empty;
+        identity = ItemIdentity.Unknown;
+        if (objectArray == 0
+            || !EngineGlobals.TryResolveServerObject(_memory, objectArray, itemObjectId, out nint serverAddress)
+            || serverAddress < 0x10)
         {
-            return true;
+            return false;
         }
 
-        if (force)
+        address = serverAddress - 0x10;
+        if (!IsLiveServerItem(true, address, serverAddress)
+            || !_memory.TryReadUInt32(address, out uint vtable) || vtable != ItemVtable)
         {
-            _itemTagsBuiltAtMs = Environment.TickCount64;
-            RebuildItemTagCacheNow();
-            return _itemAddresses.ContainsKey(itemObjectId);
+            address = 0;
+            return false;
         }
 
-        // A miss on the pump thread asks the background worker for a refresh and answers "not
-        // known" for now, instead of stopping the position stream for a third of a second to
-        // go and look. The rate limit still applies — inside ServiceItemTagCache — for exactly
-        // the reason it was added: a sweep per miss per tick once dropped the pump to about
-        // 4 Hz and measured as peers lagging by seconds.
-        ServiceItemTagCache();
-        return _itemAddresses.ContainsKey(itemObjectId);
+        nint tagAddress;
+        if (_memory.TryReadUInt32(address + 0x14, out uint standardId) && standardId == itemObjectId)
+        {
+            tagAddress = address + 0x28;
+        }
+        else if (_memory.TryReadUInt32(address + 0x04, out uint alternateId) && alternateId == itemObjectId)
+        {
+            tagAddress = address + 0x18;
+        }
+        else
+        {
+            address = 0;
+            return false;
+        }
+
+        _itemAddresses[itemObjectId] = address;
+        string liveTag = SanitiseResref(ReadExoString(tagAddress));
+        if (liveTag.Length > 0)
+        {
+            _itemTags[itemObjectId] = liveTag;
+        }
+        else
+        {
+            _itemTags.Remove(itemObjectId);
+        }
+
+        byte[] window = new byte[ItemIdentityLayout.WindowLength];
+        if (!_memory.TryRead(address + ItemIdentityLayout.WindowStart, window))
+        {
+            address = 0;
+            return false;
+        }
+
+        identity = ItemIdentityLayout.Decode(window);
+        if (!identity.IsKnown)
+        {
+            address = 0;
+            return false;
+        }
+
+        if (TryGetSpawnedItemResrefForCurrentWorld(itemObjectId, out string spawned))
+        {
+            resref = spawned;
+        }
+        else if (liveTag.Length > 0)
+        {
+            resref = liveTag;
+        }
+        else
+        {
+            TryGetSpawnedItemResref(itemObjectId, out resref);
+        }
+
+        return identity.IsKnown;
     }
 
     /// <summary>
@@ -404,37 +483,18 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        if (!EnsureItemKnown(itemObjectId, force) || !_itemAddresses.TryGetValue(itemObjectId, out nint address))
+        if (force)
         {
-            why = $"no item body with id 0x{itemObjectId:X} in this process ({LastItemScanNote})";
-            return false;
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            RebuildItemTagCacheNow();
         }
 
-        // Re-checked HERE rather than trusted from the sweep: an item picked up and merged
-        // into a stack the picker already carried really is freed, and its memory reused (the
-        // same hazard Odyssey.GetItemFloorState documents). A stale address costs a false
-        // "unknown", never a bad write.
-        bool vtableRead = _memory.TryReadUInt32(address, out uint vtable);
-        bool idRead = _memory.TryReadUInt32(address + 0x14, out uint id);
-
-        if (!vtableRead || vtable != ItemVtable || !idRead || id != itemObjectId)
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray)
+            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out _, out identity))
         {
-            _itemAddresses.Remove(itemObjectId);
-            _itemTags.Remove(itemObjectId);
-            why = $"0x{itemObjectId:X} was at 0x{address:X}, which now reads vtable 0x{vtable:X} "
-                + $"id 0x{id:X} — the item was freed and its memory reused";
+            why = $"no live item body with id 0x{itemObjectId:X} resolves in this process ({LastItemScanNote})";
             return false;
         }
-
-        byte[] window = new byte[ItemIdentityLayout.WindowLength];
-        if (!_memory.TryRead(address + ItemIdentityLayout.WindowStart, window))
-        {
-            why = $"could not read 0x{address + ItemIdentityLayout.WindowStart:X}"
-                + $"..+0x{ItemIdentityLayout.WindowLength:X}";
-            return false;
-        }
-
-        identity = ItemIdentityLayout.Decode(window);
         why = string.Empty;
         return identity.IsKnown;
     }
@@ -442,7 +502,7 @@ public sealed partial class KotorGameBridge
     /// <summary>The blueprint resref of a live item, if the tag scan has seen it. Empty when
     /// it has not — the caller must not invent one.</summary>
     public string ItemResref(uint itemObjectId) =>
-        _itemTags.TryGetValue(itemObjectId, out string? tag) ? tag : string.Empty;
+        TryGetItemResref(itemObjectId, out string resref) ? resref : string.Empty;
 
     /// <summary>
     /// The blueprint resref of a live item, sweeping for it if the caches have not seen it.
@@ -479,6 +539,24 @@ public sealed partial class KotorGameBridge
 
     public bool TryGetItemResref(uint itemObjectId, out string resref, bool force = false)
     {
+        resref = string.Empty;
+        if (itemObjectId is 0 or >= 0x7F000000)
+        {
+            return false;
+        }
+
+        if (force)
+        {
+            _itemTagsBuiltAtMs = Environment.TickCount64;
+            RebuildItemTagCacheNow();
+        }
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray)
+            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out resref, out _))
+        {
+            return false;
+        }
+
         // The REAL blueprint resref, when we happen to know it: an item this session itself
         // told the plugin to spawn onto the floor (KotorGameBridge.GroundItems.cs's
         // _spawnedItemResrefs, learned in CollectVanishedItems the moment the slot first
@@ -489,28 +567,13 @@ public sealed partial class KotorGameBridge
         // live-confirmed `k_computer_spike` / `g_i_progspike01`), while this fact came from a
         // write WE made, never from an inference. "Keep Tag as a fallback only when the resref
         // is empty" is exactly this ordering.
-        if (_spawnedItemResrefs.TryGetValue(itemObjectId, out string? spawned))
+        if (TryGetSpawnedItemResrefForCurrentWorld(itemObjectId, out string spawned))
         {
             resref = spawned;
             return true;
         }
 
-        if (_itemTags.TryGetValue(itemObjectId, out string? cached))
-        {
-            resref = cached;
-            return true;
-        }
-
-        EnsureItemKnown(itemObjectId, force);
-
-        if (_itemTags.TryGetValue(itemObjectId, out string? tag))
-        {
-            resref = tag;
-            return true;
-        }
-
-        // Last resort, and the only one that works for a body WE asked the plugin to make.
-        return TryGetSpawnedItemResref(itemObjectId, out resref);
+        return resref.Length > 0;
     }
 
     /// <summary>
@@ -537,8 +600,18 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
+        if (!TryReadWorldLoadSerial(out uint worldSerial))
+        {
+            return false;
+        }
+
         for (int i = 0; i < BlockItemCapacity; i++)
         {
+            if (_itemSlotIds[i] == 0 || _itemSlotWorldSerial[i] != worldSerial)
+            {
+                continue;
+            }
+
             nint status = _pluginBlock + BlockItemStatus + (i * BlockItemStatusStride);
 
             if (!_memory.TryReadUInt32(status + 0x08, out uint state) || state != ItemStateAlive
@@ -622,9 +695,8 @@ public sealed partial class KotorGameBridge
     /// the game's committed memory was landing between two position writes: the pump ran at
     /// 12-17 Hz instead of 30 with individual ticks of 500-670 ms, and both players saw the
     /// other's avatar freeze and then dash. That is the same failure
-    /// <see cref="EnsureItemKnown"/>'s own rate limit was added for ("a sweep of the game's
-    /// committed memory per miss per tick once dropped the pump to about 4 Hz") — this method
-    /// simply was not honouring it.
+    /// scan cadence exists because repeated committed-memory sweeps per miss once dropped the
+    /// pump to about 4 Hz — this method now uses the same throttled cache service.
     ///
     /// So: an INTERACTIVE caller (the console's <c>items</c> verb, where a human is waiting and
     /// wants the truth as of now) forces. A PUMP caller does not, and gets a view at most
@@ -643,26 +715,32 @@ public sealed partial class KotorGameBridge
             ServiceItemTagCache();
         }
 
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            return [];
+        }
+
+        return ListItemsFromCurrentArray(objectArray);
+    }
+
+    private IReadOnlyList<ItemListing> ListItemsFromCurrentArray(nint objectArray)
+    {
         List<ItemListing> listings = new(_itemAddresses.Count);
 
         // ⚠ Iterate a SNAPSHOT. TryReadItemIdentity evicts an address whose vtable or id no
         // longer matches — which is the right thing for it to do, and would throw here if the
         // loop were walking the dictionary itself.
-        foreach ((uint objectId, nint address) in _itemAddresses.ToArray())
+        foreach (uint objectId in _itemAddresses.Keys.ToArray())
         {
-            if (!TryReadItemIdentity(objectId, out ItemIdentity identity, out _, force: false))
+            if (!TryReadLiveItemMetadata(objectId, objectArray, out nint liveAddress,
+                    out string resref, out ItemIdentity identity))
             {
                 continue;
             }
 
-            uint possessor = _memory.TryReadUInt32(address + ItemPossessor, out uint holder)
+            uint possessor = _memory.TryReadUInt32(liveAddress + ItemPossessor, out uint holder)
                 ? holder
                 : ObjectInvalid;
-
-            // The spawn-record fallback too, so a body the plugin made for us shows the
-            // blueprint it was made from rather than "<no tag>" — that name is the one thing
-            // a re-drop needs, and the listing is where the operator picks a target.
-            TryGetItemResref(objectId, out string resref);
 
             listings.Add(new ItemListing(objectId, resref, possessor, identity));
         }
@@ -730,11 +808,17 @@ public sealed partial class KotorGameBridge
         // array once per read and do one bounded bucket lookup per candidate; this avoids a
         // second full-memory scan and closes the gap between a cached vtable hit and its use.
         bool serverArrayResolved = EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray);
+        if (!serverArrayResolved)
+        {
+            LastPossessedItemReadWasComplete = false;
+            return [];
+        }
 
         // force: false — this runs on the agent's pump thread, between two position writes.
         // See ListItems(bool)'s own remarks for the measured cost of the sweep this declines
         // to trigger.
-        foreach (ItemListing item in ListItems(force: false))
+        ServiceItemTagCache();
+        foreach (ItemListing item in ListItemsFromCurrentArray(objectArray))
         {
             bool isPartyPoolItem = poolIds is not null && poolIds.Contains(item.ObjectId);
 
@@ -747,14 +831,6 @@ public sealed partial class KotorGameBridge
             // scan is NPC/party inventory and cannot enter this result anyway.
             if (!possessorIds.Contains(item.Possessor)
                 && !isPartyPoolItem)
-            {
-                continue;
-            }
-
-            if (!serverArrayResolved
-                || !_itemAddresses.TryGetValue(item.ObjectId, out nint scannedAddress)
-                || !EngineGlobals.TryResolveServerObject(_memory, objectArray, item.ObjectId, out nint serverAddress)
-                || !IsLiveServerItem(serverArrayResolved, scannedAddress, serverAddress))
             {
                 continue;
             }

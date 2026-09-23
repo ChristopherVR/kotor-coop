@@ -295,6 +295,14 @@ public sealed partial class KotorGameBridge
             return _partyPoolEverScanned;
         }
 
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            LastPartyPoolScanWasStale = true;
+            LastPartyPoolScanNote = "party pool: server object array unavailable";
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
         _nextPartyPoolScanTicks = now + PartyPoolScanIntervalMs;
 
         nint partyTable = serverInternal + PartyTableOffset;
@@ -305,6 +313,14 @@ public sealed partial class KotorGameBridge
             // empty pool, not a read failure. CSWPartyTable::GetPartyItems constructs the
             // repository lazily on first use; reading a null pointer here is the honest,
             // ordinary "nothing in it yet" case, not a resolve failure.
+            if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint emptyArray) || emptyArray != objectArray)
+            {
+                LastPartyPoolScanWasStale = true;
+                LastPartyPoolScanNote = "party pool: server object array changed before empty scan";
+                totals = _partyPoolLastScan;
+                return _partyPoolEverScanned;
+            }
+
             NotePartyPoolWorldSwept();
             return PublishPartyPoolScan([], out totals);
         }
@@ -321,8 +337,6 @@ public sealed partial class KotorGameBridge
 
         Dictionary<PartyPoolStackKey, int> raw = [];
         int unresolved = 0;
-        bool forcedRebuild = false;
-
         for (int i = 0; i < count; i++)
         {
             if (!_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId)
@@ -338,28 +352,12 @@ public sealed partial class KotorGameBridge
             // at once and the resulting EMPTY aggregate was published as "the shared stash is
             // empty", emptying the other instance's pool.
             //
-            // One forced sweep per scan is spent trying to close the gap first: TryGetItemResref
-            // resolves an unknown id by rebuilding the item-tag cache, and EnsureItemKnown
-            // refuses to rebuild for ItemTagRebuildMs (15s) after the last one — so without the
-            // force, a pool whose bodies are newer than the last rebuild stays unreadable for a
-            // quarter of a minute. Bounded to once because the rebuild is a full item sweep.
-            if (!TryGetItemResref(itemId, out string resref) || resref.Length == 0)
-            {
-                if (!forcedRebuild)
-                {
-                    forcedRebuild = true;
-                    TryGetItemResref(itemId, out resref, force: true);
-                }
-
-                if (resref.Length == 0)
-                {
-                    unresolved++;
-                    continue;
-                }
-            }
-
-            if (!TryReadItemIdentity(itemId, out ItemIdentity identity) || !identity.IsKnown
-                || identity.StackSize == 0)
+            // Resolve the current body directly through the native object array. Do not spend
+            // a synchronous whole-heap scan on a persistent pool miss: that scan can stall the
+            // pump, and the authoritative ID resolver already provides the address needed to
+            // read this item's tag and identity.
+            if (!TryReadLiveItemMetadata(itemId, objectArray, out _, out string resref, out ItemIdentity identity)
+                || resref.Length == 0 || !identity.IsKnown || identity.StackSize == 0)
             {
                 unresolved++;
                 continue;
@@ -386,6 +384,14 @@ public sealed partial class KotorGameBridge
         if (!ItemAggregateScanRule.IsObservation(count, unresolved))
         {
             LastPartyPoolScanNote = ItemAggregateScanRule.Explain("party pool", count, unresolved);
+            LastPartyPoolScanWasStale = true;
+            totals = _partyPoolLastScan;
+            return _partyPoolEverScanned;
+        }
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint finalArray) || finalArray != objectArray)
+        {
+            LastPartyPoolScanNote = "party pool: server object array changed during scan";
             LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;

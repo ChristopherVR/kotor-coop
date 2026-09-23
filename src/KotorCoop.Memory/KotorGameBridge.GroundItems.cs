@@ -16,6 +16,10 @@ public sealed partial class KotorGameBridge
     /// alive, before the item is ever picked up.</summary>
     private readonly string?[] _itemSlotResrefs = new string?[BlockItemCapacity];
 
+    /// <summary>The world generation that owns each slot declaration. Shared-block status
+    /// survives reload windows; never use a still-Alive old slot to name a reused object ID.</summary>
+    private readonly uint[] _itemSlotWorldSerial = new uint[BlockItemCapacity];
+
     /// <summary>
     /// objectId -&gt; the REAL blueprint resref, for every ground-item body this session itself
     /// asked the plugin to spawn — learned in <see cref="CollectVanishedItems"/> the moment a
@@ -32,11 +36,13 @@ public sealed partial class KotorGameBridge
     /// stale entry surviving a module change would be actively WRONG rather than merely
     /// uninformative — worse than the Tag fallback it exists to improve on.
     /// </summary>
-    private readonly Dictionary<uint, string> _spawnedItemResrefs = [];
+    private readonly Dictionary<uint, SpawnedItemResref> _spawnedItemResrefs = [];
+
+    private readonly record struct SpawnedItemResref(string Resref, uint WorldSerial);
 
     /// <summary>Insertion order for <see cref="_spawnedItemResrefs"/>, so it can be trimmed
     /// FIFO rather than growing without bound across a very long session.</summary>
-    private readonly Queue<uint> _spawnedItemResrefOrder = new();
+    private readonly Queue<(uint ObjectId, uint WorldSerial)> _spawnedItemResrefOrder = new();
 
     /// <summary>Generous past anything one session's ground-item churn produces (mirrors the
     /// reasoning behind <see cref="ItemScanLimit"/>): the cost of raising it is bounded, so this
@@ -50,18 +56,34 @@ public sealed partial class KotorGameBridge
     /// (<see cref="CollectVanishedItems"/>, <see cref="DrainItemTemplateSpawns"/>).</summary>
     internal void RememberSpawnedItemResref(uint objectId, string resref)
     {
-        if (objectId is 0 or ObjectInvalid || resref.Length == 0
-            || _spawnedItemResrefs.ContainsKey(objectId))
+        if (objectId is 0 or ObjectInvalid || resref.Length == 0)
         {
             return;
         }
 
-        _spawnedItemResrefs[objectId] = resref;
-        _spawnedItemResrefOrder.Enqueue(objectId);
+        uint worldSerial = 0;
+        if (_pluginBlock != 0 && !TryReadWorldLoadSerial(out worldSerial))
+        {
+            return;
+        }
+
+        if (_spawnedItemResrefs.TryGetValue(objectId, out SpawnedItemResref previous)
+            && previous.WorldSerial == worldSerial)
+        {
+            return;
+        }
+
+        _spawnedItemResrefs[objectId] = new SpawnedItemResref(resref, worldSerial);
+        _spawnedItemResrefOrder.Enqueue((objectId, worldSerial));
 
         while (_spawnedItemResrefOrder.Count > SpawnedItemResrefCacheCapacity)
         {
-            _spawnedItemResrefs.Remove(_spawnedItemResrefOrder.Dequeue());
+            (uint expiredId, uint expiredWorld) = _spawnedItemResrefOrder.Dequeue();
+            if (_spawnedItemResrefs.TryGetValue(expiredId, out SpawnedItemResref current)
+                && current.WorldSerial == expiredWorld)
+            {
+                _spawnedItemResrefs.Remove(expiredId);
+            }
         }
     }
 
@@ -70,6 +92,32 @@ public sealed partial class KotorGameBridge
     /// NOT) recorded without going through <see cref="TryGetItemResref"/> — which, on a miss,
     /// falls through to a real memory sweep this seam lets a test avoid entirely.</summary>
     internal bool HasSpawnedItemResref(uint objectId) => _spawnedItemResrefs.ContainsKey(objectId);
+
+    internal static bool IsSpawnedItemResrefCurrentWorld(uint recordedSerial, uint currentSerial) =>
+        recordedSerial == currentSerial;
+
+    internal bool TryGetSpawnedItemResrefForCurrentWorld(uint objectId, out string resref)
+    {
+        resref = string.Empty;
+        if (!_spawnedItemResrefs.TryGetValue(objectId, out SpawnedItemResref known))
+        {
+            return false;
+        }
+
+        uint currentSerial = 0;
+        if (_pluginBlock != 0 && !TryReadWorldLoadSerial(out currentSerial))
+        {
+            return false;
+        }
+
+        if (!IsSpawnedItemResrefCurrentWorld(known.WorldSerial, currentSerial))
+        {
+            return false;
+        }
+
+        resref = known.Resref;
+        return resref.Length > 0;
+    }
 
     /// <summary>Drops every learned (object id -&gt; resref) fact. Called on module change,
     /// alongside the tag/address caches — see this field's own remarks on why a stale entry
@@ -92,6 +140,11 @@ public sealed partial class KotorGameBridge
     public bool TryWriteGroundItems(IReadOnlyList<GroundItem> items)
     {
         if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        if (!TryReadWorldLoadSerial(out uint currentWorldSerial))
         {
             return false;
         }
@@ -131,6 +184,7 @@ public sealed partial class KotorGameBridge
             {
                 _itemSlotIds[i] = 0;
                 _itemSlotResrefs[i] = null;
+                _itemSlotWorldSerial[i] = 0;
             }
         }
 
@@ -147,6 +201,24 @@ public sealed partial class KotorGameBridge
             int assigned = FindItemSlot(item.ItemId);
             if (assigned >= 0)
             {
+                if (_itemSlotWorldSerial[assigned] != currentWorldSerial)
+                {
+                    // A slot declared in the prior world can still say Alive while the
+                    // engine is replacing objects. Withdraw it and wait for the native slot
+                    // state to clear; never relabel its old body as belonging to this world.
+                    ok &= _memory.TryWrite(
+                        _pluginBlock + BlockItemSlots + (assigned * BlockItemSlotStride), 0u);
+                    if (ReadItemState(assigned) == ItemStateNone)
+                    {
+                        _itemSlotIds[assigned] = 0;
+                        _itemSlotResrefs[assigned] = null;
+                        _itemSlotWorldSerial[assigned] = 0;
+                    }
+
+                    ok = false;
+                    continue;
+                }
+
                 // Already published. Its identity can still have been LEARNED since — the
                 // store merges one upward whenever a better-informed announcement arrives —
                 // so keep the slot current. The plugin only reads identity when it spawns a
@@ -188,6 +260,7 @@ public sealed partial class KotorGameBridge
 
             _itemSlotIds[free] = item.ItemId;
             _itemSlotResrefs[free] = item.Resref;
+            _itemSlotWorldSerial[free] = currentWorldSerial;
         }
 
         return ok;
@@ -207,9 +280,14 @@ public sealed partial class KotorGameBridge
             return vanished;
         }
 
+        if (!TryReadWorldLoadSerial(out uint currentWorldSerial))
+        {
+            return vanished;
+        }
+
         for (int i = 0; i < BlockItemCapacity; i++)
         {
-            if (_itemSlotIds[i] == 0)
+            if (_itemSlotIds[i] == 0 || _itemSlotWorldSerial[i] != currentWorldSerial)
             {
                 continue;
             }
@@ -232,7 +310,8 @@ public sealed partial class KotorGameBridge
             // deliberately outlives that transition instead.
             if (state == ItemStateAlive
                 && _memory.TryReadUInt32(status + 0x04, out uint objectId)
-                && objectId != 0 && _itemSlotResrefs[i] is { Length: > 0 } resref)
+                && objectId != 0
+                && _itemSlotResrefs[i] is { Length: > 0 } resref)
             {
                 RememberSpawnedItemResref(objectId, resref);
             }
