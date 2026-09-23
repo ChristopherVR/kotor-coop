@@ -359,12 +359,44 @@ the native request was submitted; it does not claim the skill succeeded, the tri
 on both peers, or that exactly one item reached the appropriate peer inventory/pool. It never
 grants an item or destroys a trigger directly.
 
-The pure request/rule suite passed 20 tests, and the root's native build completed with
-warnings-as-errors. The build has **not** been deployed or exercised live yet. The next live
-check should use a real disarmable GIT mine and an actor with a legitimate Demolitions rank,
-then confirm: retail skill success/failure; host/client trigger removal; the actual repository
-receiving the expected `traps.2da` recovery item; and exactly one corresponding item in the
-peer's correct inventory or party pool. Existing untrained test characters can prove refusal
-and skill-failure behavior only; do not raise Demolitions or grant a trapkit just to manufacture
-a success case.
+The pure request/rule suite passed 20 tests, and the native build completed with
+warnings-as-errors. The diagnostic was deployed. Both engines safely refused a non-mine target,
+and a real recovery and disarm request were submitted; the “queued” response records submission,
+not skill success. See §13 for the bounded outcomes and the unresolved positive-result test.
+
+## 13. Recovery/disarm live attempts and candidate audit (2026-09-23)
+
+The deployed diagnostic was exercised against the installed GOG campaign. A recruited Canderous
+with Demolitions rank 2 attempted `mineaction recover 0x71` on `tar_m10aa` at 11:42:06. The mine
+was absent in the later save and his HP remained 50, but no trapkit delta was found in the shared
+pool or available-NPC inventory. This does **not** prove recovery succeeded: the mine is
+`g_t_trap010.utt` (`TrapType=9`, `DisarmDC=20`, recoverable), `traps.2da` row 9 is
+`TRAP_POISON_GAS_MINOR` with recovery item `g_i_trapkit010`, and recovery checks
+`DisarmDC + 10` (30). Rank 2 cannot meet that DC even with the maximum d20 result (22). The
+poison hazard may remove the mine without direct HP loss, so mine disappearance plus unchanged
+HP is not a success signal. The exact disposition of any reward remains unobserved.
+
+A separate `mineaction disarm 0x74` attempt removed that mine, but Canderous's saved HP fell
+from 50 to 32. This is consistent with a failed roll/detonation; it is not evidence of a
+successful disarm. Ordinary disarm has no recovery-item reward. Neither attempt had a peer
+connected, so neither establishes co-op parity or exactly-once item delivery. No skill ranks,
+mine flags, or reward items were forced.
+
+An offline scan of installed campaign GIT/UTT resources found 106 disarmable placed mines among
+117 module areas. The `DisarmDC` value used by the native check is loaded from the mine's
+`traps.2da` row into trigger `+0x2DC` (`CSWSTrigger::LoadTrigger`, 0x0058E181–0x0058E18D).
+The scanned DCs are 20 (35 mines), 25 (41), and 30 (30); no mine has `DisarmDC <= 12`, the
+maximum row DC that Demolitions 2 could recover (row DC + 10). Therefore the currently staged
+rank-2 Canderous cannot provide a legitimate positive recovery test on any scanned GIT mine.
+Use an actor with naturally sufficient Demolitions to test successful recovery, then capture
+the actor's personal repository and shared pool before/after on both peers. A separate successful
+disarm check also needs a naturally qualified actor and a saved HP/trigger result that shows the
+roll succeeded without relying on disappearance alone.
+
+The native audit confirms `AIActionRecoverMine` creates the row's item and calls
+`CItemRepository::AddItem` on the recoverer's repository on success (0x005192D1–0x005192D8).
+The exact live repository delta and its transport remain unproved. Check `script_item_sync` for
+personal inventory and `party_pool_sync` for shared-pool changes; do not assume the reward belongs
+to either destination until a qualified live success identifies it. The diagnostic never grants
+the item or destroys a trigger directly.
 
