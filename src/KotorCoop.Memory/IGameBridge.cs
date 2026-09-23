@@ -641,6 +641,11 @@ public static class CheatKinds
     /// </summary>
     public const uint AddClass = 75;
 
+    /// <summary>Developer mine action: Text is operation|module, Target is a GIT mine ID,
+    /// and Amount carries the world-load serial as unchecked uint bits.
+    /// Uses the retail skill action, without manufacturing rewards or deleting the mine.</summary>
+    public const uint MineAction = 76;
+
     /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it

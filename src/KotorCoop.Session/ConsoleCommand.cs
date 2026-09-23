@@ -876,6 +876,10 @@ public enum CoopCommandKind
     /// before its "no player loaded" gate. Local only.
     /// </summary>
     Gamepad,
+
+    /// <summary>Developer diagnostic: request the retail recover/disarm action on a GIT mine.
+    /// Address holds the action; Amount holds the local server object ID. Local only.</summary>
+    MineAction,
 }
 
 /// <summary>
@@ -1070,6 +1074,7 @@ public static partial class ConsoleCommand
         new(["selectreply"], ParseSelectReply),
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),
+        new(["mineaction"], ParseMineAction),
         new(["scriptgive"], ParseScriptGive),
         new(["loottake"], ParseLootTake),
         new(["pooladd"], ParsePoolAdd),

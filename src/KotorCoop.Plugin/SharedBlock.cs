@@ -1323,4 +1323,14 @@ internal partial struct SharedBlock
     /// ⚠ 75, next free after 74 as of 2026-09-18.
     /// </summary>
     public const uint CheatKindAddClass = 75;
+
+    /// <summary>
+    /// Developer diagnostic: asks the retail client action-menu callback to recover or
+    /// disarm a deterministic GIT mine named by <see cref="OffsetCheatTarget"/>. The
+    /// text is <c>recover|module</c> or <c>disarm|module</c>, with the captured world-load
+    /// serial carried in CheatAmount. Both must still match when executed. The
+    /// engine's own range check, Demolitions roll, mine removal, and recovery reward decide
+    /// the outcome. Party-placed mines are refused. Local only.
+    /// </summary>
+    public const uint CheatKindMineAction = 76;
 }
