@@ -108,7 +108,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// side only ever needs to watch itself for its OWN save/load edge, same as phase 1.
     /// </summary>
     public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint loadSerialNow, long nowMs) =>
-        ObserveOwnVerdict(digestNow, (uint?)loadSerialNow, nowMs);
+        ObserveOwnVerdict(digestNow, (uint?)loadSerialNow, nowMs, out _);
 
     /// <summary>
     /// The form the dispatcher feeds: <paramref name="loadSerialNow"/> is null on a tick the
@@ -124,17 +124,25 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// is still there on the next readable tick, and observing it alone would leave a pending
     /// Save the returning serial could then wrongly upgrade.
     /// </summary>
-    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint? loadSerialNow, long nowMs)
+    public SaveOrLoadVerdict ObserveOwnVerdict(uint digestNow, uint? loadSerialNow, long nowMs) =>
+        ObserveOwnVerdict(digestNow, loadSerialNow, nowMs, out _);
+
+    /// <summary>Like the regular classifier, with the raw serial edge surfaced separately.
+    /// The mismatch recovery rule needs the edge even when the digest change is still pending
+    /// inside <see cref="SaveOrLoadClassifier.DefaultCorrelationWindowMs"/>.</summary>
+    public SaveOrLoadVerdict ObserveOwnVerdict(
+        uint digestNow, uint? loadSerialNow, long nowMs, out bool loadEdge)
     {
         lock (_ownVerdictGate)
         {
             if (loadSerialNow is null)
             {
+                loadEdge = false;
                 return SaveOrLoadVerdict.None;
             }
 
             (_ownClassifyWatch, bool digestChanged) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
-            (_ownLoadWatch, bool loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow.Value);
+            (_ownLoadWatch, loadEdge) = SerialEdgeWatch.Observe(_ownLoadWatch, loadSerialNow.Value);
             return _ownClassifier.Observe(nowMs, loadEdge, digestChanged);
         }
     }

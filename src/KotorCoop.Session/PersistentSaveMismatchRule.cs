@@ -8,7 +8,8 @@ namespace KotorCoop.Session;
 /// against (<see cref="KotorCoop.Protocol.WorldDigest.SaveIdentity"/>; a new world starts the
 /// count over).</summary>
 public readonly record struct MismatchRejoinWatchState(
-    bool WasMismatched, long? LastAttemptAtMs, int Attempts = 0, uint HostWorldKey = 0)
+    bool WasMismatched, long? LastAttemptAtMs, int Attempts = 0, uint HostWorldKey = 0,
+    long? RecentLoadEdgeAtMs = null, bool LoadAuthorizedEpisode = false)
 {
     public static MismatchRejoinWatchState Initial => new(false, null);
 
@@ -18,43 +19,13 @@ public readonly record struct MismatchRejoinWatchState(
 }
 
 /// <summary>
-/// Closes the gap <c>client_load_rejoin</c> (<see cref="ClientLoadRejoinRule"/>) left open,
-/// found live (docs/research/party-reconciliation.md's "Attempted... two simultaneous
-/// releases" entry): a debug-cheat cross-module warp (<c>tools/blockpoke.ps1 travel</c>, and
-/// anything else that moves the engine to a new module without going through a real Save/Load)
-/// bumps the LIVE world-load serial (<c>WorldLoadRule.IsUnannouncedTeardown</c> sees no
-/// <c>trans_pending</c> precursor, exactly like a real Load Game) but writes NOTHING to disk —
-/// <c>SaveDigest.TryComputeSaveIdentity</c> hashes the STAGED SAVE FILE
-/// (<c>SaveDigestCache.RefreshSaveIfStale</c> only re-stats and recomputes when that file's
-/// length/write-time actually changes), and a debug warp never touches it. The result: the two
-/// peers' <see cref="KotorCoop.Protocol.WorldDigest.SaveIdentity"/> values can go on disagreeing
-/// indefinitely (<c>ContentCompatibility.ApplyWorldMismatch</c> correctly keeps reporting
-/// <see cref="KotorCoop.Protocol.CompatibilityCode.Save"/>, dropping party/enemies/doors/items —
-/// this half is not a bug) while NEITHER of <see cref="RejoinTrigger.OwnLoad"/> (needs the
-/// LOCAL digest to actually CHANGE — it never does) nor <see cref="RejoinTrigger.HostReload"/>
-/// (needs the HOST's own reported digest to change — same problem on that side) ever produces
-/// the EDGE <see cref="SaveOrLoadClassifier"/> requires to fire. The player-facing line
-/// ("...rejoin to adopt the host's world and get them back") describes a corrective action that,
-/// for exactly this class of mismatch, nothing was ever wired to actually take.
-///
-/// THE FIX IS NOT A NEW DIGEST SOURCE. <c>SessionManager.RejoinAfterLoadAsync</c> already fetches
-/// the host's world and overwrites the client's own staged save with it — a REAL disk write,
-/// which (once it lands) gives <see cref="KotorCoop.Memory.SaveDigestCache"/> a changed file stamp
-/// and a freshly matching digest, closing the mismatch for real, not just retrying the same
-/// stale comparison. The only missing piece was a trigger that watches the COMPARISON'S OWN
-/// verdict — a LEVEL, the same "say it every tick, not just once" reasoning
-/// <c>PartyRosterController</c>'s own header already argues for a structurally identical problem
-/// — instead of requiring an edge on a signal a debug warp never produces.
-///
-/// Deliberately NOT edge-only: <see cref="RetryIntervalMs"/> re-triggers a still-mismatched
-/// condition even after one attempt already ran and finished (success or failure), because a
-/// single failed rejoin (a dropped packet, a momentarily busy host) must not mean this gate goes
-/// back to being permanently stuck exactly the way the bug it fixes did. Deliberately NOT
-/// hammering either: a rejoin already <see cref="RejoinPhase.InFlight"/> is never restarted (the
-/// caller checks that independently, same as every other <see cref="RejoinTrigger"/>), and a
-/// freshly-started attempt is not retried again until the cooldown elapses even if it is still
-/// running past that point — <see cref="ClientLoadRejoinRule.Decide"/>'s own InFlight gate
-/// already swallows that call for free.
+/// Retries a save-identity mismatch only when a raw local or host world-load serial edge
+/// correlates with it. Ordinary saves can make the compared identities differ while both
+/// peers remain in the same loaded world; automatically adopting the host's newest disk save
+/// in that case can replace a valid live world with unrelated progress. A load edge is retained
+/// for <see cref="LoadCorrelationWindowMs"/> to allow the digest cache to catch up, then
+/// authorizes retries for that mismatch episode. Existing compatibility checks still decide
+/// whether the resulting worlds agree.
 /// </summary>
 public static class PersistentSaveMismatchRule
 {
@@ -78,6 +49,10 @@ public static class PersistentSaveMismatchRule
     /// </summary>
     public const int MaxAttemptsPerWorld = 5;
 
+    /// <summary>A load edge may precede the save digest update while the cache catches up.
+    /// Only a mismatch observed in this correlation window can authorize automatic adoption.</summary>
+    public const long LoadCorrelationWindowMs = SaveOrLoadClassifier.DefaultCorrelationWindowMs;
+
     /// <summary>The wait before attempt number <paramref name="attemptsSoFar"/> + 1:
     /// <see cref="RetryIntervalMs"/> doubled per attempt already made (20 s, 40 s, 80 s, 160 s),
     /// never less than the base interval.</summary>
@@ -89,16 +64,35 @@ public static class PersistentSaveMismatchRule
     /// unknown): the per-world scope of the attempt cap. A change resets the count, since the
     /// attempts made against the old world say nothing about the new one.</param>
     public static (bool ShouldTrigger, MismatchRejoinWatchState Next) Observe(
-        MismatchRejoinWatchState current, bool mismatchedNow, bool rejoinInFlight, long nowMs, uint hostWorldKey = 0)
+        MismatchRejoinWatchState current, bool mismatchedNow, bool rejoinInFlight, long nowMs,
+        uint hostWorldKey = 0, bool loadEdge = false)
     {
+        long? recentLoadEdgeAtMs = loadEdge ? nowMs : current.RecentLoadEdgeAtMs;
+        bool recentLoadEdge = recentLoadEdgeAtMs is { } edgeAt
+            && nowMs >= edgeAt && nowMs - edgeAt <= LoadCorrelationWindowMs;
+
         if (!mismatchedNow)
         {
             // Clean now — whether it just healed or was never wrong, there is nothing to
             // retry, and the next mismatch (whenever it starts) must read as a fresh edge
             // rather than reusing a stale cooldown from an unrelated earlier episode. This is
             // also the "reset on success" of the attempt cap.
-            return (false, MismatchRejoinWatchState.Initial);
+            // A pending edge observed before any mismatch may still correlate with a digest
+            // that is catching up. Once an authorized mismatch episode heals, consume that
+            // edge so a later ordinary save cannot reuse it as authority.
+            bool healedEpisode = current.WasMismatched || current.LoadAuthorizedEpisode;
+            long? pendingEdge = loadEdge
+                ? recentLoadEdgeAtMs
+                : !healedEpisode && recentLoadEdge ? recentLoadEdgeAtMs : null;
+            return (false, MismatchRejoinWatchState.Initial with { RecentLoadEdgeAtMs = pendingEdge });
         }
+
+        bool loadAuthorizedEpisode = current.LoadAuthorizedEpisode || recentLoadEdge;
+        current = current with
+        {
+            RecentLoadEdgeAtMs = recentLoadEdge ? recentLoadEdgeAtMs : null,
+            LoadAuthorizedEpisode = loadAuthorizedEpisode,
+        };
 
         if (rejoinInFlight)
         {
@@ -112,7 +106,17 @@ public static class PersistentSaveMismatchRule
         {
             // A different host world: whatever was tried against the old one does not count,
             // and a mismatch against the new one is a fresh edge.
-            current = new MismatchRejoinWatchState(false, null, 0, hostWorldKey);
+            current = new MismatchRejoinWatchState(false, null, 0, hostWorldKey,
+                current.RecentLoadEdgeAtMs, loadAuthorizedEpisode);
+        }
+
+        // A save-identity mismatch by itself is not evidence that either loaded world changed.
+        // In particular, two ordinary saves can diverge while both players remain in the
+        // same in-memory world. Keep observing the level, but only a nearby raw load edge may
+        // make this mismatch episode eligible for automatic adoption.
+        if (!loadAuthorizedEpisode)
+        {
+            return (false, current with { WasMismatched = true });
         }
 
         if (current.Attempts >= MaxAttemptsPerWorld)
@@ -126,7 +130,9 @@ public static class PersistentSaveMismatchRule
 
         if (isNewEdge || cooldownElapsed)
         {
-            return (true, new MismatchRejoinWatchState(true, nowMs, current.Attempts + 1, hostWorldKey));
+            return (true, new MismatchRejoinWatchState(
+                true, nowMs, current.Attempts + 1, hostWorldKey,
+                current.RecentLoadEdgeAtMs, LoadAuthorizedEpisode: true));
         }
 
         return (false, current with { WasMismatched = true });

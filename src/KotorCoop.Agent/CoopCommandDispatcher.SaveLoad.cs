@@ -503,7 +503,8 @@ public sealed partial class CoopCommandDispatcher
                 }
             }
 
-            SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(digest, loadSerial, nowMs);
+            SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(
+                digest, loadSerial, nowMs, out bool ownLoadEdge);
             WorldDigest hostDigest = client.RemoteWorldDigest;
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
                 hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs, out bool hostLoadEdge);
@@ -575,6 +576,28 @@ public sealed partial class CoopCommandDispatcher
                 HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge, hostState);
             _hostWorldReplacedState = nextReplacedState;
 
+            // Preserve the raw edge even when a higher-priority rule owns this tick's rejoin.
+            // Otherwise OwnLoad/HostReload consumes the edge before the mismatch fallback can
+            // correlate it. If both rules select recovery this tick, the earlier branch owns
+            // the action and the mismatch rule's attempt is recorded for its later backoff.
+            bool saveMismatchNow = client.Compatibility?.Notes
+                .Any(n => n.Code == CompatibilityCode.Save) ?? false;
+            bool isNewCharacterCapture = bridge.TryGetNewCharacterCapture(
+                    out uint mismatchChargenState, out _, out _)
+                && mismatchChargenState is ChargenStateArmed or ChargenStateSaving;
+            bool mismatchShouldTrigger = false;
+            MismatchRejoinWatchState mismatchStateForTick = _mismatchRejoinState;
+            if (!isNewCharacterCapture)
+            {
+                (mismatchShouldTrigger, mismatchStateForTick) = PersistentSaveMismatchRule.Observe(
+                    _mismatchRejoinState, saveMismatchNow,
+                    _rejoinState.Phase == RejoinPhase.InFlight,
+                    nowMs,
+                    hostWorldKey: client.RemoteWorldDigest.SaveIdentity,
+                    loadEdge: ownLoadEdge || hostLoadEdge);
+                _mismatchRejoinState = mismatchStateForTick;
+            }
+
             if (ownVerdict == SaveOrLoadVerdict.Load)
             {
                 Reply("you loaded a save - rejoining the host's world");
@@ -609,8 +632,7 @@ public sealed partial class CoopCommandDispatcher
                     TriggerRejoin(RejoinTrigger.SoloReturn, session);
                 }
             }
-            else if (bridge.TryGetNewCharacterCapture(out uint chargenState, out _, out _)
-                && chargenState is ChargenStateArmed or ChargenStateSaving)
+            else if (isNewCharacterCapture)
             {
                 // ⚠ CRASHED LIVE 2026-09-10 (docs/research/world-adoption.md's addendum) before
                 // this guard existed: a first-time joiner's own freshly-created chargen module
@@ -633,30 +655,17 @@ public sealed partial class CoopCommandDispatcher
             }
             else
             {
-                // Neither classifier saw an EDGE this tick (a debug-cheat module warp never
-                // produces one on either side's digest). Watch the compared VERDICT itself
-                // instead — a level, not an edge — so a save mismatch that a real Load's
-                // edge-based triggers above will never see still gets the same self-heal
-                // action the "rejoin to adopt" message promises, rather than sitting degraded
-                // for the rest of the session.
-                bool saveMismatchNow = client.Compatibility?.Notes
-                    .Any(n => n.Code == CompatibilityCode.Save) ?? false;
-
-                (bool shouldTrigger, MismatchRejoinWatchState nextMismatchState) =
-                    PersistentSaveMismatchRule.Observe(
-                        _mismatchRejoinState, saveMismatchNow,
-                        _rejoinState.Phase == RejoinPhase.InFlight, nowMs,
-                        hostWorldKey: client.RemoteWorldDigest.SaveIdentity);
-                _mismatchRejoinState = nextMismatchState;
-
-                if (shouldTrigger)
+                // No higher-priority recovery owns this tick. The mismatch rule only permits
+                // adoption after a raw load edge was correlated with this mismatch; a plain
+                // save-identity divergence remains visible without replacing the loaded world.
+                if (mismatchShouldTrigger)
                 {
                     Reply(
                         $"your world still differs from the host's - rejoining automatically "
-                        + $"(attempt {nextMismatchState.Attempts} of {PersistentSaveMismatchRule.MaxAttemptsPerWorld})");
+                        + $"(attempt {mismatchStateForTick.Attempts} of {PersistentSaveMismatchRule.MaxAttemptsPerWorld})");
                     TriggerRejoin(RejoinTrigger.SaveMismatch, session);
                 }
-                else if (nextMismatchState.GaveUp && _rejoinState.Phase != RejoinPhase.InFlight)
+                else if (mismatchStateForTick.GaveUp && _rejoinState.Phase != RejoinPhase.InFlight)
                 {
                     if (!_mismatchGaveUpAnnounced)
                     {
@@ -667,7 +676,7 @@ public sealed partial class CoopCommandDispatcher
                         Log?.Invoke("session-save: SaveMismatch auto-rejoin capped for this host world");
                     }
                 }
-                else if (nextMismatchState.Attempts == 0)
+                else if (mismatchStateForTick.Attempts == 0)
                 {
                     _mismatchGaveUpAnnounced = false;
                 }

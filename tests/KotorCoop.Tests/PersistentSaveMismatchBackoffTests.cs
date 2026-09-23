@@ -9,8 +9,9 @@ namespace KotorCoop.Tests;
 /// cap, so a mismatch no fetch could heal re-ran the whole rejoin cycle every 20 s all
 /// session). Pins: the delay doubles per attempt, the fifth attempt is the last for one host
 /// world, healing resets the count, and a different host world starts over.
-/// <see cref="PersistentSaveMismatchRuleTests"/> still covers the edge/level behaviour, which
-/// is unchanged.
+/// <see cref="PersistentSaveMismatchRuleTests"/> covers the raw-load-edge eligibility added
+/// after live ordinary-save divergence proved that a save mismatch alone cannot authorize a
+/// world adoption.
 /// </summary>
 public sealed class PersistentSaveMismatchBackoffTests
 {
@@ -37,7 +38,8 @@ public sealed class PersistentSaveMismatchBackoffTests
 
         for (int i = 0; i < 20; i++)
         {
-            (bool trigger, state) = PersistentSaveMismatchRule.Observe(state, true, false, now, WorldA);
+            (bool trigger, state) = PersistentSaveMismatchRule.Observe(state, true, false, now, WorldA,
+                loadEdge: i == 0);
             if (trigger)
             {
                 attemptTimes.Add(now);
@@ -60,7 +62,8 @@ public sealed class PersistentSaveMismatchBackoffTests
     [Fact]
     public void AWaitShorterThanTheGrownDelayDoesNotRetry()
     {
-        MismatchRejoinWatchState afterTwo = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 2, HostWorldKey: WorldA);
+        MismatchRejoinWatchState afterTwo = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 2,
+            HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
         long notYet = 1000 + (2 * PersistentSaveMismatchRule.RetryIntervalMs) - 1;
 
         (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(afterTwo, true, false, notYet, WorldA);
@@ -72,13 +75,15 @@ public sealed class PersistentSaveMismatchBackoffTests
     [Fact]
     public void HealingResetsTheAttemptCount()
     {
-        MismatchRejoinWatchState capped = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 5, HostWorldKey: WorldA);
+        MismatchRejoinWatchState capped = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 5,
+            HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
 
         (_, MismatchRejoinWatchState healed) = PersistentSaveMismatchRule.Observe(capped, false, false, 2000, WorldA);
         Assert.Equal(0, healed.Attempts);
         Assert.False(healed.GaveUp);
 
-        (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(healed, true, false, 3000, WorldA);
+        (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(healed, true, false,
+            3000, WorldA, loadEdge: true);
         Assert.True(trigger);
         Assert.Equal(1, next.Attempts);
     }
@@ -86,7 +91,8 @@ public sealed class PersistentSaveMismatchBackoffTests
     [Fact]
     public void ADifferentHostWorldStartsTheCountOver()
     {
-        MismatchRejoinWatchState capped = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 5, HostWorldKey: WorldA);
+        MismatchRejoinWatchState capped = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 5,
+            HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
 
         (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(capped, true, false, 1001, WorldB);
 
@@ -98,7 +104,8 @@ public sealed class PersistentSaveMismatchBackoffTests
     [Fact]
     public void AnInFlightRejoinDoesNotCountAsAnAttempt()
     {
-        MismatchRejoinWatchState one = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 1, HostWorldKey: WorldA);
+        MismatchRejoinWatchState one = new(WasMismatched: true, LastAttemptAtMs: 1000, Attempts: 1,
+            HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
 
         (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(one, true, true, 999_999, WorldA);
 

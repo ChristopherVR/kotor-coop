@@ -243,6 +243,25 @@ public sealed class SessionSaveWatchTests : IDisposable
     }
 
     [Fact]
+    public void ObserveOwnVerdictExposesLoadEdgeWhileDigestSamplingLags()
+    {
+        SessionSaveWatch watch = new(".");
+        watch.ObserveOwnVerdict(0x1234, 1u, 0);
+
+        SaveOrLoadVerdict edgeOnly = watch.ObserveOwnVerdict(
+            0x1234, 2u, 100, out bool loadEdge);
+
+        Assert.Equal(SaveOrLoadVerdict.None, edgeOnly);
+        Assert.True(loadEdge);
+
+        SaveOrLoadVerdict delayedDigest = watch.ObserveOwnVerdict(
+            0x5678, 2u, 200, out bool secondEdge);
+
+        Assert.False(secondEdge);
+        Assert.Equal(SaveOrLoadVerdict.Load, delayedDigest);
+    }
+
+    [Fact]
     public void AdoptedWorldLoadBecomesNewBaselineButTheNextRealLoadStillClassifies()
     {
         SessionSaveWatch watch = new(gameDirectory: Path.GetTempPath());
