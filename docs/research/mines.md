@@ -310,3 +310,19 @@ is permanently omitted by the publisher. The off-switch test now actually writes
 All 27 mine tests pass, including both selection cursors and party-placed refusal. These checks
 do not replace a live busy-module test of slot consumption, and do not implement mine placement.
 
+## 11. Dynamic identity foundation (2026-09-23)
+
+`PartyPlacedMineIdentityMap` now provides a tested, currently unconsumed mapping from
+authoritative spawn serials to each engine's local object IDs. Every operation carries
+session-generation and world-epoch tokens. Scope changes clear both directions; retired
+serials cannot be resurrected. Registrations must arrive in increasing authority serial
+order, with idempotent repeats permitted only while the same mapping remains active.
+The 15-active-mine limit follows the retail party-placement cap; a scalar serial high-water
+mark avoids accumulating retirement tombstones. Ten focused tests pass, including stale
+events, local ID reuse, capacity, and different IDs for the same mine in two engines.
+
+This does not enable party-placed replication. The future transport must preserve spawn
+order and scope, and the native consumer must validate a live party-placed trigger before
+using a resolved ID. Main-thread creation, capture of the actual spawned identity, exactly
+one item consumption, recovery rewards, and single-authority damage still require proof.
+
