@@ -2291,3 +2291,40 @@ and the joiner reconnected to `danm13` at 10:51:42. This confirms the native men
 notice emission, control release and automatic rejoin path on the two-instance rig.
 It does not verify the visual placement of those notices or clicking the retail menu.
 Evidence: `agent1-sep23-recovery26.log` and `agent2-sep23-away26.log` in the live-log folder.
+
+
+### Selected older joiner save: exact-source live pass (2026-09-23)
+
+The 10:14 regression loaded `000026 - campaign_zhar_fixed_before_joiner` but recovered
+from the newer `000033 - zhar_joiner_before` after a refused quicksave. Those characters
+had different XP and Commandable values. `36599fc` binds character extraction to the
+selected folder and the combined SAVEGAME/SAVENFO/PARTYTABLE fingerprint, protects it
+from generic capture, and carries it authoritatively even with `join_mode = save`.
+
+The first checks26 repeat safely declined capture: the native wrapper tears down first,
+then calls the direct AUTOSAVE loader at the next world serial. `091c965` recognizes that
+specific downstream callback only when the staged bytes still match the pre-request
+snapshot, and requires the exact command acknowledgement and completed serial. The raw
+load episode plus that proof also handles unchanged or late save digests.
+
+On checks27, the joiner selected save 26 at 10:52:36 (request 6). At 10:52:39 the agent
+captured that exact folder, skipped the disconnect quicksave, adopted host identity
+`18AFC541` carrying the verified co-op character, and rejoined at 10:52:42. The captured
+PIFO was inspected before further gameplay: Yasuko Kaar, Experience 1000, Commandable 1.
+This matches selected save 26, not the newer 10801-XP checkpoint. Only one OwnLoad rejoin
+occurred. Logs: `agent2-sep23-recovery27.log` in the live-log folder.
+
+This proves the explicit `loadgame` path. Unsupported retail save-row provenance and a
+direct-directory request first observed after its request-time serial remain fail-closed;
+this pass does not claim automatic extraction from those sources or terminal-credits saves.
+
+
+### Two ordinary saves without a load (checks27, 2026-09-23)
+
+The host saved `000040 - zhar_joiner_walk_after_host` at 10:54:19 and the joiner saved
+`000039 - zhar_joiner_walk_after_client` at 10:54:20. At 10:54:21 the agent reported that
+the identity difference came from a save with no intervening load and kept the shared
+world. Neither log contains W_SAVE, W_GIT or a rejoin in the following minute; the
+joiner remained connected with zero reported liveness anomalies. This closes the
+ordinary two-save regression in `danm13`, not the earlier Leviathan mapping-specific
+re-adoption case.

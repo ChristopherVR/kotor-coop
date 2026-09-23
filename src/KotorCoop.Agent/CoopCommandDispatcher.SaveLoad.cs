@@ -1802,7 +1802,7 @@ public sealed partial class CoopCommandDispatcher
         if (_ownLoadVerdictPending || _skipNextDisconnectCapture || _ownLoadCaptureRequiresConfirmedSave)
         {
             _skipNextDisconnectCapture = false;
-            Log?.Invoke("character capture: skipped disconnect quicksave because no safe selected-save capture is available");
+            Log?.Invoke("character capture: selected-load character protection is active; skipped disconnect quicksave");
             return;
         }
 
