@@ -182,3 +182,20 @@ world-load serials (host generation 6 / serial 2; client generation 8 / serial 3
 This validates that replay path and its bounded native CExoString read. Ordinary retail
 selected-row/server-request capture and archive-fingerprint/baseline persistence still
 need their own validation; no HP persistence completion is claimed.
+
+### Baseline sidecar foundation (2026-09-23)
+
+`EnemyScalingBaselineDocument` and `EnemyScalingBaselineStore` now provide a bounded,
+strictly validated sidecar tied to the exact archive SHA-256 and selected save key.
+Records include module, object ID, tag, template, original maximum, and applied percentage.
+Selection also checks that the archived maximum agrees with that baseline and percentage.
+The store uses a flushed temporary file and atomic replacement, rejects changed archives,
+and bounds sidecar reads. Direct-directory loads retain their exact directory name with
+an explicit no-slot sentinel. Fifteen focused tests cover identity rejection, non-compounding
+arithmetic, native arithmetic parity, and persistence validation.
+
+This layer is not yet consumed by the save/load path or native scaling controller. Remaining
+integration: retain baseline metadata in the controller; capture only after a completed save;
+bind a successful load and its world epoch to the exact archive; preserve valid records for
+visited modules; and define current-health handling when percentages change. The default
+remains 100%, and scaled-save reload correctness is still open.
