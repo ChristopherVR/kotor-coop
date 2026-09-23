@@ -79,13 +79,14 @@ public static partial class PacketCodec
         w.WriteInt32(digest.InterpolationMs);
         w.WriteString(digest.FollowLead, MaxFollowLeadLength);
 
-        // Scheme 2 (protocol 53): the four player-count scaling SETTINGS, as int32 each — 0 is
+        // Scheme 3 (protocol 63): the five player-count scaling SETTINGS, as int32 each — 0 is
         // "auto", otherwise a percent (docs/research/player-count-scaling.md). Ints rather
         // than bytes so the range can widen without another scheme bump.
         w.WriteInt32(digest.EnemyHealth);
         w.WriteInt32(digest.EnemyDamage);
         w.WriteInt32(digest.XpRate);
         w.WriteInt32(digest.StoreStock);
+        w.WriteInt32(digest.StorePrices);
     }
 
     private static BehaviourDigest ReadBehaviourDigest(ref PacketReader r)
@@ -107,8 +108,9 @@ public static partial class PacketCodec
         int enemyDamage = r.ReadInt32();
         int xpRate = r.ReadInt32();
         int storeStock = r.ReadInt32();
+        int storePrices = r.ReadInt32();
 
-        return BehaviourDigest.FromFields(flags, interp, followLead, enemyHealth, enemyDamage, xpRate, storeStock);
+        return BehaviourDigest.FromFields(flags, interp, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }
 
     /// <summary>follow_lead is either "any" or "host" today (<see

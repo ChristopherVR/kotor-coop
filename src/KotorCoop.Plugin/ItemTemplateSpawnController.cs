@@ -6,8 +6,16 @@ namespace KotorCoop.Plugin;
 /// nothing on the agent side ever needs to hand one of these back to a plugin, unlike barks or
 /// peer effects, so there is no IN half to this channel.
 /// </summary>
-internal sealed unsafe class ItemTemplateSpawnController(SharedBlockView block)
+internal sealed unsafe class ItemTemplateSpawnController
 {
+    private readonly SharedBlockView _block;
+
+    public ItemTemplateSpawnController(SharedBlockView block)
+    {
+        _block = block;
+        _block.AdvanceItemTemplateSpawnGeneration();
+    }
+
     /// <summary>Highest hook-side serial already copied into the block's ring, so a slot the
     /// hook has not touched again since the last pass is not republished. Same dedup shape as
     /// <see cref="BarkController"/>'s own <c>Serials</c> comparison, simplified: this direction
@@ -19,6 +27,7 @@ internal sealed unsafe class ItemTemplateSpawnController(SharedBlockView block)
     /// had not yet drained would name a stranger by the time the agent could read it.</summary>
     public void Invalidate()
     {
+        _block.AdvanceItemTemplateSpawnGeneration();
         ItemTemplateSpawnHook.Invalidate();
         _lastPublishedSerial = 0;
     }
@@ -34,14 +43,16 @@ internal sealed unsafe class ItemTemplateSpawnController(SharedBlockView block)
         for (int i = 0; i < ItemTemplateSpawnHook.Capacity; i++)
         {
             ItemTemplateSpawnHook.Read(
-                i, out uint objectId, out uint serial, out bool isCheat, out ushort stackCount, resRef);
+                i, out uint objectId, out uint serial, out uint worldGeneration, out uint worldLoadSerial,
+                out bool isCheat, out ushort stackCount, resRef);
 
-            if (serial == 0 || serial <= _lastPublishedSerial || objectId == 0)
+            if (serial == 0 || serial <= _lastPublishedSerial || objectId == 0 || worldGeneration == 0)
             {
                 continue;
             }
 
-            block.PublishItemTemplateSpawn(objectId, resRef, isCheat, stackCount);
+            _block.PublishItemTemplateSpawn(
+                objectId, resRef, isCheat, stackCount, worldGeneration, worldLoadSerial);
 
             if (serial > highest)
             {

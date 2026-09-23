@@ -138,6 +138,8 @@ internal static unsafe class ItemTemplateSpawnHook
     public const int ResRefBytes = 16;
 
     private static readonly uint[] ObjectId = new uint[Capacity];
+    private static readonly uint[] WorldGeneration = new uint[Capacity];
+    private static readonly uint[] WorldLoadSerials = new uint[Capacity];
     private static readonly byte[] ResRef = new byte[Capacity * ResRefBytes];
     private static readonly uint[] Serials = new uint[Capacity];
     private static readonly bool[] IsCheat = new bool[Capacity];
@@ -168,6 +170,7 @@ internal static unsafe class ItemTemplateSpawnHook
 
     private static int _write;
     private static uint _sequence;
+    private static SharedBlockView? _blockView;
 
     /// <summary>
     /// Set TRUE by <c>Odyssey.GiveItemToInventory</c> (<c>Odyssey.Equipment.cs</c>), bracketing
@@ -194,12 +197,14 @@ internal static unsafe class ItemTemplateSpawnHook
     /// <summary>Reads one captured entry by slot index (wrapped). A zero <paramref
     /// name="serial"/> means this slot has never been written.</summary>
     public static void Read(
-        int index, out uint objectId, out uint serial, out bool isCheat, out ushort stackCount,
-        Span<byte> resRef)
+        int index, out uint objectId, out uint serial, out uint worldGeneration, out uint worldLoadSerial,
+        out bool isCheat, out ushort stackCount, Span<byte> resRef)
     {
         int i = ((index % Capacity) + Capacity) % Capacity;
         objectId = ObjectId[i];
         serial = Serials[i];
+        worldGeneration = WorldGeneration[i];
+        worldLoadSerial = WorldLoadSerials[i];
         isCheat = IsCheat[i];
         stackCount = StackCount[i];
 
@@ -228,10 +233,18 @@ internal static unsafe class ItemTemplateSpawnHook
     /// </summary>
     public static string? TryGetResRef(uint objectId)
     {
+        SharedBlockView? blockView = _blockView;
+        if (blockView is null)
+        {
+            return null;
+        }
+
+        uint currentGeneration = blockView.ItemTemplateSpawnGeneration;
         for (int step = 0; step < Capacity; step++)
         {
             int i = (((_write - 1 - step) % Capacity) + Capacity) % Capacity;
-            if (Serials[i] == 0 || ObjectId[i] != objectId)
+            if (Serials[i] == 0 || ObjectId[i] != objectId
+                || WorldGeneration[i] != currentGeneration)
             {
                 continue;
             }
@@ -257,6 +270,8 @@ internal static unsafe class ItemTemplateSpawnHook
         {
             Serials[i] = 0;
             ObjectId[i] = 0;
+            WorldGeneration[i] = 0;
+            WorldLoadSerials[i] = 0;
             IsCheat[i] = false;
             StackCount[i] = 0;
         }
@@ -267,8 +282,9 @@ internal static unsafe class ItemTemplateSpawnHook
 
     /// <summary>Verify-bytes-or-refuse, like every patch in this plugin: an unrecognised
     /// context means we do nothing rather than corrupt the engine. MAIN THREAD ONLY, once.</summary>
-    public static bool Install(out string diagnostic)
+    public static bool Install(SharedBlockView blockView, out string diagnostic)
     {
+        _blockView = blockView;
         if (_installed)
         {
             diagnostic = "already installed";
@@ -389,6 +405,14 @@ internal static unsafe class ItemTemplateSpawnHook
                 return;
             }
 
+            SharedBlockView? blockView = _blockView;
+            uint worldGeneration = blockView?.ItemTemplateSpawnGeneration ?? 0;
+            uint worldLoadSerial = blockView?.WorldLoadSerial ?? 0;
+            if (worldGeneration == 0 || blockView is null)
+            {
+                return;
+            }
+
             int slot = _write;
             byte* r = (byte*)resrefPtr;
             for (int b = 0; b < ResRefBytes; b++)
@@ -397,6 +421,8 @@ internal static unsafe class ItemTemplateSpawnHook
             }
 
             ObjectId[slot] = id;
+            WorldGeneration[slot] = worldGeneration;
+            WorldLoadSerials[slot] = worldLoadSerial;
             IsCheat[slot] = NextSpawnIsCheat;
 
             // The engine clamps the request to the template's own max stack (0x0052F6CC) and
@@ -407,6 +433,19 @@ internal static unsafe class ItemTemplateSpawnHook
 
             // Serial last: the reader trusts a slot only once this says it is complete.
             Serials[slot] = ++_sequence;
+
+            // Do not publish a capture if a world/module edge crossed the hook. Generation
+            // fences ordinary module changes; load serial carries the distinct explicit-load
+            // provenance used by the agent's creation observations.
+            if (blockView.ItemTemplateSpawnGeneration != worldGeneration
+                || blockView.WorldLoadSerial != worldLoadSerial)
+            {
+                Serials[slot] = 0;
+                ObjectId[slot] = 0;
+                WorldGeneration[slot] = 0;
+                WorldLoadSerials[slot] = 0;
+                return;
+            }
 
             _write = (slot + 1) % Capacity;
         }

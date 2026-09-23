@@ -6,8 +6,8 @@ using Xunit;
 namespace KotorCoop.Tests;
 
 /// <summary>
-/// The four player-count scaling settings on the wire (docs/research/player-count-scaling.md,
-/// protocol version 53 / <see cref="BehaviourDigest.CurrentScheme"/> 2): they ride the
+/// The five player-count scaling settings on the wire (docs/research/player-count-scaling.md,
+/// protocol version 63 / <see cref="BehaviourDigest.CurrentScheme"/> 3): they ride the
 /// behaviour digest, compare as host-authoritative keys, survive the Hello/Welcome codec, and
 /// a client adopts the host's value over real loopback the way <see
 /// cref="BehaviourNegotiationTests"/> already proves for the boolean keys.
@@ -18,14 +18,16 @@ public class PlayerCountScalingDigestTests
 
     private static BehaviourDigest Digest(
         int enemyHealth = PlayerCountScalingRule.Auto, int enemyDamage = PlayerCountScalingRule.Auto,
-        int xpRate = PlayerCountScalingRule.Auto, int storeStock = PlayerCountScalingRule.Auto) =>
+        int xpRate = PlayerCountScalingRule.Auto, int storeStock = PlayerCountScalingRule.Auto,
+        int storePrices = PlayerCountScalingRule.Vanilla) =>
         BehaviourDigest.Compute(
             localCombat: true, companionLocalCombat: false, partyFastPump: true, partySync: true,
             clientDoorRefusal: true, transitionAnnounce: false, clientLoadRejoin: true, hostLoadReadopt: true,
             effectSync: true, triggerRelay: true, clientEncounters: true, dialogueItemSync: true,
             dialogueRecruitSync: false, scriptItemSync: false, movieRelay: true, livenessSync: false,
             mapRevealSync: false, requireIdenticalSave: false, interpolationMs: 80, followLead: "any",
-            enemyHealth: enemyHealth, enemyDamage: enemyDamage, xpRate: xpRate, storeStock: storeStock);
+            enemyHealth: enemyHealth, enemyDamage: enemyDamage, xpRate: xpRate, storeStock: storeStock,
+            storePrices: storePrices);
 
     [Fact]
     public void ComputeCarriesTheSettingsAndTheHashFoldsThem()
@@ -34,12 +36,14 @@ public class PlayerCountScalingDigestTests
         Assert.Equal(150, a.EnemyHealth);
         Assert.Equal(PlayerCountScalingRule.Auto, a.EnemyDamage);
         Assert.Equal(200, a.StoreStock);
+        Assert.Equal(100, a.StorePrices);
 
         BehaviourDigest same = Digest(enemyHealth: 150, storeStock: 200);
         Assert.Equal(a, same);
 
         BehaviourDigest b = Digest(enemyHealth: 151, storeStock: 200);
         Assert.NotEqual(a.Hash, b.Hash);
+        Assert.NotEqual(a.Hash, Digest(enemyHealth: 150, storeStock: 200, storePrices: 101).Hash);
     }
 
     [Fact]
@@ -56,9 +60,10 @@ public class PlayerCountScalingDigestTests
     {
         BehaviourComparisonResult result = BehaviourCompatibility.Compare(
             host: Digest(enemyHealth: PlayerCountScalingRule.Auto, enemyDamage: 120, xpRate: 100, storeStock: 250),
-            peer: Digest(enemyHealth: 150, enemyDamage: 120, xpRate: 100, storeStock: PlayerCountScalingRule.Auto));
+            peer: Digest(enemyHealth: 150, enemyDamage: 120, xpRate: 100,
+                storeStock: PlayerCountScalingRule.Auto, storePrices: 200));
 
-        Assert.Equal(2, result.Differences.Count);
+        Assert.Equal(3, result.Differences.Count);
 
         BehaviourDifference health = Assert.Single(result.Differences, d => d.Key == "enemy_health");
         Assert.True(health.HostAuthoritative);
@@ -70,6 +75,11 @@ public class PlayerCountScalingDigestTests
         Assert.True(stock.HostAuthoritative);
         Assert.Equal("250", stock.HostValue);
         Assert.Equal("auto", stock.YourValue);
+
+        BehaviourDifference prices = Assert.Single(result.Differences, d => d.Key == "store_prices");
+        Assert.True(prices.HostAuthoritative);
+        Assert.Equal("100", prices.HostValue);
+        Assert.Equal("200", prices.YourValue);
     }
 
     [Fact]
@@ -79,10 +89,11 @@ public class PlayerCountScalingDigestTests
     }
 
     [Fact]
-    public void HelloAndWelcomeCarryTheFourSettings()
+    public void HelloAndWelcomeCarryTheFiveSettings()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
-        BehaviourDigest behaviour = Digest(enemyHealth: 150, enemyDamage: 115, xpRate: 200, storeStock: 300);
+        BehaviourDigest behaviour = Digest(enemyHealth: 150, enemyDamage: 115, xpRate: 200, storeStock: 300,
+            storePrices: 175);
 
         HelloPacket hello = new("Revan", "end_m01aa", 12345, ContentDigest.Unknown, 0xABCD, behaviour);
         int length = PacketCodec.Write(buffer, hello);
@@ -93,22 +104,30 @@ public class PlayerCountScalingDigestTests
         Assert.Equal(115, decodedHello.Behaviour.EnemyDamage);
         Assert.Equal(200, decodedHello.Behaviour.XpRate);
         Assert.Equal(300, decodedHello.Behaviour.StoreStock);
+        Assert.Equal(175, decodedHello.Behaviour.StorePrices);
         Assert.Equal(behaviour.Hash, decodedHello.Behaviour.Hash);
         Assert.Equal(behaviour, decodedHello.Behaviour);
+
+        WelcomePacket welcome = new(2, 998, 30, 8, ContentDigest.Unknown, behaviour);
+        length = PacketCodec.Write(buffer, welcome);
+        WelcomePacket? decodedWelcome = PacketCodec.ReadWelcome(buffer[..length]);
+        Assert.NotNull(decodedWelcome);
+        Assert.Equal(175, decodedWelcome.Behaviour.StorePrices);
+        Assert.Equal(behaviour, decodedWelcome.Behaviour);
     }
 
     [Fact]
     public async Task AClientAdoptsTheHostsScalingSettingsOverLoopback()
     {
-        // Host: enemy_health auto, store_stock 250. Client: enemy_health 150 (fixed), everything
-        // else auto. Both differences are host-authoritative and both are adopted; the two
-        // equal keys stay unadopted (null = "read the local value").
+        // Host: enemy_health auto, store_stock 250, store_prices 175. Client: enemy_health 150
+        // (fixed), store_prices 250. The host-authoritative differences are adopted; equal
+        // keys stay unadopted (null = "read the local value").
         using CoopHost host = new(new SessionSettings
         {
-            PlayerName = "Revan", Port = 0, Behaviour = Digest(storeStock: 250),
+            PlayerName = "Revan", Port = 0, Behaviour = Digest(storeStock: 250, storePrices: 175),
         });
         using CoopClient client = new(
-            new SessionSettings { PlayerName = "Malak", Behaviour = Digest(enemyHealth: 150) },
+            new SessionSettings { PlayerName = "Malak", Behaviour = Digest(enemyHealth: 150, storePrices: 250) },
             new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
 
         using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
@@ -128,21 +147,28 @@ public class PlayerCountScalingDigestTests
             "the client never compared its behaviour digest against the host's Welcome");
 
         BehaviourComparisonResult result = client.BehaviourWarnings!;
-        Assert.Equal(2, result.Differences.Count);
+        Assert.Equal(3, result.Differences.Count);
         Assert.Contains(result.Differences, d => d.Key == "enemy_health" && d.HostAuthoritative);
         Assert.Contains(result.Differences, d => d.Key == "store_stock" && d.HostAuthoritative);
+        Assert.Contains(result.Differences, d => d.Key == "store_prices" && d.HostAuthoritative);
 
         Assert.Equal(PlayerCountScalingRule.Auto, client.Overrides.EnemyHealth);
         Assert.Equal(250, client.Overrides.StoreStock);
+        Assert.Equal(175, client.Overrides.StorePrices);
         Assert.Null(client.Overrides.EnemyDamage);
         Assert.Null(client.Overrides.XpRate);
 
         // Fed through the resolved state the agent keeps: two players, host's auto -> 150%.
-        PlayerCountScaling scaling = new(new PlayerCountScalingSettings(150, 100, 100, 100));
+        PlayerCountScaling scaling = new(new PlayerCountScalingSettings(150, 100, 100, 100, 250));
         scaling.Update(client.Overrides, 2);
         Assert.Equal(150, scaling.EnemyHealthPercent);
         Assert.Equal(250, scaling.StoreStockPercent);
         Assert.Equal(100, scaling.EnemyDamagePercent);
+        Assert.Equal(175, scaling.StorePricesPercent);
+
+        // A cleared session override restores this install's configured price setting.
+        scaling.Update(SessionOverrides.None, 2);
+        Assert.Equal(250, scaling.StorePricesPercent);
 
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);

@@ -603,14 +603,14 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        if (!TryReadWorldLoadSerial(out uint worldSerial))
+        if (!TryReadItemTemplateSpawnGeneration(out uint generation))
         {
             return false;
         }
 
         for (int i = 0; i < BlockItemCapacity; i++)
         {
-            if (_itemSlotIds[i] == 0 || _itemSlotWorldSerial[i] != worldSerial)
+            if (_itemSlotIds[i] == 0 || _itemSlotGeneration[i] != generation)
             {
                 continue;
             }

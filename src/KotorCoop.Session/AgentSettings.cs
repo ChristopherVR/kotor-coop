@@ -282,12 +282,13 @@ public sealed record AgentSettings
     public FollowLeadMode FollowLeadMode { get; init; } = FollowLeadMode.Any;
 
     /// <summary>
-    /// The four player-count scaling SETTINGS from coop.ini (<c>enemy_health</c>,
-    /// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c> — docs/research/player-count-
+    /// The five player-count scaling SETTINGS from coop.ini (<c>enemy_health</c>,
+    /// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c>, <c>store_prices</c> — docs/research/player-count-
     /// scaling.md), each <see cref="PlayerCountScalingRule.Auto"/> or a fixed percent. What
     /// THIS install asked for; a client's session may override any of them with the host's
     /// (<see cref="SessionOverrides"/>), and <see cref="PlayerCountScaling"/> resolves the
-    /// effective setting to a percent from the live player count every tick.
+    /// effective setting to a percent from the live player count every tick; store-price auto
+    /// is currently neutral at 100%.
     /// </summary>
     public PlayerCountScalingSettings Scaling { get; init; } = PlayerCountScalingSettings.Default;
 

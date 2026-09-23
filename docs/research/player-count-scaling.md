@@ -1,6 +1,6 @@
 # Player-count scaling (review blocker #9, roadmap #41)
 
-Every fight was vanilla-balanced for two PCs. Four coop.ini keys now scale with the number of
+Every fight was vanilla-balanced for two PCs. Five coop.ini keys now scale with the number of
 connected players. **Status: built; health save/load idempotence remains open.** The safe default
 for `enemy_health` is currently vanilla 100%; `auto` remains an explicit opt-in until persisted
 scaled maxima can be identified without multiplying them after reload. This prevents another
@@ -9,32 +9,33 @@ scaled maximum.
 
 ## Keys and curve
 
-`enemy_health`, `enemy_damage`, `xp_rate`, `store_stock` = `auto` or a percent (lenient parse,
+`enemy_health`, `enemy_damage`, `xp_rate`, `store_stock`, `store_prices` = `auto` or a percent (lenient parse,
 `%` accepted, clamp 50-400, junk falls back to the default). `auto` resolves from the live player
 count (this instance + connected peers) in `PlayerCountScalingRule.Curve`:
 
-| Players | enemy_health | enemy_damage | xp_rate | store_stock |
-| --- | --- | --- | --- | --- |
-| 1 | 100 | 100 | 100 | 100 |
-| 2 | 150 | 115 | 100 | 150 |
-| 3 | 200 | 125 | 100 | 200 |
-| 4+ | 250 | 135 | 100 | 250 |
+| Players | enemy_health | enemy_damage | xp_rate | store_stock | store_prices |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 100 | 100 | 100 | 100 | 100 |
+| 2 | 150 | 115 | 100 | 150 | 100 |
+| 3 | 200 | 125 | 100 | 200 | 100 |
+| 4+ | 250 | 135 | 100 | 250 | 100 |
 
 Defaults (three readers agree: `CoopConfig`, `AgentComposition ??`, `BehaviourDigest.Default`,
 shipped ini): `enemy_health = 100` (safe vanilla fallback while reload idempotence is open),
-`enemy_damage = auto` (live-verified), `xp_rate = auto`, `store_stock = auto`. Set
-`enemy_health = auto` explicitly to opt into the player-count health curve. `store_prices` is NOT built: the price lookup behind
-`CSWGuiStore::BuyItem` is now statically traced in the 2026-09-23 price-path addendum below; a
-co-op multiplier, wire setting, and live verification remain unbuilt.
+`enemy_damage = auto` (live-verified), `xp_rate = auto`, `store_stock = auto`,
+`store_prices = 100`. Set
+`enemy_health = auto` explicitly to opt into the player-count health curve. `store_prices` is
+100 by default, and `auto` currently resolves to the same neutral price until a balance curve
+is chosen.
 
 ## Wire
 
-`BehaviourDigest` scheme 1 -> 2 carries the four SETTINGS (int32 each, 0 = auto), compared as
-host-authoritative keys (`W_CFG` warning + adopt, `SessionOverrides.EnemyHealth` etc.). The
-percent is never sent: both sides resolve it from the same setting and the same player count.
-**Protocol version 52 -> 53.** Shared-block version 67 -> 68 (agent signature byte 0x43 -> 0x44):
-`OffsetScalingCombat` 0x4C20 (health low 16, damage high 16) and `OffsetScalingEconomy` 0x4C24,
-no `TotalSize` growth, cleared on disconnect.
+`BehaviourDigest` scheme 3 (protocol version 63) carries all five SETTINGS as int32 fields,
+including `store_prices`. They are host-authoritative keys (`W_CFG` warning + adopt,
+`SessionOverrides.EnemyHealth` etc.). The resolved percent is not sent on the network: both
+sides derive it from the adopted setting and shared player count. Shared-block version 75
+(signature byte 0x4B) adds the resolved store price word at 0x4C40. The existing combat and
+economy words remain at 0x4C38 and 0x4C3C; all three are cleared on disconnect.
 
 ## Apply points
 
@@ -60,12 +61,12 @@ no `TotalSize` growth, cleared on disconnect.
 
 ## Unfinished / not done
 
-`store_prices`; the in-game status line for the economy word; a live A/B of every apply point.
+The in-game status line for the economy word; a live A/B of every apply point, including prices.
 The stored-max write (health) and the in-place effect-list write (damage) are the two writes
 new to this codebase. Health scaling also needs save/load persistence before the reload checklist
 item can be closed.
 
-### Store price path (2026-09-23 static GOG trace; no price change implemented)
+### Store price path (2026-09-23 static GOG trace)
 
 The GOG executable and `tools/kotor1_0_3.db` identify the retail lookup methods as
 `CSWGuiStore::GetItemBuyValue` (`0x006C0790`) and `GetItemSellValue` (`0x006C07F0`). Fresh
@@ -105,22 +106,27 @@ That interception also changes the price used by the panel's persuasion threshol
 interaction must be explicitly tested at high and low multipliers before adopting this hook
 boundary as the final design.
 
-Implementation still needs a chosen meaning and curve for `store_prices`, an adopted host setting
-in `BehaviourDigest`/`SessionOverrides`, and an agent-to-plugin resolved percent. The current
-economy dword is already packed as XP percent and store-stock percent; it has no spare halfword,
-so a new field needs a verified free SharedBlock location and both protocol/shared-block version
-updates. If player count changes while a store is open, its two item lists need a guarded refresh
-so the displayed values match the getter used by the next click. Do not write `mark_up`,
+The implementation adds `store_prices`, default 100; `auto` currently resolves to the neutral
+100 until a balance curve is chosen. Fixed values are host-authoritative settings carried by
+`BehaviourDigest` and `SessionOverrides`, then written as a resolved percent to SharedBlock
+0x4C40. A verify-bytes entry hook runs after neither store mutation nor item-list patching: it
+calls each original getter through a trampoline and scales that getter's returned integer once.
+The exact eight-byte GOG entry prologue is `8B C1 8B 0D FC 39 7A 00` for both getters, with no
+PC-relative instruction. A 100% value leaves the retail return unchanged. The rule uses a wide
+multiply, floor division, keeps a positive price at least one credit, leaves zero and negative
+values unchanged, and saturates at `Int32.MaxValue`. This post-getter scale also affects the
+panel's persuasion threshold, which must be included in the eventual live A/B. If player count
+changes while a store is open, the getter computes the current percent whenever the panel draws
+or checks a transaction; its native list data is not rewritten. Do not write `mark_up`,
 `mark_down`, `+0x24C`, or `+0x250` into a running store: it would mutate world state and could
 compound or save differently. For post-return arithmetic use a wide intermediate, clamp to a
 nonnegative `int`, preserve exact value at 100%, and specify rounding and low-price behavior
 before coding; retail's own integer conversion has already happened before a proposed multiplier.
 
-This is static analysis only. There is no live transaction proving the modified return is shown
-and charged identically, nor a round-trip test for integer edge cases. A bounded next step is a
-pure price-scale rule (including overflow, zero, and tiny prices), wire/config agreement, then
-two verified getter-return hooks and a live buy/sell A/B with a known base item and store. Prices remain retail; no `store_prices` setting is implemented yet. Do not enable a
-price adjustment until that entire path passes.
+The static addresses and retail call sites are traced, and the scale/config/wire/hook bytes have
+targeted tests. No live transaction yet proves the modified return is displayed and charged as
+intended. Prices remain retail by default; use a non-100 setting only after a live buy/sell A/B
+with a known base item and store verifies both transaction sides and the persuasion threshold.
 
 ## Save/load health compounding (confirmed defect; open)
 

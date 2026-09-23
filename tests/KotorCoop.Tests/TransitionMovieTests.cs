@@ -257,8 +257,9 @@ public class TransitionMovieTests
         // 71 = companion presence publication sequences in the existing slot padding;
         // 72 = live runtime difficulty sample in the container-loot region's free tail;
         // 73 = agent-published local session role at 0x4E44; 74 = exact native load request
-        // provenance at 0x4E50..0x4EA8.
-        Assert.Equal(74, int.Parse(version.Groups[1].Value));
+        // provenance at 0x4E50..0x4EA8; 75 adds resolved store prices at 0x4C40 and the
+        // item-spawn generation/ticket/load-serial arrays at 0x4F00..0x5300.
+        Assert.Equal(75, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

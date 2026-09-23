@@ -110,7 +110,7 @@ public static class BehaviourCompatibility
                 "follow_lead", host.FollowLead, peer.FollowLead, HostAuthoritative: false));
         }
 
-        // The four player-count scaling SETTINGS (docs/research/player-count-scaling.md). All
+        // The five player-count scaling SETTINGS (docs/research/player-count-scaling.md). All
         // HOST-AUTHORITATIVE: the host's engine is where enemy hit points are set, where the
         // XP delta is scaled before the max-merge and where store stock is topped up, so a
         // client running a different number would only disagree with what it is shown — and a
@@ -121,6 +121,7 @@ public static class BehaviourCompatibility
         CompareSetting(host.EnemyDamage, peer.EnemyDamage, "enemy_damage");
         CompareSetting(host.XpRate, peer.XpRate, "xp_rate");
         CompareSetting(host.StoreStock, peer.StoreStock, "store_stock");
+        CompareSetting(host.StorePrices, peer.StorePrices, "store_prices");
 
         return diffs.Count == 0 ? BehaviourComparisonResult.None : new BehaviourComparisonResult(diffs);
 

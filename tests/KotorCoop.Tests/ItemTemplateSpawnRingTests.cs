@@ -19,6 +19,56 @@ public class ItemTemplateSpawnRingTests
     private const int Capacity = 64;
 
     [Fact]
+    public void FreshAgentRejectsBufferedRowFromPreviousModuleGeneration()
+    {
+        // Cursor may still point at a row from the previous module when a new agent starts.
+        // Matching IDs/resrefs are immaterial: only producer-captured generation is trusted.
+        Assert.False(ItemTemplateSpawnRing.IsStableCurrentEntry(
+            expectedCursor: 4,
+            currentGenerationBefore: 9,
+            entryGenerationBefore: 8,
+            ticketBefore: 4,
+            worldSerialBefore: 12,
+            entryGenerationAfter: 8,
+            ticketAfter: 4,
+            worldSerialAfter: 12,
+            currentGenerationAfter: 9));
+    }
+
+    [Fact]
+    public void NewWorldRowIsAcceptedWithItsCapturedLoadSerial()
+    {
+        Assert.True(ItemTemplateSpawnRing.IsStableCurrentEntry(
+            expectedCursor: 0,
+            currentGenerationBefore: 10,
+            entryGenerationBefore: 10,
+            ticketBefore: 0,
+            worldSerialBefore: 13,
+            entryGenerationAfter: 10,
+            ticketAfter: 0,
+            worldSerialAfter: 13,
+            currentGenerationAfter: 10));
+    }
+
+    [Fact]
+    public void OverwriteInProgressOrGenerationChangeDuringReadIsRejected()
+    {
+        // The writer invalidates generation and changes the ticket before touching payload.
+        Assert.False(ItemTemplateSpawnRing.IsStableCurrentEntry(
+            64, 10, 0, ~64u, 13, 10, 64, 13, 10));
+
+        Assert.False(ItemTemplateSpawnRing.IsStableCurrentEntry(
+            64, 10, 10, 64, 13, 10, 64, 13, 11));
+    }
+
+    [Fact]
+    public void CapturedLoadSerialMustNotTearDuringEntryRead()
+    {
+        Assert.False(ItemTemplateSpawnRing.IsStableCurrentEntry(
+            3, 2, 2, 3, 5, 2, 3, 6, 2));
+    }
+
+    [Fact]
     public void NoNewWritesMeansNothingToRead()
     {
         ItemTemplateSpawnDrainRange range = ItemTemplateSpawnRing.ComputeDrainRange(

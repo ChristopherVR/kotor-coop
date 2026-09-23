@@ -93,6 +93,26 @@ internal partial struct SharedBlock
 
     public const uint ItemTemplateSpawnStackCountMask = 0xFFFFu;
 
+    /// <summary>Version 75. The plugin's item/world generation at each ring slot, captured
+    /// by the engine hook when the item is created. Entries from before an <c>InvalidateAll</c>
+    /// edge must never name an object id reused by the next module.</summary>
+    public const int OffsetItemTemplateSpawnGenerations = 0x4F00;
+
+    /// <summary>Version 75. Current generation for item-template-spawn provenance. Incremented
+    /// whenever PluginHost invalidates world-owned state (including ordinary announced module
+    /// changes, which do not necessarily bump WorldLoadSerial).</summary>
+    public const int OffsetItemTemplateSpawnGeneration = 0x5000;
+
+    /// <summary>Version 75. Each row's full cursor value, published after its payload and
+    /// before the global cursor. Readers can reject a row overwritten during a drain even
+    /// when the replacement belongs to the same world generation.</summary>
+    public const int OffsetItemTemplateSpawnTickets = 0x5100;
+
+    /// <summary>Version 75. WorldLoadSerial sampled at the exact native create-item hook.
+    /// Kept separately from ItemTemplateSpawnGeneration because announced module transitions
+    /// advance generation without advancing WorldLoadSerial.</summary>
+    public const int OffsetItemTemplateSpawnWorldSerials = 0x5200;
+
     /// <summary>
     /// Plugin -&gt; agent. A count of entries EVER written, never wrapped or reset — the slot
     /// for the Nth write (1-indexed) is <c>(N - 1) % ItemTemplateSpawnRingCapacity</c>.

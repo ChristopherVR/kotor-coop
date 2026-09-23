@@ -7,9 +7,9 @@ namespace KotorCoop.Tests;
 public sealed class LoadProvenanceLayoutTests
 {
     [Fact]
-    public void MailboxUsesTheAgreedV74FreeTailWithoutGrowingTheBlock()
+    public void MailboxUsesTheAgreedV74FreeTailBeforeTheV75Extension()
     {
-        Assert.Equal(0x4F00, SharedBlock.TotalSize);
+        Assert.Equal(0x5400, SharedBlock.TotalSize);
         Assert.Equal(0x4E50, SharedBlock.OffsetLoadProvenanceGeneration);
         Assert.Equal(0x4E54, SharedBlock.OffsetLoadProvenanceSlot);
         Assert.Equal(0x4E58, SharedBlock.OffsetLoadProvenanceSource);
@@ -19,7 +19,7 @@ public sealed class LoadProvenanceLayoutTests
         Assert.Equal(0x4E68, SharedBlock.OffsetLoadProvenanceName);
         Assert.Equal(64, SharedBlock.LoadProvenanceNameCapacity);
         Assert.Equal(0x4EA8, SharedBlock.OffsetLoadProvenanceName + SharedBlock.LoadProvenanceNameCapacity);
-        Assert.Equal(0x58, SharedBlock.TotalSize - (SharedBlock.OffsetLoadProvenanceName + SharedBlock.LoadProvenanceNameCapacity));
+        Assert.Equal(0x58, 0x4F00 - (SharedBlock.OffsetLoadProvenanceName + SharedBlock.LoadProvenanceNameCapacity));
         Assert.Equal(0x1C8, SharedBlock.LoadEntrySaveNumberOffset);
         Assert.Equal(0x1D8, SharedBlock.LoadEntrySaveNameOffset);
         Assert.Equal(0x1C4, LoadProvenanceCodec.MainMenuEntryFlagsOffset);

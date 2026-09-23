@@ -45,6 +45,14 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll", SetLastError = true)]
     public static partial nint VirtualAlloc(nint address, nuint size, uint allocationType, uint protect);
 
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool VirtualFree(nint address, nuint size, uint freeType);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool FlushInstructionCache(nint process, nint address, nuint size);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct MemoryBasicInformation
     {

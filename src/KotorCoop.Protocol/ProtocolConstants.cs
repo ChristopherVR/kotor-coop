@@ -249,7 +249,7 @@ public static class ProtocolConstants
     /// peer agreement. Older peers are refused at the protocol handshake rather than
     /// misreading the new field.
     /// </summary>
-    public const byte Version = 62;
+    public const byte Version = 63;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

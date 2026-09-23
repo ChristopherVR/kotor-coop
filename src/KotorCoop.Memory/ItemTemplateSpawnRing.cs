@@ -43,6 +43,28 @@ public readonly record struct ItemTemplateSpawnDrainRange(uint StartCursor, int 
 /// </summary>
 public static class ItemTemplateSpawnRing
 {
+    /// <summary>Accept a slot only when the producer's generation and full cursor ticket
+    /// bracket the payload consistently. Generation rejects entries retained from an earlier
+    /// module epoch; the ticket rejects an overwrite racing this drain, including while the
+    /// producer has not advanced the global cursor yet.</summary>
+    public static bool IsStableCurrentEntry(
+        uint expectedCursor,
+        uint currentGenerationBefore,
+        uint entryGenerationBefore,
+        uint ticketBefore,
+        uint worldSerialBefore,
+        uint entryGenerationAfter,
+        uint ticketAfter,
+        uint worldSerialAfter,
+        uint currentGenerationAfter) =>
+        currentGenerationBefore != 0
+        && currentGenerationBefore == currentGenerationAfter
+        && entryGenerationBefore == currentGenerationBefore
+        && entryGenerationAfter == currentGenerationBefore
+        && ticketBefore == expectedCursor
+        && ticketAfter == expectedCursor
+        && worldSerialBefore == worldSerialAfter;
+
     /// <summary>
     /// What to read this pass, given the cursor value remembered from the previous drain and
     /// the value the block reports right now.

@@ -143,8 +143,8 @@ public enum BehaviourFlags : uint
 ///
 /// Every boolean lives in <see cref="Flags"/> (one bitfield, one wire uint) rather than one
 /// field per key; <c>interp_ms</c> and <c>follow_lead</c> get their own fields because they are
-/// not booleans, and so do the four player-count scaling SETTINGS (<c>enemy_health</c>,
-/// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c> — integer percents, or
+/// not booleans, and so do the player-count scaling SETTINGS (<c>enemy_health</c>,
+/// <c>enemy_damage</c>, <c>xp_rate</c>, <c>store_stock</c>, <c>store_prices</c> — integer percents, or
 /// <see cref="PlayerCountScalingRule.Auto"/>; docs/research/player-count-scaling.md), which are
 /// host-authoritative: a client adopts the host's setting so both resolve the same percent
 /// from the same player count. <see cref="Hash"/> is a stable FNV-1a-32 over the whole digest, purely for a
@@ -154,17 +154,18 @@ public enum BehaviourFlags : uint
 /// </summary>
 public readonly record struct BehaviourDigest(
     uint Flags, int InterpolationMs, string FollowLead,
-    int EnemyHealth, int EnemyDamage, int XpRate, int StoreStock, uint Hash)
+    int EnemyHealth, int EnemyDamage, int XpRate, int StoreStock, int StorePrices, uint Hash)
 {
     /// <summary>Bumped only if the field set/order changes — mirrors <see
-    /// cref="ContentDigest.CurrentScheme"/>. 2 (2026-09-18): the four player-count scaling
-    /// settings joined the digest (protocol version 53).</summary>
-    public const byte CurrentScheme = 2;
+    /// cref="ContentDigest.CurrentScheme"/>. 2 (2026-09-18): four scaling settings; 3 (2026-09-23)
+    /// adds <c>store_prices</c> (protocol version 63).</summary>
+    public const byte CurrentScheme = 3;
 
     /// <summary>Every field at its built-in default: everything on except the OFF-by-default
     /// keys, <c>interp_ms</c> at the built-in delay, <c>follow_lead</c> at "any", the four
     /// scaling settings at their code fallbacks (<c>enemy_health</c> 100 until load-idempotent
-    /// persistence exists, <c>enemy_damage</c>/<c>xp_rate</c>/<c>store_stock</c> auto; see
+    /// persistence exists, <c>enemy_damage</c>/<c>xp_rate</c>/<c>store_stock</c> auto, and
+    /// <c>store_prices</c> 100 neutral; see
     /// docs/research/player-count-scaling.md). Used by test fakes and any <see cref="ICoopSession"/> that never computed a real
     /// one.</summary>
     public static BehaviourDigest Default { get; } = Compute(
@@ -191,7 +192,8 @@ public readonly record struct BehaviourDigest(
         enemyHealth: PlayerCountScalingRule.Vanilla,
         enemyDamage: PlayerCountScalingRule.Auto,
         xpRate: PlayerCountScalingRule.Auto,
-        storeStock: PlayerCountScalingRule.Auto);
+        storeStock: PlayerCountScalingRule.Auto,
+        storePrices: PlayerCountScalingRule.Vanilla);
 
     public bool Has(BehaviourFlags flag) => (Flags & (uint)flag) != 0;
 
@@ -206,16 +208,18 @@ public readonly record struct BehaviourDigest(
     public static BehaviourDigest FromFields(
         uint flags, int interpolationMs, string? followLead,
         int enemyHealth = PlayerCountScalingRule.Auto, int enemyDamage = PlayerCountScalingRule.Auto,
-        int xpRate = PlayerCountScalingRule.Auto, int storeStock = PlayerCountScalingRule.Auto)
+        int xpRate = PlayerCountScalingRule.Auto, int storeStock = PlayerCountScalingRule.Auto,
+        int storePrices = PlayerCountScalingRule.Vanilla)
     {
         string follow = string.IsNullOrEmpty(followLead) ? "any" : followLead;
         enemyHealth = PlayerCountScalingRule.NormaliseSetting(enemyHealth);
         enemyDamage = PlayerCountScalingRule.NormaliseSetting(enemyDamage);
         xpRate = PlayerCountScalingRule.NormaliseSetting(xpRate);
         storeStock = PlayerCountScalingRule.NormaliseSetting(storeStock);
+        storePrices = PlayerCountScalingRule.NormaliseSetting(storePrices);
         return new BehaviourDigest(
-            flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock,
-            ComputeHash(flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock));
+            flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock, storePrices,
+            ComputeHash(flags, interpolationMs, follow, enemyHealth, enemyDamage, xpRate, storeStock, storePrices));
     }
 
     /// <summary>Builds a digest from the resolved (post coop.ini/CLI-default) value of every
@@ -245,7 +249,8 @@ public readonly record struct BehaviourDigest(
         int enemyHealth = PlayerCountScalingRule.Auto,
         int enemyDamage = PlayerCountScalingRule.Auto,
         int xpRate = PlayerCountScalingRule.Auto,
-        int storeStock = PlayerCountScalingRule.Auto)
+        int storeStock = PlayerCountScalingRule.Auto,
+        int storePrices = PlayerCountScalingRule.Vanilla)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -275,15 +280,15 @@ public readonly record struct BehaviourDigest(
         Set(mapRevealSync, BehaviourFlags.MapRevealSync);
         Set(requireIdenticalSave, BehaviourFlags.RequireIdenticalSave);
 
-        return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock);
+        return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }
 
     /// <summary>FNV-1a-32, the same house hash <see cref="SessionPassword"/> and <see
     /// cref="ContentDigest"/>'s producers use — folded over the flags word, the interpolation
-    /// delay, the follow-lead string's UTF-16 code units, and the four scaling settings.</summary>
+    /// delay, the follow-lead string's UTF-16 code units, and the five scaling settings.</summary>
     private static uint ComputeHash(
         uint flags, int interpolationMs, string followLead,
-        int enemyHealth, int enemyDamage, int xpRate, int storeStock)
+        int enemyHealth, int enemyDamage, int xpRate, int storeStock, int storePrices)
     {
         uint h = 2166136261;
         void Mix(byte b) => h = (h ^ b) * 16777619;
@@ -309,6 +314,7 @@ public readonly record struct BehaviourDigest(
         MixInt(enemyDamage);
         MixInt(xpRate);
         MixInt(storeStock);
+        MixInt(storePrices);
 
         return h;
 

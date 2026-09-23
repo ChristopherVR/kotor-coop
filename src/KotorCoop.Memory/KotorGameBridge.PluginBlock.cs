@@ -765,6 +765,15 @@ public sealed partial class KotorGameBridge
     private const int BlockItemTemplateSpawnCursor =
         BlockItemTemplateSpawnRing + (BlockItemTemplateSpawnRingCapacity * BlockItemTemplateSpawnEntryStride);
 
+    // Version 75: plugin-owned generation captured at the engine creation hook, not at drain
+    // time. It fences ordinary module invalidations as well as explicit/unannounced loads.
+    private const int BlockItemTemplateSpawnGenerations = 0x4F00;
+    private const int BlockItemTemplateSpawnGeneration = 0x5000;
+    // Full per-slot cursor tickets detect a row overwritten while the agent reads its payload.
+    private const int BlockItemTemplateSpawnTickets = 0x5100;
+    // Captured by the native hook at item creation; do not replace it with drain-time serial.
+    private const int BlockItemTemplateSpawnWorldSerials = 0x5200;
+
     private const int BlockLocalDialogueNode = 0x1320;
     private const int BlockLocalDialogueNodeSerial = 0x1324;
     private const int BlockRemoteDialogueNode = 0x1328;
@@ -825,6 +834,7 @@ public sealed partial class KotorGameBridge
     // docs/research/player-count-scaling.md.
     private const int BlockScalingCombat = 0x4C38;
     private const int BlockScalingEconomy = 0x4C3C;
+    private const int BlockScalingPrices = 0x4C40;
 
     // Client-cast enemy-effect relay (shared block version 70, region 0x4C60..0x4C80, no
     // TotalSize growth). Mirrors SharedBlock.OffsetEnemyEffect*. Two 12-byte mailboxes
@@ -842,7 +852,7 @@ public sealed partial class KotorGameBridge
     /// <summary>See <see cref="IPlayerBridge.SetPlayerCountScaling"/>. Economy before combat:
     /// the plugin only ever ACTS on the combat word, so a reader that sees the new combat
     /// word already has the matching economy word for its status line.</summary>
-    public void SetPlayerCountScaling(uint combatWord, uint economyWord)
+    public void SetPlayerCountScaling(uint combatWord, uint economyWord, uint pricesWord)
     {
         if (_pluginBlock == 0)
         {
@@ -850,6 +860,7 @@ public sealed partial class KotorGameBridge
         }
 
         _memory.TryWrite(_pluginBlock + BlockScalingEconomy, economyWord);
+        _memory.TryWrite(_pluginBlock + BlockScalingPrices, pricesWord);
         _memory.TryWrite(_pluginBlock + BlockScalingCombat, combatWord);
     }
 

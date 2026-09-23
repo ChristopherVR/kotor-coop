@@ -50,6 +50,7 @@ public class PlayerCountScalingRuleTests
         Assert.Equal(damage, PlayerCountScalingRule.Curve(ScalingKind.EnemyDamage, players));
         Assert.Equal(xp, PlayerCountScalingRule.Curve(ScalingKind.XpRate, players));
         Assert.Equal(stock, PlayerCountScalingRule.Curve(ScalingKind.StoreStock, players));
+        Assert.Equal(100, PlayerCountScalingRule.Curve(ScalingKind.StorePrices, players));
     }
 
     [Fact]
@@ -102,6 +103,7 @@ public class PlayerCountScalingRuleTests
         Assert.Equal(100, scaling.EnemyDamagePercent);
         Assert.Equal(100, scaling.XpRatePercent);
         Assert.Equal(100, scaling.StoreStockPercent);
+        Assert.Equal(100, scaling.StorePricesPercent);
         Assert.Equal(1, scaling.PlayerCount);
     }
 
@@ -116,6 +118,7 @@ public class PlayerCountScalingRuleTests
         Assert.Equal(115, scaling.EnemyDamagePercent);
         Assert.Equal(100, scaling.XpRatePercent);
         Assert.Equal(150, scaling.StoreStockPercent);
+        Assert.Equal(100, scaling.StorePricesPercent);
         Assert.NotEqual(before, scaling.Generation);
 
         // Same inputs again: nothing changed, nothing bumped.
@@ -152,11 +155,14 @@ public class PlayerCountScalingRuleTests
         Assert.Equal(PlayerCountScalingRule.Auto, d.XpRate);
         Assert.Equal(PlayerCountScalingRule.Auto, d.StoreStock);
 
-        // BehaviourDigest.Default carries the same four numbers (the three-reader rule).
+        Assert.Equal(PlayerCountScalingRule.Vanilla, d.StorePrices);
+
+        // BehaviourDigest.Default carries the same five numbers (the three-reader rule).
         Assert.Equal(d.EnemyHealth, BehaviourDigest.Default.EnemyHealth);
         Assert.Equal(d.EnemyDamage, BehaviourDigest.Default.EnemyDamage);
         Assert.Equal(d.XpRate, BehaviourDigest.Default.XpRate);
         Assert.Equal(d.StoreStock, BehaviourDigest.Default.StoreStock);
+        Assert.Equal(d.StorePrices, BehaviourDigest.Default.StorePrices);
 
         // ...and so does a CoopConfig with no scaling keys at all.
         CoopConfig config = new();
@@ -164,6 +170,7 @@ public class PlayerCountScalingRuleTests
         Assert.Equal(d.EnemyDamage, config.EnemyDamage);
         Assert.Equal(d.XpRate, config.XpRate);
         Assert.Equal(d.StoreStock, config.StoreStock);
+        Assert.Equal(d.StorePrices, config.StorePrices);
     }
 
     [Fact]
@@ -192,6 +199,30 @@ public class PlayerCountScalingRuleTests
     }
 
     [Fact]
+    public void StorePricesDefaultToRetailAndAutoResolvesToRetail()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"coop-prices-{Guid.NewGuid():N}.ini");
+        try
+        {
+            File.WriteAllText(path, "[coop]\nmode = host\n");
+            CoopConfig config = CoopConfig.TryLoad(path)!;
+            Assert.Equal(PlayerCountScalingRule.Vanilla, config.StorePrices);
+
+            File.WriteAllText(path, "[coop]\nmode = host\nstore_prices = auto\n");
+            config = CoopConfig.TryLoad(path)!;
+            Assert.Equal(PlayerCountScalingRule.Auto, config.StorePrices);
+            PlayerCountScaling scaling = new(new PlayerCountScalingSettings(
+                config.EnemyHealth, config.EnemyDamage, config.XpRate, config.StoreStock, config.StorePrices));
+            scaling.Update(SessionOverrides.None, 4);
+            Assert.Equal(100, scaling.StorePricesPercent);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ThePackedCombatWordCarriesHealthLowAndDamageHigh()
     {
         PlayerCountScaling scaling = new(new PlayerCountScalingSettings(0, 0, 0, 0));
@@ -204,6 +235,8 @@ public class PlayerCountScalingRuleTests
         uint economy = scaling.PackEconomyWord();
         Assert.Equal(100u, economy & 0xFFFF);
         Assert.Equal(200u, economy >> 16);
+
+        Assert.Equal(100u, scaling.PackPricesWord()); // auto is neutral even at 3 players
     }
 
     [Fact]

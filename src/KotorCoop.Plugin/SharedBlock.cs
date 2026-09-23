@@ -146,7 +146,7 @@ internal partial struct SharedBlock
     /// region starts cleanly at the old boundary and uses 0x18 of the new 0x100.
     /// </summary>
     /// <summary>Grown for the acknowledged 24-slot container-loot mailbox (protocol 59).</summary>
-    public const int TotalSize = 0x4F00;
+    public const int TotalSize = 0x5400;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -248,7 +248,9 @@ internal partial struct SharedBlock
     /// Version 72 adds the live difficulty level and known byte at 0x4E40..0x4E42 in the
     /// unused tail after the container-loot mailbox. Version 73 adds the agent-published
     /// local session role word at 0x4E44. Version 74 adds the exact native load-request
-    /// provenance mailbox at 0x4E50..0x4EA8; the block size remains 0x4F00.
+    /// provenance mailbox at 0x4E50..0x4EA8; the v74 block size was 0x4F00. Version 75 adds
+    /// the resolved store price percent at 0x4C40 and grows the tail to 0x5400 for item-spawn
+    /// generation, cursor-ticket and load-serial provenance; see SharedBlock.ItemTemplateSpawns.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

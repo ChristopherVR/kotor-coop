@@ -18,7 +18,7 @@ public sealed partial class KotorGameBridge
 
     /// <summary>The world generation that owns each slot declaration. Shared-block status
     /// survives reload windows; never use a still-Alive old slot to name a reused object ID.</summary>
-    private readonly uint[] _itemSlotWorldSerial = new uint[BlockItemCapacity];
+    private readonly uint[] _itemSlotGeneration = new uint[BlockItemCapacity];
 
     /// <summary>
     /// objectId -&gt; the REAL blueprint resref, for every ground-item body this session itself
@@ -38,11 +38,11 @@ public sealed partial class KotorGameBridge
     /// </summary>
     private readonly Dictionary<uint, SpawnedItemResref> _spawnedItemResrefs = [];
 
-    private readonly record struct SpawnedItemResref(string Resref, uint WorldSerial);
+    private readonly record struct SpawnedItemResref(string Resref, uint Generation);
 
     /// <summary>Insertion order for <see cref="_spawnedItemResrefs"/>, so it can be trimmed
     /// FIFO rather than growing without bound across a very long session.</summary>
-    private readonly Queue<(uint ObjectId, uint WorldSerial)> _spawnedItemResrefOrder = new();
+    private readonly Queue<(uint ObjectId, uint Generation)> _spawnedItemResrefOrder = new();
 
     /// <summary>Generous past anything one session's ground-item churn produces (mirrors the
     /// reasoning behind <see cref="ItemScanLimit"/>): the cost of raising it is bounded, so this
@@ -61,26 +61,45 @@ public sealed partial class KotorGameBridge
             return;
         }
 
-        uint worldSerial = 0;
-        if (_pluginBlock != 0 && !TryReadWorldLoadSerial(out worldSerial))
+        uint generation = 0;
+        if (_pluginBlock != 0 && !TryReadItemTemplateSpawnGeneration(out generation))
+        {
+            return;
+        }
+
+        RememberSpawnedItemResref(objectId, resref, generation);
+    }
+
+    /// <summary>Records an alias only under the producer generation that actually captured
+    /// the item creation. A drain-time generation must never be used to relabel an old event.</summary>
+    internal void RememberSpawnedItemResref(uint objectId, string resref, uint generation)
+    {
+        if (objectId is 0 or ObjectInvalid || resref.Length == 0)
+        {
+            return;
+        }
+
+        if (_pluginBlock != 0
+            && (!TryReadItemTemplateSpawnGeneration(out uint currentGeneration)
+                || generation == 0 || currentGeneration != generation))
         {
             return;
         }
 
         if (_spawnedItemResrefs.TryGetValue(objectId, out SpawnedItemResref previous)
-            && previous.WorldSerial == worldSerial)
+            && previous.Generation == generation)
         {
             return;
         }
 
-        _spawnedItemResrefs[objectId] = new SpawnedItemResref(resref, worldSerial);
-        _spawnedItemResrefOrder.Enqueue((objectId, worldSerial));
+        _spawnedItemResrefs[objectId] = new SpawnedItemResref(resref, generation);
+        _spawnedItemResrefOrder.Enqueue((objectId, generation));
 
         while (_spawnedItemResrefOrder.Count > SpawnedItemResrefCacheCapacity)
         {
-            (uint expiredId, uint expiredWorld) = _spawnedItemResrefOrder.Dequeue();
+            (uint expiredId, uint expiredGeneration) = _spawnedItemResrefOrder.Dequeue();
             if (_spawnedItemResrefs.TryGetValue(expiredId, out SpawnedItemResref current)
-                && current.WorldSerial == expiredWorld)
+                && current.Generation == expiredGeneration)
             {
                 _spawnedItemResrefs.Remove(expiredId);
             }
@@ -93,8 +112,8 @@ public sealed partial class KotorGameBridge
     /// falls through to a real memory sweep this seam lets a test avoid entirely.</summary>
     internal bool HasSpawnedItemResref(uint objectId) => _spawnedItemResrefs.ContainsKey(objectId);
 
-    internal static bool IsSpawnedItemResrefCurrentWorld(uint recordedSerial, uint currentSerial) =>
-        recordedSerial == currentSerial;
+    internal static bool IsSpawnedItemResrefCurrentGeneration(uint recordedGeneration, uint currentGeneration) =>
+        recordedGeneration == currentGeneration;
 
     internal bool TryGetSpawnedItemResrefForCurrentWorld(uint objectId, out string resref)
     {
@@ -104,13 +123,13 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        uint currentSerial = 0;
-        if (_pluginBlock != 0 && !TryReadWorldLoadSerial(out currentSerial))
+        uint currentGeneration = 0;
+        if (_pluginBlock != 0 && !TryReadItemTemplateSpawnGeneration(out currentGeneration))
         {
             return false;
         }
 
-        if (!IsSpawnedItemResrefCurrentWorld(known.WorldSerial, currentSerial))
+        if (!IsSpawnedItemResrefCurrentGeneration(known.Generation, currentGeneration))
         {
             return false;
         }
@@ -144,7 +163,7 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        if (!TryReadWorldLoadSerial(out uint currentWorldSerial))
+        if (!TryReadItemTemplateSpawnGeneration(out uint currentGeneration))
         {
             return false;
         }
@@ -184,7 +203,7 @@ public sealed partial class KotorGameBridge
             {
                 _itemSlotIds[i] = 0;
                 _itemSlotResrefs[i] = null;
-                _itemSlotWorldSerial[i] = 0;
+                _itemSlotGeneration[i] = 0;
             }
         }
 
@@ -201,7 +220,7 @@ public sealed partial class KotorGameBridge
             int assigned = FindItemSlot(item.ItemId);
             if (assigned >= 0)
             {
-                if (_itemSlotWorldSerial[assigned] != currentWorldSerial)
+                if (_itemSlotGeneration[assigned] != currentGeneration)
                 {
                     // A slot declared in the prior world can still say Alive while the
                     // engine is replacing objects. Withdraw it and wait for the native slot
@@ -212,7 +231,7 @@ public sealed partial class KotorGameBridge
                     {
                         _itemSlotIds[assigned] = 0;
                         _itemSlotResrefs[assigned] = null;
-                        _itemSlotWorldSerial[assigned] = 0;
+                        _itemSlotGeneration[assigned] = 0;
                     }
 
                     ok = false;
@@ -260,7 +279,7 @@ public sealed partial class KotorGameBridge
 
             _itemSlotIds[free] = item.ItemId;
             _itemSlotResrefs[free] = item.Resref;
-            _itemSlotWorldSerial[free] = currentWorldSerial;
+            _itemSlotGeneration[free] = currentGeneration;
         }
 
         return ok;
@@ -280,14 +299,14 @@ public sealed partial class KotorGameBridge
             return vanished;
         }
 
-        if (!TryReadWorldLoadSerial(out uint currentWorldSerial))
+        if (!TryReadItemTemplateSpawnGeneration(out uint currentGeneration))
         {
             return vanished;
         }
 
         for (int i = 0; i < BlockItemCapacity; i++)
         {
-            if (_itemSlotIds[i] == 0 || _itemSlotWorldSerial[i] != currentWorldSerial)
+            if (_itemSlotIds[i] == 0 || _itemSlotGeneration[i] != currentGeneration)
             {
                 continue;
             }
@@ -313,7 +332,7 @@ public sealed partial class KotorGameBridge
                 && objectId != 0
                 && _itemSlotResrefs[i] is { Length: > 0 } resref)
             {
-                RememberSpawnedItemResref(objectId, resref);
+                RememberSpawnedItemResref(objectId, resref, currentGeneration);
             }
 
             if (state == ItemStateVanished)

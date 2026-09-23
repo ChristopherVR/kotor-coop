@@ -83,6 +83,12 @@ public class SharedInventoryV2LoopbackTests
 
         public bool SupportsStore => true;
 
+        // This fixture models both peers loaded into the same deterministic save. Initial
+        // party-pool reconciliation now requires a positive matching save identity before the
+        // client consumes the host snapshot; 0 means "unknown" and correctly keeps the gate
+        // closed (as it does for an unresolved real save).
+        public uint SaveIdentityDigest => 0x504F4F4Cu;
+
         public bool TryReadLocalState(out PlayerState state)
         {
             state = new PlayerState(Vector3f.Zero, 0f, Module, 20, 0);

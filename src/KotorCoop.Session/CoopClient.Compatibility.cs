@@ -165,7 +165,8 @@ public sealed partial class CoopClient
             EnemyHealth: AdoptSetting("enemy_health"),
             EnemyDamage: AdoptSetting("enemy_damage"),
             XpRate: AdoptSetting("xp_rate"),
-            StoreStock: AdoptSetting("store_stock"));
+            StoreStock: AdoptSetting("store_stock"),
+            StorePrices: AdoptSetting("store_prices"));
     }
 
     private void HandleWorldDigest(IPEndPoint from, ReadOnlySpan<byte> span, long now)

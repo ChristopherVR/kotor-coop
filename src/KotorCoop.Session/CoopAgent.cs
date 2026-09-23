@@ -1049,7 +1049,7 @@ public sealed partial class CoopAgent
     }
 
     /// <summary>
-    /// Resolves the four player-count scaling percents for this tick (the host's adopted
+    /// Resolves the five player-count scaling percents for this tick (the host's adopted
     /// settings where the session has them, else this install's; the player count is this
     /// instance plus every peer in the list) and, on a change, logs one line and pushes the
     /// plugin-side pair (enemy health, enemy damage) into the shared block — the same
@@ -1074,7 +1074,8 @@ public sealed partial class CoopAgent
         }
 
         _lastScalingGenerationPushed = _scaling.Generation;
-        _bridge.SetPlayerCountScaling(_scaling.PackCombatWord(), _scaling.PackEconomyWord());
+        _bridge.SetPlayerCountScaling(
+            _scaling.PackCombatWord(), _scaling.PackEconomyWord(), _scaling.PackPricesWord());
     }
 
     /// <summary>Diffs <see cref="_knownPeerIds"/> against this tick's peer set and raises

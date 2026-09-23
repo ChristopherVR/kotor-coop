@@ -38,6 +38,17 @@ internal static unsafe partial class PluginHost
             Log($"frame hook NOT installed: {hookDiagnostic}");
         }
 
+        // One verify-bytes getter detour covers store row display, affordability/persuasion
+        // checks and the click handlers. At 100% it returns the retail integer unchanged.
+        if (StorePriceHook.Install(_view!, out string storePriceDiagnostic))
+        {
+            Log($"store prices: {storePriceDiagnostic}");
+        }
+        else
+        {
+            Log($"store price hooks NOT installed: {storePriceDiagnostic}");
+        }
+
         // Intercept the console command interpreter so co-op verbs route to the block and
         // are swallowed (no "function <x> not found"), while real typos still get flagged.
         // Independent of the frame hook, so the co-op console works at the menu too.
@@ -113,7 +124,7 @@ internal static unsafe partial class PluginHost
         // default ON, but new enough to want an escape hatch beyond the usual prologue guard.
         if (PluginConfig.ReadBool("item_template_spawn_sync", true))
         {
-            if (ItemTemplateSpawnHook.Install(out string itemTemplateSpawnDiagnostic))
+            if (ItemTemplateSpawnHook.Install(_view!, out string itemTemplateSpawnDiagnostic))
             {
                 Log($"item-template spawns: {itemTemplateSpawnDiagnostic}");
             }

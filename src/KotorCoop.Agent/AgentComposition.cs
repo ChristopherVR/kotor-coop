@@ -156,7 +156,8 @@ internal static class AgentComposition
                 config?.EnemyHealth ?? PlayerCountScalingRule.Vanilla,
                 config?.EnemyDamage ?? PlayerCountScalingRule.Auto,
                 config?.XpRate ?? PlayerCountScalingRule.Auto,
-                config?.StoreStock ?? PlayerCountScalingRule.Auto),
+                config?.StoreStock ?? PlayerCountScalingRule.Auto,
+                config?.StorePrices ?? PlayerCountScalingRule.Vanilla),
             GameDirectory = installDirectory,
 
             // CoopAgent is deliberately game-agnostic and has no reader of its own for a
@@ -230,7 +231,8 @@ internal static class AgentComposition
             enemyHealth: agentSettings.Scaling.EnemyHealth,
             enemyDamage: agentSettings.Scaling.EnemyDamage,
             xpRate: agentSettings.Scaling.XpRate,
-            storeStock: agentSettings.Scaling.StoreStock);
+            storeStock: agentSettings.Scaling.StoreStock,
+            storePrices: agentSettings.Scaling.StorePrices);
 
         SessionManager manager = new(bridge, agentSettings);
 

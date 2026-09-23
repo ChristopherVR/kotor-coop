@@ -35,6 +35,10 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("ContainerLockResponseSerial", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ContainerLockResponseGranted", "SharedBlock.Dialogue.cs", "KotorGameBridge.PluginBlock.cs"),
         ("ItemTemplateSpawnRing", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("ItemTemplateSpawnGenerations", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("ItemTemplateSpawnGeneration", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("ItemTemplateSpawnTickets", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("ItemTemplateSpawnWorldSerials", "SharedBlock.ItemTemplateSpawns.cs", "KotorGameBridge.PluginBlock.cs"),
 
         // The new-character (coop.ini join_mode = newcharacter) capture handshake. Its agent
         // half lives in PluginMenuLoader rather than KotorGameBridge for the same reason the

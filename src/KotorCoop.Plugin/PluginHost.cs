@@ -383,8 +383,8 @@ internal static unsafe partial class PluginHost
         //      docs/research/class-and-power-grants.md.
         //  69: the resolved player-count scaling words (SharedBlock.PlayerCountScaling.cs,
         //      0x4C38..0x4C40, no TotalSize growth): the agent resolves coop.ini
-        //      enemy_health/enemy_damage/xp_rate/store_stock to percents and pushes the two
-        //      this plugin acts on (EnemyScalingController, PhantomHitHook). NEEDS-LIVE at
+        //      enemy_health/enemy_damage/xp_rate/store_stock/store_prices to percents and pushes
+        //      the plugin-side combat and store price words. NEEDS-LIVE at
         //      the time of the bump. See docs/research/player-count-scaling.md.
         //  70: the client-cast enemy-effect relay (SharedBlock.EnemyEffect.cs, 0x4C60..0x4C80, no
         //      TotalSize growth): two 12-byte mailboxes and two ack dwords. A non-damage effect a
@@ -399,7 +399,7 @@ internal static unsafe partial class PluginHost
         // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
         // 73 adds the agent-published local session role word at 0x4E44.
         // 74 adds the read-only exact native load-request provenance mailbox at 0x4E50.
-        _block->Version = 74;
+        _block->Version = 75;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

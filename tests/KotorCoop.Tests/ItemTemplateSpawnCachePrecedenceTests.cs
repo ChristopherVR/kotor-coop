@@ -92,8 +92,8 @@ public class ItemTemplateSpawnCachePrecedenceTests : IDisposable
     [Fact]
     public void AnObservedAliasCannotNameAReusedIdAfterWorldLoad()
     {
-        Assert.True(KotorGameBridge.IsSpawnedItemResrefCurrentWorld(7, 7));
-        Assert.False(KotorGameBridge.IsSpawnedItemResrefCurrentWorld(7, 8));
+        Assert.True(KotorGameBridge.IsSpawnedItemResrefCurrentGeneration(7, 7));
+        Assert.False(KotorGameBridge.IsSpawnedItemResrefCurrentGeneration(7, 8));
     }
 
     /// <summary>OBJECT_INVALID and 0 are never real ids — a defensive entry naming either must

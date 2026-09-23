@@ -76,6 +76,9 @@
     <Compile Include="..\KotorCoop.Protocol\ModuleIdentity.cs" Link="Shared\ModuleIdentity.cs" />
     <Compile Include="..\KotorCoop.Protocol\PartyPoolMailboxFence.cs" Link="Shared\PartyPoolMailboxFence.cs" />
     <Compile Include="..\KotorCoop.Protocol\Vector3f.cs" Link="Shared\Vector3f.cs" />
+    <Compile Include="..\KotorCoop.Protocol\PlayerCountScalingRule.cs" Link="Shared\PlayerCountScalingRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\StorePriceRule.cs" Link="Shared\StorePriceRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\StorePriceHookStubBuilder.cs" Link="Shared\StorePriceHookStubBuilder.cs" />
 
     <!--
       Same technique, one file from KotorCoop.Memory: WineDetection needs to be reachable from

@@ -121,10 +121,12 @@ public interface IPlayerBridge
     /// health percent in its low 16 bits and the enemy damage percent in its high 16 — the two
     /// the plugin applies (hit points on first sighting, the damage rewrite at the
     /// OnApplyDamage detour); <paramref name="economyWord"/> carries xp and store stock the
-    /// same way, for the plugin's status line only. 0 in a half means "no session has resolved
+    /// same way, for the plugin's status line only. <paramref name="pricesWord"/> carries the
+    /// resolved retail buy/sell percent in its low half; 0 means unresolved and the plugin
+    /// uses neutral 100%. 0 in a half means "no session has resolved
     /// this" and the plugin applies nothing, which is also the post-teardown state
     /// (<c>KotorGameBridge.SessionScopedBlockLevels</c>). Best-effort, like
     /// <see cref="ClearCoopState"/>; a no-op on a bridge with no plugin block.
     /// </summary>
-    void SetPlayerCountScaling(uint combatWord, uint economyWord) { }
+    void SetPlayerCountScaling(uint combatWord, uint economyWord, uint pricesWord) { }
 }

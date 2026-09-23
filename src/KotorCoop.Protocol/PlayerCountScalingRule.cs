@@ -1,6 +1,6 @@
 namespace KotorCoop.Protocol;
 
-/// <summary>Which of the four player-count scaling knobs a value is for — each has its own
+/// <summary>Which player-count scaling knob a value is for — each has its own
 /// <c>auto</c> curve in <see cref="PlayerCountScalingRule.Curve"/>.</summary>
 public enum ScalingKind : byte
 {
@@ -8,11 +8,12 @@ public enum ScalingKind : byte
     EnemyDamage = 1,
     XpRate = 2,
     StoreStock = 3,
+    StorePrices = 4,
 }
 
 /// <summary>
-/// The pure arithmetic behind coop.ini <c>enemy_health</c>, <c>enemy_damage</c>, <c>xp_rate</c>
-/// and <c>store_stock</c> (docs/research/player-count-scaling.md): how a player's setting text
+/// The pure arithmetic behind coop.ini <c>enemy_health</c>, <c>enemy_damage</c>, <c>xp_rate</c>,
+/// <c>store_stock</c> and <c>store_prices</c> (docs/research/player-count-scaling.md): how a player's setting text
 /// becomes a stored SETTING (an integer percent, or <see cref="Auto"/>), how a setting plus the
 /// live player count becomes the PERCENT actually applied, and how a percent scales a value.
 ///
@@ -110,6 +111,7 @@ public static class PlayerCountScalingRule
             ScalingKind.EnemyDamage => row switch { 2 => 115, 3 => 125, _ => 135 },
             ScalingKind.XpRate => Vanilla,
             ScalingKind.StoreStock => row switch { 2 => 150, 3 => 200, _ => 250 },
+            ScalingKind.StorePrices => Vanilla,
             _ => Vanilla,
         };
     }

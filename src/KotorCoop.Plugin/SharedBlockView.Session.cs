@@ -225,4 +225,7 @@ internal sealed unsafe partial class SharedBlockView
     /// <summary>Agent-written: xp rate percent (low 16) | store stock percent (high 16); status
     /// line only.</summary>
     public uint ScalingEconomyWord => *U32(SharedBlock.OffsetScalingEconomy);
+
+    /// <summary>Agent-written resolved store price percent; zero is neutral 100%.</summary>
+    public uint ScalingPricesWord => *U32(SharedBlock.OffsetScalingPrices);
 }

@@ -501,7 +501,7 @@ public sealed record CoopConfig
     public FollowLeadMode FollowLead { get; init; } = FollowLeadMode.Any;
 
     // ── Player-count scaling (docs/research/player-count-scaling.md) ─────────────────────
-    // Four SETTINGS, each PlayerCountScalingRule.Auto (0, "resolve from the live player
+    // Five SETTINGS, each PlayerCountScalingRule.Auto (0, "resolve from the live player
     // count") or a fixed percent clamped 50-400. Health defaults to vanilla 100% because
     // saved scaled maxima are not yet idempotent across load; `auto` remains an explicit opt-in.
     // Host-authoritative on the wire
@@ -527,6 +527,10 @@ public sealed record CoopConfig
     /// <summary>coop.ini <c>store_stock</c>: finite shop stock, percent of vanilla, or
     /// <c>auto</c>. Default auto.</summary>
     public int StoreStock { get; init; } = PlayerCountScalingRule.Auto;
+
+    /// <summary>coop.ini <c>store_prices</c>: buy and sell prices as a percent of the retail
+    /// result; default 100 preserves vanilla. <c>auto</c> currently resolves to neutral 100.</summary>
+    public int StorePrices { get; init; } = PlayerCountScalingRule.Vanilla;
 
     /// <summary>
     /// Relays a mid-module <c>PlayMovie</c> call (no transition involved) to peers, and acts
@@ -794,7 +798,7 @@ public sealed record CoopConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
-        "enemy_health", "enemy_damage", "xp_rate", "store_stock",
+        "enemy_health", "enemy_damage", "xp_rate", "store_stock", "store_prices",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
         "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp",
@@ -1033,6 +1037,8 @@ public sealed record CoopConfig
                 kv.GetValueOrDefault("xp_rate"), PlayerCountScalingRule.Auto),
             StoreStock = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("store_stock"), PlayerCountScalingRule.Auto),
+            StorePrices = PlayerCountScalingRule.ParseSetting(
+                kv.GetValueOrDefault("store_prices"), PlayerCountScalingRule.Vanilla),
             MovieRelayEnabled = !kv.ContainsKey("movie_relay") || IsTruthy(kv.GetValueOrDefault("movie_relay")),
 
             // Absent key -> the default server list; PRESENT-but-empty ("stun_servers = ")

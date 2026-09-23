@@ -505,6 +505,7 @@ public sealed partial class KotorGameBridge
         // A leftover resolved scaling would keep the plugin topping up enemy hit points and
         // rewriting enemy damage for a session that has ended; 0/0 is "nothing to apply".
         ("scaling economy", BlockScalingEconomy),
+        ("scaling prices", BlockScalingPrices),
         ("scaling combat", BlockScalingCombat),
 
         // LAST, always. See the remarks.

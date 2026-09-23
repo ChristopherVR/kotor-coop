@@ -20,8 +20,10 @@ public sealed partial class KotorGameBridge
     /// every tick (docs/research/item-identity.md §13.2) and this fact is therefore observed
     /// within one tick of the real creation, never meaningfully later.
     ///
-    /// <paramref name="WorldSerial"/> is the plugin's <see cref="WorldLoadSerial"/> at the
-    /// moment of the drain — which world minted this id. Live 2026-09-02
+    /// <paramref name="WorldSerial"/> is the plugin's <see cref="WorldLoadSerial"/> captured
+    /// by the native hook at the moment of creation — which explicit load epoch minted this id.
+    /// The independent item generation also changes on ordinary module transitions, which do
+    /// not necessarily bump WorldLoadSerial. Live 2026-09-02
     /// (docs/research/shared-inventory-v2.md §17): END_M01AA's own ambient scripting deposits a
     /// random consumable into the party pool at world-up, on either instance, and the plugin's
     /// ring faithfully captured every one of them as non-cheat — but the drain had already run
@@ -200,12 +202,8 @@ public sealed partial class KotorGameBridge
 
     public void DrainItemTemplateSpawns()
     {
-        if (_pluginBlock == 0)
-        {
-            return;
-        }
-
-        if (!_memory.TryReadUInt32(_pluginBlock + BlockItemTemplateSpawnCursor, out uint currentCursor))
+        if (!TryReadItemTemplateSpawnGeneration(out uint currentGeneration)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockItemTemplateSpawnCursor, out uint currentCursor))
         {
             return;
         }
@@ -218,10 +216,10 @@ public sealed partial class KotorGameBridge
             LastItemTemplateSpawnLostCount += range.Lost;
         }
 
-        // Which world minted the ids drained this pass — read once per pass, not per entry.
-        // The serial is bumped at teardown, so an id created for the world being loaded is
-        // already tagged with that world's serial however early in the load it was minted.
-        uint worldSerial = range.Count > 0 ? WorldLoadSerial : 0;
+        // Per-entry generation and load serial were captured by the hook at actual creation
+        // time. Never stamp a buffered row with values observed here: ring entries can survive
+        // ordinary module edges and ids are reused between modules.
+        long observedAtMs = Environment.TickCount64;
 
         for (int i = 0; i < range.Count; i++)
         {
@@ -229,6 +227,18 @@ public sealed partial class KotorGameBridge
             int slot = ItemTemplateSpawnRing.SlotFor(cursorValue, BlockItemTemplateSpawnRingCapacity);
 
             nint entry = _pluginBlock + BlockItemTemplateSpawnRing + (slot * BlockItemTemplateSpawnEntryStride);
+
+            nint generationAddress = _pluginBlock + BlockItemTemplateSpawnGenerations + (slot * sizeof(uint));
+            nint ticketAddress = _pluginBlock + BlockItemTemplateSpawnTickets + (slot * sizeof(uint));
+            nint worldSerialAddress = _pluginBlock + BlockItemTemplateSpawnWorldSerials + (slot * sizeof(uint));
+            if (!_memory.TryReadUInt32(generationAddress, out uint generationBefore)
+                || !_memory.TryReadUInt32(ticketAddress, out uint ticketBefore)
+                || !_memory.TryReadUInt32(worldSerialAddress, out uint worldSerialBefore)
+                || generationBefore != currentGeneration
+                || ticketBefore != cursorValue)
+            {
+                continue;
+            }
 
             if (!_memory.TryReadUInt32(entry + BlockItemTemplateSpawnIdOffset, out uint objectId)
                 || objectId == 0 || objectId >= ObjectInvalid)
@@ -251,7 +261,6 @@ public sealed partial class KotorGameBridge
             int createdCount = flagsRead
                 ? (int)((rawFlags >> BlockItemTemplateSpawnStackCountShift) & BlockItemTemplateSpawnStackCountMask)
                 : 0;
-            RememberItemCreation(objectId, isCheat, Environment.TickCount64, worldSerial, createdCount);
 
             if (!_memory.TryReadAsciiString(
                     entry + BlockItemTemplateSpawnResrefOffset, BlockItemTemplateSpawnResrefLength,
@@ -264,12 +273,40 @@ public sealed partial class KotorGameBridge
             // through (ApplyItemScanHits's own tag read) — defensive here too, even though
             // TryReadAsciiString already refused anything outside printable ASCII.
             string resref = SanitiseResref(raw);
-            if (resref.Length > 0)
+            if (resref.Length == 0
+                || !_memory.TryReadUInt32(generationAddress, out uint generationAfter)
+                || !_memory.TryReadUInt32(ticketAddress, out uint ticketAfter)
+                || !_memory.TryReadUInt32(worldSerialAddress, out uint worldSerialAfter)
+                || !TryReadItemTemplateSpawnGeneration(out uint currentGenerationAfter)
+                || !ItemTemplateSpawnRing.IsStableCurrentEntry(
+                    cursorValue, currentGeneration, generationBefore, ticketBefore, worldSerialBefore,
+                    generationAfter, ticketAfter, worldSerialAfter, currentGenerationAfter))
             {
-                RememberSpawnedItemResref(objectId, resref);
+                continue;
             }
+
+            RememberItemCreation(objectId, isCheat, observedAtMs, worldSerialBefore, createdCount);
+
+            RememberSpawnedItemResref(objectId, resref, generationBefore);
+        }
+
+        // If the producer crossed a module/load edge while this drain ran, leave the cursor
+        // untouched so the next pass can reread the now-current rows. Otherwise a new-world
+        // entry published after our initial cursor snapshot could be skipped permanently.
+        if (!TryReadItemTemplateSpawnGeneration(out uint finalGeneration)
+            || finalGeneration != currentGeneration)
+        {
+            return;
         }
 
         _itemTemplateSpawnLastSeenCursor = range.NextLastSeenCursor;
+    }
+
+    private bool TryReadItemTemplateSpawnGeneration(out uint generation)
+    {
+        generation = 0;
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockItemTemplateSpawnGeneration, out generation)
+            && generation != 0;
     }
 }

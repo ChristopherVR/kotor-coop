@@ -49,9 +49,10 @@ public sealed record SessionOverrides(
     int? EnemyHealth = null,
     int? EnemyDamage = null,
     int? XpRate = null,
-    int? StoreStock = null)
+    int? StoreStock = null,
+    int? StorePrices = null)
 {
-    // The four int? fields (2026-09-18) are the player-count scaling SETTINGS
+    // The five int? fields (2026-09-18/23) are the player-count scaling SETTINGS
     // (docs/research/player-count-scaling.md): the host's coop.ini value, adopted verbatim —
     // PlayerCountScalingRule.Auto or a fixed percent — so this client resolves the same
     // percent from the same player count the host does. Consulted by CoopAgent's

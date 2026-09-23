@@ -25,13 +25,46 @@ internal sealed unsafe partial class SharedBlockView
     /// covered by the value it read can never observe a half-written slot, even though this
     /// runs from inside an engine call rather than from an ordinary per-frame controller pass.
     /// </summary>
-    public void PublishItemTemplateSpawn(uint objectId, ReadOnlySpan<byte> resref, bool isCheat, ushort stackCount)
+    public uint ItemTemplateSpawnGeneration => *U32(SharedBlock.OffsetItemTemplateSpawnGeneration);
+    /// <summary>Invalidates aliases from every prior world/module epoch. Generation zero is
+    /// reserved as the in-progress entry marker, so the live generation skips zero on wrap.</summary>
+    public uint AdvanceItemTemplateSpawnGeneration()
     {
+        uint next = unchecked(ItemTemplateSpawnGeneration + 1);
+        if (next == 0)
+        {
+            next = 1;
+        }
+
+        *U32(SharedBlock.OffsetItemTemplateSpawnGeneration) = next;
+        return next;
+    }
+
+    /// <summary>Publishes a capture with the generation sampled by ItemTemplateSpawnHook at
+    /// the actual engine creation site. Never substitutes the current generation here: the
+    /// controller may drain this entry after a world invalidation.</summary>
+    public void PublishItemTemplateSpawn(
+        uint objectId, ReadOnlySpan<byte> resref, bool isCheat, ushort stackCount,
+        uint capturedGeneration, uint capturedWorldLoadSerial)
+    {
+        if (capturedGeneration == 0
+            || capturedGeneration != ItemTemplateSpawnGeneration
+            || capturedWorldLoadSerial != WorldLoadSerial)
+        {
+            return;
+        }
+
         uint cursor = *U32(SharedBlock.OffsetItemTemplateSpawnCursor);
         int slot = (int)(cursor % SharedBlock.ItemTemplateSpawnRingCapacity);
 
         byte* entry = baseAddress + SharedBlock.OffsetItemTemplateSpawnRing
             + (slot * SharedBlock.ItemTemplateSpawnEntryStride);
+
+        // Generation zero marks this slot as being rewritten. It cannot be confused with a
+        // valid row because the controller starts generation at one.
+        *U32(SharedBlock.OffsetItemTemplateSpawnGenerations + (slot * sizeof(uint))) = 0;
+        *U32(SharedBlock.OffsetItemTemplateSpawnTickets + (slot * sizeof(uint))) = ~cursor;
+        *U32(SharedBlock.OffsetItemTemplateSpawnWorldSerials + (slot * sizeof(uint))) = 0;
 
         *(uint*)(entry + SharedBlock.ItemTemplateSpawnIdOffset) = objectId;
 
@@ -43,6 +76,10 @@ internal sealed unsafe partial class SharedBlockView
         *(uint*)(entry + SharedBlock.ItemTemplateSpawnIsCheatOffset) =
             (isCheat ? SharedBlock.ItemTemplateSpawnIsCheatBit : 0)
             | ((uint)stackCount << SharedBlock.ItemTemplateSpawnStackCountShift);
+
+        *U32(SharedBlock.OffsetItemTemplateSpawnTickets + (slot * sizeof(uint))) = cursor;
+        *U32(SharedBlock.OffsetItemTemplateSpawnWorldSerials + (slot * sizeof(uint))) = capturedWorldLoadSerial;
+        *U32(SharedBlock.OffsetItemTemplateSpawnGenerations + (slot * sizeof(uint))) = capturedGeneration;
 
         // Cursor last: the agent only trusts entries the cursor value it just read covers.
         *U32(SharedBlock.OffsetItemTemplateSpawnCursor) = cursor + 1;
