@@ -86,6 +86,22 @@ public sealed class EnemyScalingBaselineTests
         }
     }
 
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(0x7F000000u)]
+    [InlineData(0x7FFFFFFFu)]
+    [InlineData(uint.MaxValue)]
+    public void RejectsNonEnemySentinelsEvenWhenSavedAndRequestedIdentitiesAgree(uint objectId)
+    {
+        EnemyScalingBaselineRecord record = Record with { ObjectId = objectId };
+        Assert.False(EnemyScalingBaselineRule.IsValidRecord(record));
+        Assert.False(EnemyScalingBaselineRule.IsValidDocument(Document(record), requireHash: true));
+        Assert.False(EnemyScalingBaselineRule.TrySelect(
+            Document(record), SaveKey, ArchiveHash, record.Module, objectId,
+            record.Tag, record.Template, storedMaximum: 23, out var selected));
+        Assert.Null(selected);
+    }
+
     private static EnemyScalingBaselineDocument Document(params EnemyScalingBaselineRecord[] records) =>
         new(EnemyScalingBaselineDocument.CurrentSchemaVersion,
             SaveKey.Slot, SaveKey.Name, SaveKey.SaveIdentity, ArchiveHash, records);

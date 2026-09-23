@@ -48,7 +48,8 @@ public static class EnemyScalingBaselineRule
 {
     public const int MinimumPercent = 50;
     public const int MaximumPercent = 400;
-    public const uint InvalidObjectId = 0x7FFF_FFFF;
+    public const uint InvalidObjectId = 0x7F00_0000;
+    public const uint PlayerObjectId = 0x7FFF_FFFF;
 
     public static bool IsValidDocument(EnemyScalingBaselineDocument? document, bool requireHash)
     {
@@ -80,7 +81,7 @@ public static class EnemyScalingBaselineRule
     public static bool IsValidRecord(EnemyScalingBaselineRecord? record) =>
         record is not null
         && IsValidResRef(record.Module, EnemyScalingBaselineDocument.MaximumModuleLength)
-        && record.ObjectId is > 0 and not InvalidObjectId and not uint.MaxValue
+        && record.ObjectId is > 0 and not InvalidObjectId and not PlayerObjectId and not uint.MaxValue
         && IsValidName(record.Tag, EnemyScalingBaselineDocument.MaximumTagLength)
         && IsValidResRef(record.Template, EnemyScalingBaselineDocument.MaximumTemplateLength)
         && record.BaseMaximum is > 0 and <= ushort.MaxValue
@@ -109,7 +110,7 @@ public static class EnemyScalingBaselineRule
             || document.SaveIdentity != selectedSave.SaveIdentity
             || !string.Equals(document.SaveName, selectedSave.Name, StringComparison.Ordinal)
             || !IsValidResRef(module, EnemyScalingBaselineDocument.MaximumModuleLength)
-            || objectId is 0 or InvalidObjectId or uint.MaxValue
+            || objectId is 0 or InvalidObjectId or PlayerObjectId or uint.MaxValue
             || !IsValidName(tag, EnemyScalingBaselineDocument.MaximumTagLength)
             || !IsValidResRef(template, EnemyScalingBaselineDocument.MaximumTemplateLength))
         {
