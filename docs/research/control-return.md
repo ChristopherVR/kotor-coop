@@ -552,3 +552,21 @@ The intended correction must serialize the original commandable value only when
 this mod owns the temporary lock, then reassert the lock in the running game. It
 must cover saves with no phantoms and must not normalize every loaded zero flag:
 retail scripts can legitimately make actors non-commandable.
+
+### Corrected save: live zero-phantom minigame check
+
+With `e05b10f` and matching native SHA-256
+`7DB5DEA68F65A905C3317A1FD6E447845C38D14251619FD3EA484D828DE839A6`
+on both installs, the same staged minigame entry parked the joiner at 10:27:15.
+The 10:27:21 save flush held and reissued the save despite there being zero spawned
+bodies. `000037 - parked_lock_fixed` landed at 10:27:22 with the own player's
+Commandable **1** and empty ActionList in the nested academy module. Read-only
+inspection of the native-resolved live PC after saving still showed Commandable
+**0** while the host remained in the minigame. After the host returned at 10:28,
+the same live player field was **1**. The saved baseline and live spectator lock
+therefore have separate, correct values in this reproduced path.
+
+The native build passed warnings-as-errors; 16 focused lock/flush tests passed.
+This does not prove every retail save-menu path, overlapping live lock owners, or
+natural completion of the minigame. Existing saves containing an unproven zero
+remain unchanged rather than being blindly normalized on load.
