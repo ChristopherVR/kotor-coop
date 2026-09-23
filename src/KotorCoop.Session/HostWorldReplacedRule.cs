@@ -38,9 +38,11 @@ public static class HostWorldReplacedRule
     /// tick (<see cref="SerialEdgeWatch"/> over <see cref="WorldDigest.LoadSerial"/>).</param>
     /// <param name="host">The host's state as reported over the wire, or null when the host is
     /// not in the peer list this tick.</param>
+    /// <param name="digestModule">The module from the host's latest world digest. This is empty
+    /// while its local world read is unavailable, even if its last-good player row is retained.</param>
     /// <returns>Whether to start a rejoin THIS call, and the new state.</returns>
     public static (bool ShouldTrigger, HostWorldReplacedState Next) Observe(
-        HostWorldReplacedState current, bool hostLoadEdge, PlayerState? host)
+        HostWorldReplacedState current, bool hostLoadEdge, PlayerState? host, string digestModule)
     {
         bool armed = current.Armed || hostLoadEdge;
         if (!armed)
@@ -55,14 +57,32 @@ public static class HostWorldReplacedRule
 
         // A mid-load host keeps publishing its last known row, or an away one; the first report
         // that is standing in a named module is the host in the replaced world.
-        bool hostStanding = hostState.Module.Length > 0
-            && !hostState.IsAway
-            && !hostState.IsPartyWiped
-            && !hostState.IsDowned;
+        bool hostStanding = IsHostReady(hostState, digestModule);
 
         return hostStanding
             ? (true, HostWorldReplacedState.Initial)
             : (false, new HostWorldReplacedState(true));
+    }
+
+    /// <summary>
+    /// A standing last-good player row is insufficient during teardown: it can remain in the
+    /// peer list after the host has left the world. Require the independently sampled world
+    /// digest to name the same non-empty module before treating that row as a ready host.
+    /// </summary>
+    public static bool IsHostReady(PlayerState? host, string digestModule)
+    {
+        if (host is not { } hostState
+            || string.IsNullOrEmpty(digestModule)
+            || hostState.Module.Length == 0
+            || !string.Equals(hostState.Module, digestModule, StringComparison.OrdinalIgnoreCase)
+            || hostState.IsAway
+            || hostState.IsPartyWiped
+            || hostState.IsDowned)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>The caller started a rejoin for any reason: forget the pending edge, so the

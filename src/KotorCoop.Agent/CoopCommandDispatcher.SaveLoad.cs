@@ -86,6 +86,20 @@ public sealed partial class CoopCommandDispatcher
 
     private string? _captureSourceBefore;
     private DateTime _captureStampBefore;
+    private uint? _lastOwnLoadProvenanceGeneration;
+    private OwnLoadCharacterSource? _pendingOwnLoadCharacterSource;
+    private OwnLoadCharacterSource? _pendingCommandOwnLoadCharacterSource;
+    private bool _ownLoadVerdictPending;
+    private bool _ownLoadCharacterCapturedForVerdict;
+    private bool _ownLoadLoadVerdictSeen;
+    private bool _ownLoadRefusalReady;
+    private bool _ownLoadCaptureWaitNoticed;
+    private long _ownLoadVerdictDeadlineMs;
+    private bool _skipNextDisconnectCapture;
+    private bool _ownLoadCaptureRequiresConfirmedSave;
+    private bool _verifiedOwnLoadAwaitingRejoin;
+    private uint _ownLoadCaptureEpoch;
+    private uint _captureRequestOwnLoadEpoch;
 
     /// <summary>The main archive's write time. The DIRECTORY's own time is not enough: a
     /// quicksave over an existing QUICKSAVE folder rewrites files in place, which on NTFS
@@ -113,7 +127,7 @@ public sealed partial class CoopCommandDispatcher
     /// <summary>The client's periodic capture, one step per tick — see the section comment.</summary>
     private void MaintainPeriodicCapture(PlayerState? localState, long nowMs, string savesDirectory)
     {
-        if (_sessionSaveWatch is null)
+        if (_sessionSaveWatch is null || _ownLoadVerdictPending || _verifiedOwnLoadAwaitingRejoin)
         {
             return;
         }
@@ -138,6 +152,23 @@ public sealed partial class CoopCommandDispatcher
                 return;
             }
 
+            if (_ownLoadCaptureRequiresConfirmedSave
+                && _captureRequestOwnLoadEpoch != _ownLoadCaptureEpoch)
+            {
+                Log?.Invoke("character capture: discarded a quicksave request from before the load");
+                _captureRequestedMs = 0;
+                _captureLastMs = nowMs;
+                return;
+            }
+
+            if (!landed && _ownLoadCaptureRequiresConfirmedSave)
+            {
+                Log?.Invoke("character capture: no save landed after the load; refusing the unrelated newest-save fallback");
+                _captureRequestedMs = 0;
+                _captureLastMs = nowMs;
+                return;
+            }
+
             Log?.Invoke(landed
                 ? $"character capture: quicksave landed after {nowMs - _captureRequestedMs} ms - capturing"
                 : "character capture: no save appeared within the wait (the engine may refuse to save here) - capturing the newest save as before");
@@ -148,10 +179,15 @@ public sealed partial class CoopCommandDispatcher
             // even though the requested quicksave is now newer. Keep the observed source as a
             // fallback when the save tree is being torn down concurrently.
             string? captureSource = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, sourceNow);
-            string? outcome = _sessionSaveWatch.CaptureNow(captureSource);
+            bool captured = _sessionSaveWatch.CaptureNowWritten(captureSource, out string? outcome);
             if (outcome is not null)
             {
                 Log?.Invoke(outcome);
+            }
+            if (OwnLoadCaptureSafetyRule.MayReleaseWithPeriodicSave(
+                _captureRequestOwnLoadEpoch, _ownLoadCaptureEpoch, landed, captured))
+            {
+                _ownLoadCaptureRequiresConfirmedSave = false;
             }
 
             _captureRequestedMs = 0;
@@ -175,6 +211,7 @@ public sealed partial class CoopCommandDispatcher
         _captureSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
         _captureStampBefore = SaveStamp(_captureSourceBefore);
         _captureRequestedMs = nowMs;
+        _captureRequestOwnLoadEpoch = _ownLoadCaptureEpoch;
 
         Log?.Invoke($"character capture: {CharacterCaptureIntervalMin} min elapsed - asking the engine for a quicksave");
         SendCheat(new CheatRequest(CheatKinds.QuickSave), quiet: true);
@@ -394,6 +431,20 @@ public sealed partial class CoopCommandDispatcher
             _hostReturnSaveReady = true;
             _captureLastMs = 0;
             _captureRequestedMs = 0;
+            _lastOwnLoadProvenanceGeneration = null;
+            _pendingOwnLoadCharacterSource = null;
+            _pendingCommandOwnLoadCharacterSource = null;
+            _ownLoadVerdictPending = false;
+            _ownLoadCharacterCapturedForVerdict = false;
+            _ownLoadLoadVerdictSeen = false;
+            _ownLoadRefusalReady = false;
+            _ownLoadCaptureWaitNoticed = false;
+            _ownLoadVerdictDeadlineMs = 0;
+            _skipNextDisconnectCapture = false;
+            _ownLoadCaptureRequiresConfirmedSave = false;
+            _verifiedOwnLoadAwaitingRejoin = false;
+            _ownLoadCaptureEpoch = 0;
+            _captureRequestOwnLoadEpoch = 0;
             return;
         }
 
@@ -481,16 +532,6 @@ public sealed partial class CoopCommandDispatcher
         }
         else if (session is CoopClient client)
         {
-            // The digest watches the session's save (FindSessionSave: the staged autosave);
-            // the capture reads this install's OWN newest save — never the staged copy of the
-            // host's world, whose player is the host's PC. See StagedSave.
-            string? currentSave = ClientCharacterPersistence.FindCaptureSource(Path.Combine(gameDirectory, "saves"));
-            string? outcome = _sessionSaveWatch.ObserveClient(digest, currentSave);
-            if (outcome is not null)
-            {
-                Reply(outcome);
-            }
-
             // One line per episode: the engine's own transition autosave gives each side its
             // own counters, so after a real door the raw identities differ for good while the
             // world is still shared (SaveLineage). Say so once, then stay quiet until it clears.
@@ -505,6 +546,80 @@ public sealed partial class CoopCommandDispatcher
 
             SaveOrLoadVerdict ownVerdict = _sessionSaveWatch.ObserveOwnVerdict(
                 digest, loadSerial, nowMs, out bool ownLoadEdge);
+            string savesDirectory = Path.Combine(gameDirectory, "saves");
+            LoadProvenance? loadProvenance = bridge.TryReadLoadProvenance(out LoadProvenance? observedProvenance)
+                ? observedProvenance : null;
+            ObserveOwnLoadCharacterSource(loadProvenance, loadSerial, nowMs, savesDirectory);
+
+            bool ownLoadCharacterCaptured = false;
+            if (ownLoadEdge)
+            {
+                _ownLoadCaptureEpoch = OwnLoadCaptureSafetyRule.NextEpoch(_ownLoadCaptureEpoch);
+                _captureRequestedMs = 0;
+                _captureSourceBefore = null;
+                _captureStampBefore = default;
+                _ownLoadVerdictPending = true;
+                _ownLoadLoadVerdictSeen = false;
+                _ownLoadRefusalReady = false;
+                _ownLoadCaptureWaitNoticed = false;
+                _ownLoadCaptureRequiresConfirmedSave = true;
+                _mismatchRejoinState = MismatchRejoinWatchState.Initial;
+                _mismatchGaveUpAnnounced = false;
+                _ownLoadCharacterCapturedForVerdict = TryCaptureCompletedOwnLoadCharacter(
+                    loadProvenance, loadSerial, nowMs, savesDirectory);
+                _ownLoadVerdictDeadlineMs = nowMs + OwnLoadCharacterSourceRule.MaxRequestAgeMs;
+            }
+            else if (_ownLoadVerdictPending && !_ownLoadCharacterCapturedForVerdict)
+            {
+                // Console load completion can lag the first serial edge; keep checking the
+                // exact request acknowledgement during the classifier's settling window.
+                _ownLoadCharacterCapturedForVerdict = TryCaptureCompletedOwnLoadCharacter(
+                    loadProvenance, loadSerial, nowMs, savesDirectory);
+            }
+            bool suppressGenericCapture = _ownLoadVerdictPending;
+            _ownLoadLoadVerdictSeen = OwnLoadCaptureSafetyRule.LatchLoadVerdict(
+                _ownLoadLoadVerdictSeen, ownVerdict == SaveOrLoadVerdict.Load);
+            bool ownLoadRejoinReady = OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(
+                _ownLoadLoadVerdictSeen, _ownLoadCharacterCapturedForVerdict);
+            if (_ownLoadVerdictPending && ownLoadRejoinReady)
+            {
+                ownLoadCharacterCaptured = _ownLoadCharacterCapturedForVerdict;
+                if (ownLoadCharacterCaptured)
+                {
+                    _skipNextDisconnectCapture = true;
+                    _ownLoadCaptureRequiresConfirmedSave = false;
+                    _verifiedOwnLoadAwaitingRejoin = true;
+                }
+                _ownLoadVerdictPending = false;
+                _ownLoadCharacterCapturedForVerdict = false;
+                _ownLoadLoadVerdictSeen = false;
+                _ownLoadCaptureWaitNoticed = false;
+                _pendingOwnLoadCharacterSource = null;
+                _pendingCommandOwnLoadCharacterSource = null;
+            }
+            else if (_ownLoadVerdictPending && nowMs >= _ownLoadVerdictDeadlineMs)
+            {
+                _ownLoadVerdictPending = false;
+                _ownLoadRefusalReady = OwnLoadCaptureSafetyRule.MustRefuseAfterDeadline(
+                    _ownLoadLoadVerdictSeen, _ownLoadCharacterCapturedForVerdict, requestWindowPending: false);
+                _ownLoadCharacterCapturedForVerdict = false;
+                _pendingOwnLoadCharacterSource = null;
+                _pendingCommandOwnLoadCharacterSource = null;
+            }
+
+            // Suppress capture throughout the digest classifier's settling window, not just
+            // the raw serial edge tick; the save digest can trail that edge by several polls.
+            string? currentSave = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
+            bool captureBlockedByOwnLoad = !OwnLoadCaptureSafetyRule.MayCaptureFromNewestSave(
+                suppressGenericCapture,
+                _ownLoadCaptureRequiresConfirmedSave,
+                _verifiedOwnLoadAwaitingRejoin);
+            string? captureOutcome = _sessionSaveWatch.ObserveClient(
+                digest, captureBlockedByOwnLoad ? null : currentSave, out _);
+            if (captureOutcome is not null)
+            {
+                Reply(captureOutcome);
+            }
             WorldDigest hostDigest = client.RemoteWorldDigest;
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(
                 hostDigest.SaveIdentity, hostDigest.LoadSerial, nowMs, out bool hostLoadEdge);
@@ -573,7 +688,7 @@ public sealed partial class CoopCommandDispatcher
             // arms on the raw edge, fires once the host stands in a named module. Runs every
             // tick too, so an edge that lands mid-teardown is not lost behind another branch.
             (bool hostWorldReplaced, HostWorldReplacedState nextReplacedState) =
-                HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge, hostState);
+                HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge, hostState, hostDigest.Module);
             _hostWorldReplacedState = nextReplacedState;
 
             // Preserve the raw edge even when a higher-priority rule owns this tick's rejoin.
@@ -587,7 +702,11 @@ public sealed partial class CoopCommandDispatcher
                 && mismatchChargenState is ChargenStateArmed or ChargenStateSaving;
             bool mismatchShouldTrigger = false;
             MismatchRejoinWatchState mismatchStateForTick = _mismatchRejoinState;
-            if (!isNewCharacterCapture)
+            bool ownLoadSafetyHold = !OwnLoadCaptureSafetyRule.MayAutomaticallyAdopt(
+                _ownLoadCaptureRequiresConfirmedSave,
+                _verifiedOwnLoadAwaitingRejoin,
+                ownLoadTrigger: ownVerdict == SaveOrLoadVerdict.Load && ownLoadCharacterCaptured);
+            if (!isNewCharacterCapture && !ownLoadSafetyHold)
             {
                 (mismatchShouldTrigger, mismatchStateForTick) = PersistentSaveMismatchRule.Observe(
                     _mismatchRejoinState, saveMismatchNow,
@@ -598,12 +717,38 @@ public sealed partial class CoopCommandDispatcher
                 _mismatchRejoinState = mismatchStateForTick;
             }
 
-            if (ownVerdict == SaveOrLoadVerdict.Load)
+            if (ownVerdict == SaveOrLoadVerdict.Load || ownLoadRejoinReady || _ownLoadRefusalReady)
             {
-                Reply("you loaded a save - rejoining the host's world");
-                TriggerRejoin(RejoinTrigger.OwnLoad, session);
+                if (ownLoadCharacterCaptured || ownLoadRejoinReady)
+                {
+                    Reply("you loaded a save - rejoining the host's world");
+                    TriggerRejoin(RejoinTrigger.OwnLoad, session);
+                }
+                else
+                {
+                    if (_ownLoadVerdictPending)
+                    {
+                        // The world-load serial/digest edge can arrive before the plugin's
+                        // request acknowledgement. Keep the exact source candidate alive and
+                        // wait within its bounded request window before refusing.
+                    }
+                    else
+                    {
+                        Reply("could not verify which character save you loaded, so I left the session connected; save and reconnect manually to avoid carrying the wrong character");
+                        Log?.Invoke("session-save: OwnLoad rejoin refused because no fresh, unchanged selected-save source was proven");
+                        _ownLoadRefusalReady = false;
+                        _ownLoadLoadVerdictSeen = false;
+                    }
+                }
             }
-            else if (remoteVerdict == SaveOrLoadVerdict.Load)
+            else if (_ownLoadCaptureRequiresConfirmedSave || _verifiedOwnLoadAwaitingRejoin)
+            {
+                // An unproven load may have replaced the live PC while newest-on-disk still
+                // belongs to a different save. Hold every automatic adoption path until a
+                // later confirmed own save captures the current character.
+            }
+            else if (remoteVerdict == SaveOrLoadVerdict.Load
+                && HostWorldReplacedRule.IsHostReady(hostState, hostDigest.Module))
             {
                 Reply("host loaded a save - rejoining their world");
                 TriggerRejoin(RejoinTrigger.HostReload, session);
@@ -1045,6 +1190,15 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession)
     {
+        if (!OwnLoadCaptureSafetyRule.MayAutomaticallyAdopt(
+                _ownLoadCaptureRequiresConfirmedSave,
+                _verifiedOwnLoadAwaitingRejoin,
+                trigger == RejoinTrigger.OwnLoad))
+        {
+            Log?.Invoke($"session-save: {trigger} automatic adoption held until a safe own-character save is available");
+            return;
+        }
+
         if (!manager.TryGetCurrentGeneration(expectedSession, out long managerGeneration))
         {
             return;
@@ -1063,6 +1217,19 @@ public sealed partial class CoopCommandDispatcher
             RejoinTrigger.SoloReturn => AutoAdoptWorldEnabled,
             _ => false,
         };
+
+        (GffStruct Player, SidecarMetadata Metadata)? ownLoadCharacter = null;
+        if (trigger == RejoinTrigger.OwnLoad && gateEnabled
+            && ClientCharacterPersistence.TryReadSidecar(
+                Path.Combine(gameDirectory, "saves"), out GffStruct ownPlayer, out SidecarMetadata ownMetadata, out _))
+        {
+            ownLoadCharacter = (ownPlayer, ownMetadata);
+        }
+        if (trigger == RejoinTrigger.OwnLoad && gateEnabled && ownLoadCharacter is null)
+        {
+            Log?.Invoke("session-save: OwnLoad rejoin refused because the verified character sidecar could not be read");
+            return;
+        }
 
         (bool shouldStart, RejoinDecisionState next) = ClientLoadRejoinRule.Decide(_rejoinState, trigger, gateEnabled);
         _rejoinState = next;
@@ -1091,11 +1258,18 @@ public sealed partial class CoopCommandDispatcher
         int rejoinGeneration = ++_rejoinGeneration;
         _rejoinOwnsDisconnect = true;
 
-        (GffStruct Player, SidecarMetadata Metadata)? carried = null;
-        if (ClientCharacterPersistence.TryReadSidecar(
+        (GffStruct Player, SidecarMetadata Metadata)? carried = ownLoadCharacter;
+        if (trigger != RejoinTrigger.OwnLoad && ClientCharacterPersistence.TryReadSidecar(
             Path.Combine(gameDirectory, "saves"), out GffStruct sidecarPlayer, out SidecarMetadata sidecarMeta, out _))
         {
             carried = (sidecarPlayer, sidecarMeta);
+        }
+
+        if (trigger == RejoinTrigger.OwnLoad)
+        {
+            // The worker now owns an immutable in-memory copy. Later saves may update the
+            // sidecar without changing the character this rejoin carries.
+            _verifiedOwnLoadAwaitingRejoin = false;
         }
 
         _rejoinTask = Task.Run(async () =>
@@ -1128,7 +1302,7 @@ public sealed partial class CoopCommandDispatcher
                         adoption = await manager
                         .RejoinAfterLoadAsync(
                             bridge, gameDirectory, carried, managerGeneration, cancellationToken,
-                            carriedIsAuthoritative: trigger == RejoinTrigger.SoloReturn
+                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
                             onHostWorldUnavailable: trigger == RejoinTrigger.HostReload
@@ -1425,13 +1599,56 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        if (!_kotor.TryRequestMidSessionLoad(slotIndex, out string request))
+        string savesDirectory = Path.Combine(gameDirectory, "saves");
+        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slotIndex, out string selectedSave, out string selectedDiagnostic))
+        {
+            Reply($"loadgame: {selectedDiagnostic}");
+            return;
+        }
+
+        if (!ClientCharacterPersistence.TryHashSave(selectedSave, out string selectedHash, out long selectedLength))
+        {
+            Reply("loadgame: could not safely snapshot the selected save");
+            return;
+        }
+
+        if (!_kotor.TryStageMidSessionLoadFromDirectory(selectedSave, out string staging, out string stagedSave))
+        {
+            Reply($"loadgame: {staging}");
+            return;
+        }
+
+        if (!ClientCharacterPersistence.TryHashSave(stagedSave, out string stagedHash, out long stagedLength)
+            || stagedLength != selectedLength
+            || !string.Equals(stagedHash, selectedHash, StringComparison.Ordinal))
+        {
+            Reply("loadgame: selected save changed while staging; request was not sent");
+            return;
+        }
+
+        if (!bridge.TryReadWorldLoadSerial(out uint startingWorldLoadSerial))
+        {
+            Reply("loadgame: could not read the current world-load serial; request was not sent");
+            return;
+        }
+
+        if (!_kotor.TryRequestStagedMidSessionLoad(out string request, out uint requestId))
         {
             Reply($"loadgame: {request}");
             return;
         }
 
-        Reply($"loadgame: {request}");
+        _pendingCommandOwnLoadCharacterSource = new OwnLoadCharacterSource(
+            ProvenanceGeneration: 0,
+            WorldLoadSerialAtRequest: startingWorldLoadSerial,
+            Directory: selectedSave,
+            SaveSha256: selectedHash,
+            SaveLength: selectedLength,
+            ObservedAtMs: SessionClock.NowMs,
+            CommandRequestId: requestId,
+            CommandStartWorldLoadSerial: startingWorldLoadSerial);
+
+        Reply($"loadgame: {staging}; {request}");
 
         KotorGameBridge kotor = _kotor;
         _loadGameTask = Task.Run(async () =>
@@ -1439,8 +1656,13 @@ public sealed partial class CoopCommandDispatcher
             DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
             while (DateTime.UtcNow < deadline)
             {
-                if (kotor.TryGetAdoptedWorldLoadStatus(out uint applied, out int status) && applied != 0)
+                if (kotor.TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
+                    && applied == requestId)
                 {
+                    if (status != 0)
+                    {
+                        _pendingCommandOwnLoadCharacterSource = null;
+                    }
                     Reply(status == 0
                         ? "loadgame: the world is up"
                         : $"loadgame: the plugin refused (failure {status})");
@@ -1451,7 +1673,107 @@ public sealed partial class CoopCommandDispatcher
             }
 
             Reply("loadgame: no result within 90s - check the plugin log");
+            if (_pendingCommandOwnLoadCharacterSource?.CommandRequestId == requestId)
+            {
+                _pendingCommandOwnLoadCharacterSource = null;
+            }
         });
+    }
+
+    private void ObserveOwnLoadCharacterSource(
+        LoadProvenance? provenance,
+        uint? currentWorldLoadSerial,
+        long nowMs,
+        string savesDirectory)
+    {
+        if (provenance is null)
+        {
+            return;
+        }
+
+        if (_lastOwnLoadProvenanceGeneration is null)
+        {
+            // The first mailbox value may be retained from a load before this session.
+            _lastOwnLoadProvenanceGeneration = provenance.Generation;
+            return;
+        }
+
+        if (_lastOwnLoadProvenanceGeneration == provenance.Generation)
+        {
+            return;
+        }
+
+        uint? previousGeneration = _lastOwnLoadProvenanceGeneration;
+        _lastOwnLoadProvenanceGeneration = provenance.Generation;
+        _pendingOwnLoadCharacterSource = null;
+        if (_pendingCommandOwnLoadCharacterSource is { CommandStartWorldLoadSerial: uint commandSerial })
+        {
+            if (provenance.Source == LoadProvenanceSource.ServerLoadRequest
+                && provenance.Status == LoadProvenanceStatus.Captured
+                && provenance.WorldLoadSerialAtRequest == commandSerial)
+            {
+                return;
+            }
+
+            _pendingCommandOwnLoadCharacterSource = null;
+        }
+
+        if (currentWorldLoadSerial.HasValue
+            && OwnLoadCharacterSourceRule.TryCreate(
+                provenance,
+                previousGeneration,
+                savesDirectory,
+                currentWorldLoadSerial.Value,
+                nowMs,
+                out OwnLoadCharacterSource? candidate))
+        {
+            _pendingOwnLoadCharacterSource = candidate;
+        }
+    }
+
+    private bool TryCaptureCompletedOwnLoadCharacter(
+        LoadProvenance? provenance,
+        uint? currentWorldLoadSerial,
+        long nowMs,
+        string savesDirectory)
+    {
+        OwnLoadCharacterSource? commandSource = _pendingCommandOwnLoadCharacterSource;
+        OwnLoadCharacterSource? source = commandSource ?? _pendingOwnLoadCharacterSource;
+        bool completed = false;
+        if (currentWorldLoadSerial.HasValue && commandSource is not null
+            && _kotor is not null
+            && _kotor.TryGetAdoptedWorldLoadStatus(out uint applied, out int status))
+        {
+            completed = OwnLoadCharacterSourceRule.IsCommandCompletedFor(
+                commandSource, currentWorldLoadSerial.Value, applied, status, nowMs);
+        }
+        else if (currentWorldLoadSerial.HasValue && commandSource is null)
+        {
+            completed = OwnLoadCharacterSourceRule.IsCompletedFor(
+                source, provenance, true, currentWorldLoadSerial.Value, nowMs);
+        }
+
+        if (!completed || source is null)
+        {
+            if (!_ownLoadCaptureWaitNoticed)
+            {
+                _ownLoadCaptureWaitNoticed = true;
+                Log?.Invoke("session-save: waiting for the exact selected-character source to be verified");
+            }
+            return false;
+        }
+
+        if (!_sessionSaveWatch!.CaptureVerifiedLoadSource(source!, out string outcome))
+        {
+            Log?.Invoke($"session-save: selected character capture failed: {outcome}");
+            return false;
+        }
+
+        Log?.Invoke($"session-save: selected character captured from '{Path.GetFileName(source!.Directory)}': {outcome}");
+        _ownLoadCaptureWaitNoticed = false;
+        _pendingOwnLoadCharacterSource = null;
+        _pendingCommandOwnLoadCharacterSource = null;
+        return true;
     }
 
     /// <summary>
@@ -1464,6 +1786,13 @@ public sealed partial class CoopCommandDispatcher
     {
         if (_sessionSaveWatch is null || manager.Current is not CoopClient)
         {
+            return;
+        }
+
+        if (_ownLoadVerdictPending || _skipNextDisconnectCapture || _ownLoadCaptureRequiresConfirmedSave)
+        {
+            _skipNextDisconnectCapture = false;
+            Log?.Invoke("character capture: skipped disconnect quicksave because no safe selected-save capture is available");
             return;
         }
 

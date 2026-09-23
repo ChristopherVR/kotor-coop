@@ -184,8 +184,28 @@ public static class PluginMenuLoader
             return false;
         }
 
-        DirectoryInfo source = new(sourcePath);
+        return TryStageSaveAsAutosaveFromDirectory(gameDirectory, sourcePath, out diagnostic);
+    }
+
+    /// <summary>Stages the already-resolved folder. Callers that need source identity must
+    /// resolve once and pass that exact path through staging rather than resolving a mutable
+    /// recency-ordered slot a second time.</summary>
+    public static bool TryStageSaveAsAutosaveFromDirectory(
+        string gameDirectory,
+        string sourcePath,
+        out string diagnostic)
+    {
         string savesDirectory = Path.Combine(gameDirectory, "saves");
+        string fullSaves = Path.GetFullPath(savesDirectory);
+        string fullSource = Path.GetFullPath(sourcePath);
+        if (!fullSource.StartsWith(fullSaves + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !Directory.Exists(fullSource))
+        {
+            diagnostic = $"selected save folder is not inside {fullSaves}";
+            return false;
+        }
+
+        DirectoryInfo source = new(fullSource);
         string autosave = Path.Combine(savesDirectory, AutosaveSlot);
 
         try
@@ -236,7 +256,13 @@ public static class PluginMenuLoader
     public static bool TryRequestLoad(
         ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false,
         bool inSession = false)
+        => TryRequestLoad(memory, out block, out diagnostic, out _, adoptedWorld, inSession);
+
+    public static bool TryRequestLoad(
+        ProcessMemory memory, out nint block, out string diagnostic, out uint requestId,
+        bool adoptedWorld = false, bool inSession = false)
     {
+        requestId = 0;
         if (!TryFindBlock(memory, out block, out diagnostic))
         {
             return false;
@@ -294,6 +320,7 @@ public static class PluginMenuLoader
             return false;
         }
 
+        requestId = unchecked(serial + 1);
         diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName}"
             + (adoptedWorld ? ", carried character" : string.Empty)
             + (inSession ? ", mid-session)" : ")");

@@ -33,6 +33,7 @@ public sealed partial class CoopAgent
 
     private long _lastHeavyPumpMs;
     private long _lastCombatPumpMs;
+    private WorldDigestReadinessState _worldDigestReadinessState = WorldDigestReadinessState.Initial;
 
     /// <summary>coop.ini <c>perf_trace</c>'s accumulator, or null when the trace is off — which
     /// is what keeps every call site below a single null check rather than a flag test plus a
@@ -893,13 +894,22 @@ public sealed partial class CoopAgent
         byte? difficultyLevel = _bridge.TryReadDifficultyLevel(out byte sampledDifficulty)
             ? sampledDifficulty
             : null;
-        _session.PublishWorldDigest(new WorldDigest(
+        // A changed load serial is first published without a ready module even if this tick's
+        // player read succeeds. The next successful digest sample at that same serial can
+        // advertise the module, proving the row was sampled after the load edge was observed.
+        uint loadSerial = _bridge.WorldLoadSerial;
+        (WorldDigestReadinessState nextReadiness, bool moduleReady) = WorldDigestReadinessRule.Observe(
+            _worldDigestReadinessState, loadSerial, LastReadSucceeded);
+        _worldDigestReadinessState = nextReadiness;
+        uint digestModuleGit = moduleReady ? _bridge.ModuleGitDigest(local.Module) : 0;
+        WorldDigest digest = new WorldDigest(
             _bridge.GlobalsCatalogueDigest,
             _bridge.SaveIdentityDigest,
             local.Module,
-            _bridge.ModuleGitDigest(local.Module),
-            _bridge.WorldLoadSerial,
-            difficultyLevel));
+            digestModuleGit,
+            loadSerial,
+            difficultyLevel);
+        _session.PublishWorldDigest(ForCurrentReadAvailability(digest, moduleReady));
 
         _worldStatePump.PumpItems(local, caps);
 
@@ -1104,6 +1114,12 @@ public sealed partial class CoopAgent
         _partyPoolPumpV2.CompleteHostIntentV2(peerId, intentSerial);
         _session.CompletePartyPoolIntentV2(peerId, intentSerial, accepted);
     }
+
+    /// <summary>Clear module-scoped readiness when the local player read failed. The world
+    /// load serial can still advance during teardown, but the retained player row and module
+    /// must not be advertised as a newly loaded, ready world.</summary>
+    internal static WorldDigest ForCurrentReadAvailability(WorldDigest digest, bool readSucceeded) =>
+        readSucceeded ? digest : digest with { Module = string.Empty, ModuleGit = 0 };
 
     /// <summary>
     /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most

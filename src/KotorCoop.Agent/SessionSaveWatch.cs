@@ -213,7 +213,11 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// to report.
     /// </summary>
     public string? ObserveClient(uint digestNow, string? currentSaveDirectory)
+        => ObserveClient(digestNow, currentSaveDirectory, out _);
+
+    public string? ObserveClient(uint digestNow, string? currentSaveDirectory, out bool characterWritten)
     {
+        characterWritten = false;
         (bool _, bool changed) = Advance(digestNow);
 
         if (!changed || currentSaveDirectory is null)
@@ -221,7 +225,10 @@ public sealed class SessionSaveWatch(string gameDirectory)
             return null;
         }
 
-        return Capture(currentSaveDirectory);
+        CharacterCapture capture = ClientCharacterPersistence.Capture(
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic);
+        characterWritten = capture == CharacterCapture.Written;
+        return FormatCapture(capture, diagnostic);
     }
 
     /// <summary>
@@ -255,16 +262,36 @@ public sealed class SessionSaveWatch(string gameDirectory)
         return result == CharacterCapture.Written;
     }
 
+    /// <summary>Captures only the directory proven by a fresh, completed own-load request.
+    /// This deliberately bypasses the ordinary newest-save and staged-copy rules because the
+    /// provenance plus unchanged archive fingerprint establishes that this staged directory
+    /// contains the selected local character rather than the host's adopted character.</summary>
+    public bool CaptureVerifiedLoadSource(OwnLoadCharacterSource source, out string outcome)
+    {
+        bool written = ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            SavesDirectory,
+            source.Directory,
+            source.SaveSha256,
+            source.SaveLength,
+            _sessionBaselineIdentity,
+            allowStagedDirectory: source.CommandRequestId is null,
+            out string diagnostic);
+        outcome = written
+            ? $"selected character saved ({diagnostic})"
+            : $"selected character NOT captured ({diagnostic})";
+        return written;
+    }
+
     private string? Capture(string currentSaveDirectory) =>
-        ClientCharacterPersistence.Capture(
-            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic) switch
-        {
-            CharacterCapture.Written => $"session-saved character: {diagnostic}",
-            // Not an error: the staged copy of the host's world, or a save older than the
-            // sidecar — either way the sidecar on disk is the right one and stays.
-            CharacterCapture.Kept => $"session-saved character: {diagnostic}",
-            _ => $"session-saved character NOT captured: {diagnostic}",
-        };
+        FormatCapture(ClientCharacterPersistence.Capture(
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic), diagnostic);
+
+    private static string FormatCapture(CharacterCapture capture, string diagnostic) => capture switch
+    {
+        CharacterCapture.Written => $"session-saved character: {diagnostic}",
+        CharacterCapture.Kept => $"session-saved character: {diagnostic}",
+        _ => $"session-saved character NOT captured: {diagnostic}",
+    };
 
     /// <summary>Runs the pure watch and records the connection's baseline the first time it
     /// establishes. Returns (justEstablished, changed) — <see cref="ObserveHost"/> and

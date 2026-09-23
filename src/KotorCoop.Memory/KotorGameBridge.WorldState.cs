@@ -280,7 +280,16 @@ public sealed partial class KotorGameBridge
     /// THIS path is itself live-verified, not something this pass claims to have done.
     /// </summary>
     public bool TryRequestMidSessionLoad(int slotIndex, out string diagnostic)
+        => TryRequestMidSessionLoad(slotIndex, out diagnostic, out _, out _);
+
+    public bool TryRequestMidSessionLoad(
+        int slotIndex,
+        out string diagnostic,
+        out uint requestId,
+        out string selectedSaveDirectory)
     {
+        requestId = 0;
+        selectedSaveDirectory = string.Empty;
         string? gameDirectory;
         try
         {
@@ -299,20 +308,80 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        if (!PluginMenuLoader.TryStageSaveAsAutosave(gameDirectory, slotIndex, out string staging))
+        if (!PluginMenuLoader.TryResolveSaveDirectory(gameDirectory, slotIndex, out selectedSaveDirectory, out string selected))
         {
-            diagnostic = staging;
+            diagnostic = selected;
             return false;
         }
 
+        if (!TryStageMidSessionLoadFromDirectory(selectedSaveDirectory, out diagnostic, out _))
+        {
+            return false;
+        }
+
+        return TryRequestStagedMidSessionLoad(out diagnostic, out requestId);
+    }
+
+    /// <summary>Request a mid-session load from the already-resolved selected directory.
+    /// The exact path is staged before the native request is published.</summary>
+    public bool TryRequestMidSessionLoadFromDirectory(
+        string selectedSaveDirectory,
+        out string diagnostic,
+        out uint requestId)
+    {
+        if (!TryStageMidSessionLoadFromDirectory(selectedSaveDirectory, out diagnostic, out _))
+        {
+            requestId = 0;
+            return false;
+        }
+
+        return TryRequestStagedMidSessionLoad(out diagnostic, out requestId);
+    }
+
+    public bool TryStageMidSessionLoadFromDirectory(
+        string selectedSaveDirectory,
+        out string diagnostic,
+        out string stagedSaveDirectory)
+    {
+        stagedSaveDirectory = string.Empty;
+        string? gameDirectory;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+            gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+        }
+        catch (Exception ex)
+        {
+            diagnostic = $"cannot resolve the game directory: {ex.Message}";
+            return false;
+        }
+
+        if (gameDirectory is null)
+        {
+            diagnostic = "cannot resolve the game directory";
+            return false;
+        }
+
+        if (!PluginMenuLoader.TryStageSaveAsAutosaveFromDirectory(gameDirectory, selectedSaveDirectory, out diagnostic))
+        {
+            return false;
+        }
+
+        stagedSaveDirectory = Path.Combine(gameDirectory, "saves", PluginMenuLoader.AutosaveSlot);
+        return true;
+    }
+
+    public bool TryRequestStagedMidSessionLoad(out string diagnostic, out uint requestId)
+    {
+        requestId = 0;
         bool ok = PluginMenuLoader.TryRequestLoad(
-            _memory, out nint block, out string request, adoptedWorld: false, inSession: true);
+            _memory, out nint block, out string request, out requestId, adoptedWorld: false, inSession: true);
         if (ok)
         {
             _menuLoadBlock = block;
         }
 
-        diagnostic = ok ? $"{staging}; {request}" : request;
+        diagnostic = request;
         return ok;
     }
 

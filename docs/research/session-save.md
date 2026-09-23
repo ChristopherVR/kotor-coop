@@ -2247,3 +2247,30 @@ The source is still the newest NON-staged save, so `saves\000001 - AUTOSAVE` on 
 read. `CaptureCharacterOnDisconnect` does the same quicksave-then-wait (blocking, up to 5 s, on the
 teardown path). The cadence rule is pinned by `CharacterCaptureCadenceRuleTests`; the dispatcher wiring is not unit-tested. NEEDS-LIVE: the
 quicksave landing where `FindCaptureSource` looks, and that a periodic quicksave is unobtrusive.
+
+## Host quit-to-menu edge must not reuse the last-good standing row (2026-09-23)
+
+**Regression observed.** At about 10:35:49 the host ran `quittomenu`. Three seconds later, the
+client's `HostWorldReplacedRule` saw the new teardown serial together with the host's retained
+standing `PlayerState` row and tried to rejoin immediately. The host had no world yet, so the
+joiner performed its bounded no-world retry loop instead of waiting for the host-away / reload
+notice. Logs are `$env:TEMP/kotorcoop-review-live/agent1-sep23-lock.log` and
+`agent2-sep23-lock.log`.
+
+**Guard added, live confirmation pending.** `CoopAgent` continues publishing the last-good
+player row for short native-read failures, but now publishes an empty `WorldDigest.Module` and
+zero module GIT on any tick where `TryReadLocalState` failed. The load serial remains published
+so the edge is not lost. `HostWorldReplacedRule.IsHostReady(hostState, digestModule)` now requires
+both a non-away, non-downed standing row and a non-empty digest module matching that row
+case-insensitively. `WorldDigestReadinessRule` also suppresses the module on the first digest
+publication that observes a changed load serial, even if the player read succeeded on that pump;
+the next successful sample at the same serial may publish it. This closes the stale-row sampling
+window without waiting for an away packet, which some fast reloads skip. The digest-correlated
+HostReload path uses the same readiness predicate. Tests cover the initial baseline,
+changed-serial suppression, the next same-serial success, continued refusal while reads fail,
+stale standing rows with empty or mismatched digest modules, the valid fast path, and preservation
+of the serial while clearing module readiness.
+
+This is code/test evidence only. Re-run Quit to Main Menu with a connected client to confirm the
+client receives the host-away notice, waits while the host has no world, and performs exactly
+one rejoin once the host's matching-module digest and standing row return.

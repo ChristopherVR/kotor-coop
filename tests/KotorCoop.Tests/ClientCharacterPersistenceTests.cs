@@ -239,6 +239,47 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void VerifiedSelectedLoadCanCaptureTheStagedDirectoryOnlyWhileItsArchiveIsUnchanged()
+    {
+        string saves = TempDirectory();
+        string staged = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Selected Character");
+        Assert.True(ClientCharacterPersistence.TryHashSave(staged, out string hash, out long length));
+
+        Assert.True(ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            saves, staged, hash, length, hostSaveIdentity: 0x42, allowStagedDirectory: true, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out _, out _));
+        Assert.Equal("Selected Character", read.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void VerifiedSelectedLoadRefusesAnArchiveChangedAfterTheRequestSnapshot()
+    {
+        string saves = TempDirectory();
+        string staged = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Selected Character");
+        Assert.True(ClientCharacterPersistence.TryHashSave(staged, out string hash, out long length));
+        File.AppendAllText(Path.Combine(staged, "SAVEGAME.sav"), "changed");
+
+        Assert.False(ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            saves, staged, hash, length, hostSaveIdentity: 0x42, allowStagedDirectory: true, out string diagnostic));
+        Assert.Contains("changed after its load request", diagnostic, StringComparison.Ordinal);
+        Assert.False(ClientCharacterPersistence.TryReadSidecar(saves, out _, out _, out _));
+    }
+
+    [Fact]
+    public void VerifiedSelectedLoadAlsoBindsActiveModuleAndCompanionControlMetadata()
+    {
+        string saves = TempDirectory();
+        string staged = BuildSaveIn(saves, "000001 - AUTOSAVE", "end_m01aa", 0x99, "Selected Character");
+        Assert.True(ClientCharacterPersistence.TryHashSave(staged, out string hash, out long length));
+        File.AppendAllText(Path.Combine(staged, "savenfo.res"), "changed active module metadata");
+
+        Assert.False(ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            saves, staged, hash, length, hostSaveIdentity: 0x42, allowStagedDirectory: true, out string diagnostic));
+        Assert.Contains("changed after its load request", diagnostic, StringComparison.Ordinal);
+        Assert.False(ClientCharacterPersistence.TryReadSidecar(saves, out _, out _, out _));
+    }
+
+    [Fact]
     public void TheEnginesOwnAutosaveInTheSameSlotIsCapturable()
     {
         string saves = TempDirectory();

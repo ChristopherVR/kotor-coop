@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Buffers.Binary;
 using KotorCoop.Memory;
 using KotorCoop.Memory.GameFiles;
 
@@ -142,6 +144,106 @@ public static class ClientCharacterPersistence
             }
 
             return PlayerIfo.TryExtractPlayer(saveDirectory, out _, out _);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Captures from a load source whose exact directory was observed in a fresh native load
+    /// request and whose SAVEGAME archive still matches the request-time fingerprint. This is
+    /// the only path allowed to read the staged AUTOSAVE slot: ordinary captures must keep
+    /// rejecting it because it normally contains the host's character.
+    /// </summary>
+    public static bool TryCaptureVerifiedLoadSource(
+        string savesDirectory,
+        string sourceDirectory,
+        string expectedSha256,
+        long expectedLength,
+        uint hostSaveIdentity,
+        bool allowStagedDirectory,
+        out string diagnostic)
+    {
+        string root = Path.GetFullPath(savesDirectory);
+        string source = Path.GetFullPath(sourceDirectory);
+        bool staged = string.Equals(Path.GetFileName(source), "000001 - AUTOSAVE", StringComparison.OrdinalIgnoreCase);
+        if (!source.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || staged && !allowStagedDirectory)
+        {
+            diagnostic = "the verified load source is outside this saves folder or is an unproven staged autosave";
+            return false;
+        }
+
+        if (!TryHashSave(source, out string beforeHash, out long beforeLength)
+            || beforeLength != expectedLength
+            || !string.Equals(beforeHash, expectedSha256, StringComparison.Ordinal))
+        {
+            diagnostic = "the selected save changed after its load request - kept the existing character";
+            return false;
+        }
+
+        if (!PlayerIfo.TryExtractPlayer(source, out GffStruct player, out diagnostic))
+        {
+            return false;
+        }
+
+        if (!TryHashSave(source, out string afterHash, out long afterLength)
+            || afterLength != expectedLength
+            || !string.Equals(afterHash, expectedSha256, StringComparison.Ordinal))
+        {
+            diagnostic = "the selected save changed while its character was being read - kept the existing character";
+            return false;
+        }
+
+        return TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic);
+    }
+
+    /// <summary>Stable content fingerprint for the archive a confirmed load request names.</summary>
+    public static bool TryHashSave(string saveDirectory, out string sha256, out long length)
+    {
+        sha256 = string.Empty;
+        length = 0;
+        try
+        {
+            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            string[] inputs = ["SAVEGAME.sav", "savenfo.res", "PARTYTABLE.res"];
+            byte[] lengthBytes = new byte[sizeof(long)];
+            bool saveArchivePresent = false;
+            foreach (string name in inputs)
+            {
+                byte[] nameBytes = Encoding.ASCII.GetBytes(name);
+                hash.AppendData(nameBytes);
+                string path = Path.Combine(saveDirectory, name);
+                if (!File.Exists(path))
+                {
+                    hash.AppendData([0]);
+                    continue;
+                }
+
+                using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                long fileLength = stream.Length;
+                if (name == "SAVEGAME.sav")
+                {
+                    if (fileLength <= 0) return false;
+                    saveArchivePresent = true;
+                }
+                BinaryPrimitives.WriteInt64LittleEndian(lengthBytes, fileLength);
+                hash.AppendData([1]);
+                hash.AppendData(lengthBytes);
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    hash.AppendData(buffer.AsSpan(0, read));
+                }
+                length = checked(length + fileLength);
+            }
+
+            if (!saveArchivePresent) return false;
+            sha256 = Convert.ToHexString(hash.GetHashAndReset());
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {

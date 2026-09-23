@@ -103,6 +103,31 @@ finishing a conversation) is the concrete example the live-test script in §7 us
 early/mid-game and reproducible by walking into the right spot, unlike the Leviathan/endgame
 entries in this list.
 
+#### Live route collision (2026-09-23): Dantooine workbench route enters the Zhar scene trigger
+
+A clean joiner test advanced Zhar dialogue node 100→101 and then stopped following the scripted
+move to `wp_bench01` at `(93.14, 38.11, 5.03)`. This coordinate is inside `danm13.git`'s
+`dan13_trig03` polygon (TriggerList[3], OnEnter `k_pdan_trig1303`): relative to trigger origin
+`(86.2077, 36.8906, 5.03395)` it is `(6.93, 1.22)`, and the segment to the waypoint crosses
+the polygon. In the available save snapshot, `DAN_JEDI_PLOT=0`; the script checks
+`GetEnteringObject()==GetFirstPC()` and then selects the `dan13_zhar` branch without requiring
+`DAN_STARMAP_DONE` or `DAN_VANDAR_DONE`. That branch targets Zhar and starts a conversation, with
+content depending on the campaign's current plot state. A later live run loaded
+`campaign_zhar_fixed_before_host` and walked through the trigger before directly talking to Zhar:
+trigger 0x38 fired, the Zhar conversation advanced through entry nodes 100→101→102→103, and
+completed naturally. This shows the trigger-driven conversation is the intended route for that
+staged save; it does not prove every branch is the initial Council scene. The earlier save
+snapshot showing `DAN_JEDI_PLOT=0` was collected later than its log, so it is corroborating
+evidence, not a timestamp-exact read.
+
+For the workbench test, load cleanly and walk through the trigger before directly starting the
+workbench conversation. Starting that conversation first and then crossing the trigger can
+start a second Zhar conversation and interrupt/reset the route. The observed stop is therefore
+consistent with entering active vanilla scene content; by itself it does not establish a coop
+movement defect. The host log's generic-trigger publication proves the trigger event was
+observed, but not that the relayed host phantom passed this script's local-PC guard; host-side
+progression parity remains a separate live check.
+
 ### 2.3 Net read
 
 Non-monotonic quest state is not an edge case this fix hardens against speculatively — it is
