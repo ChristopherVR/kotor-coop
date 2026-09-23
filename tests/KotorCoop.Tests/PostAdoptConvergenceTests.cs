@@ -160,25 +160,42 @@ public class PostAdoptConvergenceTests
     {
         string root = RepositoryRoot();
 
-        foreach (string relative in
-            (string[])["src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs",
-                "src/KotorCoop.Agent/JoinFlow.cs"])
-        {
-            string path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
-            Assert.True(File.Exists(path), $"expected to find {path}");
+        const string Why =
+            "the shadows must be dropped BEFORE the socket reopens, or the first scan of the new "
+            + "session diffs the host's staged world against the one we left";
 
-            string text = File.ReadAllText(path);
-            Assert.Contains("ForgetWorldShadows()", text);
+        // The join flow forgets, then reopens the socket itself.
+        string join = ReadSource(root, "src/KotorCoop.Agent/JoinFlow.cs");
+        int joinForget = join.IndexOf("ForgetWorldShadows()", StringComparison.Ordinal);
+        Assert.True(joinForget >= 0, "JoinFlow.cs must call ForgetWorldShadows()");
+        Assert.True(
+            join.IndexOf("Reconnect()", joinForget, StringComparison.Ordinal) > joinForget,
+            $"JoinFlow.cs: {Why}");
 
-            int forget = text.IndexOf("ForgetWorldShadows()", StringComparison.Ordinal);
-            int reconnect = text.IndexOf("Reconnect()", StringComparison.Ordinal);
+        // The save-load rejoin hands the forget to SessionManager.CompleteRejoin as its
+        // settled-load callback, so the reopen happens inside the manager's lifecycle lock.
+        string saveLoad = ReadSource(root, "src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs");
+        int complete = saveLoad.IndexOf("manager.CompleteRejoin(", StringComparison.Ordinal);
+        int saveLoadForget = saveLoad.IndexOf("ForgetWorldShadows()", StringComparison.Ordinal);
+        Assert.True(complete >= 0, "CoopCommandDispatcher.SaveLoad.cs must rejoin through CompleteRejoin");
+        Assert.True(
+            saveLoadForget > complete,
+            $"CoopCommandDispatcher.SaveLoad.cs: ForgetWorldShadows() must run in CompleteRejoin's callback; {Why}");
 
-            Assert.True(
-                reconnect > forget,
-                $"{relative}: the shadows must be dropped BEFORE the socket reopens, or the "
-                    + "first scan of the new session diffs the host's staged world against the "
-                    + "one we left");
-        }
+        // ...and the manager must run that callback before it reconnects.
+        string manager = ReadSource(root, "src/KotorCoop.Session/SessionManager.cs");
+        int body = manager.IndexOf("public bool CompleteRejoin(", StringComparison.Ordinal);
+        Assert.True(body >= 0, "SessionManager.CompleteRejoin not found");
+        int callback = manager.IndexOf("onAdoptedLoadSettled();", body, StringComparison.Ordinal);
+        int connect = manager.IndexOf("ConnectCore(", body, StringComparison.Ordinal);
+        Assert.True(callback > body && connect > callback, $"SessionManager.CompleteRejoin: {Why}");
+    }
+
+    private static string ReadSource(string root, string relative)
+    {
+        string path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+        Assert.True(File.Exists(path), $"expected to find {path}");
+        return File.ReadAllText(path);
     }
 
     private static string RepositoryRoot()

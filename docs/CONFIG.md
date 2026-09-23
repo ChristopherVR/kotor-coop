@@ -234,6 +234,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `dialogue_fast_join` | ON | pump the dialogue channel on the real-time path, not the 150ms cadence | [dialogue-skip-desync.md](research/dialogue-skip-desync.md) |
 | `dialogue_join_teleport` | ON | teleport a late joiner into a conversation instead of walking | [dialogue-join-latency.md](research/dialogue-join-latency.md) |
 | `dialogue_exclusive` | ON | one conversation at a time (the exclusivity lock itself) | [dialogue-sync.md](research/dialogue-sync.md) |
+| `leviathan_action_script_gate` | ON | on a client, skip the two Leviathan rescuer-transform node action scripts in `lev_m40aa` so only the host runs the rescue; without it the follower moves its own PC to the rescuer waypoint and switches into a companion | [leviathan.md](research/leviathan.md) |
 | `dialog_state_watch` | OFF | opt-in diagnostic: logs every writer of the dialogue global-state flag | [dialogue-sync.md](research/dialogue-sync.md) |
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers | [cinematics.md](research/cinematics.md) |
 | `item_template_spawn_sync` | ON | capture the real blueprint resref of every item `CreateItemOnObject` creates, for `script_item_sync` | [item-identity.md §13](research/item-identity.md) |

@@ -55,10 +55,12 @@ public class TravelPumpTests
                 return true;
             }
 
+            // The real bridge reports an idle mailbox as a readable serial-zero snapshot,
+            // which TransitionPump takes as its baseline (e521ea4).
             serial = 0;
             module = string.Empty;
             waypoint = string.Empty;
-            return false;
+            return true;
         }
 
         /// <summary>The movies attached to each travel request, so the cinematic parity
@@ -868,6 +870,9 @@ public class TravelPumpTests
                 followLeadMode: FollowLeadMode.Any);
         session.EnemyAuthority = true;
 
+        // The idle mailbox is the baseline; only a later serial is this session's own edge.
+        agent.PumpOnce();
+
         // Our own engine's announce into the stunt module (the pod script's StartNewModule).
         bridge.OwnAnnounce = (1, "STUNT_00", string.Empty);
         agent.PumpOnce();
@@ -1237,6 +1242,7 @@ public class TravelPumpTests
         (CoopAgent agent, TravelBridge bridge, StubSession session) =
             Build(transitionAnnounce: true, followLeadMode: FollowLeadMode.Any, combatPumpMs: 0);
         session.EnemyAuthority = true;
+        agent.PumpOnce(); // the idle mailbox is the baseline
         bridge.OwnAnnounce = (1, "korr_m34aa", "from_door");
 
         session.IncomingAnnounces.Add(ClientAnnounce(1, "tar_m03aa"));

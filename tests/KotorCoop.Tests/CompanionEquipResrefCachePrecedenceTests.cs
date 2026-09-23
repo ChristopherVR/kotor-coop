@@ -60,20 +60,22 @@ public sealed class CompanionEquipResrefCachePrecedenceTests : IDisposable
         new Span<byte>((void*)address, length).Fill(value);
     }
 
+    /// <summary>Since 3e571c1 every metadata read resolves the id to a live engine item body
+    /// first, and only then prefers the spawn cache over the Tag proxy (ids are reused across
+    /// modules, so a cached alias alone may name a stranger). The spawn-cache precedence itself
+    /// is pinned in <c>ItemTemplateSpawnCachePrecedenceTests</c>; here the test host has no
+    /// engine object array, so an equipped id with a cached alias must read empty rather than
+    /// trust the alias.</summary>
     [Fact]
-    public void AFreshlyEquippedItemResolvesImmediatelyFromTheSpawnCache()
+    public void ACachedAliasWithoutALiveItemBodyReadsEmpty()
     {
         const uint itemId = 0x9001;
         Marshal.WriteInt32(_inventory + InvSlotRightWeapon, unchecked((int)itemId));
 
-        // The fact the ItemTemplateSpawnHook ring would have fed this session the instant
-        // EquipItemFromTemplateDirect's own CreateItemOnObject call produced the item —
-        // BEFORE any vtable/Tag rescan (rate-limited to once per 15s) ever ran.
         _bridge.RememberSpawnedItemResref(itemId, "g_w_vbrdblswd01");
+        Assert.True(_bridge.TryGetSpawnedItemResrefForCurrentWorld(itemId, out _));
 
-        string resref = _bridge.ReadEquippedResref(_creature, InvSlotRightWeapon);
-
-        Assert.Equal("g_w_vbrdblswd01", resref);
+        Assert.Equal(string.Empty, _bridge.ReadEquippedResref(_creature, InvSlotRightWeapon));
     }
 
     [Fact]

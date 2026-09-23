@@ -106,6 +106,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.GalaxyAccept] = "galaxyaccept",
         [CoopCommandKind.Gamepad] = "gamepad status",
         [CoopCommandKind.AddClass] = "addclass 3",
+        [CoopCommandKind.MineAction] = "mineaction recover 0x71",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one
