@@ -580,7 +580,7 @@ public sealed partial class CoopCommandDispatcher
             _ownLoadLoadVerdictSeen = OwnLoadCaptureSafetyRule.LatchLoadVerdict(
                 _ownLoadLoadVerdictSeen, ownVerdict == SaveOrLoadVerdict.Load);
             bool ownLoadRejoinReady = OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(
-                _ownLoadLoadVerdictSeen, _ownLoadCharacterCapturedForVerdict);
+                _ownLoadVerdictPending, _ownLoadCharacterCapturedForVerdict);
             if (_ownLoadVerdictPending && ownLoadRejoinReady)
             {
                 ownLoadCharacterCaptured = _ownLoadCharacterCapturedForVerdict;
@@ -1711,6 +1711,16 @@ public sealed partial class CoopCommandDispatcher
             if (provenance.Source == LoadProvenanceSource.ServerLoadRequest
                 && provenance.Status == LoadProvenanceStatus.Captured
                 && provenance.WorldLoadSerialAtRequest == commandSerial)
+            {
+                return;
+            }
+
+            // The mid-session wrapper first advances the world-load serial while tearing
+            // down, then invokes the main-menu directory loader against the exact staged
+            // AUTOSAVE. Retain the command's source only when that callback is at the
+            // teardown's next serial and its bytes still match the explicitly selected save.
+            if (OwnLoadCharacterSourceRule.IsCommandProvenanceFor(
+                _pendingCommandOwnLoadCharacterSource, provenance, savesDirectory))
             {
                 return;
             }

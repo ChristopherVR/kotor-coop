@@ -19,8 +19,8 @@ public static class OwnLoadCaptureSafetyRule
     public static bool LatchLoadVerdict(bool previouslySeen, bool loadVerdictSeen) =>
         previouslySeen || loadVerdictSeen;
 
-    public static bool MayRejoinAfterCapture(bool loadVerdictSeen, bool selectedCharacterCaptured) =>
-        loadVerdictSeen && selectedCharacterCaptured;
+    public static bool MayRejoinAfterCapture(bool rawOwnLoadEpisodePending, bool selectedCharacterCaptured) =>
+        rawOwnLoadEpisodePending && selectedCharacterCaptured;
 
     public static bool MustRefuseAfterDeadline(bool loadVerdictSeen, bool selectedCharacterCaptured, bool requestWindowPending) =>
         loadVerdictSeen && !selectedCharacterCaptured && !requestWindowPending;

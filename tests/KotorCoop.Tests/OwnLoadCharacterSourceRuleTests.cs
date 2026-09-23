@@ -65,6 +65,44 @@ public sealed class OwnLoadCharacterSourceRuleTests
     }
 
     [Fact]
+    public void ConsoleLoadRetainsExactStagedSourceAcrossWrapperTeardownAndDirectoryCallback()
+    {
+        string saves = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        string selected = Path.Combine(saves, "000026 - selected");
+        string autosave = Path.Combine(saves, "000001 - AUTOSAVE");
+        Directory.CreateDirectory(selected);
+        Directory.CreateDirectory(autosave);
+        byte[] selectedBytes = [9, 8, 7, 6];
+        File.WriteAllBytes(Path.Combine(selected, "SAVEGAME.sav"), selectedBytes);
+        File.WriteAllBytes(Path.Combine(autosave, "SAVEGAME.sav"), selectedBytes);
+        try
+        {
+            Assert.True(ClientCharacterPersistence.TryHashSave(selected, out string hash, out long length));
+            OwnLoadCharacterSource command = new(0, 2, selected, hash, length, 100,
+                CommandRequestId: 4, CommandStartWorldLoadSerial: 2);
+            LoadProvenance wrapperDirectoryLoad = Request(8, 3,
+                LoadProvenanceSource.MainMenuDirectDirectory,
+                LoadProvenanceStatus.CapturedDirectory, "000001 - AUTOSAVE");
+
+            // Plugin teardown increments the serial before MainMenuDirectDirectory runs.
+            Assert.True(OwnLoadCharacterSourceRule.IsCommandProvenanceFor(command, wrapperDirectoryLoad, saves));
+            Assert.True(OwnLoadCharacterSourceRule.IsCommandCompletedFor(command, 3, 4, 0, 101));
+
+            File.WriteAllBytes(Path.Combine(autosave, "SAVEGAME.sav"), [1, 1, 1]);
+            Assert.False(OwnLoadCharacterSourceRule.IsCommandProvenanceFor(command, wrapperDirectoryLoad, saves));
+            Assert.False(OwnLoadCharacterSourceRule.IsCommandProvenanceFor(command,
+                wrapperDirectoryLoad with { WorldLoadSerialAtRequest = 4 }, saves));
+            Assert.False(OwnLoadCharacterSourceRule.IsCommandProvenanceFor(command,
+                Request(9, 3, LoadProvenanceSource.MainMenuDirectDirectory,
+                    LoadProvenanceStatus.CapturedDirectory, "000002 - OTHER"), saves));
+        }
+        finally
+        {
+            Directory.Delete(saves, recursive: true);
+        }
+    }
+
+    [Fact]
     public void CaptureSafetyBlocksDelayedNewestSaveAndNonOwnAdoptionsUntilFreshSave()
     {
         Assert.False(OwnLoadCaptureSafetyRule.MayCaptureFromNewestSave(
@@ -88,13 +126,17 @@ public sealed class OwnLoadCharacterSourceRuleTests
     [Fact]
     public void LoadVerdictCanWaitForLateExactLoadAcknowledgementThenRejoin()
     {
-        bool loadVerdictSeen = OwnLoadCaptureSafetyRule.LatchLoadVerdict(false, true);
-        Assert.False(OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(loadVerdictSeen, selectedCharacterCaptured: false));
+        bool loadVerdictSeen = false; // same-save reload may leave no digest verdict at all
+        bool rawOwnLoadEpisodePending = true;
+        Assert.False(OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(rawOwnLoadEpisodePending, selectedCharacterCaptured: false));
         Assert.False(OwnLoadCaptureSafetyRule.MustRefuseAfterDeadline(
             loadVerdictSeen, selectedCharacterCaptured: false, requestWindowPending: true));
 
-        // The request acknowledgement can arrive after the digest classifier reports Load.
-        Assert.True(OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(loadVerdictSeen, selectedCharacterCaptured: true));
+        // A proven exact source plus request acknowledgement can rejoin even when the
+        // save digest is unchanged or its classifier sample arrives late.
+        Assert.True(OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(rawOwnLoadEpisodePending, selectedCharacterCaptured: true));
+        Assert.False(OwnLoadCaptureSafetyRule.MayRejoinAfterCapture(
+            rawOwnLoadEpisodePending: false, selectedCharacterCaptured: true));
         Assert.False(OwnLoadCaptureSafetyRule.MustRefuseAfterDeadline(
             loadVerdictSeen, selectedCharacterCaptured: true, requestWindowPending: false));
     }

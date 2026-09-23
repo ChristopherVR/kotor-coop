@@ -18,6 +18,33 @@ public static class OwnLoadCharacterSourceRule
 {
     public const long MaxRequestAgeMs = 90_000;
 
+    /// <summary>Keep the exact command source when the wrapper reaches the native directory
+    /// loader one world serial after the command's teardown serial. The AUTOSAVE bytes must
+    /// still be the bytes staged from the selected slot; the request acknowledgement and
+    /// completed serial are checked separately by <see cref="IsCommandCompletedFor"/>.</summary>
+    public static bool IsCommandProvenanceFor(
+        OwnLoadCharacterSource? source,
+        LoadProvenance provenance,
+        string savesDirectory)
+    {
+        if (source is null
+            || !source.CommandRequestId.HasValue
+            || !source.CommandStartWorldLoadSerial.HasValue
+            || provenance.Source != LoadProvenanceSource.MainMenuDirectDirectory
+            || provenance.Status != LoadProvenanceStatus.CapturedDirectory
+            || !string.Equals(provenance.DirectoryName, "000001 - AUTOSAVE", StringComparison.OrdinalIgnoreCase)
+            || provenance.WorldLoadSerialAtRequest
+                != unchecked(source.CommandStartWorldLoadSerial.Value + 1))
+        {
+            return false;
+        }
+
+        string stagedDirectory = Path.GetFullPath(Path.Combine(savesDirectory, provenance.DirectoryName!));
+        return ClientCharacterPersistence.TryHashSave(stagedDirectory, out string hash, out long length)
+            && length == source.SaveLength
+            && string.Equals(hash, source.SaveSha256, StringComparison.Ordinal);
+    }
+
     /// <summary>Accept only a new, successful direct-directory request for the staged autosave,
     /// observed before its world-load serial advances. Unsupported or stale requests fail closed.</summary>
     public static bool TryCreate(

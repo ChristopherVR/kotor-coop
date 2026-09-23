@@ -2274,3 +2274,20 @@ of the serial while clearing module readiness.
 This is code/test evidence only. Re-run Quit to Main Menu with a connected client to confirm the
 client receives the host-away notice, waits while the host has no world, and performs exactly
 one rejoin once the host's matching-module digest and standing row return.
+
+### Live host-away repeat (2026-09-23, checks26)
+
+With `36599fc` managed code and the already deployed `e05b10f` native DLL, the host left
+for the main menu at 10:51:01. The joiner reported the departure at 10:51:03 and released
+plugin-side locks at the configured timeout, 10:51:23, while keeping the socket connected.
+There was no premature HostReload or NoWorld retry during menu parking. A preceding
+parking pass also verified native movement: the joiner moved from (187.3,74.3) to
+(142.5,75.5) after a `walkto` command.
+
+The host loaded `000030 - campaign_zhar_fixed_before_host` through the plugin CLI load
+path. At 10:51:38 the joiner detected the returning world and started exactly one
+HostReload. Its pre-disconnect save landed in 330 ms; adoption used identity `18AFC541`,
+and the joiner reconnected to `danm13` at 10:51:42. This confirms the native menu/return,
+notice emission, control release and automatic rejoin path on the two-instance rig.
+It does not verify the visual placement of those notices or clicking the retail menu.
+Evidence: `agent1-sep23-recovery26.log` and `agent2-sep23-away26.log` in the live-log folder.
