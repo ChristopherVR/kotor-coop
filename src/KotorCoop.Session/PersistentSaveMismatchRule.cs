@@ -102,12 +102,24 @@ public static class PersistentSaveMismatchRule
             return (false, current with { WasMismatched = true });
         }
 
-        if (hostWorldKey != current.HostWorldKey)
+        if (hostWorldKey != 0 && current.HostWorldKey != 0 && hostWorldKey != current.HostWorldKey)
         {
-            // A different host world: whatever was tried against the old one does not count,
-            // and a mismatch against the new one is a fresh edge.
+            // A different host world starts a new authorization scope as well as a new retry
+            // budget. A still-unconsumed raw load edge may follow a delayed digest update to
+            // this key; an edge already used to start an attempt for the old key may not.
+            bool edgeCanAuthorizeNewWorld = recentLoadEdge
+                && current.RecentLoadEdgeAtMs is not null;
+            loadAuthorizedEpisode = edgeCanAuthorizeNewWorld;
             current = new MismatchRejoinWatchState(false, null, 0, hostWorldKey,
-                current.RecentLoadEdgeAtMs, loadAuthorizedEpisode);
+                edgeCanAuthorizeNewWorld ? current.RecentLoadEdgeAtMs : null,
+                LoadAuthorizedEpisode: edgeCanAuthorizeNewWorld);
+        }
+        else if (hostWorldKey != 0 && current.HostWorldKey == 0)
+        {
+            // Establishing the first known key is not evidence of a world replacement. Keep
+            // an unconsumed edge while a digest delayed within its correlation window catches
+            // up, and bind this watch to the now-known key for subsequent changes.
+            current = current with { HostWorldKey = hostWorldKey };
         }
 
         // A save-identity mismatch by itself is not evidence that either loaded world changed.
@@ -130,9 +142,10 @@ public static class PersistentSaveMismatchRule
 
         if (isNewEdge || cooldownElapsed)
         {
+            uint effectiveHostWorldKey = hostWorldKey != 0 ? hostWorldKey : current.HostWorldKey;
             return (true, new MismatchRejoinWatchState(
-                true, nowMs, current.Attempts + 1, hostWorldKey,
-                current.RecentLoadEdgeAtMs, LoadAuthorizedEpisode: true));
+                true, nowMs, current.Attempts + 1, effectiveHostWorldKey,
+                RecentLoadEdgeAtMs: null, LoadAuthorizedEpisode: true));
         }
 
         return (false, current with { WasMismatched = true });

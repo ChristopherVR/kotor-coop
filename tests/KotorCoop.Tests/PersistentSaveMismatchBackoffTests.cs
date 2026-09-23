@@ -96,9 +96,73 @@ public sealed class PersistentSaveMismatchBackoffTests
 
         (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(capped, true, false, 1001, WorldB);
 
+        Assert.False(trigger);
+        Assert.Equal(0, next.Attempts);
+        Assert.Equal(WorldB, next.HostWorldKey);
+        Assert.False(next.LoadAuthorizedEpisode);
+    }
+
+    [Fact]
+    public void NewHostWorldNeedsItsOwnLoadEdgeToAuthorizeAdoption()
+    {
+        MismatchRejoinWatchState attemptedWorldA = new(WasMismatched: true, LastAttemptAtMs: 1000,
+            Attempts: 1, HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
+
+        (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(
+            attemptedWorldA, mismatchedNow: true, rejoinInFlight: false, nowMs: 1001,
+            hostWorldKey: WorldB, loadEdge: true);
+
         Assert.True(trigger);
         Assert.Equal(1, next.Attempts);
         Assert.Equal(WorldB, next.HostWorldKey);
+        Assert.True(next.LoadAuthorizedEpisode);
+        Assert.Null(next.RecentLoadEdgeAtMs);
+    }
+
+    [Fact]
+    public void UnknownHostKeyDoesNotEraseTheKnownAuthorizationScope()
+    {
+        MismatchRejoinWatchState attemptedWorldA = new(WasMismatched: true, LastAttemptAtMs: 1000,
+            Attempts: 1, HostWorldKey: WorldA, LoadAuthorizedEpisode: true);
+
+        (bool interimTrigger, MismatchRejoinWatchState interim) = PersistentSaveMismatchRule.Observe(
+            attemptedWorldA, mismatchedNow: true, rejoinInFlight: false,
+            nowMs: 1000 + PersistentSaveMismatchRule.RetryIntervalMs,
+            hostWorldKey: 0);
+        Assert.True(interimTrigger);
+        Assert.Equal(WorldA, interim.HostWorldKey);
+        Assert.True(interim.LoadAuthorizedEpisode);
+
+        (bool nextWorldTrigger, MismatchRejoinWatchState nextWorld) = PersistentSaveMismatchRule.Observe(
+            interim, mismatchedNow: true, rejoinInFlight: false,
+            nowMs: 1000 + PersistentSaveMismatchRule.RetryIntervalMs + 1,
+            hostWorldKey: WorldB);
+
+        Assert.False(nextWorldTrigger);
+        Assert.Equal(WorldB, nextWorld.HostWorldKey);
+        Assert.False(nextWorld.LoadAuthorizedEpisode);
+    }
+
+    [Fact]
+    public void UnconsumedLoadEdgeCanFollowDelayedDigestToNewHostWorld()
+    {
+        // A prior rejoin owns the in-flight slot when the new edge arrives, so this rule
+        // records but does not spend the edge yet. The new host key arrives on the next tick.
+        (_, MismatchRejoinWatchState edgePending) = PersistentSaveMismatchRule.Observe(
+            new MismatchRejoinWatchState(WasMismatched: true, LastAttemptAtMs: 500,
+                Attempts: 1, HostWorldKey: WorldA),
+            mismatchedNow: true, rejoinInFlight: true, nowMs: 1000,
+            hostWorldKey: WorldA, loadEdge: true);
+
+        (bool trigger, MismatchRejoinWatchState next) = PersistentSaveMismatchRule.Observe(
+            edgePending, mismatchedNow: true, rejoinInFlight: false, nowMs: 1001,
+            hostWorldKey: WorldB);
+
+        Assert.True(trigger);
+        Assert.Equal(WorldB, next.HostWorldKey);
+        Assert.Equal(1, next.Attempts);
+        Assert.True(next.LoadAuthorizedEpisode);
+        Assert.Null(next.RecentLoadEdgeAtMs);
     }
 
     [Fact]
