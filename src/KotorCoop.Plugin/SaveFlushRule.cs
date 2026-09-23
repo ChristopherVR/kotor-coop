@@ -68,8 +68,9 @@ internal enum SaveFlushStep
 ///
 /// THE INVARIANTS THE TESTS PIN:
 /// <list type="bullet">
-/// <item>A request with nothing standing is never held. The common case (a solo player, or a
-/// partner who has not joined yet) must be bit-for-bit the retail save.</item>
+/// <item>A request with nothing standing and no plugin-owned local input lock is never held.
+/// The common solo save remains the retail path. An active commandable lock is held through
+/// the same bounded store window so the save contains the value from before the lock.</item>
 /// <item>A held save is re-issued EXACTLY once, whatever happens: clean (the normal case),
 /// unclean after the frame budget (a destroy the engine keeps refusing), and never twice
 /// (a second request that lands while the first is held is coalesced into it — the player
@@ -128,12 +129,12 @@ internal sealed class SaveFlushRule
     /// bodies standing. The host captures the request's arguments only on
     /// <see cref="SaveFlushRequest.Hold"/>; a coalesced request replaces the capture, so the
     /// latest slot and name win.</summary>
-    public SaveFlushRequest OnSaveRequested(int standing)
+    public SaveFlushRequest OnSaveRequested(int standing, bool inputLockOwned = false)
     {
         switch (Phase)
         {
             case SaveFlushPhase.Idle:
-                if (standing <= 0)
+                if (standing <= 0 && !inputLockOwned)
                 {
                     return SaveFlushRequest.PassThrough;
                 }

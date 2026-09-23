@@ -529,3 +529,26 @@ clean, `auto_start_agent` restored to `1` in both installs.
   unchanged, including the bounds-check-free `-2` sentinel) — needs debugger access this
   round's tooling did not have. Does not block the regression fix, which no longer depends on
   it.
+
+## Temporary spectator lock persisted in an own save (2026-09-23)
+
+On the v74 build preceding the save-lock correction, the host entered `tar_m03mg`
+through a staged warp at 10:19:40. The joiner correctly refused that single-seat
+transition and its native minigame lock engaged at 10:19:41. The joiner remained in
+`korr_m35aa`, with zero remote phantoms. Its save `000035 - parked_lock_beforefix`
+landed at 10:19:48; nested module.ifo contains the own Yasuko Kaar player with
+`Commandable=0` and an empty ActionList. Returning the host to the academy released
+the live lock at 10:20:08. Thus an ordinary save can persist a temporary mod-owned
+control restriction even though the running session later releases it.
+
+An earlier affected save, `000033 - zhar_joiner_before`, also contains Commandable 0
+before the Zhar dialogue begins. That run reached the silent scripted entry 101,
+which pauses dialogue for the PC's workbench movement/animation; it never queued
+that movement. A clean earlier checkpoint has Commandable 1 and did start the
+approach, but still stopped before the scene resumed. This is evidence of a saved
+lock defect, not proof that correcting it alone completes the Zhar reward check.
+
+The intended correction must serialize the original commandable value only when
+this mod owns the temporary lock, then reassert the lock in the running game. It
+must cover saves with no phantoms and must not normalize every loaded zero flag:
+retail scripts can legitimately make actors non-commandable.

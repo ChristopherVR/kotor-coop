@@ -61,11 +61,6 @@ internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block
     /// camera is following.</summary>
     private uint _watching;
 
-    /// <summary>The local player's own creature while its commandable flag is held down, so
-    /// the exact pointer that was clamped is the one restored — never a fresh read at restore
-    /// time, which could by then be a different creature after a revive/respawn.</summary>
-    private nint _lockedCreature;
-
     /// <summary>True while THIS instance is spectating a peer's solo segment — read by
     /// <see cref="PeerDamageController"/> to stop crediting this player's damage against the
     /// owner's enemy mirror, on top of (not instead of) the input lock above. Static, matching
@@ -77,7 +72,7 @@ internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block
     public void Invalidate()
     {
         _watching = 0;
-        _lockedCreature = 0;
+        PlayerCommandableLock.Forget(PlayerCommandableLockOwner.SoloSegment);
         _countdown = 0;
         IsSpectating = false;
     }
@@ -188,8 +183,7 @@ internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block
             return;
         }
 
-        _lockedCreature = controlled;
-        *(int*)(controlled + Odyssey.ObjCommandable) = 0;
+        PlayerCommandableLock.Acquire(PlayerCommandableLockOwner.SoloSegment, controlled);
         Odyssey.HoldCreatureStill(controlled);
     }
 
@@ -204,11 +198,7 @@ internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block
         IsSpectating = false;
         _countdown = 0;
 
-        if (_lockedCreature != 0)
-        {
-            *(int*)(_lockedCreature + Odyssey.ObjCommandable) = 1;
-            _lockedCreature = 0;
-        }
+        PlayerCommandableLock.Release(PlayerCommandableLockOwner.SoloSegment);
 
         if (Odyssey.RestoreCameraToControlledCreature())
         {

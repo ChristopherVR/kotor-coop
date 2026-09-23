@@ -62,12 +62,6 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
 
     private bool _locked;
 
-    /// <summary>The creature whose commandable flag is held down, so the exact pointer that
-    /// was clamped is the one restored — never a fresh read at restore time, which could by
-    /// then be a different creature after a revive, a respawn or a module change. Same
-    /// discipline as <see cref="SoloSegmentSpectateController"/>'s own <c>_lockedCreature</c>.</summary>
-    private nint _lockedCreature;
-
     /// <summary>True while THIS instance is held for a peer's minigame. Static for the same
     /// reason <see cref="SoloSegmentSpectateController.IsSpectating"/> is: any other
     /// controller that wants to know runs in the same process on the same frame, so a plain
@@ -80,7 +74,7 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
     public void Invalidate()
     {
         _locked = false;
-        _lockedCreature = 0;
+        PlayerCommandableLock.Forget(PlayerCommandableLockOwner.Minigame);
         _countdown = 0;
         IsLocked = false;
     }
@@ -157,8 +151,7 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
             // REASSERTED, not fire-and-forget: nothing guarantees the engine's own AI or a
             // follow-order reset never flips commandable back to 1 between passes
             // (party-reconciliation.md's "trap 5" is exactly this shape of surprise).
-            _lockedCreature = controlled;
-            *(int*)(controlled + Odyssey.ObjCommandable) = 0;
+            PlayerCommandableLock.Acquire(PlayerCommandableLockOwner.Minigame, controlled);
             Odyssey.HoldCreatureStill(controlled);
         }
 
@@ -167,7 +160,7 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
 
     private void Release(string reason)
     {
-        if (!_locked && _lockedCreature == 0)
+        if (!_locked)
         {
             return;
         }
@@ -176,11 +169,7 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
         IsLocked = false;
         _countdown = 0;
 
-        if (_lockedCreature != 0)
-        {
-            *(int*)(_lockedCreature + Odyssey.ObjCommandable) = 1;
-            _lockedCreature = 0;
-        }
+        PlayerCommandableLock.Release(PlayerCommandableLockOwner.Minigame);
 
         PluginHost.Log($"minigame lock: {reason} — control is yours again");
     }

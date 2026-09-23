@@ -134,6 +134,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPlacedMineIdentityMap.cs" Link="Plugin\PartyPlacedMineIdentityMap.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GhostSweepRule.cs" Link="Plugin\GhostSweepRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SaveFlushRule.cs" Link="Plugin\SaveFlushRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PlayerCommandableLockRule.cs" Link="Plugin\PlayerCommandableLockRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Phase2StallRule.cs" Link="Plugin\Phase2StallRule.cs" />

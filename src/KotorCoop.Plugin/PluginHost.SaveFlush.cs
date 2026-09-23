@@ -16,6 +16,11 @@ internal static unsafe partial class PluginHost
     /// logged from the frame, never from inside the engine's message handling.</summary>
     private static bool _saveFlushLogHoldPending;
 
+    /// <summary>True only after a successful re-issue temporarily exposed the local PC's
+    /// original commandable value. SaveFlush's quiet frames keep input-lock controllers from
+    /// reasserting it until the native store has consumed the save.</summary>
+    private static bool _saveInputLockSuspended;
+
     /// <summary>How many spawned bodies are standing right now, across the four registries the
     /// pre-store flush empties: peer stand-ins, replicated ground items, materialised enemy
     /// bodies and peer map pins. MAIN THREAD ONLY.</summary>
@@ -57,7 +62,8 @@ internal static unsafe partial class PluginHost
     /// the world the request is for (the epoch is unreadable mid-load, or differs from the one
     /// the frame last saw — the registries are then stale and nothing of ours can be standing
     /// in the new world, which is exactly the module-enter autosave's situation); when the
-    /// request's name cannot be captured; and, through the rule, when nothing is standing.
+    /// request's name cannot be captured; and, through the rule, when nothing is standing and
+    /// no plugin-owned player input lock needs a clean serialization window.
     /// </summary>
     internal static bool OnSaveGameRequested(nint server, int number, nint name, nint player, nint arg4)
     {
@@ -72,7 +78,8 @@ internal static unsafe partial class PluginHost
         }
 
         int standing = CountSpawnedBodiesStanding();
-        if (_saveFlush.Phase == SaveFlushPhase.Idle && standing == 0)
+        bool inputLockOwned = PlayerCommandableLock.IsOwned;
+        if (_saveFlush.Phase == SaveFlushPhase.Idle && standing == 0 && !inputLockOwned)
         {
             return true;
         }
@@ -82,7 +89,7 @@ internal static unsafe partial class PluginHost
             return true;
         }
 
-        if (_saveFlush.OnSaveRequested(standing) == SaveFlushRequest.PassThrough)
+        if (_saveFlush.OnSaveRequested(standing, inputLockOwned) == SaveFlushRequest.PassThrough)
         {
             return true;
         }
@@ -133,6 +140,7 @@ internal static unsafe partial class PluginHost
                 // id on a destroyed slot ("already reported gone") — so they get the same
                 // nudge the aborted-transition path gives them.
                 _items?.Invalidate();
+                ResumeSaveInputLock();
                 Log("save flush: released; the controllers rebuild what the flush destroyed");
                 return false;
 
@@ -160,11 +168,16 @@ internal static unsafe partial class PluginHost
         if (!Odyssey.TryGetQuickSaveReadiness(out string readinessReason))
         {
             _saveFlush.Reset();
+            ResumeSaveInputLock();
             Log($"save flush: refused to re-issue the held save (slot {held.Number}, '{held.Name}') - "
                 + $"player world is not ready ({readinessReason}); the held save was dropped");
             return;
         }
 
+        // A successful SaveGame call only arms StallEventSaveGame; serialization happens on
+        // the next main-loop pass. Temporarily restore the value captured before the plugin
+        // owned its input lock, and leave controller frames parked until that store window ends.
+        _saveInputLockSuspended = PlayerCommandableLock.SuspendForSave();
         if (Odyssey.ReissueServerSaveGame(held.Server, held.Number, held.Name, held.Player, held.Arg4))
         {
             Log($"save flush: re-issued the save (slot {held.Number}, '{held.Name}') after "
@@ -179,8 +192,20 @@ internal static unsafe partial class PluginHost
         // The server object is not the one the request was made against (the world went
         // away under the hold). Nothing to re-issue into; say so, loudly.
         _saveFlush.Reset();
+        ResumeSaveInputLock();
         Log($"save flush: could NOT re-issue the held save (slot {held.Number}, '{held.Name}') - "
             + "the server the request was made against is gone; that save did not happen");
+    }
+
+    private static void ResumeSaveInputLock()
+    {
+        if (!_saveInputLockSuspended)
+        {
+            return;
+        }
+
+        _saveInputLockSuspended = false;
+        PlayerCommandableLock.ResumeAfterSave();
     }
 
     /// <summary>The world changed while a save was held: the request was for a world that no
@@ -195,6 +220,10 @@ internal static unsafe partial class PluginHost
         SaveFlushHook.Capture held = _heldSave;
         _saveFlush.Reset();
         _saveFlushLogHoldPending = false;
+        // InvalidateAll runs immediately before this method on a world epoch change and
+        // forgets world-owned lock pointers without dereferencing them. Clear only our local
+        // bookkeeping; never write through a pointer into the world being unloaded.
+        _saveInputLockSuspended = false;
         Log($"save flush: the module changed while the save (slot {held.Number}, '{held.Name}') was "
             + "held - dropped; the transition autosave covers this world change");
     }

@@ -21,6 +21,19 @@ public sealed class SaveFlushRuleTests
     }
 
     [Fact]
+    public void ARequestWithOnlyAPluginOwnedInputLockIsHeldForTheAsyncStoreWindow()
+    {
+        var rule = new SaveFlushRule(budgetFrames: 10, quietFrames: 2, settleFrames: 0);
+
+        Assert.Equal(SaveFlushRequest.Hold, rule.OnSaveRequested(0, inputLockOwned: true));
+        Assert.Equal(SaveFlushStep.ReissueClean, rule.OnFrame(flushedOne: false));
+        Assert.Equal(SaveFlushPhase.Quiet, rule.Phase);
+        Assert.Equal(SaveFlushRequest.PassThrough, rule.OnSaveRequested(0, inputLockOwned: true));
+        Assert.Equal(SaveFlushStep.KeepQuiet, rule.OnFrame(flushedOne: false));
+        Assert.Equal(SaveFlushStep.Release, rule.OnFrame(flushedOne: false));
+    }
+
+    [Fact]
     public void ARequestWithBodiesStandingIsHeldThenReissuedOnceClean()
     {
         var rule = new SaveFlushRule(budgetFrames: 120, quietFrames: 4, settleFrames: 1);
