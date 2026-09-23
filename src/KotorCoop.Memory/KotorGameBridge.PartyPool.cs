@@ -337,6 +337,7 @@ public sealed partial class KotorGameBridge
 
         Dictionary<PartyPoolStackKey, int> raw = [];
         int unresolved = 0;
+        bool deletingItemSeen = false;
         for (int i = 0; i < count; i++)
         {
             if (!_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId)
@@ -356,9 +357,17 @@ public sealed partial class KotorGameBridge
             // a synchronous whole-heap scan on a persistent pool miss: that scan can stall the
             // pump, and the authoritative ID resolver already provides the address needed to
             // read this item's tag and identity.
-            if (!TryReadLiveItemMetadata(itemId, objectArray, out _, out string resref, out ItemIdentity identity)
+            if (!TryReadLiveItemMetadata(itemId, objectArray, out _, out string resref,
+                    out ItemIdentity identity, out bool isDeleting)
                 || resref.Length == 0 || !identity.IsKnown || identity.StackSize == 0)
             {
+                unresolved++;
+                continue;
+            }
+
+            if (isDeleting)
+            {
+                deletingItemSeen = true;
                 unresolved++;
                 continue;
             }
@@ -383,7 +392,10 @@ public sealed partial class KotorGameBridge
         // ItemAggregateScanRule for why a partial aggregate is a removal order in disguise.
         if (!ItemAggregateScanRule.IsObservation(count, unresolved))
         {
-            LastPartyPoolScanNote = ItemAggregateScanRule.Explain("party pool", count, unresolved);
+            LastPartyPoolScanNote = deletingItemSeen
+                ? $"party pool: {unresolved} of {count} entries include an item marked DELETING; "
+                  + "holding the last complete scan"
+                : ItemAggregateScanRule.Explain("party pool", count, unresolved);
             LastPartyPoolScanWasStale = true;
             totals = _partyPoolLastScan;
             return _partyPoolEverScanned;

@@ -38,6 +38,9 @@ public static class ItemIdentityLayout
     /// bit 5 stolen, bit 6 non-equippable, bit 7 new-item, bit 8 deleting.</summary>
     public const int BitFlags = 0x288;
 
+    /// <summary>Runtime item-state flag: the engine has marked this body for deletion.</summary>
+    public const uint BitDeleting = 1u << 8;
+
     /// <summary>Stack size. Written as a dword whose high half is kept zero (the loader
     /// zero-extends a 16-bit GFF word into it), and read back as a word by the saver.</summary>
     public const int StackSize = 0x28C;
@@ -140,6 +143,12 @@ public static class ItemIdentityLayout
             upgrades,
             flags);
     }
+
+    /// <summary>Returns whether the live flag dword marks the item for deletion. This runtime
+    /// bookkeeping is intentionally not copied into <see cref="ItemIdentity"/> on the wire.</summary>
+    public static bool IsDeleting(ReadOnlySpan<byte> window) =>
+        window.Length >= (BitFlags - WindowStart) + sizeof(uint)
+        && (ReadUInt32(window, BitFlags) & BitDeleting) != 0;
 
     private static uint ReadUInt32(ReadOnlySpan<byte> window, int itemOffset) =>
         BinaryPrimitives.ReadUInt32LittleEndian(window[(itemOffset - WindowStart)..]);

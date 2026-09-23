@@ -83,6 +83,25 @@ public class ItemIdentityTests
         Assert.Equal(ItemIdentity.FlagKnown, identity.Flags);
     }
 
+    [Fact]
+    public void DeletingIsAvailableForLocalFilteringButNeverEntersWireIdentity()
+    {
+        byte[] window = Window(bits: ItemIdentityLayout.BitDeleting | (1u << 0));
+
+        Assert.True(ItemIdentityLayout.IsDeleting(window));
+        Assert.Equal(ItemIdentity.FlagKnown | ItemIdentity.FlagIdentified,
+            ItemIdentityLayout.Decode(window).Flags);
+        Assert.False(ItemIdentityLayout.IsDeleting(Window(bits: 1u << 7)));
+    }
+
+    [Fact]
+    public void TruncatedWindowCannotClaimDeletingFlag()
+    {
+        byte[] window = Window(bits: ItemIdentityLayout.BitDeleting);
+
+        Assert.False(ItemIdentityLayout.IsDeleting(window.AsSpan(0, 0x33)));
+    }
+
     /// <summary>
     /// A stack size of zero is not something the engine produces, and it is the one decoded
     /// field that gets written back into a live item on the other machine. A stale read of

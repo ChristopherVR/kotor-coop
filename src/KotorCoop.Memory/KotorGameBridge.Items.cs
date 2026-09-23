@@ -373,11 +373,13 @@ public sealed partial class KotorGameBridge
     /// bodies can retain an old vtable, ID, and tag. The caller supplies one object-array
     /// snapshot so bulk readers do exactly one bounded bucket lookup per item.</summary>
     private bool TryReadLiveItemMetadata(
-        uint itemObjectId, nint objectArray, out nint address, out string resref, out ItemIdentity identity)
+        uint itemObjectId, nint objectArray, out nint address, out string resref,
+        out ItemIdentity identity, out bool isDeleting)
     {
         address = 0;
         resref = string.Empty;
         identity = ItemIdentity.Unknown;
+        isDeleting = false;
         if (objectArray == 0
             || !EngineGlobals.TryResolveServerObject(_memory, objectArray, itemObjectId, out nint serverAddress)
             || serverAddress < 0x10)
@@ -426,6 +428,7 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
+        isDeleting = ItemIdentityLayout.IsDeleting(window);
         identity = ItemIdentityLayout.Decode(window);
         if (!identity.IsKnown)
         {
@@ -490,7 +493,7 @@ public sealed partial class KotorGameBridge
         }
 
         if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray)
-            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out _, out identity))
+            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out _, out identity, out _))
         {
             why = $"no live item body with id 0x{itemObjectId:X} resolves in this process ({LastItemScanNote})";
             return false;
@@ -552,7 +555,7 @@ public sealed partial class KotorGameBridge
         }
 
         if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray)
-            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out resref, out _))
+            || !TryReadLiveItemMetadata(itemObjectId, objectArray, out _, out resref, out _, out _))
         {
             return false;
         }
@@ -643,7 +646,7 @@ public sealed partial class KotorGameBridge
     /// field being <c>OBJECT_INVALID</c>, so it is the engine's own answer rather than a
     /// proxy for one.</param>
     public readonly record struct ItemListing(
-        uint ObjectId, string Resref, uint Possessor, ItemIdentity Identity)
+        uint ObjectId, string Resref, uint Possessor, ItemIdentity Identity, bool IsDeleting = false)
     {
         /// <summary>True when this item differs from a freshly created blueprint in a way the
         /// identity channel carries — which is what makes it worth picking for a test.</summary>
@@ -733,7 +736,7 @@ public sealed partial class KotorGameBridge
         foreach (uint objectId in _itemAddresses.Keys.ToArray())
         {
             if (!TryReadLiveItemMetadata(objectId, objectArray, out nint liveAddress,
-                    out string resref, out ItemIdentity identity))
+                    out string resref, out ItemIdentity identity, out bool isDeleting))
             {
                 continue;
             }
@@ -742,7 +745,7 @@ public sealed partial class KotorGameBridge
                 ? holder
                 : ObjectInvalid;
 
-            listings.Add(new ItemListing(objectId, resref, possessor, identity));
+            listings.Add(new ItemListing(objectId, resref, possessor, identity, isDeleting));
         }
 
         // The interesting ones first — an item with a stack, charges or an upgrade mask is
@@ -821,6 +824,24 @@ public sealed partial class KotorGameBridge
         foreach (ItemListing item in ListItemsFromCurrentArray(objectArray))
         {
             bool isPartyPoolItem = poolIds is not null && poolIds.Contains(item.ObjectId);
+
+            if (item.IsDeleting)
+            {
+                if (isPartyPoolItem)
+                {
+                    // A deleting row in the party repository means it is mid-mutation. Do
+                    // not let an incomplete pool membership read become an inventory diff.
+                    LastPossessedItemReadWasComplete = false;
+                    return [];
+                }
+
+                if (excludePartyPool && possessorIds.Contains(item.Possessor))
+                {
+                    // The old possessor can remain on an object while the engine tears it
+                    // down. It is not a newly granted personal item.
+                    continue;
+                }
+            }
 
             if (excludePartyPool && isPartyPoolItem)
             {
