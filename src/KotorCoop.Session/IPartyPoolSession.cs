@@ -104,6 +104,11 @@ public interface IPartyPoolSession
     /// verdict. <c>Pumps.PartyPoolPumpV2</c> removes each from its own "still outstanding"
     /// reconcile-target adjustment.</summary>
     IReadOnlyList<uint> DrainAckedPartyPoolIntentsV2() => [];
+
+    /// <summary>Client only: discard party-pool intents from the world that was just left.
+    /// A load-edge quarantine calls this before a new host snapshot can be reconciled. Hosts
+    /// have no outbound intents, so the default is a no-op.</summary>
+    void DiscardPendingPartyPoolIntentsV2() { }
 }
 
 public readonly record struct PartyPoolIntentResultV2(

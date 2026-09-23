@@ -146,6 +146,19 @@ public sealed partial class CoopClient
         }
     }
 
+    public void DiscardPendingPartyPoolIntentsV2()
+    {
+        lock (_gate)
+        {
+            _pendingPartyPoolIntentsV2.Clear();
+        }
+
+        lock (_partyPoolIntentAckDrainV2Gate)
+        {
+            _partyPoolIntentResultDrainV2.Clear();
+        }
+    }
+
     /// <summary>Retransmits every not-yet-acked intent, same backoff shape as
     /// <see cref="ReliablePartyPoolSender.CollectDue"/> — called from <see cref="Tick"/>.</summary>
     private void RetransmitPartyPoolIntentsV2(long now)

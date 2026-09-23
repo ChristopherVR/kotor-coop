@@ -138,32 +138,56 @@ public sealed partial class CoopHost
         bool isNew;
         bool haveResult;
         bool result = false;
+        bool quarantined;
         lock (_gate)
         {
-            _partyPoolIntentSourcesV2[dedupKey] = from;
-            _partyPoolIntentPacketsV2[dedupKey] = intent;
-            haveResult = _partyPoolIntentResultsV2.TryGetValue(dedupKey, out result);
-            isNew = _partyPoolIntentDedupV2.Add(dedupKey);
-            if (isNew)
+            bool peerIsCurrent = _peers.TryGetValue(intent.PeerId, out PeerConnection? peer)
+                && peer.EndPoint.Equals(from);
+            quarantined = !peerIsCurrent || peer!.PartyPoolLoadQuarantined;
+            if (quarantined)
             {
-                _partyPoolIntentDedupHistoryV2.Enqueue(dedupKey);
-                while (_partyPoolIntentDedupHistoryV2.Count > MaxRememberedIntentsV2)
+                isNew = false;
+                haveResult = false;
+                if (peerIsCurrent && peer!.PartyPoolLoadQuarantined)
                 {
-                    (uint Peer, uint Serial) evicted = _partyPoolIntentDedupHistoryV2.Dequeue();
-                    _partyPoolIntentDedupV2.Remove(evicted);
-                    _partyPoolIntentSourcesV2.Remove(evicted);
-                    _partyPoolIntentResultsV2.Remove(evicted);
-                    _partyPoolIntentPacketsV2.Remove(evicted);
+                    // Remember a rejected pre-adoption serial so a retransmission delayed
+                    // until after the peer is readmitted cannot become a new-world apply.
+                    isNew = _partyPoolIntentDedupV2.Add(dedupKey);
+                    _partyPoolIntentSourcesV2[dedupKey] = from;
+                    _partyPoolIntentPacketsV2[dedupKey] = intent;
+                    _partyPoolIntentResultsV2[dedupKey] = false;
+                    if (isNew)
+                    {
+                        _partyPoolIntentDedupHistoryV2.Enqueue(dedupKey);
+                        TrimPartyPoolIntentHistoryLocked();
+                    }
+                }
+            }
+            else
+            {
+                _partyPoolIntentSourcesV2[dedupKey] = from;
+                _partyPoolIntentPacketsV2[dedupKey] = intent;
+                haveResult = _partyPoolIntentResultsV2.TryGetValue(dedupKey, out result);
+                isNew = _partyPoolIntentDedupV2.Add(dedupKey);
+                if (isNew)
+                {
+                    _partyPoolIntentDedupHistoryV2.Enqueue(dedupKey);
+                    TrimPartyPoolIntentHistoryLocked();
+
+                    // Enqueue under the eligibility lock. A load edge either observes and
+                    // drains this queued request, or arrives first and makes us reject it.
+                    lock (_partyPoolIntentDrainV2Gate)
+                    {
+                        _partyPoolIntentDrainV2.Enqueue(intent);
+                    }
                 }
             }
         }
 
-        if (isNew)
+        if (quarantined)
         {
-            lock (_partyPoolIntentDrainV2Gate)
-            {
-                _partyPoolIntentDrainV2.Enqueue(intent);
-            }
+            SendPartyPoolIntentAck(from, intent, accepted: false);
+            return;
         }
 
         // New and still-pending intents have no ACK yet. A duplicate of a completed intent is
@@ -171,6 +195,26 @@ public sealed partial class CoopHost
         if (haveResult)
         {
             SendPartyPoolIntentAck(from, intent, result);
+        }
+    }
+
+    private void TrimPartyPoolIntentHistoryLocked()
+    {
+        while (_partyPoolIntentDedupHistoryV2.Count > MaxRememberedIntentsV2)
+        {
+            (uint Peer, uint Serial) evicted = _partyPoolIntentDedupHistoryV2.Dequeue();
+            _partyPoolIntentDedupV2.Remove(evicted);
+            _partyPoolIntentSourcesV2.Remove(evicted);
+            _partyPoolIntentResultsV2.Remove(evicted);
+            _partyPoolIntentPacketsV2.Remove(evicted);
+        }
+    }
+
+    private void DiscardQueuedPartyPoolIntentsAfterWorldLoad()
+    {
+        foreach (PartyPoolIntentPacketV2 intent in DrainPartyPoolIntentsV2())
+        {
+            CompletePartyPoolIntentV2(intent.PeerId, intent.IntentSerial, accepted: false);
         }
     }
 
@@ -241,6 +285,7 @@ public sealed partial class CoopHost
         // place, so this clone is no longer covering an active race — kept anyway so a future
         // in-place mutator (a resync helper, a debug tool) can never reintroduce one silently.
         Dictionary<PartyPoolStackKey, int> belief;
+        List<PeerConnection> readyRecipients;
         lock (_gate)
         {
             if (!_partyPoolBeliefV2Valid)
@@ -249,6 +294,16 @@ public sealed partial class CoopHost
             }
 
             belief = new Dictionary<PartyPoolStackKey, int>(_partyPoolBeliefV2);
+            readyRecipients = recipients
+                .Where(peer => _peers.TryGetValue(peer.Id, out PeerConnection? current)
+                    && ReferenceEquals(current, peer)
+                    && !peer.PartyPoolLoadQuarantined)
+                .ToList();
+        }
+
+        if (readyRecipients.Count == 0)
+        {
+            return;
         }
 
         foreach (PartyPoolSnapshotPacketV2 page in
@@ -260,7 +315,7 @@ public sealed partial class CoopHost
                 continue;
             }
 
-            foreach (PeerConnection peer in recipients)
+            foreach (PeerConnection peer in readyRecipients)
             {
                 _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
             }

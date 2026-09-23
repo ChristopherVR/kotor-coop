@@ -34,6 +34,16 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        if (next.WorldLoadSerial is not { } sourceLoadSerial)
+        {
+            Log?.Invoke($"party pool v2: refusing {next.Kind.ToString().ToLowerInvariant()} for '{next.Key.Resref}' — source world serial unavailable");
+            if (next.IntentSerial != 0)
+            {
+                agent.CompletePartyPoolIntentV2(next.IntentPeerId, next.IntentSerial, accepted: false);
+            }
+            return;
+        }
+
         uint kind = next.Kind == KotorCoop.Protocol.PartyPoolOpKind.Add
             ? CheatKinds.PartyPoolAdd
             : CheatKinds.PartyPoolRemove;
@@ -74,8 +84,10 @@ public sealed partial class CoopCommandDispatcher
 
         SendCheat(new CheatRequest(
             kind,
+            Target: sourceLoadSerial,
             Text: next.Key.Resref,
             Amount: next.Count,
+            X: PartyPoolMailboxFence.Marker,
             Charges: next.Key.Charges,
             MaxCharges: next.Key.MaxCharges,
             Upgrades: next.Key.Upgrades,

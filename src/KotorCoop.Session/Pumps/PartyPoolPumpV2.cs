@@ -113,6 +113,9 @@ internal sealed class PartyPoolPumpV2(
 
     private bool _everPumped;
 
+    private volatile bool _applyWorldReady = true;
+    private uint? _currentPumpWorldLoadSerial;
+
     /// <summary>Client only: every intent this pump has published but not yet seen acked or
     /// timed out, per key — the <c>Σ(outstanding)</c> term <see cref="ReconcileTarget"/> reads to
     /// avoid reconciling away a local deposit the host has not echoed back yet. NOT consulted by
@@ -217,8 +220,27 @@ internal sealed class PartyPoolPumpV2(
     /// <see cref="_pendingGate"/>, exactly like <see cref="_pendingApplies"/> itself.</summary>
     private readonly Queue<ExpectedReconcileMovement?> _dispatchOrder = new();
 
-    public void Pump(SessionCapabilities caps, string localModule = "")
+    public void Pump(
+        SessionCapabilities caps,
+        string localModule = "",
+        bool localWorldReady = true,
+        bool clientLoadQuarantined = false)
     {
+        _currentPumpWorldLoadSerial = null;
+        if (!bridge.TryReadWorldLoadSerial(out uint scanWorldLoadSerial))
+        {
+            _applyWorldReady = false;
+            if (session.IsEnemyAuthority)
+            {
+                session.WithdrawPartyPoolSnapshotV2();
+            }
+
+            return;
+        }
+
+        _currentPumpWorldLoadSerial = scanWorldLoadSerial;
+        bool usable = localWorldReady && !bridge.IsWorldBetweenLives;
+        _applyWorldReady = usable && !clientLoadQuarantined;
         if (!bridge.SupportsPartyPool || (caps & SessionCapabilities.PartyPool) == 0)
         {
             return;
@@ -226,11 +248,61 @@ internal sealed class PartyPoolPumpV2(
 
         if (session.IsEnemyAuthority)
         {
+            if (!usable)
+            {
+                session.WithdrawPartyPoolSnapshotV2();
+                return;
+            }
+
             PumpHost(localModule);
         }
         else
         {
+            if (!usable || clientLoadQuarantined)
+            {
+                return;
+            }
+
             PumpClient(localModule);
+        }
+    }
+
+    /// <summary>Forget ledgers and queued applies from the world being replaced. This is called
+    /// once on a real client/host load edge; the client does not resume until its CoopAgent is
+    /// rebuilt after adoption.</summary>
+    public void ResetForWorldReplacement(bool client)
+    {
+        _applyWorldReady = false;
+        lock (_pendingGate)
+        {
+            _pendingApplies.Clear();
+            _dispatchOrder.Clear();
+            _hostAddsInFlight.Clear();
+            _hostAddsAwaitingScan.Clear();
+            _hostAddCompletionVersion++;
+        }
+
+        _belief.Clear();
+        _lastSnapshotValue.Clear();
+        _expectedFromReconcile.Clear();
+        _outstanding.Clear();
+        _outstandingBySerial.Clear();
+        _failedIntentStates.Clear();
+        _lastScanEpoch = bridge.PartyPoolScanEpoch;
+        _everPumped = false;
+
+        if (client)
+        {
+            session.DiscardPendingPartyPoolIntentsV2();
+        }
+        else
+        {
+            foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
+            {
+                session.CompletePartyPoolIntentV2(intent.PeerId, intent.IntentSerial, accepted: false);
+            }
+
+            session.WithdrawPartyPoolSnapshotV2();
         }
     }
 
@@ -802,6 +874,13 @@ internal sealed class PartyPoolPumpV2(
         ExpectedReconcileMovement? expected = null,
         uint intentPeerId = 0, uint intentSerial = 0)
     {
+        if (_currentPumpWorldLoadSerial is not uint capturedLoadSerial
+            || !bridge.TryReadWorldLoadSerial(out uint enqueueLoadSerial)
+            || enqueueLoadSerial != capturedLoadSerial)
+        {
+            return false;
+        }
+
         lock (_pendingGate)
         {
             if (_pendingApplies.Count >= MaxPendingApplies)
@@ -812,7 +891,7 @@ internal sealed class PartyPoolPumpV2(
             }
 
             _pendingApplies.Enqueue(new CoopAgent.PendingPartyPoolApply(
-                kind, key, count, intentPeerId, intentSerial));
+                kind, key, count, intentPeerId, intentSerial, capturedLoadSerial));
             _dispatchOrder.Enqueue(expected);
             return true;
         }
@@ -1075,8 +1154,9 @@ internal sealed class PartyPoolPumpV2(
     {
         lock (_pendingGate)
         {
-            if (!_pendingApplies.TryDequeue(out next))
+            if (!_applyWorldReady || !_pendingApplies.TryDequeue(out next))
             {
+                next = default;
                 return false;
             }
 

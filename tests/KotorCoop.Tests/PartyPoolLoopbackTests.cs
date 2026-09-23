@@ -77,6 +77,11 @@ public class PartyPoolLoopbackTests
 
         public bool SupportsPartyPool => true;
 
+        // CoopAgent's initial party-pool alignment now requires both peers to publish the
+        // same known save identity before the client reconciles a host snapshot. This loopback
+        // rig represents both sides loaded into the same deterministic test world.
+        public uint SaveIdentityDigest => 0x504F4F4Cu;
+
         public bool TryReadLocalState(out PlayerState state)
         {
             state = new PlayerState(Vector3f.Zero, 0f, Module, 20, 0);

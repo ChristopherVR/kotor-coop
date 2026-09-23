@@ -16,6 +16,10 @@ public interface ICapabilitySession
     /// </summary>
     void PublishWorldDigest(in WorldDigest digest);
 
+    /// <summary>Announces a local native load edge immediately, before the next periodic
+    /// content-digest sample. Hosts use this to withdraw world-scoped snapshots promptly.</summary>
+    void NotifyWorldLoadEdge(uint loadSerial) { }
+
     /// <summary>
     /// The replication channels this session is currently allowed to use, after content
     /// compatibility with the peer(s) has been judged. Starts at <see

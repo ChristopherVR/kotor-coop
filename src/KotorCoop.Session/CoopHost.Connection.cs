@@ -184,6 +184,8 @@ public sealed partial class CoopHost
                     Nonce = hello.ClientNonce,
                     LastSeenMs = now,
                     InstallVerdict = verdict,
+                    PartyPoolLoadQuarantined = _hasObservedHostLoad,
+                    PartyPoolReleaseWhenReady = _hasObservedHostLoad,
                 };
 
                 freshlyAdmitted = true;

@@ -209,6 +209,11 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
 
     public void Pump(SessionCapabilities caps, string localModule)
     {
+        if (!bridge.TryReadWorldLoadSerial(out uint scanWorldLoadSerial))
+        {
+            return;
+        }
+
         if (!bridge.SupportsPartyPool || (caps & SessionCapabilities.PartyPool) == 0)
         {
             return;
@@ -227,6 +232,12 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
         if (!bridge.TryScanPartyPoolTotals(out IReadOnlyDictionary<PartyPoolStackKey, int> engine))
         {
             // No world loaded yet (main menu, loading screen) — nothing to compare against.
+            return;
+        }
+
+        if (!bridge.TryReadWorldLoadSerial(out uint afterScanSerial)
+            || afterScanSerial != scanWorldLoadSerial)
+        {
             return;
         }
 
@@ -382,6 +393,12 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
             // thread (CoopCommandDispatcher.RunAsync), not merely a different call frame.
             lock (_pendingGate)
             {
+                if (!bridge.TryReadWorldLoadSerial(out uint enqueueWorldLoadSerial)
+                    || enqueueWorldLoadSerial != scanWorldLoadSerial)
+                {
+                    return;
+                }
+
                 if (_pendingApplies.Count >= MaxPendingApplies)
                 {
                     log($"party pool: dropping apply for '{delta.Key.Resref}' — already holding "
@@ -390,7 +407,8 @@ internal sealed class PartyPoolPump(IGameBridge bridge, ICoopSession session, Ac
                 }
 
                 _pendingApplies.Enqueue(
-                    new CoopAgent.PendingPartyPoolApply(delta.Kind, delta.Key, (ushort)delta.Count));
+                    new CoopAgent.PendingPartyPoolApply(
+                        delta.Kind, delta.Key, (ushort)delta.Count, WorldLoadSerial: scanWorldLoadSerial));
             }
 
             _applyInFlight[delta.Key] = now;

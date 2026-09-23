@@ -34,6 +34,11 @@ public sealed partial class CoopHost : ICoopSession
         /// module + GIT), every field 0/empty until it reports one.</summary>
         public WorldDigest World = WorldDigest.Empty;
 
+        /// <summary>A host world-load edge quarantines this already-connected peer's shared
+        /// pool intents until that peer has loaded/adopted the host's resulting world.</summary>
+        public bool PartyPoolLoadQuarantined;
+        public bool PartyPoolReleaseWhenReady;
+
         /// <summary>Absorbs the transient save-identity mismatch an ordinary module
         /// transition produces while this peer and the host cross at slightly different
         /// times — see <see cref="SaveIdentitySettle"/>. One per peer: each crossing is its

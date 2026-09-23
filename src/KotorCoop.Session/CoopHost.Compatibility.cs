@@ -12,6 +12,8 @@ public sealed partial class CoopHost
 {
     private CompatibilityVerdict? _compatibility;
     private WorldDigest _localWorld = WorldDigest.Empty;
+    private bool _hasPublishedLocalWorldDigest;
+    private bool _hasObservedHostLoad;
 
     /// <summary>The behaviour-flag comparison against the most recently seen Hello — see
     /// <see cref="ICapabilitySession.BehaviourWarnings"/>. A host never adopts anything
@@ -22,7 +24,70 @@ public sealed partial class CoopHost
 
     public BehaviourComparisonResult? BehaviourWarnings => _behaviourComparison;
 
-    public void PublishWorldDigest(in WorldDigest digest) => _localWorld = digest;
+    public void PublishWorldDigest(in WorldDigest digest)
+    {
+        bool loadEdge = false;
+        lock (_gate)
+        {
+            if (_hasPublishedLocalWorldDigest && _localWorld.LoadSerial != digest.LoadSerial)
+            {
+                loadEdge = true;
+                BeginHostWorldLoadEdgeLocked();
+            }
+
+            _localWorld = digest;
+            _hasPublishedLocalWorldDigest = true;
+        }
+
+        if (loadEdge)
+        {
+            // A host's published repository belongs to the old world until the bridge has
+            // scanned the loaded one. The pump also withdraws its internal pending applies;
+            // this immediate withdrawal closes the receive-loop window before that tick.
+            WithdrawPartyPoolSnapshotV2();
+            DiscardQueuedPartyPoolIntentsAfterWorldLoad();
+        }
+    }
+
+    public void NotifyWorldLoadEdge(uint loadSerial)
+    {
+        bool loadEdge = false;
+        lock (_gate)
+        {
+            if (_hasPublishedLocalWorldDigest && _localWorld.LoadSerial != loadSerial)
+            {
+                // Keep admission/compatibility comparisons from treating the old ready row
+                // as the host's post-load world while the new world is still resolving.
+                _localWorld = _localWorld with
+                {
+                    SaveIdentity = 0,
+                    Module = string.Empty,
+                    ModuleGit = 0,
+                    LoadSerial = loadSerial,
+                };
+                BeginHostWorldLoadEdgeLocked();
+                loadEdge = true;
+            }
+        }
+
+        if (loadEdge)
+        {
+            WithdrawPartyPoolSnapshotV2();
+            DiscardQueuedPartyPoolIntentsAfterWorldLoad();
+        }
+    }
+
+    private void BeginHostWorldLoadEdgeLocked()
+    {
+        _hasObservedHostLoad = true;
+        foreach (PeerConnection peer in _peers.Values)
+        {
+            // Existing connections cannot prove which world an already-sent UDP intent
+            // belongs to. Keep them quarantined until disconnect and a fresh admission.
+            peer.PartyPoolLoadQuarantined = true;
+            peer.PartyPoolReleaseWhenReady = false;
+        }
+    }
 
     /// <summary>
     /// This peer's effective capabilities: its install verdict, refined by the in-world
@@ -107,6 +172,13 @@ public sealed partial class CoopHost
             if (_peers.TryGetValue(report.PeerId, out PeerConnection? peer))
             {
                 peer.World = report.Digest;
+                if (peer.PartyPoolLoadQuarantined && peer.PartyPoolReleaseWhenReady
+                    && PartyPoolLoadGateRule.PeerMatchesReadyWorld(_localWorld, peer.World))
+                {
+                    peer.PartyPoolLoadQuarantined = false;
+                    peer.PartyPoolReleaseWhenReady = false;
+                }
+
                 _compatibility = EffectiveVerdict(peer);
             }
         }

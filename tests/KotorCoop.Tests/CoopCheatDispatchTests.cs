@@ -22,6 +22,10 @@ public class CoopCheatDispatchTests
 
         public bool Supports = true;
 
+        public uint LoadSerial = 17;
+
+        public bool LoadSerialReadable = true;
+
         public int AnswerReads;
 
         public uint AnsweredSerial;
@@ -33,6 +37,14 @@ public class CoopCheatDispatchTests
         public bool CanWriteRemotes => true;
 
         public bool SupportsCheats => Supports;
+
+        public uint WorldLoadSerial => LoadSerial;
+
+        public bool TryReadWorldLoadSerial(out uint serial)
+        {
+            serial = LoadSerial;
+            return LoadSerialReadable;
+        }
 
         public bool TryReadLocalState(out PlayerState state)
         {
@@ -165,6 +177,69 @@ public class CoopCheatDispatchTests
 
             await cts.CancelAsync();
             await loop;
+        }
+    }
+
+    [Fact]
+    public async Task PartyPoolHumanRequestCarriesCapturedWorldLoadFence()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            CheatRequest request = await TypeAndAnswer(dispatcher, bridge, "pooladd g_w_blstrpstl001 2");
+
+            Assert.Equal(CheatKinds.PartyPoolAdd, request.Kind);
+            Assert.Equal(17u, request.Target);
+            Assert.Equal(PartyPoolMailboxFence.Marker, request.X);
+            Assert.Equal(2, request.Amount);
+
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
+    [Fact]
+    public async Task QueuedPartyPoolRequestKeepsItsOriginalWorldLoadFence()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            using CancellationTokenSource cts = new();
+            Task loop = dispatcher.RunAsync(cts.Token);
+
+            Type(dispatcher, "god on");
+            Assert.True(await WaitForAsync(() => bridge.Requests.Count == 1, TimeSpan.FromSeconds(5)));
+
+            Type(dispatcher, "poolremove g_w_blstrpstl001 1");
+            bridge.LoadSerial = 18;
+            bridge.AnsweredSerial = 1;
+
+            Assert.True(await WaitForAsync(() => bridge.Requests.Count == 2, TimeSpan.FromSeconds(5)));
+            CheatRequest request = bridge.Requests[1];
+
+            Assert.Equal(CheatKinds.PartyPoolRemove, request.Kind);
+            Assert.Equal(17u, request.Target);
+            Assert.Equal(PartyPoolMailboxFence.Marker, request.X);
+
+            bridge.AnsweredSerial = 2;
+            await Task.Delay(250);
+            await cts.CancelAsync();
+            await loop;
+        }
+    }
+
+    [Fact]
+    public void PartyPoolRequestRefusesWhenWorldLoadSerialCannotBeRead()
+    {
+        (CoopCommandDispatcher dispatcher, CheatBridge bridge, SessionManager manager) = NewDispatcher();
+        using (manager)
+        {
+            bridge.LoadSerialReadable = false;
+            Type(dispatcher, "pooladd g_w_blstrpstl001 2");
+            Assert.Empty(bridge.Requests);
         }
     }
 

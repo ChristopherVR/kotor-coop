@@ -1,4 +1,5 @@
 using System.Text;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Plugin;
 
@@ -17,6 +18,11 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void PartyPoolAdd(uint playerId)
     {
+        if (!PartyPoolRequestIsCurrent("add"))
+        {
+            return;
+        }
+
         byte* text = block.CheatText;
         int length = 0;
         while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
@@ -83,6 +89,11 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void PartyPoolRemove()
     {
+        if (!PartyPoolRequestIsCurrent("remove"))
+        {
+            return;
+        }
+
         byte* text = block.CheatText;
         int length = 0;
         while (length < SharedBlock.CheatTextLength - 1 && text[length] != 0)
@@ -125,5 +136,27 @@ internal sealed unsafe partial class CheatController
 
         PluginHost.Log($"party pool: removed '{resref}' x{removed} (asked for {count})");
         Answer(SharedBlock.CheatStatusApplied, $"removed '{resref}' x{removed} from the party pool");
+    }
+
+    /// <summary>Pool requests are the only cheats that use Target and X as a mailbox scope
+    /// fence. Check this before reading the request text or touching a repository: queued work
+    /// from an earlier loaded world must never mutate a same-module replacement.</summary>
+    private bool PartyPoolRequestIsCurrent(string operation)
+    {
+        float marker = block.CheatPosition.X;
+        uint requestSerial = block.CheatTarget;
+        uint currentSerial = block.WorldLoadSerial;
+        if (PartyPoolMailboxFence.IsCurrent(marker, requestSerial, currentSerial))
+        {
+            return true;
+        }
+
+        string reason = marker != PartyPoolMailboxFence.Marker
+            ? "request has no world-load fence"
+            : $"request belongs to world load {requestSerial}, current load is {currentSerial}";
+        Answer(
+            SharedBlock.CheatStatusRefused,
+            $"party pool {operation}: {reason}; no change was made");
+        return false;
     }
 }

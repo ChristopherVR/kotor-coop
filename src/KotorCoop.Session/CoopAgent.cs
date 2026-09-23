@@ -100,6 +100,11 @@ public sealed partial class CoopAgent
     /// channel at once (see <see cref="PumpOnce"/>'s own mode dispatch): v1's
     /// <see cref="_partyPoolPump"/>/<see cref="_storePump"/> are untouched by this redesign.</summary>
     private readonly PartyPoolPumpV2 _partyPoolPumpV2;
+    private PartyPoolLoadGateState _partyPoolLoadGateState = PartyPoolLoadGateState.Initial;
+    private bool _partyPoolHostLoadPending;
+    private bool _partyPoolClientLoadQuarantined;
+    private bool _partyPoolHostKnownUnavailable;
+    private volatile bool _partyPoolApplyBlocked;
     private readonly StorePumpV2 _storePumpV2;
 
     /// <summary>
@@ -460,6 +465,8 @@ public sealed partial class CoopAgent
                 }
             }
         }
+
+        ObservePartyPoolLoadGate(local);
 
         IReadOnlyList<RemotePeer> peers = _session.GetRemotePeers();
 
@@ -897,9 +904,12 @@ public sealed partial class CoopAgent
         // A changed load serial is first published without a ready module even if this tick's
         // player read succeeds. The next successful digest sample at that same serial can
         // advertise the module, proving the row was sampled after the load edge was observed.
-        uint loadSerial = _bridge.WorldLoadSerial;
+        bool loadSerialReadable = _bridge.TryReadWorldLoadSerial(out uint sampledLoadSerial);
+        uint loadSerial = loadSerialReadable
+            ? sampledLoadSerial
+            : _worldDigestReadinessState.LastSerial;
         (WorldDigestReadinessState nextReadiness, bool moduleReady) = WorldDigestReadinessRule.Observe(
-            _worldDigestReadinessState, loadSerial, LastReadSucceeded);
+            _worldDigestReadinessState, loadSerial, LastReadSucceeded && loadSerialReadable);
         _worldDigestReadinessState = nextReadiness;
         uint digestModuleGit = moduleReady ? _bridge.ModuleGitDigest(local.Module) : 0;
         WorldDigest digest = new WorldDigest(
@@ -910,6 +920,32 @@ public sealed partial class CoopAgent
             loadSerial,
             difficultyLevel);
         _session.PublishWorldDigest(ForCurrentReadAvailability(digest, moduleReady));
+
+        if (!_session.IsEnemyAuthority && _session is ICapabilitySession capabilitySession)
+        {
+            _partyPoolLoadGateState = PartyPoolLoadGateRule.ObserveInitialWorldAlignment(
+                _partyPoolLoadGateState,
+                ForCurrentReadAvailability(digest, moduleReady),
+                capabilitySession.RemoteWorldDigest);
+        }
+
+        if (_session.IsEnemyAuthority && moduleReady)
+        {
+            _partyPoolHostLoadPending = false;
+        }
+        bool partyPoolLocalWorldReady = LastReadSucceeded
+            && !_bridge.IsWorldBetweenLives
+            && loadSerialReadable
+            && moduleReady
+            && !_partyPoolHostLoadPending
+            && (_session.IsEnemyAuthority || _partyPoolLoadGateState.HasInitialAlignedWorld);
+        _partyPoolApplyBlocked = !LastReadSucceeded
+            || _bridge.IsWorldBetweenLives
+            || !loadSerialReadable
+            || _partyPoolHostLoadPending
+            || _partyPoolClientLoadQuarantined
+            || _partyPoolHostKnownUnavailable
+            || (!_session.IsEnemyAuthority && !_partyPoolLoadGateState.HasInitialAlignedWorld);
 
         _worldStatePump.PumpItems(local, caps);
 
@@ -953,10 +989,20 @@ public sealed partial class CoopAgent
         switch (_settings.EffectivePartyPoolSyncMode)
         {
             case 1:
-                _partyPoolPump.Pump(caps, local.Module);
+                if (partyPoolLocalWorldReady && !_partyPoolClientLoadQuarantined
+                    && !_partyPoolHostKnownUnavailable)
+                {
+                    _partyPoolPump.Pump(caps, local.Module);
+                }
                 break;
             case 2:
-                _partyPoolPumpV2.Pump(caps, local.Module);
+                _partyPoolPumpV2.Pump(
+                    caps,
+                    local.Module,
+                    localWorldReady: partyPoolLocalWorldReady,
+                    clientLoadQuarantined: _partyPoolClientLoadQuarantined
+                        || _partyPoolHostKnownUnavailable
+                        || (!_session.IsEnemyAuthority && !_partyPoolLoadGateState.HasInitialAlignedWorld));
                 break;
         }
 
@@ -1104,7 +1150,7 @@ public sealed partial class CoopAgent
     /// assembly, needs to see it.</summary>
     public readonly record struct PendingPartyPoolApply(
         KotorCoop.Protocol.PartyPoolOpKind Kind, KotorCoop.Protocol.PartyPoolStackKey Key, ushort Count,
-        uint IntentPeerId = 0, uint IntentSerial = 0);
+        uint IntentPeerId = 0, uint IntentSerial = 0, uint? WorldLoadSerial = null);
 
     /// <summary>Completes a host-side v2 intent after the plugin has answered the engine apply.
     /// The wire ACK is sent only for this result, so a queued-but-refused spawn cannot leave the
@@ -1121,6 +1167,66 @@ public sealed partial class CoopAgent
     internal static WorldDigest ForCurrentReadAvailability(WorldDigest digest, bool readSucceeded) =>
         readSucceeded ? digest : digest with { Module = string.Empty, ModuleGit = 0 };
 
+    /// <summary>Quarantine shared-pool replication across an observed native load. Save
+    /// identity divergence alone is deliberately ignored: ordinary saves are allowed to
+    /// diverge during play. The client quarantine is sticky until SessionManager replaces
+    /// this agent after host-world adoption.</summary>
+    private void ObservePartyPoolLoadGate(PlayerState local)
+    {
+        if (!_bridge.TryReadWorldLoadSerial(out uint serial))
+        {
+            _partyPoolApplyBlocked = true;
+            return;
+        }
+        bool readable = LastReadSucceeded && !_bridge.IsWorldBetweenLives;
+
+        if (_session.IsEnemyAuthority)
+        {
+            (PartyPoolLoadGateState next, bool hold) = PartyPoolLoadGateRule.ObserveHost(
+                _partyPoolLoadGateState,
+                serial,
+                readable && !string.IsNullOrWhiteSpace(local.Module));
+            bool loadEdge = _partyPoolLoadGateState.HasLocalSerial
+                && _partyPoolLoadGateState.LocalSerial != serial;
+            _partyPoolLoadGateState = next;
+            if (loadEdge)
+            {
+                _partyPoolPumpV2.ResetForWorldReplacement(client: false);
+                _session.NotifyWorldLoadEdge(serial);
+            }
+
+            _partyPoolHostLoadPending = next.ClientHeldAfterLoad;
+            _partyPoolHostKnownUnavailable = false;
+            _partyPoolClientLoadQuarantined = false;
+            _partyPoolApplyBlocked = hold;
+            return;
+        }
+
+        WorldDigest remoteHost = _session is ICapabilitySession capability
+            ? capability.RemoteWorldDigest
+            : WorldDigest.Empty;
+        (PartyPoolLoadGateState clientNext, bool clientHold) = PartyPoolLoadGateRule.ObserveClient(
+            _partyPoolLoadGateState,
+            serial,
+            remoteHost,
+            readable);
+        bool localEdgeClient = _partyPoolLoadGateState.HasLocalSerial
+            && _partyPoolLoadGateState.LocalSerial != serial;
+        bool remoteEdgeClient = !remoteHost.IsEmpty
+            && _partyPoolLoadGateState.HasRemoteSerial
+            && _partyPoolLoadGateState.RemoteSerial != remoteHost.LoadSerial;
+        _partyPoolLoadGateState = clientNext;
+        if (localEdgeClient || remoteEdgeClient)
+        {
+            _partyPoolPumpV2.ResetForWorldReplacement(client: true);
+        }
+
+        _partyPoolClientLoadQuarantined = clientNext.ClientHeldAfterLoad;
+        _partyPoolHostKnownUnavailable = !remoteHost.IsEmpty && string.IsNullOrWhiteSpace(remoteHost.Module);
+        _partyPoolHostLoadPending = false;
+        _partyPoolApplyBlocked = clientHold;
+    }
+
     /// <summary>
     /// Called by whatever already arbitrates the single-slot staging-cheat channel, at most
     /// once per ITS tick, so an automatic party-pool apply is submitted through the same call
@@ -1129,6 +1235,12 @@ public sealed partial class CoopAgent
     /// </summary>
     public bool TryDequeuePendingPartyPoolApply(out PendingPartyPoolApply next)
     {
+        if (_partyPoolApplyBlocked)
+        {
+            next = default;
+            return false;
+        }
+
         return _partyPoolPump.TryDequeuePendingApply(out next);
     }
 
@@ -1154,6 +1266,12 @@ public sealed partial class CoopAgent
     /// was needed anywhere in this assembly's surface.</summary>
     public bool TryDequeuePendingPartyPoolApplyV2(out PendingPartyPoolApply next)
     {
+        if (_partyPoolApplyBlocked)
+        {
+            next = default;
+            return false;
+        }
+
         return _partyPoolPumpV2.TryDequeuePendingApply(out next);
     }
 

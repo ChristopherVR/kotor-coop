@@ -1,4 +1,5 @@
 using KotorCoop.Memory;
+using KotorCoop.Protocol;
 using KotorCoop.Session;
 
 namespace KotorCoop.Agent;
@@ -33,6 +34,12 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        if (next.WorldLoadSerial is not { } sourceLoadSerial)
+        {
+            Log?.Invoke($"party pool: dropping {next.Kind.ToString().ToLowerInvariant()} for '{next.Key.Resref}' — source world serial unavailable");
+            return;
+        }
+
         uint kind = next.Kind == KotorCoop.Protocol.PartyPoolOpKind.Add
             ? CheatKinds.PartyPoolAdd
             : CheatKinds.PartyPoolRemove;
@@ -43,8 +50,10 @@ public sealed partial class CoopCommandDispatcher
 
         SendCheat(new CheatRequest(
             kind,
+            Target: sourceLoadSerial,
             Text: next.Key.Resref,
             Amount: next.Count,
+            X: PartyPoolMailboxFence.Marker,
             Charges: next.Key.Charges,
             MaxCharges: next.Key.MaxCharges,
             Upgrades: next.Key.Upgrades,

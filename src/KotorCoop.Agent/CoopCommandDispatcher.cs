@@ -439,6 +439,49 @@ public sealed partial class CoopCommandDispatcher(
 
     private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null, bool quiet = false)
     {
+        if (request.Kind is CheatKinds.PartyPoolAdd or CheatKinds.PartyPoolRemove)
+        {
+            if (!bridge.TryReadWorldLoadSerial(out uint currentLoadSerial))
+            {
+                const string reason = "party-pool action refused: current world-load serial is unavailable";
+                if (quiet)
+                {
+                    Log?.Invoke(reason);
+                }
+                else
+                {
+                    Reply(reason);
+                }
+                onRefused?.Invoke();
+                return;
+            }
+
+            if (request.X == PartyPoolMailboxFence.Marker)
+            {
+                if (!PartyPoolMailboxFence.IsCurrent(request.X, request.Target, currentLoadSerial))
+                {
+                    const string reason = "party-pool action refused: queued apply belongs to a replaced world";
+                    if (quiet)
+                    {
+                        Log?.Invoke(reason);
+                    }
+                    else
+                    {
+                        Reply(reason);
+                    }
+                    onRefused?.Invoke();
+                    return;
+                }
+            }
+            else
+            {
+                // Human requests capture their scope when filed. A queued request keeps this
+                // exact serial through FireCheat; the plugin rejects it if a load occurs while
+                // it waits behind another staging action.
+                request = request with { Target = currentLoadSerial, X = PartyPoolMailboxFence.Marker };
+            }
+        }
+
         if (!bridge.SupportsCheats)
         {
             Reply("staging cheats need the in-game plugin (no shared block found)");

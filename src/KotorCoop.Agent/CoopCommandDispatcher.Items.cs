@@ -291,9 +291,12 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void PoolAdd(string resref, int count)
     {
-        manager.Agent?.NoteLocalPartyPoolAdd(resref);
+        CoopAgent? agent = manager.Agent;
+        RecentlySyncedItems.Reservation reservation = agent?.NoteLocalPartyPoolAdd(resref) ?? default;
 
-        SendCheat(new CheatRequest(CheatKinds.PartyPoolAdd, Text: resref, Amount: count));
+        SendCheat(
+            new CheatRequest(CheatKinds.PartyPoolAdd, Text: resref, Amount: count),
+            onRefused: () => agent?.UnnoteLocalPartyPoolAdd(reservation));
     }
 
     /// <summary>
