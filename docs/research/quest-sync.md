@@ -339,11 +339,11 @@ test — the cross-instance proof is §7's own script above.
 ## 8. Explicitly out of scope
 
 - **Per-object local variables** (`SetLocalBoolean`/`SetLocalNumber`/`GetLocalBoolean`/
-  `GetLocalNumber` — `CSWVarTable`, seen in the symbol DB at `0x0059B000`/`0x0059B040` during
-  this pass's routine lookups but not otherwise investigated) are NOT covered by
-  `EventFlagStore`/`JournalStore` and remain per-instance. This was already true before this
-  pass and is unchanged by it — flagged here only because the task explicitly asked it be
-  documented as out of scope.
+  `GetLocalNumber`) remain per-instance. The table and VM routes are now identified below, but
+  there is no safe capture/apply path or content allowlist yet. Do not publish these slots as
+  generic world truth: a local slot is an integer index in one object's table, not a globally
+  named quest variable, and scripts can use the same slot for player-specific or transient
+  state.
 - **String globals** — `KotorGameBridge`'s `TryApplyWorldState` already refuses to replicate
   location and string globals ("every one of them in a real save is a per-player scratchpad or
   cutscene staging value" — existing comment, unchanged by this pass).
@@ -357,6 +357,98 @@ test — the cross-instance proof is §7's own script above.
   "usually monotonic" — this pass's fix benefits them incidentally (they ride the same
   `EventFlagStore`) but no equivalent module-content enumeration was done for door/placeable
   state specifically; §2's scan was scoped to the task's own named operations.
+
+### 8.1 Per-object local variables: verified shape, unsafe replication boundary
+
+The GOG 1.0.3 executable and `tools/kotor1_0_3.db` were checked after the original out-of-scope
+note. `python tools/q.py class CSWVarTable`, `python tools/q.py offsets CSWVarTable`, and direct
+disassembly with `python tools/disasm.py` at each listed address establish the following
+layout and bounds. The native class is `CSWVarTable` (`size=0x14`): three 32-bit words of
+local booleans at `+0x00` (96 slots), then eight signed-byte local numbers at `+0x0C` (8
+slots). Its accessors are `GetLocalBoolean 0x0059B000`, `SetLocalBoolean 0x0059B040`,
+`GetLocalNumber 0x0059B0B0`, and `SetLocalNumber 0x0059B0D0`. The accessor bodies enforce the
+ranges: boolean indices 0–95 and number indices 0–7. The VM `SetLocalNumber` wrapper
+`0x00543130` checks that the value is within -128..127 before calling the lower
+`CSWVarTable::SetLocalNumber`; the lower setter itself stores the low byte and has no signed-range
+check.
+
+The VM command ids are `GetLocalBoolean=679`, `SetLocalBoolean=680`, `GetLocalNumber=681`, and
+`SetLocalNumber=682`. Both get commands enter `ExecuteCommandGetLocalValue 0x0053B760`; both
+set commands enter `ExecuteCommandSetLocalValue 0x00543130`. The setter wrapper resolves the
+target object from the VM stack and selects its table according to object kind: for an area,
+the virtual area accessor plus `0x1F4`; for a module, the virtual module accessor plus
+`0x09C`; otherwise, the object plus `0x110`. That setter wrapper is the only concrete
+write-capture candidate found in this pass. The lower `CSWVarTable` setters receive only a
+table pointer, index, and value; they have already lost the owning object identity needed for a
+network key.
+
+There is no installed local-variable hook or bridge extension. The existing quest capture
+reads the process-wide `CSWGlobalVariableTable` catalogue and values; it cannot enumerate
+object-local tables. The existing plugin world-state apply explicitly rejects object-keyed
+64-bit flags, and its object-keyed dispatch only knows deterministic door/placeable/GIT-mine
+state. Consequently, the fact that `EventFlagStore` already handles 64-bit last-writer-wins
+values does not make local slots safe to add to that channel by itself.
+
+The first implementable slice, if a verified safe target is found, is **allowlisted GIT objects
+only**. A candidate collision-free key can reuse the existing 64-bit flag operation/snapshot
+shape: the current key has an 8-bit tag, 32-bit module hash, and 24-bit object field; for GIT
+object ids already constrained to 16 bits, that last field could carry object id (16), slot
+index (7), and boolean/number discriminator (1). Boolean values are 0/1 and number values fit
+the existing signed-byte value. This is only a layout proposal: no new tag or dispatch is
+assigned, and no packets are emitted. A real implementation still needs compatibility gating
+and a specific content allowlist. Objects with dynamic ids cannot use this key: their ids are
+local to each engine and require an authoritative entity serial plus a verified per-instance
+identity map. Module and area local tables also need a stable identity distinct from ordinary
+GIT object ids.
+
+The remaining blockers are concrete:
+
+* **No authority policy.** A capture must identify which module/script/object/index combinations
+  are shared world state and which are player-local scratch, cutscene state, or temporary script
+  bookkeeping. Mirroring all 96 booleans and 8 numbers would copy unrelated state between
+  players. The index alone has no catalogue name; a script-level audit and explicit allowlist
+  are required before any target can be called shared truth.
+* **No verified capture contract.** A hook at `ExecuteCommandSetLocalValue` could in principle
+  observe the target id, slot, kind, and value while the VM command executes, but the exact
+  stack-pop/call ABI, safe hook span, re-entrancy behavior, object resolution, and capture timing
+  have not been turned into a tested hook contract. Hooking the lower setters is insufficient
+  because it loses object identity.
+* **No safe apply contract.** The peer needs to resolve its own corresponding object and update
+  that object's table on the game thread. No current `IWorldStateBridge` method does this, and
+  the engine paths for resolving a local table and applying the value have not been verified
+  against live objects or teardown/reload races.
+* **Identity and ordering need scope.** Static GIT objects can use module plus deterministic
+  object id; dynamic creatures/placeables need a host-authoritative serial and local-id mapping.
+  Every operation must also be scoped to the module/world epoch so a late write cannot target a
+  new object that reused the id. The existing last-writer-wins serial is usable only after
+  deciding which peer owns each allowlisted object and preserving that identity through
+  reconnect/resync.
+
+#### Candidate audit: no safe allowlist yet
+
+The first content audit found local slots in three tempting but currently unsuitable cases.
+In `danm15`, the placed generic trigger `dan15_opendoor` runs its own script, reads the global
+`DAN_DEATH_DONE` and `DAN_LIFE_DONE` gates plus `OBJECT_SELF` local boolean 0, performs its
+guard/door actions when that latch is clear, and sets the same local boolean to 1 at the end.
+That slot is an idempotence latch on the trigger; the trigger-relay path already executes the
+same script locally and requests host execution, so this does not establish a missing shared
+campaign value. `dan13_belaya.utc` assigns `k_pdan_belaya_9` as `ScriptSpawn`; that script uses
+local accessors, but the content audit has not proved a host-only writer or that the slots
+represent plot state rather than per-instance spawn bookkeeping. Finally, `k_pdan_door02` and
+`k_pdan_door1505` are attached to door failure/open events; door state already has its own
+replication route, and no separate local-slot consequence was shown to be missing.
+
+These examples are ruled out as first replication targets, not proof that no useful target
+exists. A candidate still needs one script-level trace showing the exact static object and slot,
+an authoritative write, and a later consequential read that can run on the other peer while
+remaining outside existing trigger/door/dialogue synchronization. No code or wire operation is
+enabled by this audit.
+
+Until those are resolved, leave object locals out of the existing world-state channel. The safe
+next research unit is a single allowlisted GIT object/local slot found in real module scripts:
+trace its `SetLocal*` writer and `GetLocal*` readers, prove whether its value is shared world
+truth, then establish the VM hook and peer-side apply contract on the live engine before adding
+any wire emission.
 
 ## Live pass (2026-08-22)
 
