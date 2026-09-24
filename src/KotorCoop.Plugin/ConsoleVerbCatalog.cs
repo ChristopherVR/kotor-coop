@@ -164,5 +164,10 @@ internal static class ConsoleVerbCatalog
         // effect's creator to be the local player can finally be exercised.
         ("cast", "cast <spell id|name> <target: me|0xid> [metamagic]  (dev-only: real cast through the engine's action queue; names: heal, cure, valor, stun, fear, forcepush, stasis)"),
         ("grantpower", "grantpower <spell id|name> [classSlot]  (dev-only: engine's own AddKnownSpell, for a save that doesn't know the power yet)"),
+
+        // The make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-grants.md
+        // §9): closes the "no Force points to cast with" dead end effect-sync.md §14.7 hit.
+        ("levelup", "levelup <classSlot 0|1 | classes.2da id> [count]  (dev-only: engine's own AutoLevelup on the LAST class slot; see 'addclass'/'stats')"),
+        ("stats", "stats  (dev-only: read-only class levels, hp/fp, known powers of your own player)"),
     ];
 }

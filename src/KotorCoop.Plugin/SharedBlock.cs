@@ -1424,4 +1424,34 @@ internal partial struct SharedBlock
     /// and docs/research/effect-sync.md §14.
     /// </summary>
     public const uint CheatKindGrantPower = 96;
+
+    // 97-99 remain reserved for the live-cast primitive (see the comment above CheatKindCast).
+    // 100-104: the make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-
+    // grants.md §9) - closes effect-sync.md §14.7's dead end (no Force points to cast with).
+
+    /// <summary>
+    /// <c>levelup &lt;classSlot 0|1 | classes.2da id&gt; [count]</c> — runs the engine's own
+    /// <c>CSWSCreatureStats::AutoLevelup</c> (0x005B27E0, the SAME routine the character
+    /// screen's "Auto Level-Up" button and the "Auto Level Up Party Members" option both reach)
+    /// on the local player's LAST class slot, <c>count</c> times (default 1), topping up XP via
+    /// the same raw field write <c>grantxp</c> uses whenever the engine's own
+    /// <c>CanLevelUp</c> says there is not yet enough (computed by
+    /// <c>CalculateExpNeededForNextLevel</c>). Recomputes hit points and — for a Force-using
+    /// class — current Force points, both through the SAME <c>LevelUp</c> apply path the
+    /// engine's own level-up screen uses; grants no new POWER knowledge (that is
+    /// <c>grantpower</c>'s job). CheatAmount is the class slot or classes.2da id; CheatItemCharges
+    /// is the count. See <c>IGameBridge.CheatKinds.LevelUp</c> and docs/research/class-and-
+    /// power-grants.md §9.
+    /// </summary>
+    public const uint CheatKindLevelUp = 100;
+
+    /// <summary>
+    /// <c>stats</c> — read-only: reports the local player's class levels, current/max hit
+    /// points (<c>Odyssey.GetEffectiveMaxHitPoints</c>, the engine's own PC branch), current/max
+    /// Force points (<c>CSWSCreature::GetMaxForcePoints</c>) and known powers per class slot.
+    /// The full known-power lists for both slots always go to the plugin log; the console reply
+    /// (64 bytes) shows only the last-leveled slot's powers. No arguments; local only. See
+    /// <c>IGameBridge.CheatKinds.Stats</c> and docs/research/class-and-power-grants.md §9.
+    /// </summary>
+    public const uint CheatKindStats = 101;
 }

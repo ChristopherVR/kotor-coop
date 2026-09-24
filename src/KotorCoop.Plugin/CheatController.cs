@@ -396,6 +396,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 GrantPower(playerId);
                 break;
 
+            case SharedBlock.CheatKindLevelUp:
+                LevelUp(player, playerId);
+                break;
+
+            case SharedBlock.CheatKindStats:
+                Stats(player);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

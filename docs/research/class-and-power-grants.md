@@ -182,3 +182,230 @@ snapshot=1. Named saves `000031 - campaign_zhar_fixed_host` and
 `INVENTORY.res`, StackSize 1, DELETING 0. Their player equipment does not contain
 a second saber. This verifies the host-led Sentinel reward after the guard fix;
 joiner-led reward and natural council prerequisites remain separate checks.
+
+## 9. `levelup`/`stats`: making the live-test character a REAL Jedi with real Force points (2026-09-25)
+
+Closes the dead end effect-sync.md §14.7 hit: `grantpower cure` then `cast cure 0x17F`
+queued the spell but nothing landed, because "every character in the rig's saves is
+the level-1 test character with no Force points... the engine's own cast action
+cannot pay for the power" and "`addlevel` is a game console command, not reachable
+through the mod's console channel." This section finds and wires the headless
+route `addlevel` itself is not (it opens the level-up GUI screen and needs mouse
+input — console-cheats.md §2's own table already says so: "a level: `addlevel` —
+local; the level-up itself is the character screen, not scriptable").
+
+Tags follow this document's own legend (§0 header): **VERIFIED(static)** = read directly off
+the sha256-matched GOG v1.0.3 `swkotor.exe` with `tools/disasm.py`/`tools/xrefs.py`/`tools/q.py`,
+byte-for-byte, in this pass. **NEEDS-LIVE** = the route is verified statically but has not run
+in a live game. Everything in this section is static-only, per the task's constraint — nothing
+here has been live-tested.
+
+### 9.1 The route — VERIFIED(static)
+
+`python tools/q.py func LevelUp` lists every LevelUp-adjacent symbol in the DB, including one
+the task did not name but that turns out to be the actual answer:
+`CSWSCreatureStats::AutoLevelup` (`0x005B27E0`). `tools/xrefs.py 0x005B27E0` finds exactly four
+call/jmp sites:
+
+| Caller | Address | What it is |
+| --- | --- | --- |
+| `CSWGuiInGameCharacter::DoAutoLevelup` | `0x006AEC80`, a raw `jmp 0x5b27e0` at `0x006AECC7` (a genuine tail call — no return, no stack teardown) | the character screen's own "Auto Level-Up" button handler |
+| `CSWPartyTable::AutoLevelUpNPCs` | `0x00563B90`, calls at `0x00563BD2` | the "Auto Level Up Party Members" option, applied to every roster member each pass |
+| `CSWPartyTable::DistributeExperience` | `0x005653A0`, calls at `0x0056543A` | the SAME auto-level-up option, applied right after an XP grant |
+
+Both `CSWPartyTable` call sites gate the call with `CSWSCreatureStats::CanLevelUp`
+(`0x005A6810`, thiscall, `this` = the stats block, boolean in `eax`) immediately before it —
+`call 0x5a6810; test eax,eax; je <skip>` — then `push 1; call 0x5b27e0`. `DoAutoLevelup`
+resolves the SELECTED character's stats pointer (`creature+0xA74`, the SAME `CreStats` offset
+`Odyssey.Core.cs` already declares) and calls it unconditionally with `push 0`. `AutoLevelup`
+itself (`__thiscall`, DB and the binary's own `ret 4` agree: one stack argument) is a ~1800-byte
+function; disassembling its first ~150 instructions (`tools/disasm.py 0x5B27E0 1808`) shows the
+ONE stack argument is never read to select a class — the class it operates on is computed purely
+from the stats block itself:
+
+```
+0x005B281E  mov al, byte ptr [ecx + 0x89]      ; al = class_count  (StatsClassCount, 0x089)
+0x005B2824  mov bl, al
+0x005B2826  dec bl                              ; bl = class_count - 1  (the LAST slot)
+...
+0x005B283C  movzx eax, bl
+0x005B283F  lea eax, [eax + eax*4]              ; eax = bl*5  (ClassInfoStride/8 = 5)
+0x005B2842  mov dl, byte ptr [ecx + eax*8 + 0xa7]  ; classes[bl].class_id  (0x08C+0x1B=0xA7)
+```
+
+So **AutoLevelup always levels `classes[class_count-1]` — the LAST class slot** — never an
+explicit argument. That is exactly what `addclass <id>` leaves behind (§3: it always appends),
+so `addclass 3` (opening Jedi Guardian at slot 1, class_count 1→2) followed by `levelup 1`
+levels the NEW Jedi class, never the base class. `levelup`'s own `classSlot|class id` argument
+is therefore not passed to the engine at all; it is a **confirmation** the plugin checks against
+the real `class_count-1` before calling anything, refusing (failure 4) rather than silently
+leveling a class the caller did not name.
+
+Internally `AutoLevelup` builds a `CSWLevelStats` level-up record (`CSWLevelStats::Constructor`
+`0x005CB1B0`), picks recommended skills (`CSWClass::GetRecommendedSkill`/`IsSkillUseable`/
+`IsSkillClassSkill`, `CSWLevelStats::SetSkillRankChange` `0x005CB120`) and a feat
+(`CSWSCreatureStats::CalcLevelUpNumberFeats` `0x005A6F40`, `CSWClass::GetRecommendedFeat`
+`0x005BE3C0`, `CSWSCreatureStats::CanChooseFeat` `0x005B2530`), commits
+the chosen feat through the REAL `CSWSCreatureStats::AddFeat` (`0x005AA810` — the same address
+§3 already names) and the record via `CSWLevelStats::AddFeat` (`0x005CB150`), then calls
+`CSWSCreatureStats::ValidateLevelUp` (`0x005AF950`), which calls
+`CSWSCreatureStats::LevelUp` (`0x005AABF0` — §2's table already names this as "the level-up
+screen's apply path") to actually apply the record. Full disassembly of `LevelUp`
+(`tools/disasm.py 0x5AABF0 2352`) finds the two writes that matter:
+
+```
+0x005AAD1C  mov ecx, dword ptr [esp + 0x1c]     ; ecx = the level-up record (LevelUp's 2nd arg)
+0x005AAD20  mov eax, dword ptr [esi + 0x24]     ; eax = the owning CSWSCreature (stats+0x24)
+0x005AAD23  movsx edi, word ptr [eax + 0xe0]    ; edi = current hit points
+0x005AAD2A  movzx edx, byte ptr [ecx + 0x2b]    ; edx = record.hpGained
+0x005AAD2E  add edx, edi
+0x005AAD30  mov dword ptr [eax + 0xe0], edx     ; hit_points += hpGained
+0x005AAD36  movzx ax, byte ptr [ecx + 0x2d]     ; ax = record.fpGained
+0x005AAD3B  add word ptr [esi + 0x122], ax      ; force_points += fpGained
+```
+
+**⚠ Offset-naming trap avoided:** `eax` here is the CSWSCreature's own base (via
+`stats+0x24`), so `[eax+0xE0]` is CSWSCreature's field at that offset — the SAME field
+`Odyssey.Health.cs` already documents as "NOT +0xE0, which is the stored MAX" for the generic
+`CSWSObject` read path, and as ALWAYS ZERO for a PC outside this one write. This IS that write:
+the engine's OWN level-up path is what puts a nonzero value there for a player character in the
+first place — matching `Odyssey.Health.cs`'s `GetEffectiveMaxHitPoints`/`MaxHitPointsRule`
+comment that a PC's true max is computed from its rolled per-level hit points, not read back
+from a stored field. `esi` is `LevelUp`'s own `this` (the stats block), so `[esi+0x122]` is
+`CSWSCreatureStats::force_points` — the SAME field name `tools/q.py offsets
+CSWSCreatureStats` already lists, with no separate stored "max" field anywhere server-side
+(only `CSWCCreatureStats`/`CLastUpdateObject`, the CLIENT-side UI mirrors, cache a
+`max_force_points`).
+
+**Current Force points are therefore "filled" by the SAME write the task asked to find** — a
+real level in a Force-using class raises current Force points by the level's own rolled amount,
+exactly the way current hit points rise, through the engine's OWN `LevelUp` apply path. This is
+not a raw poke (the write happens inside the verified call target, never touched directly by
+this codebase) and it is not a "set to max" (it is additive, matching real KOTOR level-up
+behaviour for hit points too) — so no separate "rest"/"heal Force" step was added; none exists
+as a plain callable setter and none was needed.
+
+**`AutoLevelup` grants no new POWER knowledge.** `tools/xrefs.py 0x005AA9B0`
+(`CSWSCreatureStats::AddKnownSpell`, §14.3's grant route) finds exactly two callers:
+`ReadSpellsFromGff` (loading saved data) and one inside the level-up GUI's own code
+(`0x006CEC2C`) — neither reachable from `AutoLevelup`'s call graph (confirmed by grep over the
+full list of functions `AutoLevelup` itself calls). This matches the live evidence §"Feats and
+Force powers" (2026-09-19) already recorded for `AddMultiClass`: a level in a Force class does
+not teach you a new power by itself in KOTOR (you pick powers on the level-up SCREEN, which is
+exactly the GUI path this section avoids). So `grantpower` (§14) stays the separate, required
+step — this section's own live recipe below keeps it that way, matching the task's own example
+recipe verbatim.
+
+### 9.2 The max hit points and max Force points readers — VERIFIED(static), reused not reinvented
+
+For the `stats` read verb, max hit points reuses the ALREADY-VERIFIED, ALREADY-LIVE-TESTED
+`Odyssey.GetEffectiveMaxHitPoints` (`Odyssey.Health.cs`) — its own comment records a live
+result: "a level-1 PC with a rolled 10 and a +2 CON modifier read back 12, matching a full-health
+reading exactly." No new code was written for max hit points; `stats` only calls it.
+
+Max Force points has no such existing reader, so this pass added one: `CSWSCreature::
+GetMaxForcePoints` (`0x004FD490`) — the SAME address `AutoLevelup` itself calls first
+(`0x005B286C: mov ecx,[esi+0x24]; call 0x4fd490`, `esi` = the stats block, `+0x24` = its
+creature backpointer), i.e. a call target the engine already exercises on every level-up, not a
+fresh guess. `tools/q.py func GetMaxForcePoints` confirms `__thiscall`, 0 stack arguments (DB
+and the binary's bare `ret` agree); `CSWSCreatureStats::GetMaxHitPoints` (`0x004ED310`) was
+found too but its ONE stack argument's meaning was not resolved in the time this pass allowed,
+so `stats` deliberately does NOT call it (calling an engine function with a guessed argument is
+exactly what "verify-bytes-or-refuse" is meant to prevent) — max hit points comes from the
+existing `GetEffectiveMaxHitPoints` reimplementation instead, which needs no argument.
+
+Current hit points/Force points are plain, already-established field reads:
+`Odyssey.GetCurrentHitPoints` (`CSWSObject+0xDC`, existing) and this section's new
+`Odyssey.GetCurrentForcePoints` (`CSWSCreatureStats+0x122`, the same field §9.1 verified
+`LevelUp` writes).
+
+### 9.3 Known powers — VERIFIED(static), traced from `AddKnownSpell`'s own append
+
+`grantpower`'s target (§14.3) is `CSWSCreatureStats::AddKnownSpell` (`0x005AA9B0`), which
+(after its `classIndex < class_count` guard) does `lea ecx, [esi + eax*8 + 0x8c]` (the
+`classes[classIndex]` ClassInfo entry — the SAME `StatsClasses`/`ClassInfoStride` arithmetic
+`Odyssey.ClassGrant.cs` already uses) and calls `CSWSCreatureStats_ClassInfo::AddKnownSpell`
+(`0x00649660`) with that pointer as `this`. Disassembling `0x00649660` shows a dedupe-then-append
+onto a `CExoArrayList<uint32>` living at the ClassInfo entry's OWN base (offset 0) — confirmed
+independently by `tools/q.py offsets CSWSCreatureStats_ClassInfo`, which lists `known_spells`
+(a `CExoArrayList<unsigned_long>`) at `0x000`, `class_id` at `0x01B` and `level` at `0x01C` —
+the exact three fields this document's earlier sections already use. `Odyssey.ReadKnownSpells`
+reads this array directly (`data` pointer at `+0x00`, `count` at `+0x04`), the read-side
+counterpart of the write `grantpower` already performs, never a new engine call.
+
+### 9.4 XP: reusing `grantxp`'s own field write, gap computed by the engine's own calculator
+
+Both real `AutoLevelup` callers gate on `CanLevelUp` first, so this pass does the same: if
+`CanLevelUp(stats)` is false, `CSWSCreatureStats::CalculateExpNeededForNextLevel`
+(`0x005A5490` — §3 already names this as `AddMultiClass`'s own XP-gap calculator) gives the
+ABSOLUTE XP threshold for the next level (0 once the 20-level cap is reached), and the plugin
+writes that value directly through `Odyssey.Progression.SetExperience` — the SAME raw
+`CSWSCreatureStats+0x068` field write `grantxp` already performs (companion-state-sync.md's own
+live test plan), reused rather than reversing an unverified two-argument engine
+`SetExperience`/`AddExperience`. This satisfies the task's "the XP is granted consistently
+(grantxp exists)" instruction literally: it is the same write, called from a second place.
+
+### 9.5 The verbs
+
+- **`levelup <classSlot 0|1 | classes.2da id> [count]`** (`CheatKindLevelUp` = 100,
+  `CheatKinds.LevelUp` = 100) — `Odyssey.TryAutoLevelUp`: resolves the local player, confirms
+  the named class IS `classes[class_count-1]` (refusing otherwise — failure 4), verify-bytes-or-
+  refuses `AutoLevelup`/`CanLevelUp`/`CalculateExpNeededForNextLevel` (failure 5), then loops up
+  to `count` (clamped 1-40) times: top up XP if `CanLevelUp` is false, call `AutoLevelup(stats,
+  1)`, and confirm the class level actually advanced before continuing (stopping early — not
+  failing — at the level cap or on an engine-side refusal). Console/log answer shows the
+  before/after class list, exactly like `addclass`'s own precedent.
+- **`stats`** (`CheatKindStats` = 101) — read-only: class levels, current/max hit points,
+  current/max Force points, and known powers per class slot (full lists in the plugin log,
+  the LAST-leveled slot's list in the 64-byte console reply — the same "full listing in the
+  log, short summary in the reply" precedent `items`/`item` already established,
+  console-cheats.md §3).
+
+Neither verb changes the shared-block version or adds a protocol field — both are local-only
+staging verbs, the same authority class `addclass`/`cast`/`grantpower` already have.
+`CheatKindSyncTests` covers the two new numbers the same way it covers every other pair.
+
+### 9.6 Co-op: what the peer sees
+
+`levelup`/`stats` call ONLY the local player's own stats block and touch no shared/replicated
+state — they are pure local staging verbs, like `cast`/`grantpower`/`addclass` before them.
+The class SLOT itself is not new information to a peer: `addclass` already relays the class
+grant (protocol 78/79, §6-§7). What `levelup` changes on top of that — the LEVEL inside that
+class, hit points, current Force points, feats and skill points — is exactly the same
+per-player state `progression-sync.md`'s XP max-merge and `companion-state-sync.md`'s own
+fields already reason about, but this pass does not add or touch a sync channel for any of
+them: level-up in KOTOR (like feat/power selection, §"Feats and Force powers" above) has always
+been something each player does for their OWN character, on their OWN screen, and `levelup` is
+a headless stand-in for exactly that action — it doesn't fight `progression-sync.md`'s XP
+channel because it GRANTS XP through the SAME local field `grantxp` already uses (§9.4), which
+that channel's own max-merge already treats as "this player's own report." A peer watching over
+network sees only what they would see from a real level-up: the caster's HP/FP numbers change
+on next sync, and (once `class_grant_sync` and a companion/party-state channel carry it) their
+class and level fields update accordingly — nothing here is hidden from or contradicts those
+channels, because nothing here bypasses the fields they already read.
+
+### 9.7 NEEDS-LIVE — the exact recipe
+
+None of §9.1-9.6 has run in the actual game. On ANY save (the level-1 rig test character is
+fine — this section exists because that character has zero Force points):
+
+1. `addclass 3` — opens Jedi Guardian at class slot 1, class_count 1→2 (§3's own existing
+   live-verified behaviour, 2026-09-19).
+2. `levelup 1 4` — levels slot 1 (Guardian) four times. Expect the console answer
+   `classes 2:[0@1,-1@0] -> 2:[0@1,3@4], granted 4/4` (exact "before" numbers depend on the
+   save's base class/level).
+3. `stats` — expect `fp` in the reply to read greater than 0 (Guardian's Force-point-per-level
+   gain, four levels' worth) and `cls` to show `1@4` for the Guardian slot. If `fp` is still 0,
+   STOP: something in §9.1's chain did not fire the way this pass expects — do not proceed to
+   `grantpower`, since a genuine 0 Force points is the exact dead end effect-sync.md §14.7 hit.
+4. `grantpower cure` — grants Force Cure to the Guardian class slot (effect-sync.md §14.3,
+   unchanged by this section).
+5. `cast cure me` — expect `cast: queued spell 10 at 0x7FFFFFFF (metamagic 0)` AND (unlike
+   §14.7's first attempt) `stats` run again afterward should show `fp` LOWER than step 3's
+   reading — the engine actually PAID for the cast this time, which is the whole point of this
+   section. If the character was already at full health, damage yourself first (`hurt <n>`) so
+   Cure's animation and hit-point rise are also visible, not just the Force-point spend.
+
+Regression check: run `stats` once BEFORE `addclass`/`levelup` on the same save and confirm it
+reports `fp 0/0` (or close to it) and the base class only — the negative control that this
+section's numbers are real, not stale/cached.
