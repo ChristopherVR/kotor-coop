@@ -400,3 +400,273 @@ personal inventory and `party_pool_sync` for shared-pool changes; do not assume 
 to either destination until a qualified live success identifies it. The diagnostic never grants
 the item or destroys a trigger directly.
 
+## 14. Player-placed mine replication — BUILT, NEEDS-LIVE (2026-09-24)
+
+The design in §7/§7.1 is now fully implemented end to end, behind `placed_mine_sync`
+(**default OFF**). Nothing in this section has been exercised against a running game; every
+native call and field write is verify-bytes-or-refuse and marked NEEDS-LIVE below. The pure
+logic (identity map, host authority, fairness, the damage rule) is unit-tested; a live two-
+instance run is the only thing this pass could not do (§14.6 gives the recipe for the next one).
+
+Three readers agree on the default (OFF): `PlacedMineController.Enabled`
+(`PluginConfig.ReadBool("placed_mine_sync", false)`), `CoopConfig.PlacedMineSync`
+(`IsTruthy` over an absent key), and `AgentComposition`'s `config?.PlacedMineSync ?? false`.
+
+### 14.1 Shape: publish, serial, map, apply
+
+Exactly the three steps §7 called for:
+
+1. **Publish, never a local id.** `PlacedMineController.ScanCaptures` (plugin, game thread,
+   `PlacedMineController.cs`) walks the local area's trigger list once every 10 frames and finds
+   a trigger with the trap gate set (`+0x2BC`) AND the party-placed marker set (`+0x314`) that
+   this controller has not already accounted for (baselined at scope entry, already captured, or
+   built here as a replica). It reads the record with `Odyssey.ReadPartyPlacedMine` — trap type,
+   position, orientation, both DCs, faction — and hands it to the agent as a **capture ring**
+   entry (`SharedBlock.PlacedMines.cs`, plugin -> agent), keyed by a per-process capture counter.
+   The local dynamic object id never leaves the process (it rides only as a diagnostic field the
+   agent never reads for identity).
+2. **The host assigns one ordered serial.** `PlacedMineAuthority` (`KotorCoop.Session`, host-only,
+   pure and thread-safe) is the canonical set for the host's current module. `Place` mints
+   `_nextSerial++` — session-wide, monotonic, **never reused even across a world change** — keyed
+   by `(ownerPeerId, captureSerial)` so a retransmitted placement intent is a no-op `Duplicate`
+   rather than a second mine, refuses a placement outside the host's own current module (the
+   host's copy is the only one that can ever damage a host-owned enemy — §14.4), and enforces the
+   retail 15-mines-per-area cap (`CSWSArea::GetPlayerCanSetMines 0x005089D0`,
+   `PlacedMineRosterPacket.MaxEntries`). A client's own placement goes out as a
+   `PlacedMineIntentPacket` (`PacketType.PlacedMineIntent = 100`, retransmitted by
+   `PlacedMineIntentSender` until `PlacedMineIntentAckPacket` (101) arrives); the host's own
+   placement calls `Place` directly. The whole set goes back out as a `PlacedMineRosterPacket`
+   (`PacketType.PlacedMineRoster = 102`) — generation-numbered so a client keeps only the newest,
+   ascending by serial, carrying `HighestSerial` as the fence below which an absent serial means
+   "removed" rather than "not announced yet" (`PlacedMineRosterRule.ShouldRemove`, unit-tested).
+   Protocol version 66.
+3. **Every engine keeps its own serial -> local id map.** `PartyPlacedMineIdentityMap` (§11,
+   ten tests) is scoped to `(session generation, world epoch)`; a scope change (reconnect, module
+   change, same-module reload) invalidates every mapping so a stale serial can never resolve
+   after a world boundary. Registrations must arrive in non-decreasing serial order (matching how
+   `PlacedMineReplicaPlanner` drives the mailbox, next). The placer's own mine is **registered**
+   under the host's serial, never destroyed and rebuilt — its item consumption and any engine-side
+   bookkeeping already happened once, on the placer, through the retail branch itself. Every other
+   engine **builds a replica** through §14.2's route.
+
+`KotorGameBridge.PlacedMines.cs` (agent) is the read/write half of the shared-block region
+(`SharedBlock.PlacedMines.cs`, version 78, offsets `0x5A00..0x5BBC`, `TotalSize` grown to
+`0x5C00` — both files are cross-checked by `SharedBlockNewRegionOffsetMirrorTests`): capture ring
+head/entries, gone ring head/entries, the roster level (agent -> plugin) and the spawn mailbox
+(agent -> plugin) with its ack (plugin -> agent). `IPlacedMineBridge.cs` mirrors the plugin's
+`PlacedMineSpawnStatus` enum as `PlacedMineSpawnStatusCodes`; `PlacedMineRelayTests` cross-checks
+the two numbers stay in sync, the same discipline `CheatKindSyncTests` and
+`BehaviourOverrideBitsSyncTests` use for their own plugin/agent pairs.
+
+### 14.2 Native construction route — VERIFIED(static), spawn itself NEEDS-LIVE
+
+`Odyssey.TrySpawnPartyPlacedMine` (`Odyssey.PlacedMines.cs`) replays
+`CSWSCreature::AIActionSetMine`'s no-target branch (§7.1, `0x0051A607..0x0051A76B`) step for
+step, on the game thread only:
+
+```
+operator new(0x318)                              0x006FA7E6
+CSWSTrigger::Constructor(id = 0x7F000000)         0x0058EAE0   (fresh dynamic id)
+CSWSTrigger::SetCreator(creatorId)                0x0058D700   (writes +0x2E4, sets +0x314 = 1)
+CExoString::operator=(+0x264, TrapScript)         0x005E5C50 / 0x005E5A90 / 0x005E5C20
++0x2D4 = TrapType; +0x2D8/+0x2DC = DCs; +0x2BC/+0x2C0/+0x2C4 = 1 (trap/detect/disarm gates)
+CSWSObject::SetPosition(pos, 1, 1, 0)             0x004CD1A0
++0x2B8 = faction; +0x22C = TrapName (traps.2da INT column, when present)
+CSWSTrigger::CreateNewGeometry(2.0, pos, area)    0x0058D210
+CSWSTrigger::AddToArea(area, x, y, z, 1)          0x0058F030
+CExoArrayList<ulong>::Add(area+0x12C, id)         0x00671C00
+```
+
+`VerifyPlacedMineRoute` decodes 13 call sites and 18 byte runs (every `E8` target and every
+constant/opcode the sequence depends on: the `push 0x318`/`0x7F000000` immediates, every raw
+field-offset `mov`, the `traps.2da` pointer chain `g_pRules->2da-set->traps`, the two literal
+column-name strings) straight out of the loaded image and refuses on the first mismatch, exactly
+like the GIT-mine and fire-gate routes. This has been checked against the installed GOG binary
+(`VerifyPlacedMineRoute` logs `"AIActionSetMine route verified (13 calls, 18 byte runs)"` at
+plugin startup when `placed_mine_sync` is on) but **the construction call sequence itself has
+never been executed** — no live spawn has been attempted. That is the one piece of this feature
+that is NEEDS-LIVE in the strong sense: everything else here is either pure logic (unit-tested)
+or a byte-verified read.
+
+One deliberate departure from the retail branch: a replica is given a recognisable tag
+(`CSWSObject +0x018`, a `CExoString`, e.g. `COOP_PMINE_<serial>`) written through the engine's own
+`CExoString` constructor/assignment before `AddToArea` registers the object anywhere — so it can
+be told apart in a save, a script's `GetObjectByTag`, or a debugger. The placer's own mine (and
+the `placemine` test verb) passes no tag and stays byte-for-byte like a retail placement. Faction
+and both DCs come from the **placer's** record (they carry that engine's d20 roll and skill rank,
+which cannot be recomputed on a peer); `TrapScript`/`TrapName` are resolved from **this**
+instance's own `traps.2da` row, the engine's own way, so a modded `traps.2da` that differs between
+peers still produces a locally-consistent object (the fields that matter for parity — position,
+DCs, faction, trap type — are exactly what travelled over the wire).
+
+`Odyssey.IsLivePartyPlacedMine` is the read-side gate every apply path uses before touching a
+serial's local id: trigger vtable (`0x00749A38`), object id round-trips, `+0x2BC != 0` (trap
+gate), `+0x314 != 0` (party-placed). `Odyssey.ListPartyPlacedMines` walks the area's own trigger
+list (`+0x12C`/`+0x130`, the same list `GetNumMinesSetByPlayerParty 0x00508960` counts) rather
+than a separately maintained cache, so it can never drift from what the engine itself considers a
+party mine.
+
+### 14.3 Fairness: one spawn request at a time, strictly ascending
+
+`PartyPlacedMineIdentityMap.Register` accepts a scope's mappings only in non-decreasing serial
+order, so the agent cannot hand the plugin a spawn request out of turn. `PlacedMineReplicaPlanner`
+(pure, `PlacedMineReplicaPlannerTests`) is the fairness rule that follows from that constraint: it
+always serves the **lowest still-unsettled** roster entry, skipping entries already settled
+(spawned, registered, refused, or reported gone) regardless of how many are done — so in a busy
+module where several party mines were placed close together, one entry stuck retrying (an area
+not yet loaded, a transient refusal) never starves every later serial; the planner simply keeps
+re-offering it each tick until it settles or the attempt cap gives up on it, while nothing ahead
+of it in the fairness order is skipped. This is the placed-mine half of the "mine backlog
+fairness" line in the review doc — the GIT-mine mirror's rotating slot list is the other half.
+
+`PlacedMinePump` (agent, one in flight at a time) drives exactly one `RequestPlacedMineSpawn`
+mailbox write per tick, waits up to 3 s for the plugin's ack (`AckTimeoutMs`), retries up to 20
+times with a fixed 500 ms delay between attempts, and gives up (marks the serial settled locally)
+rather than retrying forever — a single stubborn mine cannot wedge the whole roster. An own
+capture that vanishes on the placer before the host's serial ever arrives is reported gone instead
+of spawned (`PlacedMineStepKind.ReportGone`), so a mine detonated in the few hundred milliseconds
+between placement and the host's ack never gets a phantom replica anywhere.
+
+### 14.4 Single-authority damage rule
+
+Enemies are host-owned everywhere else in this mod (creature census, phantom damage ledger); a
+party-placed mine must follow the same rule or a walk-on detonation would either be lost (a
+client's mirror overwrites its health from the census) or counted twice (the client's own trap
+script AND the peer-damage ledger both apply it). The rule (`PlacedMineFireRule`,
+`PlacedMineRulesTests`): **only the host's engine may ever run a party mine's trap script.**
+
+`PlacedMineFireGateHook` is a five-byte call-site redirect — the only call to
+`CSWSTrigger::GetCanFireMineOnObject 0x0058D4A0` in the image (confirmed with
+`tools/xrefs.py 0x58d4a0`: one direct call, no address literal), at `0x0058D59E` inside
+`CSWSTrigger::OnEnterMine 0x0058D570`. The stub is a handful of plain instructions with no managed
+transition: it answers 0 ("do not fire") only when this instance is a live-session client (its
+own dword, written every frame by `PlacedMineController.UpdateFireGate`) AND the trigger's
+`+0x314` is set (party-placed) — a GIT mine is never touched. Verify-bytes-or-refuse on install;
+the call is left alone entirely when `placed_mine_sync` is off. `OnEnterMine`'s own `je` on a
+zero return skips straight to its epilogue, before the key lookup, the trap script, and the
+event-11 self-destruction — a refused mine simply stays armed and untouched, exactly as if the
+walker had missed it.
+
+`PlacedMineFireRule.SuppressPartyMines` fails **open** (never suppress) when the host/client role
+is not yet known, because refusing fire on an actual host would make every one of its mines
+harmless everywhere — the unknown-role case must favour "the mine works" over "the mine is
+inert," since the former is merely un-mirrored (today's behaviour) and the latter breaks the
+single-player game the host is also playing. A client learns of a detonation only from the host's
+roster (the serial disappears, or the entry falls below the announced `HighestSerial`) and removes
+its own copy through the engine's own `DestroyObject`, exactly like the GIT-mine mirror (§6) —
+never by reading its own (suppressed) `OnEnterMine`.
+
+### 14.5 Transition flush
+
+A client's replicas are session state, not world state: the host's copies are the canonical mines
+of that module, and a client's replica exists only so the peer sees the hazard. `PluginHost.Frame`
+calls `PlacedMineController.FlushOneReplica` from both the ordinary and mid-transition body-flush
+sites, alongside the existing map-marker and phantom flushes, so a replica is never baked into a
+client's own saved area as a permanent (and now un-suppressed, if the feature is later reconfigured
+differently) party mine. The serial is retired from the identity map **before** the destroy call,
+so the vanish scan can never misread the flush as a local detonation and echo a false "gone" back
+to the host. The host keeps every one of its own copies across a transition — they are not
+replicas, and destroying them would remove a live mine everywhere for no reason.
+
+### 14.6 Dev console verbs and the live-test recipe
+
+Three verbs exercise the whole path without the radial menu (dispatcher wiring:
+`CoopCommandDispatcher.Mines.cs`, `ConsoleCommand.Mines.cs`, `ConsoleVerbCatalog.cs`,
+`FuncInterpHook.cs`'s in-game verb allowlist; cheat kinds 90-92, `CheatKindSyncTests`-covered):
+
+* `placemine <traps.2da row> [detectDC] [disarmDC]` — builds a party-placed mine at the local
+  player's feet through the exact §14.2 sequence, AS IF a party member here had placed it. It is
+  deliberately **not** recorded as a replica, so the very next capture scan publishes it exactly
+  like a real placement; it consumes no item (a real placement's item consumption stays the
+  engine's own business, on the placer, and is out of scope for this diagnostic). DCs default to
+  10 (`ConsoleCommand.PlaceMineDefaultDc`) so the live recipe does not depend on any Demolitions
+  rank.
+* `minestate` — dumps every mapped serial (`#S -> local 0xID (own|replica, x,y)`), pending
+  captures awaiting a host serial, the fire gate's install/suppress/refusal state, and
+  `VerifyPlacedMineRoute`'s verdict, both to the log and as a one-line summary.
+* `placedmineaction <recover|disarm> <serial>` — the §12 retail-skill diagnostic
+  (`AIActionRecoverMine`/`AIActionDisarmMine` via the client action-menu entry points), retargeted
+  at a session serial instead of a GIT object id: resolves the serial through this instance's own
+  `PartyPlacedMineIdentityMap` first, then runs the same module/load-serial-bound request the
+  GIT-mine `mineaction` verb uses.
+
+**Recipe (two instances, GOG rig, `placed_mine_sync = 1` on BOTH — mismatched settings are
+refused loudly by the fire gate: a suppressed client with no host to answer it would simply sit
+on an inert mine forever).** Any module works; `tar_m10aa` is convenient because §8 already
+establishes its GIT-mine layout as a landmark and it is known not to have any party-placed mines
+of its own to confuse the baseline.
+
+1. `host` / `connect`, both instances on `tar_m10aa`.
+2. On the CLIENT: `placemine 3` (row 3, minor fragmentation mine, low blast radius). Expect the
+   client's log: `placed mines: captured local placement #1 (local 0x..., creator 0x..., row 3,
+   DC 10/10, faction ..., at X,Y,Z)`. This proves the construction route ran and the capture scan
+   found it (§14.1 step 1, §14.2).
+3. Within ~1-3 s, expect on the CLIENT: `placed mines: local placement #1 ... - reporting to the
+   host`, then `placed mines: own placement #1 (local 0x...) is session mine #1 - kept, not
+   rebuilt` (the host answered and this instance registered its own mine under the new serial —
+   §14.1 step 3, "own capture" branch). On the HOST: `placed mines: peer <id>'s placement #1 is
+   session mine #1 (row 3, DC 10/10, at X,Y,Z)`.
+4. Within ~1-3 s more, expect on the HOST: `placed mines: asking the plugin to build session mine
+   #1 (owner peer <id>, attempt 1)` then `placed mines: replica of session mine #1 spawned - built
+   party-placed mine 0x... (row 3, DC 10/10, faction ...) at (X.XX, Y.YY, Z.ZZ), tag
+   COOP_PMINE_1`. This is the one native write in the whole feature (§14.2) — the first thing to
+   actually watch on screen: does a mine model appear at the reported coordinates on the HOST,
+   at the position the CLIENT placed it at?
+5. `minestate` on both: both must show `#1=0x...o` (own) on the placer and `#1=0x...r` (replica)
+   on the peer, `route=ok` on both, `gate=installed` on both, `suppress=true` on the CLIENT only
+   (the placer here) and `suppress=false` on the HOST.
+6. **Walk-on detonation, single damage.** Only the HOST's copy can ever fire (§14.4), so walk the
+   HOST's own party onto the HOST's replica's coordinates (from step 4's log line) until it goes
+   off. Expect, in order:
+   - the HOST takes the trap's damage exactly once (retail combat log / HP delta) — this is the
+     ONLY place damage should appear anywhere for this mine;
+   - the HOST's log reads `placed mines: mine #1 (local 0x...) is gone here (the engine removed
+     it) - reported to the session`, then `placed mines: session mine #1 gone on the host -
+     removed from the canonical set`;
+   - within ~1-3 s the CLIENT's log reads `placed mines: mine #1 (local 0x...) removed on the
+     session's authority (engine DestroyObject)` — this is the CLIENT's OWN placed mine (the
+     object it originally built at its own location) being torn down by `ReconcileRoster`
+     because the roster no longer lists serial #1, NOT because the client ever saw a detonation.
+   - `minestate` on the CLIENT afterward shows the entry for #1 gone and `refusals` unchanged
+     from before the walk (the client's fire gate never got a chance to refuse anything — the
+     object was destroyed outright, not walked into); `minestate` on the HOST shows the same.
+   Confirm the CLIENT's own party took no damage (it was never near either copy) — this, plus the
+   single HP delta on the host, is the "damaged exactly once, on the host" property under test. If
+   a host-side COMPANION triggers it instead of the player, confirm the damage lands on that
+   companion's HP on the host and nowhere else.
+7. **Disarm.** `placemine 3` again on either side for a fresh mine (repeat steps 2-5 for serial
+   #2), then on either instance `minestate` to read its serial, then
+   `placedmineaction disarm 2` on that SAME instance. Expect a retail skill-check outcome exactly
+   as in §13 (a low-DC test mine at DC 10 with an unskilled actor should usually succeed): on
+   success, the mine is destroyed on the acting instance, which reports it gone through the same
+   path as step 6, and the peer removes its copy within ~1-3 s. Confirm the mine disappears on
+   BOTH instances and stays gone after a warp-out/warp-back (mirrors §8 step 5's false-positive
+   guard, now for party-placed mines).
+8. **Off switch / mismatch refusal.** Set `placed_mine_sync = 0` on one side only and repeat step
+   2 on that side: `placemine` still builds the native mine object (`PlaceTestMine` does not read
+   the switch), but `PlacedMineController.OnFrame` returns immediately when `Enabled` is false —
+   before the baseline, the capture scan, or anything else — so the mine is never captured and
+   never reported; its `minestate` shows the fire gate itself absent (`gate=absent`, since
+   `PlacedMineFireGateHook.Install` is only ever called when `Enabled`). `minestate` on the OTHER
+   (still-enabled) side must show no pending replica and no log line about it at all — the off
+   side never speaks, so the on side never even hears about the placement. This is the expected
+   degrade, not a bug: the feature is symmetric-only, and an asymmetric config is a
+   misconfiguration to flag, not a scenario to silently paper over.
+
+Confirm across the whole recipe: the host's own placements never wait for an ack (no
+`PlacedMineIntentPacket` needed for the host's own mines — `Place` is called directly, in-process
+— §14.1 step 2), a party-placed mine that was already active in the area when a session begins
+(placed in a prior single-player play session, or by a script before the session started) is
+baselined and never published (`PlacedMineController.Baseline`, mirrors the GIT-mine baseline
+rule in §6), and `route=ok` never flips to `route=REFUSED` on the installed GOG build — a refusal
+there means a different executable and every native write in §14.2 stops before touching memory.
+
+**What is still unverified after this pass:** every native write in §14.2 (the spawn itself has
+never run), whether `SetCreator`'s party-membership check accepts a plugin-supplied creator id the
+same way it accepts the retail placer, whether the CreateNewGeometry/AddToArea pair produces a
+mine that looks and fires identically to a retail one, and the live timing of the fire-gate
+refusal counter under an actual walk-on. Recovery's item reward for a party-placed mine is
+untested even in single life (§12-13's live attempts were both against GIT mines); a
+party-placed mine's own `traps.2da` item reward, if any, follows the same
+`script_item_sync`/`party_pool_sync` ambiguity §13 already flags for GIT-mine recovery.
+
