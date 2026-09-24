@@ -2011,3 +2011,91 @@ now with a real cast).**
 no Force points, so the engine's own cast action cannot pay for the power. `addlevel` is a game
 console command, not reachable through the mod's console channel. These recipes need a save with a
 real Jedi who has Force points (any character past a Jedi level-up).
+
+### 14.8 Why `cast` still doesn't spend FP on a real Jedi (2026-09-25) — VERIFIED(static)
+
+2026-09-25's live retest used a level-19 Guardian (fp 76/135, spell 10 known via `AddKnownSpell` in
+class slot 1) so the previous "no Force points" excuse doesn't apply. `cast cure me` still spends
+no FP and heals nothing. Static RE of `CSWSCreature::AddCastSpellActions` (0x004F9460, the function
+`ExecuteCommandCastSpell` calls) explains why, and it's a design property of the engine, not a bug
+in our call.
+
+**`AddCastSpellActions` is two functions wearing one name, selected by its own last stack
+argument.** Its prologue (`mov eax,[esp+0x48]; ...; jne 0x4F9572`) branches on the *18th and last*
+of its 18 dword args (`param_size_bytes` in the RE db is 72 = 18×4, confirmed by both `ret 0x48`
+epilogues). Call that argument `bPromote`:
+
+- **`bPromote == 0` ("request" mode, `0x4F9475`–`0x4F956F`).** Calls
+  `CSWSCombatRound::AddSWSpellAction` (0x004D39B0, `ecx = [this+0x9C8]`) — the name says it
+  outright: this *stashes* the spell/target/metamagic/etc. into a pending-cast record owned by the
+  creature's `CSWSCombatRound` (the struct at `creature+0x9C8`). It then calls
+  `CSWSObject::GetNodeById(0x3F)` (0x004CC630) — 0x3F is the RunActions node type for
+  `CSWSCreature::AIActionCheckMoveToFollowRadius` (confirmed: jump-table slot 63 of the table at
+  0x005801E4 is 0x0057FAC6, which calls 0x00510AB0 = that exact function). If a node of that type
+  is **already queued**, the function returns success immediately and touches nothing else — no
+  new node, no re-stash. If not, it queues one fresh via `CSWSObject::AddAction` (0x004CEA20) and
+  returns. **Either way, this branch never validates the spell, never spends FP, and never queues
+  the actual cast action.** It only arms a pending-cast record and (conditionally) a follow-radius
+  checkpoint node.
+- **`bPromote != 0` ("promote" mode, `0x4F9572`+).** Does the real work: feat/spell-known lookup,
+  target validation, cast-time computation (`fstp` at 0x004F9754 via 0x004EB3A0), and the actual
+  enqueue that spends FP and applies the spell.
+
+**Every external "please cast" entry point uses `bPromote = 0`.** Traced all 8 call sites
+(`tools/xrefs.py 0x4F9460`):
+
+| Call site | Function | `bPromote` (first chronological `push` before the call = last/18th arg) |
+|---|---|---|
+| 0x0052F0EA | `CSWVirtualMachineCommands::ExecuteCommandCastSpell` (special-id/"cheat" branch, `ebx==0x1F5`/`0x1F6`) | **`push 0`** (0x0052F0AC) |
+| 0x0052F26D | `CSWVirtualMachineCommands::ExecuteCommandCastSpell` (normal branch — this is the one our `cast` verb's routine-501 dispatch reaches for spell 10) | **`mov [esp+0x6C],0`** (0x0052F265) |
+| 0x0052620C | `CSWSMessage::HandlePlayerToServerInputMessage` — the network message the real client sends when the **player clicks a Force power in the radial menu** | **`push 0`** (0x005261C4) |
+| 0x005B64E4 | `CSWSCreature::AIActionCombat` (0x005B6210) — the RunActions handler for node type **0x3E** (jump-table slot 62 of 0x005801E4 = 0x0057FB63, confirmed calling 0x005B6210) | **`push 1`** (0x005B6496); every one of the 18 args here is read straight back out of `[[this+0x9C8]+0x9C8]` — the exact record `AddSWSpellAction` writes in request mode |
+
+Only `AIActionCombat` ever passes `bPromote = 1`, and it does so by replaying the pending-cast
+record a *request*-mode call previously stashed. `HandlePlayerToServerInputMessage` — the literal
+code path a real player's radial-menu Force-power click runs through — passes `bPromote = 0`, the
+same as our VM dispatch. So the retail engine's own "cast this now" entry points never perform the
+cast synchronously either; they arm the pending-cast record and rely on the creature's *own
+combat-round tick* (node type 0x3E, run only while the creature is undergoing
+`AIActionCombat` processing) to come along later and promote it. A creature that never gets a 0x3E
+action run — never enters genuine round-based combat processing — has its pending cast silently
+dropped. That matches the live symptom exactly: no FP spent, no heal, and within a few seconds the
+placeholder `WaitForEndOfRound` (node type 0x0F, `CSWSCreature::AIActionWaitForEndOfRound` at
+0x00513F60, jump-table slot 15 of 0x005801E4) is gone with nothing behind it — `0x00513F60` itself
+(fully disassembled) does nothing but poll three round-readiness checks and a
+`[[this+0x9C8]+0x934]==1` flag and return one of three status constants; it never reads or promotes
+the pending-cast record itself.
+
+One more wrinkle worth flagging: because the request-mode bail is "if a 0x3F node already exists,
+do nothing," a **second** `cast` attempt while a first attempt's follow-radius node (or any
+pre-existing one, e.g. from party-follow AI) is still queued is a guaranteed silent no-op — it
+won't even re-stash the new spell/target. The live session should account for this when re-running
+recipes (clear the queue or use a fresh creature between attempts).
+
+**Why no code change is being shipped here.** The correct, retail-parity fix is not "pass
+`bPromote = 1`" — that requires either (a) hand-constructing the same 18-arg call
+`ExecuteCommandCastSpell`'s normal branch builds (0x0052F26D), several of whose args are
+intermediate values computed by preceding vtable calls on the caster (`[eax+0x30]`, `[eax+0x48]`
+slots) that we have not fully identified, or (b) invoking `AIActionCombat` (0x005B6210) directly
+outside its normal RunActions dispatch context (no confirmation it's safe to call without the
+combat-round machinery already primed — same class of risk `docs/kotor-coop-engine-write-rules.md`
+flags for raw pokes). Neither clears this repo's "verify a researched offset live before shipping
+the write" bar from a static pass alone, so **no code change was made** to
+`src/KotorCoop.Plugin/Odyssey.Spells.cs` in this pass.
+
+**Live recipe for the main session** (does not require a code change; tests the two-phase theory
+directly):
+
+1. Load the same level-19 Guardian save (fp 76/135, spell 10 known in class slot 1).
+2. Aggro a genuinely hostile creature first (so the PC is undergoing real `AIActionCombat`
+   round-ticks — a spawned hostile stand-in the death-test recipes already use is fine), *then*
+   run `cast cure me` while combat is actively ticking. If FP is spent and the heal lands, the
+   two-phase theory above is confirmed live, and the follow-up fix becomes "drive the caster into
+   an active combat round before/while queuing the request" rather than touching the VM call at
+   all.
+3. As a control, repeat `cast cure me` with no hostile engaged (the original repro) and confirm the
+   dequeue-with-nothing-behind-it behavior is stable across runs.
+4. Between attempts 2 and 3, dump the caster's action queue (`CSWSObject`+0xFC) before and after
+   each `cast` call — specifically check whether a node of type 0x3F (`CheckMoveToFollowRadius`)
+   is already present *before* the call, since that alone silently no-ops the request per the
+   `GetNodeById` bail above.
