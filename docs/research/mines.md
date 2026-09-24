@@ -690,8 +690,14 @@ Both engines logged the fire gate at `0x58D59E` and `AIActionSetMine route verif
 **Recipe correction (step 6).** Walking the HOST onto the replica does nothing, and correctly: the
 mine carries the party's faction (0) and a party's mines fire only on hostiles. The walk-on test
 needs a hostile crossing the host's replica; the Vulkars in this save were not hostile and
-`spawncreature n_sithsoldier001` refused here (failure 9), so detonation-by-enemy and
-damage-exactly-once on the host remain unobserved.
+`spawncreature n_sithsoldier001` refused here (failure 9), so the first run had no enemy walk-on.
+
+**Enemy walk-on, and a blast fix.** A guard ordered to attack (so it would count as hostile) and
+snapped onto the host's replica set it off. The blast reached the joiner's stand-in 3 units away
+and was forwarded as an enemy hit that downed the joiner. The fire-gate stub now arms a 3-frame
+window when it lets a party-placed mine's check through, and `PhantomHitHook` drops stand-in hits
+inside it. Re-run: `dropped a party mine's hit on player stand-in 0x141 (a party member; not
+forwarded)`, the host copy was consumed, and the joiner's copy was removed 136 ms later.
 
 **Open finding.** `placedmineaction recover|disarm` queues the retail skill request but the engine
 never performs it, on the host's replica AND on the joiner's own `placemine`-built mine. Both were
