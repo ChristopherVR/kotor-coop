@@ -350,6 +350,11 @@ internal static unsafe partial class Odyssey
 
     public static void UnlockPlaceable(nint placeable) => *(int*)(placeable + PlaceableLocked) = 0;
 
+    /// <summary>The re-lock half of <see cref="UnlockPlaceable"/> — the same plain field write
+    /// in the other direction, so a story <c>SetLocked(placeable, TRUE)</c> reaches a peer the
+    /// same way <c>DoorController</c>'s <c>Odyssey.SetDoorLocked</c> already does for doors.</summary>
+    public static void LockPlaceable(nint placeable) => *(int*)(placeable + PlaceableLocked) = 1;
+
     public static bool IsPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) != 0;
 
     public static void SetPlaceableOpen(nint placeable) => *(int*)(placeable + PlaceableOpen) = 1;

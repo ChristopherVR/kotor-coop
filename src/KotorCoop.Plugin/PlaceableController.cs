@@ -3,15 +3,20 @@ namespace KotorCoop.Plugin;
 /// <summary>
 /// Applies the session's placeable truth (chests, corpses, switches, containers) to this
 /// instance, on the game's thread. The sibling of <see cref="DoorController"/>: placeable
-/// object ids match across instances (same save, deterministic GIT order) and their state only
-/// advances (closed -&gt; opened/searched, locked -&gt; unlocked), so the reliable max-merge flag
-/// channel carries them with no new transport.
+/// object ids match across instances (same save, deterministic GIT order), and — since the
+/// door-relock model was extended here (docs/research/door-relock.md §6) — open/closed and
+/// locked/unlocked both apply in EITHER direction now, ordered by the same Lamport flag store
+/// doors use, with the same no-oscillation guarantee: <see cref="_desired"/> only ever applies
+/// a genuinely NEW (open, unlocked) tuple, so a stale re-published value cannot fight a local
+/// story change (or the closing player's own panel) out from under itself.
 ///
-/// Simpler than a door: a placeable has no walkmesh coupling, so applying is a plain field
-/// write — unlock is a write to the locked field, "opened" a write to the open field. There is
-/// no swing animation to defer or commit. The cosmetic open pose (an engine vtable call) is
-/// deliberately not done here; it is a NEEDS-LIVE guessed-ABI path and the field write desyncs
-/// nothing structural without it.
+/// Simpler than a door: a placeable has no walkmesh coupling, so lock/unlock is a plain field
+/// write either direction (<see cref="Odyssey.UnlockPlaceable"/> / <see cref="Odyssey.LockPlaceable"/>).
+/// Open/close plays the same VERIFIED animation pair the container-sync interaction-lock mirror
+/// already uses (<see cref="OdysseyPlaceables.PlayContainerOpenAnimation"/> /
+/// <see cref="OdysseyPlaceables.PlayContainerCloseAnimation"/>, docs/research/container-sync.md
+/// §1.2) alongside the field write, so a peer sees the lid move rather than just the flag
+/// changing under it.
 /// </summary>
 internal sealed class PlaceableController(SharedBlockView block)
 {
@@ -24,11 +29,18 @@ internal sealed class PlaceableController(SharedBlockView block)
     /// <summary>Floor-mine removals share this slot list (kind byte +7 == 1) — SharedBlock.Mines.cs.</summary>
     private readonly MineController _mines = new();
 
+    /// <summary>Dedupes applies to a genuinely new (open, unlocked) tuple per placeable id — the
+    /// placeable twin of <c>DoorController</c>'s own tracker; see
+    /// <see cref="PlaceableDesiredStateTracker"/>'s remarks for why this replaces the old
+    /// <c>ContainerCloseHook.WasEverClosed</c> permanent latch.</summary>
+    private readonly PlaceableDesiredStateTracker _desired = new();
+
     /// <summary>Forgets everything on a module change; ids now name different placeables.</summary>
     public void Invalidate()
     {
         block.PlaceableCount = 0;
         _mines.Invalidate();
+        _desired.Clear();
     }
 
     public void OnFrame()
@@ -73,33 +85,54 @@ internal sealed class PlaceableController(SharedBlockView block)
             return;
         }
 
-        if (desired.Unlocked && Odyssey.IsPlaceableLocked(placeable))
-        {
-            Odyssey.UnlockPlaceable(placeable);
-            LogFew($"placeable 0x{desired.ObjectId:X}: unlocked on the session's authority");
-        }
-
+        // Disarm is unaffected by this pass and stays forward-only — nothing shipped ever
+        // re-arms a trap, so there is no "desired.Disarmed == false" branch to add.
         if (desired.Disarmed && Odyssey.IsPlaceableTrapped(placeable))
         {
             Odyssey.DisarmPlaceable(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: trap disarmed on the session's authority");
         }
 
-        // LIVE-PASS ADDITION (2026-08-22): the WasEverClosed latch. This channel is
-        // deliberately monotonic (PlaceableFlags.cs: "a placeable only ever advances ... never
-        // the reverse") and the agent polls every placeable's own +0x338 about once a second
-        // (KotorGameBridge.CollectChangedPlaceableState) — so once ANY player has ever really
-        // opened a container, this Apply pass would otherwise re-assert it open forever. Live-
-        // confirmed to clobber a fresh real close within ~100ms of it happening, on every
-        // instance, permanently — and confirmed AGAIN that a time-boxed defence is not enough
-        // (the reassertion pressure is continuous, so any timeout eventually loses the race; see
-        // ContainerCloseHook's own remarks for that measurement). Deferring here — rather than
-        // making the channel itself expressly "closed" (a wire/merge change out of scope for
-        // this pass) — is the smallest fix that lets a real close actually stick.
-        if (desired.Open && !Odyssey.IsPlaceableOpen(placeable) && !ContainerCloseHook.WasEverClosed(desired.ObjectId))
+        // Do not keep asserting an unchanged (open, unlocked) snapshot: a local story script (or
+        // the closing player's own panel) may have just changed this placeable, and the external
+        // scanner needs a chance to publish that newer state before we re-apply the stale one —
+        // the exact guarantee DoorDesiredStateTracker gives doors (DoorController.Apply). This
+        // also replaces the old ContainerCloseHook.WasEverClosed latch: that blocked a re-open
+        // of this id FOREVER once any real close was seen, which would have refused a genuinely
+        // later re-open; this only blocks re-applying the SAME tuple.
+        if (!_desired.IsNew(desired.ObjectId, desired.Open, desired.Unlocked))
         {
+            return;
+        }
+
+        if (desired.Unlocked)
+        {
+            Odyssey.UnlockPlaceable(placeable);
+        }
+        else
+        {
+            Odyssey.LockPlaceable(placeable);
+        }
+
+        _desired.Applied(desired.ObjectId, desired.Open, desired.Unlocked);
+
+        bool currentlyOpen = Odyssey.IsPlaceableOpen(placeable);
+        if (desired.Open == currentlyOpen)
+        {
+            return;
+        }
+
+        if (desired.Open)
+        {
+            OdysseyPlaceables.PlayContainerOpenAnimation(placeable);
             Odyssey.SetPlaceableOpen(placeable);
-            LogFew($"placeable 0x{desired.ObjectId:X}: marked opened on the session's authority");
+            LogFew($"placeable 0x{desired.ObjectId:X}: opened on the session's authority");
+        }
+        else
+        {
+            OdysseyPlaceables.PlayContainerCloseAnimation(placeable);
+            OdysseyPlaceables.ClearPlaceableOpenFlag(placeable);
+            LogFew($"placeable 0x{desired.ObjectId:X}: closed on the session's authority");
         }
     }
 

@@ -1,4 +1,6 @@
 using KotorCoop.Memory;
+using KotorCoop.Plugin;
+using KotorCoop.Session;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -57,14 +59,44 @@ public class PlaceableFlagsTests
     }
 
     [Fact]
-    public void ValueIsMonotonicUnderTheStoreMaxMerge()
+    public void NewerStoryRelockWinsAndOldSnapshotCannotReopenIt()
     {
-        // Adding bits only ever raises the value, so a placeable that gains "unlocked" or
-        // "disarmed" never regresses under a value-only merge or a stale replay.
-        sbyte openOnly = PlaceableFlags.MakeValue(open: true, unlocked: false);
-        sbyte openUnlocked = PlaceableFlags.MakeValue(open: true, unlocked: true);
-        sbyte all = PlaceableFlags.MakeValue(open: true, unlocked: true, disarmed: true);
-        Assert.True(openUnlocked > openOnly);
-        Assert.True(all > openUnlocked);
+        // The placeable twin of DoorFlagsTests' own test of the same name: a story re-lock (or
+        // a real close) reaches a peer honestly, and a stale snapshot replayed afterward cannot
+        // undo it — EventFlagStore's per-key Lamport clock, the same store doors use.
+        ulong key = PlaceableFlags.MakeKey(PlaceableFlags.HashModule("tar_m02ac"), 42);
+        EventFlagStore owner = new();
+        EventFlagStore peer = new();
+        owner.Set(key, PlaceableFlags.MakeValue(open: true, unlocked: true), 1);
+        var stale = owner.SnapshotEntries();
+        uint staleVersion = owner.Version;
+        peer.MergeSnapshot(stale, staleVersion);
+        owner.Set(key, PlaceableFlags.MakeValue(open: false, unlocked: false), 1);
+        peer.MergeSnapshot(owner.SnapshotEntries(), owner.Version);
+        peer.MergeSnapshot(stale, staleVersion);
+        Assert.True(peer.TryGet(key, out sbyte current));
+        Assert.Equal(PlaceableFlags.MakeValue(open: false, unlocked: false), current);
+    }
+
+    [Fact]
+    public void UnchangedDesiredStateDoesNotFightLocalStoryChanges()
+    {
+        // Pins PlaceableDesiredStateTracker's exact contract, mirroring
+        // DoorFlagsTests.UnchangedDesiredStateDoesNotFightLocalStoryChanges: applying the same
+        // (open, unlocked) tuple twice is a no-op, a genuinely new tuple re-arms it (in either
+        // direction), and a module change (Clear) resets it for reused object ids — the
+        // guarantee that replaces the old ContainerCloseHook.WasEverClosed permanent latch.
+        PlaceableDesiredStateTracker tracker = new();
+        Assert.True(tracker.IsNew(42, open: true, unlocked: true));
+        tracker.Applied(42, open: true, unlocked: true);
+        Assert.False(tracker.IsNew(42, open: true, unlocked: true));
+        Assert.True(tracker.IsNew(42, open: false, unlocked: false));
+        tracker.Applied(42, open: false, unlocked: false);
+        Assert.False(tracker.IsNew(42, open: false, unlocked: false));
+        // A LATER, genuinely different value — including a re-open — still goes through; this
+        // is exactly what the old permanent latch could not do.
+        Assert.True(tracker.IsNew(42, open: true, unlocked: true));
+        tracker.Clear();
+        Assert.True(tracker.IsNew(42, open: false, unlocked: false)); // New module reuses object IDs.
     }
 }
