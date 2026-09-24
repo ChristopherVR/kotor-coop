@@ -23,8 +23,14 @@ namespace KotorCoop.Plugin;
 /// DirectInput wrap use), <c>gamepad_cursor_speed = 1.0</c> (multiplier on
 /// <see cref="GamepadCursorRule.BaseSpeed"/>). The <c>gamepad</c> console verb reports
 /// status and, for the unattended rig, drives a virtual pad (<c>gamepad sim ly=1</c>).
+///
+/// Text entry (the address/password box, chat, the console — docs/research/gamepad.md §7) is
+/// the other half, in GamepadController.TextEntry.cs: a co-op text box gaining focus preempts
+/// World/Cursor mode the same way the ~ console already did (<see cref="GamepadModeRule"/>
+/// only ever forced Suspended for it before), except now the pad drives an on-screen character
+/// grid instead of doing nothing.
 /// </summary>
-internal sealed class GamepadController
+internal sealed partial class GamepadController
 {
     private const int NoticeColumn = 3;
     private const int NoticeRow = 7;
@@ -39,6 +45,13 @@ internal sealed class GamepadController
     private readonly GamepadIntent _intent = new();
     private readonly bool[] _held = new bool[256];
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+    // ── on-screen keyboard (GamepadController.TextEntry.cs) ──────────────────────────────
+    private readonly GamepadTextEntryStateMachine _textEntry = new();
+    private readonly StickAxisLatch _gridVertical = new();
+    private readonly StickAxisLatch _gridHorizontal = new();
+    private int _gridVerticalWas;
+    private int _gridHorizontalWas;
 
     private bool _enabled;
     private bool _cursorToggle;
@@ -114,6 +127,7 @@ internal sealed class GamepadController
         if (!_enabled)
         {
             ReleaseEverything();
+            _textEntry.Close();
             return;
         }
 
@@ -159,6 +173,7 @@ internal sealed class GamepadController
         if (!connected)
         {
             ReleaseEverything();
+            _textEntry.Close();
             _previous = PadState.Idle;
             return;
         }
@@ -170,6 +185,29 @@ internal sealed class GamepadController
         // a real pad stays foreground-only so a backgrounded game does not walk off.
         bool foreground = _virtual is not null || NativeMethods.IsForeground();
         bool consoleOpen = Odyssey.IsConsoleOpen;
+        bool modalOpen = PasswordEntryModal.IsAnyOpen;
+
+        // A co-op text box has focus: hand the pad to the on-screen keyboard instead of the
+        // usual World/Cursor translation. Same foreground gate as everything else here — a
+        // backgrounded window drives nothing, same as before this mode existed. Checked BEFORE
+        // GamepadModeRule because it needs state (the console/modal open flags) the rule does
+        // not take; the rule keeps deciding Suspended/World/Cursor for every other frame.
+        if (foreground && (consoleOpen || modalOpen))
+        {
+            ReleaseEverything(); // release anything still held from World/Cursor mode
+            _lastMode = GamepadMode.TextEntry;
+            RunTextEntry(pad, pressedThisFrame, consoleOpen, modalOpen, nowMs);
+            return;
+        }
+
+        if (_textEntry.Active)
+        {
+            // The box closed by some other means (Alt-Tab dismissed it, a keyboard player
+            // typed Enter/Escape themselves, ...): drop the grid rather than leave it drawn
+            // over a screen it no longer applies to.
+            _textEntry.Close();
+        }
+
         bool inGame = Odyssey.IsInGame;
         bool fullScreenGui = Odyssey.IsFullScreenGuiUp;
         bool conversation = Odyssey.IsConversationActive;
@@ -347,6 +385,7 @@ internal sealed class GamepadController
                 _enabled = false;
                 _virtual = null;
                 ReleaseEverything();
+                _textEntry.Close();
                 return Say("gamepad: off (keys released)", nowMs);
 
             case "cursor":
@@ -405,7 +444,11 @@ internal sealed class GamepadController
             + $"; cursor speed x{_cursorSpeed:0.##}"
             + (Odyssey.TryGetCursor(out int cx, out int cy) ? $" at {cx},{cy} of {Odyssey.ScreenWidth}x{Odyssey.ScreenHeight}" : "")
             + $"; engine input {(Odyssey.IsInputActive ? "active" : "inactive")}"
-            + (_keymap.Overrides.Count > 0 ? $"; keymap overrides {string.Join(",", _keymap.Overrides)}" : "");
+            + (_keymap.Overrides.Count > 0 ? $"; keymap overrides {string.Join(",", _keymap.Overrides)}" : "")
+            + (_textEntry.Active
+                ? $"; text entry: target {_textEntryTargetLabel}, row {_textEntry.Row} col {_textEntry.Col}"
+                    + $" shift {_textEntry.Shift}, selected '{_textEntry.Selected}'"
+                : "");
         PluginHost.Log(line);
 
         // The console reply (the shared cheat-detail slot) holds 63 characters, so what the
@@ -418,7 +461,8 @@ internal sealed class GamepadController
         string brief =
             $"gamepad: {(_enabled ? "on" : "off")}; {shortSource}; {_lastMode}"
             + $"{(_cursorToggle ? " (forced)" : "")}; DI {di}; held {_intent.HeldKeyCount()}"
-            + $"{(_leftHeld ? " +LMB" : "")}{(_rightHeld ? " +RMB" : "")}";
+            + $"{(_leftHeld ? " +LMB" : "")}{(_rightHeld ? " +RMB" : "")}"
+            + (_textEntry.Active ? $" r{_textEntry.Row}c{_textEntry.Col}='{_textEntry.Selected}'" : "");
         ShowNotice(brief, nowMs);
         return brief;
     }

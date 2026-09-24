@@ -149,6 +149,20 @@ internal static partial class NativeMethods
     public const uint MkRButton = 0x0002;
     public const int WheelDelta = 120;
 
+    // ── Character emulation for the gamepad on-screen keyboard (GamepadController.TextEntry) ──
+    // The ~ console and the address/password editbox both take typed characters through
+    // Win32 WM_CHAR (docs/research/connect-flow.md, docs/research/console-open-safe.md) — a
+    // DIFFERENT path from the buffered DirectInput read the rest of this layer uses, so those
+    // two boxes cannot be "typed into" via DirectInputKeyboardHook at all. Posting WM_CHAR is
+    // the same class of trick as the mouse messages above: PostMessage (not Send) from inside
+    // this process, landing on the game's own PeekMessage pump next frame like real input.
+    // wParam is the ANSI character code (PostMessageA, same as every mouse post above), which
+    // is exactly what DoConsole's `bl = the typed char` and the editbox's AddNewChar read.
+    public const uint WmChar = 0x0102;
+    public const byte AsciiBackspace = 0x08;
+    public const byte AsciiEscape = 0x1B;
+    public const byte AsciiCarriageReturn = 0x0D;
+
     [LibraryImport("user32.dll", EntryPoint = "PostMessageA")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PostMessage(nint window, uint message, nuint wParam, nint lParam);

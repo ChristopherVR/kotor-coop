@@ -166,6 +166,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ThreatTable.cs" Link="Plugin\ThreatTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ThreatRetargetRule.cs" Link="Plugin\ThreatRetargetRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GamepadMapping.cs" Link="Plugin\GamepadMapping.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\GamepadTextEntry.cs" Link="Plugin\GamepadTextEntry.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoff.cs" Link="Plugin\RetainedEnemyHandoff.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoffProof.cs" Link="Plugin\RetainedEnemyHandoffProof.cs" />
   </ItemGroup>
