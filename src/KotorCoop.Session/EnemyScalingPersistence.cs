@@ -171,6 +171,7 @@ public sealed class EnemyScalingPersistence
                 }
                 else
                 {
+                    _log?.Invoke($"enemy-baseline: world {page.WorldGeneration} '{page.Module}' load not bound: {bound}");
                     MarkUnknown($"load not bound: {bound}");
                 }
 
