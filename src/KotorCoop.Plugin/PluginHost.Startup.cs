@@ -49,6 +49,24 @@ internal static unsafe partial class PluginHost
             Log($"store price hooks NOT installed: {storePriceDiagnostic}");
         }
 
+        // local_var_sync (docs/research/quest-sync.md §8.3): the two SetLocal* call sites inside
+        // ExecuteCommandSetLocalValue. Only when the key is on — default OFF until live-verified.
+        if (LocalVarController.Enabled)
+        {
+            LocalVarWatchTable.Build();
+            if (LocalVarSyncHook.Install(_view!, out string localVarDiagnostic))
+            {
+                Log($"local vars: {localVarDiagnostic}");
+            }
+            else
+            {
+                Log($"local-var hook NOT installed: {localVarDiagnostic}");
+            }
+        }
+
+        // The agent reads this word before draining the capture ring or handing out applies.
+        _view!.SetLocalVarStatus(LocalVarSyncHook.IsInstalled, LocalVarController.Enabled);
+
         // Intercept the console command interpreter so co-op verbs route to the block and
         // are swallowed (no "function <x> not found"), while real typos still get flagged.
         // Independent of the frame hook, so the co-op console works at the menu too.

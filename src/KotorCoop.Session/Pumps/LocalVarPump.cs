@@ -21,12 +21,23 @@ internal sealed class LocalVarPump(IGameBridge bridge, ICoopSession session, Act
     private int _loggedChanges;
     private uint _loggedLost;
     private int _loggedApplyCount;
+    private string _lastBlocked = "(not yet pumped)";
 
     public void Pump(SessionCapabilities caps)
     {
         // Same capability gate as doors, placeables and mines: it rests on the same
         // "GIT object ids agree across one save" assumption.
-        if (!bridge.SupportsLocalVarSync || (caps & SessionCapabilities.Doors) == 0 || bridge.IsWorldBetweenLives)
+        string blocked = !bridge.SupportsLocalVarSync ? "the plugin reports local_var_sync off or its hook missing"
+            : (caps & SessionCapabilities.Doors) == 0 ? "shared world state is off for this session"
+            : bridge.IsWorldBetweenLives ? "the world is between lives"
+            : string.Empty;
+        if (blocked != _lastBlocked)
+        {
+            _lastBlocked = blocked;
+            log(blocked.Length == 0 ? "localvar: pumping" : $"localvar: paused - {blocked}");
+        }
+
+        if (blocked.Length != 0)
         {
             return;
         }
