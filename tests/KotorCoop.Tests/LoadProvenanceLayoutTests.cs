@@ -9,7 +9,7 @@ public sealed class LoadProvenanceLayoutTests
     [Fact]
     public void MailboxUsesTheAgreedV74FreeTailBeforeTheV75Extension()
     {
-        Assert.Equal(0x5400, SharedBlock.TotalSize);
+        Assert.Equal(0x5A00, SharedBlock.TotalSize);
         Assert.Equal(0x4E50, SharedBlock.OffsetLoadProvenanceGeneration);
         Assert.Equal(0x4E54, SharedBlock.OffsetLoadProvenanceSlot);
         Assert.Equal(0x4E58, SharedBlock.OffsetLoadProvenanceSource);

@@ -68,6 +68,17 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("LootMailboxConsumedCount", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxAckEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+
+        // local_var_sync (version 77, docs/research/quest-sync.md §8.3).
+        ("LocalVarCaptureCursor", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarStatus", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarGeneration", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarCaptureRing", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplySerial", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyCount", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyGeneration", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyDrainedCursor", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyEntries", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
     ];
 
     [Fact]

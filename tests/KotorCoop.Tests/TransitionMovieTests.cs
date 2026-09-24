@@ -258,8 +258,9 @@ public class TransitionMovieTests
         // 72 = live runtime difficulty sample in the container-loot region's free tail;
         // 73 = agent-published local session role at 0x4E44; 74 = exact native load request
         // provenance at 0x4E50..0x4EA8; 75 adds resolved store prices at 0x4C40 and the
-        // item-spawn generation/ticket/load-serial arrays at 0x4F00..0x5300.
-        Assert.Equal(75, int.Parse(version.Groups[1].Value));
+        // item-spawn generation/ticket/load-serial arrays at 0x4F00..0x5300. 77 = per-object
+        // local-variable replication at 0x5800..0x5A00 (docs/research/quest-sync.md §8.3).
+        Assert.Equal(77, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(
