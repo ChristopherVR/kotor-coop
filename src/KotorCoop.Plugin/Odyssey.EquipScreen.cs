@@ -22,7 +22,10 @@ internal static unsafe partial class Odyssey
     /// <summary>CSWGuiInGameEquip's vtable — tools/kotor1_0_3.db <c>classes.vtable</c> for the
     /// class (7694752). The guard that <c>[gui+0x0C]</c> really is this panel before anything
     /// below it is read.</summary>
-    private const nint EquipScreenVtable = 0x007567A0;
+    // 0x007569A0: written by CSWGuiInGameEquip's own constructor (0x006BA9CD) and destructor
+    // (0x006B8864). This read 0x007567A0 until 2026-09-25, a CSWGuiContainer vtable (its constructor
+    // writes it at 0x006B6FF5), so the companion-equip guard disabled itself on its first real read.
+    private const nint EquipScreenVtable = 0x007569A0;
 
     /// <summary>CSWGuiInGameEquip + this = <c>player_creature</c> (CSWCCreature*), the character
     /// the screen is dressing — symbol DB <c>offsets</c> row, and VERIFIED by disassembly of
@@ -192,29 +195,65 @@ internal static unsafe partial class Odyssey
             return 0;
         }
 
+        // The client's CSWParty is a view, not a roster (memory: after a join the PC can sit
+        // BEYOND the count, and live 2026-09-25 a joiner with one host companion read count 1).
+        // Walk every slot the capacity allows and count companions, i.e. entries that are not
+        // the PC, so index N means "the Nth companion" whatever order the view holds them in.
+        nint controlled = GetClientPlayerCreatureFn(client);
         int liveCount = *(int*)(party + SwPartyMemberCount);
-        if (liveCount <= partyIndex || liveCount > SwPartyMemberCapacity)
+        int companionsSeen = 0;
+        for (int slot = 0; slot < SwPartyMemberCapacity; slot++)
         {
-            detail = $"party has no live member at index {partyIndex} (CSWParty count {liveCount})";
-            return 0;
+            uint memberId = *(uint*)(party + SwPartyMember0ClientId + (slot * SwPartyMemberStride)) & ~ControlPartyNpcFlag;
+            if (memberId == 0)
+            {
+                continue;
+            }
+
+            nint member = GetCreatureByClientIdFn(client, memberId);
+            if (member == 0 || member == controlled)
+            {
+                continue;
+            }
+
+            if (++companionsSeen == partyIndex)
+            {
+                return member;
+            }
         }
 
-        uint memberId =
-            *(uint*)(party + SwPartyMember0ClientId + (partyIndex * SwPartyMemberStride)) & ~ControlPartyNpcFlag;
-        if (memberId == 0)
+        // A joiner's client view can list no companions at all while its party table holds
+        // them (live 2026-09-25: T3 in the party, CSWParty count 1, zero companions). Fall back
+        // to the party table: the Nth active roster slot, translated server -> client id.
+        if (TryReadPartyRoster(out _, out uint partyMask))
         {
-            detail = $"party member[{partyIndex}]'s client id read 0";
-            return 0;
+            int rosterSeen = 0;
+            for (int slot = 0; slot < 9; slot++)
+            {
+                if ((partyMask & (1u << slot)) == 0)
+                {
+                    continue;
+                }
+
+                uint serverId = GetPartyRosterObjectId(slot);
+                if (serverId is 0 or ObjectInvalid || ++rosterSeen != partyIndex)
+                {
+                    continue;
+                }
+
+                uint clientId = ServerToClientObjectIdFn(client, serverId);
+                nint member = clientId is 0 or ObjectInvalid ? 0 : GetCreatureByClientIdFn(client, clientId);
+                if (member != 0 && member != controlled)
+                {
+                    return member;
+                }
+            }
         }
 
-        nint creature = GetCreatureByClientIdFn(client, memberId);
-        if (creature == 0)
-        {
-            detail = $"client id 0x{memberId:X} (party member[{partyIndex}]) did not resolve to a creature";
-        }
-
-        return creature;
+        detail = $"no companion #{partyIndex} in the client party view (CSWParty count {liveCount}, {companionsSeen} companion(s) found) or the party table";
+        return 0;
     }
+
 
     /// <summary>
     /// Opens the Equipment screen (index 0 — <see cref="InGameGuiEquipScreenOffset"/>) on THIS
@@ -262,14 +301,28 @@ internal static unsafe partial class Odyssey
 
         int fullScreenBefore = *(int*)(gui + InGameGuiBusyOffset);
         int screenBefore = *(int*)(gui + InGameGuiCurrentScreenOffset);
+        if (fullScreenBefore != 0 && screenBefore != 0)
+        {
+            // Live 2026-09-25: a freshly joined client read +0x30 = 1 with +0x2C = 7 and no screen
+            // on show. That is the post-load Status Summary nobody clicked away, the same
+            // leftover ShowGalaxyMapGui trips on. Restore the retail post-close input class
+            // first, exactly as Odyssey.GalaxyMap does, then look again.
+            if (!RestoreGameInputClass(out string restoreDetail))
+            {
+                detail = $"could not restore the game input class first: {restoreDetail}";
+                return false;
+            }
+
+            fullScreenBefore = *(int*)(gui + InGameGuiBusyOffset);
+            screenBefore = *(int*)(gui + InGameGuiCurrentScreenOffset);
+        }
+
         bool equipmentAlreadyUp = fullScreenBefore != 0 && screenBefore == 0;
 
-        if (fullScreenBefore != 0 && !equipmentAlreadyUp)
-        {
-            detail = "a different full-screen GUI screen is already up "
-                + $"(CGuiInGame+0x2C = {screenBefore}) - close it first, e.g. `closegui`";
-            return false;
-        }
+        // Another full-screen page reading as up is not a refusal: the retail Equip key does
+        // the same ShowSWInGameGui call from any page and simply switches to Equipment. Live
+        // 2026-09-25, a joiner kept reading +0x30 = 1 / +0x2C = 7 even straight after a
+        // successful closegui, so refusing here made the verb unusable exactly where it is needed.
 
         if (!equipmentAlreadyUp)
         {

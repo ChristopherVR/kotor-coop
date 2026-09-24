@@ -1660,3 +1660,22 @@ line), `CheatKindSyncTests` (existing table-diff tests cover the new `CheatKindS
 `ShowGuiEquip = 99` pair automatically — no test file changes needed there).
 `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both
 clean. `dotnet test KotorCoop.slnx`: see the session's own final report for the exact count.
+
+### 15.1 Live result (2026-09-25)
+
+Three fixes before it worked on the rig:
+1. `EquipScreenVtable` read `0x7567A0`, a `CSWGuiContainer` vtable (its constructor writes it at
+   `0x006B6FF5`). The real `CSWGuiInGameEquip` vtable is `0x7569A0`: its constructor
+   (`0x006BA9CD`) and destructor (`0x006B8864`) write it, and the old doc comment's decimal
+   7694752 already said so. The shipping guard shares the constant, so it would have disabled
+   itself on its first real read.
+2. A joiner's client `CSWParty` view listed no companions (count 1) while its party table held
+   T3. Companion N is now looked up as the Nth non-PC member of the view, falling back to the
+   Nth active party-table slot translated server -> client id.
+3. A joiner kept reading `+0x30 = 1 / +0x2C = 7` even straight after `closegui`. The verb no
+   longer refuses in that state: the retail Equip key switches from any page, and so does
+   `ShowSWInGameGui`.
+
+Result: on the joiner, `showgui equip 1` opened T3's page, and the guard closed it 14 ms later
+(`companion equip: client copy of the Equipment screen ... was showing creature 0x18FEFFE0, not
+the PC - closed`). `showgui equip 0` (the joiner's own page) stayed open. **VERIFIED.**
