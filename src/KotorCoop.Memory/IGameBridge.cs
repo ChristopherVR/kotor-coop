@@ -681,6 +681,7 @@ public interface IGameBridge :
     IDoorBridge,
     IPlaceableBridge,
     IMineBridge,
+    IPlacedMineBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
     IStoreBridge,
