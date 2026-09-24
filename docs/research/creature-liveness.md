@@ -1873,3 +1873,13 @@ Expected outcome: every step above passes with the counts and log lines describe
 line ever reports dropping an enemy past 32, and the joiner's `census` count matches the host's
 at every step. NEEDS-LIVE — not run on the two-instance rig yet as part of this pass (out of
 scope for this change: no game launch, no `demo.ps1`, no `build.ps1 -Install`).
+
+### Live run (2026-09-24, block v80 / protocol 70)
+
+`tar_m10aa`, aligned saves, host `spawncreature tar10_vulkpoo002 32` then `20`. Host `census:
+OWNER 78 id(s) ... 78 resolve here`; joiner `census: MIRROR 78 id(s) ... 42 resolve here, 36 do
+not`. The paged snapshot reached the joiner in full (78 ids, past the old 32). Materialisation did
+not keep up: about ten spawned bodies were built on the joiner and it then stopped, and several
+host ids were matched to unrelated local objects (`NOT spawning ... it exists locally after all`).
+The census cap is gone; materialising large numbers of host-spawned enemies on a joiner is a
+separate open defect.
