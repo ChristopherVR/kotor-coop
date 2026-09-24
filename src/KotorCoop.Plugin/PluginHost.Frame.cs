@@ -1049,6 +1049,7 @@ internal static unsafe partial class PluginHost
             {
                 _doors?.OnFrame();
                 _placeables?.OnFrame();
+                _localVars?.OnFrame();
                 _loot?.OnFrame();
                 _pause?.OnFrame();
                 _pauseKey?.OnFrame();

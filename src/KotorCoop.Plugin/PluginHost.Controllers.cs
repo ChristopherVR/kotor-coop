@@ -28,6 +28,11 @@ internal static unsafe partial class PluginHost
         _cheats = new CheatController(_view);
         _doors = new DoorController(_view);
         _placeables = new PlaceableController(_view);
+        _localVars = new LocalVarController(_view);
+
+        // Generation zero means "no world" to the capture hook and the agent; start at one so a
+        // capture in the very first world is publishable.
+        _view.AdvanceLocalVarGeneration();
         _loot = new LootController(_view);
         _travel = new TravelController(_view);
         _menuLoad = new MenuLoadController(_view);

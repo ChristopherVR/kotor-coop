@@ -23,10 +23,11 @@ public enum LocalVarKind : byte
 /// <param name="Module">Module resref, case-insensitive (e.g. <c>danm13</c>).</param>
 /// <param name="Tag">The object's tag, case-insensitive. Unique among the module's GIT objects
 /// (the audit only admits uniquely-tagged objects).</param>
-/// <param name="ObjectId">The deterministic GIT object id the audit predicted
-/// (<c>tools/kotorfiles.py objectids</c>). Both the capture and the apply require the LIVE id
-/// to equal this, so a wrong prediction fails closed (never fires) rather than keying a
-/// different object.</param>
+/// <param name="ObjectId">The deterministic GIT object id the audit predicted for a FIRST load
+/// of the module (<c>tools/kotorfiles.py objectids</c>). Diagnostic only: the flag key uses the
+/// LIVE id (both peers load the same save, so it agrees between them), and a module restored
+/// from a save may legitimately renumber after destroyed objects. A mismatch is logged, not
+/// refused; identity is enforced by the unique tag plus the 16-bit GIT id range.</param>
 public sealed record LocalVarAllowEntry(
     string Module, string Tag, ushort ObjectId, LocalVarKind Kind, byte Slot,
     string Writer, string Reader, string Why);
@@ -147,17 +148,22 @@ public static class LocalVarSyncRule
     }
 
     /// <summary>
-    /// The allowlist entry for (module, kind, slot) whose tag and expected id match, or null.
-    /// A match needs all five: a slot outside the list, a tag that differs, or a live id that
-    /// is not the one the audit predicted is refused.
+    /// The allowlist entry for (module, tag, kind, slot), or null. The object must also carry a
+    /// deterministic GIT id (<see cref="IsGitObjectId"/>): a dynamically created copy that
+    /// happens to share the tag is refused, because its id means nothing on the peer.
     /// </summary>
     public static LocalVarAllowEntry? Match(
         IReadOnlyList<LocalVarAllowEntry> list, uint moduleHash, uint objectId, ReadOnlySpan<char> tag,
         LocalVarKind kind, int slot)
     {
+        if (!IsGitObjectId(objectId))
+        {
+            return null;
+        }
+
         foreach (LocalVarAllowEntry entry in list)
         {
-            if (entry.Kind == kind && entry.Slot == slot && entry.ObjectId == objectId
+            if (entry.Kind == kind && entry.Slot == slot
                 && HashModule(entry.Module) == moduleHash
                 && tag.Equals(entry.Tag, StringComparison.OrdinalIgnoreCase))
             {

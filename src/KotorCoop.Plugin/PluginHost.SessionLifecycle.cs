@@ -199,6 +199,7 @@ internal static unsafe partial class PluginHost
         AnimationHook.InvalidateCreatureTable();
         _doors?.Invalidate();
         _placeables?.Invalidate();
+        _localVars?.Invalidate();
         _loot?.Invalidate();
         _travel?.Invalidate();
         _pause?.Invalidate();

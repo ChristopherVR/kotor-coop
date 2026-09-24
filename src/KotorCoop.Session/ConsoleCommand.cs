@@ -880,6 +880,16 @@ public enum CoopCommandKind
     /// <summary>Developer diagnostic: request the retail recover/disarm action on a GIT mine.
     /// Address holds the action; Amount holds the local server object ID. Local only.</summary>
     MineAction,
+
+    /// <summary>
+    /// <c>localvar &lt;get|set|watch&gt; &lt;tag|0xid&gt; &lt;b|n&gt; &lt;slot&gt; [value]</c> —
+    /// LIVE-TEST PRIMITIVE for coop.ini <c>local_var_sync</c> (docs/research/quest-sync.md §8.3).
+    /// Address carries the canonical <c>op|kind|slot|tag</c> request
+    /// (<c>LocalVarSyncRule.FormatRequest</c>), Password the object id in decimal ("0" when named
+    /// by tag), Amount the value for set. Local only; a set on a watched slot is then published
+    /// by the plugin exactly like a script write.
+    /// </summary>
+    LocalVar,
 }
 
 /// <summary>
@@ -1075,6 +1085,7 @@ public static partial class ConsoleCommand
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),
         new(["mineaction"], ParseMineAction),
+        new(["localvar"], ParseLocalVar),
         new(["scriptgive"], ParseScriptGive),
         new(["loottake"], ParseLootTake),
         new(["pooladd"], ParsePoolAdd),

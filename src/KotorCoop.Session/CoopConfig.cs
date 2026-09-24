@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -826,7 +826,7 @@ public sealed record CoopConfig
         "enemy_effect_sync", "enemy_materialise",
         "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
-        "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat",
+        "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat", "local_var_sync",
         "local_combat_bisect_mask", "local_combat_bypass_id", "local_combat_deferred_notice",
         "local_combat_diag_undriven_id", "local_combat_engage_fallback",
         "local_combat_engage_range", "local_combat_range", "local_combat_slots",

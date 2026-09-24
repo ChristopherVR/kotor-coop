@@ -70,6 +70,7 @@ internal static unsafe partial class PluginHost
     private static PortraitController? _portraits;
     private static BarkController? _barks;
     private static ItemTemplateSpawnController? _itemTemplateSpawns;
+    private static LocalVarController? _localVars;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
     private static PartySelectSuppressionController? _partySelectSuppression;
@@ -399,7 +400,14 @@ internal static unsafe partial class PluginHost
         // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
         // 73 adds the agent-published local session role word at 0x4E44.
         // 74 adds the read-only exact native load-request provenance mailbox at 0x4E50.
-        _block->Version = 75;
+        // 75 adds resolved store prices at 0x4C40 and the item-spawn generation/ticket/
+        //    load-serial arrays at 0x4F00..0x5300.
+        // 77 adds per-object local-variable replication (SharedBlock.LocalVars.cs,
+        //    0x5800..0x5A00, TotalSize 0x5A00): a 16-row capture ring LocalVarSyncHook fills
+        //    from ExecuteCommandSetLocalValue and a 28-row seqlocked apply list for
+        //    LocalVarController. coop.ini local_var_sync, default OFF; NEEDS-LIVE. See
+        //    docs/research/quest-sync.md §8.3.
+        _block->Version = 77;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

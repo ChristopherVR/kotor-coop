@@ -124,6 +124,7 @@ internal static class ConsoleVerbCatalog
 
         // Three live-test primitives (2026-08-27): none shadows a retail verb.
         ("setglobal", "setglobal <name> <int|true|false|on|off>  (writes a script global by name)"),
+        ("localvar", "localvar <get|set|watch> <tag|0xid> <b|n> <slot> [value]  (dev-only: one object's local slot; watch = session-only local_var_sync test)"),
         ("pazaak", "pazaak [npc-tag|id] [deck]  (starts a Pazaak hand; blank = engine's own default opponent)"),
         ("openstore", "openstore <resref|tag|id>  (opens the store GUI against a resolved store)"),
 

@@ -155,6 +155,12 @@ internal static unsafe class FuncInterpHook
         // explanation. Does not shadow a retail verb (checked against
         // docs/research/console-cheats.md the same way every prior addition here was).
         "pooladd", "poolremove",
+
+        // The local_var_sync live-test primitive (2026-09-24, docs/research/quest-sync.md §8.3):
+        // reads/writes one per-object local slot and adds a session-only watch, typed directly
+        // at the in-game console on both rig instances. Does not shadow a retail verb (the
+        // string "localvar" does not occur anywhere in the GOG swkotor.exe image).
+        "localvar",
     ];
 
     /// <summary>

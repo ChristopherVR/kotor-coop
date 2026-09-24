@@ -324,6 +324,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 MineAction(playerId);
                 break;
 
+            case SharedBlock.CheatKindLocalVar:
+                LocalVar();
+                break;
+
             case SharedBlock.CheatKindFollowKick:
                 FollowKick();
                 break;
