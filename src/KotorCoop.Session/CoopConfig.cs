@@ -335,7 +335,7 @@ public sealed record CoopConfig
     /// NEEDS-LIVE: the apply half has never been run against an enemy body. Three readers must
     /// agree on that default — this record and its parser, the agent's
     /// <c>AgentComposition</c> fallback and the plugin's <c>PluginConfig.ReadBool
-    /// ("enemy_effect_sync", false)</c>. docs/research/enemy-effects.md.</summary>
+    /// ("enemy_effect_sync", true)</c>. docs/research/enemy-effects.md.</summary>
     public bool EnemyEffectSync { get; init; }
 
     /// <summary>coop.ini <c>placed_mine_sync</c> — replicate floor mines a party member PLACES
@@ -1116,7 +1116,7 @@ public sealed record CoopConfig
             // parsed here purely so the outgoing BehaviourDigest can compare them.
             LocalCombat = !kv.ContainsKey("local_combat") || IsTruthy(kv.GetValueOrDefault("local_combat")),
             CompanionLocalCombat = IsTruthy(kv.GetValueOrDefault("companion_local_combat")),
-            EnemyEffectSync = IsTruthy(kv.GetValueOrDefault("enemy_effect_sync")),
+            EnemyEffectSync = !kv.ContainsKey("enemy_effect_sync") || IsTruthy(kv.GetValueOrDefault("enemy_effect_sync")),
             PlacedMineSync = IsTruthy(kv.GetValueOrDefault("placed_mine_sync")),
             MenuGuardSyncEnabled = !kv.ContainsKey("menu_guard_sync")
                 || IsTruthy(kv.GetValueOrDefault("menu_guard_sync")),

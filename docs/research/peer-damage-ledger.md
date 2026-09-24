@@ -1426,3 +1426,25 @@ on the target, not a scripted forward):
 
 If step 5 shows the order still flapping (the host's own margin never sustains a hold because
 its damage keeps pace with the peer's), that is the signal for §12.5's stage 3.
+
+## Live sticky-aggro run (2026-09-25)
+
+Rig: `danm14aa`, both players levelled to Guardian 19 with `levelup`, and `god on` on both.
+The host spawned a kath hound and set it to 400 hp. Attacks went through the new client-route
+`attack` verb, which calls `CSWCCreature::PerformAttack` like a real click and sustains the fight
+on its own (one call, damage every round).
+
+* **Joiner attacks, host idle (VERIFIED):** the host's hound kept `currentTarget 0xEA` (the
+  joiner's stand-in) for 90 s. Its HP fell 343 -> 103 from forwarded damage alone, the joiner
+  logged 17 hits on its phantom, and the host PC took none. No explicit retarget was needed: the
+  engine's own AI followed the attacker.
+* **Joiner at its 1-hp floor:** its stand-in reads downed and the hound released it. That is
+  the intended rule: a downed player is never targeted.
+* **Both attack with similar damage:** the engine target alternated between the host PC and
+  the joiner's stand-in roughly every 8 s. Neither side met the 1.5x margin, so
+  `threat_retarget` correctly stayed out. **Open:** the joiner logged no phantom hits during
+  those stretches, although the host's hound read `currentTarget 0xEA`.
+
+`threat_retarget` was documented ON since 2026-09-03, but the plugin read it with a default of
+OFF and no shipped `coop.ini` set it. A fresh install therefore ran without it. It now defaults
+ON in code.

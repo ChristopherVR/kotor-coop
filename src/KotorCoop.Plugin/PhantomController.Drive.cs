@@ -572,11 +572,11 @@ internal sealed unsafe partial class PhantomController
     /// <see cref="PhantomTargetRule"/> and docs/research/effect-sync.md §13.</summary>
     private readonly bool _menuGuardSync = PluginConfig.ReadBool("menu_guard_sync", true);
 
-    /// <summary>coop.ini <c>partner_buffs</c>, default OFF, NEEDS-LIVE: seat the targetable
+    /// <summary>coop.ini <c>partner_buffs</c>, default ON since 2026-09-25 (live: a host Cure healed the joiner 4 -> 12 hp): seat the targetable
     /// stand-in in Friendly_1 rather than Player so a friend-sphere cast (Force Valor family)
     /// reaches it. Plugin-only key — the agent never reads it, so there is no digest field and
     /// no second default to keep in step. See docs/research/partner-buffs.md.</summary>
-    private readonly bool _partnerBuffs = PluginConfig.ReadBool("partner_buffs", false);
+    private readonly bool _partnerBuffs = PluginConfig.ReadBool("partner_buffs", true);
 
     /// <summary>coop.ini <c>stealth_visual_sync</c> (default OFF, NEEDS-LIVE): additionally
     /// put the stand-in into the engine's own stealth mode through
@@ -710,7 +710,7 @@ internal sealed unsafe partial class PhantomController
             return;
         }
 
-        // partner_buffs (default OFF, NEEDS-LIVE): the targetable state uses Friendly_1 instead of
+        // partner_buffs (default ON since 2026-09-25): the targetable state uses Friendly_1 instead of
         // Player so the engine's GetIsFriend (reputation >= 90) holds for the local caster — see
         // PhantomTargetRule.FactionFor and docs/research/partner-buffs.md. The latch below stays
         // keyed on `want`: the key is read once at construction, so the pair never disagrees.

@@ -121,6 +121,20 @@ $script:CoopIniDriftedDefaults = @(
         Meaning  = 'syncs merchant store stock, host-authoritative redesign (mode 2)'
     }
     [pscustomobject]@{
+        Key      = 'enemy_effect_sync'
+        OldValue = '0'
+        NewValue = '1'
+        Date     = '2026-09-25'
+        Meaning  = "relays a stun, fear or other effect the joiner casts on an enemy to the host"
+    }
+    [pscustomobject]@{
+        Key      = 'partner_buffs'
+        OldValue = '0'
+        NewValue = '1'
+        Date     = '2026-09-25'
+        Meaning  = "lets a Force heal or buff you cast reach your partner"
+    }
+    [pscustomobject]@{
         Key      = 'threat_retarget'
         OldValue = '0'
         NewValue = '1'
@@ -202,6 +216,8 @@ $script:CoopIniDeveloperKeyDefaults = @{
     local_combat_range                 = '20'
     damage_creator_attribution         = '0'
     threat_retarget                    = '1'
+    partner_buffs                      = '1'
+    enemy_effect_sync                  = '1'
     companion_local_combat             = '0'
     companion_local_combat_range       = '10'
     companion_xp_sync                  = '1'

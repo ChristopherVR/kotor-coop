@@ -12,7 +12,7 @@ internal static unsafe class PartnerHealMirror
     private const int EffectCreator = 0x18;
     private const int EffectSpellId = 0x1C;
 
-    private static readonly bool Enabled = PluginConfig.ReadBool("partner_buffs", false);
+    private static readonly bool Enabled = PluginConfig.ReadBool("partner_buffs", true);
 
     private static readonly uint[] _localTargets = new uint[SharedBlock.PartyRosterSlots + 1];
     private static readonly uint[] _phantoms = new uint[SharedBlock.SlotCapacity];

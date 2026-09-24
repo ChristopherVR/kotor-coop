@@ -29,7 +29,7 @@ internal static unsafe class EnemyEffectCapture
 {
     /// <summary>coop.ini <c>enemy_effect_sync</c> — default OFF, NEEDS-LIVE (docs/CONFIG.md). The
     /// agent reads the same key for its own half (<c>CoopConfig.EnemyEffectSync</c>).</summary>
-    public static readonly bool Enabled = PluginConfig.ReadBool("enemy_effect_sync", false);
+    public static readonly bool Enabled = PluginConfig.ReadBool("enemy_effect_sync", true);
 
     /// <summary>True while the plugin is itself applying an enemy effect (the host's replay),
     /// so the dispatcher's callback does not capture it again.</summary>
