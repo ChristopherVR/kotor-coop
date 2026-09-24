@@ -1,4 +1,4 @@
-﻿using KotorCoop.Memory;
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session.Events;
 using KotorCoop.Session.Pumps;
@@ -89,6 +89,7 @@ public sealed partial class CoopAgent
     private readonly PausePump _pausePump;
     private readonly DeathPump _deathPump;
     private readonly WorldStatePump _worldStatePump;
+    private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly ClassGrantPump _classGrantPump;
     private readonly EnemyEffectPump _enemyEffectPump;
@@ -187,6 +188,7 @@ public sealed partial class CoopAgent
         _pausePump = new PausePump(bridge, settings, _log);
         _deathPump = new DeathPump(bridge, session, _log);
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
+        _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
         _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
         _enemyEffectPump = new EnemyEffectPump(bridge, session, settings, _log);
@@ -977,6 +979,12 @@ public sealed partial class CoopAgent
         if (_settings.MineSync)
         {
             _worldStatePump.PumpMines(caps);
+        }
+
+        // Off by default (coop.ini local_var_sync); see docs/research/quest-sync.md §8.3.
+        if (_settings.LocalVarSync)
+        {
+            _localVarPump.Pump(caps);
         }
 
         // PumpContainerLoot itself moved to the fast per-tick path above, ahead of the

@@ -673,6 +673,7 @@ public interface IGameBridge :
     IDoorBridge,
     IPlaceableBridge,
     IMineBridge,
+    ILocalVarBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
     IStoreBridge,

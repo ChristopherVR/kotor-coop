@@ -397,6 +397,17 @@ public sealed record CoopConfig
     public bool MineSync { get; init; } = true;
 
     /// <summary>
+    /// Per-object local-variable replication (coop.ini <c>local_var_sync</c>): an allowlisted
+    /// SetLocalBoolean/SetLocalNumber on a static GIT object (docs/research/quest-sync.md §8.2)
+    /// is captured by the plugin, carried on the reliable flag channel, and applied to the
+    /// peer's copy of the object through the engine's own setter. OFF by default until
+    /// live-verified; gates BOTH halves on this instance (agent pump, plugin hook + apply). The
+    /// three default readers agree on OFF (PluginConfig fallback, this record's absent-key
+    /// parse, AgentComposition's <c>?? false</c>).
+    /// </summary>
+    public bool LocalVarSync { get; init; }
+
+    /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
     /// 14 phase 1, design §3.2 item 5) actually tears the session down when it fires. OFF by
     /// default — live-verified (docs/research/shared-state-audit.md §2) to false-positive
@@ -1007,6 +1018,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             MineSync = !kv.ContainsKey("mine_sync") || IsTruthy(kv.GetValueOrDefault("mine_sync")),
+            LocalVarSync = IsTruthy(kv.GetValueOrDefault("local_var_sync")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")
                 || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),
