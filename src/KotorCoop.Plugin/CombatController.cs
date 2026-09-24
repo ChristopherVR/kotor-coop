@@ -114,6 +114,14 @@ internal sealed class CombatController(SharedBlockView block)
             return;
         }
 
+        // A death verdict first: KillOnce does its own (death-form) retained translation, and
+        // the live retained proof below needs a hostile row a corpse no longer satisfies.
+        if (enemy.Dead)
+        {
+            KillOnce(enemy.ObjectId);
+            return;
+        }
+
         bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(enemy.ObjectId, block);
         bool retainedAlias = MaterialisedEnemies.IsRetainedOwner(enemy.ObjectId);
         uint mapped;
@@ -127,12 +135,6 @@ internal sealed class CombatController(SharedBlockView block)
         else
         {
             mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
-        }
-
-        if (enemy.Dead)
-        {
-            KillOnce(enemy.ObjectId);
-            return;
         }
 
         // Translate through the materialisation map: an enemy that exists only in the
@@ -246,7 +248,8 @@ internal sealed class CombatController(SharedBlockView block)
         uint mapped;
         if (retainedCandidate || retainedAlias)
         {
-            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(objectId, block, out mapped))
+            if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(objectId, block, out mapped)
+                && !MaterialisedEnemies.TryGetRetainedLocalForDeath(objectId, out mapped))
             {
                 return; // defer: never kill a raw owner id that may collide locally
             }

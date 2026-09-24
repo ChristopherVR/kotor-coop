@@ -70,8 +70,9 @@ public static partial class ConsoleCommand
     /// sentinel, matching <c>ParseDown</c> below.</summary>
     private static CoopCommand ParseHurt(string[] rest)
     {
-        const string usage = "hurt <amount> [slot]  amount: real damage through the engine's "
-            + "own path (shields and both 1-hp floors apply); slot: party-roster 0-8, blank = yourself";
+        const string usage = "hurt <amount> [slot|0xid]  amount: real damage through the engine's "
+            + "own path (shields and both 1-hp floors apply); slot: party-roster 0-8, 0xid: any creature, "
+            + "blank = yourself";
 
         if (rest.Length is < 1 or > 2)
         {
@@ -85,6 +86,18 @@ public static partial class ConsoleCommand
         }
 
         float slot = -1f;
+        if (rest.Length == 2 && rest[1].StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!uint.TryParse(rest[1].AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out uint objectId)
+                || objectId is 0 or >= 0x20000000)
+            {
+                return new CoopCommand(
+                    CoopCommandKind.Invalid, Error: $"'{rest[1]}' is not a creature object id - {usage}");
+            }
+
+            return new CoopCommand(CoopCommandKind.Hurt, Amount: amount, X: -1f, Address: rest[1]);
+        }
+
         if (rest.Length == 2)
         {
             if (!int.TryParse(rest[1], out int parsedSlot) || parsedSlot is < 0 or > 8)

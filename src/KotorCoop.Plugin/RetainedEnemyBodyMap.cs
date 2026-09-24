@@ -13,6 +13,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
     private readonly RetainedEnemyBody?[] _entries = new RetainedEnemyBody?[capacity];
     private readonly RetainedLocalQuarantine?[] _quarantined = new RetainedLocalQuarantine?[capacity];
     private readonly uint[] _ownerTombstones = new uint[capacity];
+    private readonly RetainedEnemyBody?[] _tombstoneBodies = new RetainedEnemyBody?[capacity];
     private bool _quarantineAll;
     private bool _ownerTombstoneOverflow;
 
@@ -202,7 +203,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
 
             if (currentRosterId(entry.RosterSlot) != entry.LocalId)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 return 0;
             }
@@ -224,7 +225,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
 
             if (currentRosterId(entry.RosterSlot) != entry.LocalId)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 return 0;
             }
@@ -259,7 +260,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         {
             if (_entries[i] is { } entry && entry.OwnerId == ownerId)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 return;
             }
@@ -273,7 +274,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         {
             if (_entries[i] is { } entry && now - entry.LastSeen >= staleSeconds)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 forgotten++;
             }
@@ -289,7 +290,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         {
             if (_entries[i] is { } entry && currentRosterId(entry.RosterSlot) != entry.LocalId)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 forgotten++;
             }
@@ -308,7 +309,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         {
             if (_entries[i] is { } entry && !isCurrentlyProven(entry))
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
                 _entries[i] = null;
                 forgotten++;
             }
@@ -324,6 +325,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         Array.Clear(_entries);
         Array.Clear(_quarantined);
         Array.Clear(_ownerTombstones);
+        Array.Clear(_tombstoneBodies);
         _quarantineAll = false;
         _ownerTombstoneOverflow = false;
         return forgotten;
@@ -334,6 +336,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         Array.Clear(_entries);
         Array.Clear(_quarantined);
         Array.Clear(_ownerTombstones);
+        Array.Clear(_tombstoneBodies);
         _quarantineAll = false;
         _ownerTombstoneOverflow = false;
     }
@@ -345,7 +348,7 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         {
             if (_entries[i] is { } entry)
             {
-                RememberOwnerTombstone(entry.OwnerId);
+                RememberOwnerTombstone(entry);
             }
         }
 
@@ -382,6 +385,49 @@ internal sealed class RetainedEnemyBodyMap(int capacity)
         }
 
         return false;
+    }
+
+    /// <summary>The last alias a tombstoned owner held. An owner's death removes the very
+    /// census row the live proof needs, so the alias is pruned a pass BEFORE the death verdict
+    /// arrives on the liveness channel; this keeps which local body that verdict applies to.
+    /// Death-only: nothing routes damage, effects or presence through a tombstone.</summary>
+    public bool TryGetTombstonedBody(uint ownerId, out RetainedEnemyBody entry)
+    {
+        for (int i = 0; i < _tombstoneBodies.Length; i++)
+        {
+            if (_tombstoneBodies[i] is { } body && body.OwnerId == ownerId)
+            {
+                entry = body;
+                return true;
+            }
+        }
+
+        entry = default;
+        return false;
+    }
+
+    private void RememberOwnerTombstone(RetainedEnemyBody entry)
+    {
+        for (int i = 0; i < _tombstoneBodies.Length; i++)
+        {
+            if (_tombstoneBodies[i] is { } body && body.OwnerId == entry.OwnerId)
+            {
+                _tombstoneBodies[i] = entry;
+                RememberOwnerTombstone(entry.OwnerId);
+                return;
+            }
+        }
+
+        for (int i = 0; i < _tombstoneBodies.Length; i++)
+        {
+            if (_tombstoneBodies[i] is null)
+            {
+                _tombstoneBodies[i] = entry;
+                break;
+            }
+        }
+
+        RememberOwnerTombstone(entry.OwnerId);
     }
 
     private void RememberOwnerTombstone(uint ownerId)

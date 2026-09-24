@@ -184,6 +184,9 @@ internal sealed unsafe partial class CheatController
     /// reach (it just dies), so this deliberately never resolves one — unlike
     /// <see cref="TryResolveTarget"/>, which <see cref="Slay"/> uses.
     /// </summary>
+    /// <summary>Set by the agent on a <c>hurt 0x..</c> target: an object id, not a slot.</summary>
+    private const uint HurtObjectIdFlag = 0x20000000;
+
     private static bool TryResolvePartyOrSelf(
         uint target, nint player, uint playerId,
         out nint creature, out uint creatureId, out string who, out string refusal)
@@ -197,12 +200,32 @@ internal sealed unsafe partial class CheatController
             return true;
         }
 
+        if ((target & HurtObjectIdFlag) != 0)
+        {
+            // Any other creature by object id (the hurt verb's 0x.. form, flagged by the agent
+            // because GIT ids can fall in the 0-8 slot range). Resolved through the engine's own
+            // id table and required to be a live creature.
+            uint objectTarget = target & ~HurtObjectIdFlag;
+            creature = Odyssey.ResolveServerObject(objectTarget);
+            creatureId = objectTarget;
+            who = $"0x{objectTarget:X}";
+            if (creature == 0 || *(nint*)creature != CreatureFinder.CreatureVtable)
+            {
+                creature = 0;
+                refusal = $"0x{objectTarget:X} is not a live creature here";
+                return false;
+            }
+
+            refusal = string.Empty;
+            return true;
+        }
+
         if (target > 8)
         {
             creature = 0;
             creatureId = 0;
             who = string.Empty;
-            refusal = $"target must be yourself or a party-roster slot 0-8 (got {target})";
+            refusal = $"target must be yourself, a party-roster slot 0-8, or 0x<creature id> (got {target})";
             return false;
         }
 

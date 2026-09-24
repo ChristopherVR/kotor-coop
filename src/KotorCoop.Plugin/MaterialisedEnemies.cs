@@ -249,6 +249,45 @@ internal static unsafe class MaterialisedEnemies
         return true;
     }
 
+    /// <summary>
+    /// The death-verdict form of <see cref="TryGetCurrentRetainedLocal"/>. The owner's death of
+    /// a retained body removes the very evidence the live proof needs: its hostile enemy row
+    /// (the corpse stops being published) and often its host roster id. Live 2026-09-25: the
+    /// host slew Jolee and Juhani on Lehon and the joiner's copies stood at min-1-hp forever,
+    /// every kill deferred. A death is safe to apply on less: a committed alias for this owner,
+    /// the same module, a live local body that is still the one registered and still hostile
+    /// (we made it so at handoff), and the slot still out of this instance's party.
+    /// </summary>
+    public static bool TryGetRetainedLocalForDeath(uint ownerId, out uint localId)
+    {
+        localId = 0;
+        RetainedEnemyBody entry = default;
+        if (!(RetainedBodies.TryGetOwnerEntry(ownerId, out entry)
+                || RetainedBodies.TryGetTombstonedBody(ownerId, out entry))
+            || !IsLehonModule()
+            || !Odyssey.TryReadPartyRoster(out uint localAvailable, out uint localParty))
+        {
+            return false;
+        }
+
+        uint bit = 1u << entry.RosterSlot;
+        if ((localAvailable & bit) != 0 || (localParty & bit) != 0)
+        {
+            return false;
+        }
+
+        nint creature = Odyssey.ResolveServerObject(entry.LocalId);
+        if (creature == 0
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + ObjId), entry.LocalId)
+            || Odyssey.GetCreatureFaction(creature) != DarkSideHostileCompanionRule.HostileFaction)
+        {
+            return false;
+        }
+
+        localId = entry.LocalId;
+        return true;
+    }
+
     public static bool TryGetCurrentRetainedOwner(uint localId, SharedBlockView block, out uint ownerId)
     {
         ownerId = 0;

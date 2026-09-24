@@ -289,6 +289,12 @@ public class CoopCheatDispatchTests
             CheatRequest hurtSlotZero = await TypeAndAnswer(dispatcher, bridge, "hurt 10 0");
             Assert.Equal(0u, hurtSlotZero.Target);
 
+            // 0x.. names a creature by object id, flagged so a GIT id in the 0-8 range is
+            // never read as a roster slot (Bastila is 0x2 on Lehon).
+            CheatRequest hurtById = await TypeAndAnswer(dispatcher, bridge, "hurt 5 0x2");
+            Assert.Equal(5, hurtById.Amount);
+            Assert.Equal(0x20000002u, hurtById.Target);
+
             CheatRequest downSlot = await TypeAndAnswer(dispatcher, bridge, "down 8");
             Assert.Equal(8u, downSlot.Target);
 

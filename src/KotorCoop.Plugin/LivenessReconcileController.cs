@@ -157,7 +157,17 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
         {
             if (!MaterialisedEnemies.TryGetCurrentRetainedLocal(entry.ObjectId, block, out mapped))
             {
-                return false; // defer kills/destroys until the current owner/local proof is restored
+                // A dead or vanished owner body has no hostile row left to prove the live alias
+                // (CombatController.KillOnce's note), so a death verdict uses the death form.
+                if (hostState == LivenessHostState.Alive
+                    || !MaterialisedEnemies.TryGetRetainedLocalForDeath(entry.ObjectId, out mapped))
+                {
+                    return false; // defer kills/destroys until the current owner/local proof is restored
+                }
+
+                // A retained body is a roster companion's own creature: kill it like the owner
+                // did rather than destroy an object the party table still names.
+                hostState = LivenessHostState.Dead;
             }
         }
         else

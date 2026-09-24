@@ -395,10 +395,28 @@ public sealed partial class KotorGameBridge
         // as a creature it should be reconciling, which is not this channel's business either.
         HashSet<uint> partyRoster = ReadPartyRosterIds();
 
+        // The one exception ReadEnemies makes, made here too: a Lehon companion the campaign
+        // dismissed and turned hostile rides the enemy channel, so its death must ride this
+        // one. Without it the host killed Jolee/Juhani and the joiner's copies never heard
+        // (live 2026-09-25: the roster table still names the dismissed bodies).
+        bool havePartyState = TryReadPartyCensusRoster(
+            out uint[] rosterObjectIds, out ushort availableMask, out ushort activePartyMask);
+        string censusModule = TryReadCurrentModule(out string liveModule) ? liveModule : string.Empty;
+
         foreach (CreatureRef creature in EnumerateCreatures())
         {
+            int rosterSlot = havePartyState ? Array.IndexOf(rosterObjectIds, creature.ObjectId) : -1;
+            ushort rosterFaction = 0;
+            bool factionRead = rosterSlot is 4 or 5
+                && TryReadCreatureFaction(creature.Address, out rosterFaction);
+            bool hostileDismissal = DarkSideHostileCompanionRule.IsEligible(
+                censusModule, rosterSlot, creature.IsPlayer, factionRead, factionRead ? rosterFaction : (ushort)0,
+                rosterSlot >= 0 && (availableMask & (1 << rosterSlot)) != 0,
+                rosterSlot >= 0 && (activePartyMask & (1 << rosterSlot)) != 0);
+
             if (PartyCensusRule.IsOwnParty(
-                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster))
+                    creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster)
+                && !hostileDismissal)
             {
                 continue;
             }

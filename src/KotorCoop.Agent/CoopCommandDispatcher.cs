@@ -323,7 +323,7 @@ public sealed partial class CoopCommandDispatcher(
         // c.X carries the party-roster slot (0-8), or negative for "yourself" — see
         // CoopCommandKind.Hurt/Down's own doc comments for why X, not Amount, holds it.
         [CoopCommandKind.Hurt] = c => SendCheat(new CheatRequest(
-            CheatKinds.Hurt, Target: HurtDownTarget(c.X), Amount: c.Amount)),
+            CheatKinds.Hurt, Target: HurtTarget(c), Amount: c.Amount)),
         [CoopCommandKind.Down] = c => SendCheat(new CheatRequest(
             CheatKinds.Down, Target: HurtDownTarget(c.X))),
 
@@ -449,6 +449,20 @@ public sealed partial class CoopCommandDispatcher(
     /// <see cref="CheatKinds.LocalPlayerTarget"/> in the request; a typed slot (already
     /// range-checked 0-8 by <c>ParseHurt</c>/<c>ParseDown</c>) crosses as-is.</summary>
     private static uint HurtDownTarget(float slot) => slot < 0 ? CheatKinds.LocalPlayerTarget : (uint)slot;
+
+    /// <summary><c>hurt</c> also takes a creature object id (<c>0x..</c>, above the 0-8 slot
+    /// range) so a live test can land a real damage event on an NPC, e.g. to reach a boss's
+    /// "defeated" script without killing it.</summary>
+    private static uint HurtTarget(CoopCommand c) =>
+        c.Address is { Length: > 2 } id
+        && uint.TryParse(id.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out uint objectId)
+            ? objectId | HurtObjectIdFlag
+            : HurtDownTarget(c.X);
+
+    /// <summary>Marks a <c>hurt</c> target as an object id rather than a 0-8 party slot; GIT
+    /// creatures can have ids in the slot range (Bastila on the Lehon summit is 0x2).
+    /// Mirrors CheatController's decoding.</summary>
+    private const uint HurtObjectIdFlag = 0x20000000;
 
     private void SendCheat(CheatRequest request, Action? onApplied = null, Action? onRefused = null, bool quiet = false)
     {

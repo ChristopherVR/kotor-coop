@@ -48,6 +48,28 @@ public sealed class RetainedEnemyBodyMapTests
     }
 
     [Fact]
+    public void APrunedAliasKeepsItsBodyForALaterDeathVerdictButRoutesNothing()
+    {
+        // Live 2026-09-25: the owner's death removed Jolee's census row, the alias was pruned,
+        // and the liveness verdict that arrived next had no local body to apply to.
+        RetainedEnemyBodyMap map = new(4);
+        Assert.True(map.Register(HostJolee, LocalJolee, rosterSlot: 4, now: 10));
+
+        Assert.Equal(1, map.PruneUnproven(_ => false));
+
+        Assert.False(map.TryGetOwnerEntry(HostJolee, out _));
+        Assert.Equal(0u, map.ToLocal(HostJolee, _ => LocalJolee));
+        Assert.True(map.IsOwnerTombstoned(HostJolee));
+        Assert.True(map.TryGetTombstonedBody(HostJolee, out RetainedEnemyBody body));
+        Assert.Equal(LocalJolee, body.LocalId);
+        Assert.Equal(4, body.RosterSlot);
+        Assert.False(map.TryGetTombstonedBody(0x121, out _));
+
+        map.ReleaseSession();
+        Assert.False(map.TryGetTombstonedBody(HostJolee, out _));
+    }
+
+    [Fact]
     public void CurrentProofPruneImmediatelyDropsAliasesWhenEnemyRowOrRosterProofDisappears()
     {
         RetainedEnemyBodyMap map = new(4);
