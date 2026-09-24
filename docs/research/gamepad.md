@@ -4,6 +4,11 @@ Status (2026-09-03): **implemented, unit-tested, live-verified on the rig with t
 (walking, Escape/panels, the cursor, and world clicks that select and act on objects — §6).
 A physical XInput pad has not been on the rig yet.
 
+Status (2026-09-24): **text entry added** — the address box, the password box, chat and the
+console can now be typed into with the pad, via an on-screen character grid (§7). Unit-tested
+(grid navigation, editing, confirm/cancel); NEEDS-LIVE the same way §6's click checks were
+before they were run.
+
 KOTOR's PC release has no controller support of its own: it reads its keyboard as buffered
 DirectInput events and its cursor from ordinary window messages, and never asks XInput or
 DirectInput for a joystick. The mod adds a controller by translating a pad into exactly those
@@ -163,9 +168,10 @@ the selected object **runs its default action** (walk to it and open/talk/attack
 empty floor does nothing — KOTOR's PC build has no click-to-move — so from a pad the way to
 "go there" is the left stick, and RT (or A in cursor mode) is for objects and buttons.
 
-Text entry (the connect panel's address and password, chat, the console) still needs a
-keyboard: the engine's edit boxes take characters through `WM_CHAR`, and an on-screen keyboard
-is out of scope.
+Text entry (the connect panel's address and password, chat, the console) needs a keyboard OR
+the pad's own on-screen character grid (§7): the engine's edit boxes take characters through
+`WM_CHAR`, a different path from everything above (which rides the buffered DirectInput read),
+so it needed its own mechanism.
 
 ## 5. The `gamepad` console verb
 
@@ -238,3 +244,118 @@ downstream of `TryRead` is covered by the virtual-pad checks above.
 The first two hours of the click check were spent clicking the floor under the player and
 concluding the click path was broken; it was the test that was wrong (§4: no click-to-move).
 Read `+0x4A4` first — if the engine has nothing under the cursor, a click has nothing to do.
+
+## 7. Text entry: the on-screen character grid (2026-09-24)
+
+The one gap §4 called out: the address box (`docs/research/server-browser.md` §"The address
+box"), the password box, chat (`Enter`, `Odyssey.OpenChatInput`) and the `~` console all take
+typed characters through Win32 `WM_CHAR` —
+
+- editbox: `app handler 0x004024CE → CSWGuiManager::HandleKeyPress 0x0040B2A0 → focused
+  control vtbl +0x9C = CSWGuiEditbox::HandleKeyPress 0x004184F0`, appending via `AddNewChar
+  0x004163A0` / backspacing via `RemoveLastChar 0x004162E0` (`docs/research/connect-flow.md`
+  §"Real editable text control", VERIFIED disassembly);
+- console: `HandleWMCharMessage 0x00402240 → DoConsole 0x00401F00`, `bl` = the typed char —
+  `0x0D`/`0x0A` submit, `0x1B` toggles open/closed, `0x08` backspaces, else appends
+  (`docs/research/console-open-safe.md` §"Typed chars reach the buffer", VERIFIED disassembly).
+
+That is a **different path from everything else in this file**: movement, menu keys and clicks
+all ride the buffered DirectInput read (`DirectInputKeyboardHook`) or posted mouse messages: a
+fake DIK key-down never reaches either handler above, because neither is fed by DirectInput.
+The pad therefore cannot "type" by pretending to be a keyboard key — it needs to drive the
+engine through the SAME channel a real keystroke does.
+
+### Design
+
+**An on-screen character grid, driven entirely by posted `WM_CHAR`.** No new engine call
+addresses at all: typing a character is `PostMessage(gameWindow, WM_CHAR, asciiChar, 1)` — the
+same in-process, main-thread-landing `PostMessage` trick already proven for the mouse
+(`docs/research/mouse-cursor-input.md` §"Recipe A"; `GamepadController.ApplyCursor` /
+`ApplyMouseButtons`), aimed at a window message instead of `WM_MOUSEMOVE`/`WM_LBUTTONDOWN`.
+`PostMessageA` (already imported) makes `wParam`'s low byte the ANSI character code, exactly
+what `DoConsole`'s `bl` and the editbox's `AddNewChar` read — no encoding conversion needed.
+
+Layout (`GamepadTextEntry.cs`, pure, compiled into the test project like `GamepadMapping.cs`):
+
+| Piece | What it does |
+| --- | --- |
+| `GamepadTextGrid` | 5 rows: digits, `qwertyuiop`, `asdfghjkl:`, `zxcvbnm,.'`, `-_@?!/` (ragged — the last row is shorter). Letter rows have a lower/upper variant; digits and punctuation are shift-invariant. No Backspace/Space *cell* — those are dedicated buttons, same as a real keyboard. |
+| `GamepadTextGridCursor` | Row/column, clamped vertically (never wraps past row 0 or the last row, and clamps the column when a shorter row is entered), wraps horizontally at the CURRENT row's own length. |
+| `GamepadTextEntryStateMachine` | Open/Close, the cursor, the shift flag, and `Step(input) -> command`: one frame of edge-triggered intents in, one of `{None, Type(char), Backspace, Space, Submit, Cancel}` out. `Submit`/`Cancel` close it (`Active = false`); the controller re-opens it next frame if the box is still there (e.g. an address the grammar rejected — a fresh grid on re-open is the trade made for never having to track "is this the same box as last frame"). |
+| `RenderRow(row)` | One display line: cells space-separated, the selected cell in `[brackets]` — the only "cursor" the plain-ASCII queued-text renderer can show (`docs/research/console-overlay.md`: no per-character colour, no newlines). Longest line (10 letters) is 29 characters, well under the queued-text budget. |
+
+Pad mapping (`GamepadController.TextEntry.cs`, the impure half): D-pad presses are
+edge-triggered like every other button here; the left stick ALSO navigates, through the same
+`StickAxisLatch` hysteresis §3 uses for walking, compared frame-to-frame so a push moves the
+selection once per threshold crossing rather than once per held frame.
+
+| Pad | Action |
+| --- | --- |
+| D-pad / left stick | Move the grid selection |
+| A | Type the selected character |
+| B | Backspace |
+| X | Space |
+| Y or Start | Confirm (send) |
+| Back | Cancel |
+| LB | Toggle shift (upper case) |
+
+**Confirm/Cancel do NOT both go through `WM_CHAR`.** The console's own submit (`0x0D`/`0x0A`)
+and close (`0x1B`) are VERIFIED disassembly (`console-open-safe.md`), so a posted `WM_CHAR`
+there runs exactly the engine's own path. The modal's Enter-in-editbox routing, by contrast, is
+explicitly flagged `NEEDS-LIVE` and unrun in `connect-flow.md` ("Enter-in-editbox routing to
+the ..."), so Confirm/Cancel on the address/password panel instead call
+`PasswordEntryModal.ConfirmActive()` / `CancelActive()` — new static entry points that run
+**the exact same code** the OK/Cancel buttons' own click handlers already run
+(`OnOkClicked`/`OnCancelClicked` were refactored to call the same `SubmitTyped()`/
+`CloseVisual()` instance methods), so a pad's "send" is provably identical to a mouse click on
+OK, not a parallel, unverified path.
+
+**Gating — why this cannot leak into normal play.** `GamepadController.OnFrame` only reaches
+the grid when `foreground && (Odyssey.IsConsoleOpen || PasswordEntryModal.IsAnyOpen)` — the
+SAME foreground gate every other pad action already uses, checked BEFORE `GamepadModeRule`
+(which only ever forced `Suspended` for an open console; it has no idea about the modal). Both
+conditions are the caller's own, already-live open flags, re-read every frame — nothing latches
+"has focus" independently, so the grid can never survive past the box it was drawn for.
+`PasswordEntryModal.IsAnyOpen` excludes an instance mid-`CloseVisual` (`_closing`) on purpose:
+without that, Confirm/Cancel would set the grid inactive for one frame and then see the panel
+"still open" (it is still registered for a frame or two while the sweep runs) and re-open it,
+flashing the grid back on right as the panel is closing.
+
+**Not a new input source, so no new double-drive risk.** The grid reads the SAME per-frame
+`PadState` (XInput or the virtual pad) `GamepadController.OnFrame` already read this frame —
+nothing new is polled, no new slot is opened. Whatever already stopped a background window or
+a second instance from double-acting (the `IsForeground` gate, the single first-connected
+slot, the virtual pad's exclusivity while set) applies unchanged; only the MEANING of a press
+changes while a text box has focus, the same way World mode's buttons already mean something
+else in Cursor mode.
+
+**No new coop.ini key.** The existing `gamepad` toggle already gates the whole layer, including
+text entry — `gamepad = 0` turns this off along with everything else, same as before.
+
+### Live/rig verification — NEEDS-LIVE
+
+No new console verb: `gamepad sim` already drives a virtual pad through the SAME
+`GamepadController.OnFrame` path (§5), so it drives the grid too — the recipe below needs no
+physical pad, same as §6's original checks.
+
+```
+tools/blockpoke.ps1 -ProcId <pid> console 'browse'                    # open the server browser
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad sim down'          # ... etc to reach the address row
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad sim a'             # Connect on it -> the address panel opens
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad sim right'         # move the grid onto '2' (row0 col1)
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad sim a'             # type '2'
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad status'            # reply + log: "text entry: target address, row 0 col 1 ..."
+tools/blockpoke.ps1 -ProcId <pid> console 'gamepad sim back'          # Cancel: panel closes, browser stays
+```
+
+| Check | Expected |
+| --- | --- |
+| `browse` then D-pad/stick to the address row, `sim a` | The address panel opens (as it already does for a mouse click on the row — proven in `server-browser.md`), and `kotorcoop-plugin.log` starts logging `text entry: target address, row 0 col 0 shift False, selected '1'` every `gamepad status`. |
+| `sim right` × N then `sim a` | Each `sim a` posts one `WM_CHAR`; the panel's own live text (already rendered by the engine, NOT by this feature) grows by one correct character, and the caret stays after it — the SAME rendering `server-browser.md`'s address-box pass already watched work for a keyboard. |
+| `sim b` | The panel's text shortens by one character (backspace). |
+| `sim back` | The panel closes (Cancel), the browser stays open, exactly like a mouse click on Cancel — because `PasswordEntryModal.CancelActive()` runs the identical `CloseVisual()`. |
+| Full address then `sim y` (or `sim start`) | `ConfirmActive()` runs `SubmitTyped()`: a valid address closes the panel and connects (`server-browser.md`'s existing NEEDS-LIVE checklist item 4); an address the grammar rejects re-captions the title and stays open, exactly as a mouse-clicked OK already does. |
+| In a loaded module, `sim start` at the pad's own confirm mapping does NOT open chat | Confirm here means the GRID's confirm, not `Action280A`; opening chat is still `Enter` on a real keyboard or `ChatInputController`'s own edge-detect — the grid only exists once a box already has focus. |
+| Press `Enter` for real (or `Odyssey.OpenChatInput`), then `sim a` on a letter | Posts `WM_CHAR` into the `say ` line; `sim start` posts `WM_CHAR 0x0D`, which is DoConsole's own VERIFIED submit — the line should reach the co-op layer exactly like a typed chat message. |
+| `sim` a button while walking, no box open | Nothing happens to movement/menus (unchanged from before this feature); no grid is drawn (no `text entry:` lines in the log). |
+| Alt-tab away while the grid is up | Same as the existing password-ask Alt-tab check (`connect-flow.md`): the panel/console closes on its own, and the NEXT frame's `IsAnyOpen`/`IsConsoleOpen` read false, so the grid closes with it (`_textEntry.Close()` in the "target vanished" branch). |
