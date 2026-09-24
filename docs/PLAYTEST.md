@@ -37,19 +37,19 @@ log; "the joiner's log" means the joining player's copy.
 | --- | --- | --- | --- |
 | 11 | Leave the Ebon Hawk with the party-select screen: once as host, once as joiner. | The other player is taken along either way. | Whether the second player is left behind, and any "refused" message. |
 | 12 | Fly to a planet: **host** clicks the map, then the **joiner** clicks the map. | Both work, both arrive together. | Already verified; recheck only after other changes. |
-| 13 | Take the **Sith-fighter ambush** turret: host plays, joiner watches. | The joiner waits, then follows back to the Hawk when the host finishes. | Joiner log: `not following ... single-seat`, then a normal follow back. The host must not drop to the main menu. |
+| 13 | Take the **Sith-fighter ambush** turret: host plays and **wins** (shoot the fighters down), joiner watches. | The joiner waits, then carries on with the host back on the Hawk. | Joiner log: `not following ... single-seat`, then `minigame lock: ... finished`. The waiting and the return are already proven on the rig; only a real win (which a script can't stage) is left. |
 | 14 | On **Dantooine**, reach the Jedi Enclave and play Dorak's path choice as host, then as joiner in another run. | The chosen class is added to both players; each then picks their own feats and powers on their level-up screen. | Host: `class-grant: a script added class N ...`; joiner: `class-grant: applied a peer's class N`. |
-| 15 | Pick up the **lightsaber crystal** and build the saber as one player. | Note what the other player sees. | Not handled; tells us if a channel is needed. |
+| 15 | Build the **lightsaber** with Zhar as the **joiner** (walk through the trigger in front of Zhar first). | One saber, and both players' shared stash agrees afterwards. | Save on both sides afterwards and compare the stash. A host-led build already matches on both sides. |
 
 ## Later planets
 
 | # | Do this | It should | Look for |
 | --- | --- | --- | --- |
 | 16 | **Manaan**: get the envirosuit, use an airlock door in the Hrakert Station as host. (The scripted airlock and the return by `warp` are already proven on the rig; what is left is the walk on the sea floor and the real return trigger.) | The joiner stays in the station; the host walks the sea floor; on return the joiner is still fine. | Joiner: `not following the announced transition to 'manm28ab': that is a single-seat minigame track` and the on-screen line "is in a solo section - waiting". |
-| 17 | **Leviathan**: play the capture and the brig break as host (choose a rescuer). | The joiner is parked and spectating while the rescuer is played, and released when the host frees the party. | Host: `solo segment: began in lev_m40aa`. Joiner: `fighting alone - spectating`. Note what the joiner actually sees and whether their gear comes back. |
+| 17 | **Leviathan**: play the capture and the brig break as host (choose a rescuer), then open the **locker** by the cells and take your gear back. | The joiner is parked while the rescuer is played and released when the party is freed. Every item comes back exactly once, with its upgrades, for both players. | Host: `solo segment: began in lev_m40aa`. Compare both players' inventories before the capture and after the locker; note anything missing or doubled. |
 | 18 | Play through an **ending** cutscene chain (Star Forge end, credits) as host. (The first hop already works on the rig via `warp STUNT_50a`; the multi-hop chain and other STUNT scenes need a real run.) | The joiner also sees the scenes. | Both logs: `stunt leg:` lines. Note anything skipped. |
 | 19 | **Star Forge**: Bastila and Malak duels as host. | The joiner parks and watches. | Already verified with a forced trigger; the real fight is not. |
-| 20 | **Temple summit** (Unknown World): make the dark-side choice as host. | Note what the joiner sees Jolee and Juhani do. | Not handled; tells us whether faction needs a channel. |
+| 20 | **Temple summit** (Unknown World): make the **dark-side** choice as host ("Together we can rule the galaxy", then "Death to the Jedi"). | Jolee and Juhani leave both players' parties and fight you on both screens; hits and deaths agree; Bastila joins. | Both players' party lists afterwards; whether Jolee/Juhani move and take damage on the joiner's screen. |
 
 ## Internet and install
 
@@ -59,6 +59,15 @@ log; "the joiner's log" means the joining player's copy.
 | 22 | Install on a fresh Windows PC as a normal user, host once. | A Windows Firewall prompt or the rule is added; a LAN friend can join. | Whether the game freezes behind a hidden prompt. |
 | 23 | Run the game on **Linux / Steam Deck** (see the package README). | It loads and connects. | The `running under Wine` line and how far it got. |
 | 24 | Plug in a **physical Xbox pad**. | Walk, fight, menus. | Anything that double-drives on Steam Input. |
+
+
+## Added 2026-09-24
+
+| # | Do this | It should | Look for |
+| --- | --- | --- | --- |
+| 25 | With `placed_mine_sync = 1` on both sides, place a mine from the radial menu as the joiner, then **recover** it from the radial menu. | The mine appears on both screens; recovering it removes it on both and gives the item back once. | Whether both copies go away and where the recovered mine item lands. A console-driven recover does nothing yet. |
+| 26 | Walk past a door the story **re-locks** (the Taris Sith Base lab door, or the door Trask seals on the Endar Spire) with your partner elsewhere. | Your partner's copy closes and locks too. | Try the door on the partner's side afterwards: it should say locked. Already proven with the lab door on the rig. |
+| 27 | Disconnect and reconnect (console `disconnect`, then `reconnect`) without loading anything. | Enemies, doors and items keep syncing; no "different save" warning. | Joiner log: `same world, not rejoining`. Already proven on the rig. |
 
 If something here crashes the game, `KotorCoop.Agent.exe logs` includes the crash record that survives a hard crash.
 
