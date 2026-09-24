@@ -280,6 +280,27 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void HelloRoundTripsTheLineageSeed()
+    {
+        // Version 67 (docs/research/session-save.md): a reconnecting client's carried
+        // checkpoint. Nonzero throughout, unlike HelloRoundTrips above, specifically to prove
+        // these are not silently defaulting back to the "no seed" 0/0/0 shape.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        HelloPacket original = new(
+            "Revan", "end_m01aa", 12345, ContentDigest.Unknown, 0xABCD, BehaviourDigest.Default,
+            LineageHostSessionId: 777, LineageHostLoad: 5, LineageClientLoad: 3);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+
+        HelloPacket? decoded = PacketCodec.ReadHello(buffer[..length]);
+        Assert.Equal(original, decoded);
+        Assert.Equal(777u, decoded!.LineageHostSessionId);
+        Assert.Equal(5u, decoded.LineageHostLoad);
+        Assert.Equal(3u, decoded.LineageClientLoad);
+    }
+
+    [Fact]
     public void HelloCarriesTheBehaviourDigest()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
