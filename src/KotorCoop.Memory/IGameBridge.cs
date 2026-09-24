@@ -730,6 +730,19 @@ public static class CheatKinds
     public const uint MgKill = 97;
 
     /// <summary>
+    /// <c>attack &lt;0xid&gt;</c> / <c>attack stop</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/combat-participation.md §15): orders the LOCAL PLAYER's own creature to
+    /// attack the given target through the engine's own <c>ActionAttack</c> action queue
+    /// (<c>Odyssey.AttackTarget</c>, the SAME verified <c>ExecuteCommandAttack</c> route this
+    /// plugin already drives for a mirrored companion/enemy), so the sticky-aggro test (the
+    /// unattended rig cannot click) and a live <c>cast</c> (which needs the caster's own
+    /// active combat round) can finally be exercised. Target = the object id, or 0 for
+    /// "stop" (clears the queued attack through <c>Odyssey.ClearQueuedCombatActions</c>). See
+    /// SharedBlock.CheatKindAttack and docs/research/combat-participation.md §15.
+    /// </summary>
+    public const uint Attack = 98;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

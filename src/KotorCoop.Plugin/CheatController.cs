@@ -400,6 +400,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 MgKill();
                 break;
 
+            case SharedBlock.CheatKindAttack:
+                Attack(player, playerId);
+                break;
+
             case SharedBlock.CheatKindLevelUp:
                 LevelUp(player, playerId);
                 break;

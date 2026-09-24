@@ -2179,3 +2179,16 @@ before queuing the cast" (e.g. via a verified `AIActionAttack`/`AttackObject` ca
 poke) rather than anything in the VM dispatch itself. If it *still* fails, the promotion path is
 something else entirely (most likely inside `AddAction`/`AddActionToFront`/0x4CCB00, per the open
 question above) and that pair of functions should be the next static target.
+
+### 14.10 The `attack` verb (2026-09-25): the step 2 recipe above no longer needs a human
+
+§14.8's own live recipe needed step 2 ("aggro a genuinely hostile creature first... so the PC is
+undergoing real `AIActionCombat` round-ticks") to happen somehow, and the unattended rig cannot
+click. `docs/research/combat-participation.md` §15 adds a dev-only console verb, `attack <0xid>`
+(`attack stop` to clear it), that orders the LOCAL PLAYER's own creature to attack a target
+through the engine's own `ActionAttack` action queue — the exact precondition step 2 asks for,
+reachable by typing at the console instead of clicking. See that section for the mechanism (it
+reuses `Odyssey.AttackTarget`, the same routine already driving mirrored-enemy/companion combat,
+never `Odyssey.QueueAttackAction`'s proven no-op) and the combined live recipe (`attack` a
+hostile, then `cast cure me` while the round is still active, watching `stats` for the FP spend
+this section's own theory predicts).

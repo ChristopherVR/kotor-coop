@@ -1374,3 +1374,121 @@ and nine proximity arms:
 **Verdict.** Exactly the two outcomes §13 predicted: activity (either a landed hit or the
 creature targeting the local player) resets the clock, and its absence still releases the slot at
 the configured timeout. This closes §13's own NEEDS-LIVE mark.
+
+## §15 — The `attack` dev verb (2026-09-25): a real queued ActionAttack for the LOCAL PLAYER
+
+Two things this project could not test without a human clicking a mouse:
+
+1. **Sticky aggro.** "The joiner out-damages the host; the enemy should stay locked on the
+   joiner rather than switching back." No prior verb could make the JOINER's own creature
+   fight — every existing attack-staging primitive (`Odyssey.AttackTarget`, wired into
+   `EnemyPresenceController`/`PartyPresenceController`/`PeerDamageController`) orders an NPC or
+   phantom to attack, never the local player.
+2. **A real `cast`.** §14.8 (`docs/research/effect-sync.md`) found that `AddCastSpellActions`
+   is two functions selected by its own last argument: every external "please cast" entry
+   point — including the VM routine `cast` dispatches and the real radial-menu click — only
+   ever *stages* a pending-cast record (`bPromote = 0`). The record is only *promoted* to a
+   real, FP-spending cast by `CSWSCreature::AIActionCombat` (RunActions node type 0x3E),
+   which only ever runs while the creature is undergoing genuine per-round combat processing.
+   A caster with no active combat round has its `cast` silently dropped a few seconds later.
+   §14.8's own live recipe says as much: "aggro a genuinely hostile creature first... then run
+   `cast cure me` while combat is actively ticking." Until now nothing could put the JOINER
+   into that state without a click either.
+
+### What it reuses, and what it does not
+
+`attack <0xid>` does **not** reintroduce `Odyssey.QueueAttackAction` (`Odyssey.Combat.Attack.cs`)
+— that routine hand-replicates `CreateNewAttackActions`'s round-arming steps and is documented
+(`EnemyPresenceController.cs`, round 39) as a **proven permanent no-op** for a creature pulled out
+of AI processing (a mirrored/driven puppet with no heartbeat). The local player is not that kind
+of object — it is the engine's own always-ticking creature — but there is no reason to risk the
+same class of failure when a second, independently-verified route already exists.
+
+It calls `Odyssey.AttackTarget` (`Odyssey.Faction.cs`) instead: the engine's own `ActionAttack`
+NWScript action, dispatched through the VM exactly like `cast`/`grantpower`/`pickupitem`, with
+`OBJECT_SELF` redirected to the attacker for the one call. This is the SAME routine
+`shared-state-audit.md` round 11 confirmed live — a genuinely fresh `sithsoldier` taken from inert
+to real, landing damage (12 hp → 8 hp → 1 hp across two ordered attacks) — and the same one
+`EnemyPresenceController`, `PartyPresenceController` and `PeerDamageController` already drive for
+mirrored enemies/companions every day. `attack` is the first console-verb caller with the
+ATTACKER as the local player rather than an NPC.
+
+### The one PC-specific gotcha, and why the verb closes it itself
+
+`TestDriveController.cs` (a separate, pre-existing test-battery hook that also calls
+`Odyssey.AttackTarget` with the local player as attacker, driven from the shared block's `Test*`
+fields rather than the console) already hit this once, round 71: a queued `ActionAttack` for a
+PLAYER-CONTROLLED creature never closes the distance to its target on its own. For an AI-driven
+attacker, the walk-to-range step is part of that creature's own per-tick `AIActionCombat`
+processing; the player is never driven that way — a real click's accompanying move-to-click
+path is what normally covers the gap, and calling `ActionAttack` through the VM directly skips
+it. Round 68's failures (five targets, two modules, never a real hit) were exactly this: the
+order armed (head action became 0x3E `Combat`, confirmed steady for a 20s probe window) but
+nothing ever swung, because nothing was in range.
+
+`CheatController.Attack.cs` closes the gap itself before arming the order — the same fix
+`TestDriveController.CloseToMeleeRangeIfNeeded` already uses, re-derived here rather than shared
+(the two live on different plumbing: `Test*` fields vs. the `CheatKind` channel): if the player is
+farther than 1.5 m (planar) from the target, `Odyssey.SnapTo` moves it to melee range, approaching
+from whatever direction it already stood. `SnapTo` is done **before** `AttackTarget` is called on
+purpose — `SnapTo` runs `ClearAllActionsFn` as part of committing the position, which would wipe
+an attack order queued ahead of it.
+
+### Verb shape
+
+- `attack <0xid>` — resolves the target through `Odyssey.ResolveServerObject`, requires it to be
+  a live creature (`vtable == CreatureFinder.CreatureVtable`), refuses the local player's own id,
+  closes to melee range if needed, then calls `Odyssey.AttackTarget(playerId, targetId, ...)`.
+  Replies with the head action type before and after (`Odyssey.GetHeadActionType`) so a live run
+  can tell whether the order actually took (an unchanged head, or one outside the fight set —
+  `0x0B`/`0x3E`/`0x0E`/`0x31`/`0x0F`, see `Odyssey.ActionQueue.cs`'s `IsFightAction` — means it
+  did not).
+- `attack stop` — `CheatTarget == 0` is the sentinel (no live object id is ever 0, matching the
+  convention `TestDriveController.HandleAttack` already uses for "stop fighting"): clears the
+  local player's queued attack through `Odyssey.ClearQueuedCombatActions`, the same
+  `CServerExoApp::ClearAllQueuedCombatActions` the TEST BATTERY's own break-off step uses, so a
+  staging run can put the world back before the next check.
+
+Wired through the standard verb path: `ConsoleCommand.Attack.cs` (parse) →
+`CoopCommandDispatcher.Combat.cs` (send, `CheatKinds.Attack = 98`) → `CheatController.Attack.cs`
+(apply, `SharedBlock.CheatKindAttack = 98`) → `Odyssey.AttackTarget`/`Odyssey.SnapTo` (engine
+calls), plus `FuncInterpHook`/`ConsoleVerbCatalog` allowlisting and the verb-table coverage test.
+Never bypasses `PhantomHitHook`'s damage-forwarding path — a mirrored enemy's HP still comes from
+its owner and is still pinned min-1-hp on the joiner's own instance; this verb only queues the
+same engine action a real click would, nothing about damage application changes.
+
+### NEEDS-LIVE
+
+Everything above is reasoned from the same verified mechanism `AttackTarget`'s existing callers
+already exercise live daily, but the verb itself (and the melee-range close specifically, for a
+target that is not already the fixed post-`tp` companion distance round 71's own fix was tuned
+against) has not yet been run. Two recipes, meant to be run together as one session on the live
+rig (`tools/demo.ps1`, two instances):
+
+**Sticky aggro** (closes the "has never run" gap this section opened with):
+
+1. Get both the host and the joiner into the same fight against the same hostile (or
+   owner-mirrored) creature — `spawncreature`/an existing hostile encounter is fine.
+2. On the HOST instance: `attack 0x<enemy>` (or let it fight normally).
+3. On the JOINER instance: `attack 0x<enemy>` too, and keep re-issuing it every few seconds
+   (`AttackTarget` does not repeat on its own once the round ends) so the joiner keeps
+   out-damaging the host.
+4. Watch the HOST's own log for its `threat`/`local_combat: slot N/M ... reason=` lines
+   (`EnemyPresenceController`/`PeerDamageController`) — the enemy should stay armed against the
+   joiner's forwarded damage rather than re-arming against the host once the joiner is doing
+   more damage. `stats`/`where` on both sides confirms whose hp is actually dropping.
+
+**A real cast** (closes §14.8's own NEEDS-LIVE live recipe, the one the caster-side half of this
+section exists for):
+
+1. Load (or `levelup` into, per `docs/research/class-and-power-grants.md` §9) a Jedi with real
+   Force points and a known power (`grantpower` if needed).
+2. `attack 0x<hostile>` to put the LOCAL PLAYER into a genuine, actively-ticking combat round —
+   the exact precondition §14.8 identified as missing.
+3. While the round is still active, `cast cure me` (or another known power) and watch `stats`:
+   FP should actually drop and the effect should land, confirming the two-phase
+   request/promote theory live rather than statically.
+4. `attack stop` afterward to clear the queue before the next check, matching the TEST BATTERY's
+   own between-checks convention.
+
+See `docs/research/effect-sync.md` §14.9 for the pointer back from the cast side.
