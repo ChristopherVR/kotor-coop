@@ -21,11 +21,11 @@ needs live" is the accurate one — the mechanism is implemented and unit-tested
 ever driven a *real shipped story script* through it; every prior door-sync live pass (`cinematics.md`
 §8.3c, the 2026-09-17 eight-door soak) exercised ordinary player opens, never a re-lock.
 
-This pass closes the gap between "implemented" and "known to work" three ways: (2) a full static
+This pass closes the gap between "implemented" and "known to work" three ways: (1) a full static
 trace of the mechanism with citations, confirming nothing about it is script-specific — it
-reaches a re-lock/re-close from *any* source, not just the two named NWScript calls; (3) an
+reaches a re-lock/re-close from *any* source, not just the two named NWScript calls; (2) an
 offline content audit that names four real, early, reachable shipped scripts that do exactly
-what the roadmap asked about; (4) a two-instance live-test recipe using this repo's own console
+what the roadmap asked about; (3) a two-instance live-test recipe using this repo's own console
 verbs, ready for the next live session. No code changed — the mechanism did not need fixing,
 only proving and documenting.
 
@@ -179,12 +179,13 @@ empty, even doors that genuinely do get re-locked (below), because nothing in th
 content bothers to react to its own lock/close event; the re-lock has to be found by tracing
 *callers*, which is exactly what this audit does and a GFF field scan cannot.
 
-**Result** (23 modules, all reachable module-list resources): 19 `ActionCloseDoor`/`SetLocked`
-call sites naming a concrete door tag (several more target `SELF` from inside the door's own
-event handler, or an unresolved `GetNearestObject()` call — both excluded here as not concretely
-retargetable for a recipe). Four picked below for reachability, a single-command trigger where
-one exists, and coverage of every "owner" shape the audit found (a door's own hook, a trigger's
-`OnEnter`, and a dialogue action node):
+**Result** (23 modules scanned; 18 had at least one hit): 68 `ActionCloseDoor`/`SetLocked(…,
+TRUE)`/`ActionLockObject` call sites total, of which 35 name a concrete door tag via
+`GetObjectByTag("…")` (the rest target `SELF` from inside the door's own event handler, or an
+unresolved call such as `GetNearestObject()` — excluded here as not concretely retargetable for a
+recipe). Four picked below for reachability, a single-command trigger where one exists, and
+coverage of every "owner" shape the audit found (a door's own hook, a trigger's `OnEnter`, and a
+dialogue action node):
 
 | # | Module | Door tag | Script | Owner (what runs it) | Effect |
 | --- | --- | --- | --- | --- | --- |
