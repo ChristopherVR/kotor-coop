@@ -215,9 +215,11 @@ public class MidModuleMovieRelayTests
         // day for the materialised-owner-id table (65, 0x4B00), then to 0x4D00 on 2026-09-03
         // for the galaxy-map departure relay (67, 0x4C00), then to 0x4F00 for v74's protocol-59
         // acknowledged container-loot mailbox (0x4D00..0x4E3B), then to 0x5400 for v75's
-        // item-spawn provenance arrays, then to 0x5C00 for the 2026-09-24 wave (v76-78) — see
-        // SharedBlock.TotalSize.
-        Assert.Equal(0x5C00, SharedBlock.TotalSize);
+        // item-spawn provenance arrays, then to 0x5C00 for the 2026-09-24 wave (v76-78), then to
+        // 0x8600 for v80's "no cap really" pass (the enemy census/presence/materialised-owner/
+        // damage-ledger tables relocated to a new 0x6000 region, past v79's reserved
+        // 0x5C00..0x6000 gap) — see SharedBlock.TotalSize.
+        Assert.Equal(0x8600, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

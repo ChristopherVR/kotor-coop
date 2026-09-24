@@ -150,8 +150,26 @@ internal partial struct SharedBlock
     /// enemy-health baseline channel (SharedBlock.EnemyScalingBaseline.cs, 0x5400..0x57C0),
     /// and to 0x5A00 for v77's per-object local-variable replication
     /// (<see cref="OffsetLocalVarCaptureCursor"/>, docs/research/quest-sync.md §8.3), then to
-    /// 0x5C00 for v78's party-placed mine replication (SharedBlock.PlacedMines.cs).</summary>
-    public const int TotalSize = 0x5C00;
+    /// 0x5C00 for v78's party-placed mine replication (SharedBlock.PlacedMines.cs).
+    ///
+    /// 0x5C00..0x6000 is deliberately left alone here — reserved for other in-flight work, not
+    /// this pass's to spend.
+    ///
+    /// Grown to 0x8600 for v80's "no cap really" pass (docs/research/creature-liveness.md,
+    /// docs/review-seamless-2026-09-18.md): the enemy census/presence/materialised-owner/
+    /// damage-ledger tables all widen from 32 to <see cref="EnemyCapacity"/> (128) entries and
+    /// none of their old homes had room to grow in place, so all five moved into a brand-new
+    /// region starting cleanly at 0x6000, past the reserved gap:
+    ///   0x6000..0x6800  <see cref="OffsetEnemySlots"/> (health/flags), 128 x 0x10.
+    ///   0x6800..0x7C00  <see cref="OffsetEnemyPresenceSlots"/> (position/facing/anim/etc), 128 x 0x28.
+    ///   0x7C00..0x7E00  <see cref="OffsetMaterialisedOwnerIds"/>, 128 x 4.
+    ///   0x7E00..0x8200  <see cref="OffsetDamageDealtSlots"/>, 128 x 8.
+    ///   0x8200..0x8600  <see cref="OffsetDamageOwedSlots"/>, 128 x 8.
+    /// Every old home (0x490..0x690, 0x1410..0x1910, 0x4B00..0x4B80, 0x1E60..0x1F60,
+    /// 0x2018..0x2118) is now DEAD — documented rather than reused, the same discipline the old
+    /// bark-ring hole already established, so a stale reader finds zeros there rather than half
+    /// a record. See SharedBlock.Combat.cs for the five moved regions' own remarks.</summary>
+    public const int TotalSize = 0x8600;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -257,7 +275,15 @@ internal partial struct SharedBlock
     /// the resolved store price percent at 0x4C40 and grows the tail to 0x5400 for item-spawn
     /// generation, cursor-ticket and load-serial provenance; see SharedBlock.ItemTemplateSpawns.cs.
     /// Version 76 adds the exact enemy-health baseline channel at 0x5400..0x57C0 and grows the
-    /// block to 0x5800; see SharedBlock.EnemyScalingBaseline.cs.
+    /// block to 0x5800; see SharedBlock.EnemyScalingBaseline.cs. Versions 77-79 are the rest of
+    /// the 2026-09-24 wave (per-object local-variable replication, party-placed mine
+    /// replication, and another in-flight stream's own reservation). Version 80 (2026-09-24,
+    /// "no cap really" — docs/research/creature-liveness.md) relocates and widens the enemy
+    /// census: <see cref="OffsetEnemySlots"/>, <see cref="OffsetEnemyPresenceSlots"/>,
+    /// <see cref="OffsetMaterialisedOwnerIds"/>, <see cref="OffsetDamageDealtSlots"/> and
+    /// <see cref="OffsetDamageOwedSlots"/> all move into a new region at 0x6000 and
+    /// <see cref="EnemyCapacity"/> rises from 32 to 128 — see SharedBlock.Combat.cs and
+    /// this file's own <see cref="TotalSize"/> remarks.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

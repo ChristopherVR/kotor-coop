@@ -1743,3 +1743,133 @@ resurrects anything.
 
 **Verdict.** Every item this rig could reach came back clean; `liveness_sync` shipped ON by
 default the same day (`2bbf8de`) — see `docs/limitations.md`'s combat table.
+
+## 2026-09-24 — the fixed 32-object combat-census cap is removed ("no cap really")
+
+Closes `docs/review-seamless-2026-09-18.md`'s "Enemy census beyond 32 candidates" row. Decision
+recorded verbatim: "For network sync no cap really." — every enemy in a module must replicate,
+however many there are, not just the 32 the combat census (the 32-slot `SharedBlock` region
+`Item 6` above measured, distinct from THIS section's own 96-slot liveness capacity) used to
+carry.
+
+### Content survey: how big does the ceiling actually need to be
+
+`tools/kotorfiles.py`, run against a full GOG install, against ALL 117 shipped modules'
+`.git` `Creature List` field (the static placement, not a runtime scan) — the first exhaustive
+survey of this number; the 14-module live-census table earlier in this document only ever
+sampled modules the rig happened to visit and measured a DIFFERENT thing (currently-spawned
+population, capped by the very 32-slot census being replaced here).
+
+Largest static `Creature List` entry counts found:
+
+| module | creatures | notes |
+|---|---|---|
+| `manm27aa` (Manaan — Sith Base) | **51** | no encounters — this is the population as-placed |
+| `tar_m04aa` | 43 | |
+| `tat_m17aa` | 41 | |
+| `tar_m02ae` | 40 | |
+| `manm26ab` | 39 | |
+| `manm28aa` | 37 | |
+| `korr_m35aa` | 36 static, 48 combined with its 3 encounters' worst-case `.ute` `MaxCreatures` | |
+| `tar_m10ab` | 30 static, 46 combined (4 encounters) | |
+
+`manm27aa` is the hardest real ceiling this game ships, static or combined with encounter
+spawns: 51. `KotorGameBridge.BlockEnemyCapacity`/`SharedBlock.EnemyCapacity` is set to **128** —
+2.5x headroom over that measured maximum, and roughly 4x the population the old 14-module live
+survey ever observed apart from the synthetic `spawncreature` round below.
+
+### The design
+
+Three independent layers, each closing a different overflow point the old flat 32-truncation
+conflated into one:
+
+1. **Shared-block tables (the physical ceiling).** `SharedBlock.EnemyCapacity` /
+   `KotorGameBridge.BlockEnemyCapacity` 32 → 128. The five tables that scale with it — enemy
+   health/flags, enemy presence (position/facing/animation), materialised-owner ids, and both
+   damage ledgers (dealt and owed) — all moved into a brand-new region starting at `0x6000`
+   (their old homes had no free bytes to grow into; see `SharedBlock.Combat.cs`'s own remarks
+   on each). Block version bumped to 80; `TotalSize` grew to `0x8600`. The liveness region
+   (`SharedBlock.LivenessCapacity`, 96 entries) is UNCHANGED — it already had its own generous
+   capacity plus dead/gone-priority + alive-tail rotation (see "Item 6" above), decoupled from
+   the combat census by design, and 96 already clears the 51-creature survey maximum with room
+   to spare.
+2. **The wire (no ceiling of its own).** `EnemySnapshotPacket` (protocol 70) gains
+   `PageIndex`/`PageCount`; `EnemyCensusPaging.Paginate` splits one tick's full published set
+   across as many datagrams as it needs (`ProtocolConstants.MaxEnemies`, 32, is now a PER-PAGE
+   limit, the same role `MaxCreatureLivenessEntries` already plays for the liveness channel —
+   not a total). Unlike the liveness channel's 2-second throttle, this pages EVERY tick: combat
+   needs low-latency health and position, not eventual consistency. `EnemySnapshotAssembler`
+   applies each page the instant it arrives (never gated on a sibling page) and only prunes a
+   roster entry once a complete tick's worth of pages confirms it is actually gone.
+3. **Rotation (the safety net beyond even 128).** `KotorGameBridge.ReadEnemies` splits its
+   already fighting-first-then-nearest-sorted candidate list into a `fighting` set (always
+   published, truncated only as an absolute last resort — a fight that desyncs is worse than a
+   bystander missing one publish) and a `bystanders` set, and hands both to
+   `EnemyCensusPage.Select`, which fills whatever capacity remains by ROTATING through the
+   bystander pool across pumps (the same window+rotation shape
+   `LivenessBlockPage.Select` already established for its own overflow) instead of always
+   covering the same nearest prefix. A farther bystander a crowded pump had no room for gets a
+   turn within a bounded number of pumps — several times a second at the `PumpEnemies` combat
+   cadence — rather than being shed for the rest of the session. This only engages past 128
+   simultaneously-tracked creatures, which no surveyed module reaches; it exists for debug
+   `spawncreature` sprees and unknown future content, not because any shipped module needs it.
+
+Per-frame cost stays bounded: the plugin's own per-frame loops (`EnemyPresenceController.OnFrame`
+et al.) iterate `min(published count, EnemyCapacity)`, i.e. the ACTUAL enemy count present, not
+a fixed capacity scan — the same O(n) shape as before, just against a larger real `n` when a
+module genuinely has one. No nested "for each enemy, scan every other enemy" pattern was
+introduced; `EnemyCensusPage.Select`/`EnemyBlockPage` (removed as redundant once the source-side
+rotation above already bounds what a mirror ever receives) and `LivenessBlockPage.Select` are all
+single linear passes.
+
+### Live recipe: proving more than 32 enemies actually replicate
+
+Reuses the proven `tar_m10aa` / `tar10_vulkpoo002` recipe from the 2026-09-03 checklist run
+above (verified template, verified module — `g_vulkar001` refuses there with failure 9, template
+did not resolve; a template must be present in the CURRENT module's archive, and
+`tools/kotorfiles.py list modules/<module>_s.rim --type utc` lists what actually is). Does not
+require reaching `manm27aa` naturally (a late-game module no default save sits in).
+
+0. `pwsh src/KotorCoop.Plugin/build.ps1 -Install` first — `demo.ps1` does NOT deploy the plugin,
+   and a stale v78 `dinput8.dll` against this v80 agent reads as "plugin shared block not found"
+   (the signature embeds the block version). Compare installed `dinput8.dll` sizes in both game
+   folders before launching.
+1. `pwsh tools/demo.ps1 -Save 1` — both instances launch, load, and connect unattended (host
+   and joiner). Confirm both are in the same module (`tar_m10aa` or wherever save 1 opens into —
+   `warp` there with the existing console verb if not, exactly like the 2026-09-03 run did).
+2. On the HOST console: `spawncreature tar10_vulkpoo002 32` (the per-call max), then
+   `spawncreature tar10_vulkpoo002 20` again — 52 total, comfortably past the old 32-object cap
+   and past even a single `MaxEnemies`-sized wire page, while still well inside the new 128
+   shared-block capacity (so this proves paging, not the rotation safety net — see step 6 for
+   that).
+3. On the HOST console: `census`. Expect the `EnemyCensusStatus` line —
+   `census: 52 candidate(s), 52 selected before ID validation, capacity 128, 0 beyond cap` (the
+   OLD recipe's expected line here, from the 32-slot era, was `capacity 32, 20 beyond cap` —
+   the whole point being demonstrated).
+4. Nothing logs per-page sends (`EnemyCensusPaging` is silent by design — it runs every tick),
+   so the wire is proven by step 5's count, not by a log line: with 52 enemies at
+   `EnemySnapshotPacket.MaxEntriesPerPacket` (32) per page the host sends 2 pages per tick, and
+   a joiner count above 32 is only reachable if page 1 arrived and was applied.
+5. On the JOINER console: `census`. As a mirror, this reports `manager.Current.GetEnemies(module)`
+   — the count CoopClient's `EnemySnapshotAssembler` has accumulated across however many pages
+   this tick needed. Expect the full 52, not capped at 32 — the direct proof that pagination
+   (not truncation) reached the peer. Cross-check against the host's own `census` count from
+   step 3; they must agree.
+6. Optional — exercising the rotation safety net specifically (128+ simultaneously tracked,
+   not just 32+): four more `spawncreature tar10_vulkpoo002 32` calls (128 total, right at
+   capacity) then one more small batch to push past it. Expect the HOST's own `census` line to
+   show `beyond cap` > 0 for the first time, and repeated `census` calls a few pumps apart to
+   show the reported set changing (the bystander tail rotating) rather than the identical
+   nearest-N every time — the live analogue of `EnemyCensusPageTests.RotatingThroughTheWholeSet
+   EventuallyCoversEveryBystander`.
+7. Kill a few of the spawned creatures on the host (`slay <id>`) and confirm both the host's own
+   `census` and the joiner's mirrored view agree on which ids dropped out as dead versus merely
+   rotated out of this pump's page — the joiner's copies should NOT be treated as destroyed
+   (see `LocalCombatExclusionRule`'s "an id shed for capacity is never mistaken for a destroyed
+   one" rule) for a bystander that is merely rotating, only for one the host actually reports
+   `Dead`.
+
+Expected outcome: every step above passes with the counts and log lines described, no host log
+line ever reports dropping an enemy past 32, and the joiner's `census` count matches the host's
+at every step. NEEDS-LIVE — not run on the two-instance rig yet as part of this pass (out of
+scope for this change: no game launch, no `demo.ps1`, no `build.ps1 -Install`).

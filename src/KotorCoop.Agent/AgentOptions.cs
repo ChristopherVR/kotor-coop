@@ -1,4 +1,5 @@
 using System.Net;
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
@@ -111,12 +112,14 @@ public sealed record AgentOptions
     public int Phantoms { get; init; } = 4;
 
     /// <summary>
-    /// DEBUG ONLY: overrides <c>KotorGameBridge</c>'s built-in 32-creature enemy-census
-    /// truncation to something smaller, so a live test can exercise the creature-liveness
-    /// reconciliation channel's "beyond the census cap" path (docs/research/creature-liveness.md
-    /// item 1) in an ordinary module without needing one that legitimately places 33+
-    /// creatures. 0 (default) keeps the built-in 32 — no behaviour change unless a session
-    /// explicitly opts in via <c>--enemy-census-cap</c>.
+    /// DEBUG ONLY: overrides <see cref="KotorCoop.Memory.KotorGameBridge.BlockEnemyCapacity"/>
+    /// (128 since version 80's "no cap really" pass — docs/research/creature-liveness.md) to
+    /// something smaller, so a live test can exercise
+    /// <see cref="KotorCoop.Memory.EnemyCensusPage"/>'s "beyond the census cap" rotation, or the
+    /// creature-liveness reconciliation channel's own equivalent path (item 1 of that doc), in
+    /// an ordinary module without needing one that legitimately places that many creatures.
+    /// 0 (default) keeps the built-in cap — no behaviour change unless a session explicitly
+    /// opts in via <c>--enemy-census-cap</c>.
     /// </summary>
     public int EnemyCensusCap { get; init; }
 
@@ -534,13 +537,16 @@ public sealed record AgentOptions
                 case "--enemy-census-cap":
                     // DEBUG ONLY (docs/research/creature-liveness.md §"why 32 already covers
                     // this some other way"): lowers the enemy-census truncation
-                    // (KotorGameBridge.BlockEnemyCapacity, 32) so a small, ordinary module can
-                    // be pushed past the cap without needing real content that places 33+
-                    // creatures. 0 (default) keeps the built-in 32. Clamped to at least 1 so a
-                    // mistyped 0 here cannot be confused with "unset" and silently publish an
-                    // empty census.
+                    // (KotorGameBridge.BlockEnemyCapacity) so a small, ordinary module can be
+                    // pushed past the cap without needing real content that places that many
+                    // creatures. 0 (default) keeps the built-in cap. Clamped to
+                    // KotorGameBridge.BlockEnemyCapacity — the single source of truth for the
+                    // upper bound, referenced rather than re-typed so this clamp cannot drift
+                    // from the shared-block region's own physical capacity the way a
+                    // hand-copied literal could. A mistyped 0 here cannot be confused with
+                    // "unset" and silently publish an empty census (clamp floor of 1).
                     enemyCensusCap = int.TryParse(Next(), out int parsedCap) && parsedCap > 0
-                        ? Math.Clamp(parsedCap, 1, 32)
+                        ? Math.Clamp(parsedCap, 1, KotorGameBridge.BlockEnemyCapacity)
                         : enemyCensusCap;
                     break;
 

@@ -1,3 +1,4 @@
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -42,11 +43,15 @@ internal sealed class LocalCombatExclusionRule
     /// publishes, and well inside the 25 s the fight would otherwise run on for.</summary>
     public const long AbsenceGraceMs = 2000;
 
-    /// <summary>The owner's census cap — the SharedBlock enemy region holds exactly 32, and the
-    /// owner sheds by distance to the nearest player above it. A debug cap below 32
-    /// (<c>enemy_census_cap</c>) on the owner is not visible here; with one set, an id shed for
-    /// capacity could read as destroyed, which is why that knob is dev-only.</summary>
-    public const int FeedCapacity = 32;
+    /// <summary>The owner's census cap — the SharedBlock enemy region holds exactly
+    /// <see cref="KotorGameBridge.BlockEnemyCapacity"/> entries (referenced rather than
+    /// re-typed, so this cannot drift from the shared-block region's own physical capacity),
+    /// and the owner sheds by distance to the nearest player above it, with the overflow
+    /// rotated across pumps rather than shed forever (<c>KotorCoop.Memory.EnemyCensusPage</c>).
+    /// A debug cap below that (<c>--enemy-census-cap</c>) on the owner is not visible here; with
+    /// one set, an id shed for capacity could read as destroyed, which is why that knob is
+    /// dev-only.</summary>
+    public const int FeedCapacity = KotorGameBridge.BlockEnemyCapacity;
 
     private readonly Dictionary<uint, Tracked> _tracked = [];
 

@@ -9,7 +9,11 @@ public sealed class LoadProvenanceLayoutTests
     [Fact]
     public void MailboxUsesTheAgreedV74FreeTailBeforeTheLaterExtensions()
     {
-        Assert.Equal(0x5C00, SharedBlock.TotalSize);
+        // TotalSize has grown since v74 (most recently to 0x8600 for v80's "no cap really"
+        // pass, which relocated the enemy tables into a brand-new region well past the
+        // load-provenance mailbox below) — this assertion tracks the CURRENT edge, same as
+        // every other test in this file's family that pins SharedBlock.TotalSize.
+        Assert.Equal(0x8600, SharedBlock.TotalSize);
         Assert.Equal(0x4E50, SharedBlock.OffsetLoadProvenanceGeneration);
         Assert.Equal(0x4E54, SharedBlock.OffsetLoadProvenanceSlot);
         Assert.Equal(0x4E58, SharedBlock.OffsetLoadProvenanceSource);

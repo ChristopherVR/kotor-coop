@@ -36,9 +36,12 @@ public sealed partial class KotorGameBridge : IGameBridge
     private int _consecutiveFailures;
     private nint _pluginBlock;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 77 + guard 0xC0FFEE01 (76: the exact
+    /// <summary>16-byte signature: "KOCOOP01" + version 80 + guard 0xC0FFEE01 (76: the exact
     /// enemy-health baseline channel 0x5400..0x5800; 77: the local_var_sync region
-    /// 0x5800..0x5A00, KotorGameBridge.LocalVars.cs). The version is
+    /// 0x5800..0x5A00, KotorGameBridge.LocalVars.cs; 78: party-placed mine replication,
+    /// 0x5A00..0x5C00; 79: another in-flight stream's own reservation; 80: the "no cap really"
+    /// pass — EnemyCapacity 32 -> 128 and the five capacity-scaled enemy tables relocated to a
+    /// new 0x6000..0x8600 region, docs/research/creature-liveness.md). The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
@@ -51,7 +54,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
     /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 4E 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 50 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead
@@ -81,11 +84,17 @@ public sealed partial class KotorGameBridge : IGameBridge
 
     /// <summary>See the constructor's <c>enemyCensusCap</c> parameter. Read by
     /// <see cref="ReadEnemies"/> in place of <see cref="BlockEnemyCapacity"/> when set below the
-    /// built-in 32, so a live test can push an ordinary module's population past the count the
-    /// combat census actually carries without needing real content that places 33+ creatures.
+    /// built-in <see cref="BlockEnemyCapacity"/> (128 since version 80's "no cap really" pass —
+    /// docs/research/creature-liveness.md), so a live test can push an ordinary module's
+    /// population past the count the combat census actually carries without needing real
+    /// content that places that many creatures.
     /// <see cref="TryWriteEnemies"/>'s own wire write stays bounded by
-    /// <see cref="BlockEnemyCapacity"/> regardless — the SharedBlock region has exactly 32
-    /// physical slots, and this can only ever select FEWER of them, never more.</summary>
+    /// <see cref="BlockEnemyCapacity"/> regardless — the SharedBlock region has exactly that
+    /// many physical slots, and this can only ever select FEWER of them, never more. A live
+    /// population that exceeds even that generous bound (a debug spawn spree, not real content)
+    /// is not simply truncated: <see cref="ReadEnemies"/> hands the overflow to
+    /// <see cref="EnemyCensusPage"/>, which rotates the non-fighting tail across pumps so
+    /// nothing this instance publishes is shed forever.</summary>
     private readonly int _enemyCensusCap;
 
     public string Description =>

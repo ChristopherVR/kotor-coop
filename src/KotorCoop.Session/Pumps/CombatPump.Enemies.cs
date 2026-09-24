@@ -274,6 +274,11 @@ internal sealed partial class CombatPump
             enemies = filtered;
         }
 
+        // The owner's own census (KotorGameBridge.ReadEnemies -> EnemyCensusPage.Select) already
+        // bounds what it ever publishes to BlockEnemyCapacity with fair fighting/nearest
+        // rotation, so `enemies` here is already within the block's capacity in every case this
+        // codebase can reach; TryWriteEnemies keeps its own defensive Math.Min as the last-resort
+        // safety net.
         bool wrote = bridge.TryWriteEnemies(enemies);
         if (logDiagThisTick)
         {

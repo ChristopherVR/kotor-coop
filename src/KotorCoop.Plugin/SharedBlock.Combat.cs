@@ -15,12 +15,34 @@ internal partial struct SharedBlock
     /// <summary>Agent -&gt; plugin. How many enemy entries are valid.</summary>
     public const int OffsetEnemyCount = 0x488;
 
-    /// <summary>Agent -&gt; plugin. objectId u32 @0, current u16 @4, max u16 @6, flags u32 @8.</summary>
-    public const int OffsetEnemySlots = 0x490;
+    /// <summary>
+    /// Agent -&gt; plugin. objectId u32 @0, current u16 @4, max u16 @6, flags u32 @8.
+    ///
+    /// RELOCATED (version 80, "no cap really" — docs/research/creature-liveness.md): the old
+    /// home, 0x490..0x690, had no room to grow (the next used field, <see cref="OffsetLocalDowned"/>,
+    /// starts at 0x1020 but the ground-item/door/equipment regions in between were already
+    /// spoken for) so the array moved into the new region at 0x6000 the same way every other
+    /// enemy-count-scaled table in this file did this round. 0x490..0x690 is now DEAD — like the
+    /// old bark rings' hole, documented rather than reused, so a stale reader finds zeros there
+    /// rather than half a record.
+    /// </summary>
+    public const int OffsetEnemySlots = 0x6000;
 
     public const int EnemySlotStride = 0x10;
 
-    public const int EnemyCapacity = 32;
+    /// <summary>
+    /// Enemies one instance can publish (or mirror) at once. Raised from 32 to 128 (version 80,
+    /// "no cap really" — docs/research/creature-liveness.md, docs/review-seamless-2026-09-18.md):
+    /// a live GIT-file survey of all 117 shipped modules (tools/kotorfiles.py, 2026-09-24) found
+    /// the largest static <c>Creature List</c> to be 51 (manm27aa, Manaan — Sith Base; the
+    /// largest static+worst-case-encounter-spawn combined figure is also 51, since manm27aa has
+    /// no encounters at all), so 128 is 2.5x headroom over the hardest real content this game
+    /// ships. A live population that somehow still exceeds this (a debug <c>spawncreature</c>
+    /// spree, not real content) is handled by <c>KotorCoop.Memory.EnemyCensusPage</c>'s
+    /// rotation (agent side; this project cannot reference it) rather than a silent, permanent
+    /// drop — see that type's own doc comment.
+    /// </summary>
+    public const int EnemyCapacity = 128;
 
     /// <summary>Set in an enemy slot's flags when the owning peer says it is dead.</summary>
     public const uint EnemyFlagDead = 1;
@@ -46,8 +68,13 @@ internal partial struct SharedBlock
     /// u32 @0x1C, one-shot animation u32 @0x20, appearance.2da row u16 @0x24 and
     /// repute.2da faction u16 @0x26 (version 26 — for materialising an enemy this
     /// instance has no copy of; 0 appearance = unknown, do not materialise).
-    /// Occupies 0x1410..0x1910.</summary>
-    public const int OffsetEnemyPresenceSlots = 0x1410;
+    ///
+    /// RELOCATED (version 80, same "no cap really" pass as <see cref="OffsetEnemySlots"/>):
+    /// the old home, 0x1410..0x1910, could not grow either (<see cref="OffsetEnemyOneShotTable"/>
+    /// starts right at the old boundary, 0x1920), so this moved into the new region too.
+    /// 0x1410..0x1910 is now DEAD, same reasoning as 0x490..0x690. Occupies
+    /// 0x6800..0x7C00 at the new <see cref="EnemyCapacity"/>.</summary>
+    public const int OffsetEnemyPresenceSlots = 0x6800;
 
     public const int EnemyPresenceStride = 0x28;
 
@@ -207,19 +234,33 @@ internal partial struct SharedBlock
     // goes missing. Same rule as the phantom-hit channel above.
 
     /// <summary>Plugin -&gt; agent. objectId u32 @0, cumulative raw damage u32 @4.
-    /// Occupies 0x1E60..0x1F60 exactly — 32 entries, the wire cap.</summary>
-    public const int OffsetDamageDealtSlots = 0x1E60;
+    ///
+    /// RELOCATED (version 80, "no cap really" pass): raising <see cref="DamageLedgerCapacity"/>
+    /// past 32 needed room the old home (0x1E60..0x1F60, wedged between the encounter-request
+    /// region and <see cref="OffsetDownBlockReason"/>) did not have, so this moved into the new
+    /// region with every other enemy-scaled table. 0x1E60..0x1F60 is now DEAD, same reasoning
+    /// as <see cref="OffsetEnemySlots"/>'s own old home. Occupies 0x7E00..0x8200.</summary>
+    public const int OffsetDamageDealtSlots = 0x7E00;
 
     /// <summary>Agent -&gt; plugin. Same shape, the other way: the total all peers have dealt
-    /// to each of this instance's enemies. Occupies 0x2018..0x2118.</summary>
-    public const int OffsetDamageOwedSlots = 0x2018;
+    /// to each of this instance's enemies.
+    ///
+    /// RELOCATED (version 80): the old home, 0x2018..0x2118, backed onto
+    /// <see cref="OffsetDamageDealtEnabled"/> (0x2118) with no free bytes to grow into, so this
+    /// moved too. 0x2018..0x2118 is now DEAD. Occupies 0x8200..0x8600.</summary>
+    public const int OffsetDamageOwedSlots = 0x8200;
 
     public const int DamageLedgerStride = 0x08;
 
-    /// <summary>Enemies one instance can carry damage for at a time. The ledger only holds
-    /// creatures actually damaged and not yet seen dead, so this is a live-fight bound, not
-    /// a module one; matches <c>ProtocolConstants.MaxEnemyDamageEntries</c>.</summary>
-    public const int DamageLedgerCapacity = 32;
+    /// <summary>
+    /// Enemies one instance can carry damage for at a time. Raised from 32 to
+    /// <see cref="EnemyCapacity"/> (version 80, "no cap really" —
+    /// docs/research/creature-liveness.md): the ledger only holds creatures actually damaged
+    /// and not yet seen dead, so it is a live-fight bound, and a fight can now legitimately
+    /// involve as many creatures as the census itself carries. Matches
+    /// <c>ProtocolConstants.MaxEnemyDamageEntries</c>.
+    /// </summary>
+    public const int DamageLedgerCapacity = EnemyCapacity;
 
     /// <summary>Plugin -&gt; agent. How many damage-dealt entries are valid.</summary>
     public const int OffsetDamageDealtCount = 0x2000;
@@ -438,8 +479,14 @@ internal partial struct SharedBlock
     /// <summary>Plugin -&gt; agent. EnemyCapacity owner-space ids (u32 each, slot i at this
     /// offset + i*4) — every owner id <c>MaterialisedEnemies</c> currently maps to a local
     /// stand-in body. 0 marks an unused slot, the same convention
-    /// <see cref="OffsetLocalCombatExcludedIds"/> uses. Occupies 0x4B00..0x4B80.</summary>
-    public const int OffsetMaterialisedOwnerIds = 0x4B00;
+    /// <see cref="OffsetLocalCombatExcludedIds"/> uses.
+    ///
+    /// RELOCATED (version 80, "no cap really" pass): the old home, 0x4B00..0x4B80, had exactly
+    /// 0x80 bytes (the old 32-entry width) and nothing free past it before
+    /// <see cref="OffsetThreatDebugCount"/> at 0x4B80, so this moved into the new region at the
+    /// new, wider <see cref="EnemyCapacity"/>. 0x4B00..0x4B80 is now DEAD. Occupies
+    /// 0x7C00..0x7E00.</summary>
+    public const int OffsetMaterialisedOwnerIds = 0x7C00;
 
 
     // ---- threat-retarget diagnostics (version 66, region 0x4B80..0x4C00) ----------

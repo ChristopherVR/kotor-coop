@@ -49,11 +49,24 @@ public sealed partial class KotorGameBridge
     private const int BlockEquipStride = 0x30;
     private const int BlockEquipResrefLength = 16;
 
-    // Enemy replication, mirroring SharedBlock version 3.
+    // Enemy replication, mirroring SharedBlock version 3. Relocated to the new 0x6000 region
+    // and widened from 32 to 128 by block version 80's "no cap really" pass — see
+    // SharedBlock.Combat.cs's own remarks and docs/research/creature-liveness.md. The old home
+    // (0x490..0x690) is now dead.
     private const int BlockEnemyCount = 0x488;
-    private const int BlockEnemySlots = 0x490;
+    private const int BlockEnemySlots = 0x6000;
     private const int BlockEnemyStride = 0x10;
-    private const int BlockEnemyCapacity = 32;
+
+    /// <summary>Mirrors <c>SharedBlock.EnemyCapacity</c> exactly — see that constant's own doc
+    /// comment for the content survey behind the 128 figure. Public (not the usual
+    /// <c>private const</c> every other Block* offset uses in this file) so
+    /// <c>KotorCoop.Agent.AgentOptions</c>' <c>--enemy-census-cap</c> clamp and
+    /// <c>KotorCoop.Session.LocalCombatExclusionRule.FeedCapacity</c> can reference this ONE
+    /// number instead of each hand-copying a third literal — the least drift-prone option left
+    /// once a single number has to be known on both sides of the plugin boundary AND by two
+    /// more assemblies that cannot see <c>SharedBlock</c> at all.</summary>
+    public const int BlockEnemyCapacity = 128;
+
     private const uint EnemyFlagDead = 1;
 
     /// <summary>Un-killable by module rule (a cutscene actor): presence-only, the combat
@@ -64,8 +77,10 @@ public sealed partial class KotorGameBridge
     // which the plugin drives the local copies to match. Slot i pairs with enemy slot i.
     // id u32 @0 (written last), x f32 @4, y @8, z @0xC, facing f32 @0x10, animation u32
     // @0x14, flags u32 @0x18 (bit 0 dead), one-shot serial u32 @0x1C, one-shot anim u32 @0x20.
+    // Slots relocated to the new 0x6000 region by block version 80 (old home 0x1410..0x1910
+    // now dead) — see SharedBlock.Combat.cs.
     private const int BlockEnemyPresenceCount = 0x1400;
-    private const int BlockEnemyPresenceSlots = 0x1410;
+    private const int BlockEnemyPresenceSlots = 0x6800;
     private const int BlockEnemyPresenceStride = 0x28;
 
     // Engine-resolved player (block version 38). Plugin -> agent: the engine's own
@@ -80,15 +95,17 @@ public sealed partial class KotorGameBridge
     // health min-merge it served: the owner now applies a peer's damage as real damage, so
     // a kill falls out of the arithmetic instead of arriving as a message to be trusted.
 
-    // Damage ledger (block version 23). Peer -> agent at 0x1E60 (32 x {id, cumulative}),
-    // agent -> peer's owner at 0x2018 (same shape), counters in between. A cumulative sum
+    // Damage ledger (block version 23). Peer -> agent at 0x7E00 (128 x {id, cumulative}),
+    // agent -> peer's owner at 0x8200 (same shape), counters in between. A cumulative sum
     // of damage DEALT, which is what replaced reporting enemy HEALTH: health had to be
     // sampled and the owner's mirror wrote its own value back between samples, so most of
-    // a lone player's fight was erased before anyone could read it.
-    private const int BlockDamageDealtSlots = 0x1E60;
-    private const int BlockDamageOwedSlots = 0x2018;
+    // a lone player's fight was erased before anyone could read it. Relocated and widened
+    // from 32 to BlockEnemyCapacity by block version 80 (old homes 0x1E60..0x1F60 and
+    // 0x2018..0x2118 now dead) — see SharedBlock.Combat.cs.
+    private const int BlockDamageDealtSlots = 0x7E00;
+    private const int BlockDamageOwedSlots = 0x8200;
     private const int BlockDamageLedgerStride = 0x08;
-    private const int BlockDamageLedgerCapacity = 32;
+    private const int BlockDamageLedgerCapacity = BlockEnemyCapacity;
     private const int BlockDamageDealtCount = 0x2000;
     private const int BlockDamageDealtDropped = 0x2004;
     private const int BlockDamageDealtGeneration = 0x2008;

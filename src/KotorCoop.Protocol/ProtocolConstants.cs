@@ -281,8 +281,19 @@ public static class ProtocolConstants
     /// <c>SharedBlock</c> layout change: the plugin's per-slot flags dword's low 16 bits already
     /// carry every flag bit verbatim (<c>RemoteView.FlagsMask</c>), the same as
     /// <see cref="PlayerState.FlagStealth"/>. See docs/research/effect-sync.md §13.
+    /// Version 70: the fixed 32-enemy census cap is
+    /// gone. <see cref="EnemySnapshotPacket"/> gains <c>PageIndex</c>/<c>PageCount</c> (the
+    /// existing <see cref="PacketType.EnemySnapshot"/>, no new packet type) so a module with
+    /// more hostiles than fit one datagram pages across several, all stamped with the same
+    /// <c>ServerTimeMs</c> tick id — the identical fix <see cref="WorldSnapshotPacket"/> and
+    /// <see cref="CreatureLivenessPacket"/> already shipped for their own channels. <see
+    /// cref="MaxEnemies"/> is now a PER-PACKET limit, not a per-cycle one. <see
+    /// cref="MaxEnemyDamageEntries"/> widened from 32 to 128 to match the shared-block damage
+    /// ledger's new capacity — still comfortably one packet, so that channel needed no paging
+    /// of its own. See docs/research/creature-liveness.md's cap-removal section and
+    /// docs/review-seamless-2026-09-18.md's "Enemy census beyond 32 candidates" row.
     /// </summary>
-    public const byte Version = 69;
+    public const byte Version = 70;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -363,23 +374,29 @@ public static class ProtocolConstants
     public const int MaxStoreSnapshotEntriesPerPacket = 28;
 
     /// <summary>
-    /// Creatures the owner replicates per snapshot. 40 bytes each (id, health, death,
-    /// position, facing, animation, one-shot serial + id, plot, appearance, faction), so
-    /// a full 32 is 1293 bytes with the header — inside one datagram with modest slack;
-    /// the fit is asserted by a test. A module can hold more creatures than this: the
-    /// census takes hostiles first, then the nearest bystanders, so the cap sheds the
-    /// least visible bodies rather than arbitrary ones.
+    /// Creatures the owner replicates PER PACKET (protocol 70; a per-cycle limit before that).
+    /// 40 bytes each (id, health, death, position, facing, animation, one-shot serial + id,
+    /// plot, appearance, faction), so a full 32 is 1293 bytes with the header — inside one
+    /// datagram with modest slack; the fit is asserted by a test. A module holding more
+    /// hostiles than this pages across several <see cref="EnemySnapshotPacket"/> datagrams in
+    /// the same tick (<c>EnemyCensusPaging.Paginate</c>, <c>KotorCoop.Session</c>) rather than
+    /// truncating — see that type's own <c>PageIndex</c>/<c>PageCount</c> remarks and
+    /// docs/research/creature-liveness.md's cap-removal section. The census itself still sorts
+    /// in-combat creatures first, then nearest-to-a-player, so the FIRST page a receiver
+    /// applies is always the most urgent one even if a later page is lost.
     /// </summary>
     public const int MaxEnemies = 32;
 
     /// <summary>
-    /// Enemies one peer can report damage against per datagram. 8 bytes each (object id +
-    /// cumulative total), so a full 32 is 302 bytes with the header and the module string
-    /// — a quarter of a datagram. It matches the plugin's own ledger capacity, which is
-    /// the real limit: the ledger only holds enemies this instance has actually damaged
-    /// and not yet seen die.
+    /// Enemies one peer can report damage against per datagram (protocol 70: widened from 32
+    /// to match <c>SharedBlock.DamageLedgerCapacity</c>'s own growth). 8 bytes each (object id +
+    /// cumulative total), so a full 128 is 1082 bytes with the header and the module string —
+    /// still comfortably inside one datagram, so this channel needed no paging of its own. It
+    /// matches the plugin's own ledger capacity, which is the real limit: the ledger only holds
+    /// enemies this instance has actually damaged and not yet seen die, and no surveyed module
+    /// places anywhere near 128 concurrent hostiles for one peer to be fighting at once.
     /// </summary>
-    public const int MaxEnemyDamageEntries = 32;
+    public const int MaxEnemyDamageEntries = 128;
 
     /// <summary>
     /// Per-attacker breakdown entries on one <see cref="PhantomDamagePacket"/> — matches the

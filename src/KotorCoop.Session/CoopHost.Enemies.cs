@@ -90,6 +90,11 @@ public sealed partial class CoopHost
     /// world snapshot: a lost packet costs one tick of staleness, and the next one carries
     /// the full truth anyway. Death is a level in that state, not an event, so it cannot
     /// be missed the way a one-shot "it died" message could.
+    ///
+    /// Paged (protocol 70), not throttled: a module with more hostiles than fit one datagram
+    /// costs several datagrams THIS tick — see <see cref="EnemyCensusPaging"/> — rather than a
+    /// slower broadcast cycle the way <see cref="BroadcastCreatureLiveness"/> uses, because
+    /// combat needs every enemy's health and position current every tick, not eventually.
     /// </summary>
     private void BroadcastEnemies(long now, List<PeerConnection> recipients)
     {
@@ -106,15 +111,18 @@ public sealed partial class CoopHost
             return;
         }
 
-        int length = PacketCodec.Write(_sendBuffer, new EnemySnapshotPacket(now, module, enemies));
-        if (length == 0)
+        foreach (EnemySnapshotPacket page in EnemyCensusPaging.Paginate(now, module, enemies))
         {
-            return;
-        }
+            int length = PacketCodec.Write(_sendBuffer, page);
+            if (length == 0)
+            {
+                continue;
+            }
 
-        foreach (PeerConnection peer in recipients)
-        {
-            _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            foreach (PeerConnection peer in recipients)
+            {
+                _channel.Send(peer.EndPoint, _sendBuffer.AsSpan(0, length));
+            }
         }
     }
 

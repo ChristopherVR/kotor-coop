@@ -462,7 +462,7 @@ others are setup, discovery or offline utilities. `agent` with no arguments prin
 | `--drop-file <path>` | none | watch a path for a scripted item-drop request | `run` |
 | `--log <path>` | none | append a compact status log | `run` |
 | `--phantoms <n>` | `4` | idle creatures to claim as remote-player avatars, clamped 0-8 | `run` |
-| `--enemy-census-cap <n>` | `0` (built-in 32) | DEBUG: shrink the enemy-census cap, clamped 1-32 | `run` |
+| `--enemy-census-cap <n>` | `0` (built-in 128) | DEBUG: shrink the enemy-census cap, clamped 1-128 | `run` |
 | `--source <dir>` | none | save directory to copy from | `craft-save` |
 | `--dest <dir>` | none | save directory to create (must not exist) | `craft-save` |
 | `--bool <NAME[=0\|1]>` | none, repeatable | force a global boolean; bare `NAME` means `=1` | `craft-save` |

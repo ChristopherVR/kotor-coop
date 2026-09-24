@@ -40,7 +40,11 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
 
     /// <summary>Mirrors <c>SharedBlock.LivenessCapacity</c> in the plugin — kept as a plain
     /// literal here rather than a cross-project reference, the same "shared by value, not by
-    /// reference" rule the plugin's own block-layout constants already follow.</summary>
+    /// reference" rule the plugin's own block-layout constants already follow. NOT part of the
+    /// version 80 "no cap really" pass (that grew the 32-slot combat census/presence/
+    /// damage-ledger/materialised-owner-id tables to 128; liveness already had its own
+    /// generous 96-slot capacity plus wire paging and block-side rotation, and stays at 96) —
+    /// see docs/research/creature-liveness.md's cap-removal section.</summary>
     private const int SharedBlockLivenessCapacity = 96;
 
     /// <summary>Rotates the "alive" tail <see cref="LivenessBlockPage"/> hands the plugin

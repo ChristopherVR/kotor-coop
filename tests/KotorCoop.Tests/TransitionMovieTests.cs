@@ -261,7 +261,13 @@ public class TransitionMovieTests
         // item-spawn generation/ticket/load-serial arrays at 0x4F00..0x5300.
         // 76-77 = the 2026-09-24 wave's other streams; 78 = party-placed mine replication at
         // 0x5A00..0x5BBC (block grown to 0x5C00 for the wave, docs/research/mines.md §14).
-        Assert.Equal(78, int.Parse(version.Groups[1].Value));
+        // 79 = another in-flight stream's own reservation (0x5C00..0x6000, deliberately left
+        // untouched by 80 below). 80 = the "no cap really" pass
+        // (docs/research/creature-liveness.md, docs/review-seamless-2026-09-18.md): the
+        // 32-entry enemy census/presence/materialised-owner/damage-ledger tables all widen to
+        // 128 and relocate into a new region, block grown to 0x8600 — see
+        // SharedBlock.Combat.cs and SharedBlock.TotalSize's own remarks.
+        Assert.Equal(80, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(
