@@ -1830,21 +1830,26 @@ did not resolve; a template must be present in the CURRENT module's archive, and
 `tools/kotorfiles.py list modules/<module>_s.rim --type utc` lists what actually is). Does not
 require reaching `manm27aa` naturally (a late-game module no default save sits in).
 
+0. `pwsh src/KotorCoop.Plugin/build.ps1 -Install` first — `demo.ps1` does NOT deploy the plugin,
+   and a stale v78 `dinput8.dll` against this v80 agent reads as "plugin shared block not found"
+   (the signature embeds the block version). Compare installed `dinput8.dll` sizes in both game
+   folders before launching.
 1. `pwsh tools/demo.ps1 -Save 1` — both instances launch, load, and connect unattended (host
    and joiner). Confirm both are in the same module (`tar_m10aa` or wherever save 1 opens into —
    `warp` there with the existing console verb if not, exactly like the 2026-09-03 run did).
 2. On the HOST console: `spawncreature tar10_vulkpoo002 32` (the per-call max), then
    `spawncreature tar10_vulkpoo002 20` again — 52 total, comfortably past the old 32-object cap
    and past even a single `MaxEnemies`-sized wire page, while still well inside the new 128
-   shared-block capacity (so this proves paging, not the rotation safety net — see step 5 for
+   shared-block capacity (so this proves paging, not the rotation safety net — see step 6 for
    that).
 3. On the HOST console: `census`. Expect the `EnemyCensusStatus` line —
    `census: 52 candidate(s), 52 selected before ID validation, capacity 128, 0 beyond cap` (the
    OLD recipe's expected line here, from the 32-slot era, was `capacity 32, 20 beyond cap` —
    the whole point being demonstrated).
-4. Watch the host's session log (or `logs` command) for `EnemyCensusPaging` activity: with 52
-   enemies at `EnemySnapshotPacket.MaxEntriesPerPacket` (32) per page, expect 2 pages sent every
-   broadcast tick, not one. Confirm no host log line mentions dropping/truncating past 32.
+4. Nothing logs per-page sends (`EnemyCensusPaging` is silent by design — it runs every tick),
+   so the wire is proven by step 5's count, not by a log line: with 52 enemies at
+   `EnemySnapshotPacket.MaxEntriesPerPacket` (32) per page the host sends 2 pages per tick, and
+   a joiner count above 32 is only reachable if page 1 arrived and was applied.
 5. On the JOINER console: `census`. As a mirror, this reports `manager.Current.GetEnemies(module)`
    — the count CoopClient's `EnemySnapshotAssembler` has accumulated across however many pages
    this tick needed. Expect the full 52, not capped at 32 — the direct proof that pagination
