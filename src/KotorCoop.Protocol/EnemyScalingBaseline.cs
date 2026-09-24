@@ -130,7 +130,7 @@ public static class EnemyScalingBaselineRule
         && IsValidResRef(record.Module, EnemyScalingBaselineDocument.MaximumModuleLength)
         && record.ObjectId is > 0 and not InvalidObjectId and not PlayerObjectId and not uint.MaxValue
         && IsValidName(record.Tag, EnemyScalingBaselineDocument.MaximumTagLength)
-        && IsValidResRef(record.Template, EnemyScalingBaselineDocument.MaximumTemplateLength)
+        && IsValidTemplate(record.Template)
         && record.BaseMaximum is > 0 and <= ushort.MaxValue
         && record.AppliedPercent is >= MinimumPercent and <= MaximumPercent;
 
@@ -159,7 +159,7 @@ public static class EnemyScalingBaselineRule
             || !IsValidResRef(module, EnemyScalingBaselineDocument.MaximumModuleLength)
             || objectId is 0 or InvalidObjectId or PlayerObjectId or uint.MaxValue
             || !IsValidName(tag, EnemyScalingBaselineDocument.MaximumTagLength)
-            || !IsValidResRef(template, EnemyScalingBaselineDocument.MaximumTemplateLength))
+            || !IsValidTemplate(template))
         {
             return false;
         }
@@ -239,8 +239,13 @@ public static class EnemyScalingBaselineRule
     public static bool IsValidTag(string? value) =>
         IsValidName(value, EnemyScalingBaselineDocument.MaximumTagLength);
 
+    /// <summary>A saved creature's GIT record carries no <c>TemplateResRef</c> (0 of 3,221
+    /// creature records across 40 GOG saves, 2026-09-24), so the template is optional: empty,
+    /// or a well-formed resref when a record does name one. Object id plus Tag stay the
+    /// identity.</summary>
     public static bool IsValidTemplate(string? value) =>
-        IsValidResRef(value, EnemyScalingBaselineDocument.MaximumTemplateLength);
+        value is not null
+        && (value.Length == 0 || IsValidResRef(value, EnemyScalingBaselineDocument.MaximumTemplateLength));
 
     private static bool IsValidResRef(string? value, int maxLength)
     {

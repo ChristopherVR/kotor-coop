@@ -236,6 +236,26 @@ public sealed class EnemyScalingPersistenceTests : IDisposable
         Assert.Equal(EnemyScalingVerdict.Refuse, _port.LastVerdict(3));
     }
 
+    /// <summary>A real save's GIT creature record has a Tag but no TemplateResRef (0 of 3,221
+    /// across 40 GOG saves). Live 2026-09-24 the join refused every scaled module on that alone
+    /// ("0xE has no usable saved tag/template"), so no save could ever prove its health.</summary>
+    [Fact]
+    public void TheJoinAcceptsARealSavedRecordWithNoTemplate()
+    {
+        EnemyScalingArchiveModule saved = new("danm14aa", new Dictionary<uint, EnemyScalingArchiveCreature>
+        {
+            [0xE] = new(0xE, "g_kathhound", string.Empty, 60),
+        });
+
+        List<EnemyScalingBaselineRecord> records = [];
+        Assert.True(EnemyScalingArchiveJoin.TryJoinModule("danm14aa", [new(0xE, 40, 150)], saved, records, out _));
+        EnemyScalingBaselineRecord record = Assert.Single(records);
+        Assert.Equal(string.Empty, record.Template);
+        Assert.True(EnemyScalingBaselineRule.IsValidRecord(record));
+        Assert.False(EnemyScalingBaselineRule.IsValidTemplate(null));
+        Assert.False(EnemyScalingBaselineRule.IsValidTemplate("bad name"));
+    }
+
     [Fact]
     public void TheJoinDropsCreaturesScaledAfterTheStoreAndRefusesContradictions()
     {
