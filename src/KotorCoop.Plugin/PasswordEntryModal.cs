@@ -46,6 +46,13 @@ namespace KotorCoop.Plugin;
 /// <c>connect &lt;host:port&gt;</c> instead of <c>password &lt;text&gt;</c>). Text the rule
 /// refuses does NOT close the panel — the title is re-captioned with the reason and the
 /// player edits what they typed. The name of the class is historical.
+///
+/// SINCE 2026-09-24 the panel is also reachable from the gamepad on-screen keyboard
+/// (docs/research/gamepad.md §7): <see cref="IsAnyOpen"/>/<see cref="ActiveAsk"/> let
+/// <c>GamepadController</c> know a co-op text box has focus without holding its own reference
+/// to whichever instance is open, and <see cref="ConfirmActive"/>/<see cref="CancelActive"/>
+/// run the exact OK/Cancel code a mouse click would — the typing itself (per character) is a
+/// posted WM_CHAR, same as a real keystroke, so this class needed no new engine surface at all.
 /// </summary>
 internal sealed unsafe class PasswordEntryModal
 {
@@ -175,6 +182,21 @@ internal sealed unsafe class PasswordEntryModal
     public static bool Available => !_broken;
 
     public bool IsOpen => _panel != 0;
+
+    /// <summary>
+    /// True while SOME instance's panel is up and not already on its way out. Static, because
+    /// two instances exist (one per flow, <see cref="_active"/>) and a caller that just wants
+    /// to know "does a co-op text box have focus right now" — the gamepad on-screen keyboard's
+    /// gate — should not have to know which flow opened it. Excludes <c>_closing</c>
+    /// deliberately: once <see cref="CloseVisual"/> has run, the panel is on the sweep's way
+    /// out (still registered for a frame or two) and must stop looking like a live target, or
+    /// the gamepad controller would re-open its grid against a panel that is already closing.
+    /// </summary>
+    public static bool IsAnyOpen => _active is { _panel: not 0, _closing: false };
+
+    /// <summary>Which question the currently-open instance is asking, or null if none is open —
+    /// lets a caller (the gamepad grid's title) label the box without holding its own reference.</summary>
+    public static Ask? ActiveAsk => _active is { _panel: not 0, _closing: false } self ? self._ask : null;
 
     /// <summary>A caller's own structural guard refused (e.g. a garbage gui-manager pointer
     /// on the way to an open): latch the shared native path off, same as an internal guard.</summary>
@@ -421,66 +443,17 @@ internal sealed unsafe class PasswordEntryModal
 
     /// <summary>
     /// The engine invokes this for OK (click or accept): <c>fn(owner /*ecx*/, firingControl
-    /// /*stack*/)</c>. Reads the typed CExoString while the panel is still alive, composes
-    /// the console line, and marks the panel for the sweep; the publish happens after the
-    /// sweep confirms the free (see <see cref="Poll"/>).
+    /// /*stack*/)</c>. Delegates to <see cref="SubmitTyped"/> — see there.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvThiscall)])]
     private static void OnOkClicked(nint owner, nint firingControl)
     {
         try
         {
-            if (_active is not { _panel: not 0, _closing: false } self)
+            if (_active is { _panel: not 0, _closing: false } self)
             {
-                return;
+                self.SubmitTyped();
             }
-
-            // CExoString {char* data @0, int length @4}. ⚠ length INCLUDES the null
-            // terminator (the repo's thrice-bitten trap); PasswordAnswer.Compose cuts at the
-            // first null regardless of what the length field claims.
-            byte* data = *(byte**)(self._panel + PanelTypedString);
-            int length = *(int*)(self._panel + PanelTypedString + 4);
-
-            int composed = 0;
-            string? rejection = null;
-            if (data != null && length > 0)
-            {
-                if (!LooksLikeReadablePointer((nint)data))
-                {
-                    // A non-null garbage pointer where the typed string should be means the
-                    // layout is not what the research says: latch, dismiss, fall back.
-                    Break("typed string pointer");
-                    self.CloseVisual();
-                    return;
-                }
-
-                ReadOnlySpan<byte> typed = new(data, Math.Min(length, self._answer.Length));
-                composed = self._ask == Ask.Address
-                    ? ConnectAddressRule.Compose(typed, self._answer, out rejection)
-                    : PasswordAnswer.Compose(typed, self._answer);
-            }
-
-            if (composed == 0)
-            {
-                if (rejection is { Length: > 0 })
-                {
-                    // Text that is not an address: say why in the title and STAY OPEN with
-                    // the player's text still in the box, rather than dialling garbage or
-                    // closing on them. The panel is alive (we are inside its own OK dispatch),
-                    // so the same guarded caption write as at open applies.
-                    TrySetTitle(self._panel, rejection);
-                    return;
-                }
-
-                // Nothing typed: an empty OK is a cancel, not a join attempt with a
-                // zero-length password the host can only refuse.
-                self.CloseVisual();
-                return;
-            }
-
-            self._answerLength = composed;
-            self._okPending = true;
-            self.CloseVisual();
         }
         catch
         {
@@ -501,6 +474,91 @@ internal sealed unsafe class PasswordEntryModal
         catch
         {
             // A managed exception must never unwind into the engine's event dispatch.
+        }
+    }
+
+    /// <summary>
+    /// Reads the typed CExoString while the panel is still alive, composes the console line,
+    /// and marks the panel for the sweep; the publish happens after the sweep confirms the
+    /// free (see <see cref="Poll"/>). The exact OK path — called from the engine's own click
+    /// dispatch (<see cref="OnOkClicked"/>) AND from the gamepad on-screen keyboard's Confirm
+    /// (<see cref="ConfirmActive"/>), so a pad's "send" does precisely what a mouse click on
+    /// OK already does, with no second code path to keep in sync.
+    /// </summary>
+    private void SubmitTyped()
+    {
+        // CExoString {char* data @0, int length @4}. ⚠ length INCLUDES the null
+        // terminator (the repo's thrice-bitten trap); PasswordAnswer.Compose cuts at the
+        // first null regardless of what the length field claims.
+        byte* data = *(byte**)(_panel + PanelTypedString);
+        int length = *(int*)(_panel + PanelTypedString + 4);
+
+        int composed = 0;
+        string? rejection = null;
+        if (data != null && length > 0)
+        {
+            if (!LooksLikeReadablePointer((nint)data))
+            {
+                // A non-null garbage pointer where the typed string should be means the
+                // layout is not what the research says: latch, dismiss, fall back.
+                Break("typed string pointer");
+                CloseVisual();
+                return;
+            }
+
+            ReadOnlySpan<byte> typed = new(data, Math.Min(length, _answer.Length));
+            composed = _ask == Ask.Address
+                ? ConnectAddressRule.Compose(typed, _answer, out rejection)
+                : PasswordAnswer.Compose(typed, _answer);
+        }
+
+        if (composed == 0)
+        {
+            if (rejection is { Length: > 0 })
+            {
+                // Text that is not an address: say why in the title and STAY OPEN with
+                // the player's text still in the box, rather than dialling garbage or
+                // closing on them. The panel is alive (we are inside its own OK dispatch,
+                // or the pad's equivalent), so the same guarded caption write as at open
+                // applies.
+                TrySetTitle(_panel, rejection);
+                return;
+            }
+
+            // Nothing typed: an empty OK is a cancel, not a join attempt with a
+            // zero-length password the host can only refuse.
+            CloseVisual();
+            return;
+        }
+
+        _answerLength = composed;
+        _okPending = true;
+        CloseVisual();
+    }
+
+    /// <summary>
+    /// The gamepad on-screen keyboard's Confirm (Y/Start) on whichever instance is currently
+    /// open (<see cref="_active"/>) — runs exactly <see cref="SubmitTyped"/>, the same path a
+    /// mouse click on OK takes. No-op if nothing is open or the open panel is already closing.
+    /// </summary>
+    public static void ConfirmActive()
+    {
+        if (_active is { _panel: not 0, _closing: false } self)
+        {
+            self.SubmitTyped();
+        }
+    }
+
+    /// <summary>
+    /// The gamepad on-screen keyboard's Cancel (Back) on whichever instance is currently open —
+    /// runs exactly what a mouse click on Cancel does. No-op if nothing is open or already
+    /// closing.
+    /// </summary>
+    public static void CancelActive()
+    {
+        if (_active is { _panel: not 0, _closing: false } self)
+        {
+            self.CloseVisual();
         }
     }
 

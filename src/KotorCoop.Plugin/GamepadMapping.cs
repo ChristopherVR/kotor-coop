@@ -343,6 +343,14 @@ internal enum GamepadMode
     /// <summary>A full-screen GUI, conversation, main menu or the player's own toggle: both
     /// sticks are the cursor, A clicks.</summary>
     Cursor,
+
+    /// <summary>A co-op text box has focus (the ~ console, or the address/password panel) and
+    /// the pad is driving the on-screen character grid instead (docs/research/gamepad.md §7).
+    /// <see cref="GamepadModeRule"/> never returns this — it is a frame-loop decision made
+    /// BEFORE the rule runs, because it needs state (the console/modal open flags) the rule
+    /// does not take. Movement/menu keys and the cursor are fully released while in this mode,
+    /// same as <see cref="Suspended"/>.</summary>
+    TextEntry,
 }
 
 /// <summary>Chooses the <see cref="GamepadMode"/> from what the engine says is on screen.</summary>

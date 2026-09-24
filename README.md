@@ -107,9 +107,11 @@ the address your host shares. The mod also tries to open your router's port auto
 (UPnP); treat that as a bonus, not something to rely on yet.
 
 **Playing with a controller.** Plug in any Xbox-style (XInput) pad and it just works, in
-menus and in the world — except typing: the address/password box, chat and the console still
-need a keyboard. `gamepad = 0` in `coop.ini` turns it off. Details:
-[docs/research/gamepad.md](docs/research/gamepad.md).
+menus and in the world. Typing works too: open the address box, the password box, chat
+(`Enter`) or the `~` console and an on-screen character grid appears — D-pad or the left stick
+picks a letter, `A` types it, `B` backspaces, `X` is a space, `Y`/`Start` sends, `Back`
+cancels, `LB` switches to upper case. `gamepad = 0` in `coop.ini` turns the whole layer off.
+Details: [docs/research/gamepad.md](docs/research/gamepad.md).
 
 ### Sharing `dinput8.dll` with another mod
 
