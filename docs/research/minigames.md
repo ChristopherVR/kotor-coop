@@ -3558,3 +3558,173 @@ The waiting-player lock now also releases on the racer's away flag. A game-over 
 the last known track module/minigame bit in its network snapshot; that stale bit can no
 longer freeze the joiner until host-away timeout. All 30 minigame-lock tests passed,
 including a real UDP case where local player reads stop while the minigame bit stays set.
+
+## 25. `mgkill` — a live-test primitive to finish the m12ab turret ambush without a human (2026-09-25)
+
+§9.4 and the 2026-09-19 review pass (above) both hit the same wall: `m12ab`'s Sith-fighter
+turret ambush can only be *completed* by actually shooting down the fighters, and this
+project's unattended rig has no way to aim and fire a gunnery view. Setting `ebo_turret_done`
+directly does not end the sequence — nothing re-checks it, and the module's own `StartNewModule`
+call only ever runs from inside the death scripts themselves (traced below). This item builds a
+dev verb, `mgkill <all|n>`, that kills the minigame's enemy follower objects through the
+ENGINE'S OWN damage path, so the shipped death scripts run exactly as they would for a real
+bullet kill.
+
+### 25.1 The content, decoded straight out of the shipped files — VERIFIED(static)
+
+`m12ab.are`'s own `MiniGame` GFF struct (`python tools/kotorfiles.py gff
+"<gamedir>/modules/M12ab.rim:m12ab.are" --path MiniGame`) carries `Type = 2` (turret, per §3),
+a `Player` follower (the Ebon Hawk itself, `Hit_Points = Max_HPs = 3000`, two gun banks each
+doing 30 damage/hit), and an `Enemies` list of **exactly six** entries, `Hit_Points = Max_HPs =
+100` each, with `Scripts/OnDeath` = `k_pebo_sthdeath2` .. `k_pebo_sthdeath7` respectively (one
+resref per entry, confirmed by name for all six). **All six exist from the start — there are no
+waves.** No heartbeat spawn call was found anywhere in `k_pebo_mgheart.ncs` (decoded below); the
+module's `Mod_OnModLoad = k_pebo_mgload` only zeroes `ebo_num_fighters`/`ebo_turret_done` and
+sets a couple of unrelated globals, and `k_pebo_sthcreate.ncs` (each fighter's `OnCreate`
+script, run once per fighter at `CSWMiniGame::Load` time) just does
+`ebo_num_fighters = GetGlobalNumber("ebo_num_fighters") + 1`. So by the time `Mod_OnModLoad`
+finishes, `ebo_num_fighters == 6` and stays there until deaths bring it down.
+
+Every one of `k_pebo_sthdeath2.ncs` .. `k_pebo_sthdeath7.ncs` was decoded with
+`tools/localvaraudit.py`'s own NCS decoder (`decode()`) driven by a small scratch script that
+prints `ACTION`/`CONST`/jump opcodes by name (not committed — same category as this project's
+other throwaway diagnostics); all six carry **byte-identical logic**:
+
+```
+SWMG_OnDeath()                                    ; notify the engine this follower died
+SWMG_PlayAnimation(SWMG_GetPlayer(), 'SithLoop##d', 1, 0, 1)   ; player hit-reaction animation
+ebo_num_fighters = GetGlobalNumber("ebo_num_fighters") - 1
+if (ebo_num_fighters <= 0) {
+    SetGlobalBoolean("ebo_turret_done", 1)
+    DelayCommand(2.0, ST_PlayPostTurret())
+}
+```
+
+**This directly confirms the task brief's premise and answers its open questions:**
+
+* Setting `ebo_turret_done` alone does nothing further — nothing in this module reads it except
+  this same decrement-and-check block, which only runs from inside a death script.
+* The counter is a **countdown from 6, not a per-script "am I the last one" check** — every
+  single death script runs the identical decrement; the ambush ends on whichever kill happens to
+  bring the counter to zero, **regardless of kill order**. A `mgkill` implementation therefore
+  does not need to kill any particular fighter or in any particular sequence.
+* **No waves**: exactly 6 fighters exist for the whole sequence, so `mgkill all` in one call
+  (once a minigame is active) is expected to finish it; the verb still accepts a bounded `n` and
+  reports remaining/total in case a future content change or a different minigame module does
+  spawn in stages.
+* `ST_PlayPostTurret()` (a local subroutine inside the same compiled script, reached via `JSR`)
+  is a **generic, shared "what minigame did we just finish" dispatcher** used by several of this
+  game's minigames (branches on `K_HK47_SIMULATION`, `K_RANDOM_MINI_GAME`, `K_FUTURE_PLANET`,
+  etc.); the branch that matches "we were in the Sith-fighter ambush" (`K_MINI_GAME` unset in
+  all the checked branches) calls `StartNewModule("ebo_m12aa", ...)` — matching the task brief
+  and the 2026-09-19 live pass's observed convergence target exactly.
+
+### 25.2 The engine's damage path, from the ENGINE binary — VERIFIED(static)
+
+Two nwscript.nss routines share one comdat-folded native handler,
+`CSWVirtualMachineCommands::ExecuteCommandSWMG_AdjustFollowerHitPoint` (`0x005CB990`, the literal
+symbol `tools/kotor1_0_3.db` gives it) — full disassembly (`tools/disasm.py 0x5CB990 200`) shows
+it reads back its OWN routine number (the same `handler(implementer, routine, nParams)`
+convention `Odyssey.Spells.cs`'s `CastSpellAtObject` already uses and documents) and branches:
+
+* **routine 590 = `int SWMG_AdjustFollowerHitPoints(object oFollower, int nHP, int
+  nAbsolute=0)`** (nwscript.nss's own comment: "adjusts a followers hit points, can specify the
+  absolute value to set to") → calls `CSWTrackFollower::AdjustHitPoints` (`0x0066E8E0`), which
+  stores `nHP` into the object's own pending-delta field and tail-jumps into
+  `CSWTrackFollower::OnDamage` (`0x0066E7A0`, param 0) — **this is the path that actually
+  changes hit points and can kill.**
+* **routine 604 = `void SWMG_SetFollowerHitPoints(object oFollower, int nHP)`** → calls
+  `CSWTrackFollower::SetHitPoints` (`0x0066C900`), a raw field write that explicitly **refuses**
+  a value `<= 0` (`test eax,eax; jle <no-op>`) and never touches `OnDamage`/`OnDeath` at all —
+  useless for killing anything, and **not used by this implementation**.
+
+Only two `StackPop*` calls appear anywhere in the 590 branch — `StackPopObject` (`0x005D10C0`)
+for `oFollower`, then `StackPopInteger` (`0x005D1000`) for `nHP` — never a third pop for
+`nAbsolute`, so this build's native handler always applies `nHP` as a **relative** delta no
+matter what a script would pass for the optional third argument. `oFollower`, despite the
+nwscript.nss type, is popped and used directly as a raw array index (`GetMiniGameObject`'s own
+bounds check, `cmp eax,0xFF; jae refuse`, is the *same* 0..254 range `CSWMiniGameObjectArray`
+uses everywhere) — no separate `SWMG_GetEnemy`/`SWMG_GetEnemyCount` round trip is needed to
+translate a slot number into it.
+
+`CSWTrackFollower::OnDamage` (`0x0066E7A0`): applies the pending delta to the object's own
+current-hit-points field (`+0x8C`), and if the new value is `<= 0` and the object is not already
+flagged dead (`+0x88` bit `0x2`), sets that bit and calls `CSWTrackFollower::OnDeath(this, 0)`
+(`0x0066E2A0`). `OnDeath`, with param 0: fetches the object's own "script slot 6" (populated
+from the GFF's `Scripts/OnDeath` field at `CSWMiniGame::Load` time) and, if assigned, **runs it
+through the same script-exec helper `OnHitBullet`/`OnHitFollower` use** and returns — it does
+**not** fall through to the generic built-in explosion/cleanup path in that case. For every
+m12ab fighter this script IS assigned (`k_pebo_sthdeath2..7`, per §25.1), so a sufficiently
+negative `nHP` here runs the real per-fighter death script through the engine, indistinguishable
+from a real bullet kill.
+
+Each enemy fighter in the array is a `CSWMiniEnemy` (size `0x1A4`, vtable `0x007528A8` per
+`tools/kotor1_0_3.db`'s class row) — independently confirmed by `CSWMiniGame::AddEnemy`'s own
+construction code (`0x00671E40`), which allocates exactly `0x1A4` bytes and writes
+`mov dword ptr [edi], 0x7528a8` into the new object's vtable slot before inserting it into
+`CClientExoAppInternal`'s `mgo_array` (offset `0x000`, `tools/kotor1_0_3.db`; independently
+cross-checked against `CClientExoApp::GetMGOArray`'s own two-hop disassembly, `0x005EDAF0`).
+`CSWMiniEnemy` embeds a `CSWTrackFollower` at its own offset `+0`, so `OnDamage`/`OnDeath`'s
+field offsets above (`+0x88`/`+0x8C`/`+0x90`) apply directly to each array object's own base
+address.
+
+### 25.3 The implementation
+
+* `src/KotorCoop.Plugin/Odyssey.Minigame.cs` (new): `ListMiniGameFighters()` — a READ-ONLY walk
+  of the client's `mgo_array` (255 flat slots, `CSWMiniGameObjectArray::Constructor`/
+  `GetMiniGameObject` VERIFIED the exact same shape), keeping any slot whose object vtable
+  equals `CSWMiniEnemy`'s (`0x007528A8`) and reporting its slot index, current/max HP and
+  already-dead flag. No engine call, no bytes-verification needed for a plain read (matching
+  `MinigameController`'s own existing read-only pattern for `mini_game`). `TryKillMiniGameFighter
+  (int slot, out int failure)` — the mutating half: verify-bytes-or-refuse on the routine table
+  entry AND the handler's own prologue bytes (the same belt-and-braces `CastSpellAtObject`
+  uses), push `(nHP=-999999, oFollower=slot)` in the reverse-declared order the handler's own
+  pop order confirms, call the verified handler directly with routine 590, and treat a nonzero
+  status as refusal. Never pokes `+0x88`/`+0x8C` directly, never calls `OnDamage`/`OnDeath` by
+  address, never touches `StartNewModule`.
+* `src/KotorCoop.Plugin/CheatController.Minigame.cs` (new): `MgKill()` — reads
+  `CheatAmount` (-1 = all, else a positive count), lists fighters, kills up to that many
+  currently-alive ones (array order — order does not matter per §25.1), and answers with a
+  `killed X/Y requested (Z alive, N tracked total, D already dead); R still alive` line so an
+  unattended run's log states the counts the task asked for.
+* `src/KotorCoop.Session/ConsoleCommand.Minigame.cs` (new) / `CoopCommandDispatcher.cs` /
+  `CheatController.cs` / `ConsoleVerbCatalog.cs` / `FuncInterpHook.cs`: the standard verb-wiring
+  five-file pattern every other dev verb in this codebase follows. `CheatKinds.MgKill` /
+  `SharedBlock.CheatKindMgKill` = **97** (the task's reserved 97-99 range; 98-99 still free). No
+  shared-block layout change — `CheatAmount` is an existing field.
+
+### 25.4 Live recipe (NEEDS-LIVE — nothing in this item has been run against the game yet)
+
+1. Host and joiner both on `ebo_m12aa` (any save; `warp ebo_m12aa` from either instance if not
+   already there — matches the 2026-09-19 pass's own starting point).
+2. Host: `~` console → `warp m12ab`. Expect the same sequence the 2026-09-19 pass already
+   verified: host log `travel: moving to module 'm12ab'`, then `minigame: entered (Unknown)` →
+   `minigame: kind settled to Turret`; joiner log `not following the announced transition to
+   'm12ab': that is a single-seat minigame track`, `minigame lock: Lanik started a minigame -
+   holding control until it ends`, and the joiner parks in `ebo_m12aa`.
+3. **Before the ~66 s unattended-loss window §9.4/2026-09-19 both measured** (i.e. promptly),
+   host: `mgkill all`.
+   * Expected host plugin log: six lines `mgkill: slot N (hp 100/100) killed via
+     SWMG_AdjustFollowerHitPoints` (slot numbers may not be 0-5 — whatever the array assigned),
+     then the reply `mgkill: killed 6/6 requested (6 were alive, 6 tracked total, 0 already
+     dead); 0 still alive`.
+   * Expect the game's own script logging (if `ShipBuild()`/debug build) or, regardless,
+     `ebo_num_fighters` reaching 0 on the sixth kill, `ebo_turret_done` set, and ~2 s later
+     `StartNewModule("ebo_m12aa", ...)` firing — i.e. the SAME convergence path the 2026-09-19
+     pass observed for the (then-unreachable) "ambush completed normally" case: host log
+     `travel:`/`epoch: world unloading`, landing back in `ebo_m12aa`.
+   * If fewer than 6 fighters are found (`mgkill: no minigame enemy fighters found` or a count
+     under 6), that itself is informative — re-run `mgkill all` once more before concluding
+     anything is wrong, since §25.1 found no wave logic to explain a lower count.
+4. Joiner: expect `minigame lock: Lanik finished — control is yours again` (the exact line the
+   2026-09-19 review row already cites as the convergence signal) and both instances standing in
+   `ebo_m12aa` together, the same as a human-played completion.
+5. If step 3 needed a second `mgkill all` (a wave the static read missed, or a fighter that
+   spawned after the first pass), the verb's own reply reports remaining count — repeat until
+   `still alive` reaches 0.
+
+Not run this round: no game process was launched (per this task's rules). Every claim above
+that says VERIFIED(static) was read directly out of the installed GOG `swkotor.exe`
+(`tools/disasm.py`/`tools/q.py`) or the installed module/script files
+(`tools/kotorfiles.py`/`tools/localvaraudit.py`'s NCS decoder) this session, not carried over
+from a prior round.
