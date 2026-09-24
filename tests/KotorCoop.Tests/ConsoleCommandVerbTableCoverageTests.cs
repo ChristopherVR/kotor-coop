@@ -108,6 +108,9 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.AddClass] = "addclass 3",
         [CoopCommandKind.MineAction] = "mineaction recover 0x71",
         [CoopCommandKind.LocalVar] = "localvar get dan13_belaya b 10",
+        [CoopCommandKind.PlaceMine] = "placemine 3",
+        [CoopCommandKind.MineState] = "minestate",
+        [CoopCommandKind.PlacedMineAction] = "placedmineaction disarm 1",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

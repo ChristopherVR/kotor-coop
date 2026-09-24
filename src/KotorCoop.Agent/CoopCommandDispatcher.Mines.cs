@@ -21,4 +21,21 @@ public sealed partial class CoopCommandDispatcher
             Target: (uint)command.Amount, Amount: unchecked((int)serial),
             Text: $"{command.Address}|{module}"));
     }
+
+    /// <summary><c>placedmineaction</c>: the same world-bound request as <c>mineaction</c>, with
+    /// the session serial as the target — only this instance's plugin can resolve it.</summary>
+    private void QueuePlacedMineAction(CoopCommand command)
+    {
+        if (!bridge.TryReadWorldLoadSerial(out uint serial)
+            || !bridge.TryReadCurrentModule(out string module)
+            || string.IsNullOrWhiteSpace(module))
+        {
+            Reply("placedmineaction refused: current world identity is unavailable");
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.PlacedMineAction,
+            Target: (uint)command.Amount, Amount: unchecked((int)serial),
+            Text: $"{command.Address}|{module}"));
+    }
 }

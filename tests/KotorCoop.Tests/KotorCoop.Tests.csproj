@@ -137,6 +137,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\MineRemovalRule.cs" Link="Plugin\MineRemovalRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MineActionRule.cs" Link="Plugin\MineActionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPlacedMineIdentityMap.cs" Link="Plugin\PartyPlacedMineIdentityMap.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PlacedMineRules.cs" Link="Plugin\PlacedMineRules.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GhostSweepRule.cs" Link="Plugin\GhostSweepRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SaveFlushRule.cs" Link="Plugin\SaveFlushRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PlayerCommandableLockRule.cs" Link="Plugin\PlayerCommandableLockRule.cs" />

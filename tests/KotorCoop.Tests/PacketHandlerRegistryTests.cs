@@ -47,6 +47,9 @@ public class PacketHandlerRegistryTests
         // the host's ordinary receive loop rather than a per-peer channel.
         PacketType.WorldTransferRequest, PacketType.WorldTransferChunkStatus,
         PacketType.WorldTransferComplete,
+        // Party-placed mine replication (docs/research/mines.md §14): a client's placement/gone
+        // report is a reliable intent to the host; the host never receives its own roster or ack.
+        PacketType.PlacedMineIntent,
         PacketType.None,
     ];
 
@@ -78,6 +81,9 @@ public class PacketHandlerRegistryTests
         PacketType.HostBye,
         // Galaxy-map departure relay: the host's own accept, or another client's relayed one.
         PacketType.GalaxyDeparture,
+        // Party-placed mine replication: the host's ack of this client's own intent, and the
+        // host's canonical-set roster level; a client never receives another client's intent.
+        PacketType.PlacedMineIntentAck, PacketType.PlacedMineRoster,
         PacketType.None,
     ];
 

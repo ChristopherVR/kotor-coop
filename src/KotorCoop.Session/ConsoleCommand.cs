@@ -890,6 +890,19 @@ public enum CoopCommandKind
     /// by the plugin exactly like a script write.
     /// </summary>
     LocalVar,
+    /// <summary>Test instrument (docs/research/mines.md §14.6): build a party-placed floor mine at
+    /// the local player's feet through the retail construction sequence, so the capture, serial,
+    /// peer replica and fire gate can be exercised without the radial menu. Amount = traps.2da
+    /// row; EffectMagnitude = detect DC (low 16) | disarm DC (high 16). Local only.</summary>
+    PlaceMine,
+
+    /// <summary>Diagnostic: dump the party-placed mine identity map (serial -> local id),
+    /// pending captures, the fire gate and the verified-route verdict. Local only.</summary>
+    MineState,
+
+    /// <summary><see cref="MineAction"/> for a PARTY-PLACED mine named by its session serial
+    /// (Amount); Address holds recover|disarm. Local only.</summary>
+    PlacedMineAction,
 }
 
 /// <summary>
@@ -1086,6 +1099,9 @@ public static partial class ConsoleCommand
         new(["quittomenu"], ParseQuitToMenu),
         new(["mineaction"], ParseMineAction),
         new(["localvar"], ParseLocalVar),
+        new(["placemine"], ParsePlaceMine),
+        new(["minestate"], ParseMineState),
+        new(["placedmineaction"], ParsePlacedMineAction),
         new(["scriptgive"], ParseScriptGive),
         new(["loottake"], ParseLootTake),
         new(["pooladd"], ParsePoolAdd),

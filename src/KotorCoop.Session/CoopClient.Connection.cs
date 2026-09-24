@@ -129,6 +129,8 @@ public sealed partial class CoopClient
             _lootSender.ResetBackoff();
             _dialogueGrantSender.ResetBackoff();
             _classGrantSender.ResetBackoff();
+            _placedMineIntents.ResetBackoff();
+            ResetPlacedMineRoster();
 
             // ...and ask for the full world back, rather than trusting three version counters
             // that an outage can leave equal-but-different. Each channel owns its force flag,

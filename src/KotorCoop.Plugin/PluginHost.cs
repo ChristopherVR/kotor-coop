@@ -107,6 +107,10 @@ internal static unsafe partial class PluginHost
     private static GalaxyDepartureController? _galaxyDeparture;
     private static ClassGrantController? _classGrant;
     private static EnemyEffectController? _enemyEffects;
+    private static PlacedMineController? _placedMines;
+
+    /// <summary>The party-placed mine controller, for the cheat verbs (placemine/minestate/placedmineaction).</summary>
+    internal static PlacedMineController? PlacedMines => _placedMines;
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
@@ -409,7 +413,12 @@ internal static unsafe partial class PluginHost
         //    from ExecuteCommandSetLocalValue and a 28-row seqlocked apply list for
         //    LocalVarController. coop.ini local_var_sync, default OFF; NEEDS-LIVE. See
         //    docs/research/quest-sync.md §8.3.
-        _block->Version = 77;
+        // 78 adds party-placed floor-mine
+        //      replication at 0x5A00..0x5BB8 (SharedBlock.PlacedMines.cs; TotalSize grown to
+        //      0x5C00 for the wave): capture and gone rings, the agent's roster level and a
+        //      spawn mailbox. coop.ini placed_mine_sync, default OFF; NEEDS-LIVE. See
+        //      docs/research/mines.md §14.
+        _block->Version = 78;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

@@ -728,4 +728,28 @@ public enum PacketType : byte
     /// <summary>host -&gt; client: acknowledges one <see cref="EnemyEffect"/> op —
     /// <see cref="EnemyEffectAckPacket"/>, keyed by the op's (origin, sequence).</summary>
     EnemyEffectAck = 85,
+
+    // 86-99 are other streams' reservations; the party-placed mine channel owns 100-104
+    // (103 and 104 are reserved and unused).
+
+    /// <summary>
+    /// client -&gt; host (reliable, acked by <see cref="PlacedMineIntentAck"/>): "a party member on
+    /// my instance just placed a floor mine" (<see cref="PlacedMineIntentKind.Placed"/>) or "a
+    /// replicated mine is gone on my instance" (<see cref="PlacedMineIntentKind.Gone"/>) —
+    /// <see cref="PlacedMineIntentPacket"/>. Never carries a local dynamic object id. The host
+    /// owns the canonical set (<c>KotorCoop.Session.PlacedMineAuthority</c>).
+    /// <c>placed_mine_sync</c>, default OFF, NEEDS-LIVE. See docs/research/mines.md §14.
+    /// </summary>
+    PlacedMineIntent = 100,
+
+    /// <summary>host -&gt; client: acknowledges one <see cref="PlacedMineIntent"/> op —
+    /// <see cref="PlacedMineIntentAckPacket"/>, keyed by (origin, sequence).</summary>
+    PlacedMineIntentAck = 101,
+
+    /// <summary>
+    /// host -&gt; client (a LEVEL, resent every second and on every change): the host's canonical
+    /// party-placed mines for its current module — <see cref="PlacedMineRosterPacket"/>. A
+    /// client spawns what it lacks and removes a replica whose serial is absent.
+    /// </summary>
+    PlacedMineRoster = 102,
 }

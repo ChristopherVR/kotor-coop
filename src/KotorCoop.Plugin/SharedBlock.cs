@@ -149,8 +149,9 @@ internal partial struct SharedBlock
     /// to 0x5400 for v75's item-spawn provenance arrays, to 0x5800 for v76's exact
     /// enemy-health baseline channel (SharedBlock.EnemyScalingBaseline.cs, 0x5400..0x57C0),
     /// and to 0x5A00 for v77's per-object local-variable replication
-    /// (<see cref="OffsetLocalVarCaptureCursor"/>, docs/research/quest-sync.md §8.3).</summary>
-    public const int TotalSize = 0x5A00;
+    /// (<see cref="OffsetLocalVarCaptureCursor"/>, docs/research/quest-sync.md §8.3), then to
+    /// 0x5C00 for v78's party-placed mine replication (SharedBlock.PlacedMines.cs).</summary>
+    public const int TotalSize = 0x5C00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1351,4 +1352,27 @@ internal partial struct SharedBlock
     /// entry for the current module. Local only.
     /// </summary>
     public const uint CheatKindLocalVar = 85;
+    // 77-89 are other streams' reservations (2026-09-24 wave); the party-placed mine channel
+    // owns 90-94 (93 and 94 reserved, unused). docs/research/mines.md §14.
+
+    /// <summary>
+    /// Test instrument for party-placed mine replication: builds a party-placed floor mine at
+    /// the local player's feet through the retail construction sequence
+    /// (<c>Odyssey.TrySpawnPartyPlacedMine</c>), creator = the local player. Amount = traps.2da
+    /// row; Target = detect DC in the low 16 bits and disarm DC in the high 16. Not a replica:
+    /// the capture scan publishes it exactly like a real placement. Consumes no item. Local only.
+    /// </summary>
+    public const uint CheatKindPlaceMine = 90;
+
+    /// <summary>Diagnostic: dumps the party-placed mine identity map, pending captures, the fire
+    /// gate and the verified-route verdict to the plugin log (<c>minestate</c>).</summary>
+    public const uint CheatKindMineState = 91;
+
+    /// <summary>
+    /// <see cref="CheatKindMineAction"/> for a PARTY-PLACED mine named by its session serial
+    /// (Target). The plugin resolves the serial through its identity map and runs the same
+    /// retail client action-menu entry; the engine decides range, roll and reward. Text is
+    /// <c>recover|module</c> or <c>disarm|module</c>, CheatAmount the world-load serial.
+    /// </summary>
+    public const uint CheatKindPlacedMineAction = 92;
 }

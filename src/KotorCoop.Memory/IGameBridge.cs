@@ -650,6 +650,18 @@ public static class CheatKinds
     /// (LocalVarSyncRule.FormatRequest), Target an optional GIT object id, Amount the value for
     /// set. See SharedBlock.CheatKindLocalVar.</summary>
     public const uint LocalVar = 85;
+    // 77-89: other streams' reservations (2026-09-24 wave). 90-94: party-placed mines
+    // (93/94 reserved). See SharedBlock.CheatKindPlaceMine and docs/research/mines.md §14.
+
+    /// <summary>Test instrument: build a party-placed mine at the local player's feet. Amount =
+    /// traps.2da row; Target = detect DC (low 16) | disarm DC (high 16).</summary>
+    public const uint PlaceMine = 90;
+
+    /// <summary>Diagnostic dump of the party-placed mine identity map (<c>minestate</c>).</summary>
+    public const uint MineState = 91;
+
+    /// <summary><see cref="MineAction"/> for a party-placed mine named by session serial (Target).</summary>
+    public const uint PlacedMineAction = 92;
 
     /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
@@ -674,6 +686,7 @@ public interface IGameBridge :
     IPlaceableBridge,
     IMineBridge,
     ILocalVarBridge,
+    IPlacedMineBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
     IStoreBridge,

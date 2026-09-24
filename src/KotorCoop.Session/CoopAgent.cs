@@ -92,6 +92,7 @@ public sealed partial class CoopAgent
     private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly ClassGrantPump _classGrantPump;
+    private readonly PlacedMinePump _placedMinePump;
     private readonly EnemyEffectPump _enemyEffectPump;
     private readonly PartyPoolPump _partyPoolPump;
     private readonly StorePump _storePump;
@@ -191,6 +192,7 @@ public sealed partial class CoopAgent
         _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
         _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
+        _placedMinePump = new PlacedMinePump(bridge, session, settings, _log);
         _enemyEffectPump = new EnemyEffectPump(bridge, session, settings, _log);
     }
 
@@ -736,6 +738,11 @@ public sealed partial class CoopAgent
         // apply is a request + ack loop against the plugin; a no-op (one dword read) when
         // nothing is pending, and nothing at all when class_grant_sync is off.
         _classGrantPump.Pump(local, peers, _changedModule, _moduleSettledAtMs);
+
+        // Party-placed floor mines (docs/research/mines.md §14): publish a local placement or a
+        // local removal, hand the plugin the host's canonical set, one spawn request at a time.
+        // Nothing at all when placed_mine_sync is off.
+        _placedMinePump.Pump(local);
 
         // The client-cast enemy-effect relay (docs/research/enemy-effects.md): report a cast on a
         // mirrored enemy to the host, hand a client's reported cast to the plugin. Nothing at

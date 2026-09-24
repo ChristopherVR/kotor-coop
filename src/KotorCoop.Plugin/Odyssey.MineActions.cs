@@ -50,7 +50,8 @@ internal static unsafe partial class Odyssey
         uint expectedWorldLoadSerial,
         uint currentWorldLoadSerial,
         bool recover,
-        out string diagnostic)
+        out string diagnostic,
+        bool partyPlaced = false)
     {
         diagnostic = string.Empty;
         if (string.IsNullOrWhiteSpace(expectedModule)
@@ -84,7 +85,9 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        if (serverMineId is 0 or > 0xFFFF)
+        // A party-placed mine (placedmineaction) has a dynamic id outside the GIT range; its
+        // caller resolved it from a session serial through PartyPlacedMineIdentityMap.
+        if (serverMineId == 0 || (!partyPlaced && serverMineId > 0xFFFF))
         {
             diagnostic = "target id is outside the deterministic GIT range 1..0xFFFF";
             return false;
@@ -155,7 +158,7 @@ internal static unsafe partial class Odyssey
             ServerTargetFound: serverTrigger != 0,
             ServerTargetIsTrigger: serverTriggerIsTrigger,
             TargetIsMine: isMine,
-            TargetIsGit: isGit,
+            TargetIsGit: partyPlaced ? !isGit : isGit,
             TargetIsCurrentArea: targetIsCurrentArea,
             Disarmable: disarmable,
             ClientTargetMatches: clientTargetMatches,
@@ -175,12 +178,12 @@ internal static unsafe partial class Odyssey
         if (recover)
         {
             RecoverMineFromActionMenuFn(clientTrigger, 0, clientActor);
-            diagnostic = $"queued retail recover-skill request for GIT mine 0x{serverMineId:X}; skill roll decides success";
+            diagnostic = $"queued retail recover-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success";
         }
         else
         {
             DisableMineFromActionMenuFn(clientTrigger, 0, 0);
-            diagnostic = $"queued retail disable-skill request for GIT mine 0x{serverMineId:X}; skill roll decides success";
+            diagnostic = $"queued retail disable-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success";
         }
 
         return true;

@@ -219,6 +219,7 @@ public sealed partial class CoopHost
             // already fully retired before it came back is not resent.
             _dialogueGrantSender.ResetBackoff();
             _classGrantSender.ResetBackoff();
+            _placedMineRosterSentMs = 0; // the (re)admitted peer needs the mine roster now
 
             // Same reasoning again, for the shared party item pool: a peer away long enough to
             // lose its live entry has also missed however many add/remove ops happened while
