@@ -1,142 +1,121 @@
-﻿# kotor-coop
+# kotor-coop
 
 [![CI](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml)
 
-Seamless-style two-player co-op for **Star Wars: Knights of the Old Republic** (retail GOG build), in C#. Two full
-copies of the game run side by side — locally or across a network — and an external agent plus a tiny in-process
-plugin bridge them into one shared world, the way FromSoftware's Seamless Co-op mod bridges Elden Ring.
+A free mod that lets two to eight people play **Star Wars: Knights of the Old Republic** (the
+retail GOG or Steam build) together. Two full copies of the game run side by side — on one
+desk or over the internet — and an external helper program (the "agent") plus a small
+in-game plugin keep them in one shared world, each player in their own character. It plays
+the way FromSoftware's Seamless Co-op mod plays Elden Ring: nobody hosts a "co-op server",
+you just start the game and connect.
 
-No game file is modified. The plugin installs as a `dinput8.dll` proxy the game loads itself (or behind a tiny
-chain loader when another mod already owns that name); everything else attaches from outside with `OpenProcess`.
+No game file is changed. The plugin installs as a `dinput8.dll` the game already loads on
+its own (or behind a tiny loader if another mod already uses that name); the agent attaches
+from outside, the same way a debugger would.
 
-**Players:** the plain-language download and install site is [christophervr.github.io/kotor-coop](https://christophervr.github.io/kotor-coop/)
-(source in [`site/`](site/), published by `.github/workflows/pages.yml`). This README is the developer-facing page.
+**Players:** the plain-language download and install site is
+[christophervr.github.io/kotor-coop](https://christophervr.github.io/kotor-coop/) (source in
+[`site/`](site/)). This README is the same information for someone reading the repository —
+players and curious developers both.
 
 ## Status at a glance
 
-**You can play the whole game together.** Two people (up to eight) each run their own copy of
-KOTOR, one hosts, the other connects from a **Co-op** button on the main menu, and from then on
-you are in one world: you see each other as real characters, walk through the same doors, fly to
-the same planets, fight the same enemies with one shared health bar per enemy, loot one shared
-inventory, and watch the same conversations play out. Saving, loading, quitting to the menu and
-even the host crashing are all handled — the other side rejoins on its own.
+**You can play the whole game together.** Two people (up to eight) each run their own copy
+of KOTOR, one hosts, the other connects from a **Co-op** button on the main menu, and from
+then on you are in one world: you see each other as real characters, walk through the same
+doors, fly to the same planets, fight the same enemies with one shared health bar per enemy,
+loot one shared inventory, and watch the same conversations play out. Saving, loading,
+quitting to the menu and even the host's game crashing are all handled — the other side
+rejoins on its own.
 
 What you should know before starting:
 
-- **One conversation at a time.** Whoever starts talking to someone chooses the replies; the other
-  player watches it live. That's deliberate — two people steering one dialogue would break the
-  story.
-- **The host owns the party.** Only the host swaps the active party member and picks the party
-  before a departure. Companions follow the host's game, and a companion recruited in a
-  conversation reaches both players (`dialogue_recruit_sync`, on by default since 2026-09-18).
-  One related switch ships OFF: `companion_local_combat` (without it, a companion doesn't fight
-  for the other player through their own copy of the game). It is a one-line `coop.ini` edit.
-- **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for the
-  other. A shop's stock is only re-read while someone has it open, and a shop that has an infinite
-  supply of something will never show it changing (harmless).
-- **Minigames are single-seat.** One of you plays Pazaak or races; the other is told they're waiting.
-- **Enemies alternate between you rather than sticking to whoever hurt them most** — the game's own
-  AI keeps pulling them back to the host.
-- **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works every menu;
-  the address/password box, chat and the console still need a keyboard.
-- **Internet play works** — confirmed end-to-end over a tunnel tool (playit.gg) on 2026-09-10. A
-  real home router's own automatic port-opening (UPnP) is still unverified, and very restrictive
-  networks can't be reached at all since there is no relay server. Current status in
-  [docs/limitations.md](docs/limitations.md).
+- **One conversation at a time.** Whoever starts talking chooses the replies; the other
+  player watches it live — two people steering one dialogue would break the story.
+- **The host owns the party.** Only the host swaps the active party member and picks the
+  party before a departure. A companion recruited in a conversation reaches both players by
+  default; a companion fighting *for the other player*, through their own copy of the game,
+  is off by default (`companion_local_combat = 1` in `coop.ini` turns it on).
+- **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for
+  the other. The host can set a buy/sell price multiplier (`store_prices` in `coop.ini`) and
+  the joiner automatically uses it.
+- **Minigames are single-seat.** One of you plays Pazaak or races; the other waits.
+- **Enemies alternate between you** rather than sticking to whoever hurt them most — the
+  game's own AI keeps pulling them back to the host.
+- **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works
+  every menu; the address/password box, chat and the console still need a keyboard.
+- **Internet play works** over a tunnel tool such as playit.gg. A router's own automatic
+  port-opening (UPnP) is still unconfirmed, and there is no relay server for networks it
+  can't reach.
+- **A few things are off by default and still being proved live**: enemies getting tougher
+  with more players (`enemy_health`, `enemy_damage`), story flags reaching the other player
+  (`local_var_sync`), and party-placed mines (`placed_mine_sync`) — each has a `coop.ini` key,
+  described in [docs/limitations.md](docs/limitations.md).
+- **Known issue:** disconnecting and reconnecting without loading a save can occasionally
+  make the mod think you're on a different save and turn shared-world syncing off; loading
+  your game once and reconnecting clears it. A fix is in progress.
 
-The full list, activity by activity, is [docs/limitations.md](docs/limitations.md). Every line
-there has been watched on two real copies of the game unless it says otherwise; the dates, counts
-and research behind each one are in [docs/status-engineering.md](docs/status-engineering.md).
-
-## What works today
-
-Both players, each in their own full game:
-
-- **See each other** as a real in-game character with your real appearance, armour and weapons,
-  walking on the real floor, on the minimap and on the map screen.
-- **Travel together, either player leading** — doors, area transitions and the galaxy map. The
-  other player follows through the same loading screen (or the same take-off movie).
-  `follow_lead=host` restores host-only leading, `--no-follow` opts out.
-- **Fight the same fight**: enemy health and deaths come from the host's game and are mirrored
-  live; your hits land, your own game really fights up to three enemies at once, and stuns, slows,
-  chokes and heals reach your partner's real body. Going down puts you in a spectator camera until
-  you're revived; a full party wipe reloads and rejoins automatically.
-- **Share the world.** Dropped items, doors, containers and locks, story triggers, quests, the
-  journal, credits, the party's inventory and merchant stock all stay in step. **Pause** pauses
-  both games.
-- **Share one party**, driven by the host's game and mirrored to everyone (`--no-party-sync` opts
-  out), including a companion's equipment, experience and recruitment (`dialogue_recruit_sync`, on by
-  default since 2026-09-18 — see [docs/CONFIG.md](docs/CONFIG.md); with it off, only the player
-  who ran the recruiting conversation keeps the new companion).
-- **Start from the game's own menu** — a "Co-op" button, a server list with a "Connect to an
-  address..." row for internet games, password-protected, auto-reconnect — and
-  **type commands in-game** (`~`, see [docs/CONSOLE.md](docs/CONSOLE.md)) or **chat** (Enter).
-- **Hold one conversation at a time**, Baldur's Gate 3-style: the other player spectates live and a
-  late joiner catches up instantly.
-
-An unfocused or minimised copy keeps running, which is what makes one-machine testing practical.
-**Mods don't have to match**: at join time each side fingerprints its install and the two compare
-notes — a mismatched module only drops that module's channels, a different save asks you to rejoin
-(or refuses, with `--require-identical-save`), and every decision is said on screen with a code
-(`E_EXE`, `W_GIT`, `W_SAVE`, ...). See [mod-compatibility.md](docs/research/mod-compatibility.md).
+The full list, activity by activity, is [docs/limitations.md](docs/limitations.md); the
+dates, counts and research behind each line are in [docs/status-engineering.md](docs/status-engineering.md).
 
 ## Requirements
 
-- Windows, or Linux / Steam Deck through Proton or Wine (see [Linux and Steam Deck](#linux-and-steam-deck-proton)).
-  The packaged zip has no prerequisites — the agent ships with its own .NET runtime inside one exe. Building from
-  source needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ toolset (NativeAOT `win-x86` plugin, C chain
-  loader).
-- **KOTOR 1, v1.0.3.** A DRM-free build is what everything here is developed and tested against. The Steam copy is
-  the *same binary* under a DRM wrapper, its addresses match at runtime, and it is supported: a Steam client and a
-  DRM-free host have been verified in one live session — see [Steam](#steam) below. KOTOR 2 is untouched.
-- For two instances on one machine: a second copy of the game directory — the single-instance guard is just a named
-  mutex, renamed in memory by `agent launch --instance 2`.
+- Windows, or Linux / Steam Deck through Proton or Wine (see
+  [Linux and Steam Deck](#linux-and-steam-deck-proton)). The packaged zip has no
+  prerequisites — the agent carries its own .NET runtime.
+- **KOTOR 1, v1.0.3.** Developed and tested against the DRM-free build; the Steam copy is the
+  same binary under a DRM wrapper and is supported — see [Steam](#steam) below. KOTOR 2 is
+  untouched.
+- For two instances on one machine: a second copy of the game directory. The single-instance
+  guard is just a named mutex, renamed by `agent launch --instance 2`.
 
 ## Quick start (players)
 
-Download `kotor-coop-<version>-windows.zip` (or, on Linux / Steam Deck, `kotor-coop-<version>-linux.tar.gz`)
-from the [releases page](https://github.com/ChristopherVR/kotor-coop/releases). Pick a numbered version for the
-most stable build, or `latest` for the newest one that's passed its automated checks. The zip is a game-folder image: **extract it straight
-into the folder that contains `swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** —
-it finds your KOTOR install — GOG or Steam, including libraries on other drives — or asks if it finds none or
-several, copies everything in, and offers to launch.
+Download `kotor-coop-<version>-windows.zip` (or, on Linux / Steam Deck,
+`kotor-coop-<version>-linux.tar.gz`) from the
+[releases page](https://github.com/ChristopherVR/kotor-coop/releases) — a numbered version
+for the most stable build, or `latest` for the newest one that's passed its automated checks.
 
-No scripts, nothing to configure. If another mod already owns `dinput8.dll` (ReShade, an ASI loader, ...), both
-install paths notice and set kotor-coop up to run alongside it automatically — see
-[Sharing `dinput8.dll` with another mod](#sharing-dinput8dll-with-another-mod) below; nothing extra to do. Launch
-KOTOR, click **Co-op** on the main menu, one of you presses **Host** while the other picks that server and presses
-**Connect** — the game starts the agent itself in the background. Everything optional lives in `coop.ini`
-([docs/CONFIG.md](docs/CONFIG.md)); the zip's own `README.md` covers play, configuration and troubleshooting without
-needing this repo. CLI equivalent: `KotorCoop.Agent.exe install|uninstall --game-path <dir>` or `install.ps1`.
+The zip is a game-folder image: **extract it straight into the folder that contains
+`swkotor.exe`**, or extract it anywhere and **double-click `KotorCoop.Agent.exe`** — it finds
+your KOTOR install (GOG or Steam, including libraries on other drives), or asks if it finds
+none or several, copies everything in, and offers to launch. No scripts, nothing to
+configure. If another mod already owns `dinput8.dll` (ReShade, an ASI loader, ...), the
+installer notices and chains kotor-coop alongside it automatically — see
+[Sharing `dinput8.dll` with another mod](#sharing-dinput8dll-with-another-mod) below.
 
-### Joining: which character you bring
+## First session
 
-Co-op is one world — the host's — with each player in their own body. Your **co-op character** is separate from any
-single-player game on the same install: the mod makes it with you the first time you join and keeps it
-(`saves\kotorcoop-character.*`), and every join after that uses it. `coop.ini`'s `join_mode` says which:
+Launch KOTOR, click **Co-op** on the main menu. One of you presses **Host** (from any save,
+or from a fresh game once you've reached the first autosave); the other picks that server in
+the list and presses **Connect**. The agent starts itself in the background — nothing to
+launch by hand.
 
-| `join_mode` | what happens |
-| --- | --- |
-| `auto` (the default) | **First join:** connect, and the game's own character-creation screens open; make your character exactly as you normally would. Your game starts as usual; a few seconds later the mod quicksaves it and pulls you into the **host's** world with the character you just made (live-verified: 2 min 10 s, the player does nothing but character creation; you arrive right next to the host). **Every later join:** that same character is carried straight into the host's world, whatever single-player saves you have — it keeps everything you earned in co-op, refreshed on every in-game save you make while connected |
-| `newcharacter` | make a new co-op character on this join even though you already have one (it replaces the old one) |
-| `save` | the old way: the character from your own most recent save is carried into the host's world. If your world already matches the host's, it just loads; if it does not, the mod fetches the host's world first (`auto_adopt_world`, on by default) |
+**Which character you bring.** Co-op is one world — the host's — with each player in their
+own body. Your **co-op character** is separate from any single-player save on the same
+install: the mod makes it with you the first time you join, keeps it
+(`saves\kotorcoop-character.*`), and carries it into the host's world on every join after
+that. `coop.ini`'s `join_mode` controls this (`auto`, the default; `newcharacter` makes a new
+one; `save` carries your own most recent save instead). Your own saves are never touched.
+Details: [docs/research/world-adoption.md](docs/research/world-adoption.md).
 
-Either way **your own saves are never touched** — only the autosave slot is written — so leaving the session and
-loading your own game again costs nothing. What you give up when the worlds differ is the world you were playing:
-party, inventory, companions, story progress and journal all come from the host (your party is inherited cosmetically),
-because in co-op those are shared. You bring your character; the host brings the world. A mismatched save
-auto-adopts the host's world (`auto_adopt_world`, on by default), and a host serves its own world by default too.
+**Playing over the internet.** The reliable way today is a free tunnel program on the host,
+such as [playit.gg](https://playit.gg). To join, pick **Connect to an address...** at the
+bottom of the in-game server list (or `connect address:port` at the `~` console) and enter
+the address your host shares. The mod also tries to open your router's port automatically
+(UPnP); treat that as a bonus, not something to rely on yet.
 
-See [docs/research/world-adoption.md](docs/research/world-adoption.md) for the mechanism.
+**Playing with a controller.** Plug in any Xbox-style (XInput) pad and it just works, in
+menus and in the world — except typing: the address/password box, chat and the console still
+need a keyboard. `gamepad = 0` in `coop.ini` turns it off. Details:
+[docs/research/gamepad.md](docs/research/gamepad.md).
 
 ### Sharing `dinput8.dll` with another mod
 
-Only one file can be called `dinput8.dll`. Every install path — the CLI, `install.ps1`, `build.ps1 -Install` and the
-double-click setup — detects a foreign one and installs as a chain automatically: no flag, no prompt beyond a single
-summary line naming what was found (the detector recognises ReShade, Ultimate ASI Loader and a plain copy
-of Windows' own `dinput8.dll` — the last of those isn't a mod, so it's just overwritten, no chain needed). `--force`
-still overwrites a foreign DLL outright instead of chaining it if that's what you want, and `--chain`/`--load` remain
-available to force chain mode or add extra DLLs explicitly:
+Only one file can be called `dinput8.dll`. Every install path detects a foreign one (ReShade,
+Ultimate ASI Loader, ...) and installs as a chain automatically — no flag, no prompt beyond a
+one-line summary of what was found. `--force` overwrites the foreign DLL outright instead;
+`--chain`/`--load` force chain mode or add extra DLLs by hand:
 
 ```powershell
 KotorCoop.Agent.exe install --game-path '...'                                # auto-detects and chains if needed
@@ -144,131 +123,103 @@ KotorCoop.Agent.exe install --game-path '...' --chain --load ReShade32.dll   # f
 KotorCoop.Agent.exe install --game-path '...' --force                       # overwrite the foreign DLL instead
 ```
 
-Chain mode installs the [`KotorCoop.Loader`](src/KotorCoop.Loader/dinput8_loader.c) wrapper — 6 KB of plain C, no
-runtime — as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`, renames the other mod to `dinput8.prev.dll`, and
-writes a `dinput8.chain` list. Each entry forwards to the next, the first proxy being ours; `coop.ini`'s
-`dinput8_next` overrides the plugin's next hop explicitly. `.asi` mods beside the game (or in `scripts\`/`plugins\`)
-are left untouched and named in the install summary. Re-running install over an existing chain install upgrades the
-plugin in place and never duplicates a `dinput8.chain` entry — including one a player added by hand. `uninstall`
-restores the other mod under its original name, and `install --check`/`install.ps1 -Check` reports the install
-layout and verifies it (every chain entry exists, both markers are present, `coop.ini` exists) without changing
-anything.
+Chain mode installs a small C loader as `dinput8.dll`, our plugin as `KotorCoop.Plugin.dll`,
+renames the other mod to `dinput8.prev.dll`, and writes a `dinput8.chain` list; `.asi` mods
+are left untouched. `install --check` reports the install layout without changing anything,
+and `uninstall` restores the other mod under its original name.
+
+## What works and what doesn't
+
+| Area | Status | Details |
+| --- | --- | --- |
+| Getting into a game together (host/join, your character, saving, internet) | Works, with catches | [limitations.md § Getting into a game together](docs/limitations.md#getting-into-a-game-together) |
+| Moving around the world (doors, galaxy map, companions following) | Works | [limitations.md § Moving around the world](docs/limitations.md#moving-around-the-world) |
+| Fighting (shared enemies, real local combat, effects) | Works, with catches | [limitations.md § Fighting](docs/limitations.md#fighting) |
+| Talking to people (one conversation at a time, recruiting) | Works, with catches | [limitations.md § Talking to people](docs/limitations.md#talking-to-people) |
+| Party, items and shops | Works, with catches | [limitations.md § The party, items and shops](docs/limitations.md#the-party-items-and-shops) |
+| Minigames (Pazaak, swoop racing) | Single-seat, both of you still get the reward | [limitations.md § Minigames](docs/limitations.md#minigames) |
+| Controls (keyboard/mouse, gamepad) | Works | [limitations.md § Controls and interface](docs/limitations.md#controls-and-interface) |
+| Linux and Steam Deck | Should work — not yet run on real hardware | [limitations.md § Linux and Steam Deck](docs/limitations.md#linux-and-steam-deck) |
+| Story beats past Taris (Leviathan return, Manaan's sea floor, the ending) | Mostly untested with two players; a few moments known not to work yet | [docs/review-seamless-2026-09-18.md](docs/review-seamless-2026-09-18.md) |
+
+**Mods don't have to match**: at join time each side fingerprints its install and the two
+compare notes — a mismatched module only drops that module's channels, a different save asks
+you to rejoin, and every decision is said on screen with a short code. See
+[docs/research/mod-compatibility.md](docs/research/mod-compatibility.md).
+
+Read [docs/limitations.md](docs/limitations.md) in full before planning a start-to-end run —
+it's ordered the way you'll actually hit things (joining, moving, fighting, talking, party
+and shops, minigames, controls).
 
 ## Steam
 
-Full write-up: [docs/research/steam-support.md](docs/research/steam-support.md).
-
-**The Steam copy of KOTOR is the same binary this mod was built against.** Steam ships retail 1.0.3 wrapped in
-Valve's SteamStub v3, which encrypts only the `.text` section on disk and decrypts it in place before the game's own
-entry point runs. Everything else — the section table, `.rdata`, `.data`, `.rsrc`, the import table, the fixed
-`0x00400000` load address — is byte-identical to the DRM-free file. So every hardcoded engine address is correct on
-both at runtime, and the plugin loads the same way (`dinput8.dll` is a static import of both, and we start from
-`DirectInput8Create` — well after the wrapper has finished).
-
-**Live-verified on 2026-08-29** (docs/research/steam-support.md §18): the Steam copy was launched through Steam with
-the mod installed, every hook installed with no byte-pattern refusal, and a **Steam client joined a DRM-free host** in
-one session — connect, mutual presence, and a module transition with the world transferred across.
-
-### Installing into the Steam copy
-
-Exactly the same as any other install: put the files in the folder that holds `swkotor.exe` — normally
-`C:\Program Files (x86)\Steam\steamapps\common\swkotor`. `KotorCoop.Agent.exe` (double-clicked, or
-`install --game-path`) finds Steam installs on its own now, including libraries on other drives, and labels each one
-with the form its exe is actually in. If another mod already owns `dinput8.dll` there, use chain mode exactly as you
-would on a DRM-free install — the chain loader is a file-name convention among mods and has nothing to do with the
-DRM wrapper.
-
-Do **not** unwrap or replace the Steam `swkotor.exe`. The wrapper is not in the way of anything.
-
-What that leaves is a much shorter list of real limitations:
-
-| | |
-| --- | --- |
-| **Steam ↔ Steam** | Works. Both peers are identical in every respect the handshake looks at. |
-| **Steam ↔ DRM-free** | **Works** (verified live 2026-08-29). The handshake now hashes the *running image* rather than the exe file, so the wrapped and unwrapped builds agree — they genuinely are the same code once loaded. Both peers need this version or newer; against an older build the executable check silently downgrades to a warning. |
-| **Two copies on one PC** | Not possible from a Steam install: the wrapper goes through the Steam client, which allows one copy. Verified — `agent launch --instance 2` renames the mutex, and Steam still refuses. Use a DRM-free copy for the second instance (one of each works: run the Steam copy first, the DRM-free one as instance 2). Irrelevant for two players on two machines. |
-| **Steam overlay** | Not a problem in practice. With the overlay loaded, the frame hook installed normally (`frame hook installed: hooked IAT 0x73D00C`) and kept firing, so the overlay does not own that import slot. If a future overlay build ever does, the plugin refuses rather than corrupting it and says so in `kotorcoop-plugin.log` — turn the overlay off for KOTOR (Properties → General → uncheck "Enable the Steam Overlay while in-game"). |
-
-### Friends-list invites ("Join Game")
-
-Optional and off unless you set it up. When it is on, hosting publishes a Steam rich-presence `connect` string so
-friends can join from the friends list without being told an IP, and accepting an invite dials it through the normal
-join path (password included, so you are never asked for one you were never given). Two console verbs make this
-visible and reachable from in-game rather than only from a log file: `steamstatus` (is it active, your SteamID64, and
-— while hosting — the exact string a friend receives) and `steaminvite <steamid64>` (push an invite to one friend
-explicitly, for when they are not looking at your profile — see [docs/CONSOLE.md](docs/CONSOLE.md)).
-
-Verified live on 2026-08-29 as far as a single machine can take it: the library loads, Steam accepts the agent as app
-32370, and the `connect` string is published. **Re-verified and extended 2026-09-04**
-(docs/research/steam-support.md §19): `ISteamUser::GetSteamID` is now bound too (this is what makes `steamstatus`
-possible), `InviteUserToGame` was called for the first time and returned success, and `--steam-join` was driven
-against a real second instance — not just decoded — ending in a normal connected session (the one address it
-couldn't reach, its own public IP from inside the same LAN, is ordinary NAT hairpinning, not a Steam-invite bug). What
-still needs a second Steam account is unchanged: a distinct friend actually receiving and accepting an invite.
-
-It needs `steam_api64.dll` beside `KotorCoop.Agent.exe`, and **this project cannot ship one** — Valve licenses the
-Steamworks redistributable to Steam partners, not to mod authors. Copy one from the Steamworks SDK or from any Steam
-game you own (most ship it; look for `steam_api64.dll` under a game's folder). Drop it next to the agent and it is
-picked up on the next run — no other setup, and the agent writes its own `steam_appid.txt` beside itself. Without the
-DLL you get a single line in the log and everything else works exactly as before, which is why `steam_invites` is on
-by default. Both players need to own KOTOR on Steam; while the agent runs, Steam shows you as playing KOTOR. It works
-from a **GOG** install too — owning KOTOR on Steam is what matters, not launching it from there.
-
-```ini
-steam_invites = 1     ; coop.ini; 0 stops the agent talking to Steam at all
-```
-
-```powershell
-KotorCoop.Agent.exe run --steam-join 'kc1/203.0.113.7:27140'   # what "Join Game" passes; also usable by hand
-```
+The Steam copy of KOTOR is the same binary this mod was built against, wrapped in an
+encryption layer that unwraps itself before the game's own code runs, so installing is
+identical to a DRM-free copy. **Steam ↔ Steam** and **Steam ↔ DRM-free** sessions both work
+(the latter live-verified). Two copies on one PC still needs at least one DRM-free copy,
+since Steam itself only allows one running instance. Full write-up, including the optional
+Steam friends-list "Join Game" invite: [docs/research/steam-support.md](docs/research/steam-support.md).
 
 ## Linux and Steam Deck (Proton)
 
-Full write-up: [docs/research/proton.md](docs/research/proton.md).
-
-Both halves of the mod are Windows programs that run inside the game's Wine/Proton prefix, and both are built so
-that the prefix needs nothing added: the plugin is a native x86 DLL with no runtime, and since 2026-09-03 the
-packaged agent is one self-contained `KotorCoop.Agent.exe` with the .NET runtime inside (that is also why a
-Windows player no longer needs .NET installed). The installer recognises Wine and looks for the game where Proton,
-Heroic and Lutris put it (`Z:\home\…` Steam libraries, `Games\Heroic`, `Games`, `STEAM_COMPAT_INSTALL_PATH`).
-
-What a Linux player does differently, in short: take the Linux package from the releases page and run its
-installer — a bash port of the C# installer (`tools/install.sh`) that runs natively, finds the game in the Steam
-libraries / Heroic / Lutris, chains an existing `dinput8.dll` mod the same way, and has the same `--check` and
-`--uninstall` — then add the DLL override that makes Wine load our `dinput8.dll` instead of its built-in one:
+Both halves of the mod are plain Windows programs that run inside the game's Wine/Proton
+prefix with nothing extra to install — the plugin is a native DLL with no runtime, and the
+agent carries its own .NET. Take the Linux package from the releases page and run its
+installer, then add one launch option so Wine loads the mod's `dinput8.dll` instead of its
+own:
 
 ```bash
 tar -xzf kotor-coop-<version>-linux.tar.gz && ./kotor-coop-<version>/install.sh
 WINEDLLOVERRIDES="dinput8=n,b" %command%        # Steam / Steam Deck launch options
 ```
 
-(The Windows installer also works from inside the prefix — `protontricks-launch --appid 32370 KotorCoop.Agent.exe`,
-Heroic's *Run EXE on prefix*, Lutris' *Run EXE inside Wine prefix* — and extracting either archive straight into
-the game folder is a plain install.) CI installs the tarball on an Ubuntu runner against a stand-in game folder on
-every push (plain, chain, upgrade, uninstall), so the installer itself is exercised even though the game is not.
+(Heroic: environment variable `WINEDLLOVERRIDES=dinput8=n,b`; Lutris: runner options → DLL
+overrides `dinput8` → `n,b`.) Everything after that — hosting, joining, `coop.ini`, the
+controller layer — is the same as on Windows.
 
-(Heroic: game settings → environment variable `WINEDLLOVERRIDES=dinput8=n,b`; Lutris: runner options → DLL
-overrides `dinput8` → `n,b`.) Everything after that — hosting, joining, `coop.ini`, the controller layer with the
-Deck's own controls — is the same as on Windows. The recipe and the caveats are spelled out in the packaged README.
+**Honest status: nothing here has run on a real Linux machine yet.** It's built and reasoned
+against Wine's documented behaviour, and both halves log `running under Wine x.y` so a report
+from a real Deck or desktop tells us immediately where it got to. First live report wins.
+Full write-up: [docs/research/proton.md](docs/research/proton.md).
 
-**Honest status: nothing here has run on a Linux machine yet.** The engineering is done and reasoned against
-Wine's documented behaviour, the plugin and agent log `running under Wine x.y` so a report from a real Deck or
-desktop tells us immediately where it got to, and the open questions are listed in
-[proton.md](docs/research/proton.md) §6. First live report wins.
+## Settings
+
+Everything lives in one `coop.ini` beside the game. The shipped file
+(`profiles/coop.ini.example`) is short by design — connecting, your character, screen,
+internet play and a few switches, each in plain language with a comment. Settings that
+default off (like `local_var_sync` and `placed_mine_sync` above) are experimental: they work
+in testing but haven't had every path checked live yet, so they ship off until they have. The
+mod has a lot more internal tuning switches for development; they aren't in `coop.ini` on
+purpose and setting one by hand is unsupported. Full table of every key, its shipped default
+and what it does: [docs/CONFIG.md](docs/CONFIG.md).
+
+Press `~` in-game for a console (`connect`/`disconnect`/`reconnect` manage the session
+without a restart; Tab-completes, Up/Down recalls history) and **Enter** to chat with your
+partner. Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
+
+## Troubleshooting
+
+Common problems and their actual causes — a missing Co-op button, nothing happening at all,
+another mod owning `dinput8.dll`, a second instance that won't launch, and more — are in
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). If something goes wrong, run
+`KotorCoop.Agent.exe logs` to collect one zip with the logs and a description of your setup,
+and attach it to a bug report.
 
 ## Building from source
+
+Needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ toolset (for the NativeAOT
+plugin and the C chain loader).
 
 ```powershell
 dotnet build KotorCoop.slnx                     # agent, session, protocol, memory, tests
 dotnet test  tests\KotorCoop.Tests
 pwsh src\KotorCoop.Plugin\build.ps1 -Install    # plugin (NativeAOT x86) + agent + overrides -> the GOG default dir
-pwsh src\KotorCoop.Loader\build.ps1             # the chain loader (only needed for chain mode)
 pwsh tools\package.ps1                          # dist\kotor-coop-<version>-windows.zip + -linux.tar.gz
 ```
 
-`build.ps1 -Install` deploys into `C:\GOG Games\Star Wars KOTOR (GOG)` by default (`-GameDir` for another copy);
-both native builds import the MSVC x86 environment themselves via `tools\devenv.ps1` (vswhere-located, so any VS
-edition works). `-WarnAsError` is what CI runs. For development — two instances driven unattended on one machine:
+`build.ps1 -Install` deploys into `C:\GOG Games\Star Wars KOTOR (GOG)` by default
+(`-GameDir` for another copy). For development — two instances driven unattended on one
+machine:
 
 ```powershell
 pwsh tools\demo.ps1          # launch both instances, load saves, connect the agents
@@ -276,99 +227,47 @@ pwsh tools\verify.ps1        # PASS/FAIL per feature against the live pair
 pwsh tools\demo.ps1 -Stop    # shut everything down
 ```
 
-`demo.ps1` does **not** deploy the plugin — run `build.ps1 -Install` first for every game copy the rig uses.
-Driving the agent by hand, `KotorCoop.MockGame` (a stand-in process for testing without KOTOR), and the CI/release
-pipeline: see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
-
-## Playing with a controller
-
-Plug in any Xbox-style (XInput) controller and it just works — in the menus as well as in the world, and
-in the base game too, which never supported one. Left stick walks and turns, right stick is the cursor,
-A is the default action, B/Start is Escape, X cancels combat, Y switches character, LB/RB cycle targets,
-LT pauses, RT clicks what the cursor points at (as with a mouse, one click selects a door, container or
-character and a second click on it walks over and uses it — the game has no click-to-move, the left stick
-is how you walk), the D-pad is action slots 1-4, Back opens the map, LS click is stealth. On any menu or panel A clicks, X right-clicks, the D-pad scrolls and pages; RS click
-forces cursor mode on and off. Your own `swkotor.ini` key bindings are respected. The one thing a pad
-can't do is type: the address/password box, chat and the `~` console still need a keyboard. `gamepad = 0`
-in `coop.ini` turns it off; `gamepad status` in the console shows what it is doing. Details:
-[docs/research/gamepad.md](docs/research/gamepad.md).
-
-## Console
-
-Press `~` in-game for the console. `connect`/`disconnect`/`reconnect` manage the session without a restart;
-Tab-completes (including the game's own verbs), Up/Down recalls history. A handful of verbs (`god`, `topup`, `tp`,
-`dropitem`, `applyeffect`, and more) stage a test without grinding to it. Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
-
-## Configuration
-
-Everything lives in one `coop.ini` beside the game, parsed by two independent halves — the external agent and the
-in-process plugin each read their own keys from it. The shipped file (`profiles/coop.ini.example`) is short by
-design — every player setting there is, in plain language: connecting, your character, screen, internet play and a
-few advanced switches. The mod has a lot more internal tuning/bisect switches for development; they aren't in
-`coop.ini` on purpose, and setting one by hand is unsupported. Full table of every key, player-facing or not, its
-shipped default and what it does: [docs/CONFIG.md](docs/CONFIG.md).
+`demo.ps1` does **not** deploy the plugin — run `build.ps1 -Install` first. The full build,
+test, live-rig and release-pipeline reference, plus repo layout and code conventions, is
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## How it works
 
 ```
-swkotor.exe (x86): dinput8.dll proxy, SharedBlock, frame hook, engine calls
-       <--- signature scan / shared block --->
-agent (x64, external): KotorGameBridge reads player, writes peers, runs CoopSession
-       <--- UDP: PlayerState, items, enemies, flags, journal --->
+the game (unmodified): a small in-process plugin adds a few hooks and a shared memory block
+       <--- reads/writes the running game's memory --->
+the agent (a separate program): reads your character, writes everyone else's, talks to the
+other players over the network
+       <--- network: positions, items, enemies, flags, journal --->
 ```
 
-Discovery is external, engine calls are in-process; clients talk only to the host (star relay, not mesh); authority
-is explicit (your character is yours, enemies are the host's); positions stream and are superseded regularly, while
-flags/items/doors/journal retransmit until acked and merge monotonically upward. Full design:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Everyone talks only to the host, not to each other. Authority is explicit: your character is
+yours, enemies are the host's. Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Layout
+## Where the project is
 
-```
-src/KotorCoop.Protocol   wire format: packets, codec, player state
-src/KotorCoop.Memory     OpenProcess, AOB scanner, engine bridge, GameFiles/ (KEY/BIF/GFF/2DA/TLK)
-src/KotorCoop.Session    UDP transport, host/client, interpolation, stores, agent pump
-src/KotorCoop.Agent      CLI: launch, load, run, scan, track, info
-src/KotorCoop.Plugin     in-process plugin (NativeAOT win-x86, installs as dinput8.dll)
-src/KotorCoop.Loader     generic dinput8 chain loader (C) for coexisting with other dinput8 mods
-src/KotorCoop.MockGame   stand-in game process for testing without KOTOR
-tests/KotorCoop.Tests    unit + loopback integration tests
-profiles/                JSON offset profiles, coop.ini.example; profiles/override ships k_coop_ game files
-docs/research/           verified reverse-engineering write-ups behind each feature
-tools/                   package/install scripts, demo rig, RE helpers, the kotor1_0_3 symbol database
-.github/workflows/       ci.yml (build, test, package on every push), release.yml (after green CI: rolling "latest" on main, full release on a v* tag)
-```
-
-## Honest limitations
-
-Two documents, for two readers:
-
-- **[docs/limitations.md](docs/limitations.md)** — for players. What works, what works with a
-  catch, what is deliberately not shared, and what nobody has been able to test on real hardware
-  yet, in everyday words, ordered the way you'll hit it (joining, moving, fighting, talking, party
-  and shops, minigames, controls). Read this before planning a start-to-end run.
-- **[docs/status-engineering.md](docs/status-engineering.md)** — for developers. The same list
-  with the dates, counts, rule names and research links behind each status, plus the full feature
-  table and detailed engineering notes that used to live on this page.
-
-The things most likely to surprise a first-time pair are already in "Status at a glance" above:
-one conversation at a time, the host owns the party, minigames are single-seat, a controller can't type, and
-a real home router's automatic port-opening for internet play is still unverified. Things that *look* like bugs but aren't — the
-1-hp floor on the Endar Spire, an old `coop.ini` keeping a stale default — are listed at the end of
-docs/limitations.md.
+The mod is playable start to finish for two players through Taris, and the same systems
+should carry the rest of the campaign, but nobody has played a complete two-player run past
+that point yet, and a handful of late-game story moments (the Leviathan prison break, the
+dark-side temple choice, seeing the ending) are known not to work correctly for the second
+player. The project's working checklist of what still needs a live check — and what closed
+recently — is [docs/review-seamless-2026-09-18.md](docs/review-seamless-2026-09-18.md); the
+evidence behind every "works" claim on this page is
+[docs/status-engineering.md](docs/status-engineering.md).
 
 ## Documentation map
 
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — build, test, the live rig, CI/release pipeline, repo layout, code conventions.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design and why it looks like this.
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — build, test, the live rig, CI/release pipeline, repo layout, code conventions, and how to add a feature end-to-end.
 - [docs/CONFIG.md](docs/CONFIG.md) — every `coop.ini` key and CLI flag, with defaults.
 - [docs/CONSOLE.md](docs/CONSOLE.md) — every in-game console verb.
 - [docs/limitations.md](docs/limitations.md) — what works and what doesn't, in plain language, for players.
-- [docs/status-engineering.md](docs/status-engineering.md) — the same list with the evidence behind every status, plus the full feature table, for developers.
-- [docs/roadmap-seamless.md](docs/roadmap-seamless.md) — what's left before "seamless," tiered by priority.
+- [docs/status-engineering.md](docs/status-engineering.md) — the same list with the evidence behind every status, for developers.
+- [docs/review-seamless-2026-09-18.md](docs/review-seamless-2026-09-18.md) — the current open-items checklist before the campaign is verified end to end.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common problems and their causes.
+- [docs/PLAYTEST.md](docs/PLAYTEST.md) — a checklist of things only a person at the keyboard can prove, with exact steps.
 - [docs/live-verification.md](docs/live-verification.md) — the two-instance checklist that turns "built" into "live-verified" here.
-- [docs/FINDING-OFFSETS.md](docs/FINDING-OFFSETS.md) and [docs/re/](docs/re/) — how engine addresses were found, and the core RE independent of any one feature.
+- [docs/FINDING-OFFSETS.md](docs/FINDING-OFFSETS.md) and [docs/re/](docs/re/) — how engine addresses were found.
 - [docs/research/README.md](docs/research/README.md) — the full per-feature research index.
 - [tools/README.md](tools/README.md) — what every helper script in `tools/` does.
 - [tools/package-README.txt](tools/package-README.txt) — the README that ships inside the zip.
