@@ -218,6 +218,7 @@ internal static unsafe partial class PluginHost
         _galaxyDeparture?.Invalidate();
         _classGrant?.Invalidate();
         _enemyEffects?.Invalidate();
+        _placedMines?.Invalidate();
         PendingMoviePlay.Cancel();
         _barks?.Invalidate();
         _itemTemplateSpawns?.Invalidate();

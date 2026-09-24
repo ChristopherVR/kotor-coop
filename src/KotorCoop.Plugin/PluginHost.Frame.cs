@@ -659,6 +659,13 @@ internal static unsafe partial class PluginHost
                     return;
                 }
 
+                // A client's party-placed mine REPLICAS are session state, not world state
+                // (docs/research/mines.md §14.5); the host's copies are canonical and stay.
+                if (_placedMines is { } placedMines && placedMines.FlushOneReplica())
+                {
+                    return;
+                }
+
                 _mapMarkers?.FlushOneBody();
                 return;
             }
@@ -775,6 +782,11 @@ internal static unsafe partial class PluginHost
                 }
 
                 if (_mapMarkers is { } markers && markers.FlushOneBody())
+                {
+                    return;
+                }
+
+                if (_placedMines is { } placedMines && placedMines.FlushOneReplica())
                 {
                     return;
                 }
@@ -1049,6 +1061,11 @@ internal static unsafe partial class PluginHost
             {
                 _doors?.OnFrame();
                 _placeables?.OnFrame();
+
+                // Party-placed mines (docs/research/mines.md §14): beside the GIT-mine removal
+                // mirror that rides the placeable slots, and after the relays, so a replica built
+                // this frame is registered before the next capture scan can see it.
+                _placedMines?.OnFrame();
                 _loot?.OnFrame();
                 _pause?.OnFrame();
                 _pauseKey?.OnFrame();

@@ -375,6 +375,27 @@ internal static unsafe partial class PluginHost
             Log($"shot-camera guard NOT installed: {shotDiagnostic}");
         }
 
+        // Party-placed mine replication's single-authority damage gate (docs/research/mines.md
+        // §14.4): a five-byte call-site redirect of the one GetCanFireMineOnObject call, which
+        // refuses a party-placed mine only while PlacedMineController says this is a client in a
+        // live session. Behind placed_mine_sync (default OFF, NEEDS-LIVE); with the key off the
+        // call site is never touched.
+        if (PlacedMineController.Enabled)
+        {
+            if (PlacedMineFireGateHook.Install(out string placedMineDiagnostic))
+            {
+                Log($"placed mines: {placedMineDiagnostic}");
+            }
+            else
+            {
+                Log($"placed mines: fire gate NOT installed ({placedMineDiagnostic}); party-placed mines stay local-only");
+            }
+
+            Log(Odyssey.VerifyPlacedMineRoute(out string routeDiagnostic)
+                ? $"placed mines: {routeDiagnostic}"
+                : $"placed mines: {routeDiagnostic}; no replica will be built");
+        }
+
         // The minimap draws exactly one arrow and has no note or party loop, so a peer
         // gets there by drawing that same arrow again, inside the viewport the engine
         // has already opened. coop.ini minimap_peers=0 opts out.

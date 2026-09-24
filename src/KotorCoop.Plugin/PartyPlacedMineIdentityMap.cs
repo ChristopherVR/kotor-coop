@@ -111,6 +111,28 @@ internal sealed class PartyPlacedMineIdentityMap
         return true;
     }
 
+    /// <summary>
+    /// Whether <see cref="Register"/> could accept a brand-new <paramref name="serial"/> right now
+    /// (in scope, above the high-water mark, under capacity). Lets a consumer refuse BEFORE it
+    /// builds an engine object it would then be unable to track.
+    /// </summary>
+    public bool CanRegisterNew(PartyPlacedMineScope scope, ulong serial) =>
+        scope == _scope && scope.IsValid && serial != 0
+        && !_objectIdBySerial.ContainsKey(serial)
+        && serial > _highestSerial
+        && _objectIdBySerial.Count < MaxActiveMines;
+
+    /// <summary>Number of active serial ↔ local id pairs.</summary>
+    public int Count => _objectIdBySerial.Count;
+
+    /// <summary>Snapshot of the active pairs, ascending by serial (diagnostics and scans).</summary>
+    public List<(ulong Serial, uint LocalObjectId)> Snapshot()
+    {
+        List<(ulong, uint)> pairs = [.. _objectIdBySerial.Select(p => (p.Key, p.Value))];
+        pairs.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+        return pairs;
+    }
+
     /// <summary>Resolves a canonical serial only inside the currently active local scope.</summary>
     public bool TryGetLocalObjectId(PartyPlacedMineScope scope, ulong serial, out uint localObjectId)
     {
