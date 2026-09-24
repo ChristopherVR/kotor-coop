@@ -255,7 +255,7 @@ rig yet. Good targets for the next live-test pass:
     unblocked it was a hardware watchpoint finding that a save-joined client's `ShowGalaxyMapGui`
     silently no-ops because the engine's post-load Status Summary box left the input class at
     "GUI" — see the table above and the research doc's 2026-09-03 relay addendum.)*
-16. Per-object local variables (`local_var_sync`, 2026-09-24): both splices installing, a real
+16. *(done 2026-09-24: capture, apply, late join and world edge all watched live; still default OFF — see review row "Per-object local variables".)* Per-object local variables (`local_var_sync`, 2026-09-24): both splices installing, a real
     conversation write captured, the peer applying it through the engine setter, no capture of the
     generic AI's slot-20+ traffic, and the late-join snapshot — the recipe is
     `research/quest-sync.md` §8.3.
@@ -263,6 +263,27 @@ rig yet. Good targets for the next live-test pass:
     installs with no minimap collision, and transient toasts fade out on their own countdown — see
     the table. Exact pixel-column mapping at resolutions other than the tested one is still
     unconfirmed, no working screenshot tool on this rig.)*
+
+## Live pass 2026-09-25 — evidence summary
+
+Rig: GOG host + GOG joiner, `000035 - dark_handoff_ready`, `000010 - campaign_dantooine`. Details
+and exact log lines are in the linked research sections and in review-seamless-2026-09-18.md.
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| Dark-side summit handoff | **Works** (Bastila's join needs a real save) | Both rosters drop Jolee and Juhani, the hostile handoff, the health mirror, and both deaths map after `3282fea`; the staged Bastila is tagged `bastilae`, so `k_punk_bastjoin2` finds no one — research/dark-side-branch.md |
+| Turret ambush completion | **Works** (staged win) | `mgkill all` kills 6/6 through `SWMG_AdjustFollowerHitPoints`; the return runs once a `ST_PlayPostTurret` branch matches (`K_RANDOM_MINI_GAME`) — research/minigames.md §25.5 |
+| Real Jedi / cast | **Works** | `levelup` through the engine's AutoLevelup; `cast` through `CSWCCreature::PerformCastSpell` heals for real. The VM route only ever filed a request — research/effect-sync.md §14.8-§14.11 |
+| Partner heal | **Works**, now default ON | A host Cure heals the joiner 4 -> 12 hp (`partner_buffs`) |
+| Enemy crowd control | **Works** (stun), now default ON | The joiner's stun is applied to the host's enemy in 70 ms (`enemy_effect_sync`) |
+| Sticky aggro | **Works** | Client-route `attack`; the hound stayed on the joiner for 90 s. `threat_retarget` had a drifted OFF default, now ON — research/peer-damage-ledger.md |
+| Recruitment | **Works**, all nine slots | Engine recruit calls; a same-id reuse bug fixed — research/dialogue-consequences.md |
+| Placed-mine recover/disarm | **Works** with Demolitions > 0 | Retail's trained-only rule was the silent refusal — research/mines.md §14.10-§14.12 |
+| Container open/close replication | **Works** | footlocker 0xAD `open=True`/`False` on the joiner |
+| Difficulty mismatch warning | **Works** | appears, clears (re-arms) and re-announces on both agents |
+| Old-build rejection | **Works** | a v0.10.0 MockGame peer is told `host is v70, you are v51`; the host logs the notice and its session is unaffected |
+| Save identity for an unvisited-module autosave | **Fixed** | the engine's transition autosave has no module .sav; identity now falls back to the pristine GIT plus the SAVEGAME bytes — research/session-save.md |
+| Memory over a warp soak | **Bounded plugin heap** | the plugin's managed heap stays at 1-5 MB; game private bytes grow ~1.5 MB per warp between two modules (engine-native) |
 
 ## Appendix A — feature status table (moved from README.md, 2026-09-03)
 
