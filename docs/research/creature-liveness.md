@@ -1883,3 +1883,5 @@ not keep up: about ten spawned bodies were built on the joiner and it then stopp
 host ids were matched to unrelated local objects (`NOT spawning ... it exists locally after all`).
 The census cap is gone; materialising large numbers of host-spawned enemies on a joiner is a
 separate open defect.
+
+**Fixed the same day (`44ae837`).** The stall was an id collision: host spawns and the joiner's own stand-ins/phantoms draw ids from the same range, and the joiner's existence sweep found its own colliding body and recorded the enemy as present. Colliding ids now go straight to materialisation. Re-run: the joiner drove all 78 enemies.
