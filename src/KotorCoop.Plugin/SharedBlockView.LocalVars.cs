@@ -76,7 +76,7 @@ internal sealed unsafe partial class SharedBlockView
         generation = 0;
         drainedCursor = 0;
 
-        uint before = *(volatile uint*)(baseAddress + SharedBlock.OffsetLocalVarApplySerial);
+        uint before = Volatile.Read(ref *U32(SharedBlock.OffsetLocalVarApplySerial));
         if (before == 0 || (before & 1) != 0)
         {
             return false;
@@ -94,7 +94,7 @@ internal sealed unsafe partial class SharedBlockView
             entryWords[i] = *(uint*)(row + 4);
         }
 
-        uint after = *(volatile uint*)(baseAddress + SharedBlock.OffsetLocalVarApplySerial);
+        uint after = Volatile.Read(ref *U32(SharedBlock.OffsetLocalVarApplySerial));
         if (after != before)
         {
             return false;
