@@ -233,6 +233,15 @@ public sealed partial class CoopAgent
     /// against.</summary>
     private int _consecutiveReadFailures;
 
+    // ---- menu-guard timer (MenuGuardRule) ------------------------------------------------
+    // The bounded protection window behind PlayerState.FlagMenuGuard: 0 while no menu opening
+    // is being timed, held/advanced exactly like AwayRule's own state, driven once per pump
+    // from a raw engine read (IsLocalFullScreenGuiOpen) rather than anything in `local` itself
+    // — a full-screen menu has nothing to do with the player creature TryReadLocalState reads.
+
+    private long _menuGuardOpenSinceMs;
+    private long _menuGuardCooldownUntilMs;
+
     public PlayerState LastLocalState
     {
         get
@@ -405,6 +414,35 @@ public sealed partial class CoopAgent
             readBytes - _perfPhaseFromReads.ReadBytes);
     }
 
+    /// <summary>
+    /// Folds <see cref="PlayerState.FlagMenuGuard"/> into a freshly-read local state — see
+    /// <see cref="MenuGuardRule"/>'s own doc comment for the shape. <see cref="_bridge"/> is
+    /// checked against the concrete <c>KotorGameBridge</c> rather than added to
+    /// <see cref="IGameBridge"/> itself: the interface is implemented by a long tail of test
+    /// fakes across this project (<c>AgentComposition</c>'s own <c>ResolveDiagnostic</c> wiring
+    /// uses the same pattern), and a full-screen-GUI read is meaningless against any of them.
+    /// A non-<c>KotorGameBridge</c> bridge simply never publishes the bit.
+    /// </summary>
+    private PlayerState ApplyMenuGuard(PlayerState local)
+    {
+        if (!_settings.MenuGuardSyncEnabled || _bridge is not KotorGameBridge bridge)
+        {
+            return local;
+        }
+
+        long now = Environment.TickCount64;
+        bool menuOpenNow = bridge.IsLocalFullScreenGuiOpen;
+
+        _menuGuardOpenSinceMs = MenuGuardRule.TrackOpenSince(_menuGuardOpenSinceMs, menuOpenNow, now);
+        bool capExhausted = MenuGuardRule.CapExhausted(_menuGuardOpenSinceMs, _settings.MenuGuardCapMs, now);
+        _menuGuardCooldownUntilMs = MenuGuardRule.TrackCooldown(
+            _menuGuardCooldownUntilMs, capExhausted, _settings.MenuGuardCooldownMs, now);
+
+        return MenuGuardRule.IsProtected(_menuGuardOpenSinceMs, _menuGuardCooldownUntilMs, _settings.MenuGuardCapMs, now)
+            ? local with { Flags = local.Flags | PlayerState.FlagMenuGuard }
+            : local;
+    }
+
     public void PumpOnce()
     {
         if (_perfTrace is not null)
@@ -426,6 +464,8 @@ public sealed partial class CoopAgent
                 IsAway = false;
                 Log?.Invoke("away: local reads resumed - no longer away");
             }
+
+            local = ApplyMenuGuard(local);
 
             _session.PublishLocalState(local);
 

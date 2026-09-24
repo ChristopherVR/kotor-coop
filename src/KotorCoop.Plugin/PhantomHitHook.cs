@@ -101,6 +101,37 @@ internal static unsafe class PhantomHitHook
     /// understand is landing on someone's creature).</summary>
     public static uint ImplausibleRefused { get; private set; }
 
+    /// <summary>
+    /// Per phantom slot: whether that peer currently has menu-guard protection active
+    /// (<c>menu_guard_sync</c> + <c>PlayerState.FlagMenuGuard</c>, folded together by
+    /// <c>PhantomController.ApplyTargetable</c>'s own caller and written here every frame
+    /// through <see cref="SetMenuGuarded"/>). <see cref="OnDamage"/> drops a hit on such a slot
+    /// before it is ever accumulated — belt and braces beside the faction-flip release: that
+    /// release is edge-only (only re-applied when the wanted state changes), so a hit landing
+    /// the SAME frame the peer's menu opens, before the flip has run, would otherwise still
+    /// reach them. Same "watch array read on the hot damage path, written once a frame from the
+    /// main thread" shape as <see cref="_watchedId"/> itself.
+    /// </summary>
+    private static readonly bool[] _menuGuarded = new bool[SharedBlock.SlotCapacity];
+
+    /// <summary>Hits refused so far because the target's slot was menu-guarded — for the
+    /// dashboard-style checks, the same role <see cref="ImplausibleRefused"/> plays.</summary>
+    public static uint MenuGuardRefused { get; private set; }
+
+    /// <summary>How many menu-guard refusals get logged; the rest are only counted.</summary>
+    private const int MenuGuardLogLimit = 12;
+    private static int _menuGuardLogged;
+
+    /// <summary>MAIN THREAD, once a frame per slot. Cleared (false) when the slot is
+    /// reassigned or its peer leaves — see <c>PhantomController.ClearSlot</c>.</summary>
+    public static void SetMenuGuarded(int slot, bool guarded)
+    {
+        if (slot is >= 0 and < SharedBlock.SlotCapacity)
+        {
+            _menuGuarded[slot] = guarded;
+        }
+    }
+
     /// <summary>Phantom object ids currently being watched, and the damage each has taken.
     /// Fixed slots indexed by phantom slot — the array is read on the engine's damage path,
     /// so there is nothing to allocate or lock.</summary>
@@ -558,6 +589,7 @@ internal static unsafe class PhantomHitHook
     public static void Invalidate()
     {
         Array.Clear(_watchedId);
+        Array.Clear(_menuGuarded);
         Array.Clear(_cumulative);
         Array.Clear(_lastAttacker);
         Array.Clear(_serial);
@@ -707,6 +739,24 @@ internal static unsafe class PhantomHitHook
                 if (_partyMineHitsDropped++ < 12)
                 {
                     PluginHost.Log($"placed mines: dropped a party mine's hit on player stand-in 0x{targetId:X} (a party member; not forwarded)");
+                }
+
+                return;
+            }
+
+            // menu_guard_sync: the peer has a full-screen menu open, within MenuGuardRule's
+            // bounded window. Drop the hit outright rather than merely relying on the faction
+            // release above, for the same "same-frame race" reason PlacedMineFireGateHook's
+            // window is checked before anything else: a hit that landed on the edge frame the
+            // release has not yet run must still never reach the peer's real character.
+            if (slot >= 0 && _menuGuarded[slot])
+            {
+                MenuGuardRefused++;
+
+                if (_menuGuardLogged < MenuGuardLogLimit)
+                {
+                    _menuGuardLogged++;
+                    PluginHost.Log($"menu guard: dropped a hit on player stand-in 0x{targetId:X} (peer has a full-screen menu open)");
                 }
 
                 return;

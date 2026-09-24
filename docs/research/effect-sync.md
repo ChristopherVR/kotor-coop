@@ -1599,3 +1599,151 @@ Defaults after this pass: Fear/Stunned stay ON (now live-verified); `disguise_sy
 
 - **Stealth targeting: PASS (flag path).** With host + joiner on the Endar Spire deck, the joiner's stealth byte (`creature+0x4D1`, read with a raw poke because no console verb toggles stealth) was set to 1: the host logged `phantom 0x14E: back to neutral; attackers released (peer is in stealth)` within about a second, and clearing it logged `phantom 0x14E: joined the player faction; local enemies can fight it`. That proves the read, the `FlagStealth` publication and the stand-in's release from targeting. Not proven: the real engine toggle (`SetActivity` -> `SetStealthMode`, which sets other state the raw byte does not), enemies actually ignoring the stand-in, and `stealth_visual_sync`.
 - **Poison, `poison_sync` off: capture PASS, tick path INCONCLUSIVE.** `applyeffect poison 0x14E 12000 1` on the host: `effects` showed `captured/forwarded poison ... serial 1` (once per application, as designed); the joiner logged `not replaying kind 15 ... its coop.ini key poison_sync is off`. Over 15 s (the effect lasts 12 s) no `combat: took N damage` line reached the joiner and its hit points stayed 9, so §10.3's inference (that the tick path forwards poison damage) was NOT confirmed; poison row 1 may simply not tick on a stand-in. The double-count question (`poison_sync=1` on top of the tick path) needs a poison that visibly ticks first, so `poison_sync` stays OFF.
+
+## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
+
+Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the
+instant a menu opens; co-op only pauses the OPENER's own game, so their stand-in kept eating
+hits on every other screen while they had no way to react (they cannot see, let alone dodge,
+what is happening on a partner's separate engine instance). Rather than trying to replicate a
+real cross-engine pause (the "Pausing" row's harder, still-open half — see roadmap), this reuses
+the ONE release lever `stealth_sync` already proved out: hold the menu-opener's stand-in Neutral
+and pacified for as long as their menu is open, bounded so it cannot become a standing shield.
+
+### 13.1 The field — VERIFIED, already relied on elsewhere; no new offset
+
+`CGuiInGame+0x30` is the field this whole feature reads — the SAME field
+`Odyssey.Store.cs`'s `InGameGuiBusyOffset`/`Odyssey.Input.cs`'s `IsFullScreenGuiUp` and
+`Odyssey.GalaxyMap.cs`/`Odyssey.EquipScreen.cs` already gate on, VERIFIED by fresh disasm of
+`ShowStoreGui 0x0062E339`/`ShowGalaxyMapGui 0x0062D069`'s own precondition checks and, since
+the 2026-09-03 hardware-watchpoint correction, its true writer —
+`CClientExoAppInternal::SetInputClass 0x006200E0` (class 2 = GUI sets it, class 0 = game clears
+it; `Show*Gui`'s own `SetInputClass(2, 1)` and every retail close path's `SetInputClass(0, 1)`).
+It reads "the full-screen in-game GUI is up" — the equipment/inventory/character/abilities/
+journal/map/options screen the menu key raises, store and galaxy-map panels alike — not "some
+panel exists". No new RE for this feature: only a new FIELD read off an already-resolved
+pointer, on a NEW side (the external agent) that had never read it before.
+
+`KotorGameBridge.IsLocalFullScreenGuiOpen` (`KotorGameBridge.MenuGuard.cs`) walks the SAME
+pointer chain the agent's store scan already uses (`InGameGuiOffset = 0x40`,
+`KotorGameBridge.Store.cs`, itself VERIFIED against `EngineHandles`/`Odyssey`'s in-process
+chain) and adds the one new offset read, `+0x30`. Pure, read-only, false when no client is
+resolvable.
+
+### 13.2 The bounded window — `MenuGuardRule`, pure, unit-tested
+
+Publishing the raw bit unconditionally (the way `FlagStealth` samples `creature+0x4D1`) would
+turn "protected while a menu is open" into "protected for as long as I hold the menu open" —
+parking on the inventory screen for a standing shield. `KotorCoop.Session.MenuGuardRule` is a
+small pure state machine (same shape as `AwayRule`/`HostAwayRule`: external state, free
+functions, tested without a clock or a game) that instead grants a BOUNDED window:
+
+1. The instant the menu opens, protection starts (`TrackOpenSince`) — no delay.
+2. A single opening is capped at `menu_guard_cap_ms` (default 12 s, inside the 10-15 s the
+   feature was scoped to) — `CapExhausted`/`IsProtected`.
+3. Protection ends the INSTANT the menu closes, capped or not.
+4. An opening that burns through the full cap starts a cooldown (`menu_guard_cooldown_ms`,
+   default 20 s, `TrackCooldown`): closing and reopening the menu does not grant a fresh cap
+   while the cooldown is counting down, which is what stops "tap the menu key every 12
+   seconds" from being a permanent shield. A short check well under the cap never triggers a
+   cooldown at all — the ordinary way a player actually uses an inventory screen mid-fight.
+
+`CoopAgent.ApplyMenuGuard` drives it once a pump (`Environment.TickCount64`, matching every
+other ms-timestamped rule in this codebase), gated on `menu_guard_sync`, and folds
+`PlayerState.FlagMenuGuard` into the freshly-read local state before it is published — the
+same place `FlagAway` is folded in. `IGameBridge` itself is NOT extended: `_bridge` is checked
+against the concrete `KotorGameBridge` (the pattern `AgentComposition`'s own
+`ResolveDiagnostic` wiring already uses), because the interface is implemented by a long tail
+of test fakes across this project and a full-screen-GUI read is meaningless against any of
+them — a non-`KotorGameBridge` bridge simply never publishes the bit.
+
+### 13.3 Consumption — the same lever `stealth_sync` already proved
+
+`PhantomTargetRule.WantsPlayerFaction` gained a second pair of parameters,
+`menuGuardSync`/`menuGuarded`, alongside the existing `stealthSync`/`stealthed` — same
+formula, `!(sync && flag)`, ORed into the existing refusal. `PhantomController.ApplyTargetable`
+folds `menu_guard_sync` and `PlayerState.FlagMenuGuard` together ONCE per slot per frame (the
+same value both feeds `PhantomTargetRule` and gates the damage drop below, rather than two
+copies of the same gate that could disagree) and passes it through; when the body is held
+Neutral for this reason the log names it: `phantom 0x..: back to neutral; attackers released
+(peer has a menu open)` — the exact `stealth_sync` shape (`... (peer is in stealth)`), read by
+`IsMenuGuardHold`.
+
+That release is edge-only — re-applied only when the wanted state CHANGES, the same discipline
+every faction write in this class follows (`AddMember` walks faction lists; a peer standing
+still must not pay that every frame). A hit landing the SAME frame the peer's menu opens, before
+the flip has had a chance to run, would otherwise still reach them for real. `PhantomHitHook`
+closes that race directly: `PhantomController.ClearSlot`/the per-frame drive call
+`PhantomHitHook.SetMenuGuarded(slot, guarded)` every pass, and `OnDamage` drops (does not
+accumulate) a hit on a menu-guarded slot before anything else runs — the exact early-drop shape
+`PlacedMineFireGateHook`'s party-mine window already uses for its own same-frame race. Logged
+(bounded, 12 lines): `menu guard: dropped a hit on player stand-in 0x.. (peer has a full-screen
+menu open)`.
+
+### 13.4 What shipped this pass
+
+- `PlayerState.FlagMenuGuard = 1024` (`IsMenuGuarded`), `RemoteView.FlagMenuGuard`/`MenuGuarded`
+  — carried verbatim through the existing flags dwords, no `SharedBlock` layout change, same as
+  `FlagStealth`. `ProtocolConstants.Version` 66 → 69 (67-68 reserved by other streams) so the
+  changelog names the new bit, same convention as 50/54; no packet shape change.
+- `KotorCoop.Session.MenuGuardRule` (pure) + `CoopAgent.ApplyMenuGuard` +
+  `KotorGameBridge.IsLocalFullScreenGuiOpen`.
+- `PhantomTargetRule.WantsPlayerFaction`/new `IsMenuGuardHold`; `PhantomController.Drive.cs`'s
+  `_menuGuardSync` field and `ApplyTargetable` wiring; `PhantomHitHook.SetMenuGuarded`/the
+  `OnDamage` drop gate; `PhantomController.ClearSlot` clears the watch.
+- `menu_guard_sync` (plugin `PluginConfig.ReadBool`, default ON; agent `CoopConfig`/
+  `SessionSettings`/`AgentComposition`, same default) — the "one coop.ini key, two files"
+  pattern `solo_segment_spectate`/`minigame_hide_peer` already use. `menu_guard_cap_ms`
+  (`12000`) / `menu_guard_cooldown_ms` (`20000`), agent-side only.
+- Tests: `MenuGuardRuleTests` (the timer/cap/cooldown state machine, every transition in
+  §13.2's list), `PhantomTargetRuleTests` (the stealth/menu-guard combination table, including
+  both held at once).
+- Not in `BehaviourDigest`: like `stealth_sync`, this is a purely local, per-peer consumption
+  toggle (the opener's own agent decides whether to run the timer; a peer's plugin decides
+  whether to honour a bit it receives) — a one-sided setting is harmless in exactly the same
+  way `local_var_sync`'s digest entry describes for its own one-sided case, so it does not
+  need a warn-on-mismatch entry.
+
+### 13.5 NEEDS-LIVE — exact recipe (not run this pass)
+
+Static analysis and unit tests only; nobody has watched this work in the game. Uses
+`galaxymap open`/`galaxymap close`/`galaxymap stats` (docs/CONSOLE.md) rather than
+`tools/sendkey.ps1`'s Escape key: `galaxymap open` calls `CGuiInGame::ShowGalaxyMapGui`
+directly and is the SAME field this feature reads (`galaxymap stats` already reports
+`CGuiInGame+0x30` for exactly this reason), whereas Escape's real pause menu is confirmed
+live (docs/research/session-save.md "Items 2/3") to set a DIFFERENT field entirely
+(`CGuiInGame+0x7C`, `in_game_pause`) and click/key injection on a real inventory/character
+panel is the same rig-tooling gap that section documents — `galaxymap open` needs neither a
+click nor a key, and is already the console's own answer to "how do I set +0x30 without a
+human". `openstore <tag>` is the fallback if a merchant is in reach.
+
+1. Host + joiner connected, both on the same module, at least one hostile creature near the
+   HOST able to see the joiner's phantom (any Endar Spire/Taris encounter).
+2. On the JOINER: `galaxymap stats` — confirm `CGuiInGame+0x30 = 0` (baseline, no menu open).
+   `galaxymap open`. `galaxymap stats` again — expect `CGuiInGame+0x30 = 1`.
+3. Within about a second, the HOST's plugin log should show `phantom 0x..: back to neutral;
+   attackers released (peer has a menu open)`, and the agent dashboard's row for the joiner
+   should show a MENU-GUARD indicator (mirroring `STEALTH`'s existing one, see
+   `AgentDashboard.cs`'s stealth line — the equivalent needs adding if it is not there yet).
+4. With a hostile already fighting near the host, verify it re-targets something else (the
+   host's own PC or a companion) rather than the joiner's now-Neutral phantom — the same
+   "attackers released" verification §12.8 ran for stealth (`the host logged ... attackers
+   released`, enemies actually ignoring the stand-in was NOT independently confirmed there
+   either; the same caveat applies here).
+5. On the JOINER: `galaxymap close`. `galaxymap stats` — expect `CGuiInGame+0x30 = 0` again.
+   Within about a second the HOST's log should show `phantom 0x..: joined the player faction;
+   local enemies can fight it`, and the phantom should become attackable again.
+6. Cap test: leave the joiner's menu open past 12 s (`galaxymap open`, wait). Expect the SAME
+   "joined the player faction" log line to appear on the host WHILE the joiner's menu is still
+   open (i.e. `galaxymap stats` on the joiner still reads `+0x30 = 1`) — proving the cap
+   lapsed the protection rather than the menu closing. `galaxymap close` immediately after;
+   `galaxymap open` again right away and confirm the host does NOT log a fresh "attackers
+   released" line for at least `menu_guard_cooldown_ms` (20 s) — proving the cooldown, not a
+   fresh cap, governs the immediate reopen.
+7. Same-frame drop gate (harder to trigger deliberately — a hit has to land in the single
+   frame between the peer's menu opening and the faction flip landing): watch the host's log
+   for `menu guard: dropped a hit on player stand-in 0x.. (peer has a full-screen menu open)`
+   during steps 3-4 if a hit happens to race the flip; its absence does not mean the gate is
+   broken (the ordinary case is that the flip wins the race and nothing ever reaches
+   `OnDamage` for that slot in the first place — the ProbeHook-verified target release is the
+   primary evidence, this is defense in depth).

@@ -691,6 +691,11 @@ public sealed class AgentDashboard(
             parts.Add("STEALTH");
         }
 
+        if ((state.Flags & PlayerState.FlagMenuGuard) != 0)
+        {
+            parts.Add("MENU-GUARD");
+        }
+
         if ((state.Flags & PlayerState.FlagPaused) != 0)
         {
             parts.Add("PAUSED");

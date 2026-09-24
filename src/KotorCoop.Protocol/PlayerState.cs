@@ -146,6 +146,31 @@ public readonly record struct PlayerState(
     /// </summary>
     public const uint FlagStealth = 512;
 
+    /// <summary>
+    /// This player has a full-screen menu (inventory, map, character sheet, journal, equipment,
+    /// options) open RIGHT NOW, within the bounded protection window
+    /// <c>KotorCoop.Session.MenuGuardRule</c> grants — the parity fix for docs/limitations.md's
+    /// "Pausing" row: opening a menu freezes combat in single-player KOTOR, but only pauses the
+    /// OPENER's own game here, so their stand-in kept eating hits on every other screen while
+    /// they had no way to react. A peer's instance holds this player's stand-in out of its own
+    /// enemies' target selection and drops any hit that still lands on it while the bit is set
+    /// — the same faction-flip + PacifyCreature lever <see cref="FlagStealth"/> already uses,
+    /// no new engine write (<c>menu_guard_sync</c>, default ON). Unlike <see cref="FlagStealth"/>
+    /// this is NOT a bare sample of engine state: <c>MenuGuardRule</c> caps a single opening at
+    /// <c>menu_guard_cap_ms</c> (default 12 s) and, once an opening burns through the cap, holds
+    /// off the NEXT opening for <c>menu_guard_cooldown_ms</c> (default 20 s) — so a player
+    /// cannot park on the inventory screen, or tap the menu key open-close, for a standing
+    /// shield. A LEVEL like <see cref="FlagInCombat"/>, republished every tick while active and
+    /// cleared the instant the window ends (menu closed, cap reached, or cooldown holding).
+    ///
+    /// Version 69. A pre-69 peer never publishes the bit, so a mixed session simply keeps
+    /// today's behaviour (stand-in stays targetable while a menu is open) — graceful, bumped
+    /// only so the changelog names it, like <see cref="FlagStealth"/> (54) and
+    /// <see cref="FlagPartyWiped"/> (50) before it. No packet shape change: this rides the
+    /// existing <see cref="Flags"/> dword exactly like those two.
+    /// </summary>
+    public const uint FlagMenuGuard = 1024;
+
     /// <summary>True while this player is asking to end a shared pause they did not start.</summary>
     public bool HasReleasedPause => (Flags & FlagPauseReleased) != 0;
 
@@ -172,6 +197,8 @@ public readonly record struct PlayerState(
     public bool IsInSoloSegment => (Flags & FlagSoloSegment) != 0;
 
     public bool IsStealthed => (Flags & FlagStealth) != 0;
+
+    public bool IsMenuGuarded => (Flags & FlagMenuGuard) != 0;
 }
 
 /// <summary>A remote player as seen locally, after interpolation.</summary>

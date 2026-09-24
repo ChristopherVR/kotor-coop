@@ -160,6 +160,7 @@ internal sealed unsafe partial class PhantomController(SharedBlockView block)
         // running total, so a slot reused by a later joiner starts from zero instead of
         // inheriting the previous occupant's.
         PhantomHitHook.Watch(slot, 0);
+        PhantomHitHook.SetMenuGuarded(slot, false);
     }
 
     /// <summary>Recounts live bodies and publishes the figure. Derived, never incremented:

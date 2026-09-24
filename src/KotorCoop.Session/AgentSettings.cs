@@ -437,4 +437,27 @@ public sealed record AgentSettings
     /// <summary>See <see cref="EffectivePartyPoolSyncMode"/>'s identical remarks, store's own
     /// mirror.</summary>
     public int EffectiveStoreSyncMode => StoreSyncMode != 0 ? StoreSyncMode : (StoreSyncEnabled ? 1 : 0);
+
+    /// <summary>
+    /// Whether <see cref="CoopAgent.ApplyMenuGuard"/> runs at all — coop.ini
+    /// <c>menu_guard_sync</c>, ON by default. Gates whether THIS instance watches for a local
+    /// full-screen menu (inventory, map, character sheet, journal, equipment, options) and
+    /// publishes <see cref="PlayerState.FlagMenuGuard"/> for the bounded window
+    /// <see cref="MenuGuardCapMs"/>/<see cref="MenuGuardCooldownMs"/> describe. Read separately
+    /// by the plugin (same key, <c>PluginConfig.ReadBool("menu_guard_sync", true)</c>), which
+    /// decides whether a peer's stand-in honours a bit it receives — the same "one coop.ini key,
+    /// two files" pattern <see cref="SoloSegmentSpectateEnabled"/> uses. See docs/limitations.md's
+    /// "Pausing" row and docs/research/effect-sync.md §13.
+    /// </summary>
+    public bool MenuGuardSyncEnabled { get; init; } = true;
+
+    /// <summary>How long a single menu opening stays protected before the shield lapses even if
+    /// the menu is still open — coop.ini <c>menu_guard_cap_ms</c>. See
+    /// <see cref="CoopConfig.MenuGuardCapMs"/> for the full reasoning.</summary>
+    public int MenuGuardCapMs { get; init; } = MenuGuardRule.DefaultCapMs;
+
+    /// <summary>How long after a capped-out opening before the next one can be protected again —
+    /// coop.ini <c>menu_guard_cooldown_ms</c>. See <see cref="CoopConfig.MenuGuardCooldownMs"/>
+    /// for the full reasoning.</summary>
+    public int MenuGuardCooldownMs { get; init; } = MenuGuardRule.DefaultCooldownMs;
 }

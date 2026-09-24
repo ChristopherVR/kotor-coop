@@ -146,6 +146,9 @@ internal static class AgentComposition
             SoloSegmentSpectateEnabled = config?.SoloSegmentSpectateEnabled ?? false,
             StoreSyncEnabled = config?.StoreSyncEnabled ?? true,
             StoreSyncMode = config?.StoreSyncMode ?? 2,
+            MenuGuardSyncEnabled = config?.MenuGuardSyncEnabled ?? true,
+            MenuGuardCapMs = config?.MenuGuardCapMs ?? MenuGuardRule.DefaultCapMs,
+            MenuGuardCooldownMs = config?.MenuGuardCooldownMs ?? MenuGuardRule.DefaultCooldownMs,
 
             // No coop.ini => the most conservative choice, matching the pattern above: today's
             // exact host-leads/client-follows behaviour, not the new lead-swap default.
