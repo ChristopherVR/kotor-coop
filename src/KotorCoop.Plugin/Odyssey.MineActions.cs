@@ -14,6 +14,10 @@ internal static unsafe partial class Odyssey
     private const int MineActionTriggerDisarmableOffset = 0x2C4;
     private const int MineActionTriggerPlacedByPartyOffset = 0x314;
 
+    /// <summary>CSWSObject position (Vector, three floats), shared by every server object
+    /// including a trigger and a creature. Read for the range gate, mines.md §14.8.</summary>
+    private const int MineActionPositionOffset = 0x090;
+
     private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, void> DisableMineFromActionMenuFn =
         (delegate* unmanaged[Thiscall]<nint, int, nint, void>)0x00691900;
 
@@ -154,12 +158,29 @@ internal static unsafe partial class Odyssey
             && clientActorIdExpected != 0
             && clientActorId == clientActorIdExpected;
 
+        // VERIFIED(static) mines.md §14.8: the retail action's own range gate is a fixed 1.0-unit
+        // sphere around the trigger's position (CSWSTrigger::InTrigger 0x0058CE40), the same test
+        // OnEnterMine uses for a walk-on. Checked here so a too-far actor gets an honest refusal
+        // instead of a "queued" response the native side silently refuses every tick.
+        bool actorWithinRange = false;
+        if (serverActorValid)
+        {
+            float tx = *(float*)(serverTrigger + MineActionPositionOffset);
+            float ty = *(float*)(serverTrigger + MineActionPositionOffset + 4);
+            float tz = *(float*)(serverTrigger + MineActionPositionOffset + 8);
+            float ax = *(float*)(serverActor + MineActionPositionOffset);
+            float ay = *(float*)(serverActor + MineActionPositionOffset + 4);
+            float az = *(float*)(serverActor + MineActionPositionOffset + 8);
+            actorWithinRange = MineActionRule.WithinRecoverDisarmRange(ax - tx, ay - ty, az - tz);
+        }
+
         MineActionRule.Facts facts = new(
             ServerTargetFound: serverTrigger != 0,
             ServerTargetIsTrigger: serverTriggerIsTrigger,
             TargetIsMine: isMine,
             TargetIsGit: partyPlaced ? !isGit : isGit,
             TargetIsCurrentArea: targetIsCurrentArea,
+            ActorWithinRange: actorWithinRange,
             Disarmable: disarmable,
             ClientTargetMatches: clientTargetMatches,
             LocalActorMatches: localActorMatches);
