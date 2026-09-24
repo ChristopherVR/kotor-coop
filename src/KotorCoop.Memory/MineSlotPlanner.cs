@@ -69,9 +69,11 @@ internal static class MineSlotPlanner
 
         foreach (KeyValuePair<ulong, sbyte> flag in flags)
         {
+            // No value floor here any more: 0 ("closed, locked, not disarmed") is now a
+            // meaningful state a story re-lock can genuinely produce, not "nothing to tell the
+            // peer" — see PlaceableFlags.cs's own remarks.
             if (!PlaceableFlags.IsPlaceableKey(flag.Key)
-                || PlaceableFlags.ModuleHashOf(flag.Key) != moduleHash
-                || flag.Value <= 0)
+                || PlaceableFlags.ModuleHashOf(flag.Key) != moduleHash)
             {
                 continue;
             }

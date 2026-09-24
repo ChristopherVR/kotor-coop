@@ -53,7 +53,6 @@ public sealed partial class KotorGameBridge
         _nextDoorScanTicks = 0;
 
         _placeableShadow.Clear();
-        _placeableBaselineLocked.Clear();
         _placeableBaselineTrapped.Clear();
         _placeableModule = string.Empty;
         _placeableBaselined = false;

@@ -9,9 +9,15 @@ namespace KotorCoop.Memory;
 /// hash next (placeable object ids reset per module), the object id in the low 24 bits (the
 /// same number in both installs, same save + deterministic GIT order).
 ///
-/// Value is monotonic: bit 0 the "opened/searched" state, bit 1 set once the placeable has
-/// been unlocked, bit 2 once its trap has been disarmed. A placeable only ever advances —
-/// closed to open, locked to unlocked — never the reverse.
+/// Value layout, since the door-relock model was extended to placeables: bit 0 is the
+/// CURRENT open/closed state, bit 1 the CURRENT unlocked state — both applied both directions,
+/// ordered by the flag store's Lamport serial (host tie-break), exactly like
+/// <see cref="DoorFlags"/>'s bits 0-2. A story <c>SetLocked(placeable, TRUE)</c> or a real
+/// container close now reaches every peer the same way a door re-lock does; zero is a
+/// meaningful closed-and-locked state, not "nothing happened yet". Bit 2 (the disarmed bit)
+/// is UNCHANGED by that pass and stays forward-only: nothing in the shipped content ever
+/// re-arms a trap, so <see cref="KotorCoop.Memory.KotorGameBridge.CollectChangedPlaceableState"/>
+/// still reports it only once, relative to the module's own baseline.
 /// </summary>
 public static class PlaceableFlags
 {
