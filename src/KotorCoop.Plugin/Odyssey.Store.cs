@@ -115,6 +115,21 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // The spawn below goes through the player, and CSWSItem acquisition into a creature
+        // consumes two base items instead of filing them: credits become gold and a Pazaak
+        // card becomes a collection card (docs/research/party-pool-sync.md,
+        // AddItem). Neither can be moved into a shop this way, and trying hands the player the
+        // gold or card (live 2026-09-24: a store_stock top-up of g_i_pazcard_013 failed its
+        // insert and left the host a card plus a side-deck item in the shared pool). Refuse
+        // before spawning when the store's own stock of that tag has such a base item.
+        nint existing = FindFirstMatchingItem(repo, resrefAscii, resrefLength);
+        if (existing != 0 && IsConvertedOnAcquire(*(int*)(existing + ItemBaseItemId)))
+        {
+            LastStoreNote = $"base item 0x{*(int*)(existing + ItemBaseItemId):X} is converted on acquire "
+                + "(credits/Pazaak card); not spawning it through the player";
+            return false;
+        }
+
         // ⚠ Where a spawn actually LANDS, corrected in docs/research/shared-inventory-v2.md §15.
         // CreateItemOnObject routes through CSWSCreature::AcquireItem, which files the item into
         // CSWSCreature::GetItemRepository(creature, 1) — the SHARED PARTY POOL for a live party
@@ -1066,6 +1081,17 @@ internal static unsafe partial class Odyssey
         after = GetGoldFn(player);
         return true;
     }
+
+    /// <summary>CSWItem::base_item_id (<c>tools/q.py offsets CSWItem</c>: +0x0C, int), the
+    /// baseitems.2da row.</summary>
+    private const int ItemBaseItemId = 0x0C;
+
+    /// <summary>The baseitems.2da rows CSWSCreature acquisition converts instead of storing:
+    /// row 57 <c>Credits</c> (AddGold) and row 86 <c>Pazaak_Card</c> (AddPazaakCard).
+    /// party-pool-sync.md's 0x17/0x2A are the engine's comparison values from another field,
+    /// not row ids (live 2026-09-24: row 0x2A is Armor_Class_8, which a first cut of this guard
+    /// wrongly refused).</summary>
+    internal static bool IsConvertedOnAcquire(int baseItem) => baseItem is 57 or 86;
 
     /// <summary>Walks a <c>CItemRepository</c> for the first live item whose Tag matches
     /// (the same resref proxy <see cref="TagEqualsIgnoreCase"/> already relies on), or 0.
