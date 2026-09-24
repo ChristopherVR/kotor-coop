@@ -1747,3 +1747,12 @@ human". `openstore <tag>` is the fallback if a merchant is in reach.
    broken (the ordinary case is that the flip wins the race and nothing ever reaches
    `OnDamage` for that slot in the first place — the ProbeHook-verified target release is the
    primary evidence, this is defense in depth).
+
+### 13.6 Live run (2026-09-24)
+
+Joiner `galaxymap open` at 18:48:22: host `phantom 0x17F: back to neutral; attackers released
+(peer has a menu open)`, joiner dashboard `state MENU-GUARD`. With the menu still open the cap
+lapsed at 18:48:34 (host: the stand-in rejoined the party faction). An immediate close/reopen
+produced no release (cooldown). After the cooldown, a reopen at 18:49:37 released it again and
+the close at 18:49:41 restored it at 18:49:42. Not run: a hostile actually switching targets and
+the same-frame hit drop.
