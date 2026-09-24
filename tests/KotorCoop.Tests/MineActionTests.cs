@@ -67,6 +67,7 @@ public class MineActionTests
             TargetIsMine: true,
             TargetIsGit: true,
             TargetIsCurrentArea: true,
+            ActorWithinRange: true,
             Disarmable: true,
             ClientTargetMatches: true,
             LocalActorMatches: true);
@@ -77,8 +78,26 @@ public class MineActionTests
         Assert.Equal("target is not a floor mine", MineActionRule.Refusal(valid with { TargetIsMine = false }));
         Assert.Equal("party-placed mines are not supported by this diagnostic", MineActionRule.Refusal(valid with { TargetIsGit = false }));
         Assert.Equal("mine is not in the current area", MineActionRule.Refusal(valid with { TargetIsCurrentArea = false }));
+        Assert.Equal(
+            "actor is more than 1.0 unit from the mine (the retail range gate, mines.md §14.8) - walk onto it first",
+            MineActionRule.Refusal(valid with { ActorWithinRange = false }));
         Assert.Equal("mine is not disarmable", MineActionRule.Refusal(valid with { Disarmable = false }));
         Assert.Equal("client-side trigger identity did not match the server mine", MineActionRule.Refusal(valid with { ClientTargetMatches = false }));
         Assert.Equal("controlled client creature did not match the local player identity", MineActionRule.Refusal(valid with { LocalActorMatches = false }));
     }
+
+    /// <summary>
+    /// VERIFIED(static) mines.md §14.8: <c>CSWSTrigger::InTrigger 0x0058CE40</c> compares squared
+    /// distance against <c>[0x007A206C]&#178; = 1.0&#178;</c> with a strict less-than (fcompp +
+    /// test ah,1 on the "below" flag), so a point exactly 1.0 unit out is OUTSIDE, not a boundary
+    /// tie. These are the pure distance cases the plugin's native read feeds the rule with.
+    /// </summary>
+    [Theory]
+    [InlineData(0f, 0f, 0f, true)]        // standing exactly on the mine
+    [InlineData(0.9f, 0f, 0f, true)]       // inside the 1.0-unit sphere
+    [InlineData(0.6f, 0.6f, 0.6f, false)]  // squared distance 1.08 > 1.0 - just outside
+    [InlineData(1.0f, 0f, 0f, false)]      // exactly on the boundary - the retail test is strict "<"
+    [InlineData(5f, 5f, 5f, false)]        // nowhere close (the un-checked, pre-fix behaviour)
+    public void RecoverDisarmRangeMatchesTheRetailSphereGate(float dx, float dy, float dz, bool expected) =>
+        Assert.Equal(expected, MineActionRule.WithinRecoverDisarmRange(dx, dy, dz));
 }
