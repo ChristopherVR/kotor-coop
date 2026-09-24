@@ -1069,4 +1069,4 @@ the joiner ran `placedmineaction recover 1` on its own placed mine (row 3, DC 10
 * The joiner's inventory gained exactly one `g_i_trapkit004` (stack 1, shared pool).
 
 So recover works through the retail radial-menu route whenever the character has Demolitions,
-which is exactly retail's own rule. Disarm uses the same gate and route; it has not been run.
+which is exactly retail's own rule. Disarm, same rig: `placedmineaction disarm 2` on a second placed mine removed it on the joiner 5 s later, and on the host 230 ms after that. **VERIFIED.**
