@@ -256,8 +256,22 @@ public static class ProtocolConstants
     /// the host owns the canonical set, assigns each mine a session serial, and broadcasts the
     /// set as a level (host snapshot + client intents, never a bidirectional op log). Off by
     /// default (<c>placed_mine_sync</c>), NEEDS-LIVE. See docs/research/mines.md §14.
+    ///
+    /// Version 69 (67-68 are other streams' reservations): <see cref="PlayerState.FlagMenuGuard"/>
+    /// — a new bit on the existing flags dword (no packet shape changed, same as 50/54 before
+    /// it). While a player has a full-screen menu open, their published state carries this bit
+    /// for a bounded window (<c>KotorCoop.Session.MenuGuardRule</c>: capped per opening at
+    /// <c>menu_guard_cap_ms</c>, default 12 s; a capped-out opening then holds off the next one
+    /// for <c>menu_guard_cooldown_ms</c>, default 20 s) so a peer's engine holds their stand-in
+    /// out of target selection and drops any hit that still lands on it — the parity fix for
+    /// docs/limitations.md's "Pausing" row (in single-player KOTOR opening a menu freezes
+    /// combat; here it only pauses the opener's own game). <c>menu_guard_sync</c>, default ON.
+    /// A pre-69 peer never publishes the bit, so a mixed session keeps today's behaviour. No
+    /// <c>SharedBlock</c> layout change: the plugin's per-slot flags dword's low 16 bits already
+    /// carry every flag bit verbatim (<c>RemoteView.FlagsMask</c>), the same as
+    /// <see cref="PlayerState.FlagStealth"/>. See docs/research/effect-sync.md §13.
     /// </summary>
-    public const byte Version = 66;
+    public const byte Version = 69;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

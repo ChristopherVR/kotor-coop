@@ -122,6 +122,7 @@ internal static class PluginConfig
         "local_combat_diag_undriven_id", "local_combat_engage_fallback",
         "local_combat_engage_range", "local_combat_range", "local_combat_slots",
         "local_combat_targeting_us_fresh_s", "local_combat_timeout_s", "map_reveal_sync",
+        "menu_guard_cap_ms", "menu_guard_cooldown_ms", "menu_guard_sync",
         "minigame_hide_peer", "minigame_lock_peers", "minigame_lock_timeout_s",
         "mine_sync", "minigame_modules", "minigame_spectate", "minigame_wait_notice", "minimap_peers",
         "mirror_smooth_ms", "movement", "movie_relay", "partner_buffs", "party_drive", "party_fast_pump",

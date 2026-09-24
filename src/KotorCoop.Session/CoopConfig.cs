@@ -348,6 +348,44 @@ public sealed record CoopConfig
     public bool PlacedMineSync { get; init; }
 
     /// <summary>
+    /// coop.ini <c>menu_guard_sync</c>: while a player has a full-screen menu (inventory, map,
+    /// character sheet, journal, equipment, options) open, their published <c>PlayerState</c>
+    /// carries <c>PlayerState.FlagMenuGuard</c> for a bounded window
+    /// (<see cref="MenuGuardCapMs"/>/<see cref="MenuGuardCooldownMs"/>, <see cref="MenuGuardRule"/>),
+    /// and a peer's plugin holds their stand-in out of local target selection and drops any hit
+    /// that still lands on it — the parity fix for docs/limitations.md's "Pausing" row: opening
+    /// a menu freezes combat in single-player KOTOR, but only pauses the OPENER's own game here,
+    /// so their stand-in kept eating hits on every other screen. ON by default: it reuses the
+    /// same faction-flip + PacifyCreature lever <c>stealth_sync</c> already uses (no new engine
+    /// write), and the bounded window means it can never become a standing shield. Read on BOTH
+    /// sides — the opener's own agent (whether to run the timer and publish the bit at all) and
+    /// a peer's plugin (whether to honour a bit it receives, <c>PluginConfig.ReadBool
+    /// ("menu_guard_sync", true)</c>) — the same "one coop.ini key, two files" pattern
+    /// <c>solo_segment_spectate</c>/<c>minigame_hide_peer</c> use. See
+    /// docs/research/effect-sync.md §13.
+    /// </summary>
+    public bool MenuGuardSyncEnabled { get; init; } = true;
+
+    /// <summary>
+    /// How long a single menu opening stays protected before the shield lapses even if the menu
+    /// is still open — coop.ini <c>menu_guard_cap_ms</c>, default
+    /// <see cref="MenuGuardRule.DefaultCapMs"/> (12 s, inside the 10-15 s window the feature was
+    /// scoped to). Stops a player parking on the inventory screen for permanent invulnerability.
+    /// Agent-side only (the plugin never reads this — it only reacts to the wire bit).
+    /// </summary>
+    public int MenuGuardCapMs { get; init; } = MenuGuardRule.DefaultCapMs;
+
+    /// <summary>
+    /// How long AFTER a menu opening burns through <see cref="MenuGuardCapMs"/> before the next
+    /// opening can be protected again — coop.ini <c>menu_guard_cooldown_ms</c>, default
+    /// <see cref="MenuGuardRule.DefaultCooldownMs"/> (20 s). Closing and immediately reopening
+    /// the menu does not reset this: <see cref="MenuGuardRule.TrackCooldown"/> keys off the cap
+    /// being exhausted, not off the menu closing, so a capped-out opening cannot be renewed by
+    /// tapping the menu key. A short check well under the cap never triggers a cooldown at all.
+    /// </summary>
+    public int MenuGuardCooldownMs { get; init; } = MenuGuardRule.DefaultCooldownMs;
+
+    /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
     /// a resend rather than republished on a fixed timer — docs/research/dialogue-join-latency.md
@@ -851,6 +889,7 @@ public sealed record CoopConfig
         "local_combat_diag_undriven_id", "local_combat_engage_fallback",
         "local_combat_engage_range", "local_combat_range", "local_combat_slots",
         "local_combat_targeting_us_fresh_s", "local_combat_timeout_s", "map_reveal_sync",
+        "menu_guard_cap_ms", "menu_guard_cooldown_ms", "menu_guard_sync",
         "minigame_hide_peer", "minigame_lock_peers", "minigame_lock_timeout_s",
         "mine_sync", "minigame_modules", "minigame_spectate", "minigame_wait_notice", "minimap_peers",
         "mirror_smooth_ms", "movement", "movie_relay", "partner_buffs", "party_drive", "party_fast_pump",
@@ -1079,6 +1118,14 @@ public sealed record CoopConfig
             CompanionLocalCombat = IsTruthy(kv.GetValueOrDefault("companion_local_combat")),
             EnemyEffectSync = IsTruthy(kv.GetValueOrDefault("enemy_effect_sync")),
             PlacedMineSync = IsTruthy(kv.GetValueOrDefault("placed_mine_sync")),
+            MenuGuardSyncEnabled = !kv.ContainsKey("menu_guard_sync")
+                || IsTruthy(kv.GetValueOrDefault("menu_guard_sync")),
+            MenuGuardCapMs = int.TryParse(kv.GetValueOrDefault("menu_guard_cap_ms"), out int mgc)
+                ? Math.Max(mgc, 0)
+                : MenuGuardRule.DefaultCapMs,
+            MenuGuardCooldownMs = int.TryParse(kv.GetValueOrDefault("menu_guard_cooldown_ms"), out int mgd)
+                ? Math.Max(mgd, 0)
+                : MenuGuardRule.DefaultCooldownMs,
             EffectSync = !kv.ContainsKey("effect_sync") || IsTruthy(kv.GetValueOrDefault("effect_sync")),
             TriggerRelay = !kv.ContainsKey("trigger_relay") || IsTruthy(kv.GetValueOrDefault("trigger_relay")),
             ClientEncounters = !kv.ContainsKey("client_encounters")

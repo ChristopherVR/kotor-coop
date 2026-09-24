@@ -231,7 +231,14 @@ internal sealed unsafe partial class PhantomController
             // here; back in Neutral, `GetReputation > 10` releases every attacker at the
             // next combat-round boundary. That release lever is what the original
             // aggro-sink design lacked entirely — see docs/research/combat-participation.md.
-            ApplyTargetable(i, phantom, alive: remote.Health > 0, stealthed: remote.Stealthed);
+            // menu_guard_sync: drop any hit that still lands on this slot BEFORE the faction
+            // flip below has a chance to run (it is edge-only, so a hit landing the very frame
+            // the peer's menu opens would otherwise still reach them) — see PhantomHitHook's
+            // own gate, the same early-drop shape the party-mine window uses.
+            bool menuGuarded = _menuGuardSync && remote.MenuGuarded;
+            PhantomHitHook.SetMenuGuarded(i, menuGuarded);
+
+            ApplyTargetable(i, phantom, alive: remote.Health > 0, stealthed: remote.Stealthed, menuGuarded: menuGuarded);
             ApplyStealthVisual(i, phantom, remote.Stealthed);
             ApplyVitals(i, phantom, remote);
 
@@ -557,6 +564,14 @@ internal sealed unsafe partial class PhantomController
     /// uses, no new engine write. See <see cref="PhantomTargetRule"/> and effect-sync.md §12.4.</summary>
     private readonly bool _stealthSync = PluginConfig.ReadBool("stealth_sync", true);
 
+    /// <summary>coop.ini <c>menu_guard_sync</c> (default ON): a peer publishing
+    /// <c>PlayerState.FlagMenuGuard</c> has their stand-in held Neutral here for as long as the
+    /// bit is set — the same faction flip + PacifyCreature lever <see cref="_stealthSync"/>
+    /// uses. The bit itself is only ever set within <c>MenuGuardRule</c>'s bounded window (the
+    /// agent's own timer, not this plugin), so this cannot become a standing shield. See
+    /// <see cref="PhantomTargetRule"/> and docs/research/effect-sync.md §13.</summary>
+    private readonly bool _menuGuardSync = PluginConfig.ReadBool("menu_guard_sync", true);
+
     /// <summary>coop.ini <c>partner_buffs</c>, default OFF, NEEDS-LIVE: seat the targetable
     /// stand-in in Friendly_1 rather than Player so a friend-sphere cast (Force Valor family)
     /// reaches it. Plugin-only key — the agent never reads it, so there is no digest field and
@@ -635,7 +650,7 @@ internal sealed unsafe partial class PhantomController
     /// releases attackers immediately rather than at the next round boundary — belt and
     /// braces against the one failure this design must never reproduce.
     /// </summary>
-    private void ApplyTargetable(int slot, nint phantom, bool alive, bool stealthed)
+    private void ApplyTargetable(int slot, nint phantom, bool alive, bool stealthed, bool menuGuarded)
     {
         // ⚠ THE AUTHORITY SPLIT ONLY HOLDS IF EACH INSTANCE'S ENEMIES FIGHT ITS OWN PLAYER,
         // AND NOTHING IN THE ENGINE ENFORCES THAT.
@@ -671,8 +686,18 @@ internal sealed unsafe partial class PhantomController
         // edge logic the moment they drop out of stealth). Same lever as the authority split
         // above: no new engine write, and PacifyPhantom below releases anything already
         // locked on. See PhantomTargetRule / effect-sync.md §12.4.
-        bool want = PhantomTargetRule.WantsPlayerFaction(_targetable, alive, holdNeutral, _stealthSync, stealthed);
+        //
+        // A MENU-GUARDED peer (menu_guard_sync, PlayerState.FlagMenuGuard) is held Neutral the
+        // same way, for as long as MenuGuardRule's bounded window says so. `menuGuarded` here
+        // already has `_menuGuardSync` folded in by the caller (it doubles as the flag
+        // PhantomHitHook's damage gate uses), so `menuGuardSync` is passed as `true` below —
+        // gating it a second time would be a no-op, not a bug, but the single fold-in is the
+        // one place this project's "one gate, not two disagreeing copies" rule wants it.
+        bool want = PhantomTargetRule.WantsPlayerFaction(
+            _targetable, alive, holdNeutral, _stealthSync, stealthed, menuGuardSync: true, menuGuarded);
         bool stealthHold = PhantomTargetRule.IsStealthHold(_targetable, alive, holdNeutral, _stealthSync, stealthed);
+        bool menuGuardHold = PhantomTargetRule.IsMenuGuardHold(
+            _targetable, alive, holdNeutral, menuGuardSync: true, menuGuarded);
 
         if (_factionKnown[slot] && _hostileToLocals[slot] == want)
         {
@@ -716,7 +741,9 @@ internal sealed unsafe partial class PhantomController
                 : $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
             : stealthHold
                 ? $"phantom 0x{objectId:X}: back to neutral; attackers released (peer is in stealth)"
-                : $"phantom 0x{objectId:X}: back to neutral; attackers released");
+                : menuGuardHold
+                    ? $"phantom 0x{objectId:X}: back to neutral; attackers released (peer has a menu open)"
+                    : $"phantom 0x{objectId:X}: back to neutral; attackers released");
     }
 
     private uint _loggedAmountsSerial;

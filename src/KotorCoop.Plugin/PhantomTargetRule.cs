@@ -19,13 +19,25 @@ namespace KotorCoop.Plugin;
 /// <c>phantom_targetable</c> already pulls (faction flip + PacifyCreature), so no new engine
 /// write is involved. The engine's own stealth VISUAL on the stand-in is a separate,
 /// unverified write behind <c>stealth_visual_sync</c>.</item>
+/// <item><c>menuGuardSync</c> / <c>menuGuarded</c> — coop.ini <c>menu_guard_sync</c> and the
+/// peer's <c>PlayerState.FlagMenuGuard</c> (protocol 69, effect-sync.md §13). Opening a
+/// full-screen menu freezes combat in single-player KOTOR; here it only pauses the opener's
+/// own game, so their stand-in kept eating hits on every other screen while they had no way
+/// to react. Same lever as stealth, same reason it costs no new engine write — the difference
+/// is entirely in WHEN the bit is set: <c>MenuGuardRule</c> caps a single opening and holds
+/// off the next one after a capped-out opening, so this can never become a standing
+/// shield.</item>
 /// </list>
 /// </summary>
 internal static class PhantomTargetRule
 {
     public static bool WantsPlayerFaction(
-        bool targetable, bool alive, bool holdNeutral, bool stealthSync, bool stealthed) =>
-        targetable && alive && !holdNeutral && !(stealthSync && stealthed);
+        bool targetable, bool alive, bool holdNeutral,
+        bool stealthSync, bool stealthed,
+        bool menuGuardSync, bool menuGuarded) =>
+        targetable && alive && !holdNeutral
+        && !(stealthSync && stealthed)
+        && !(menuGuardSync && menuGuarded);
 
     /// <summary>
     /// Which faction family the stand-in belongs to this pass, given the answer from
@@ -60,4 +72,10 @@ internal static class PhantomTargetRule
     /// is hiding, as opposed to dead / the authority split / the key being off.</summary>
     public static bool IsStealthHold(bool targetable, bool alive, bool holdNeutral, bool stealthSync, bool stealthed) =>
         targetable && alive && !holdNeutral && stealthSync && stealthed;
+
+    /// <summary>The menu-guard sibling of <see cref="IsStealthHold"/>: the peer has a
+    /// full-screen menu open, within the window <c>MenuGuardRule</c> grants.</summary>
+    public static bool IsMenuGuardHold(
+        bool targetable, bool alive, bool holdNeutral, bool menuGuardSync, bool menuGuarded) =>
+        targetable && alive && !holdNeutral && menuGuardSync && menuGuarded;
 }

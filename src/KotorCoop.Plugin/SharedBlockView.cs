@@ -47,9 +47,19 @@ internal readonly record struct RemoteView(
     /// Neutral while it is set (<c>stealth_sync</c>) — see <see cref="PhantomTargetRule"/>.</summary>
     public const uint FlagStealth = 512;
 
+    /// <summary>Matches <c>PlayerState.FlagMenuGuard</c> (protocol 69) — the peer has a
+    /// full-screen menu open, within the bounded window <c>MenuGuardRule</c> grants. Carried
+    /// verbatim through the existing <see cref="Flags"/> dword; no block layout change.
+    /// <c>PhantomController.ApplyTargetable</c> holds the stand-in Neutral while it is set
+    /// (<c>menu_guard_sync</c>) and <c>PhantomHitHook</c> drops any hit that still lands on it —
+    /// see <see cref="PhantomTargetRule"/> and docs/research/effect-sync.md §13.</summary>
+    public const uint FlagMenuGuard = 1024;
+
     public bool InCombat => (Flags & FlagInCombat) != 0;
 
     public bool Stealthed => (Flags & FlagStealth) != 0;
+
+    public bool MenuGuarded => (Flags & FlagMenuGuard) != 0;
 
     public bool Paused => (Flags & FlagPaused) != 0;
 
