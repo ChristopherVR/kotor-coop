@@ -1,6 +1,6 @@
 # Enemy health baseline persistence
 
-**Status (2026-09-24): wired end to end, unit-tested, NOT live-verified.** Shared block
+**Status (2026-09-24): wired end to end; host-side recipe steps 1-6 live-verified (see "Live run"); the joiner leg (step 7) is open.** Shared block
 version 76. The `enemy_health` default stays at 100%. The recipe at the end of this page has
 not been run yet. It has to pass before `auto` can become the default again.
 
@@ -224,3 +224,28 @@ single instance is enough for steps 1-5. Watch the plugin log (`scaling-baseline
    that save: `-> Fresh` and scaling resumes.
 7. **Joiner.** With a joiner adopting the host's world, the joiner's agent binds
    `000001 - AUTOSAVE` and imports the same baselines (the sidecar travels with the world).
+
+## Live run (2026-09-24, host only, `2d69cd3`)
+
+Host `enemy_health = 150`, then 200, then 100; joiner connected throughout.
+
+- **Fail closed (step 6).** A pre-build save (`000052`, `danm13`) bound to `000001 - AUTOSAVE`,
+  had no sidecar, and came up `-> Refuse` / `-> Refused`; nothing in `danm13` was scaled.
+- **Fresh (step 1).** A warp into `danm14aa` (never visited in that save) came up `-> Fresh`
+  and scaled its kath hounds once (`0x1E 40 -> 60`, `0x1A 100 -> 150`).
+- **Save (step 2).** The first attempt exposed a real defect: the join refused
+  `danm14aa` because `0xE has no usable saved tag/template`. A save's GIT creature record never
+  carries `TemplateResRef` (0 of 3,221 records across 40 saves), so `2d69cd3` makes the template
+  optional (object id plus Tag stay the identity). Re-run: `sidecar written, 1 module(s)
+  proven (12 scaled creature(s))`.
+- **Reload, twice (step 3).** `bound to '000001 - AUTOSAVE' ... 1 of 3 saved module(s) proven`,
+  `-> Import 12 baseline(s)`, no new `scaling: enemy` line; `sethp.ps1` read `0x1E` 60/60 after
+  each reload (it would have been 90, then 135, before this work).
+- **Percentage change (step 4).** Relaunched at 200%: `saved enemy 0x1E hp 60/60 -> 80/80
+  (150% -> 200% of original 40)`, and the same for all twelve.
+- **Wounded and dead (step 5).** `0x1E` wounded to 40/80 and `0x22` killed (its object was
+  destroyed), saved, relaunched at 100%: `-> Imported (11 ...)`, `saved enemy 0x1E hp 40/80 ->
+  20/40 (200% -> 100% of original 40)`, no line for `0x22`.
+
+Not run: step 7 (the joiner importing through the host's adopted world). A corpse that
+persists as an object was not available in this module; the dead enemy here was destroyed.
