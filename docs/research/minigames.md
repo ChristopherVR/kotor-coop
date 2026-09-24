@@ -2619,7 +2619,7 @@ Two independent readers of the same `coop.ini pazaak_detect` key, following the 
   meaning does not change ("this player is meaningfully absent from the shared world"), it
   just now has a second real-world cause.
 
-Both readers default OFF (`coop.ini pazaak_detect = 0`, matching `profiles/coop.ini.example`
+Both readers default ON since 2026-09-25 (they had defaulted OFF while docs/CONFIG.md said ON; `coop.ini pazaak_detect = 0` still turns it off), unlike the original `profiles/coop.ini.example`
 and the code fallback — no drift between shipped file and code default, unlike some older
 keys `docs/CONFIG.md` documents footnotes for).
 

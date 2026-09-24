@@ -145,7 +145,7 @@ internal static unsafe partial class Odyssey
         return round == 0 ? 0 : *(uint*)(round + RoundCurrentTarget);
     }
 
-    /// <summary>coop.ini <c>threat_retarget</c> (default OFF; assigned once from
+    /// <summary>coop.ini <c>threat_retarget</c> (default ON since 2026-09-25, matching docs/CONFIG.md; assigned once from
     /// <c>PluginHost.Startup.cs</c>, same pattern as <see cref="DamageCreatorAttributionEnabled"/>).
     /// When ON, the HOST side of <see cref="PeerDamageController"/> keeps a small per-creature
     /// threat table (<see cref="ThreatTable"/>) and, when a peer's tracked threat against a

@@ -218,6 +218,13 @@ internal static unsafe partial class PluginHost
         AppendFrameSection(line, "combat.roster", ref _frameCombatRosterStats, frequency);
         AppendFrameSection(line, "combat.solo", ref _frameCombatSoloStats, frequency);
         AppendFrameSection(line, "combat.suppression", ref _frameCombatSuppressionStats, frequency);
+
+        // Splits a long session's memory growth between the plugin and the engine: this is
+        // the plugin's own managed heap, so a rising process private-bytes figure with a flat
+        // heap here is the engine's (a 2026-09-25 soak grew ~4 MB per module warp).
+        line.Append("; managed heap ")
+            .Append((GC.GetTotalMemory(false) / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture))
+            .Append(" MB, gen2 ").Append(GC.CollectionCount(2).ToString(System.Globalization.CultureInfo.InvariantCulture));
         Log(line.ToString());
         _frameStats.Reset();
         _frameStatsLastFlushMs = nowMs;

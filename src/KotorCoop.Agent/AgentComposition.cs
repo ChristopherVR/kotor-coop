@@ -349,7 +349,7 @@ internal static class AgentComposition
         // process's local log/HUD state, not this instance's outgoing flag.
         if (bridge is KotorGameBridge pazaakBridge)
         {
-            pazaakBridge.PazaakDetectEnabled = config?.PazaakDetect ?? false;
+            pazaakBridge.PazaakDetectEnabled = config?.PazaakDetect ?? true;
         }
 
         // One-time startup for the in-game surfaces. Only the KOTOR bridge exposes the

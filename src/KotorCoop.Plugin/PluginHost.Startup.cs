@@ -298,12 +298,12 @@ internal static unsafe partial class PluginHost
         // through Odyssey.AttackTarget. Live-verified 2026-09-03 and ON in the shipped profile
         // (the enemy splits between the players instead of ignoring the second one); the
         // fallback for an absent key stays OFF — docs/research/peer-damage-ledger.md §9, §11.
-        Odyssey.ThreatRetargetEnabled = PluginConfig.ReadBool("threat_retarget", false);
+        Odyssey.ThreatRetargetEnabled = PluginConfig.ReadBool("threat_retarget", true);
         Log(Odyssey.ThreatRetargetEnabled
             ? "combat: threat_retarget=ON - a creature whose tracked threat clearly favours a "
                 + "peer over its current attack target will be ordered onto that peer directly "
                 + "(see combat log 'threat:' lines)"
-            : "combat: threat_retarget=OFF (key absent or 0; the shipped profile sets 1) - "
+            : "combat: threat_retarget=OFF (set to 0 in coop.ini) - "
                 + "mirrored enemies keep whichever target the engine's own AI picked");
 
         DialogueGateHook.Enabled = PluginConfig.ReadBool("dialogue_exclusive", true);

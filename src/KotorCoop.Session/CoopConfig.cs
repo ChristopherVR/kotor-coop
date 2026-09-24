@@ -1032,7 +1032,7 @@ public sealed record CoopConfig
                 [.. (kv.GetValueOrDefault("minigame_modules") ?? string.Empty)
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
             SpectateMinigame = IsTruthy(kv.GetValueOrDefault("minigame_spectate")),
-            PazaakDetect = IsTruthy(kv.GetValueOrDefault("pazaak_detect")),
+            PazaakDetect = !kv.ContainsKey("pazaak_detect") || IsTruthy(kv.GetValueOrDefault("pazaak_detect")),
             ChatOverlay = !kv.ContainsKey("chat_overlay") || IsTruthy(kv.GetValueOrDefault("chat_overlay")),
             ChatOverlayOpacity = int.TryParse(kv.GetValueOrDefault("chat_overlay_opacity"), out int op)
                 ? Math.Clamp(op, 0, 100)

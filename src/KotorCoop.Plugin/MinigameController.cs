@@ -78,7 +78,7 @@ internal static unsafe class MinigameController
     /// <summary>coop.ini <c>pazaak_detect</c> — default OFF, NEEDS-LIVE (see this class's own
     /// doc comment and docs/research/minigames.md's dated section). Read once: coop.ini is
     /// not expected to change mid-session for a READ-safety gate like this one.</summary>
-    private static readonly bool PazaakDetectEnabled = PluginConfig.ReadBool("pazaak_detect", false);
+    private static readonly bool PazaakDetectEnabled = PluginConfig.ReadBool("pazaak_detect", true);
 
     private static bool _wasInMiniGame;
 
