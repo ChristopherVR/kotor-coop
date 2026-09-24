@@ -1215,6 +1215,29 @@ public class PacketCodecTests
         Assert.Equal(1234, decoded.ServerTimeMs);
         Assert.Equal("end_m01aa", decoded.Module);
         Assert.Equal(enemies, decoded.Enemies);
+
+        // Defaulted params (PageIndex 0, PageCount 1) — an un-paged census still reads back
+        // as a complete, single-page cycle.
+        Assert.Equal(0, decoded.PageIndex);
+        Assert.Equal(1, decoded.PageCount);
+    }
+
+    [Fact]
+    public void EnemySnapshotPageIndexAndPageCountSurviveTheWire()
+    {
+        // Protocol 70: a census bigger than one datagram now pages instead of truncating at
+        // ProtocolConstants.MaxEnemies — see EnemyCensusPagingTests for the pagination
+        // arithmetic itself; this just confirms the two new bytes round-trip.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        EnemySnapshotPacket original = new(
+            5000, "manm27aa", [new EnemyState(0x14, 15, 15, false)], PageIndex: 1, PageCount: 3);
+
+        int length = PacketCodec.Write(buffer, original);
+        EnemySnapshotPacket? decoded = PacketCodec.ReadEnemySnapshot(buffer[..length]);
+
+        Assert.NotNull(decoded);
+        Assert.Equal(1, decoded.PageIndex);
+        Assert.Equal(3, decoded.PageCount);
     }
 
     [Fact]

@@ -201,24 +201,48 @@ public sealed partial class KotorGameBridge
                 // tie-breaker; fighting-first and nearest-player ordering remain unchanged.
                 : a.State.ObjectId.CompareTo(b.State.ObjectId));
 
-        // _enemyCensusCap, not BlockEnemyCapacity directly: normally the same 32, but a debug
+        // Split the already-sorted list at the fighting/bystander boundary rather than
+        // re-testing .Fighting per entry: the comparator above already grouped every Fighting
+        // == true candidate at the front, so this is a single linear pass either way.
+        List<EnemyState> fightingStates = [];
+        List<EnemyState> bystanderStates = [];
+        foreach ((EnemyState state, bool isFighting, float _) in candidates)
+        {
+            (isFighting ? fightingStates : bystanderStates).Add(state);
+        }
+
+        // _enemyCensusCap, not BlockEnemyCapacity directly: normally the same (128 since
+        // version 80's "no cap really" pass — docs/research/creature-liveness.md), but a debug
         // session can lower it (AgentOptions.EnemyCensusCap) to exercise the "beyond the cap"
-        // shedding this truncation performs without needing a module that legitimately places
-        // 33+ creatures. See _enemyCensusCap's own doc comment.
-        int count = Math.Min(candidates.Count, _enemyCensusCap);
-        LastEnemyCensus = new(candidates.Count, count, _enemyCensusCap);
+        // rotation below without needing a module that legitimately places that many creatures.
+        // See _enemyCensusCap's own doc comment.
+        //
+        // EnemyCensusPage.Select replaces a flat truncation: fighting candidates always win a
+        // slot (never rotated away — a fight that desyncs is worse than a bystander missing one
+        // publish), and whatever capacity remains rotates through the bystander pool across
+        // pumps rather than always covering the same nearest prefix, so a farther bystander a
+        // crowded pass had no room for gets one within a bounded number of ticks instead of
+        // being shed for the rest of the session. See EnemyCensusPage's own doc comment.
+        (List<EnemyState> page, int nextCursor) =
+            EnemyCensusPage.Select(fightingStates, bystanderStates, _enemyCensusCap, _enemyCensusRotationCursor);
+        _enemyCensusRotationCursor = nextCursor;
+
+        LastEnemyCensus = new(candidates.Count, page.Count, _enemyCensusCap);
         ReportEnemyCensus(LastEnemyCensus);
 
-        for (int i = 0; i < count; i++)
-        {
-            enemies.Add(candidates[i].State);
-        }
+        enemies.AddRange(page);
 
         // The last word before these ids leave this instance: every one of them must be an id
         // this engine can resolve, because that is the only thing that makes it an id a peer
         // can key a forwarded kill or a damage debt by.
         return ConfirmPublished(enemies);
     }
+
+    /// <summary>Rotation position into the current pump's bystander pool — see
+    /// <see cref="EnemyCensusPage"/>. Harmless to carry across a module transition: it indexes a
+    /// freshly rebuilt list every call, never a remembered id, so a stale value just picks a
+    /// different starting point in the new module rather than anything incorrect.</summary>
+    private int _enemyCensusRotationCursor;
 
     private bool TryReadCreatureFaction(nint creature, out ushort faction)
     {
@@ -327,7 +351,10 @@ public sealed partial class KotorGameBridge
         return ids;
     }
 
-    private const int BlockMaterialisedOwnerIds = 0x4B00;
+    // Relocated to the new 0x6000 region and widened to BlockEnemyCapacity (128) by block
+    // version 80's "no cap really" pass (old home 0x4B00..0x4B80 now dead) — see
+    // SharedBlock.Combat.cs.
+    private const int BlockMaterialisedOwnerIds = 0x7C00;
     private const int BlockMaterialisedOwnerIdCapacity = BlockEnemyCapacity;
 
     /// <summary>

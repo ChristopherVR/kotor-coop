@@ -418,7 +418,16 @@ internal static unsafe partial class PluginHost
         //      0x5C00 for the wave): capture and gone rings, the agent's roster level and a
         //      spawn mailbox. coop.ini placed_mine_sync, default OFF; NEEDS-LIVE. See
         //      docs/research/mines.md §14.
-        _block->Version = 78;
+        // 79 is another in-flight stream's own reservation (0x5C00..0x6000, left untouched
+        //      here on purpose — see SharedBlock.TotalSize's remarks).
+        // 80 (2026-09-24, "no cap really") relocates and widens the enemy census: EnemyCapacity
+        //      rises from 32 to 128 (a live GIT-file survey of all 117 shipped modules found the
+        //      largest at 51, manm27aa — 2.5x headroom), and the five capacity-scaled tables
+        //      (enemy slots, enemy presence, materialised-owner ids, damage-dealt and
+        //      damage-owed ledgers) move into a new region at 0x6000..0x8600, past the reserved
+        //      gap. See SharedBlock.Combat.cs, SharedBlock.TotalSize's own remarks and
+        //      docs/research/creature-liveness.md.
+        _block->Version = 80;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

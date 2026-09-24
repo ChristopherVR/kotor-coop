@@ -113,6 +113,18 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("PlacedMineSpawnStatus", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
         ("PlacedMineSpawnLocalId", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
         ("PlacedMineWorld", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+
+        // Version 80, "no cap really" (docs/research/creature-liveness.md): the five
+        // capacity-scaled enemy tables relocated into a new 0x6000 region so EnemyCapacity
+        // could widen from 32 to 128. Their agent-side mirrors live in
+        // KotorGameBridge.Enemies.cs (BlockMaterialisedOwnerIds) and
+        // KotorGameBridge.PluginBlock.cs (the rest) rather than a single dedicated file, the
+        // same split the pre-existing enemy region already used.
+        ("EnemySlots", "SharedBlock.Combat.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("EnemyPresenceSlots", "SharedBlock.Combat.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("MaterialisedOwnerIds", "SharedBlock.Combat.cs", "KotorGameBridge.Enemies.cs"),
+        ("DamageDealtSlots", "SharedBlock.Combat.cs", "KotorGameBridge.PluginBlock.cs"),
+        ("DamageOwedSlots", "SharedBlock.Combat.cs", "KotorGameBridge.PluginBlock.cs"),
     ];
 
     [Fact]
