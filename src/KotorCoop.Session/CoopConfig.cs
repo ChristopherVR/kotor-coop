@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -395,6 +395,17 @@ public sealed record CoopConfig
     /// fallback, this record's absent-key parse, AgentComposition's <c>?? true</c>).
     /// </summary>
     public bool MineSync { get; init; } = true;
+
+    /// <summary>
+    /// Per-object local-variable replication (coop.ini <c>local_var_sync</c>): an allowlisted
+    /// SetLocalBoolean/SetLocalNumber on a static GIT object (docs/research/quest-sync.md §8.2)
+    /// is captured by the plugin, carried on the reliable flag channel, and applied to the
+    /// peer's copy of the object through the engine's own setter. OFF by default until
+    /// live-verified; gates BOTH halves on this instance (agent pump, plugin hook + apply). The
+    /// three default readers agree on OFF (PluginConfig fallback, this record's absent-key
+    /// parse, AgentComposition's <c>?? false</c>).
+    /// </summary>
+    public bool LocalVarSync { get; init; }
 
     /// <summary>
     /// Whether the agent's <c>SessionSaveWatch</c>'s host-side edge (roadmap item
@@ -826,7 +837,7 @@ public sealed record CoopConfig
         "enemy_effect_sync", "enemy_materialise",
         "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
-        "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat",
+        "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat", "local_var_sync",
         "local_combat_bisect_mask", "local_combat_bypass_id", "local_combat_deferred_notice",
         "local_combat_diag_undriven_id", "local_combat_engage_fallback",
         "local_combat_engage_range", "local_combat_range", "local_combat_slots",
@@ -1007,6 +1018,7 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("party_fast_pump")),
             ContainerFastPump = IsTruthy(kv.GetValueOrDefault("container_fast_pump")),
             MineSync = !kv.ContainsKey("mine_sync") || IsTruthy(kv.GetValueOrDefault("mine_sync")),
+            LocalVarSync = IsTruthy(kv.GetValueOrDefault("local_var_sync")),
             SessionSaveHostRefusal = IsTruthy(kv.GetValueOrDefault("session_save_host_refusal")),
             ClientLoadRejoin = !kv.ContainsKey("client_load_rejoin")
                 || IsTruthy(kv.GetValueOrDefault("client_load_rejoin")),

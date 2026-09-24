@@ -146,9 +146,11 @@ internal partial struct SharedBlock
     /// region starts cleanly at the old boundary and uses 0x18 of the new 0x100.
     /// </summary>
     /// <summary>Grown for the acknowledged 24-slot container-loot mailbox (protocol 59), then
-    /// to 0x5400 for v75's item-spawn provenance arrays, then to 0x5800 for v76's exact
-    /// enemy-health baseline channel (SharedBlock.EnemyScalingBaseline.cs, 0x5400..0x57C0).</summary>
-    public const int TotalSize = 0x5800;
+    /// to 0x5400 for v75's item-spawn provenance arrays, to 0x5800 for v76's exact
+    /// enemy-health baseline channel (SharedBlock.EnemyScalingBaseline.cs, 0x5400..0x57C0),
+    /// and to 0x5A00 for v77's per-object local-variable replication
+    /// (<see cref="OffsetLocalVarCaptureCursor"/>, docs/research/quest-sync.md §8.3).</summary>
+    public const int TotalSize = 0x5A00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1339,4 +1341,14 @@ internal partial struct SharedBlock
     /// the outcome. Party-placed mines are refused. Local only.
     /// </summary>
     public const uint CheatKindMineAction = 76;
+
+    /// <summary>
+    /// The <c>localvar</c> live-test verb (docs/research/quest-sync.md §8.3). CheatText is
+    /// <c>op|kind|slot|tag</c> (LocalVarSyncRule.FormatRequest: op get/set/watch, kind b/n); the
+    /// object is CheatTarget when nonzero, else the tag. CheatAmount is the value for set.
+    /// get/set go through the engine's own CSWVarTable accessors; set also publishes a capture
+    /// when the slot is watched and local_var_sync is on; watch adds a session-only allowlist
+    /// entry for the current module. Local only.
+    /// </summary>
+    public const uint CheatKindLocalVar = 85;
 }

@@ -364,11 +364,12 @@ test — the cross-instance proof is §7's own script above.
 ## 8. Explicitly out of scope
 
 - **Per-object local variables** (`SetLocalBoolean`/`SetLocalNumber`/`GetLocalBoolean`/
-  `GetLocalNumber`) remain per-instance. The table and VM routes are now identified below, but
-  there is no safe capture/apply path or content allowlist yet. Do not publish these slots as
-  generic world truth: a local slot is an integer index in one object's table, not a globally
-  named quest variable, and scripts can use the same slot for player-specific or transient
-  state.
+  `GetLocalNumber`) were per-instance until 2026-09-24. §8.2 now has a content audit and a
+  generated allowlist, and §8.3 the capture/transport/apply mechanism behind coop.ini
+  `local_var_sync` (default OFF, NEEDS-LIVE). The warning still holds for everything OUTSIDE
+  the allowlist: a local slot is an integer index in one object's table, not a globally named
+  quest variable, and scripts use the same slot for player-specific or transient state, so
+  nothing is ever mirrored wholesale.
 - **String globals** — `KotorGameBridge`'s `TryApplyWorldState` already refuses to replicate
   location and string globals ("every one of them in a real save is a per-player scratchpad or
   cutscene staging value" — existing comment, unchanged by this pass).
@@ -474,6 +475,193 @@ next research unit is a single allowlisted GIT object/local slot found in real m
 trace its `SetLocal*` writer and `GetLocal*` readers, prove whether its value is shared world
 truth, then establish the VM hook and peer-side apply contract on the live engine before adding
 any wire emission.
+
+*(2026-09-24: the blockers above are addressed statically in §8.2 (content audit, allowlist) and
+§8.3 (capture, transport, apply). The live half — "establish the VM hook and peer-side apply
+contract on the live engine" — is still open; see §8.3's NEEDS-LIVE list and recipe.)*
+
+### 8.2 Content audit (2026-09-24): which local slots are shared world truth
+
+**Tool.** `tools/localvaraudit.py` (new). A byte scan cannot answer this question: a local slot
+has no name, and the stock scripts reach `SetLocalBoolean` through `k_inc_utility`'s
+`UT_SetPlotBooleanFlag(oTarget, nIndex, nState)` wrapper, so routine 680 appears inside a
+subroutine whose object and index were pushed by the caller. The tool therefore runs a small
+abstract interpreter over every compiled script's NCS stack (constants, `OBJECT_SELF`,
+`GetObjectByTag("…")` results, subroutine calls analysed with the caller's real stack, globals,
+`DelayCommand` closures; everything else is "unknown", never guessed), with every ACTION's stack
+effect taken from the game's own `nwscript.nss`. Owners (what `OBJECT_SELF` is when a script
+runs) come from the module's own data: every GIT object's blueprint event fields, the conversation
+each object names (a node's Script/Active runs with `OBJECT_SELF` = the conversation owner), and
+the area/module event fields. Read-only; GOG 1.0.3 game files.
+
+**The rule that decides shared truth** is WHICH ENGINE runs the writers. Both engines simulate
+the whole module, so:
+
+* a write from an *interaction* context runs only on the engine of the player who did it — a
+  node of an ordinary player-started conversation (`dialogue_auto_join` defaults OFF, so the
+  partner is not in it), a placeable the player used/opened, a door the player clicked or failed
+  to open (`utc.ScriptDialogue`/`ScriptEndDialogu`, `utp.OnUsed/OnOpen/OnClosed/OnInvDisturbed/
+  OnDisarm/OnLock/OnUnlock/OnEndDialogue`, `utd.OnClick/OnFailToOpen/OnOpen/OnClosed/OnLock/
+  OnUnlock/OnDisarm`);
+* every other context either runs on both engines on its own (spawn, heartbeat, perception,
+  combat events, user-defined events, area/module events) or is already relayed (a trigger's
+  OnEnter through `trigger_relay`; a script-started conversation is a forced one both players
+  auto-join). Replicating those would not only be redundant, it would be harmful: a routine
+  re-run such as `OnSpawn` at a joiner's load would mint a newer serial and overwrite a genuine
+  interaction value on the peer.
+
+A (module, object, kind, slot) pair qualifies when (1) the object is a uniquely-tagged static GIT
+object, (2) the slot is a plot slot — booleans 0–19 (`SW_PLOT_BOOLEAN_01..10` = 0–9,
+`SW_PLOT_HAS_TALKED_TO` = 10, the computer/repair plot slots 11–19); 20 and up are the generic
+AI's own per-engine `SW_FLAG_*` bookkeeping — or any number slot, (3) every writer, for THIS
+object, runs only from an interaction context, and (4) at least one DIFFERENT script reads it back
+(a slot read only by the script that writes it is that script's own run-once latch — typically an
+EndConversation handler guarding its own hostile turn — whose consequence rides other channels).
+
+**Result** (`python tools/localvaraudit.py --shared`, all 117 shipped modules, 33,433 recovered
+accesses, 37 scripts over the interpreter's step budget): 13,971 static-object pairs; 9,599 in the
+AI flag range, 767 written but never read, 794 read but never written, 2,018 with a writer that
+runs on both engines, 409 same-script latches, and **384 shared-truth pairs** in 56 modules (at
+most 19 in one module, under the 28-row apply list). They are emitted verbatim as
+`src/KotorCoop.Protocol/LocalVarAllowlist.cs` (`--emit-cs`), each entry carrying module, tag,
+predicted GIT id, kind, slot, writer script(s) + context(s), reader script(s) + context(s), and
+the reason. The families:
+
+| Family | Pairs | Writer → reader | Why it is shared truth |
+| --- | --- | --- | --- |
+| "Has talked to" | 132 + ~40 NPC-specific | `k_act_talktrue` (conversation node) → `k_con_talkedto`/`k_con_talkedto2` (greeting conditional), and often a trigger or user-defined reader | The partner who talks second otherwise gets the first-meeting branch again, with whatever quest-offer and reward nodes hang off it. |
+| Repairable droid / terminal | 78 | `k_act_com42..45`, `k_com_compart` → `k_con_comver42..45`, `k_con_comactive`, `k_con_comrep` | Which repair/activation steps were done; without it the partner re-spends parts and re-runs the activation. |
+| Per-NPC quest state | ~130 | `k_ptat_*_s`, `k_pman_*_s`, `k_pkas_*`, `k_pkor_*`, … → the matching `_y`/`_n`/`_c` conditionals | "paid", "reward given", "is angry", "told about X". |
+
+Three traced by hand with a small NCS dump (instruction listing + routine names), confirming the
+interpreter's reading:
+
+* **`danm13` `dan13_belaya` (GIT 0x4) b10.** `k_pdan_belaya02` (a node of her own conversation)
+  sets it; `k_pdan_init_bel`, the OnEnter of the trigger in front of her, reads
+  `GetEnteringObject()` → `GetIsPC` → `GetObjectByTag("dan13_belaya")` → `GetLocalBoolean(…, 10)`
+  and, when it is clear, `SignalEvent(belaya, EventUserDefined(10))` — Belaya walks up and starts
+  her conversation. Unsynced, player A's talk leaves the flag clear on B's engine (and on the
+  host, which also runs the trigger through `trigger_relay`), so B's walk-in re-triggers the
+  intro. This overturns the 2026-08 note above that Belaya's locals were "not proved": her
+  `ScriptSpawn` slots are indeed spawn bookkeeping (excluded, writer runs on both), but b10 is not.
+* **`tat_m17aa` `tat17_11iziz_01` (GIT 0x4) b2.** `k_ptat_jreward_s` (conversation action):
+  `UT_SetPlotBooleanFlag(OBJECT_SELF, 2, TRUE)` then `CreateItemOnObject("G_I_FRARMBNDS04",
+  GetFirstPC())`. `k_ptat_jreward_y` (the node's conditional) tests the same slot. Unsynced, the
+  second player to talk to Iziz is offered — and handed — the armband again.
+* **Repair droids** (`danm16` `dan16_broken` b16, `kas_m22ab` `kas22_rustbot` b16, …).
+  `k_act_com42` writes the repair-step slot from the droid's own dialogue; `k_con_comver42`
+  gates the corresponding reply.
+
+**What the audit re-classified from §8.1's list.** `danm15` `dan15_opendoor` is a trigger
+(`utt.ScriptOnEnter` — relayed, excluded). `k_pdan_door02`/`k_pdan_door1505` write from door and
+trigger events and are read only by themselves or by an unowned script (excluded).
+
+**Limits, stated plainly.** Static: 37 scripts exceeded the step budget and a value computed at
+run time is "unknown" (an unknown VALUE still yields the pair; an unknown OBJECT or SLOT does
+not). A dialogue whose owner the module data cannot name (started by `ActionStartConversation`
+on an object that does not list it) is attributed to no object and so never qualifies — a false
+negative, never a false positive. The rule also assumes the conversation is not auto-joined;
+when the partner DOES join (click-to-join, forced), both engines run the node and publish the
+same value, which the flag store absorbs.
+
+### 8.3 The mechanism (2026-09-24): `local_var_sync`, default OFF, NEEDS-LIVE
+
+**Capture — VERIFIED static, NEEDS-LIVE runtime.** `CSWVarTable::SetLocalBoolean 0x0059B040`
+and `SetLocalNumber 0x0059B0D0` each have exactly ONE caller (`tools/xrefs.py`): the two call
+sites inside `ExecuteCommandSetLocalValue 0x00543130`, `0x00543232` (`E8 09 7E 05 00`) and
+`0x005431FE` (`E8 CD 7E 05 00`). Disassembly of the wrapper (`tools/disasm.py 0x543130 80`):
+`sub esp,0xC`; `StackPopObject` into `[esp+8]` (0x0054313E), `StackPopInteger` into `[esp+4]`
+(index, 0x00543152) and `[esp]` (value, 0x00543166); `push esi` (0x00543186);
+`GetGameObject(id)` → `esi` (0x00543188); table selection (area: vtable+0x28 then +0x1F4; module:
+vtable+0x20 then +0x9C; otherwise `lea eax,[esi+0x110]`, 0x005431CD); command id `[esp+0x14]`
+680 → boolean branch, 682 → number branch (after the VM's own −128..127 check,
+0x005431EC-0x005431F4). Each branch pushes value then index and sets `ecx = eax`. So at either call
+site: `[esp]` index, `[esp+4]` value, `[esp+0x14]` the popped object id, `esi` the object,
+`eax` the table. `LocalVarSyncHook` replaces each whole 5-byte `call` (never part of an
+instruction) with a `jmp` to a stub built by `LocalVarHookStubBuilder`: `pushad`; `push
+[esp+0x24]` (value), `push [esp+0x24]` (index — one push later, the same displacement), `push
+[esp+0x3C]` (object id: 0x20 + 0x14 + two pushes); `push eax`; `push esi`; `push kind`; `call`
+the cdecl callback; `add esp,0x18`; `popad`; the ORIGINAL `call setter` re-encoded for the stub;
+`jmp` back to site+5. 8 anchor bytes before each site and the call bytes themselves are verified
+before patching (and asserted against the GOG image by `LocalVarSyncTests` when it is present).
+The callback makes no engine call (memory reads of the module name and the object's tag, a table
+lookup, five stores), so it cannot re-enter the VM; the engine's own write always proceeds. It
+records only when: the (kind, slot) is watched at all (an interest bitmap rejects the generic AI's
+slot-20+ traffic first), the engine chose the object's OWN table (`table == obj+0x110`, i.e. not
+an area/module), the object carries the popped id at +4 and the id is a 16-bit GIT id, and
+(module hash, tag, kind, slot) matches an allowlist entry or a session-only `localvar watch`.
+
+**Transport — no new packet.** The capture ring (16 rows, `SharedBlock.LocalVars.cs`, block
+version 77, 0x5800..0x5A00) carries (module hash, id|slot|kind|value word, plugin world
+generation, ticket). The agent (`KotorGameBridge.LocalVars.cs`, `LocalVarBlockRules.Drain`)
+keeps a row only when its ticket matches its position, its generation is the plugin's current
+one and its module hash is the module the agent reads now; the first drain after attach is a
+silent baseline. Each kept row becomes `ISession.SetFlag(key, value)` with key = the existing
+64-bit object-keyed layout, tag `'L'` 0x4C, 32-bit module hash, and the low 24 bits id (16) |
+slot (7) | kind (1) — §8.1's proposal. `EventFlagStore` gives last-writer-wins by per-key
+Lamport clock with a host tie-break, and the ordinary flag snapshot delivers every entry to a late
+joiner or rejoiner. No `PacketType` or protocol bump is needed (the key is opaque to the store and
+the wire); peers that predate this simply never apply an `'L'` key (`TryApplyWorldState` already
+refuses object-keyed keys).
+
+**Apply — engine accessors, never a poke.** Each pump the agent writes the session's `'L'` values
+for the CURRENT module (sorted by key, ≤ 28, rotating if ever more) under a seqlock serial
+(odd while writing), stamped with the plugin generation it read and the capture cursor it has
+drained. `LocalVarController` (every 15 frames) applies only while the session drives the world,
+a player exists and no move-to-module is pending; only a list stamped with its CURRENT generation
+(`InvalidateAll` advances it on every module change/world unload, so a list or capture from the
+previous world is inert and a late write cannot land on a reused id); only entries of the live
+module; only when `CServerExoApp::GetGameObject` resolves the id to an object carrying that id,
+that is not an area/module (the engine's own type-byte comparison against `[0x746633]`/
+`[0x746632]`), and whose TAG is the watched one; never for a watch whose most recent LOCAL capture
+is newer than the list's drained cursor (the local write wins until the agent publishes it); and
+only when `CSWVarTable::GetLocal*` reports a different value. The write is
+`CSWVarTable::SetLocalBoolean/SetLocalNumber` on `obj+0x110` — the engine's own setter, minus
+the VM stack pops, touching nothing but the table's words (no derived state exists to rebuild).
+Because it bypasses the two spliced call sites, an applied value is never re-captured.
+
+**Offsets and numbers.** Block version 77 (`_block->Version`, `PluginSignature` byte 0x4D),
+`TotalSize` 0x5A00. Capture cursor 0x5800, status 0x5804 (bit 0 hook installed, bit 1 enabled),
+generation 0x5808, refused counter 0x580C, ring 0x5810 (16 × 0x10), apply serial 0x5910, count
+0x5914, generation echo 0x5918, drained cursor 0x591C, entries 0x5920 (28 × 8). Cheat kind 85
+(`localvar`). No packet type, no protocol bump. Flag tag 0x4C.
+
+**The live-test verb.** `localvar get|set|watch <tag|0xid> <b|n> <slot> [value]` (in-game console
+and agent console). `get` reads through `GetLocal*`; `set` writes through `SetLocal*` and, when
+`local_var_sync` is on and the slot is watched, publishes a capture exactly like a script write;
+`watch` adds a session-only allowlist entry for the current module (≤ 8; needed on BOTH peers,
+since the apply side checks the watch too).
+
+**NEEDS-LIVE.** (1) The two splices install and a real script write is captured (log line
+`localvar: captured #N …`). (2) The frame offsets hold at runtime (captured id/slot/value equal
+`localvar get`). (3) A peer's value applies through the setter and a subsequent `localvar get`
+reads it. (4) No capture of a non-allowlisted slot (the generic AI's constant slot-20+ writes must
+produce no `captured` line). (5) Nothing else in the engine reaches the setters (xrefs found no
+indirect reference; runtime has not been observed).
+
+**Live-test recipe** (two instances, `local_var_sync = 1` in BOTH coop.ini; plugin rebuilt and
+deployed with `build.ps1 -Install`; both in `danm13`, the Jedi Enclave courtyard):
+
+1. Both logs: `local vars: SetLocalNumber/SetLocalBoolean call sites 0x5431FE/0x543232 (stubs …);
+   384 allowlisted slot(s)`. `kotorcoop.log` must NOT contain `local-var hook NOT installed`.
+2. Host: `localvar get dan13_belaya b 10` → `'dan13_belaya' 0x4 b10 = 0` on both (fresh save).
+3. Host: talk to Belaya (her first node runs `k_pdan_belaya02`). Host plugin log:
+   `localvar: captured #1 module 0x…  object 0x4 b10 = 1`; host agent log:
+   `localvar: published module 0x… object 0x4 b10 = 1`; client agent log:
+   `localvar: handing the plugin 1 session value(s) for this module`; client plugin log:
+   `localvar: applied 'dan13_belaya' 0x4 b10 0 -> 1 (session value 1)`.
+4. Client: `localvar get dan13_belaya b 10` → `= 1`. Client walks through the trigger in front of
+   Belaya: she must NOT walk up and restart her intro.
+5. Synthetic path without a story script: both `localvar watch <tag> b 5` on a nearby NPC; host
+   `localvar set <tag> b 5 1` → answer `… 0 -> 1; published to the session`; client log
+   `localvar: applied '<tag>' … b5 0 -> 1`; then client `localvar set <tag> b 5 0` → host
+   applies `1 -> 0` (both directions, last writer wins).
+6. Negative: fight anything for a minute (the generic AI writes slots 20+ every round): no
+   `localvar: captured` line may appear. `localvar get <npc> b 25` still works (read-only).
+7. Late join: client disconnects, host sets a watched slot, client rejoins: after load the client
+   logs `applied …` for it (snapshot path).
+8. World edge: warp away and back; plugin logs `localvar: world generation -> N` on each edge and
+   re-applies nothing stale (no `applied` for a key whose value already matches).
 
 ## Live pass (2026-08-22)
 

@@ -76,6 +76,16 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("EnemyBaselineImportSequence", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
         ("EnemyBaselineImportAck", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
         ("EnemyBaselineSaveSequence", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
+        // local_var_sync (version 77, docs/research/quest-sync.md §8.3).
+        ("LocalVarCaptureCursor", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarStatus", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarGeneration", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarCaptureRing", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplySerial", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyCount", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyGeneration", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyDrainedCursor", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
+        ("LocalVarApplyEntries", "SharedBlock.LocalVars.cs", "KotorGameBridge.LocalVars.cs"),
     ];
 
     [Fact]

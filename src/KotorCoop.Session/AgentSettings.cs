@@ -1,4 +1,4 @@
-﻿using KotorCoop.Memory;
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
@@ -233,6 +233,15 @@ public sealed record AgentSettings
     /// peer-removal APPLY half is gated separately in the plugin by the same key.
     /// </summary>
     public bool MineSync { get; init; }
+
+    /// <summary>
+    /// When true, <see cref="Pumps.WorldStatePump.PumpLocalVars"/> publishes the allowlisted
+    /// per-object local-variable writes the plugin captured and hands the session's values
+    /// back for the plugin to apply. coop.ini <c>local_var_sync</c>, default OFF until
+    /// live-verified (docs/research/quest-sync.md §8.3). The plugin gates its hook and apply
+    /// on the same key.
+    /// </summary>
+    public bool LocalVarSync { get; init; }
 
     /// When true, a follower acts on a host's <see cref="TransitionAnnouncePacket"/> the
     /// instant it arrives — starting its own warp toward the announced destination without

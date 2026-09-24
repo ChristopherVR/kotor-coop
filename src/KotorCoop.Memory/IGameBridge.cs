@@ -646,6 +646,11 @@ public static class CheatKinds
     /// Uses the retail skill action, without manufacturing rewards or deleting the mine.</summary>
     public const uint MineAction = 76;
 
+    /// <summary>The <c>localvar</c> live-test verb: Text is op|kind|slot|tag
+    /// (LocalVarSyncRule.FormatRequest), Target an optional GIT object id, Amount the value for
+    /// set. See SharedBlock.CheatKindLocalVar.</summary>
+    public const uint LocalVar = 85;
+
     /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
@@ -668,6 +673,7 @@ public interface IGameBridge :
     IDoorBridge,
     IPlaceableBridge,
     IMineBridge,
+    ILocalVarBridge,
     IContainerLootBridge,
     IPartyPoolBridge,
     IStoreBridge,

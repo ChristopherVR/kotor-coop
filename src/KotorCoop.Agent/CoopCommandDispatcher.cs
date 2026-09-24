@@ -376,6 +376,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Gamepad] = c => SendCheat(new CheatRequest(CheatKinds.Gamepad, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
         [CoopCommandKind.MineAction] = c => QueueMineAction(c),
+        [CoopCommandKind.LocalVar] = c => QueueLocalVar(c),
 
         // ⚠ Deliberately does NOT call NoteLocalItemGiven, unlike CoopCommandKind.GiveLoot's own
         // dispatcher entry just above — see CoopCommandKind.ScriptGive's own doc comment

@@ -152,6 +152,8 @@ internal static unsafe partial class PluginHost
             }
         }
 
+        // Per-object local variables (docs/research/quest-sync.md §8.3): two whole-instruction
+        // splices at the lower CSWVarTable setters
         // The script-agnostic second solo-segment trigger (docs/research/star-forge-finale.md
         // §11): a detour on every RemovePartyMember VM call, independent of and in addition to
         // SoloSegmentController's own roster-count poll. Installed unconditionally, like

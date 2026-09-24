@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using KotorCoop.Memory;
 using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
@@ -128,6 +128,7 @@ internal static class AgentComposition
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
             MineSync = config?.MineSync ?? true,
+            LocalVarSync = config?.LocalVarSync ?? false,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? true,
             FollowStunt = config?.FollowStunt ?? true,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? true,
@@ -232,7 +233,8 @@ internal static class AgentComposition
             enemyDamage: agentSettings.Scaling.EnemyDamage,
             xpRate: agentSettings.Scaling.XpRate,
             storeStock: agentSettings.Scaling.StoreStock,
-            storePrices: agentSettings.Scaling.StorePrices);
+            storePrices: agentSettings.Scaling.StorePrices,
+            localVarSync: agentSettings.LocalVarSync);
 
         SessionManager manager = new(bridge, agentSettings);
 

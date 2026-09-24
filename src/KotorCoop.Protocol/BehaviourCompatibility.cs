@@ -96,6 +96,7 @@ public static class BehaviourCompatibility
         CompareFlag(BehaviourFlags.LivenessSync, "liveness_sync", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.MapRevealSync, "map_reveal_sync", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.RequireIdenticalSave, "require_identical_save", hostAuthoritative: false);
+        CompareFlag(BehaviourFlags.LocalVarSync, "local_var_sync", hostAuthoritative: false);
 
         if (host.InterpolationMs != peer.InterpolationMs)
         {

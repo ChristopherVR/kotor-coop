@@ -127,6 +127,15 @@ public enum BehaviourFlags : uint
     /// visible (a host demanding identical saves while a client did not expect a refusal is
     /// worth a warning even though the refusal itself needs no negotiation to happen).</summary>
     RequireIdenticalSave = 1 << 17,
+
+    /// <summary>coop.ini <c>local_var_sync</c> (agent AND plugin; docs/research/quest-sync.md
+    /// §8.3). Whether allowlisted per-object local variables are captured and applied. Not
+    /// host-authoritative: the plugin reads its own coop.ini at game start and cannot adopt a
+    /// value mid-session, and a one-sided setting is harmless (the side with it off neither
+    /// publishes nor applies, so the pair simply behaves as if it were off) — but worth a
+    /// warning, since "the NPC remembers our talk on your screen and not mine" is exactly the
+    /// desync this key exists to close.</summary>
+    LocalVarSync = 1 << 18,
 }
 
 /// <summary>
@@ -250,7 +259,8 @@ public readonly record struct BehaviourDigest(
         int enemyDamage = PlayerCountScalingRule.Auto,
         int xpRate = PlayerCountScalingRule.Auto,
         int storeStock = PlayerCountScalingRule.Auto,
-        int storePrices = PlayerCountScalingRule.Vanilla)
+        int storePrices = PlayerCountScalingRule.Vanilla,
+        bool localVarSync = false)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -279,6 +289,7 @@ public readonly record struct BehaviourDigest(
         Set(livenessSync, BehaviourFlags.LivenessSync);
         Set(mapRevealSync, BehaviourFlags.MapRevealSync);
         Set(requireIdenticalSave, BehaviourFlags.RequireIdenticalSave);
+        Set(localVarSync, BehaviourFlags.LocalVarSync);
 
         return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }

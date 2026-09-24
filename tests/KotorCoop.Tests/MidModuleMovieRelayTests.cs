@@ -216,8 +216,8 @@ public class MidModuleMovieRelayTests
         // for the galaxy-map departure relay (67, 0x4C00), then to 0x4F00 for v74's protocol-59
         // acknowledged container-loot mailbox (0x4D00..0x4E3B), then to 0x5400 for v75's
         // item-spawn provenance arrays, then to 0x5800 for v76's enemy-health baseline
-        // channel — see SharedBlock.TotalSize.
-        Assert.Equal(0x5800, SharedBlock.TotalSize);
+        // channel, then to 0x5A00 for v77's local_var_sync region — see SharedBlock.TotalSize.
+        Assert.Equal(0x5A00, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

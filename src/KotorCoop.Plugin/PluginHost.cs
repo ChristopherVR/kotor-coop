@@ -70,6 +70,7 @@ internal static unsafe partial class PluginHost
     private static PortraitController? _portraits;
     private static BarkController? _barks;
     private static ItemTemplateSpawnController? _itemTemplateSpawns;
+    private static LocalVarController? _localVars;
     private static InteractionLockController? _interactionLocks;
     private static PartyRosterController? _partyRoster;
     private static PartySelectSuppressionController? _partySelectSuppression;
@@ -403,7 +404,12 @@ internal static unsafe partial class PluginHost
         // 76 adds the exact enemy-health baseline channel (world/export page, verdict/import
         //    page, native save-request mailbox) at 0x5400..0x57C0 and grows TotalSize to 0x5800.
         //    See SharedBlock.EnemyScalingBaseline.cs and docs/research/enemy-health-persistence.md.
-        _block->Version = 76;
+        // 77 adds per-object local-variable replication (SharedBlock.LocalVars.cs,
+        //    0x5800..0x5A00, TotalSize 0x5A00): a 16-row capture ring LocalVarSyncHook fills
+        //    from ExecuteCommandSetLocalValue and a 28-row seqlocked apply list for
+        //    LocalVarController. coop.ini local_var_sync, default OFF; NEEDS-LIVE. See
+        //    docs/research/quest-sync.md §8.3.
+        _block->Version = 77;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
