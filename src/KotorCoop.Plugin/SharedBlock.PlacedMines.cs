@@ -2,7 +2,7 @@ namespace KotorCoop.Plugin;
 
 internal partial struct SharedBlock
 {
-    // ---- party-placed floor-mine replication (version 78, region 0x5A00..0x5BB8) -----------
+    // ---- party-placed floor-mine replication (version 78, region 0x5A00..0x5BBC) -----------
     //
     // docs/research/mines.md §14, coop.ini placed_mine_sync (default OFF, NEEDS-LIVE). A mine a
     // party member PLACES gets a per-process dynamic object id, so it cannot ride the GIT-mine
@@ -66,8 +66,8 @@ internal partial struct SharedBlock
     /// 0 = no roster yet (the plugin removes nothing).</summary>
     public const int OffsetPlacedMineRosterGeneration = 0x5B30;
 
-    /// <summary>The <see cref="OffsetWorldLoadSerial"/> the roster was built for; a roster for
-    /// any other world is ignored.</summary>
+    /// <summary>The <see cref="OffsetPlacedMineWorld"/> token the roster was built for; a roster
+    /// for any other world is ignored.</summary>
     public const int OffsetPlacedMineRosterWorldSerial = 0x5B34;
 
     /// <summary>A mapped serial at or below this fence that is absent from the list is removed.</summary>
@@ -108,9 +108,17 @@ internal partial struct SharedBlock
     /// party-placed mine on this (client) instance.</summary>
     public const int OffsetPlacedMineFireSuppressed = 0x5BB0;
 
-    /// <summary>Plugin -&gt; agent, diagnostic: mapped serials in the current scope.
-    /// Region ends at 0x5BB8; 0x5BB8..0x5C00 is free.</summary>
+    /// <summary>Plugin -&gt; agent, diagnostic: mapped serials in the current scope.</summary>
     public const int OffsetPlacedMineMappedCount = 0x5BB4;
+
+    /// <summary>
+    /// Plugin -&gt; agent. The placed-mine WORLD TOKEN: bumped every time the controller begins a
+    /// new scope (a new world epoch — every module transition, load or same-module reload — or
+    /// a new session). Every other field in this region that names a world names this token,
+    /// not <see cref="OffsetWorldLoadSerial"/>, which deliberately does NOT move on an ordinary
+    /// door transition. 0 = no scope yet. Region ends at 0x5BBC; 0x5BBC..0x5C00 is free.
+    /// </summary>
+    public const int OffsetPlacedMineWorld = 0x5BB8;
 }
 
 /// <summary>Outcome of one spawn-mailbox request (<see cref="SharedBlock.OffsetPlacedMineSpawnStatus"/>).

@@ -1,6 +1,6 @@
 namespace KotorCoop.Plugin;
 
-// Party-placed floor-mine replication (shared block version 78, region 0x5A00..0x5BB8). See
+// Party-placed floor-mine replication (shared block version 78, region 0x5A00..0x5BBC). See
 // SharedBlock.PlacedMines.cs for the layout and docs/research/mines.md §14 for the design.
 internal sealed unsafe partial class SharedBlockView
 {
@@ -10,14 +10,14 @@ internal sealed unsafe partial class SharedBlockView
 
     /// <summary>Publishes one captured placement: fields first, the entry's serial next, the
     /// head LAST, so the agent never pairs a new head with a half-written entry.</summary>
-    public uint PublishPlacedMineCapture(uint worldLoadSerial, uint localObjectId, in PlacedMineSpec spec)
+    public uint PublishPlacedMineCapture(uint world, uint localObjectId, in PlacedMineSpec spec)
     {
         uint serial = PlacedMineCaptureHead + 1;
         byte* entry = baseAddress + SharedBlock.OffsetPlacedMineCaptureRing
             + ((int)((serial - 1) % SharedBlock.PlacedMineCaptureCapacity) * SharedBlock.PlacedMineCaptureStride);
 
         *(uint*)(entry + SharedBlock.PlacedMineCaptureSerialOffset) = 0;
-        *(uint*)(entry + SharedBlock.PlacedMineCaptureWorldSerialOffset) = worldLoadSerial;
+        *(uint*)(entry + SharedBlock.PlacedMineCaptureWorldSerialOffset) = world;
         *(uint*)(entry + SharedBlock.PlacedMineCaptureLocalIdOffset) = localObjectId;
         *(float*)(entry + SharedBlock.PlacedMineCaptureXOffset) = spec.X;
         *(float*)(entry + SharedBlock.PlacedMineCaptureYOffset) = spec.Y;
@@ -35,14 +35,14 @@ internal sealed unsafe partial class SharedBlockView
 
     // ---- gone ring (plugin -> agent) -------------------------------------------------------
 
-    public void PublishPlacedMineGone(uint worldLoadSerial, uint mineSerial, uint captureSerial)
+    public void PublishPlacedMineGone(uint world, uint mineSerial, uint captureSerial)
     {
         uint sequence = *U32(SharedBlock.OffsetPlacedMineGoneHead) + 1;
         byte* entry = baseAddress + SharedBlock.OffsetPlacedMineGoneRing
             + ((int)((sequence - 1) % SharedBlock.PlacedMineGoneCapacity) * SharedBlock.PlacedMineGoneStride);
 
         *(uint*)(entry + SharedBlock.PlacedMineGoneSequenceOffset) = 0;
-        *(uint*)(entry + SharedBlock.PlacedMineGoneWorldSerialOffset) = worldLoadSerial;
+        *(uint*)(entry + SharedBlock.PlacedMineGoneWorldSerialOffset) = world;
         *(uint*)(entry + SharedBlock.PlacedMineGoneMineSerialOffset) = mineSerial;
         *(uint*)(entry + SharedBlock.PlacedMineGoneCaptureOffset) = captureSerial;
         *(uint*)(entry + SharedBlock.PlacedMineGoneSequenceOffset) = sequence;
@@ -123,6 +123,22 @@ internal sealed unsafe partial class SharedBlockView
     {
         get => *U32(SharedBlock.OffsetPlacedMineFireSuppressed);
         set => *U32(SharedBlock.OffsetPlacedMineFireSuppressed) = value;
+    }
+
+    /// <summary>The placed-mine world token (see SharedBlock.OffsetPlacedMineWorld).</summary>
+    public uint PlacedMineWorld => *U32(SharedBlock.OffsetPlacedMineWorld);
+
+    /// <summary>Begins a new placed-mine world scope; returns the new token (never 0).</summary>
+    public uint BumpPlacedMineWorld()
+    {
+        uint next = *U32(SharedBlock.OffsetPlacedMineWorld) + 1;
+        if (next == 0)
+        {
+            next = 1;
+        }
+
+        *U32(SharedBlock.OffsetPlacedMineWorld) = next;
+        return next;
     }
 
     public uint PlacedMineMappedCount

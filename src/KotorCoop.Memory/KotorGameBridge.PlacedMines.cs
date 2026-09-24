@@ -1,5 +1,5 @@
 // The agent's half of party-placed floor-mine replication (KotorCoop.Plugin's
-// SharedBlock.PlacedMines.cs, shared block version 78, region 0x5A00..0x5BB8). See
+// SharedBlock.PlacedMines.cs, shared block version 78, region 0x5A00..0x5BBC). See
 // docs/research/mines.md §14.
 using System.Runtime.InteropServices;
 using KotorCoop.Protocol;
@@ -37,6 +37,7 @@ public sealed partial class KotorGameBridge
     private const int BlockPlacedMineSpawnApplied = 0x5BA4;
     private const int BlockPlacedMineSpawnStatus = 0x5BA8;
     private const int BlockPlacedMineSpawnLocalId = 0x5BAC;
+    private const int BlockPlacedMineWorld = 0x5BB8;
 
     [StructLayout(LayoutKind.Explicit, Size = BlockPlacedMineCaptureStride)]
     private struct CaptureEntry
@@ -66,6 +67,15 @@ public sealed partial class KotorGameBridge
 
     /// <inheritdoc />
     public bool SupportsPlacedMineSync => _pluginBlock != 0;
+
+    /// <inheritdoc />
+    public bool TryReadPlacedMineWorld(out uint world)
+    {
+        world = 0;
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockPlacedMineWorld, out world)
+            && world != 0;
+    }
 
     /// <inheritdoc />
     public bool TryReadPlacedMineHeads(out uint captureHead, out uint goneHead)
@@ -165,7 +175,7 @@ public sealed partial class KotorGameBridge
     }
 
     /// <inheritdoc />
-    public bool TryWritePlacedMineRoster(uint worldLoadSerial, uint highestSerial, IReadOnlyList<uint> serials)
+    public bool TryWritePlacedMineRoster(uint world, uint highestSerial, IReadOnlyList<uint> serials)
     {
         if (_pluginBlock == 0 || serials.Count > BlockPlacedMineRosterCapacity
             || !_memory.TryReadUInt32(_pluginBlock + BlockPlacedMineRosterGeneration, out uint generation))
@@ -176,7 +186,7 @@ public sealed partial class KotorGameBridge
         // Seqlock: odd while writing, the next even value when done.
         uint writing = (generation & 1) == 0 ? generation + 1 : generation;
         bool ok = _memory.TryWrite(_pluginBlock + BlockPlacedMineRosterGeneration, writing);
-        ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineRosterWorldSerial, worldLoadSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineRosterWorldSerial, world);
         ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineRosterHighest, highestSerial);
         ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineRosterCount, (uint)serials.Count);
         for (int i = 0; i < serials.Count; i++)
@@ -189,7 +199,7 @@ public sealed partial class KotorGameBridge
     }
 
     /// <inheritdoc />
-    public uint RequestPlacedMineSpawn(uint worldLoadSerial, uint mineSerial, uint captureSerial, PlacedMineRecord record)
+    public uint RequestPlacedMineSpawn(uint world, uint mineSerial, uint captureSerial, PlacedMineRecord record)
     {
         if (_pluginBlock == 0 || mineSerial == 0 || !record.IsValid
             || !_memory.TryReadUInt32(_pluginBlock + BlockPlacedMineSpawnRequest, out uint request))
@@ -197,7 +207,7 @@ public sealed partial class KotorGameBridge
             return 0;
         }
 
-        bool ok = _memory.TryWrite(_pluginBlock + BlockPlacedMineSpawnWorldSerial, worldLoadSerial);
+        bool ok = _memory.TryWrite(_pluginBlock + BlockPlacedMineSpawnWorldSerial, world);
         ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineSpawnSerial, mineSerial);
         ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineSpawnCapture, captureSerial);
         ok &= _memory.TryWrite(_pluginBlock + BlockPlacedMineSpawnX, record.X);

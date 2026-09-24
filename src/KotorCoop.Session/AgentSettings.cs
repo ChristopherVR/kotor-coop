@@ -175,6 +175,13 @@ public sealed record AgentSettings
     /// </summary>
     public bool EnemyEffectSync { get; init; }
 
+    /// <summary>
+    /// Replicate party-placed floor mines — docs/research/mines.md §14, coop.ini
+    /// <c>placed_mine_sync</c>. OFF by default (NEEDS-LIVE). The plugin reads the same key for its
+    /// capture, spawn and fire-gate halves; both machines must agree.
+    /// </summary>
+    public bool PlacedMineSync { get; init; }
+
     /// <summary>How often <see cref="Pumps.ScriptItemGrantPump"/> re-samples the local PC's
     /// inventory once it has a baseline, in milliseconds — independent of
     /// <see cref="HeavyPumpIntervalMs"/> for the same reason

@@ -5,11 +5,11 @@ using KotorCoop.Protocol;
 namespace KotorCoop.Memory;
 
 /// <summary>One placement the plugin captured (a party member on this instance placed a mine).</summary>
-public readonly record struct PlacedMineCapture(uint CaptureSerial, uint WorldLoadSerial, PlacedMineRecord Record);
+public readonly record struct PlacedMineCapture(uint CaptureSerial, uint World, PlacedMineRecord Record);
 
 /// <summary>One "gone here" event: <paramref name="MineSerial"/> names a mapped mine; when it is 0,
 /// <paramref name="CaptureSerial"/> names an own capture that vanished before its serial arrived.</summary>
-public readonly record struct PlacedMineGone(uint Sequence, uint WorldLoadSerial, uint MineSerial, uint CaptureSerial);
+public readonly record struct PlacedMineGone(uint Sequence, uint World, uint MineSerial, uint CaptureSerial);
 
 /// <summary>The plugin's <c>PlacedMineSpawnStatus</c> values (KEEP IN SYNC with
 /// src/KotorCoop.Plugin/SharedBlock.PlacedMines.cs; PlacedMineRelayTests reads both).</summary>
@@ -29,6 +29,14 @@ public interface IPlacedMineBridge
 {
     /// <summary>False when this bridge has no plugin block with the placed-mine region.</summary>
     bool SupportsPlacedMineSync => false;
+
+    /// <summary>The plugin's placed-mine world token (bumped on every new world scope, including
+    /// ordinary door transitions, unlike the world-load serial). 0 / false = no scope yet.</summary>
+    bool TryReadPlacedMineWorld(out uint world)
+    {
+        world = 0;
+        return false;
+    }
 
     /// <summary>The plugin's two ring heads, for baselining a fresh agent against a block that
     /// outlived an earlier session in the same process.</summary>
@@ -56,10 +64,10 @@ public interface IPlacedMineBridge
     }
 
     /// <summary>Writes the roster level under its seqlock (odd while writing, even when done).</summary>
-    bool TryWritePlacedMineRoster(uint worldLoadSerial, uint highestSerial, IReadOnlyList<uint> serials) => false;
+    bool TryWritePlacedMineRoster(uint world, uint highestSerial, IReadOnlyList<uint> serials) => false;
 
     /// <summary>Files one spawn/register request; returns the request serial written (0 = failed).</summary>
-    uint RequestPlacedMineSpawn(uint worldLoadSerial, uint mineSerial, uint captureSerial, PlacedMineRecord record) => 0;
+    uint RequestPlacedMineSpawn(uint world, uint mineSerial, uint captureSerial, PlacedMineRecord record) => 0;
 
     /// <summary>The plugin's ack of the last request.</summary>
     bool TryReadPlacedMineSpawnAck(out uint applied, out uint status, out uint localId)

@@ -23,6 +23,7 @@ public interface ICoopSession :
     IPartySession,
     IDialogueSession,
     IClassGrantSession,
+    IPlacedMineSession,
     IEnemyEffectSession,
     IInteractionLockSession,
     IChatSession,

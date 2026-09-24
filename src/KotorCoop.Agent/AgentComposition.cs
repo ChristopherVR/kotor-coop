@@ -124,6 +124,8 @@ internal static class AgentComposition
             ClassGrantSync = config?.ClassGrantSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
             EnemyEffectSync = config?.EnemyEffectSync ?? false,
+            // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
+            PlacedMineSync = config?.PlacedMineSync ?? false,
             DialogueFastJoin = config?.DialogueFastJoin ?? true,
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,

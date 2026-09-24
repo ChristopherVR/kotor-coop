@@ -338,6 +338,15 @@ public sealed record CoopConfig
     /// ("enemy_effect_sync", false)</c>. docs/research/enemy-effects.md.</summary>
     public bool EnemyEffectSync { get; init; }
 
+    /// <summary>coop.ini <c>placed_mine_sync</c> — replicate floor mines a party member PLACES
+    /// (docs/research/mines.md §14): the host names each with a session serial, every peer builds
+    /// a replica through the engine's own construction sequence, and only the host's copy can
+    /// detonate on an enemy. OFF by default, NEEDS-LIVE: the replica build is a new engine write.
+    /// Three readers must agree on that default — this record and its parser, the agent's
+    /// <c>AgentComposition</c> fallback and the plugin's <c>PluginConfig.ReadBool
+    /// ("placed_mine_sync", false)</c>. Both machines must set it.</summary>
+    public bool PlacedMineSync { get; init; }
+
     /// <summary>
     /// Whether the dialogue channel is pumped on the agent's real-time (per-poll-tick) path
     /// instead of the ~150 ms combat cadence, and whether an unchanged read is deduped against
@@ -843,6 +852,7 @@ public sealed record CoopConfig
         "phantom_gait_diagnostics",
         "party_roster_sync", "party_select_host_only", "party_together_fix",
         "pause_button_hook", "pause_sync", "pazaak_detect", "perf_trace", "phantom_targetable",
+        "placed_mine_sync",
         "poison_sync", "removeparty_hook", "save_flush", "script_item_sync",
         "session_save_host_refusal", "smooth_ms", "solo_segment_any_module", "solo_segment_modules",
         "solo_segment_spectate", "stealth_sync", "stealth_visual_sync", "store_sync",
@@ -1056,6 +1066,7 @@ public sealed record CoopConfig
             LocalCombat = !kv.ContainsKey("local_combat") || IsTruthy(kv.GetValueOrDefault("local_combat")),
             CompanionLocalCombat = IsTruthy(kv.GetValueOrDefault("companion_local_combat")),
             EnemyEffectSync = IsTruthy(kv.GetValueOrDefault("enemy_effect_sync")),
+            PlacedMineSync = IsTruthy(kv.GetValueOrDefault("placed_mine_sync")),
             EffectSync = !kv.ContainsKey("effect_sync") || IsTruthy(kv.GetValueOrDefault("effect_sync")),
             TriggerRelay = !kv.ContainsKey("trigger_relay") || IsTruthy(kv.GetValueOrDefault("trigger_relay")),
             ClientEncounters = !kv.ContainsKey("client_encounters")

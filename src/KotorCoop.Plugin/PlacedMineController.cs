@@ -60,6 +60,9 @@ internal sealed class PlacedMineController(SharedBlockView block)
     private ulong _sessionGeneration;
     private bool _sessionWasActive;
     private ulong _epoch;
+
+    /// <summary>This scope's world token (SharedBlock.OffsetPlacedMineWorld); 0 = none.</summary>
+    private uint _world;
     private nint _scopeArea;
     private bool _baselined;
     private int _frame;
@@ -79,6 +82,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
         _replicaIds.Clear();
         _destroyRetries.Clear();
         _epoch = 0;
+        _world = 0;
         _scopeArea = 0;
         _baselined = false;
         block.PlacedMineMappedCount = 0;
@@ -108,10 +112,11 @@ internal sealed class PlacedMineController(SharedBlockView block)
             return;
         }
 
-        if (epoch != _epoch)
+        if (epoch != _epoch || _world == 0)
         {
             Invalidate();
             _epoch = epoch;
+            _world = block.BumpPlacedMineWorld();
         }
 
         PartyPlacedMineScope scope = new(_sessionGeneration, _epoch);
@@ -224,7 +229,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
                 continue;
             }
 
-            uint capture = block.PublishPlacedMineCapture(block.WorldLoadSerial, id, spec);
+            uint capture = block.PublishPlacedMineCapture(_world, id, spec);
             _pendingCaptures[capture] = id;
             Log($"placed mines: captured local placement #{capture} (local 0x{id:X}, creator 0x{Odyssey.ReadPlacedMineCreator(trigger):X}, "
                 + $"row {spec.TrapType}, DC {spec.DetectDc}/{spec.DisarmDc}, faction {spec.Faction}, "
@@ -256,14 +261,14 @@ internal sealed class PlacedMineController(SharedBlockView block)
                 uint capture = (uint)(key & 0xFFFFFFFF);
                 _pendingCaptures.Remove(capture);
                 _vanishedCaptures.Add(capture);
-                block.PublishPlacedMineGone(block.WorldLoadSerial, 0, capture);
+                block.PublishPlacedMineGone(_world, 0, capture);
                 Log($"placed mines: own capture #{capture} is gone here before its serial arrived - reported");
                 continue;
             }
 
             if (_map.TryGetLocalObjectId(scope, key, out uint localId) && _map.Retire(scope, key))
             {
-                block.PublishPlacedMineGone(block.WorldLoadSerial, (uint)key, 0);
+                block.PublishPlacedMineGone(_world, (uint)key, 0);
                 Log($"placed mines: mine #{key} (local 0x{localId:X}) is gone here (the engine removed it) - reported to the session");
             }
         }
@@ -280,7 +285,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
         }
 
         ReadOnlySpan<uint> listed = serials[..count];
-        uint current = block.WorldLoadSerial;
+        uint current = _world;
         foreach ((ulong serial, uint localId) in _map.Snapshot())
         {
             if (!PlacedMineRosterRule.ShouldRemove(serial, worldSerial, current, highest, listed))
@@ -356,7 +361,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
         PlacedMineSpawnStatus status;
         uint localId = 0;
 
-        if (block.PlacedMineSpawnWorldSerial != block.WorldLoadSerial)
+        if (block.PlacedMineSpawnWorldSerial != _world)
         {
             status = PlacedMineSpawnStatus.StaleWorld;
         }
@@ -525,7 +530,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
         StringBuilder log = new();
         List<(ulong Serial, uint LocalObjectId)> pairs = _map.Snapshot();
         bool route = Odyssey.VerifyPlacedMineRoute(out string routeDiagnostic);
-        Log($"minestate: enabled={Enabled} scope=({_map.Scope.SessionGeneration},{_map.Scope.WorldEpoch:X}) world={block.WorldLoadSerial} "
+        Log($"minestate: enabled={Enabled} scope=({_map.Scope.SessionGeneration},{_map.Scope.WorldEpoch:X}) world={_world} "
             + $"mapped={pairs.Count} pending={_pendingCaptures.Count} known={_knownIds.Count} suppress={PlacedMineFireGateHook.SuppressPartyMines} "
             + $"gate={(PlacedMineFireGateHook.Installed ? "installed" : "absent")} refusals={PlacedMineFireGateHook.Refusals} route={routeDiagnostic}");
         foreach ((ulong serial, uint id) in pairs)

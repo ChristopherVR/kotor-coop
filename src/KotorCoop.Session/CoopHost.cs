@@ -252,6 +252,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
             [PacketType.ClassGrant] = HandleClassGrant,
             [PacketType.ClassGrantAck] = HandleClassGrantAck,
+            [PacketType.PlacedMineIntent] = HandlePlacedMineIntent,
             [PacketType.EnemyEffect] = HandleEnemyEffect,
             [PacketType.Ping] = HandlePing,
             [PacketType.Bye] = HandleBye,
@@ -497,6 +498,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastStoreV2(now, recipients);
         BroadcastDialogueGrant(now, recipients);
         BroadcastClassGrant(now, recipients);
+        BroadcastPlacedMineRoster(now, recipients);
         BroadcastPhantomDamage(recipients);
         BroadcastPeerEffects(recipients);
         BroadcastBarks(recipients);
