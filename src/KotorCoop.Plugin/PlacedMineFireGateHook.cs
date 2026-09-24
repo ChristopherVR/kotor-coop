@@ -17,13 +17,15 @@ namespace KotorCoop.Plugin;
 ///
 /// The stub is pure machine code, no managed transition on the engine's event path:
 /// <code>
-///   cmp  dword [flag], 0          ; the controller's per-frame SuppressPartyMines answer
-///   je   original
 ///   cmp  dword [ecx+0x314], 0     ; placed by the party? (SetCreator 0x0058D741)
 ///   je   original
+///   cmp  dword [flag], 0          ; the controller's per-frame SuppressPartyMines answer
+///   je   host
 ///   inc  dword [counter]          ; diagnostic, read back by PlacedMineController
 ///   xor  eax, eax
 ///   ret  8                        ; pop the two arguments exactly as the callee would
+/// host:
+///   mov  dword [armed], 3         ; a party mine may detonate here: see PartyMineWindowOpen
 /// original:
 ///   jmp  0x0058D4A0               ; return address and arguments untouched
 /// </code>
@@ -41,6 +43,10 @@ internal static unsafe class PlacedMineFireGateHook
 
     private const int FlagOffset = 0x30;
     private const int CounterOffset = 0x34;
+    private const int ArmedOffset = 0x38;
+
+    /// <summary>Frames a party-mine check keeps <see cref="PartyMineWindowOpen"/> true.</summary>
+    private const int ArmedFrames = 3;
 
     private static nint _stub;
 
@@ -56,6 +62,23 @@ internal static unsafe class PlacedMineFireGateHook
             {
                 *(int*)(_stub + FlagOffset) = value ? 1 : 0;
             }
+        }
+    }
+
+    /// <summary>True for a few frames after the engine checked a party-placed mine on an
+    /// engine that lets it fire (the host). The trap script's blast damages whatever in its
+    /// radius is hostile to the party's faction, and that includes a peer's stand-in, which
+    /// must stay attackable by enemies. Live 2026-09-24: a guard set off the host's replica and
+    /// the blast, forwarded as an enemy hit on the joiner's phantom, downed the joiner.
+    /// <see cref="PhantomHitHook"/> drops stand-in hits while this is open.</summary>
+    public static bool PartyMineWindowOpen => _stub != 0 && *(int*)(_stub + ArmedOffset) > 0;
+
+    /// <summary>Counts the window down. Called once per frame by PlacedMineController.</summary>
+    public static void Tick()
+    {
+        if (_stub != 0 && *(int*)(_stub + ArmedOffset) > 0)
+        {
+            (*(int*)(_stub + ArmedOffset))--;
         }
     }
 
@@ -96,24 +119,25 @@ internal static unsafe class PlacedMineFireGateHook
         int n = 0;
         uint flag = (uint)(stub + FlagOffset);
         uint counter = (uint)(stub + CounterOffset);
-
-        // cmp dword ptr [flag], 0
-        s[n++] = 0x83; s[n++] = 0x3D;
-        *(uint*)(s + n) = flag; n += 4;
-        s[n++] = 0x00;
-
-        // je original (patched below)
-        s[n++] = 0x74;
-        int jeFlag = n++;
+        uint armed = (uint)(stub + ArmedOffset);
 
         // cmp dword ptr [ecx+0x314], 0
         s[n++] = 0x83; s[n++] = 0xB9;
         *(int*)(s + n) = TriggerPlacedByParty; n += 4;
         s[n++] = 0x00;
 
-        // je original
+        // je original (patched below)
         s[n++] = 0x74;
         int jeParty = n++;
+
+        // cmp dword ptr [flag], 0
+        s[n++] = 0x83; s[n++] = 0x3D;
+        *(uint*)(s + n) = flag; n += 4;
+        s[n++] = 0x00;
+
+        // je host
+        s[n++] = 0x74;
+        int jeHost = n++;
 
         // inc dword ptr [counter]
         s[n++] = 0xFF; s[n++] = 0x05;
@@ -123,9 +147,15 @@ internal static unsafe class PlacedMineFireGateHook
         s[n++] = 0x33; s[n++] = 0xC0;
         s[n++] = 0xC2; s[n++] = 0x08; s[n++] = 0x00;
 
+        // host: mov dword ptr [armed], ArmedFrames
+        int host = n;
+        s[n++] = 0xC7; s[n++] = 0x05;
+        *(uint*)(s + n) = armed; n += 4;
+        *(int*)(s + n) = ArmedFrames; n += 4;
+
         int original = n;
-        s[jeFlag] = (byte)(original - (jeFlag + 1));
         s[jeParty] = (byte)(original - (jeParty + 1));
+        s[jeHost] = (byte)(host - (jeHost + 1));
 
         // jmp GetCanFireMineOnObject
         s[n++] = 0xE9;
@@ -140,6 +170,7 @@ internal static unsafe class PlacedMineFireGateHook
 
         *(int*)(stub + FlagOffset) = 0;
         *(uint*)(stub + CounterOffset) = 0;
+        *(int*)(stub + ArmedOffset) = 0;
 
         if (!NativeMethods.VirtualProtect(CallSite, 5, PageExecuteReadWrite, out uint old))
         {

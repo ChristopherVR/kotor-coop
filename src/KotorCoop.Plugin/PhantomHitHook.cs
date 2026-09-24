@@ -653,6 +653,8 @@ internal static unsafe class PhantomHitHook
     /// Runs before the engine's own damage application, for EVERY damage event in the
     /// game. The id filter comes first for exactly that reason.
     /// </summary>
+    private static int _partyMineHitsDropped;
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnDamage(nint target, nint effect)
     {
@@ -695,6 +697,19 @@ internal static unsafe class PhantomHitHook
                         break;
                     }
                 }
+            }
+
+            // A party-placed mine's blast (host only) reaches a peer's stand-in because the
+            // stand-in must stay hostile-attackable; it is a party member, so neither forward nor
+            // scale it. See PlacedMineFireGateHook.PartyMineWindowOpen.
+            if ((slot >= 0 || companionSlot >= 0) && PlacedMineFireGateHook.PartyMineWindowOpen)
+            {
+                if (_partyMineHitsDropped++ < 12)
+                {
+                    PluginHost.Log($"placed mines: dropped a party mine's hit on player stand-in 0x{targetId:X} (a party member; not forwarded)");
+                }
+
+                return;
             }
 
             // enemy_damage: rewrite a hostile hit on a player body BEFORE anything below reads

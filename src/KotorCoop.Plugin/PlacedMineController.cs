@@ -90,6 +90,7 @@ internal sealed class PlacedMineController(SharedBlockView block)
 
     public void OnFrame()
     {
+        PlacedMineFireGateHook.Tick();
         bool sessionActive = block.Command == SharedBlock.CommandSpawnAndDrive;
         UpdateFireGate(sessionActive);
 
