@@ -1,0 +1,129 @@
+namespace KotorCoop.Plugin;
+
+// The `attack` live-test primitive (docs/research/combat-participation.md §15): orders the
+// LOCAL PLAYER's own creature to attack a target through the engine's own ActionAttack action
+// queue (Odyssey.AttackTarget - the SAME verified ExecuteCommandAttack route this plugin
+// already drives for a mirrored companion/enemy under local_combat, round 11/71), so:
+//   (1) the sticky-aggro test ("the joiner out-damages the host; the enemy should stay on the
+//       joiner") can finally run on a rig that cannot click, and
+//   (2) a live `cast` can be exercised - effect-sync.md §14.8/§14.9 found a queued Force power
+//       cast is only promoted to a real FP-spending cast by the CASTER'S OWN active combat
+//       round, which this verb is what arms.
+// Never bypasses PhantomHitHook's damage-forwarding path: this only queues the same engine
+// action a real click produces, nothing about damage application is touched here.
+internal sealed unsafe partial class CheatController
+{
+    /// <summary>Matches TestDriveController.PlayerAttackMeleeRange (round 71,
+    /// docs/research/combat-participation.md §15): a queued ActionAttack for a
+    /// PLAYER-CONTROLLED creature never closes the gap on its own (that only happens for an
+    /// AI-driven attacker's own per-tick processing) - a real click's accompanying move-to-click
+    /// path is what normally does it. Without staging the range here first, the order arms
+    /// (head action becomes 0x3E Combat) but the target's hp never moves, exactly the round-68
+    /// failure this constant's sibling was built to close.</summary>
+    private const float AttackMeleeRange = 1.5f;
+
+    private void Attack(nint player, uint playerId)
+    {
+        uint targetId = block.CheatTarget;
+
+        // CheatTarget == 0 is "stop" (ConsoleCommand.Attack.cs's `attack stop`) - the
+        // counterpart to the order below, using the same clear helper the TEST BATTERY's own
+        // attack primitive already relies on (Odyssey.Faction.cs) rather than a raw queue wipe.
+        if (targetId == 0)
+        {
+            bool cleared = Odyssey.ClearQueuedCombatActions(playerId);
+            Answer(
+                cleared ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                cleared
+                    ? $"attack: cleared 0x{playerId:X}'s queued combat actions"
+                    : $"attack: could not clear 0x{playerId:X}'s queued combat actions");
+            return;
+        }
+
+        if (targetId == playerId)
+        {
+            Answer(SharedBlock.CheatStatusRefused, "attack: cannot target yourself");
+            return;
+        }
+
+        nint targetCreature = Odyssey.ResolveServerObject(targetId);
+        if (targetCreature == 0 || *(nint*)targetCreature != CreatureFinder.CreatureVtable)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"attack: 0x{targetId:X} is not a live creature here");
+            return;
+        }
+
+        int headBefore = Odyssey.GetHeadActionType(player);
+
+        CloseLocalPlayerToMeleeRange(player, targetCreature, targetId);
+
+        bool ok = Odyssey.AttackTarget(playerId, targetId, out int failure);
+        int headAfter = Odyssey.GetHeadActionType(player);
+
+        if (!ok)
+        {
+            string reason = failure switch
+            {
+                1 => "no VM available",
+                2 => "no routine table / attack handler bytes do not match the verified build",
+                3 => "a script currently owns the VM stack - try again next frame",
+                4 => "VM stack push refused",
+                5 => "the engine refused the attack order",
+                _ => $"engine call refused (failure {failure})",
+            };
+
+            PluginHost.Log(
+                $"attack: 0x{playerId:X} -> 0x{targetId:X} refused - {reason} "
+                + $"(head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"attack: 0x{targetId:X} refused - {reason} (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            return;
+        }
+
+        PluginHost.Log(
+            $"attack: 0x{playerId:X} ordered to attack 0x{targetId:X} "
+            + $"(head action 0x{headBefore:X} -> 0x{headAfter:X})");
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"queued attack on 0x{targetId:X} (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+    }
+
+    /// <summary>
+    /// Snaps the local player to melee range of the target BEFORE the attack order is armed —
+    /// mirrors TestDriveController.CloseToMeleeRangeIfNeeded (round 71), because
+    /// <see cref="Odyssey.SnapTo"/> clears the action queue as part of committing the position
+    /// (ClearAllActionsFn), which would wipe an attack order queued before it. A no-op when
+    /// already within <see cref="AttackMeleeRange"/>, so a live test standing next to its
+    /// target already is left exactly where it stood.
+    /// </summary>
+    private void CloseLocalPlayerToMeleeRange(nint player, nint targetCreature, uint targetId)
+    {
+        Vec3 playerPos = Odyssey.GetPosition(player);
+        Vec3 targetPos = Odyssey.GetPosition(targetCreature);
+
+        float dx = playerPos.X - targetPos.X;
+        float dy = playerPos.Y - targetPos.Y;
+        float planarDistance = MathF.Sqrt((dx * dx) + (dy * dy));
+        if (planarDistance <= AttackMeleeRange)
+        {
+            return;
+        }
+
+        // Approach from wherever the player already is (degenerate only when the two bodies
+        // are exactly coincident, which the range check above already excludes).
+        float scale = planarDistance > 0.001f ? (AttackMeleeRange / planarDistance) : 0f;
+        Vec3 snapPos = new()
+        {
+            X = targetPos.X + (dx * scale),
+            Y = targetPos.Y + (dy * scale),
+            Z = playerPos.Z,
+        };
+
+        Odyssey.SnapTo(player, snapPos);
+
+        PluginHost.Log(
+            $"attack: closed range to 0x{targetId:X} ({planarDistance:F2}m -> "
+            + $"{AttackMeleeRange:F2}m) before arming the attack");
+    }
+}

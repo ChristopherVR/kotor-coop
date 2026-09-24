@@ -114,6 +114,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Cast] = "cast heal me",
         [CoopCommandKind.GrantPower] = "grantpower heal",
         [CoopCommandKind.MgKill] = "mgkill all",
+        [CoopCommandKind.Attack] = "attack 0x35",
         [CoopCommandKind.LevelUp] = "levelup 1 4",
         [CoopCommandKind.Stats] = "stats",
     };

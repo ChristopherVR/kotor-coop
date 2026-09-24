@@ -1436,7 +1436,20 @@ internal partial struct SharedBlock
     /// <c>IGameBridge.CheatKinds.MgKill</c> and docs/research/minigames.md.
     /// </summary>
     public const uint CheatKindMgKill = 97;
-    // 97-99 remain reserved for the live-cast primitive (see the comment above CheatKindCast).
+
+    /// <summary>
+    /// <c>attack &lt;0xid&gt;</c> / <c>attack stop</c> — orders the local player's own creature
+    /// to attack CheatTarget through the engine's own <c>ActionAttack</c> action queue
+    /// (<c>Odyssey.AttackTarget</c>), the same route a real player's click on a hostile
+    /// produces: a queued attack action that starts the PC's own combat round. CheatTarget = 0
+    /// means "stop" — clears the queued attack via <c>Odyssey.ClearQueuedCombatActions</c>.
+    /// Built so the sticky-aggro test (the unattended rig cannot click) and a live <c>cast</c>
+    /// (which needs the caster's own active combat round, effect-sync.md §14.8/§14.9) can
+    /// finally be exercised. See <c>IGameBridge.CheatKinds.Attack</c> and
+    /// docs/research/combat-participation.md §15.
+    /// </summary>
+    public const uint CheatKindAttack = 98;
+    // 99 remains free.
     // 100-104: the make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-
     // grants.md §9) - closes effect-sync.md §14.7's dead end (no Force points to cast with).
 

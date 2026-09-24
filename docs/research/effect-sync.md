@@ -2099,3 +2099,16 @@ directly):
    each `cast` call — specifically check whether a node of type 0x3F (`CheckMoveToFollowRadius`)
    is already present *before* the call, since that alone silently no-ops the request per the
    `GetNodeById` bail above.
+
+### 14.9 The `attack` verb (2026-09-25): the step 2 recipe above no longer needs a human
+
+§14.8's own live recipe needed step 2 ("aggro a genuinely hostile creature first... so the PC is
+undergoing real `AIActionCombat` round-ticks") to happen somehow, and the unattended rig cannot
+click. `docs/research/combat-participation.md` §15 adds a dev-only console verb, `attack <0xid>`
+(`attack stop` to clear it), that orders the LOCAL PLAYER's own creature to attack a target
+through the engine's own `ActionAttack` action queue — the exact precondition step 2 asks for,
+reachable by typing at the console instead of clicking. See that section for the mechanism (it
+reuses `Odyssey.AttackTarget`, the same routine already driving mirrored-enemy/companion combat,
+never `Odyssey.QueueAttackAction`'s proven no-op) and the combined live recipe (`attack` a
+hostile, then `cast cure me` while the round is still active, watching `stats` for the FP spend
+this section's own theory predicts).

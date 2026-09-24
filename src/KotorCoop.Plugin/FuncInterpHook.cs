@@ -187,6 +187,14 @@ internal static unsafe class FuncInterpHook
         // points before `cast`/`grantpower` can be exercised. Does not shadow a retail verb
         // (checked the same way every prior addition here was).
         "levelup", "stats",
+
+        // The `attack` live-test primitive (2026-09-25, docs/research/combat-participation.md
+        // §16): a real queued ActionAttack for the local player, so the sticky-aggro test and a
+        // live `cast` (which needs the caster's own active combat round) can be exercised on a
+        // rig that cannot click. Does not shadow a retail verb (checked the same way every
+        // prior addition here was; ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
+        // asserts it at build time).
+        "attack",
     ];
 
     /// <summary>

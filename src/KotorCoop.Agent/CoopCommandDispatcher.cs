@@ -420,6 +420,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.GrantPower] = c => SendCheat(new CheatRequest(
             CheatKinds.GrantPower, Amount: c.Amount, Charges: c.EffectMagnitude)),
         [CoopCommandKind.MgKill] = c => SendCheat(new CheatRequest(CheatKinds.MgKill, Amount: c.Amount)),
+        [CoopCommandKind.Attack] = AttackCommand,
         [CoopCommandKind.LevelUp] = c => SendCheat(new CheatRequest(
             CheatKinds.LevelUp, Amount: c.Amount, Charges: c.EffectMagnitude)),
         [CoopCommandKind.Stats] = _ => SendCheat(new CheatRequest(CheatKinds.Stats)),

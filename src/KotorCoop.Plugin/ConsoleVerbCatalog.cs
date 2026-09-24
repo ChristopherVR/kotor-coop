@@ -174,5 +174,11 @@ internal static class ConsoleVerbCatalog
         // §9): closes the "no Force points to cast with" dead end effect-sync.md §14.7 hit.
         ("levelup", "levelup <classSlot 0|1 | classes.2da id> [count]  (dev-only: engine's own AutoLevelup on the LAST class slot; see 'addclass'/'stats')"),
         ("stats", "stats  (dev-only: read-only class levels, hp/fp, known powers of your own player)"),
+
+        // The `attack` live-test primitive (2026-09-25, docs/research/combat-participation.md
+        // §16): a real queued ActionAttack for the local player, the same route a click on a
+        // hostile produces, so the sticky-aggro test and a live `cast` (which needs the
+        // caster's own active combat round) can be exercised on a rig that cannot click.
+        ("attack", "attack <0xid>  (dev-only: local player attacks via a real queued ActionAttack) | attack stop  (clears the queued attack)"),
     ];
 }

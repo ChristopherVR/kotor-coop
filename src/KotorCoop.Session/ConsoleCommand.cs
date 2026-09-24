@@ -956,6 +956,19 @@ public enum CoopCommandKind
     /// before trying <see cref="Cast"/>. Takes no arguments. Local only.
     /// </summary>
     Stats,
+
+    /// <summary>
+    /// <c>attack &lt;0xid&gt;</c> / <c>attack stop</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/combat-participation.md §15): orders the LOCAL PLAYER's own creature to
+    /// attack the given object id through the engine's own action queue (a real queued
+    /// <c>ActionAttack</c>, the same route a player's click on a hostile produces), so the
+    /// sticky-aggro test ("the enemy should stay on the joiner") and a live <see cref="Cast"/>
+    /// (which needs the caster's own active combat round, effect-sync.md §14.8/§14.9) can
+    /// finally be exercised on a rig that cannot click. <c>attack stop</c> clears the local
+    /// player's queued attack. Address carries the raw token ("stop" or the typed 0xid).
+    /// Local only.
+    /// </summary>
+    Attack,
 }
 
 /// <summary>
@@ -1188,6 +1201,7 @@ public static partial class ConsoleCommand
         new(["mgkill"], ParseMgKill),
         new(["levelup"], ParseLevelUp),
         new(["stats"], ParseStats),
+        new(["attack"], ParseAttack),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the
