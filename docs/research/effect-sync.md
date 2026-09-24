@@ -1756,3 +1756,16 @@ lapsed at 18:48:34 (host: the stand-in rejoined the party faction). An immediate
 produced no release (cooldown). After the cooldown, a reopen at 18:49:37 released it again and
 the close at 18:49:41 restored it at 18:49:42. Not run: a hostile actually switching targets and
 the same-frame hit drop.
+
+### 12.7 Live run (2026-09-24): poison and disguise
+
+**Poison.** `poison_sync = 1` on both. Host `applyeffect poison 0x17F 30000 5` (poison.2da row 5,
+5 HP every 3 s) on the joiner's stand-in: joiner `effect: applied kind 15 from peer 0x1 (duration
+30000ms, magnitude 5)`, then `combat: took 5 damage from a hit on our phantom` every 3.0 s
+(21:33:00, :03, :06 ... :21), one per tick and no local poison tick on top. Row 1 (an ability-score
+poison) applied too and correctly did no HP damage. `poison_sync` now defaults ON.
+
+**Disguise appearance.** Host `applyeffect disguise me 30000 28` (Sith_Soldier_01): joiner
+`identity: phantom slot 0 (0x17F) now renders appearance 28`, and back to 114 when the effect
+expired 30 s later. That is the look; `disguise_sync` (replaying a disguise cast ON a stand-in)
+stays opt-in and was not exercised.

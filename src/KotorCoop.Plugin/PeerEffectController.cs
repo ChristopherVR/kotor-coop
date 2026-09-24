@@ -38,7 +38,7 @@ internal sealed unsafe class PeerEffectController(SharedBlockView block)
     /// logged no-op. Plain plugin keys, not host-authoritative overrides: each receiver
     /// decides what it lets onto its own character.
     /// </summary>
-    private readonly bool _poisonSync = PluginConfig.ReadBool("poison_sync", false);
+    private readonly bool _poisonSync = PluginConfig.ReadBool("poison_sync", true);
 
     private readonly bool _disguiseSync = PluginConfig.ReadBool("disguise_sync", false);
 

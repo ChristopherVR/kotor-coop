@@ -168,7 +168,7 @@ hand-editing one is unsupported.
 | `threat_retarget` | ON (since 2026-09-03; was OFF) | HOST only: order a creature onto the peer whose forwarded damage clearly outweighs its current target's | [peer-damage-ledger.md §9, §11](research/peer-damage-ledger.md) |
 | `phantom_targetable` | ON | let enemies target a peer's phantom | [combat-participation.md](research/combat-participation.md) |
 | `effect_sync` | ON⁴ | forward non-damage effects (stun, slow, knockdown, heal, ...) that land on a peer's phantom to their real character | [effect-sync.md](research/effect-sync.md) |
-| `poison_sync` | OFF (NEEDS-LIVE) | apply half of poison forwarding to the peer's real character (may double-poison; the capture half always runs) | [effect-sync.md §12](research/effect-sync.md) |
+| `poison_sync` | ON (since 2026-09-24; was OFF) | apply half of poison forwarding to the peer's real character. Live 2026-09-24: the effect landed on the joiner's real body and its damage arrived exactly once per 3 s tick through the forwarded phantom hits, with no second local tick (the capture half always runs) | [effect-sync.md §12](research/effect-sync.md) |
 | `disguise_sync` | OFF (NEEDS-LIVE) | mirror a peer's disguise effect (Sith uniform, Sand People robes, envirosuit) onto their stand-in | [effect-sync.md §12](research/effect-sync.md) |
 | `stealth_sync` | ON | a stealthed peer's stand-in is held out of enemy target selection while the peer sneaks (`PlayerState.FlagStealth`) | [effect-sync.md §12](research/effect-sync.md) |
 | `stealth_visual_sync` | OFF (NEEDS-LIVE) | also apply the engine's stealth look to the stealthed peer's stand-in | [effect-sync.md §12](research/effect-sync.md) |
