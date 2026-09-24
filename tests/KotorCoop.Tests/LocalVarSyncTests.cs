@@ -365,9 +365,10 @@ public class LocalVarSyncTests
         Assert.Equal(0x5800, SharedBlock.OffsetLocalVarCaptureCursor);
         Assert.Equal(SharedBlock.OffsetLocalVarApplySerial,
             SharedBlock.OffsetLocalVarCaptureRing + (SharedBlock.LocalVarCaptureCapacity * SharedBlock.LocalVarCaptureStride));
-        Assert.Equal(SharedBlock.TotalSize,
+        // The region owns exactly 0x5800..0x5A00; v78's placed mines grow the block past it.
+        Assert.Equal(0x5A00,
             SharedBlock.OffsetLocalVarApplyEntries + (SharedBlock.LocalVarApplyCapacity * SharedBlock.LocalVarApplyStride));
-        Assert.True(SharedBlock.OffsetLocalVarCaptureCursor >= 0x5800 && SharedBlock.TotalSize <= 0x5A00);
+        Assert.True(SharedBlock.TotalSize >= 0x5A00);
 
         string agent = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "KotorCoop.Memory", "KotorGameBridge.LocalVars.cs"));
         Assert.Contains($"BlockLocalVarCaptureStride = 0x{SharedBlock.LocalVarCaptureStride:X2};", agent);
