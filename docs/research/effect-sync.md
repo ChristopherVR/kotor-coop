@@ -2003,3 +2003,11 @@ now with a real cast).**
    control, not a bug). Nothing should appear on the partner's own screen.
 4. Repeat with `partner_buffs = 0`: the cast should still queue (a real cast never depended on
    the faction key), but the stand-in should show no Valor visual (Neutral fails `GetIsFriend`).
+
+### 14.7 First live attempt (2026-09-24)
+
+`grantpower cure` then `cast cure 0x17F` on the host queued the spell (`cast: queued spell 10 at
+0x17F`), but nothing landed: every character in the rig's saves is the level-1 test character with
+no Force points, so the engine's own cast action cannot pay for the power. `addlevel` is a game
+console command, not reachable through the mod's console channel. These recipes need a save with a
+real Jedi who has Force points (any character past a Jedi level-up).
