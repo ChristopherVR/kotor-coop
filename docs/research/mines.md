@@ -704,4 +704,152 @@ never performs it, on the host's replica AND on the joiner's own `placemine`-bui
 built by this route's replay rather than by a real placement, so the retail action evidently needs
 state the replay does not set (the likeliest candidate is the trap's per-creature detection
 record). A retail-placed mine is unaffected on its placer; recovering a PARTNER's mine is the case
-that stays open.
+that stays open. See §14.8: the detection-record guess is refuted by the static trace; the
+diagnostic itself was missing a range check the retail action has always enforced.
+
+### 14.8 Recover/disarm range gate — root cause and fix (static, 2026-09-24)
+
+Full static RE (`tools/disasm.py`/`tools/xrefs.py`/`tools/q.py` against the installed GOG
+`swkotor.exe`; no process opened, no game run) of the whole client-action-menu-to-server path
+behind §14.7's open finding, following the task's own checklist: the client action-menu entry
+points, the client/server object-identity check, the actor's detection/visibility state, range,
+`+0x314`/creator/faction, `PerformSkill 0x0060EE00` skill `0x65`, and the server-side
+`AIActionRecoverMine 0x00518C40` / `AIActionDisarmMine 0x00519570`. All addresses VERIFIED(static)
+unless marked otherwise; every hypothesis below was checked by disassembling the actual function,
+not inferred from behaviour alone.
+
+**Ruled out: client/server object identity.** `CClientExoAppInternal::ServerToClientObjectId
+0x005EDA50` (thunk to `0x005F2AC0`) is not a registration-dependent lookup table at all: it is a
+two-line transform, `id == 0x7F000000 ? 0x7F000000 : id | 0x80000000` — a party-placed mine's
+dynamic server id maps to a client id by construction, with nothing that needs to have been
+"announced" first. `CClientExoApp::GetGameObject 0x005ED580` (thunk to `0x005F10F0`) IS a genuine
+hash lookup into the client's own object table (`call 0x004D8230`, then a found/type check), so
+there is a real client-side mirror object — but §14.7's own log shows `clientTargetMatches`
+already passing for both the host's replica and the joiner's own mine (the diagnostic would have
+refused with "client-side trigger identity did not match" otherwise, and it did not). Whatever
+creates that client-side mirror runs as a normal side effect of `AddToArea 0x0058F030` — the same
+call the replay already makes (§14.2) — so this is not the gap.
+
+**Ruled out: the trigger's own detection state.** Neither `AIActionRecoverMine 0x00518C40` nor
+`AIActionDisarmMine 0x00519570` reads `+0x2A8` (the detection list) or `+0x2C8` (flagged/visible)
+anywhere in either function body — confirmed by disassembling both in full and grepping every
+`+0x2Cx`/`+0x2Ax` field access. The only `CSWSTrigger` field either function reads besides the ones
+the replay already writes is `+0x2E4` (creator), read through an adjustor-thunk vtable slot
+(`[vtable+0x40]`, project convention: call the slot, not a raw offset) rather than directly — same
+field, same value, no different treatment for a replayed object. §14.7's own "likeliest candidate"
+guess is refuted.
+
+**Found: a genuine, guaranteed-success fast path for the mine's own party.**
+`AIActionDisarmMine` (0x005198B9, 0x00519915, 0x00519926) compares the trigger's creator id
+against the acting creature's own id, and separately resolves the creator to a creature and checks
+`CSWSCreatureStats+0x6C` (party membership) for BOTH the creator and the actor. Either match
+(same id, or both are party members) skips the d20 roll entirely and jumps to 0x00519A09, which
+posts event 10 (`OnDisarm`) then event 11 (destroy) unconditionally — the same two `AddEventDeltaTime`
+calls §4 already documents for a successful roll. `PlacedMineController.SpawnReplica` (line 433-434)
+and `PlaceTestMine` (line 508-513) both set the trigger's creator to `Odyssey.GetPlayerObjectId()` —
+**this spawning engine's own local player** — so on every realistic test of this feature (a player
+acting on a mine built on their own engine, replica or own), the creator/party fast path always
+applies: no skill rank is needed, and detonation-on-failed-roll (§13's Canderous HP drop) cannot
+happen. This is a feature, not a bug — it matches how a real player instantly reclaims their own
+laid mine — but it means recover/disarm's *skill* logic was never actually exercised by §14.7's run.
+
+**Found: a genuinely two-phase, per-actor-ticked action.** Both `AIActionDisarmMine` and
+`AIActionRecoverMine` (via `PerformSkill`) are queued creature actions, re-invoked by the engine's
+own per-frame action-queue pump (`CSWSCreature::ExecuteActions`, the dispatcher at `0x0057FC00`
+that this action's only caller sits in, `tools/xrefs.py 0x519e30`-style single-xref confirmed for
+each). On the FIRST invocation the function always takes an early branch that builds a feedback
+message / starts the GUI timing bar (`StartGuiTimingBar 0x004EF480`, `0x00519822`) and marks the
+ACTOR's own `+0x97C` field, then returns WITHOUT touching the trigger — the roll/creator-fast-path
+code only runs once `+0x97C` is already non-zero, i.e. on a later tick. This is engine-owned,
+per-creature, cross-frame bookkeeping; the plugin does not need to (and should not) manage it — a
+correctly queued action is expected to be re-ticked automatically by the same per-frame service
+that runs every other creature action, the same way `AIActionSetMine` itself is (§7.1).
+
+**Found and fixed: the diagnostic never enforced the range gate the retail action has always had.**
+`AIActionDisarmMine`'s own "range check" (`0x004F6000`, called at `0x005195F1` with the trigger
+pointer and a `0x3E800000` (0.25f) literal) is not itself the gameplay gate: that float is fed into
+a scratch computation (`fadd [0x73E798]` = 0.1f, `0x004F6084`) that is never passed to anything
+else — VERIFIED dead-for-gameplay-purposes by reading `0x73E798` = `0.1f` out of the image and
+tracing every use of the result. The actual gate is the tail call `0x004F60BE  call 0x58ce40`,
+i.e. `CSWSTrigger::InTrigger 0x0058CE40` — the SAME sphere test §2 already documents for a walk-on
+detonation: squared distance from the actor's position to the trigger's `+0x90/+0x94/+0x98`,
+compared with a strict `<` against `[0x007A206C]² = 1.0²` (disassembled in full: `fcompp` +
+`fnstsw` + `test ah,1`, a strict "below" test, so exactly 1.0 units out does not count).
+`AIActionRecoverMine 0x00518C40` makes the identical call (`0x00518CB4 push 0x3e800000`,
+`0x00518CBA call 0x4f6000`) before it ever touches the trigger. `TryQueueMineAction` — both the
+GIT-mine `mineaction` diagnostic (§12) and the party-placed `placedmineaction` diagnostic (§14.6)
+share it — invoked the native entry point (`0x00691900`/`0x00691950`) regardless of the actor's
+distance from the target: **an actor more than 1.0 unit away got the SAME "queued" response as one
+standing on the mine, and the native gate then silently refused every tick, forever, with nothing
+visible from the C# side.** This is a real, previously-unchecked gap in the diagnostic, independent
+of whether the mine was a GIT trigger or a replay-built one — it applies identically to both,
+which is consistent with §13's own GIT-mine results never being confirmed as an actual success
+(both attempts there were run "close enough" by luck, or were genuinely in range; neither was ever
+distance-checked either).
+
+**Why the fix is "check the range," not "route to the placer."** The task's fallback (route the
+request to whichever peer's copy is retail-actionable) only helps if some copy IS retail-actionable
+and another provably is not. Nothing found here shows that: `AIActionRecoverMine`/
+`AIActionDisarmMine` read no field the replay (§14.2) omits, the creator/party fast path applies
+identically to a replica and an "own" mine (both carry the spawning engine's own player as
+creator), and the only extra requirement found — range — is a property of the ACTOR's position at
+the moment of the call, not of which peer built the trigger. Peer-routing would not have fixed
+§14.7's run: the joiner's own `placemine`-built mine failed too, on the joiner's OWN copy, and nothing
+here suggests a different peer's copy would have fared better. The safe fix is therefore to make the
+diagnostic honest about the one precondition it was not checking, not to add a cross-peer routing
+layer for a problem this trace found no evidence of.
+
+**Fix.** `MineActionRule.WithinRecoverDisarmRange(dx, dy, dz)` (pure, unit-tested,
+`RecoverDisarmRadius = 1.0f`, matching `[0x007A206C]`) and a new `ActorWithinRange` fact.
+`Odyssey.TryQueueMineAction` (`Odyssey.MineActions.cs`) now reads both the actor's and the
+trigger's position at the already-known `CSWSObject` offset `+0x90` (the same offset §2's table and
+`Odyssey.PlacedMines.cs`'s `PmPosition` already use) and refuses with `"actor is more than 1.0 unit
+from the mine (the retail range gate, mines.md §14.8) - walk onto it first"` before ever calling the
+native entry point when out of range. No new native call target, no shared-block or packet change,
+no new cheat kind — this reuses the existing `mineaction`/`placedmineaction` verbs and their
+existing verify-bytes-or-refuse guard on `0x00691900`/`0x00691950`. All 25 mine-action tests pass,
+including the five boundary cases for `WithinRecoverDisarmRange` (on-mine, inside, just outside,
+exactly on the 1.0 boundary — refused, since the retail test is strict `<` — and far away).
+
+**What is still NEEDS-LIVE.** Whether standing within 1.0 unit is *sufficient* for the two-phase
+action to complete within a few frames as expected (the per-frame `ExecuteActions` re-tick is
+INFERRED from the `+0x97C` control flow and the general engine pattern `AIActionSetMine` itself
+follows, not directly observed completing); whether the creator/party fast path really does grant
+an instant, roll-free success on a replica the way it does on the placer's own mine (both carry the
+spawning engine's own player as creator, per the code cited above); whether the destroy then
+propagates to the peer through the existing roster-removal path (§14.4/§14.7's pattern) the same
+way a walk-on detonation does; and whether a recovered item's reward lands in the expected
+inventory channel (§13's open question, never resolved for any mine kind). None of these needed a
+new engine write to investigate further — they need the actor standing on the mine, which the
+recipe below sets up explicitly (§14.6's recipe never confirmed proximity).
+
+**Live recipe addition (two instances, GOG rig, `placed_mine_sync = 1` on BOTH,
+`tar_m10aa`).** Extends §14.6 steps 2-5 (place, capture, replicate) with an explicit
+in-range recover/disarm pass and a regression pass against GIT mines.
+
+1. Run §14.6 steps 1-5 to get a HOST replica and a JOINER own-mine, session serial `#1`, and read
+   both engines' local ids and the placement coordinates from `minestate`/the spawn log line.
+2. **On the JOINER (still standing where it placed the mine — do not walk away first):**
+   `placedmineaction disarm 1`. Expect `queued retail disable-skill request for party-placed mine
+   0x...; skill roll decides success` (unchanged wording — this is the "in range" case). If the
+   joiner HAS moved away first, expect the NEW refusal instead: `actor is more than 1.0 unit from
+   the mine (the retail range gate, mines.md §14.8) - walk onto it first` — walk back onto the
+   reported coordinates and retry.
+3. Wait 1-3 s (covers the two-phase `+0x97C` tick), then `minestate` on the JOINER. Expect entry
+   `#1` gone (the creator/party fast path applies — no Demolitions rank needed) and no detonation
+   damage (the fast path skips the roll entirely, so there is no failure branch here).
+4. Within ~1-3 s more, expect the HOST's `minestate` to also show `#1` gone (propagated through
+   the same roster-removal path §14.7 already verified for a walk-on destroy).
+5. `placemine 3` again for a fresh session mine `#2` (repeat steps 2-5 of §14.6), then on the HOST
+   (standing on ITS OWN replica's reported coordinates): `placedmineaction recover 2`. Expect the
+   same pattern: queued, gone within a few seconds on the HOST, gone on the JOINER within ~1-3 s
+   more. Check both engines' inventories/shared pool for a `g_i_trapkit004` delta (row 3's reward,
+   §4) to settle the still-open recovery-reward-channel question (§13).
+6. **Regression, GIT mines (no code should have gotten WORSE here).** Walk onto `tar_m10aa`'s
+   `0x74` (102.83, 128... per §8) and run `mineaction disarm 0x74` while standing on it: expect the
+   same "queued" wording as before this pass (§13's shape), and the mine gone within a few seconds.
+   Then, WITHOUT moving, note the coordinates of a DIFFERENT mine in the trio (`0x76`) that is more
+   than 1.0 unit away and run `mineaction recover 0x76` from where you are standing: expect the
+   NEW refusal (`actor is more than 1.0 unit from the mine...`) instead of the old, misleading
+   "queued" — this is the regression check that the fix actually changes behaviour for the
+   previously-silent-failure case.
