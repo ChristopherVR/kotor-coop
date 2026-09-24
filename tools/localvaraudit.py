@@ -538,7 +538,7 @@ def module_owners(mod: Module):
         d = mod.read(dlg + ".dlg")
         if d:
             for ctx, sc in dlg_scripts(d, dlg):
-                owners[sc].append(("dlg:%s.%s" % (dlg, ctx), "script-started:" + dlg))
+                owners[sc].append(("sdlg:%s.%s" % (dlg, ctx), "script-started:" + dlg))
     return objects, owners
 
 
@@ -638,6 +638,82 @@ def resolve_targets(access: dict, objects: List[dict]) -> List[Tuple[str, Option
     return [(obj, None)]
 
 
+# --------------------------------------------------------------------------
+# --shared: which engine runs each writer/reader (the local_var_sync allowlist gate)
+# --------------------------------------------------------------------------
+#
+# In a co-op session BOTH engines simulate the whole module. What decides whether a local slot
+# can diverge is WHICH engine runs the scripts that write it:
+#
+#   * INTERACTION contexts run only on the engine of the player who did the thing: a node of an
+#     ordinary player-started conversation (dialogue_auto_join defaults OFF, so the partner is
+#     not in it), a placeable the player used/opened, a door the player clicked or failed to
+#     open. A write here exists on ONE engine only.
+#   * Everything else runs on both engines on its own (spawn, heartbeat, perception, combat
+#     events, user-defined events, area/module events) or is already relayed (a trigger's
+#     OnEnter is executed on the host through trigger_relay; a script-started conversation is a
+#     forced one both players auto-join). A write there already happens on both engines; worse,
+#     replicating it would let a routine re-run (e.g. OnSpawn at a joiner's load) mint a newer
+#     serial and overwrite a genuine interaction value on the peer.
+#
+# A pair qualifies when every writer runs only from INTERACTION contexts (for this object), at
+# least one reader exists, and the slot is a plot slot (booleans 0..19; numbers any).
+_INTERACTION_RE = re.compile(
+    r"^(dlg:[^.]+\.(action|cond|EndConversation|EndConverAbort)"
+    r"|utc\.(ScriptDialogue|ScriptEndDialogu)"
+    r"|utp\.(OnUsed|OnOpen|OnClosed|OnInvDisturbed|OnDisarm|OnUnlock|OnLock|OnEndDialogue)"
+    r"|utd\.(OnClick|OnFailToOpen|OnOpen|OnClosed|OnUnlock|OnLock|OnDisarm))$")
+
+
+def is_interaction(ctx: str) -> bool:
+    return bool(_INTERACTION_RE.match(ctx))
+
+
+def classify_shared(p: Dict[str, Any]) -> str:
+    """'shared' when the pair qualifies, else a short reason."""
+    if p["kind"] == "b" and p["index"] >= AI_FLAG_FIRST:
+        return "ai-flag-range"
+    wctx = p.get("wctx", set())
+    if not wctx:
+        return "no-writer"
+    if not p.get("rctx"):
+        return "no-reader"
+    bad = sorted(c for c in wctx if not is_interaction(c))
+    if bad:
+        return "writer-runs-on-both:" + ",".join(bad[:3])
+    return "shared"
+
+
+def print_shared(static: List[Dict[str, Any]], json_path: Optional[str]) -> int:
+    reasons: Dict[str, int] = defaultdict(int)
+    shared = []
+    for p in static:
+        r = classify_shared(p)
+        reasons[r.split(":")[0]] += 1
+        if r == "shared":
+            shared.append(p)
+    shared.sort(key=lambda p: (p["module"], p["ident"], p["kind"], p["index"]))
+    print("# --shared: %d static pairs; %s" % (len(static), ", ".join(
+        "%s=%d" % kv for kv in sorted(reasons.items()))))
+    for p in shared:
+        g = p["git"]
+        print("%-10s %-28s id=0x%-4X %s%-3d vals=%s\n    W: %s\n    R: %s" % (
+            p["module"], p["ident"], g["object_id"] or 0, p["kind"], p["index"],
+            sorted(v for v in p["values"] if v is not None) + (["?"] if None in p["values"] else []),
+            "; ".join(sorted(p["writers"])) or "-", "; ".join(sorted(p["readers"])) or "-"))
+    if json_path:
+        with open(json_path, "w") as f:
+            json.dump([{
+                "module": p["module"], "ident": p["ident"], "tag": p["git"]["tag"],
+                "object_id": p["git"]["object_id"], "kind": p["kind"], "index": p["index"],
+                "values": sorted(v for v in p["values"] if v is not None),
+                "unknown_value": None in p["values"],
+                "writers": sorted(p["writers"]), "readers": sorted(p["readers"]),
+                "wscripts": sorted(p.get("wscripts", ())), "rscripts": sorted(p.get("rscripts", ())),
+            } for p in shared], f, indent=1)
+    return 0
+
+
 def main(argv) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", default=kf.DEFAULT_GAME_DIR)
@@ -645,6 +721,9 @@ def main(argv) -> int:
     ap.add_argument("--script")
     ap.add_argument("--json")
     ap.add_argument("--all", action="store_true", help="print every static-object pair, not just candidates")
+    ap.add_argument("--shared", action="store_true",
+                    help="classify pairs by WHICH ENGINE runs the writers/readers (local_var_sync allowlist gate)")
+    ap.add_argument("--shared-json", help="with --shared: write the qualifying pairs here")
     args = ap.parse_args(argv)
     game = kf.Game(args.game)
     modules = args.module or module_names(game)
@@ -668,6 +747,15 @@ def main(argv) -> int:
                                          "git": git, "writers": set(), "readers": set(), "values": set()})
                 ctxs = ",".join(sorted({c for c, _ in a["owners"]})) or "unowned"
                 (p["writers"] if a["op"] == "set" else p["readers"]).add("%s[%s]" % (a["script"], ctxs))
+                # The contexts this access runs from FOR THIS OBJECT: an OBJECT_SELF access only
+                # runs from the events/conversations this object itself owns; a by-tag access
+                # runs from every context its script is attached to anywhere in the module.
+                if a["obj"] == "SELF":
+                    ctx_set = {c for c, d in a["owners"] if d == ident}
+                else:
+                    ctx_set = {c for c, _ in a["owners"]}
+                p.setdefault("wctx" if a["op"] == "set" else "rctx", set()).update(ctx_set or {"unowned"})
+                p.setdefault("wscripts" if a["op"] == "set" else "rscripts", set()).add(a["script"])
                 if a["op"] == "set":
                     p["values"].add(a["value"])
 
@@ -681,6 +769,9 @@ def main(argv) -> int:
         if p["kind"] == "b" and p["index"] >= AI_FLAG_FIRST:
             return False
         return True
+
+    if args.shared:
+        return print_shared(static, args.shared_json)
 
     cands = [p for p in static if is_candidate(p)] if not args.all else static
     cands.sort(key=lambda p: (p["module"], p["ident"], p["kind"], p["index"]))
