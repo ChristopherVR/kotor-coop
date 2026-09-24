@@ -1050,3 +1050,23 @@ Tests: `dotnet build KotorCoop.slnx -warnaserror` clean; `pwsh src/KotorCoop.Plu
 -WarnAsError` clean; `dotnet test KotorCoop.slnx` green (no test asserts the diagnostic string's
 exact text; `MineActionRule`'s existing suite is unaffected since its `Facts`/`Refusal` shape did
 not change).
+
+### 14.12 Positive recover, live (2026-09-25) — VERIFIED
+
+This confirms §14.11's root cause. The joiner's rig Soldier had Demolitions rank 0.
+`CSWSCreatureStats+0x168` is `byte* skill_ranks`, a pointer: `GetSkillRank 0x5AA570` does
+`mov edx,[esi+0x168]` / `movsx edi, byte [edx+skill]`. The live array read
+`[0,0,0,0,0,0,0,4]`. §14.11's diagnostic read the pointer's own bytes and has been corrected
+to dereference.
+
+For the test, the joiner's Demolitions rank was set to 4 with an external memory write, and
+the joiner ran `placedmineaction recover 1` on its own placed mine (row 3, DC 10/10):
+* The joiner's engine removed the mine 5 s later
+  (`placed mines: mine #1 (local 0x14E) is gone here (the engine removed it)`).
+* The host removed its replica 60 ms after that
+  (`removed on the session's authority (engine DestroyObject)`).
+* `minestate` read `0 mapped` on the joiner.
+* The joiner's inventory gained exactly one `g_i_trapkit004` (stack 1, shared pool).
+
+So recover works through the retail radial-menu route whenever the character has Demolitions,
+which is exactly retail's own rule. Disarm uses the same gate and route; it has not been run.

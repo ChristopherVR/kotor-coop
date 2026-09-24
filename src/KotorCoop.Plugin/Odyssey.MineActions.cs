@@ -41,7 +41,7 @@ internal static unsafe partial class Odyssey
 
     /// <summary>Signed per-skill rank byte array on <c>CSWSCreatureStats</c> (mines.md §14.10),
     /// confirmed against <c>CSWSCreatureStats::GetSkillRank 0x005AA570</c>
-    /// (<c>movsx edi, byte ptr [statsPtr+0x168+skillIndex]</c>). Index with a 0-based skills.2da
+    /// (<c>movsx edi, byte ptr [ranks+skillIndex]</c>, where ranks = the <c>byte*</c> at stats+0x168). Index with a 0-based skills.2da
     /// row (Demolitions = row 1).</summary>
     private const int MineActionSkillRankArrayOffset = 0x168;
 
@@ -309,13 +309,22 @@ internal static unsafe partial class Odyssey
             // structures GetCanUseSkill 0x005AF880 itself reads, not an emulation of its full
             // logic (the class-skill-list branch for an Untrained=1 skill is not replicated;
             // Demolitions is Untrained=0 in retail skills.2da, so only the rank>0 branch applies).
+            // CSWSCreatureStats+0x168 is `byte* skill_ranks` (tools/q.py offsets), a POINTER to
+            // the rank array, not the array itself. Live 2026-09-25 the rig Soldier's field read
+            // 0x1812FC88 and the ranks behind it [0,0,0,0,0,0,0,4].
             nint stats = *(nint*)(serverActor + MineActionActorStatsOffset);
-            if (!ReadableObject(stats, MineActionSkillRankArrayOffset + DemolitionsSkillIndex + 1))
+            if (!ReadableObject(stats, MineActionSkillRankArrayOffset + sizeof(nint)))
             {
                 return ", demolitionsRank=<stats unreadable>";
             }
 
-            sbyte rank = *(sbyte*)(stats + MineActionSkillRankArrayOffset + DemolitionsSkillIndex);
+            nint ranks = *(nint*)(stats + MineActionSkillRankArrayOffset);
+            if (!ReadableObject(ranks, DemolitionsSkillIndex + 1))
+            {
+                return ", demolitionsRank=<rank array unreadable>";
+            }
+
+            sbyte rank = *(sbyte*)(ranks + DemolitionsSkillIndex);
 
             nint ruleset = *(nint*)MineActionRulesetGlobal;
             if (!ReadableObject(ruleset, MineActionSkillDefArrayOffset + 4))
