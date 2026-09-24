@@ -249,3 +249,11 @@ Host `enemy_health = 150`, then 200, then 100; joiner connected throughout.
 
 Not run: step 7 (the joiner importing through the host's adopted world). A corpse that
 persists as an object was not available in this module; the dead enemy here was destroyed.
+
+### Joiner leg (step 7, 2026-09-24)
+
+After a host save and reload, the joiner's HostReload bound the same staged archive
+(`sha256 acfe1cb22403`) and imported the same 12 baselines. The first run exposed a 1.5 s flap:
+the import landed while the joiner's agent was still reconnecting, the unresolved scaling word
+read as 100%, and the joiner reconciled to vanilla and back. The controller now holds an Imported
+world for up to 10 s waiting for a session percent; the re-run went straight to 150%.
