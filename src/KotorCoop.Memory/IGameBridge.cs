@@ -743,6 +743,15 @@ public static class CheatKinds
     public const uint Attack = 98;
 
     /// <summary>
+    /// <c>showgui equip [partyIndex]</c> — DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/
+    /// companion-state-sync.md's dated follow-up to §14): opens the LOCAL instance's own
+    /// Equipment screen through the retail <c>ShowSWInGameGui</c>/<c>SetCharacter</c> pair,
+    /// showing party index Amount (0 = the controlled PC/leader, 1-2 = the active companions in
+    /// CSWParty order; default 0). See <c>SharedBlock.CheatKindShowGuiEquip</c>.
+    /// </summary>
+    public const uint ShowGuiEquip = 99;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

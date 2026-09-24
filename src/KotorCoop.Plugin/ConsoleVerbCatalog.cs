@@ -180,5 +180,11 @@ internal static class ConsoleVerbCatalog
         // hostile produces, so the sticky-aggro test and a live `cast` (which needs the
         // caster's own active combat round) can be exercised on a rig that cannot click.
         ("attack", "attack <0xid>  (dev-only: local player attacks via a real queued ActionAttack) | attack stop  (clears the queued attack)"),
+
+        // The showgui equip primitive (2026-09-25, docs/research/companion-state-sync.md's
+        // dated follow-up to §14): opens THIS instance's own Equipment screen through the
+        // retail ShowSWInGameGui/SetCharacter pair, so CompanionEquipSuppressionController's
+        // own close can finally be exercised on a rig that cannot press a key or click an arrow.
+        ("showgui", "showgui equip [partyIndex]  (dev-only: opens this instance's own Equipment screen via the retail ShowSWInGameGui/SetCharacter pair; 0 = your PC, 1-2 = active companions)"),
     ];
 }

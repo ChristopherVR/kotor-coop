@@ -1449,7 +1449,19 @@ internal partial struct SharedBlock
     /// docs/research/combat-participation.md §15.
     /// </summary>
     public const uint CheatKindAttack = 98;
-    // 99 remains free.
+
+    /// <summary>
+    /// <c>showgui equip [partyIndex]</c> — DEV-ONLY LIVE-TEST PRIMITIVE (2026-09-25,
+    /// docs/research/companion-state-sync.md's dated follow-up to §14). Opens THIS instance's
+    /// own Equipment screen through <c>Odyssey.ShowEquipScreenForPartyMember</c> — the SAME
+    /// <c>CGuiInGame::ShowSWInGameGui</c>/<c>CSWGuiInGameEquip::SetCharacter</c> pair the retail
+    /// Equip key and the screen's own portrait arrows reach — showing party index
+    /// <see cref="CheatAmount"/> (0 = this instance's own controlled PC/leader, 1-2 = the active
+    /// companions in CSWParty order; default 0). Built because the rig cannot press a key or
+    /// click an arrow, so <c>CompanionEquipSuppressionController</c>'s own close ("the host
+    /// equips companions") had never been exercised live. Local only.
+    /// </summary>
+    public const uint CheatKindShowGuiEquip = 99;
     // 100-104: the make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-
     // grants.md §9) - closes effect-sync.md §14.7's dead end (no Force points to cast with).
 

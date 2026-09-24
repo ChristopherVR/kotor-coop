@@ -1575,3 +1575,88 @@ host's `CompanionDamageLedger` banks it rise-only with the same plausibility gat
 dropped. Only a RELEASED companion (`companion_local_combat`, default OFF) is sampled, so a heal on a
 non-released mirror is still overwritten by the host, as before. The 9-row owed block is rotated by
 `CompanionDamageOwedWindow` because heal rows can double the table.
+
+## 15. `showgui equip` — a dev verb to open the Equipment screen without a key press (2026-09-25)
+
+§14's own NEEDS-LIVE line ("that `[gui+0x0C]` is the panel and `+0x64` the subject at runtime")
+has never been exercised: the rig cannot press the retail Equip key or click a portrait arrow, so
+`CompanionEquipSuppressionController`'s close has never actually fired on a live client. This adds
+`showgui equip [partyIndex]` — a dev-only console verb, wired through the standard
+`CoopCommandKind` → agent `CheatKinds` → plugin `SharedBlock.CheatKind*` → `CheatController` path
+(the same shape as `mgkill`/`levelup`/`attack`; `CheatKind`/`CheatKinds` = 99, the one slot the
+97-99 comment block had left free) — that opens the Equipment screen on the LOCAL instance
+through the SAME engine entry points the retail key and arrows reach, showing party index 0 (this
+instance's own controlled PC/leader, default) or 1-2 (the active companions, in CSWParty order).
+
+**The retail show path, disassembly-VERIFIED this pass.** `CGuiInGame::ShowSWInGameGui(this, int)`
+0x0062C9B0 — `ret 4`, one stack argument — is reached from exactly two call sites inside the
+retail key-handler dispatcher at 0x00621308 (`xrefs.py 0x62c9b0`): `push 7; call` at 0x00621480
+and `push eax; call` (eax computed per pressed key) at 0x00621981, the latter inside a
+close-vs-switch-vs-show branch that also compares the wanted screen against
+`InGameGuiCurrentScreenOffset` before deciding. Tracing what `ShowSWInGameGui`'s OWN body reads to
+pick a screen (0x0062CA2E-0x0062CA57) settles that it is NOT that stack argument: it calls into
+the VM's own global-variable accessor — `mov ecx,[0x7A3A00]`, the exact same global VM pointer
+`CSWVirtualMachineCommands::ExecuteCommandGetGlobalNumber` 0x00538DC0 reads at the identical `mov
+ecx,[0x7a3a00]` — for a Number global named literally `k_sup_guiopen` (the literal at 0x7513BC,
+confirmed by dumping those bytes out of the exe's data section: `k_sup_guiopen\0`), clamps the
+result to `[0,8)`, and stores it at `InGameGuiCurrentScreenOffset` (`[gui+0x2C]`) — falling back to
+whatever screen was already current if the global is absent or out of range. Screen index 0 is
+Equipment (already established by §14's own `InGameGuiEquipScreenOffset` reading). So
+`Odyssey.ShowEquipScreenForPartyMember` sets `k_sup_guiopen` to 0 through the ALREADY-VERIFIED
+`Odyssey.TryWriteGlobal` (the same typed setter the `setglobal` verb drives —
+`CSWGlobalVariableTable::SetValueNumber` 0x00529680, reached through the SAME `[0x7a3a00]` VM
+accessor path, not a raw table poke) immediately before calling `ShowSWInGameGuiFn`, then verifies
+the result (`CGuiInGame+0x30` nonzero, `+0x2C == 0`) rather than trusting it — refusing with a
+named reason instead of guessing if the global write does not stick (e.g. undeclared in this
+build) or the engine opens a different screen anyway.
+
+**Picking WHICH party member.** The retail portrait arrows call
+`CSWGuiInGameEquip::SetCharacter(this, CSWCCreature*)` 0x006B7590 (`ret 4`, VERIFIED — the same
+call §14 already cites for `panel+0x64`): it writes the given creature pointer into `panel+0x64`
+and refreshes the on-screen slot icons, early-outing if the creature already matches. There is no
+verified "get party member N's creature pointer, one call" primitive, so
+`ResolvePartyMemberCreature` reuses the SAME resolution this codebase's own control-switch and
+party-reference code already relies on: index 0 is `CClientExoApp::GetPlayerCreature` (this
+instance's own controlled PC/leader — matches `ReadEquipScreenSubject`'s own "Player" check);
+index 1-2 read CSWParty's client-side member array (`SwPartyMember0ClientId` + N *
+`SwPartyMemberStride`, masked of the "party NPC" flag bit, bounded by CSWParty's own live count)
+and resolve that client id through `CClientExoApp::GetCreatureByGameObjectID` 0x005ED5B0 — the
+exact call `CSWParty::Update` itself makes on the leader's own record id
+(`Odyssey.DoorTransitions.PartyCount.cs`'s `GetCreatureByClientIdFn`). If the party has fewer than
+`partyIndex + 1` live members, the verb refuses by name rather than resolving a stale/empty slot.
+
+**When the screen is already open.** `ShowSWInGameGuiFn` is called only when the full-screen GUI
+is not already showing Equipment (`CGuiInGame+0x30 == 0`, or a DIFFERENT screen is up — that case
+refuses with "close it first, e.g. `closegui`", same wording `OpenStore`'s own refusal uses).
+Equipment already open just resolves the persistent panel pointer at `[gui+0x0C]` and calls
+`SetCharacter` again — the same thing a second arrow click does — rather than re-running `Show`,
+whose own internal `AddPanel`/`OnPanelAdded` re-entrancy on an already-registered panel was not
+worth risking for a dev verb.
+
+**Static only, same as §14.** VERIFIED by disassembly: `ShowSWInGameGui`'s `ret 4` and its
+`k_sup_guiopen` global read, `SetCharacter`'s `ret 4` and `panel+0x64` write, and the
+`GetGlobalNumber`/`GetCreatureByGameObjectID` reuse paths above. NEEDS-LIVE: that setting
+`k_sup_guiopen=0` through the engine's own setter actually steers `ShowSWInGameGui` to Equipment
+on THIS build (the post-call verification refuses instead of guessing if not), that
+`SetCharacter` on a companion's creature pointer produces the same live panel state §14's
+`ReadEquipScreenSubject` already reads, and that the resulting client-side close
+(`CompanionEquipSuppressionController`) actually fires.
+
+**Live recipe.** On the JOINER, with a host companion in the active party:
+1. `showgui equip 1` (or `2`, whichever slot holds the companion) — expect the joiner's
+   `kotorcoop-plugin.log` to show `companion equip: client copy of the Equipment screen (panel
+   0x...) was showing creature 0x..., not the PC — closed: ...` within one 10-frame suppression
+   poll, and the in-game chat line "the host equips companions".
+2. `showgui equip 0` — the PC's own page — expect it to stay open (no suppression line), proving
+   the close is specific to the companion subject and not a blanket "always close Equipment" bug.
+
+Both instances answer the console with `showgui equip N: <detail> (panel 0x..., subject 0x...)`
+(`CheatController.ShowGuiEquip`), so a scripted rig can read the panel/subject pointers back
+without parsing the plugin log.
+
+**Test suite and build.** `LiveShowGuiEquipTests` (8 parser-only tests: default index, 0/1/2,
+case-insensitivity, and five refusal shapes), `ConsoleCommandVerbTableCoverageTests` (+1 sample
+line), `CheatKindSyncTests` (existing table-diff tests cover the new `CheatKindShowGuiEquip`/
+`ShowGuiEquip = 99` pair automatically — no test file changes needed there).
+`dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`: both
+clean. `dotnet test KotorCoop.slnx`: see the session's own final report for the exact count.
