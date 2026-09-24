@@ -176,7 +176,7 @@ public sealed partial class CoopHost
                     name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName;
                 }
 
-                _peers[assignedId] = new PeerConnection
+                PeerConnection created = new()
                 {
                     Id = assignedId,
                     EndPoint = from,
@@ -187,6 +187,23 @@ public sealed partial class CoopHost
                     PartyPoolLoadQuarantined = _hasObservedHostLoad,
                     PartyPoolReleaseWhenReady = _hasObservedHostLoad,
                 };
+                _peers[assignedId] = created;
+
+                // Version 67 (docs/research/session-save.md): a bare disconnect/reconnect
+                // that carried no load edge either side is the SAME lineage this host already
+                // judged agreed, not a fresh "never agreed" start — see SaveLineage's own doc
+                // for why a fresh instance otherwise re-honours a save-only mismatch it
+                // already knows is harmless. Trusted only when this is PROVABLY the same live
+                // host process (the client's remembered session id still matches _sessionId —
+                // a restarted host mints a new one) and this host's own world has not moved
+                // since (LoadSerial unchanged); the CLIENT's own LoadSerial is re-checked the
+                // ordinary way, by SaveLineage.Apply's load-edge guard, the first time a real
+                // digest comparison runs.
+                if (hello.LineageHostSessionId != 0 && hello.LineageHostSessionId == _sessionId
+                    && _localWorld.LoadSerial == hello.LineageHostLoad)
+                {
+                    created.SaveLineage.SeedAgreement(hello.LineageHostLoad, hello.LineageClientLoad);
+                }
 
                 freshlyAdmitted = true;
             }
