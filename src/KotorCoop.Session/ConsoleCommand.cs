@@ -969,6 +969,19 @@ public enum CoopCommandKind
     /// Local only.
     /// </summary>
     Attack,
+
+    /// <summary>
+    /// <c>showgui equip [partyIndex]</c> — DEV-ONLY LIVE-TEST PRIMITIVE (docs/research/
+    /// companion-state-sync.md's dated follow-up to §14): opens THIS instance's own Equipment
+    /// screen through the retail engine's own <c>CGuiInGame::ShowSWInGameGui</c> +
+    /// <c>CSWGuiInGameEquip::SetCharacter</c> pair — the same two calls the Equip key and the
+    /// screen's own portrait arrows reach — so <c>CompanionEquipSuppressionController</c>'s own
+    /// close ("the host equips companions") can finally be exercised on a rig that cannot press
+    /// a key or click an arrow. <see cref="CoopCommand.Amount"/> is the party index: 0 (default)
+    /// = this instance's own controlled PC/leader, 1-2 = the active companions in CSWParty
+    /// order. Local only.
+    /// </summary>
+    ShowGuiEquip,
 }
 
 /// <summary>
@@ -1202,6 +1215,7 @@ public static partial class ConsoleCommand
         new(["levelup"], ParseLevelUp),
         new(["stats"], ParseStats),
         new(["attack"], ParseAttack),
+        new(["showgui"], ParseShowGui),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

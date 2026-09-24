@@ -115,4 +115,220 @@ internal static unsafe partial class Odyssey
         nint controlled = GetClientPlayerCreatureFn(client);
         return subject == controlled ? EquipScreenSubject.Player : EquipScreenSubject.Companion;
     }
+
+    // ---- showgui equip: open the retail Equipment screen for a chosen party member ----------
+    //
+    // `showgui equip [partyIndex]` (2026-09-25, docs/research/companion-state-sync.md's dated
+    // follow-up to §14): the rig cannot press the retail Equip key or click a portrait arrow, so
+    // `CompanionEquipSuppressionController`'s own close ("the host equips companions") has never
+    // been seen firing on a live client. This opens the SAME screen through the SAME two engine
+    // entry points the key and the arrow buttons themselves reach.
+    //
+    // `CGuiInGame::ShowSWInGameGui(this, int) 0x0062C9B0` — VERIFIED by fresh disassembly:
+    // `ret 4` (one stack argument), and `xrefs.py 0x62c9b0` finds exactly two callers, both
+    // inside the retail key-handler dispatcher at 0x00621308 (`push 7; call` at 0x00621480,
+    // `push eax; call` — `eax` computed per-key — at 0x00621981). Tracing what the function's
+    // BODY actually reads to pick a screen (0x0062CA2E-0x0062CA57) settles it is NOT the stack
+    // argument: it calls into the VM's own global-variable accessor (`ecx=[0x7A3A00]`, the same
+    // global VM pointer `CSWVirtualMachineCommands::ExecuteCommandGetGlobalNumber` 0x00538DC0
+    // uses at the identical `mov ecx,[0x7a3a00]`) for a NUMBER global named literally
+    // `"k_sup_guiopen"` (read straight out of the exe's data section at the referenced literal
+    // 0x7513BC — confirmed by dumping those bytes), clamps it to [0,8), and stores it at
+    // <see cref="InGameGuiCurrentScreenOffset"/> — falling back to whatever screen was already
+    // showing if the global is absent/out of range. So the screen this call opens is whatever
+    // `k_sup_guiopen` currently says, which is why <see cref="ShowEquipScreenForPartyMember"/>
+    // sets it to 0 (Equipment) through the ALREADY-VERIFIED <see cref="TryWriteGlobal"/> (the
+    // same typed setter `setglobal` drives) immediately before calling this, then VERIFIES the
+    // result rather than trusting it — refusing instead of guessing when the write does not
+    // stick (e.g. the name is undeclared in this build).
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, void> ShowSWInGameGuiFn =
+        (delegate* unmanaged[Thiscall]<nint, int, void>)0x0062C9B0;
+
+    /// <summary>
+    /// <c>CSWGuiInGameEquip::SetCharacter(this, CSWCCreature* creature)</c> 0x006B7590 —
+    /// VERIFIED, fresh disassembly (`ret 4`; the party arrow buttons' own "set subject" call,
+    /// already cited by <see cref="EquipScreenSubjectOffset"/>'s doc comment). Early-outs when
+    /// <paramref name="creature"/> already matches <c>panel+0x64</c>; otherwise writes it there
+    /// and refreshes the on-screen slot icons — exactly what a real arrow click does, just aimed
+    /// directly at the wanted party member instead of stepping one at a time.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, nint, void> SetCharacterFn =
+        (delegate* unmanaged[Thiscall]<nint, nint, void>)0x006B7590;
+
+    /// <summary>The <c>k_sup_guiopen</c> global name, ASCII, no null terminator counted in the
+    /// length passed to <see cref="TryWriteGlobal"/> (that helper appends its own).</summary>
+    private static ReadOnlySpan<byte> GuiOpenGlobalName => "k_sup_guiopen"u8;
+
+    /// <summary>
+    /// Resolves party index <paramref name="partyIndex"/> (0 = this instance's own controlled
+    /// PC/leader, 1-2 = the active companions in CSWParty order) to a CLIENT-side creature
+    /// pointer, the same way <see cref="RotateControlToFront"/>'s callers and
+    /// <c>Odyssey.TryGetPartyReferenceState</c> already do: <see cref="GetClientPlayerCreatureFn"/>
+    /// for index 0, or CSWParty's own member array (<see cref="SwPartyMember0ClientId"/> +
+    /// <paramref name="partyIndex"/> * <see cref="SwPartyMemberStride"/>, masked of
+    /// <see cref="ControlPartyNpcFlag"/>) resolved through <see cref="GetCreatureByClientIdFn"/>
+    /// for 1-2. Returns 0 (with <paramref name="detail"/> set) when the party has no live member
+    /// at that index.
+    /// </summary>
+    private static nint ResolvePartyMemberCreature(nint client, int partyIndex, out string detail)
+    {
+        detail = string.Empty;
+
+        if (partyIndex == 0)
+        {
+            nint pc = GetClientPlayerCreatureFn(client);
+            if (pc == 0)
+            {
+                detail = "no client-controlled PC resolved";
+            }
+
+            return pc;
+        }
+
+        nint party = GetSWPartyFn(client);
+        if (party == 0)
+        {
+            detail = "no CSWParty resolved (client-side)";
+            return 0;
+        }
+
+        int liveCount = *(int*)(party + SwPartyMemberCount);
+        if (liveCount <= partyIndex || liveCount > SwPartyMemberCapacity)
+        {
+            detail = $"party has no live member at index {partyIndex} (CSWParty count {liveCount})";
+            return 0;
+        }
+
+        uint memberId =
+            *(uint*)(party + SwPartyMember0ClientId + (partyIndex * SwPartyMemberStride)) & ~ControlPartyNpcFlag;
+        if (memberId == 0)
+        {
+            detail = $"party member[{partyIndex}]'s client id read 0";
+            return 0;
+        }
+
+        nint creature = GetCreatureByClientIdFn(client, memberId);
+        if (creature == 0)
+        {
+            detail = $"client id 0x{memberId:X} (party member[{partyIndex}]) did not resolve to a creature";
+        }
+
+        return creature;
+    }
+
+    /// <summary>
+    /// Opens the Equipment screen (index 0 — <see cref="InGameGuiEquipScreenOffset"/>) on THIS
+    /// instance showing party member <paramref name="partyIndex"/>, through the retail engine's
+    /// own path: <see cref="ShowSWInGameGuiFn"/> (only when the full-screen GUI is not already
+    /// showing Equipment — reopening an already-open screen is untested and unnecessary) and
+    /// <see cref="SetCharacterFn"/> (always — the arrow-button call, so an already-open screen
+    /// just switches subject). Dev-only / MAIN THREAD ONLY.
+    /// </summary>
+    internal static bool ShowEquipScreenForPartyMember(
+        int partyIndex, out nint panel, out nint subject, out string detail)
+    {
+        panel = 0;
+        subject = 0;
+        detail = string.Empty;
+
+        nint client = GetClient();
+        nint gui = GetInGameGui();
+        if (client == 0 || gui == 0)
+        {
+            detail = "no client / in-game GUI resolved (not in a loaded module)";
+            return false;
+        }
+
+        if (*(int*)(gui + InGameGuiInitializedOffset) == 0)
+        {
+            detail = "the HUD is not initialised yet (still loading)";
+            return false;
+        }
+
+        if (partyIndex is < 0 || partyIndex >= SwPartyMemberCapacity)
+        {
+            detail = $"partyIndex must be 0-{SwPartyMemberCapacity - 1} (got {partyIndex})";
+            return false;
+        }
+
+        nint creature = ResolvePartyMemberCreature(client, partyIndex, out string resolveDetail);
+        if (creature == 0 || !LooksLikeHeapPointer(creature))
+        {
+            detail = string.IsNullOrEmpty(resolveDetail)
+                ? $"could not resolve a live creature pointer for party index {partyIndex}"
+                : resolveDetail;
+            return false;
+        }
+
+        int fullScreenBefore = *(int*)(gui + InGameGuiBusyOffset);
+        int screenBefore = *(int*)(gui + InGameGuiCurrentScreenOffset);
+        bool equipmentAlreadyUp = fullScreenBefore != 0 && screenBefore == 0;
+
+        if (fullScreenBefore != 0 && !equipmentAlreadyUp)
+        {
+            detail = "a different full-screen GUI screen is already up "
+                + $"(CGuiInGame+0x2C = {screenBefore}) - close it first, e.g. `closegui`";
+            return false;
+        }
+
+        if (!equipmentAlreadyUp)
+        {
+            fixed (byte* namePtr = GuiOpenGlobalName)
+            {
+                if (!TryWriteGlobal(
+                        namePtr, GuiOpenGlobalName.Length, asBoolean: false, value: 0,
+                        out _, out int afterGlobal, out string globalReason))
+                {
+                    detail = "could not set k_sup_guiopen (the screen-select global "
+                        + $"ShowSWInGameGui reads): {globalReason}";
+                    return false;
+                }
+
+                if (afterGlobal != 0)
+                {
+                    detail = $"k_sup_guiopen read back {afterGlobal} after being set to 0 - not "
+                        + "declared as a Number global in this build; refusing rather than "
+                        + "opening whatever screen it actually named";
+                    return false;
+                }
+            }
+
+            ShowSWInGameGuiFn(gui, 0);
+
+            int fullScreenAfter = *(int*)(gui + InGameGuiBusyOffset);
+            int screenAfter = *(int*)(gui + InGameGuiCurrentScreenOffset);
+            if (fullScreenAfter == 0 || screenAfter != 0)
+            {
+                detail = "ShowSWInGameGui did not select the Equipment screen "
+                    + $"(CGuiInGame+0x30 {fullScreenBefore}->{fullScreenAfter}, "
+                    + $"+0x2C {screenBefore}->{screenAfter})";
+                return false;
+            }
+        }
+
+        nint equipPanel = *(nint*)(gui + InGameGuiEquipScreenOffset);
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        if (equipPanel == 0 || !LooksLikeHeapPointer(equipPanel)
+            || manager == 0 || GuiPanelExistsFn(manager, equipPanel) == 0)
+        {
+            detail = "the Equipment screen did not produce a registered panel";
+            return false;
+        }
+
+        nint vtable = Deref(equipPanel);
+        if (vtable != EquipScreenVtable)
+        {
+            detail = $"panel 0x{equipPanel:X} vtable 0x{vtable:X} is not CSWGuiInGameEquip "
+                + $"(0x{EquipScreenVtable:X})";
+            return false;
+        }
+
+        SetCharacterFn(equipPanel, creature);
+
+        panel = equipPanel;
+        subject = *(nint*)(equipPanel + EquipScreenSubjectOffset);
+        detail = $"opened Equipment (was {(equipmentAlreadyUp ? "already up" : "closed")}) and "
+            + $"set subject to party index {partyIndex} (creature 0x{creature:X})";
+        return subject == creature;
+    }
 }

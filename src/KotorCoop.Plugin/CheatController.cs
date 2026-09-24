@@ -412,6 +412,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 Stats(player);
                 break;
 
+            case SharedBlock.CheatKindShowGuiEquip:
+                ShowGuiEquip();
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

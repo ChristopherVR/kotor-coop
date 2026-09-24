@@ -195,6 +195,15 @@ internal static unsafe class FuncInterpHook
         // prior addition here was; ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
         // asserts it at build time).
         "attack",
+
+        // The showgui equip live-test primitive (2026-09-25, docs/research/companion-state-
+        // sync.md's dated follow-up to §14): opens this instance's own Equipment screen through
+        // the retail ShowSWInGameGui/SetCharacter pair, so CompanionEquipSuppressionController's
+        // own close can be exercised without a key press or a portrait-arrow click. Does not
+        // shadow a retail verb (checked the same way every prior addition here was;
+        // ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb asserts it at build
+        // time).
+        "showgui",
     ];
 
     /// <summary>
