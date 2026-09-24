@@ -31,7 +31,14 @@ namespace KotorCoop.Protocol;
 ///
 /// Per-peer, per-side state, like <see cref="SaveIdentitySettle"/>: the host holds one per
 /// connected peer, each client one for the host; a reconnecting peer gets a fresh instance and
-/// therefore a fresh "never agreed" start, which is exactly what a rejoin should be judged on.
+/// therefore a fresh "never agreed" start, which is exactly what a rejoin should be judged on
+/// — UNLESS the reconnect is provably the same lineage as a connection this same process
+/// already judged agreed. Live 2026-09-24: a joiner ran <c>disconnect</c> then
+/// <c>reconnect</c> with nothing loaded in between; the agent's own pre-disconnect character
+/// capture quicksave changed the joiner's save identity the same way a transition autosave
+/// does, and the FRESH instance a reconnect naturally gets had never seen the two agree, so it
+/// honoured the mismatch and dropped every id-keyed channel for no reason at all. See
+/// <see cref="SeedAgreement"/>.
 /// </summary>
 public sealed class SaveLineage
 {
@@ -42,10 +49,37 @@ public sealed class SaveLineage
     /// <summary>True once the two identities have been seen agreeing in the same module.</summary>
     public bool HasAgreed => _agreed;
 
+    /// <summary>This side's own <see cref="WorldDigest.LoadSerial"/> at the last recorded (or
+    /// seeded) agreement — meaningless while <see cref="HasAgreed"/> is false.</summary>
+    public uint LocalLoadAtAgreement => _localLoadAtAgreement;
+
+    /// <summary>The remote side's <see cref="WorldDigest.LoadSerial"/> at that same checkpoint.</summary>
+    public uint RemoteLoadAtAgreement => _remoteLoadAtAgreement;
+
     /// <summary>True from the first mismatch this rule read as a same-world save until the
     /// next recorded agreement — a level, not a per-call verdict, so a caller announcing it
     /// says it once per episode rather than once per module-name flicker mid-transition.</summary>
     public bool Absorbing { get; private set; }
+
+    /// <summary>
+    /// Seeds this fresh instance as already agreed, without having lived through the
+    /// <see cref="Apply"/> call that would ordinarily prove it — for a RECONNECT this process
+    /// (client) or the peer's own Hello (host) already knows is the same lineage as a past
+    /// connection, carried across the reconnect gap by protocol 67's Hello/Welcome session-id
+    /// seed (docs/research/session-save.md). Deliberately trusting: the caller is responsible
+    /// for having already checked that nothing could have moved the world in between (the
+    /// same host process, e.g.) — <see cref="Apply"/>'s own load-edge check still runs on
+    /// every call afterwards exactly as it would for an organically recorded agreement, so a
+    /// seed that turns out to be stale (either side loaded since the checkpoint) is simply
+    /// never honoured the first time a real mismatch is judged against it.
+    /// </summary>
+    public void SeedAgreement(uint localLoad, uint remoteLoad)
+    {
+        _agreed = true;
+        Absorbing = false;
+        _localLoadAtAgreement = localLoad;
+        _remoteLoadAtAgreement = remoteLoad;
+    }
 
     /// <summary>
     /// Feeds one comparison together with the two digests it was computed from and returns it

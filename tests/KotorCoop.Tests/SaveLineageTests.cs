@@ -108,6 +108,56 @@ public class SaveLineageTests
     }
 
     [Fact]
+    public void SeededAgreementAbsorbsASaveOnlyMismatchExactlyLikeALiveOne()
+    {
+        // The 2026-09-24 defect: a fresh instance (a reconnect) seeded from a PAST
+        // connection's checkpoint, with no live Judge() call ever having proved it. A save on
+        // either side afterwards (the pre-disconnect capture quicksave) must be absorbed the
+        // same way an organically recorded agreement's would be.
+        SaveLineage lineage = new();
+        Assert.False(lineage.HasAgreed);
+
+        lineage.SeedAgreement(localLoad: 3, remoteLoad: 5);
+        Assert.True(lineage.HasAgreed);
+        Assert.Equal(3u, lineage.LocalLoadAtAgreement);
+        Assert.Equal(5u, lineage.RemoteLoadAtAgreement);
+
+        WorldDigestComparison result = Judge(lineage, Digest(0x2222, load: 3), Digest(0x3333, load: 5));
+
+        Assert.False(result.SaveIdentityMismatch);
+        Assert.True(lineage.Absorbing);
+    }
+
+    [Fact]
+    public void ALoadEitherSideAfterASeededAgreementIsStillHonoured()
+    {
+        // The seed is trusted, but not blindly forever — Apply's ordinary load-edge guard
+        // must keep running against it exactly as it would against a live checkpoint.
+        SaveLineage local = new();
+        local.SeedAgreement(localLoad: 3, remoteLoad: 5);
+        Assert.True(Judge(local, Digest(0x2222, load: 4), Digest(0x3333, load: 5)).SaveIdentityMismatch);
+
+        SaveLineage remote = new();
+        remote.SeedAgreement(localLoad: 3, remoteLoad: 5);
+        Assert.True(Judge(remote, Digest(0x2222, load: 3), Digest(0x3333, load: 6)).SaveIdentityMismatch);
+    }
+
+    [Fact]
+    public void SeedAgreementOverwritesWhateverCheckpointCameBefore()
+    {
+        // A caller re-seeding (e.g. SessionManager handing a fresher checkpoint to a new
+        // CoopClient) replaces the old checkpoint outright, the same way a live re-agreement
+        // (AgreementIsReRecordedSoALaterLoadIsJudgedAgainstTheNewestMatch above) does.
+        SaveLineage lineage = new();
+        lineage.SeedAgreement(localLoad: 1, remoteLoad: 1);
+        lineage.SeedAgreement(localLoad: 9, remoteLoad: 9);
+
+        Assert.Equal(9u, lineage.LocalLoadAtAgreement);
+        Assert.Equal(9u, lineage.RemoteLoadAtAgreement);
+        Assert.False(Judge(lineage, Digest(0x2222, load: 9), Digest(0x3333, load: 9)).SaveIdentityMismatch);
+    }
+
+    [Fact]
     public void OtherMismatchesPassThroughUntouched()
     {
         SaveLineage lineage = new();

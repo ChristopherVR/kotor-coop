@@ -256,8 +256,20 @@ public static class ProtocolConstants
     /// the host owns the canonical set, assigns each mine a session serial, and broadcasts the
     /// set as a level (host snapshot + client intents, never a bidirectional op log). Off by
     /// default (<c>placed_mine_sync</c>), NEEDS-LIVE. See docs/research/mines.md §14.
+    ///
+    /// Version 67: <see cref="HelloPacket"/> gains a lineage seed
+    /// (<c>LineageHostSessionId</c>/<c>LineageHostLoad</c>/<c>LineageClientLoad</c>) — a
+    /// reconnecting CLIENT's process-lifetime record of the last point its own
+    /// <see cref="SaveLineage"/> agreed with a host, carried across the reconnect gap so a
+    /// bare <c>disconnect</c>/<c>reconnect</c> with no load edge either side seeds the fresh
+    /// <see cref="SaveLineage"/> instance as already agreed instead of starting it "never
+    /// agreed" again. The host seeds the new peer's own <see cref="SaveLineage"/> back the
+    /// same way, gated on the carried session id matching its own (a restarted host mints a
+    /// new one) and its own current <c>WorldDigest.LoadSerial</c> still matching the carried
+    /// checkpoint. Closes docs/review-seamless-2026-09-18.md's "post-save rejoin
+    /// compatibility" blocker, live 2026-09-24. See docs/research/session-save.md.
     /// </summary>
-    public const byte Version = 66;
+    public const byte Version = 67;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

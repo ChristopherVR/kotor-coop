@@ -554,6 +554,12 @@ public sealed partial class CoopCommandDispatcher
             bool ownLoadCharacterCaptured = false;
             if (ownLoadEdge)
             {
+                // A LOCAL load edge, unlike a save, really can put a different world under the
+                // same host session id — see SessionManager's own doc on the field. Drop the
+                // process-lifetime lineage seed so the NEXT reconnect (whether this one, after
+                // this load, or a later one) is judged "never agreed" again rather than
+                // trusting a checkpoint this load may have already invalidated.
+                manager.ClearLineageSeed();
                 _ownLoadCaptureEpoch = OwnLoadCaptureSafetyRule.NextEpoch(_ownLoadCaptureEpoch);
                 _captureRequestedMs = 0;
                 _captureSourceBefore = null;

@@ -11,9 +11,16 @@ namespace KotorCoop.Protocol;
 // flags off, interp 0, no follow-lead label" shape, which is fine: nothing treats a
 // zero-valued digest as meaningful on its own, the same way ContentDigest.Unknown (also
 // `default`) already works.
+// Version 67 (docs/research/session-save.md): the trailing three fields are the reconnecting
+// CLIENT's process-lifetime lineage seed — 0/0/0 (never a real value: SessionId is minted from
+// Random.Shared.Next(1, int.MaxValue)) means "no seed, judge this Hello the ordinary way".
+// Appended after Behaviour for the same reason every prior handshake addition was: the strict
+// version check at ReadHeader already rejects a mismatched peer before either side parses the
+// body, so there is no older wire shape to stay compatible with here.
 public sealed record HelloPacket(
     string PlayerName, string Module, uint ClientNonce, ContentDigest Digest, uint PasswordHash,
-    BehaviourDigest Behaviour = default);
+    BehaviourDigest Behaviour = default, uint LineageHostSessionId = 0, uint LineageHostLoad = 0,
+    uint LineageClientLoad = 0);
 
 public sealed record WelcomePacket(
     uint AssignedPeerId, uint SessionId, byte TickRate, byte MaxPeers, ContentDigest Digest,

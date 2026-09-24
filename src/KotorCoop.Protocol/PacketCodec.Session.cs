@@ -16,6 +16,9 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.PasswordHash);
         WriteDigest(ref w, packet.Digest);
         WriteBehaviourDigest(ref w, packet.Behaviour);
+        w.WriteUInt32(packet.LineageHostSessionId);
+        w.WriteUInt32(packet.LineageHostLoad);
+        w.WriteUInt32(packet.LineageClientLoad);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -33,7 +36,14 @@ public static partial class PacketCodec
         uint passwordHash = r.ReadUInt32();
         ContentDigest digest = ReadDigest(ref r);
         BehaviourDigest behaviour = ReadBehaviourDigest(ref r);
-        return r.Failed ? null : new HelloPacket(name, module, nonce, digest, passwordHash, behaviour);
+        uint lineageHostSessionId = r.ReadUInt32();
+        uint lineageHostLoad = r.ReadUInt32();
+        uint lineageClientLoad = r.ReadUInt32();
+        return r.Failed
+            ? null
+            : new HelloPacket(
+                name, module, nonce, digest, passwordHash, behaviour,
+                lineageHostSessionId, lineageHostLoad, lineageClientLoad);
     }
 
     public static int Write(Span<byte> buffer, WelcomePacket packet)

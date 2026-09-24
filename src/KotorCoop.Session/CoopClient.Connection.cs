@@ -64,7 +64,9 @@ public sealed partial class CoopClient
             _sendBuffer,
             new HelloPacket(
                 _settings.PlayerName, module, _nonce, _settings.Digest,
-                SessionPassword.Hash(_settings.Password), _settings.Behaviour));
+                SessionPassword.Hash(_settings.Password), _settings.Behaviour,
+                _lineageSeed?.HostSessionId ?? 0, _lineageSeed?.HostLoadAtAgreement ?? 0,
+                _lineageSeed?.LocalLoadAtAgreement ?? 0));
         if (length > 0)
         {
             // DEBUG/TEST-ONLY (coop.ini debug_hello_version, default 0/off — see
@@ -110,7 +112,20 @@ public sealed partial class CoopClient
         {
             _localPeerId = welcome.AssignedPeerId;
             _sessionPeerId = welcome.AssignedPeerId;
+            _hostSessionId = welcome.SessionId;
             _reconnecting = false;
+
+            // The lineage seed only applies when this Welcome is provably the SAME host
+            // process the seed was recorded against — a restarted host mints a new SessionId,
+            // and a stale seed against a genuinely different host must never absorb a real
+            // mismatch. Deliberately unconditional beyond that check: SaveLineage.Apply's own
+            // load-edge guard re-verifies both LoadSerials the first time a real digest
+            // comparison runs, so a seed whose checkpoint has gone stale in some other way is
+            // simply never honoured rather than needing a second check here.
+            if (_lineageSeed is { } seed && seed.HostSessionId == welcome.SessionId)
+            {
+                _saveLineage.SeedAgreement(seed.LocalLoadAtAgreement, seed.HostLoadAtAgreement);
+            }
 
             // The host is back (or this is the first join, where it was already false). Either
             // way CoopAgent.PumpOnce reads this falling edge and resumes driving the game

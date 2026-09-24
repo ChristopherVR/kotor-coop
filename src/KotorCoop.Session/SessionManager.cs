@@ -47,6 +47,42 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     private SessionSettings? _lastSettings;
 
     /// <summary>
+    /// Process-lifetime — deliberately NOT torn down by <see cref="DisconnectCore"/> alongside
+    /// the session/agent it seeds. Sampled from the live <see cref="CoopClient.LineageCheckpoint"/>
+    /// on every <see cref="Poll"/> and handed to the NEXT <see cref="CoopClient"/>
+    /// <see cref="ConnectCore"/> constructs, so a bare <c>disconnect</c>/<c>reconnect</c> with
+    /// no load edge either side starts already agreed instead of "never agreed" again — see
+    /// <see cref="LineageSeed"/> and docs/research/session-save.md. Cleared only by
+    /// <see cref="ClearLineageSeed"/>, on a LOCAL load edge (this player loaded a save, which
+    /// really can put a different world under the same host session id).
+    /// </summary>
+    private LineageSeed? _lineageSeed;
+
+    /// <summary>The current lineage seed, for the dashboard/tests — see <see cref="_lineageSeed"/>.</summary>
+    public LineageSeed? LineageSeed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lineageSeed;
+            }
+        }
+    }
+
+    /// <summary>Drops the process-lifetime lineage seed. Called on a LOCAL load edge (this
+    /// player loaded a save mid-session): a load, unlike a save, really can put a different
+    /// world under the same host session id, so the checkpoint must not survive it. See
+    /// <see cref="_lineageSeed"/>.</summary>
+    public void ClearLineageSeed()
+    {
+        lock (_gate)
+        {
+            _lineageSeed = null;
+        }
+    }
+
+    /// <summary>
     /// When a CLIENT's current connect attempt must be given up on if nothing has happened
     /// by then (<see cref="SessionClock.NowMs"/> units). 0 = no deadline armed — a host has
     /// nobody to be admitted by, so it never sets one.
@@ -207,7 +243,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         ICoopSession session;
         try
         {
-            session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!);
+            session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!, _lineageSeed);
         }
         catch (PortInUseException ex)
         {
@@ -689,6 +725,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         if (session is null)
         {
             return;
+        }
+
+        // Sampled every poll rather than only once: the checkpoint moves forward as long as
+        // this connection keeps re-proving agreement (a later door crossing re-records it at
+        // the newer LoadSerials), and the whole point is that the NEXT CoopClient starts from
+        // whatever this one most recently proved, not from whatever it proved at Welcome.
+        if (session is CoopClient client && client.LineageCheckpoint is { } checkpoint)
+        {
+            lock (_gate)
+            {
+                _lineageSeed = checkpoint;
+            }
         }
 
         // Checked before reading stats: a host that never answers Hello produces no status

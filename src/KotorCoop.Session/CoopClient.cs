@@ -206,10 +206,34 @@ public sealed partial class CoopClient : ICoopSession
     /// </summary>
     private long _absentFromSnapshotSinceMs;
 
-    public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint)
+    /// <summary>This process's lineage checkpoint from BEFORE this client existed — see
+    /// <see cref="LineageSeed"/>. Null for an ordinary first connect (nothing to seed from).
+    /// Carried on every Hello and, once <see cref="HandleWelcome"/> confirms it names the SAME
+    /// host process, applied to <see cref="_saveLineage"/> immediately.</summary>
+    private readonly LineageSeed? _lineageSeed;
+
+    /// <summary>The host's <c>WelcomePacket.SessionId</c>, once known — 0 before the first
+    /// Welcome. Read by <see cref="LineageCheckpoint"/> so <see cref="SessionManager"/> can
+    /// persist a fresh seed naming the CORRECT host process, and by <see cref="HandleWelcome"/>
+    /// to judge whether <see cref="_lineageSeed"/> names this same reconnect.</summary>
+    private uint _hostSessionId;
+
+    /// <summary>
+    /// This client's own <see cref="SaveLineage"/> checkpoint right now, or null before any
+    /// agreement (including a freshly seeded one that has not yet had <see cref="_hostSessionId"/>
+    /// resolved). <see cref="SessionManager.Poll"/> samples this every tick and keeps the
+    /// latest one as its process-lifetime seed for the NEXT <see cref="CoopClient"/> — see
+    /// <see cref="LineageSeed"/>.
+    /// </summary>
+    public LineageSeed? LineageCheckpoint => _hostSessionId != 0 && _saveLineage.HasAgreed
+        ? new LineageSeed(_hostSessionId, _saveLineage.RemoteLoadAtAgreement, _saveLineage.LocalLoadAtAgreement)
+        : null;
+
+    public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint, LineageSeed? lineageSeed = null)
     {
         _settings = settings;
         _hostEndPoint = hostEndPoint;
+        _lineageSeed = lineageSeed;
         _effectiveTickRate = settings.TickRate;
 
         // Bind an ephemeral port: two clients on one machine must not fight over 27015.

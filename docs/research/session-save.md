@@ -2328,3 +2328,57 @@ world. Neither log contains W_SAVE, W_GIT or a rejoin in the following minute; t
 joiner remained connected with zero reported liveness anomalies. This closes the
 ordinary two-save regression in `danm13`, not the earlier Leviathan mapping-specific
 re-adoption case.
+
+## `SaveLineage` seeded across a bare disconnect/reconnect (2026-09-24)
+
+**Seen.** Host and joiner playing the same live world (byte-identical save, shared channels on).
+The joiner ran `disconnect` then `reconnect` with nothing loaded in between. On disconnect
+`CaptureCharacterOnDisconnect` writes its ordinary pre-disconnect quicksave (§"Periodic and
+pre-disconnect character capture" above) — a SAVE, exactly like the transition autosave two
+sections up, changing the joiner's own `SaveIdentity` and nothing else. But `SaveLineage` is
+per-connection by design ("a reconnecting peer starts from 'never agreed' again, which is what a
+rejoin should be judged on" — the closing line of that section): the fresh instance a reconnect
+gets had never seen the two saves agree, so it honoured the mismatch: `[W_SAVE] different save`,
+~5 s after "shared again", for a save that never actually diverged the world.
+
+**The distinction that closes it.** "A reconnecting peer starts from never agreed" was right for
+a peer that might be a DIFFERENT player, or the SAME player after a genuine load — both cases a
+fresh instance must judge honestly. It was needlessly strict for the ordinary case this section
+is about: the SAME player, the SAME live host process, reconnecting with no load edge on either
+side since the two last agreed. That case already has a checkpoint sitting right there in the
+disconnected connection's dying `SaveLineage` — nothing about a bare disconnect invalidates it.
+
+**Fix — `LineageSeed` (`KotorCoop.Session/LineageSeed.cs`), protocol 66 → 67.** `SessionManager`
+keeps a process-lifetime checkpoint (host `WelcomePacket.SessionId`, host `LoadSerial` and this
+client's own `LoadSerial`, all three at the last point this client's OWN `SaveLineage` recorded
+agreement — sampled every `Poll()` off the live `CoopClient.LineageCheckpoint`, which reads
+`HasAgreed`/`LocalLoadAtAgreement`/`RemoteLoadAtAgreement` straight off it). `ConnectCore` seeds
+the next `CoopClient` from it; the client seeds its own `SaveLineage` the moment `HandleWelcome`
+confirms the Welcome names the SAME host session id the checkpoint was recorded against (a
+restarted host mints a fresh one), via the new `SaveLineage.SeedAgreement(localLoad, remoteLoad)`
+— same effect as a live `Apply` call finding agreement, not a separate code path.  `HelloPacket`
+carries the checkpoint (0/0/0 — never a real value, since `CoopHost` mints its session id from
+`Random.Shared.Next(1, int.MaxValue)` — means "no seed"), and the HOST seeds the fresh
+`PeerConnection`'s own `SaveLineage` back the same way, gated on the carried session id matching
+its own `_sessionId` AND its own current `WorldDigest.LoadSerial` still matching the carried
+checkpoint (a host that loaded a save while the peer was away must not be trusted blindly). The
+peer's own LoadSerial is re-checked the ordinary way — `SaveLineage.Apply`'s existing load-edge
+guard runs against the seed exactly as it would against a live checkpoint, so a seed that has
+gone stale in some OTHER way is simply never honoured the first time a real mismatch is judged,
+rather than needing a second check here.
+
+**Cleared, not carried, across a real load.** `SessionManager.ClearLineageSeed()` drops the
+checkpoint; `CoopCommandDispatcher.MaintainSessionSave` calls it on this player's own `ownLoadEdge`
+(the SAME edge that already resets the OwnLoad rejoin machinery) — a LOCAL load, unlike a save,
+really can put a different world under the same host session id, so the next reconnect must start
+"never agreed" again exactly as before this fix.
+
+**Tests.** `SaveLineageTests` (pure): `SeedAgreement` absorbs a save-only mismatch identically to
+a live-recorded agreement, and `Apply`'s load-edge guard still catches a load on either side
+afterwards. `PacketCodecTests`: Hello round-trips the three new fields. `SaveLineageSeedReconnectTests`
+(new, end to end over real `CoopHost`/`CoopClient`/`SessionManager` on loopback): a bare
+reconnect with no load edge absorbs a post-disconnect save; `ClearLineageSeed` makes the next
+reconnect start genuinely unseeded; a fresh first join with no record behaves exactly as before;
+and the host refuses to seed a peer whose Hello names a different host session id even when the
+carried LoadSerial happens to match. Code/test evidence only — **NEEDS-LIVE**: disconnect,
+reconnect without loading, confirm no `W_SAVE` and every shared channel stays on.
