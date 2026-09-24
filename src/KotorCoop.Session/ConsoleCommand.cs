@@ -903,6 +903,25 @@ public enum CoopCommandKind
     /// <summary><see cref="MineAction"/> for a PARTY-PLACED mine named by its session serial
     /// (Amount); Address holds recover|disarm. Local only.</summary>
     PlacedMineAction,
+
+    /// <summary>
+    /// <c>cast &lt;spell id|name&gt; &lt;target&gt; [metamagic]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/effect-sync.md §14): makes the local player cast a spells.2da row at a
+    /// target through the engine's own action queue (the verified <c>ActionCastSpellAtObject</c>
+    /// VM routine), so a hook that requires a real cast's creator id can finally be exercised.
+    /// Address the target token, Amount the spell id, EffectMagnitude the metamagic bitmask.
+    /// Local only.
+    /// </summary>
+    Cast,
+
+    /// <summary>
+    /// <c>grantpower &lt;spell id|name&gt; [classSlot]</c> — the companion of <see cref="Cast"/>:
+    /// grants the local player a Force power through the engine's own
+    /// <c>CSWSCreatureStats::AddKnownSpell</c>, for a save whose class doesn't already know the
+    /// power under test. Amount the spell id, EffectMagnitude the class slot (0 or 1). Local
+    /// only.
+    /// </summary>
+    GrantPower,
 }
 
 /// <summary>
@@ -1130,6 +1149,8 @@ public static partial class ConsoleCommand
         new(["galaxymap"], ParseGalaxyMap),
         new(["galaxyaccept"], ParseGalaxyAccept),
         new(["gamepad"], ParseGamepad),
+        new(["cast"], ParseCast),
+        new(["grantpower"], ParseGrantPower),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

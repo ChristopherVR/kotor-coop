@@ -111,6 +111,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.PlaceMine] = "placemine 3",
         [CoopCommandKind.MineState] = "minestate",
         [CoopCommandKind.PlacedMineAction] = "placedmineaction disarm 1",
+        [CoopCommandKind.Cast] = "cast heal me",
+        [CoopCommandKind.GrantPower] = "grantpower heal",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

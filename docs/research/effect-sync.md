@@ -1769,3 +1769,237 @@ poison) applied too and correctly did no HP damage. `poison_sync` now defaults O
 `identity: phantom slot 0 (0x17F) now renders appearance 28`, and back to 114 when the effect
 expired 30 s later. That is the look; `disguise_sync` (replaying a disguise cast ON a stand-in)
 stays opt-in and was not exercised.
+
+## 14. The live-cast primitive (2026-09-24): a real Force-power cast for `partner_buffs` /
+`enemy_effect_sync`
+
+`applyeffect` (§4 onward) runs a peer-effect constructor directly through
+`OdysseyEffects.ApplyEffect`, with OBJECT_SELF invalid and the effect's creator stamped
+`0x7F000000`. Two capture hooks need more than that: `PhantomEffectHook`'s sender-side mirror
+for `partner_buffs` (§8 of `docs/research/partner-buffs.md`) requires `effect.creator == local
+PC`, and the design for `enemy_effect_sync` requires the same thing on the OTHER end — a
+client's own cast landing on a mirrored enemy, replayed on the host. Neither can be exercised by
+`applyeffect`, because it was never meant to look like a cast; it was meant to apply an effect.
+`enemy-effect: saw kind 1 on 0x31 creator 0x7F000000 ours=False` (the task's own example) is
+`applyeffect`'s signature refusal, not a bug.
+
+This section adds `cast <spell id|name> <target> [metamagic]` and its companion `grantpower
+<spell id|name> [classSlot]` — two dev verbs, CheatKinds 95/96, that make the LOCAL PLAYER
+actually cast, through the engine's own action queue, so the creator really is the PC.
+
+### 14.1 Finding the route — VERIFIED(static)
+
+The task named two candidates: the client's "use Force power on target" input path (the radial
+menu), and `CSWSCreature::AddCastSpellActions` / the VM `ActionCastSpellAtObject` routine. Both
+converge on the SAME function, so either is "the engine's own action path" — this pass uses the
+VM routine, because it is the one the existing `Odyssey.AddMultiClass` (`class-and-power-
+grants.md`) and `Odyssey.MoveToLocation` (`minigames.md`) already dispatch through, with
+`OBJECT_SELF` redirected to a specific creature id for the duration of one call — exactly the
+shape a `cast` verb needs.
+
+**The handler.** `python tools/q.py func CastSpell` names `CSWVirtualMachineCommands::
+ExecuteCommandCastSpell` (`0x0052EE50`). `tools/xrefs.py 0x0052EE50` finds exactly one
+address-literal occurrence, at `0x0054C9C9`, inside the routine table's own population code —
+the same "read the table build as data" technique `AddMultiClassHook`'s doc comment uses for
+`ExecuteCommandAddMultiClass`. Reading the raw bytes there (six bytes before the literal):
+
+```
+0x0054C9C0  mov edx, 0x0052EE50
+0x0054C9C6  mov dword ptr [eax+0x7D8], edx     ; routine 0x7D8/4 = 502 (0x1F6)
+...
+0x0054C9CF  mov dword ptr [eax+0x7D4], edx     ; routine 0x7D4/4 = 501 (0x1F5)
+```
+
+The SAME handler is registered twice, at routine numbers 501 and 502 — `ActionCastSpellAtObject`
+and `ActionCastSpellAtLocation` (K1's `nwscript.nss` declares both; the engine shares one C++
+body and switches on the routine id it was called with, exactly as `AIActionCastSpell`'s
+generic-CastSpell family does elsewhere).
+
+**Which is which.** A full disassembly of `0x0052EE50` (`tools/disasm.py 0x52EE50 2200`) traces
+every `StackPopInteger`/`StackPopObject`/`StackPopEngineStructure` call against `ebx`
+(`nCommandId`, read from the native stack at function entry):
+
+```
+0x0052EE85  call 0x5d1000     ; StackPopInteger -> nSpell            (always, first pop)
+0x0052EEA7  cmp ebx, 0x30  /  je 0x52eeff
+0x0052EEB0  cmp ebx, 0x1f5 /  je 0x52eeff        ; routine 0x30 OR 0x1F5 only
+0x0052EEFF  ...
+0x0052EF0A  call 0x5d10c0     ; StackPopObject   -> oTarget          (0x30/0x1F5 branch)
+  (else, i.e. any OTHER routine number, including 0x1F6):
+0x0052EEC5  call 0x5d10a0     ; StackPopEngineStructure(2=Location)  -> lTargetLocation
+0x0052EF13  cmp ebx, 0x1f5 /  je 0x52ef89
+0x0052EF1B  cmp ebx, 0x1f6 /  je 0x52ef89        ; 0x1F5 OR 0x1F6: ebp=1, fall into the
+                                                   shared continuation
+0x0052EF99  call 0x5d1000     ; StackPopInteger  -> nMetaMagic       (shared, third pop)
+```
+
+Routine `0x1F5` (501) is the ONLY one of the pair that pops an **object** (`0x52ef0a`); `0x1F6`
+(502) instead takes the engine-structure/location pop at `0x52eec5`. So **501 =
+`ActionCastSpellAtObject`, 502 = `ActionCastSpellAtLocation`** — VERIFIED by the branch that
+actually executes, not by guessing from declaration order.
+
+For `ebx == 0x1F5` exactly three `StackPop*` calls are reachable in the whole 700+-instruction
+function: `nSpell`, `oTarget`, `nMetaMagic`, in that order — every other `StackPop*` call site in
+the function (two more integers at `0x52ef2e`/`0x52ef42`, one more at `0x52efc1`) is guarded by
+`cmp ebx,0x30` / `cmp ebx,0xea` and an `nParams >= 7` check that routine 501 never reaches (it
+takes the `jne` past all three). The call into `CSWSCreature::AddCastSpellActions`
+(`0x0052F0EA`, `q.py` confirms `param_size_bytes=72`, 18 dwords) that follows builds its full
+argument list from those three popped values plus HARDCODED constants (`push 0`, `push 0xFF`,
+`push ebp` where `ebp` was set to `-1`) — not from four more popped values.
+
+**Conclusion, and why there is no `cast ... free`.** `nwscript.nss` declares
+`ActionCastSpellAtObject(nSpell, oTarget, nMetaMagic=0, bCheat=FALSE, nDomainLevel=0,
+nProjectilePathType=..., bInstantSpell=FALSE)` — seven parameters. A compiled K1 script always
+pushes all seven (the compiler fills in the four defaults), but **this build's native handler
+never reads the last four** — `bCheat`/`nDomainLevel`/`nProjectilePathType`/`bInstantSpell` are
+dead parameters in the shipped GOG v1.0.3 `swkotor.exe`. There is no native "free/instant cast"
+lever reachable through this routine, so the task's optional cheat flag is NOT implemented: doing
+so would mean poking Force points or the cast-cost check by hand, which the task explicitly
+forbids and the engine-write rules forbid in spirit (no verified route, no write).
+
+### 14.2 The call — `Odyssey.CastSpellAtObject`, VERIFIED(static) route, NEEDS-LIVE execution
+
+`src/KotorCoop.Plugin/Odyssey.Spells.cs`. Same shape as `Odyssey.MoveToLocation`/
+`Odyssey.AddMultiClass`: resolve the VM implementer, check the routine-table entry at index 501
+still equals `0x0052EE50` (verify-or-refuse — a different build means a different table), check
+the handler's own first 32 prologue bytes still match (a second, independent check, the same
+belt-and-braces `Odyssey.MineActions.VerifyMineActionBytes` uses for a brand-new call target),
+confirm no script currently owns the VM stack, redirect `OBJECT_SELF` (`ImplHasCallerObject`/
+`ImplCallerObjectId`) to the caster for the duration of the call, push `nMetaMagic`/`oTarget`/
+`nSpell` in reverse order (matching the pop order traced above), dispatch
+`handler(implementer, 501, 3)`, and restore the caller redirect in a `finally`. The handler's own
+return value (0 = success, matching `AddMultiClass`'s convention) is the pass/fail signal — no
+VM-stack pop for a return value, because `ActionCastSpellAtObject` is declared `void`.
+
+Because this is the exact route a compiled script's own `ActionCastSpellAtObject(...)` call
+takes — and the SAME `AddCastSpellActions` queuing function the client's radial-menu cast
+reaches via `CSWCMessage::SendPlayerToServerInput_CastSpell` →
+`HandlePlayerToServerInputMessage` (`tools/xrefs.py 0x004F9460` lists that message handler as a
+direct caller, alongside `ExecuteCommandCastSpell` and `AIActionCastSpell`) — the animation,
+Force-point cost, projectile and impact-script all run exactly as the engine does them for a real
+player cast. This is not a synthetic effect apply the way `applyeffect` is; it is the actual cast,
+which is the whole point.
+
+**`CheatKindCast = 95`** (`SharedBlock.cs` / `IGameBridge.CheatKinds.Cast`). `CheatTarget` the
+target object id (`0x7FFFFFFF` for the caster's own body — `cast heal me`), `CheatAmount` the
+spell id, `CheatItemCharges` the metamagic bitmask (0 for a plain cast).
+
+### 14.3 Granting the power for testing — VERIFIED(static), the engine's own route
+
+The task asked whether an existing verb grants feats/powers. `addclass` exists but, per
+`docs/research/class-and-power-grants.md` §3, `AddMultiClass` only opens a second class slot at
+level 0 — it "does not grant feats, powers or a level"; those come from the level-up screen's own
+`CSWSCreatureStats::AddFeat` (`0x005AA810`) and `CSWSCreatureStats::AddKnownSpell`
+(`0x005AA9B0`, callers `ReadSpellsFromGff` and the debug menu, per that document's own
+routine-table scan). **`AddKnownSpell` is the engine's own add routine** for exactly this case —
+VERIFIED by disassembly here:
+
+```
+0x005AA9B0  push ebx
+0x005AA9B1  mov bl, byte ptr [esp+8]      ; nClassIndex (first stack arg)
+0x005AA9B5  push esi
+0x005AA9B6  mov esi, ecx                  ; esi = this (CSWSCreatureStats*)
+0x005AA9B8  cmp bl, byte ptr [esi+0x89]   ; +0x89 = class_count (Odyssey.ClassGrant's own
+0x005AA9BE  jae 0x5aaa20                  ;   StatsClassCount) - silently refuses classIndex
+                                          ;   >= class_count
+...
+0x005AA9CC  mov edi, dword ptr [esp+0x14] ; nSpellId (second stack arg)
+...
+0x005AAA22  ret 8
+```
+
+`ret 8` confirms two stack args (`__thiscall`, `this` in `ecx`): `AddKnownSpell(int nClassIndex,
+int nSpellId)`. `Odyssey.TryGrantKnownSpell` reads `class_count` first and refuses a
+`classIndex` that does not exist (mirroring the engine's own silent `jae` refusal, but with a
+reason string) rather than calling into a class slot that isn't there. `CheatKindGrantPower = 96`
+— `CheatAmount` the spell id, `CheatItemCharges` the class slot (0 or 1, default 0). No raw poke
+of the known-spell bit array: the call is the engine's own function, exactly the rule the task
+set.
+
+The function returns `void` — there is no pass/fail flag to read back. `grantpower`'s own live
+confirmation IS the next `cast`: if a power that previously refused (`the engine refused the cast
+(unknown/unlearned power...)`) now queues successfully, the grant worked.
+
+### 14.4 `spells.2da` rows for this pass's live recipes — VERIFIED against this install
+
+`python tools/kotorfiles.py 2da spells.2da --cols label,name,forcepoints` (132 rows, 0-131):
+
+| Power | Row | `spells.2da` label |
+| --- | --- | --- |
+| Heal | 28 | `FORCE_POWER_HEAL` |
+| Cure | 10 | `FORCE_POWER_CURE` |
+| Force Valor | 22 | `FORCE_POWER_FORCE_VALOR` |
+| Knight Valor | 33 | `FORCE_POWER_KNIGHT_VALOR` |
+| Master Valor | 36 | `FORCE_POWER_MASTER_VALOR` |
+| Stun | 46 | `FORCE_POWER_STUN` |
+| Fear | 16 | `FORCE_POWER_FEAR` |
+| Force Push | 23 | `FORCE_POWER_FORCE_PUSH` |
+| Stasis | 29 | `FORCE_POWER_STASIS` |
+
+`ConsoleCommand.SpellAliases` (`src/KotorCoop.Session/ConsoleCommand.Spells.cs`) maps the
+friendly names (`heal`, `cure`, `valor`/`forcevalor`, `stun`, `fear`, `forcepush`/`push`,
+`stasis`, plus `knightvalor`/`mastervalor`/`horror`/`whirlwind`/`choke`) to these rows, so the
+live recipes below do not carry magic numbers. A bare integer 0-131 is accepted for any other
+row; the row count is this install's, not a claim every mod ships the same table.
+
+Target syntax matches `applyeffect`'s own precedent exactly (`me`/`self`, or an explicit `0xid`
+object id) — no tag support, because `applyeffect` never had it either and no verified
+"find-creature-by-tag" route exists in this codebase (only `Odyssey.FindDoorByTag`, door-only).
+The live recipes below always name an explicit id read from `census`/`creatures.ps1`.
+
+### 14.5 Tests
+
+`tests/KotorCoop.Tests/LiveCastTests.cs`: every alias resolves to its verified row, a bare row
+number is accepted, `me` resolves to `0x7FFFFFFF`, the metamagic bitmask is bounded 0-126, an
+out-of-range/negative/unknown spell is refused, a non-object-id target is refused, `grantpower`'s
+class slot is bounded to 0 or 1, and both verbs' argument-count checks are exercised.
+`CheatKindSyncTests` (existing, unedited) continues to assert the plugin and agent halves agree
+on `CheatKindCast`/`CheatKindGrantPower` = 95/96 and that no two cheat kinds share a number.
+`ConsoleCommandVerbTableCoverageTests`/`CoopCommandDispatcherTableCoverageTests` (existing,
+unedited) cover the new `CoopCommandKind` rows the same way every other verb is covered.
+
+### 14.6 NEEDS-LIVE — the three recipes the orchestrator will run
+
+None of §14.1-14.5 has run in the actual game. Every engine write is VERIFIED(static) only.
+
+**Recipe 1 — `partner_buffs`: Cure raises the joiner's real HP once.**
+
+1. Both players connected, same module, `partner_buffs = 1` on the HOST, partner within 15 m
+   (Cure/Heal's own range — §1 of `partner-buffs.md`).
+2. Host: `census` (or `creatures.ps1`) to read the joiner's stand-in id, then `grantpower cure`
+   if the host's own character does not already know Force Cure (a Jedi save does).
+3. Host: `cast cure <joiner stand-in id>`. Expect `cast: queued spell 10 at 0x... (metamagic 0)`
+   and, shortly after, the animation on the host's screen.
+4. Because Cure loops `GetPartyMemberByIndex` and heals nearby friendlies (not a friend/reputation
+   test — `partner-buffs.md` §1), the stand-in itself is not healed by the cast reaching it
+   directly; §8 of that document's design is what mirrors a party-member heal onto the partner's
+   REAL body. Expect the joiner's own HP bar to rise once. **NEEDS-LIVE**: confirms `effect.creator
+   == local PC` on the capture side for the first time — the constructor's own live proof
+   (`applyeffect heal <phantom>`) already exists (§10.1); this recipe supplies the missing
+   creator stamp.
+
+**Recipe 2 — `enemy_effect_sync`: a client's Stun is replayed on the host's real enemy.**
+
+1. Both connected, same module, near a live hostile creature the HOST can see. `enemy_effect_sync`
+   on (or the config default once shipped).
+2. Joiner: `census` to read the mirrored enemy's id (the JOINER's local id for the host's
+   creature). `grantpower stun` if the joiner's character does not know Force Stun.
+3. Joiner: `cast stun <mirrored enemy id>`.
+4. Expect the HOST's plugin log to show the replay landing on the REAL enemy object (the
+   `enemy-effect: saw kind ... creator ...` line, this time with `ours=True`/a resolvable peer
+   creator instead of the task's quoted refusal, and the enemy actually stunned). **NEEDS-LIVE**:
+   this is the primitive `enemy_effect_sync`'s design has never been able to exercise at all —
+   there was no way to make a REAL cast land on a mirrored enemy before this verb.
+
+**Recipe 3 — Force Valor on the partner (the negative-control pair from `partner-buffs.md` §7.1,
+now with a real cast).**
+
+1. `partner_buffs = 1` on the caster, partner within 30 m (Valor's range).
+2. Caster: `grantpower valor` if needed, then `cast valor <partner stand-in id>`.
+3. Expect the Valor visual on the caster's screen (the stand-in is Friendly_1 under
+   `partner_buffs`, so `GetIsFriend` now holds — `partner-buffs.md` §1/§6). `effects` on the
+   caster should list no captured kind (Valor's saving-throw/ability-increase components are
+   not on the peer-effect allowlist — `partner-buffs.md` §5 — this is the documented negative
+   control, not a bug). Nothing should appear on the partner's own screen.
+4. Repeat with `partner_buffs = 0`: the cast should still queue (a real cast never depended on
+   the faction key), but the stand-in should show no Valor visual (Neutral fails `GetIsFriend`).

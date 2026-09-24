@@ -1401,4 +1401,27 @@ internal partial struct SharedBlock
     /// <c>recover|module</c> or <c>disarm|module</c>, CheatAmount the world-load serial.
     /// </summary>
     public const uint CheatKindPlacedMineAction = 92;
+
+    // 93-94 reserved (party-placed mines, unused). 95-99: the live-cast primitive
+    // (2026-09-24, docs/research/effect-sync.md §14).
+
+    /// <summary>
+    /// <c>cast &lt;spell&gt; &lt;target&gt; [metamagic]</c> — makes the local player cast a
+    /// <c>spells.2da</c> row through the engine's own action queue (<c>Odyssey.CastSpellAtObject</c>,
+    /// the verified <c>ActionCastSpellAtObject</c> VM routine), so the capture hooks that need a
+    /// real cast (creator == the local player) can finally be exercised instead of
+    /// <c>applyeffect</c>'s synthetic creator 0x7F000000. CheatTarget is the target object id
+    /// (0x7FFFFFFF for the caster), CheatAmount the spell id, CheatItemCharges the metamagic
+    /// bits. See <c>IGameBridge.CheatKinds.Cast</c> and docs/research/effect-sync.md §14.
+    /// </summary>
+    public const uint CheatKindCast = 95;
+
+    /// <summary>
+    /// <c>grantpower &lt;spell&gt; [classSlot]</c> — grants the local player a Force power
+    /// through the engine's own <c>CSWSCreatureStats::AddKnownSpell</c>, for a save that does
+    /// not already have the power a <c>cast</c> live test needs. CheatAmount is the spell id,
+    /// CheatItemCharges the class slot (0 or 1). See <c>IGameBridge.CheatKinds.GrantPower</c>
+    /// and docs/research/effect-sync.md §14.
+    /// </summary>
+    public const uint CheatKindGrantPower = 96;
 }
