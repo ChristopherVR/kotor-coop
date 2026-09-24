@@ -287,14 +287,245 @@ actually changed.
 * Everything in §4 is NEEDS-LIVE — this pass proves the mechanism statically and finds real
   reachable content, but nobody has watched a real story re-lock cross the network on the running
   game.
-* **Containers/placeables are a separate, still-open gap.** `PlaceableFlags.cs` and
-  `KotorGameBridge.Placeables.cs` are unchanged by `934c18e` and remain deliberately monotonic
-  ("a placeable only ever advances... never the reverse" — `PlaceableFlags.cs`'s own docstring,
-  current); `PlaceableController.cs`'s `WasEverClosed` latch exists specifically to stop the
-  monotonic channel from fighting a real local close, which is a workaround for the channel never
-  publishing a re-lock, not a fix for it. `docs/limitations.md`'s "chest" half of the old combined
-  row is accurate as written and is kept, split out below from the door half this pass closes.
-  Out of scope for this pass (the roadmap's cited files and code paths were all door-specific);
-  a future pass extending `PlaceableFlags`/`PlaceableController` the same way `934c18e` did for
-  doors would need to re-derive `WasEverClosed`'s role once the channel itself carries "closed
-  again" honestly.
+* **Containers/placeables were a separate gap when this pass was first written — closed the
+  same day.** §6 below extends the exact model this section describes to `PlaceableFlags.cs` /
+  `KotorGameBridge.Placeables.cs` / `PlaceableController.cs`, including re-deriving
+  `WasEverClosed`'s role the way this paragraph anticipated. `docs/limitations.md`'s "chest" row
+  is updated accordingly (no longer "Not shared, by design").
+
+## 6. Extending the model to placeables/containers (2026-09-24, same-day follow-up)
+
+Closing the gap this section flagged: `PlaceableFlags.cs` / `KotorGameBridge.Placeables.cs` /
+`PlaceableController.cs` now carry a placeable's open and locked state both ways, the same model
+§§2.1-2.5 above describe for doors, so a story re-lock or a real container close reaches every
+peer honestly. Nothing here changes the wire protocol or the shared-block layout — every field
+this pass touches already existed (the placeable slot's byte `+0x04`/`+0x05` were already
+booleans, not derived from a "has ever advanced" bit).
+
+### 6.1 Detection: the same cause-agnostic poll, now honest about the lock bit too
+
+`KotorGameBridge.CollectChangedPlaceableState()` (`src/KotorCoop.Memory/KotorGameBridge.Placeables.cs`)
+already polled every live `CSWSPlaceable` (vtable `0x007494D0`) once a second and diffed
+`(open, locked, trapped)` against a per-module shadow — the shadow-diff itself, and its
+cause-agnostic character (a real player's click and a script's `SetLocked` write the same fields
+and cannot be told apart, exactly §2.1's point for doors), predate this pass. What changed is
+what got REPORTED once a genuine change fired: the old code computed `unlockedDuringPlay` —
+`locked == 0 && <the FIRST lock value ever seen this module>` — so a placeable that started
+locked, was unlocked, and was later RE-locked by a script reported `unlockedDuringPlay = false`
+at the moment of the re-lock (the honest transition), but `TryWritePlaceableStates` then dropped
+that report on the floor (next paragraph) and, more fundamentally, nothing on the apply side ever
+acted on "the peer says lock this back up". The fix drops the baseline-relative computation
+entirely and reports the CURRENT `locked == 0` reading directly — `PlaceableFlags.MakeValue(open
+!= 0, locked == 0, disarmedDuringPlay)` — the same "carry the actual state, including a
+placeable that shipped already unlocked" choice `CollectChangedDoorState` already made for doors.
+Disarm (bit 2) is untouched and stays relative to the module's own baseline: nothing shipped
+ever re-arms a trap, so there is no reverse direction to carry.
+
+### 6.2 Transport: no new plumbing — the value floor was the only real gate
+
+`WorldStatePump.PumpPlaceables` (`src/KotorCoop.Session/Pumps/WorldStatePump.cs`) already called
+`session.SetFlag` unconditionally for every entry `CollectChangedPlaceableState` reported, riding
+the SAME per-key Lamport `EventFlagStore` doors use (`PumpDoors` and `PumpPlaceables` are two
+call sites over one store) — this was already true before today's pass; placeables were never on
+a *different* store, just a channel that never told the store about a re-lock. The only actual
+value-floor gates were in `KotorGameBridge.Placeables.cs`'s own `TryWritePlaceableStates`
+(`flag.Value <= 0` — under the old model, 0 meant "nothing to tell the peer") and
+`MineSlotPlanner.SelectPlaceables` (the same `<= 0` filter, used to choose which placeables fit
+in the shared block's 32-slot list when a module holds more than that). Both now accept the full
+`0..7` range, `< 0 or > 7`, matching `TryWriteDoorStates`'s own bound — 0 ("closed, locked, not
+disarmed") is a real state a story re-lock can produce, not "no update yet".
+
+### 6.3 Apply: the engine's own calls, gated by a new no-oscillation tracker
+
+`PlaceableController.Apply` (`src/KotorCoop.Plugin/PlaceableController.cs`) now:
+
+1. Disarms a trap (unchanged, forward-only, unaffected by this pass).
+2. Gates everything else on a NEW `PlaceableDesiredStateTracker.IsNew(id, open, unlocked)` —
+   the placeable twin of `DoorDesiredStateTracker`, same shape, same job: apply a genuinely new
+   `(open, unlocked)` tuple once, so a stale re-published snapshot from before a local scan
+   catches up with its own recent story change (or the closing player's own panel) cannot fight
+   that change out from under itself, the exact guarantee §2.4 describes for
+   `DoorController.Apply`.
+3. Writes the lock field either direction — `Odyssey.UnlockPlaceable` (existing) or the new
+   `Odyssey.LockPlaceable` (`*(int*)(placeable + 0x260) = 1`, the same plain-field-write pattern
+   `Odyssey.SetDoorLocked` already uses for doors; VERIFIED offset, `placeables-containers.md`
+   §1, unchanged by this pass) — unconditionally on every genuinely new tuple, same as
+   `DoorController.Apply` always calls `SetDoorLocked` regardless of whether the bit actually
+   moved.
+4. Opens or closes through the engine's own calls, only when the live `Odyssey.IsPlaceableOpen`
+   reading actually disagrees with the desired value (mirroring `DoorController.Apply`'s
+   `if (desired.OpenState == current) return;` before it swings a door):
+   - **open**: `OdysseyPlaceables.PlayContainerOpenAnimation` (VERIFIED `0x004CCF60`,
+     animation id `0x275B` — `container-sync.md` §1.2, confirmed live 2026-08-22, no longer the
+     "NEEDS-LIVE guessed-ABI" call `placeables-containers.md` §1 originally described) then
+     `Odyssey.SetPlaceableOpen`.
+   - **close**: `OdysseyPlaceables.PlayContainerCloseAnimation` (same call, animation id
+     `0x275C`) then `OdysseyPlaceables.ClearPlaceableOpenFlag` — the exact pair the
+     container-sync interaction-lock mirror (`InteractionLockController
+     .ReconcileContainerAnimations`) already uses for a peer's claim release, now reused for
+     the durable channel's own close.
+
+### 6.4 `WasEverClosed` retired from this path, not ripped out
+
+The 2026-08-22 `ContainerCloseHook.WasEverClosed` latch existed because the OLD monotonic
+channel could not itself express "closed" — once it had ever seen a container open, it kept
+re-asserting that forever, and the latch was the only way a real close could stick (permanently
+suppressing the re-assertion for that id, for the rest of the module load). That is no longer
+true: the channel itself now carries an honest closed value, and `PlaceableDesiredStateTracker`
+gives the exact no-oscillation guarantee needed WITHOUT the latch's own failure mode — a
+PERMANENT block that would have refused a legitimate LATER re-open of the same container (a
+second player looting it again, or a script re-opening it) forever. `PlaceableController.Apply`
+no longer calls `WasEverClosed`. The hook itself (`ContainerCloseHook.Install`, its detour on
+`CloseInventory`, and `Register`) is left installed rather than removed — it is a separately
+verified, working splice with no correctness cost to leaving it running, and unhooking a live
+detour is a bigger, separate change than this pass's own scope; `ClearPlaceableOpenFlag`'s own
+call to `Register` (from the UNRELATED interaction-lock claim mirror, §6.6) keeps it fed
+regardless. See the updated remarks in `ContainerCloseHook.cs` and `OdysseyPlaceables.cs`.
+
+### 6.5 No oscillation — proven the same way doors are
+
+`PlaceableFlagsTests.cs` gained the placeable twins of the two door tests §2.5 cites:
+`NewerStoryRelockWinsAndOldSnapshotCannotReopenIt` (an owner opens+unlocks, a peer merges that
+snapshot, the owner then closes+re-locks with a fresh serial, the peer adopts the re-lock, and a
+re-merge of the STALE first snapshot cannot undo it — `EventFlagStore`'s own guarantee, exercised
+with placeable-shaped data) and `UnchangedDesiredStateDoesNotFightLocalStoryChanges` (pins
+`PlaceableDesiredStateTracker`'s exact contract: the same tuple twice is a no-op, a genuinely new
+one — including a re-open AFTER a close — re-arms it, and `Clear()` resets it for a module change
+that reuses object ids). The residual race is the same one §2.5 accepts for doors: if a peer's
+own click opens the same container in the same real-time window a host script re-locks it,
+whichever change's scan runs first mints the lower serial and loses — ordinary last-writer-wins,
+unchanged from every other channel on this store.
+
+### 6.6 What this pass does NOT touch — container-loot behaviour is a separate, faster channel
+
+`docs/research/container-sync.md` describes a completely different mechanism for "who is
+looting this container right now": the interaction-lock claim (`InteractionLockController`,
+`ContainerUseHook`, `ContainerLockArbiter`), which rides the fixed 150ms combat pump
+UNCONDITIONALLY, arbitrates exclusivity (exactly one opener wins a contested click), and mirrors
+the open/close ANIMATION on every other peer's own copy the instant a claim is taken or released
+— live-measured at ~250-330ms end to end (§10.2-10.3 of that doc). The channel this pass changes
+(`PlaceableFlags`/`PlaceableController`, §5.3 of `container-sync.md`) is the slower, DURABLE
+truth underneath it — "what a late joiner or a post-reload resync should see" — and was never
+what made two clicks on one chest resolve safely, nor what the loot mailbox (24-slot acknowledged
+replay, delayed materialised-drop owner mapping) depends on. Neither of those is touched here:
+this pass only makes the durable open/locked STATE bidirectional, the same relationship
+`container-sync.md` §10.3 already documents ("`container_fast_pump` only moves `PumpPlaceables`
+... a channel that never touches a close" — now historical; it does touch a close, but the
+interaction-lock claim mirror remains the one that actually keeps two live players' screens in
+sync within a fraction of a second).
+
+### 6.7 Content audit: real shipped scripts that re-lock or close a PLACEABLE (not a door)
+
+Reused `tools/localvaraudit.py`'s interpreter exactly as §3 describes, redirecting its routine
+watch-set to `SetLocked` (324), `ActionLockObject` (484) and `ActionUnlockObject` (483) —
+`ActionCloseDoor` (44) was included too, to CONFIRM it never targets a placeable in this build
+rather than assume it — and cross-referencing every resolved `GetObjectByTag("tag")` target (or a
+`SELF` call from inside the object's own event handler) against that module's own GIT placeable
+list (`module_owners()`'s `ext == "utp"`) rather than door-relock.md's door list. Scanned every
+module shipped in this build (`modules/*.rim`, all 117), not just the Endar Spire/Taris/Dantooine
+subset §3 used.
+
+**Result:** 26 `SetLocked`/`ActionLockObject`/`ActionUnlockObject` call sites resolve to a
+placeable target (0 `ActionCloseDoor` hits — confirming it is door-only here, as `nwscript.nss`'s
+own description implies). Three picked below for reachability via this repo's own console verbs,
+a real re-lock/re-close effect (not just an unlock), and coverage of the owner shapes the audit
+found (a heartbeat toggle, a one-shot self-lock on use, and a real loot-panel close handler):
+
+| # | Module | Placeable tag | Ships | Script | Owner (what runs it) | Effect |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | `tat_m20aa` (Tatooine, Tusken camp) | `tressndpplbin` (7 copies, same tag) | `Locked=0, Lockable=0, HasInventory=1` | `k_ptat_tusklock` | the placeable's own `OnHeartbeat` | Alternates `ActionLockObject(SELF)` / `ActionUnlockObject(SELF)` every heartbeat while nobody holds it — a self-toggling container, the placeable twin of the door audit's `tar02_cantdoor` auto-close candidate |
+| B | `tar_m03ad` (Taris, upper apartments) | `holo1` (also `holo2`-`holo6`, same script pattern) | `Locked=0, Lockable=1, HasInventory=0` | `tar03_holo1` | the placeable's own `OnUsed` | `SetLocked(SELF, TRUE)` — a single "use" (click) locks it permanently; no open/close animation involved (not a container), a clean single-bit re-lock test |
+| C | `sta_m45ab` (Star Forge) | `sta_armor_container` | `Locked=1, Lockable=1, HasInventory=1` | `k_psta_binopen` | the placeable's own `OnClosed` | `SetLocked(SELF, TRUE)` the moment the loot panel finishes closing — the real "close→re-lock" shape the roadmap asked about, exercised by the engine's own `CloseInventory` (the same call the `closeplaceable` staging verb makes, `OdysseyPlaceables.CloseInventoryReal`) |
+
+Candidate C ships locked, and unlike `opendoor` (VERIFIED to ignore a door's lock,
+`engine-api.md`), `useplaceable` sends the SAME network `UseObject` input a real click does
+(`CheatController.World.cs`'s own remarks) — `OpenInventory`'s own disassembly (`tools/disasm.py
+0x587420 350`) never reads the locked field at all, so the lock check happens upstream, in the
+action-queue path a real click also takes. Console-only reachability for C therefore needs the
+placeable already unlocked (a real Security check or key in an actual playthrough); A and B ship
+unlocked and are fully console-reachable end to end, which is why they are the primary test below.
+
+Full reproduction (read-only, offline; the routine watch-set and `Interp.record` override are
+identical in shape to §3's script, redirected to the routine ids above and cross-referenced
+against `module_owners()`'s own `ext` per tag):
+
+```python
+import sys; sys.path.insert(0, "tools")
+import kotorfiles as kf, localvaraudit as lva
+
+TARGET = {44: "ActionCloseDoor", 324: "SetLocked", 483: "ActionUnlockObject", 484: "ActionLockObject"}
+lva.LOCAL_ROUTINES = set(TARGET)
+def record(self, pc, routine, args):
+    obj = args[0] if args else None
+    a1 = args[1] if len(args) > 1 else None
+    self.sink.append({"script": self.script, "routine": TARGET.get(routine, routine),
+                       "obj": lva.describe(obj),
+                       "arg1": a1[1] if a1 and a1[0] == "int" else lva.describe(a1)})
+lva.Interp.record = record
+
+game = kf.Game(r"C:\GOG Games\Star Wars KOTOR (GOG)")
+sigs = lva.load_signatures(game)
+mod = lva.Module(game, "tat_m20aa")
+objects, owners = lva.module_owners(mod)
+tagtype = {o["tag"]: o["ext"] for o in objects if o["tag"]}
+for script in mod.resources("ncs"):
+    sink, err = lva.analyse_script(mod.read(script + ".ncs"), sigs, script)
+    for h in sink:
+        if h["routine"] in ("SetLocked", "ActionLockObject", "ActionUnlockObject"):
+            target = h["obj"][4:] if h["obj"].startswith("tag:") else h["obj"]
+            if tagtype.get(target) == "utp" or h["obj"] == "SELF":
+                print(script, h["routine"], h["obj"], h["arg1"], owners.get(script, [])[:2])
+```
+
+### 6.8 Live-test recipe (two instances, GOG rig) — NEEDS-LIVE
+
+Every candidate below is a placed GIT object present the moment its module loads, so `warp`
+reaches it directly regardless of story progress.
+
+**Primary test (candidate A — heartbeat auto-toggle, console verbs only):**
+
+1. Connect both instances.
+2. On **both** instances: `warp tat_m20aa`.
+3. On the **HOST**: bare `useplaceable` (no tag/id) — this logs the full placeable sweep,
+   including every `tressndpplbin` copy's live object id (there are 7 sharing that tag, so the
+   bare sweep or an explicit id is the reliable way to pick one; the tag form "stops at the
+   first match" found by an address-space sweep, which is not deterministic — see
+   `CreatureFinder.FindPlaceableByTag`'s own remarks). Note one id from the log.
+4. Wait roughly 5-10 seconds (a couple of `OnHeartbeat` intervals) without touching it.
+5. On the **HOST**: confirm the plugin log shows the lock state toggling on that id (or check
+   with a second `useplaceable 0x<id>` attempt — refused while locked, allowed while unlocked).
+6. Confirm the **JOINER's** copy of the SAME id agrees with the host's current locked state
+   within the next scan (≤1s) plus apply pass (≤~130ms at 40 frames/~317Hz) — attempt
+   `useplaceable 0x<id>` on the joiner and confirm it is refused exactly when the host's own
+   copy is locked, allowed exactly when unlocked. Watch two or three toggle cycles to confirm
+   the joiner tracks every flip, not just the first one (the no-oscillation check).
+
+**Secondary test (candidate B — a one-shot self-lock, console verbs only):**
+
+7. On **both** instances: `warp tar_m03ad`.
+8. On the **HOST**: `useplaceable holo1`. This sends the real `UseObject` input, which fires
+   `OnUsed` → `tar03_holo1` → `SetLocked(SELF, TRUE)` on the host's own copy.
+9. Confirm the **JOINER's** copy of `holo1` reads locked within the same poll windows as step 6
+   above — a second `useplaceable holo1` on the joiner should be refused where an identical
+   attempt before step 8 would have succeeded. `holo1` is not a container (`HasInventory=0`),
+   so there is no loot panel or animation to check here — purely the lock bit.
+
+**Tertiary test (candidate C — the real close→re-lock shape, needs an unlocked/looted copy):**
+
+10. On the **HOST**, once `sta_armor_container` is genuinely unlocked and reachable in a real
+    playthrough (Security check or key — console verbs do not bypass this placeable's lock, per
+    §6.7): `useplaceable sta_armor_container`, take or leave the contents, then
+    `closeplaceable sta_armor_container`. The real `CloseInventory` call fires `OnClosed` →
+    `k_psta_binopen` → `SetLocked(SELF, TRUE)`.
+11. Confirm the **JOINER's** copy of `sta_armor_container` reads closed (the lid pose reverts)
+    AND locked within the same poll windows, without needing to be near it or to have opened it
+    itself — the channel is module-scoped, not proximity-scoped, same as doors.
+
+**No-oscillation check, all of the above**: after each re-lock/close lands on the joiner, attempt
+the ordinary interaction again from the joiner's side and confirm it is refused rather than
+silently succeeding, and that the state does NOT flip back on its own across two or three later
+poll intervals (~2-3s) with nobody touching it. A genuine later unlock/re-open from either side
+(a real Security check, or `closeplaceable`/`useplaceable` again once unlocked) should still work
+and still propagate — the mechanism does not lock a placeable against *legitimate* state changes,
+only against a stale poll re-asserting a value nobody actually changed, the same guarantee §4's
+no-oscillation check describes for doors.

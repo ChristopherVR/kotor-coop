@@ -5,33 +5,44 @@ namespace KotorCoop.Plugin;
 
 /// <summary>
 /// LIVE-PASS ADDITION (2026-08-22). Detects every REAL close of a container's loot panel —
-/// <c>CSWSPlaceable::CloseInventory 0x00587560</c> running to completion — so the PRE-EXISTING
-/// durable placeable-open sync (<see cref="PlaceableController"/> /
-/// <c>KotorGameBridge.CollectChangedPlaceableState</c>, a "value only ever advances" reliable
-/// channel that predates this container-sync pass — <c>PlaceableFlags.cs</c>: "a placeable only
-/// ever advances — closed to open, locked to unlocked — never the reverse") does not silently
-/// re-open a container this instance just watched close.
+/// <c>CSWSPlaceable::CloseInventory 0x00587560</c> running to completion.
 ///
-/// LIVE-CONFIRMED HAZARD this hook exists to fix: the durable channel's agent-side poll
-/// (<c>KotorGameBridge.CollectChangedPlaceableState</c>) samples every placeable's <c>+0x338</c>
-/// once a second; once it has EVER seen a container open, it keeps re-asserting that fact onto
-/// every instance forever (by design — the channel cannot express "closed", only "opened").
-/// Reproduced live: host opens a footlocker, closes it through
-/// <see cref="OdysseyPlaceables.CloseInventoryReal"/> — <c>+0x338</c> genuinely clears — and
-/// within about 100ms <c>PlaceableController.Apply</c> writes it straight back to 1
+/// ⚠ 2026-09-24 UPDATE: the hazard below is what this hook was originally built to fix, from
+/// when the durable placeable-open channel (<see cref="PlaceableController"/> /
+/// <c>KotorGameBridge.CollectChangedPlaceableState</c>) was deliberately monotonic ("a placeable
+/// only ever advances ... never the reverse"). That channel now carries the placeable's CURRENT
+/// open/locked state honestly, both directions, Lamport-ordered — the same door-relock fix
+/// 934c18e made for doors (docs/research/door-relock.md §6) — and <c>PlaceableController.Apply</c>
+/// no longer consults <see cref="WasEverClosed"/> at all: <c>PlaceableDesiredStateTracker</c>
+/// gives it the same "don't re-apply an unchanged tuple, but never permanently refuse a
+/// genuinely new one" guarantee <c>DoorDesiredStateTracker</c> gives doors, which is what a
+/// FOREVER latch like this one cannot do (it would refuse a legitimate later re-open of the same
+/// container). <see cref="Register"/> is still called from both this hook and
+/// <c>OdysseyPlaceables.ClearPlaceableOpenFlag</c> (harmless bookkeeping, nothing left reads it
+/// for that purpose), and the detour itself is left installed rather than ripped out — it is a
+/// verified, working hook with no correctness cost to leaving it running, and removing a live
+/// splice is a bigger, separate change than this pass's own scope. The hazard this class
+/// documents below is historical, not current.
+///
+/// LIVE-CONFIRMED HAZARD this hook was built to fix (2026-08-22, before the pass above): the
+/// durable channel's agent-side poll (<c>KotorGameBridge.CollectChangedPlaceableState</c>)
+/// sampled every placeable's <c>+0x338</c> once a second; once it had EVER seen a container
+/// open, it kept re-asserting that fact onto every instance forever (by design — the channel
+/// could not express "closed", only "opened"). Reproduced live: host opens a footlocker, closes
+/// it through <see cref="OdysseyPlaceables.CloseInventoryReal"/> — <c>+0x338</c> genuinely
+/// clears — and within about 100ms <c>PlaceableController.Apply</c> wrote it straight back to 1
 /// ("placeable 0x...: marked opened on the session's authority" in the plugin log), on BOTH
 /// instances, permanently, with no interaction lock held by anyone. Without this hook the
-/// container-sync close feature works for a single frame and then silently fails for the rest
+/// container-sync close feature worked for a single frame and then silently failed for the rest
 /// of the session — a durable regression, not a cosmetic flicker.
 ///
-/// The fix: every <c>CloseInventory</c> call (never refused — closing a container must never be
-/// blocked, unlike opening one) LATCHES the id as closed for the rest of this module load;
-/// <see cref="PlaceableController"/> checks <see cref="WasEverClosed"/> before writing
-/// <c>Odyssey.SetPlaceableOpen</c> and skips the write once a real close has been seen, so the
-/// close actually sticks instead of being clobbered by the durable channel's next poll/apply
-/// pass. A LATCH, not a timer — the durable channel's reassertion pressure is continuous (the
-/// agent keeps re-polling <c>+0x338</c> and re-broadcasting "open" forever once it has ever seen
-/// 1), so a time-boxed suppression was tried first and live-confirmed to lose the race (see the
+/// The original fix: every <c>CloseInventory</c> call (never refused — closing a container must
+/// never be blocked, unlike opening one) LATCHED the id as closed for the rest of this module
+/// load; <see cref="PlaceableController"/> checked <see cref="WasEverClosed"/> before writing
+/// <c>Odyssey.SetPlaceableOpen</c> and skipped the write once a real close had been seen. A
+/// LATCH, not a timer — the durable channel's reassertion pressure was continuous (the agent
+/// kept re-polling <c>+0x338</c> and re-broadcasting "open" forever once it had ever seen 1), so
+/// a time-boxed suppression was tried first and live-confirmed to lose the race (see the
 /// suppression table's own remarks below for the measurement).
 ///
 /// Splice technique and prologue-verification discipline are identical to
@@ -235,8 +246,10 @@ internal static unsafe class ContainerCloseHook
     }
 
     /// <summary>Whether <paramref name="id"/> has EVER been seen closing for real in this module
-    /// load. <see cref="PlaceableController"/> defers its own "mark opened on the session's
-    /// authority" write while this is true.</summary>
+    /// load. No longer consulted by <see cref="PlaceableController"/> (2026-09-24 — see the
+    /// class remarks above): kept for any other caller that genuinely wants a permanent
+    /// per-module "was this ever really closed" answer, since <see cref="Register"/> keeps
+    /// maintaining it regardless.</summary>
     public static bool WasEverClosed(uint id)
     {
         for (int i = 0; i < _count; i++)

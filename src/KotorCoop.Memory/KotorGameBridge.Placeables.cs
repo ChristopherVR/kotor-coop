@@ -1,5 +1,5 @@
 // Placeable sync: chests, corpses, switches and containers. The door channel's twin — same
-// object-id keying, same reliable max-merge flag transport, same silent module-entry baseline.
+// object-id keying, same Lamport-ordered flag transport, same silent module-entry baseline.
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -9,8 +9,10 @@ public sealed partial class KotorGameBridge
     // ---- placeables ------------------------------------------------------------
     //
     // Chests, corpses, switches, containers. The door channel's twin: same object-id keying,
-    // same reliable max-merge flag transport (tag 0x50), same silent baseline on module entry.
-    // See docs/research/placeables-containers.md.
+    // same reliable Lamport-ordered flag transport (tag 0x50, EventFlagStore), same silent
+    // baseline on module entry, and — since the door-relock model was extended here — the same
+    // bidirectional open/locked state (docs/research/door-relock.md §6). See
+    // docs/research/placeables-containers.md.
 
     /// <summary>CSWSPlaceable vtable; every 4-byte occurrence in private memory is a placeable.</summary>
     public const uint PlaceableVtable = 0x007494D0;
@@ -31,7 +33,6 @@ public sealed partial class KotorGameBridge
     private const int BlockPlaceableCapacity = 32;
 
     private readonly Dictionary<uint, (byte Open, byte Locked, byte Trapped)> _placeableShadow = [];
-    private readonly Dictionary<uint, byte> _placeableBaselineLocked = [];
     private readonly Dictionary<uint, byte> _placeableBaselineTrapped = [];
     private string _placeableModule = string.Empty;
     private uint _placeableModuleHash;
@@ -42,9 +43,10 @@ public sealed partial class KotorGameBridge
     public bool SupportsPlaceableSync => _pluginBlock != 0;
 
     /// <summary>
-    /// Diffs the local module's placeables against the last scan and reports what advanced
-    /// (opened, unlocked) as placeable-typed world flags. First scan per module is a silent
-    /// baseline; scans throttled to one per second like doors.
+    /// Diffs the local module's placeables against the last scan and reports the CURRENT
+    /// open/locked state (either direction — a story re-lock or a real close included) plus
+    /// whatever advanced on the disarm bit, as placeable-typed world flags. First scan per
+    /// module is a silent baseline; scans throttled to one per second like doors.
     /// </summary>
     public List<KeyValuePair<ulong, sbyte>> CollectChangedPlaceableState()
     {
@@ -60,7 +62,6 @@ public sealed partial class KotorGameBridge
             _placeableModule = module;
             _placeableModuleHash = PlaceableFlags.HashModule(module);
             _placeableShadow.Clear();
-            _placeableBaselineLocked.Clear();
             _placeableBaselineTrapped.Clear();
             _placeableBaselined = false;
             _nextPlaceableScanTicks = 0;
@@ -90,9 +91,8 @@ public sealed partial class KotorGameBridge
             byte locked = lockedInt != 0 ? (byte)1 : (byte)0;
             byte trapped = trapInt != 0 ? (byte)1 : (byte)0;
 
-            if (!_placeableBaselineLocked.ContainsKey(objectId))
+            if (!_placeableBaselineTrapped.ContainsKey(objectId))
             {
-                _placeableBaselineLocked[objectId] = locked;
                 _placeableBaselineTrapped[objectId] = trapped;
             }
 
@@ -110,11 +110,15 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
-            bool unlockedDuringPlay = locked == 0 && _placeableBaselineLocked[objectId] != 0;
+            // Lamport ordering in EventFlagStore (the same store doors use) permits a story
+            // re-lock or a real close to reach the peer honestly, the same fix 934c18e made for
+            // doors: carry the CURRENT open/locked state, not "has this ever advanced". Disarm
+            // stays relative to the module's own baseline — nothing shipped ever re-arms a trap,
+            // so there is nothing to carry both ways there.
             bool disarmedDuringPlay = trapped == 0 && _placeableBaselineTrapped.GetValueOrDefault(objectId) != 0;
             changed.Add(new KeyValuePair<ulong, sbyte>(
                 PlaceableFlags.MakeKey(_placeableModuleHash, objectId),
-                PlaceableFlags.MakeValue(open != 0, unlockedDuringPlay, disarmedDuringPlay)));
+                PlaceableFlags.MakeValue(open != 0, locked == 0, disarmedDuringPlay)));
         }
 
         _placeableBaselined = true;
@@ -123,8 +127,10 @@ public sealed partial class KotorGameBridge
 
     /// <summary>
     /// Publishes the session's placeable truth for the local module into the plugin, which
-    /// applies each as a field write on the game's thread. Flags for other modules are held
-    /// back until that module loads.
+    /// applies each through the engine's own open/close/lock calls on the game's thread — open
+    /// and locked both apply in either direction now (a story re-lock or close reaches a peer
+    /// the same way a door's does). Flags for other modules are held back until that module
+    /// loads.
     /// </summary>
     public bool TryWritePlaceableStates(IReadOnlyList<KeyValuePair<ulong, sbyte>> flags)
     {
@@ -152,7 +158,7 @@ public sealed partial class KotorGameBridge
 
             if (!PlaceableFlags.IsPlaceableKey(flag.Key)
                 || PlaceableFlags.ModuleHashOf(flag.Key) != _placeableModuleHash
-                || flag.Value <= 0)
+                || flag.Value is < 0 or > 7)
             {
                 continue;
             }

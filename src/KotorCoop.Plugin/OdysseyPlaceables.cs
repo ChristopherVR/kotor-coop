@@ -45,18 +45,18 @@ internal static unsafe class OdysseyPlaceables
     /// serialised, and it is always 0 at real save time (the game does not allow saving with a
     /// container panel open) — the two readings are not actually in tension.
     ///
-    /// <see cref="PlaceableController"/>'s existing one-way mirror (host's "ever opened" ->
-    /// write 1 on a peer's copy, via <c>Odyssey.SetPlaceableOpen</c>, never cleared) is
-    /// UNAFFECTED by this correction — it keeps its own job (a late joiner sees an already-
-    /// looted chest with its lid open) — but IS live-confirmed to fight this method: that
-    /// durable channel's local agent-side poll (<c>KotorGameBridge.CollectChangedPlaceableState</c>)
-    /// samples this SAME <c>+0x338</c> field independently on every instance and, once it has
-    /// EVER read 1 here, keeps re-asserting it forever (<c>PlaceableFlags.cs</c>: monotonic by
-    /// design). <see cref="ContainerCloseHook.Register"/> below is the LIVE-PASS fix — every
-    /// caller of this method is a mirror-close (see the two call sites in
-    /// <c>InteractionLockController</c>), so registering here covers exactly the edge
-    /// <see cref="ContainerCloseHook"/>'s own hook cannot see on its own (a mirror never calls
-    /// the real <c>CloseInventory</c>, so its splice never fires for this edge).
+    /// <see cref="PlaceableController"/>'s own durable channel (host's open/locked state, both
+    /// directions since 2026-09-24 — docs/research/door-relock.md §6) reads this SAME
+    /// <c>+0x338</c> field independently on every instance
+    /// (<c>KotorGameBridge.CollectChangedPlaceableState</c>); at the time this method was added
+    /// (2026-08-22) that channel was one-way and monotonic, so it fought a real close it could
+    /// not itself express — <see cref="ContainerCloseHook.Register"/> below was that pass's LIVE
+    /// fix. The durable channel now carries an honest "closed" value too, so the two no longer
+    /// fight (see <c>PlaceableController.Apply</c>'s own remarks); <see cref="ContainerCloseHook"/>
+    /// is left installed and this call to <see cref="ContainerCloseHook.Register"/> is kept —
+    /// see that class's own updated remarks — every caller of THIS method is still a mirror-close
+    /// (the two call sites in <c>InteractionLockController</c>), the entirely separate live
+    /// "someone else is looting this right now" claim mirror, unrelated to the durable channel.
     /// </summary>
     public static void ClearPlaceableOpenFlag(nint placeable)
     {

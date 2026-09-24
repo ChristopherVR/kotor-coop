@@ -267,3 +267,30 @@ changes.
 both `CoopHost.cs` and `CoopClient.cs`, backed by orchestration-level unit tests against a stub
 session — it has not been exercised on the two-instance rig (a client actually looting a shared
 chest and confirming the host's copy also empties).
+
+## 5. Locked/closed state made bidirectional, same model as doors (2026-09-24)
+
+§1's "Applying placeable state on the mirror" above (2026-07-31) and its "monotonic
+(locked→unlocked, closed→open)" recommendation described the channel BEFORE this pass. It has
+since been extended the same way `934c18e` extended the door channel (`docs/research/door-relock.md`
+§2): `PlaceableFlags`'s value now carries the placeable's CURRENT open and locked bits, not
+"has this ever advanced", Lamport-ordered through the same `EventFlagStore` doors use, host
+tie-break on an exact-serial tie. A story `SetLocked(placeable, TRUE)` or a real container close
+now reaches every peer honestly, and `PlaceableController.Apply` applies through the engine's own
+open/close/lock paths — `Odyssey.LockPlaceable`/`UnlockPlaceable` (the plain field write §1
+already used, now called either direction) and the VERIFIED animation pair
+(`OdysseyPlaceables.PlayContainerOpenAnimation`/`PlayContainerCloseAnimation`, §1's own
+`0x275B`/`0x275C` ids, confirmed live 2026-08-22 by the container-sync pass — no longer
+NEEDS-LIVE/guessed-ABI as §1 described it) alongside the `+0x338` field write.
+
+The old permanent `ContainerCloseHook.WasEverClosed` latch (added 2026-08-22 as a stopgap for
+the monotonic channel fighting a real close, `docs/research/container-sync.md` §9) is replaced
+by `PlaceableDesiredStateTracker` — the placeable twin of `DoorDesiredStateTracker` — which
+dedupes on the exact (open, unlocked) tuple rather than latching "closed" forever, so a
+genuinely later re-open (by anyone) still applies. Trap disarm (bit 2) is unaffected and stays
+forward-only: no shipped script ever re-arms a trap. Container-loot exclusivity, the loot
+mailbox and delayed materialised loot (§2, `container-sync.md`) ride an entirely separate,
+faster channel (the interaction-lock claim mirror, `InteractionLockController
+.ReconcileContainerAnimations`) and are untouched by this pass.
+
+Full trace, content audit and live-test recipe: `door-relock.md` §6.
