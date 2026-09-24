@@ -212,12 +212,15 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        // Unlink from wherever the engine filed it, link into the store. Deliberately NOT calling
-        // SetPossessor — same reasoning AddItemToPartyPool's own remarks give: the item's
-        // possessor is left as the spawning player's id rather than fought back to
-        // OBJECT_INVALID. NEEDS-LIVE, docs/research/store-sync.md.
+        // Unlink from wherever the engine filed it, link into the store, then name the store as
+        // the possessor exactly as the engine's own CSWSStore::AcquireItem does at 0x005C7725
+        // (SetPossessor(item, store id, 1, 1, 0x7F000000)). Leaving the spawning player as the
+        // possessor made every inserted stock item read as a new personal PC item once it left
+        // the pool, and the script-grant pump offered the store's stock to the peer (live,
+        // 2026-09-24: a 12-stack store_stock top-up reported as two script item grants).
         int unlinked = RepositoryRemoveItemFn(sourceRepo, item);
         RepositoryInsertItemFn(repo, item, -1);
+        SetPossessorFn(item, storeObjectId, 1, 1, 0x7F000000);
 
         PluginHost.Log(
             $"store: insert diag — 0x{itemId:X} x{count}, unlinked from the player's repository "
