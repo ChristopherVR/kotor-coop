@@ -248,8 +248,16 @@ public static class ProtocolConstants
     /// Version 62: WorldDigest appends the sampled runtime difficulty level for warning-only
     /// peer agreement. Older peers are refused at the protocol handshake rather than
     /// misreading the new field.
+    ///
+    /// Version 66 (63-65 are other streams' reservations): <see cref="PacketType.PlacedMineIntent"/>
+    /// (100), <see cref="PacketType.PlacedMineIntentAck"/> (101) and
+    /// <see cref="PacketType.PlacedMineRoster"/> (102) — party-placed floor-mine replication.
+    /// A client reports "I placed a mine" / "a replicated mine is gone here" as reliable intents;
+    /// the host owns the canonical set, assigns each mine a session serial, and broadcasts the
+    /// set as a level (host snapshot + client intents, never a bidirectional op log). Off by
+    /// default (<c>placed_mine_sync</c>), NEEDS-LIVE. See docs/research/mines.md §14.
     /// </summary>
-    public const byte Version = 63;
+    public const byte Version = 66;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
