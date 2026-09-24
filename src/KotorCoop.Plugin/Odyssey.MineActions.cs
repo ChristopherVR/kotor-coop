@@ -18,6 +18,22 @@ internal static unsafe partial class Odyssey
     /// including a trigger and a creature. Read for the range gate, mines.md §14.8.</summary>
     private const int MineActionPositionOffset = 0x090;
 
+    /// <summary>CSWSObject object-type byte (mines.md §14.10: <c>CSWSObject::RunActions
+    /// 0x0057F4A0</c> reads this once per call and refuses to dispatch a queued Disarm/Recover
+    /// action at all unless it equals <c>5</c> — read-only diagnostic, never enforced here.</summary>
+    private const int MineActionActorTypeByteOffset = 0x008;
+
+    /// <summary>CSWSCreature's own commandable flag (<c>Odyssey.ObjCommandable</c>'s offset,
+    /// duplicated here because this file only reads it for the diagnostic string). Zero makes
+    /// both <c>CSWSCreature::UseSkill 0x004FBE40</c> and <c>AddMineActions 0x004F9DA0</c>
+    /// silently return without queuing anything (mines.md §14.10).</summary>
+    private const int MineActionActorCommandableOffset = 0x0E8;
+
+    /// <summary>The two-phase per-tick marker <c>AIActionDisarmMine</c>/<c>AIActionRecoverMine</c>
+    /// write on the acting creature (mines.md §14.8/§14.10): zero on the first tick (which only
+    /// starts the timing bar and returns), non-zero once the roll/fast-path tick has run.</summary>
+    private const int MineActionActorTickOffset = 0x97C;
+
     private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, void> DisableMineFromActionMenuFn =
         (delegate* unmanaged[Thiscall]<nint, int, nint, void>)0x00691900;
 
@@ -196,18 +212,41 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // mines.md §14.10: the retail message pump gives this call NO way to observe whether
+        // AddMineActions/RunActions actually queued or ticked the action - CSWSCreature::UseSkill
+        // (0x004FBE40) returns 1 unconditionally regardless of what its callees decide, so a
+        // "queued" response here has never meant "will do something." These three reads are
+        // read-only (no engine state is written) and exist only so the next live attempt can see
+        // which precondition was false instead of guessing from a silent 20-second timeout.
+        string actorState = DescribeActorGateState();
+
         if (recover)
         {
             RecoverMineFromActionMenuFn(clientTrigger, 0, clientActor);
-            diagnostic = $"queued retail recover-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success";
+            diagnostic = $"queued retail recover-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success{actorState}";
         }
         else
         {
             DisableMineFromActionMenuFn(clientTrigger, 0, 0);
-            diagnostic = $"queued retail disable-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success";
+            diagnostic = $"queued retail disable-skill request for {(partyPlaced ? "party-placed" : "GIT")} mine 0x{serverMineId:X}; skill roll decides success{actorState}";
         }
 
         return true;
+
+        string DescribeActorGateState()
+        {
+            if (!serverActorValid)
+            {
+                return string.Empty;
+            }
+
+            int commandable = *(int*)(serverActor + MineActionActorCommandableOffset);
+            byte actorType = *(byte*)(serverActor + MineActionActorTypeByteOffset);
+            int tick = *(int*)(serverActor + MineActionActorTickOffset);
+            bool lockOwned = PlayerCommandableLock.IsOwned;
+            return $" [actor gate: commandable={commandable}, type={actorType}(expect 5), "
+                + $"tick={tick}, commandableLockOwned={lockOwned}]";
+        }
     }
 
     private static bool ReadableObject(nint pointer, nuint size) =>

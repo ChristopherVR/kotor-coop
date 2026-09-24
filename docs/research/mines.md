@@ -860,3 +860,77 @@ The joiner stood on its own `placemine` mine (distance 0) and ran `placedmineact
 the request passed the new range gate and was queued, but after 20 s nothing had happened and both
 `minestate`s still mapped `#1`. Range was one precondition, not the only one. A real radial-menu
 recover (which the rig cannot click) is the remaining test; the diagnostic path stays open.
+
+### 14.10 The full native path beyond `0x691950`/`0x691900`, and why "queued" proves nothing (2026-09-25)
+
+Full static RE (`tools/disasm.py`/`tools/xrefs.py`/`tools/q.py` against the installed GOG
+`swkotor.exe`; no process opened, no game run, no new engine write shipped) of everything the
+retail engine does *after* `RecoverMineFromActionMenu 0x00691950`/`DisableMineFromActionMenu
+0x00691900` are called, following the task brief's own checklist: the client message send, the
+server handler and its subtype dispatch, the queued action's own gates, and the RunActions
+dispatch that has to pick the action back up. All addresses are VERIFIED(static) by disassembling
+the actual function bytes, not inferred from behaviour, unless marked otherwise.
+
+**The full chain for RECOVER (skill 0x65), one hop at a time:**
+
+| Stage | Address | What it does |
+| --- | --- | --- |
+| `CSWCCreature::PerformSkill` | `0x0060EE00` | The entry §14.8 already names. Its ONLY local check is "is the target the sentinel id `[0x00746644]`" and "does `GetSWCMessage 0x005ED6F0` return a channel" — no range, no ownership, no anything else. On success it calls `CSWCMessage::SendPlayerToServerInput_UseSkill` with `(mode=1, skillId=0x65, targetId, &{0,0,0})` — always. |
+| `CSWCMessage::SendPlayerToServerInput_UseSkill` | `0x00677B10` | Builds and queues the network/loopback message (`CreateWriteMessage 0x004D68A0`, subtype tag written elsewhere in the message header, not a literal in this function's own body). Returns bool "message accepted for send," which `PerformSkill` never even reads — nothing here reports back whether the *server side* will do anything with it. |
+| `CSWSMessage::HandlePlayerToServerInputMessage` | `0x005254C0` | The dispatcher §14.8 assumed. It reads a subtype byte (a caller-supplied parameter, `[esp+0x70]` = `arg2` at entry — decoded upstream of this function, not inside `SendPlayerToServerInput_UseSkill`'s own body) and jumps through a 36-entry table at `0x0052684C`. Confirmed by direct xref, NOT by literal-matching the send side's `0x12`: `tools/xrefs.py 0x4fbe40` shows exactly one call site, `0x00525737`, inside the table entry at index 7 (`0x00525670`). Entry 7 reads 2 bytes + 1 `ReadOBJECTIDServer` + 3 floats off the wire and calls `CSWSCreature::UseSkill`. |
+| `CSWSCreature::UseSkill` | `0x004FBE40` | Dispatches on the skill-id byte (`al`). Three literal skill ids get a direct, no-frills call to `AddMineActions` before the function's general 7-entry `bl`-indexed jump table is even reached: `al==0x64` → type `0x1B`, `al==0x65` → type `0x1A` (**RECOVER**), `al==0x66` → type `0x1C`. **`UseSkill` always returns `1` on these three paths** — the call to `AddMineActions` happens, but its return value is discarded (`mov eax,1` is hard-coded right after the call in each of the three blocks, at `0x004FBF58`/`0x004FBF80`/`0x004FBFA8`). Nothing between here and the client ever learns whether `AddMineActions` actually queued anything. |
+| `CSWSCreature::AddMineActions` | `0x004F9DA0` | The real gate. In order: (1) `if ([actor+0xE8] == 0) return 0` — the `ObjCommandable`/`commandable` flag this project's own plugin already models (`Odyssey.ObjCommandable`, `PlayerCommandableLock`); (2) resolves the target trigger by id, `return 0` if not found; (3) for type `0x19`/`0x1A` (disarm/recover) — checks the trigger's own `TrapDisarmable +0x2C4` (or the door/placeable equivalents) and `return 0`s if the object is trap-gated but not disarmable; (4) `CSWSCreatureStats::GetCanUseSkill(stats, 1)` — `1` is the Demolitions skill index in `skills.2da`, i.e. "can this creature use Demolitions at all" (a feat/class-availability check, not the roll) — `return 0` if false. Only after all four does it call `CSWSObject::AddAction(type=0x1A, priority=0xFFFF, targetId, …)`. **Every one of these four failures is silent**: no feedback message, no return-code path back to the client, nothing this side of the wire can observe. |
+| `CSWSObject::AddAction` | `0x004CEA20` | Allocates a fresh `0x74`-byte action node and appends it to the object's own action list (`edi+0x14`/`+0x16`, a 16-bit counter with wraparound). No de-duplication or per-type cap was found in this function — it always queues a new node when called. |
+| `CSWSObject::RunActions` | `0x0057F4A0` | **The gate this task's brief specifically asked to check, and the one previously undocumented anywhere in this repo.** Reads the OBJECT'S OWN type byte once, at function entry — `movzx ebx, byte ptr [esi+8]` — and reuses that single value for the rest of the call. Every creature-only action case in the ~35-way dispatch this function contains, including BOTH `AIActionDisarmMine` (call site `0x0057FC35`) and `AIActionRecoverMine` (call site `0x0057FC52`), is individually preceded by `cmp ebx,5; jne 0x0057FE08`. **If the acting object's own type byte at `+0x08` is not exactly `5`, the handler is never called at all** — control jumps straight to the shared post-dispatch housekeeping at `0x0057FE08` as if nothing were queued. This is the retail engine's OWN object-type discipline (type `5` = the creature action set), distinct from the target's type byte (trigger=7/placeable=9/door=10, mines.md §2/§4) and from this project's own documented pitfall of comparing a raw `+0x08` byte for identity (`kotor-coop-object-type-field-trap.md`) — here it is read directly out of the shipped binary, not assumed. |
+| `CSWSCreature::AIActionRecoverMine` | `0x00518C40` | Already partly documented (§4/§14.8: range gate, two-phase `+0x97C` tick). **New in this pass: it has the SAME creator/party-membership fast path §14.8 found in `AIActionDisarmMine`.** At `0x00518FAD` it compares the trigger's creator id (`+0x2E4`) against the acting creature's own id (`[actor+4]`) and jumps straight to the no-roll success path (`0x00519066`) on a match. Failing that, at `0x00518FD4`/`0x00519002` it calls `CSWPartyTable::GetIsMember_2 0x00563740` on the creator and then the actor, and at `0x00518FE7`/`0x0051900B` falls back to each one's own `CSWSCreatureStats+0x6C` party-membership flag — ANY of the four checks matching skips the d20 roll entirely. On success it posts event 10 then event 11 at the trigger (`0x005190A2`, matching §4's disarm shape) and builds the `traps.2da` reward item further down the function (unread in this pass; §13's open reward-channel question stands). |
+
+**What this means for §14.9's failed live attempt.** Every gate this pass could check statically
+should have PASSED under the stated test conditions: the joiner stood at distance 0 (range gate
+OK, §14.8); `PlaceTestMine` sets `TrapDisarmable=1` explicitly (§14.2); Demolitions has no
+class restriction in retail `skills.2da` (`GetCanUseSkill` should return true for any creature);
+`PlaceTestMine`/`SpawnReplica` both set the trigger's creator to the acting engine's own local
+player (§14.8), which should hit `AIActionRecoverMine`'s creator-id fast path immediately, no roll
+needed; and a normally-controlled party leader's own object-type byte should read `5`. None of
+that chain, on paper, explains a silent no-op. Two concrete, checkable-live possibilities remain
+open:
+
+* **`[actor+0xE8]` (`ObjCommandable`) was 0 at the moment of the call.** This project's OWN plugin
+  can legitimately zero this field — `PlayerCommandableLock` (`src/KotorCoop.Plugin/PlayerCommandableLock.cs`)
+  is acquired by `MinigameLockController` and `SoloSegmentSpectateController` and restored on
+  release. `tar_m10aa` is not a minigame module and nothing in the §14.9 recipe should have left a
+  lock held, but a stuck/leaked lock (or a lock owner this pass did not audit) would produce
+  exactly this symptom with zero engine-side feedback.
+* **`RunActions` never got a second look at this creature's queue**, or `[actor+8]` was not `5` at
+  the moment RunActions ran for this object — this pass confirmed the GATE exists and exactly what
+  it requires, but did not (could not, without a live process) confirm the ACTUAL value of either
+  field on the rig's controlled PC during the test window.
+
+**The fix implemented this pass is read-only instrumentation, not a behaviour change** —
+`Odyssey.TryQueueMineAction` (`src/KotorCoop.Plugin/Odyssey.MineActions.cs`) now reads
+`[actor+0xE8]` (commandable), `[actor+0x08]` (object type, expect `5`), `[actor+0x97C]` (the
+two-phase tick marker), and `PlayerCommandableLock.IsOwned`, and appends them to the "queued"
+diagnostic string as `[actor gate: commandable=…, type=…(expect 5), tick=…, commandableLockOwned=…]`.
+No native call, packet, field write, or refusal rule changed — the recover/disarm request is
+still sent exactly as before. This was the only change this pass could make with confidence:
+every one of the four `AddMineActions` gates and the `RunActions` object-type gate are pure
+ENGINE reads with a known offset and a known "what should this be" answer, so surfacing them costs
+nothing and turns the next live attempt's silent 20-second timeout into an actual answer instead
+of another guess. A "route to a different peer's copy" fix was considered and rejected for the
+same reason §14.7 rejected it: nothing found in this pass shows any gate that depends on WHICH
+engine built the trigger (replica vs. own placement) rather than on the ACTOR's own state at
+calltime.
+
+**Live recipe addition.** Repeat §14.8's recipe step 2 (`placedmineaction disarm|recover <serial>`
+while standing on the mine) and read the new `[actor gate: …]` suffix in the response:
+
+* `commandable=0` → a stuck `PlayerCommandableLock` (or an as-yet-unaudited third owner) is the
+  root cause; check `minigamelock`/spectate state on that instance before the attempt.
+* `type=5` and `commandable=1` and `tick` advances from `0` to non-zero across two calls a couple
+  of seconds apart, yet the mine still never disappears → the gate chain traced in this pass is NOT
+  the cause, and the remaining unread tail of `AIActionRecoverMine` (the reward-item construction,
+  past `0x005190A2`) or a part of `RunActions`/`AddMineActions` outside the `bl 0x19/0x1A` path
+  this pass followed is the next place to look.
+* `type` is anything other than `5` → the RunActions gate found in this pass IS the cause; that
+  points back at how this instance's controlled creature was claimed/possessed (`ClaimCreature`,
+  `party-reconciliation.md`), since a live/controlled PC should never carry a non-creature type
+  byte.
