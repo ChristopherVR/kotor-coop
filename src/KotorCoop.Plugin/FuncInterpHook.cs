@@ -143,6 +143,11 @@ internal static unsafe class FuncInterpHook
         // playing Dantooine. Does not shadow a retail verb.
         "addclass",
 
+        // Party-placed mine replication's live-test verbs (2026-09-24, docs/research/mines.md
+        // §14.6), typed on either instance during the two-instance recipe. None shadows a retail
+        // verb (docs/research/console-cheats.md lists no mine verb).
+        "placemine", "minestate", "placedmineaction",
+
         // BUG FIX (2026-08-29, live-verification session): `pooladd`/`poolremove`
         // (docs/research/party-pool-sync.md, added to ConsoleCommand.cs in fcdab50) were never
         // added here, so every real in-game keystroke submission of either fell through to

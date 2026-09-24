@@ -880,6 +880,20 @@ public enum CoopCommandKind
     /// <summary>Developer diagnostic: request the retail recover/disarm action on a GIT mine.
     /// Address holds the action; Amount holds the local server object ID. Local only.</summary>
     MineAction,
+
+    /// <summary>Test instrument (docs/research/mines.md §14.6): build a party-placed floor mine at
+    /// the local player's feet through the retail construction sequence, so the capture, serial,
+    /// peer replica and fire gate can be exercised without the radial menu. Amount = traps.2da
+    /// row; EffectMagnitude = detect DC (low 16) | disarm DC (high 16). Local only.</summary>
+    PlaceMine,
+
+    /// <summary>Diagnostic: dump the party-placed mine identity map (serial -> local id),
+    /// pending captures, the fire gate and the verified-route verdict. Local only.</summary>
+    MineState,
+
+    /// <summary><see cref="MineAction"/> for a PARTY-PLACED mine named by its session serial
+    /// (Amount); Address holds recover|disarm. Local only.</summary>
+    PlacedMineAction,
 }
 
 /// <summary>
@@ -1075,6 +1089,9 @@ public static partial class ConsoleCommand
         new(["loadgame"], ParseLoadGame),
         new(["quittomenu"], ParseQuitToMenu),
         new(["mineaction"], ParseMineAction),
+        new(["placemine"], ParsePlaceMine),
+        new(["minestate"], ParseMineState),
+        new(["placedmineaction"], ParsePlacedMineAction),
         new(["scriptgive"], ParseScriptGive),
         new(["loottake"], ParseLootTake),
         new(["pooladd"], ParsePoolAdd),

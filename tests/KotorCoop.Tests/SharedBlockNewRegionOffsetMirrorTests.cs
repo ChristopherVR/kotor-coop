@@ -68,6 +68,34 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("LootMailboxConsumedCount", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxAckEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+
+        // Party-placed floor-mine replication (version 78, docs/research/mines.md §14). A
+        // drifted offset here would feed the plugin a spawn request for the wrong serial, or read
+        // a capture's record out of the neighbouring slot.
+        ("PlacedMineCaptureHead", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineCaptureRing", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineGoneHead", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineGoneRing", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineRosterGeneration", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineRosterWorldSerial", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineRosterHighest", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineRosterCount", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineRosterSerials", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnRequest", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnWorldSerial", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnSerial", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnCapture", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnX", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnY", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnZ", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnDetectDc", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnDisarmDc", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnTrapType", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnFaction", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnApplied", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnStatus", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineSpawnLocalId", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
+        ("PlacedMineWorld", "SharedBlock.PlacedMines.cs", "KotorGameBridge.PlacedMines.cs"),
     ];
 
     [Fact]

@@ -259,7 +259,9 @@ public class TransitionMovieTests
         // 73 = agent-published local session role at 0x4E44; 74 = exact native load request
         // provenance at 0x4E50..0x4EA8; 75 adds resolved store prices at 0x4C40 and the
         // item-spawn generation/ticket/load-serial arrays at 0x4F00..0x5300.
-        Assert.Equal(75, int.Parse(version.Groups[1].Value));
+        // 76-77 = the 2026-09-24 wave's other streams; 78 = party-placed mine replication at
+        // 0x5A00..0x5BBC (block grown to 0x5C00 for the wave, docs/research/mines.md §14).
+        Assert.Equal(78, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

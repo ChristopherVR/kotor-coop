@@ -147,6 +147,11 @@ internal static class ConsoleVerbCatalog
         // script makes, against the local player, captured and relayed like the real thing.
         ("addclass", "addclass <class 0-8>  (dev-only: runs the engine's AddMultiClass on your player; 3 Guardian, 4 Consular, 5 Sentinel)"),
 
+        // Party-placed mine replication's live-test verbs (2026-09-24, docs/research/mines.md §14).
+        ("placemine", "placemine <traps.2da row> [detectDC] [disarmDC]  (dev-only: builds a party mine at your feet, captured like a real one)"),
+        ("minestate", "minestate  (dev-only: party-placed mine serials, local ids and the fire gate)"),
+        ("placedmineaction", "placedmineaction <recover|disarm> <serial>  (dev-only: retail recover/disarm on a replicated party mine)"),
+
         // The character-creation drive verbs (2026-08-29). Only meaningful at the MAIN MENU,
         // which is exactly where the console detour still works and the frame hook does not.
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
