@@ -175,6 +175,7 @@ public sealed partial class CoopCommandDispatcher(
                     MaintainSteamPresence();
                     PumpSteamJoinRequests();
                     MaintainSessionSave();
+                    PumpEnemyScalingPersistence();
                     MaintainWorldServing();
                     DrainChat();
                     ReflectCheatAnswer();
