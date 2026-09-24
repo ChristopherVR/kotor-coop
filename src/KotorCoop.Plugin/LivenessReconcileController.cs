@@ -164,9 +164,13 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
                 {
                     return false; // defer kills/destroys until the current owner/local proof is restored
                 }
+            }
 
-                // A retained body is a roster companion's own creature: kill it like the owner
-                // did rather than destroy an object the party table still names.
+            // A retained body is a roster companion's own creature: kill it like the owner
+            // did rather than destroy an object the party table still names (live 2026-09-25:
+            // Jolee vanished on the host while the live proof still held and was destroyed here).
+            if (hostState == LivenessHostState.Gone)
+            {
                 hostState = LivenessHostState.Dead;
             }
         }

@@ -202,3 +202,48 @@ The Sith Bastila templates use native slots 15..19 while the documented party ro
 covers 0..8 and `PartyRoster.AvailableMask` is 16-bit. Whether those native writes reach separate
 party-table storage, adjacent fields, or are translated elsewhere remains an **unverified
 resource/engine question**; this handoff does not claim the slot-width issue is solved.
+
+### Live run (2026-09-25)
+
+Staged on `000035 - dark_handoff_ready` (both instances on `unk_m44ac`, Jolee in roster slot
+4, Juhani in 5). Recipe: `god on` on both players (the staged PC is too weak to survive the
+fight, and a party wipe tears the world down mid-test), `startdialog 0x2 unk44_evilbast`, skip
+the opening E150..E166, then set Bastila low (`sethp.ps1 -ObjectId 0x2 -Set 60`) and
+`hurt 5 0x2`. That damage event fires `k_punk_bast_ud2`, which starts E75 -> E105. The dark
+replies ("true Dark Lord", "How can I reclaim", "rule the galaxy", "Lord of the Sith", "Death to
+the Jedi") reach E62 `k_punk_bastadd` -> E63 `k_punk_bastjoin` -> R73 `k_punk_bastjoin2` ->
+E64 -> R74 `test3`. `hurt` takes `0x<id>` for this (a GIT id like Bastila's 0x2 would
+otherwise read as a roster slot).
+
+**VERIFIED live:**
+* The host log shows `RemovePartyMember slot 4` and `slot 5`, and both instances' rosters drop
+  Jolee and Juhani (`companions 0`).
+* The joiner logs `enemy handoff: owner 0x5F -> retained local 0x5F, roster slot 4` and the
+  same for 0x62. The census shows OWNER 2 on the host and MIRROR 2 on the joiner.
+* Hostile Jolee and Juhani attack both players and the joiner's stand-in for the host.
+* Health maps across: `hurt 20 0x5F` on the host (42 -> 22) read 22 on the joiner's copy.
+* Both games stay responsive through the handoff and the kills.
+
+**Fixed after the first run.** The host's `slay` removes the body outright. The joiner's copies
+stood at min-1-hp forever for two reasons:
+1. The host's liveness scan skipped anything named in the party table, and dismissed
+   Jolee/Juhani still are. It now makes the same `DarkSideHostileCompanionRule` exception the
+   enemy census makes.
+2. The joiner's retained-alias proof needs a live hostile census row. A dead owner has none,
+   and the alias was pruned a pass before the verdict arrived. The map now keeps the body
+   behind a tombstone. `TryGetRetainedLocalForDeath` accepts a death verdict on that body alone:
+   Lehon module, the same live local creature, still hostile, and the slot still out of this
+   instance's party.
+
+   **Re-run with the fix (VERIFIED):** Juhani's death arrived on the joiner as
+   `combat: killed 0x62 (owner id, local stand-in 0x62) on the owner's authority` together with
+   `liveness: 0x62 is a corpse on the owner ... killing to match`. Jolee's body vanished on the
+   host, and the joiner logged `liveness: 0x5F no longer exists on the owner ... destroying to
+   match`. Both games stayed responsive for the next hour. The liveness reconcile now turns a
+   `Gone` verdict for a retained companion into a kill, not a destroy, because the party table
+   still names that object.
+
+**Not reachable on this save:** Bastila's join. `k_punk_bastjoin2` is
+`AddPartyMember(0, GetObjectByTag("bastila"))`, but the staged save's Bastila is tagged
+`bastilae`, so the lookup finds nothing and she never joins on either side. A real playthrough
+save is needed. This is a staging limit, not a co-op one: the host's own engine runs the script.

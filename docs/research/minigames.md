@@ -3728,3 +3728,33 @@ that says VERIFIED(static) was read directly out of the installed GOG `swkotor.e
 (`tools/disasm.py`/`tools/q.py`) or the installed module/script files
 (`tools/kotorfiles.py`/`tools/localvaraudit.py`'s NCS decoder) this session, not carried over
 from a prior round.
+
+### 25.5 Live result (2026-09-25) — VERIFIED
+
+Run on the rig from `000010 - campaign_dantooine`. The host ran `warp ebo_m12aa` (the joiner
+followed), then `warp m12ab`. `mgkill all` logged
+`mgkill: slot 2..7 (hp 100/100) killed via SWMG_AdjustFollowerHitPoints` and
+`killed 6/6 requested ... 0 still alive`. The fighters left the minigame array, and a second
+`mgkill all` found none.
+
+**The first run did not return to the Hawk, and the reason is the staging.** Decoding
+`ST_PlayPostTurret` (the `JSR` target inside every `k_pebo_sthdeath*`) shows it calls
+`StartNewModule` only when the story globals match one of four cases:
+* `K_HK47_SIMULATION`
+* `K_RANDOM_MINI_GAME` (the mid-game random ambush: `ebo_m12aa`, restoring `K_FUTURE_PLANET`)
+* `K_STAR_MAP == 0 && K_KOTOR_MASTER == 10` (leaving Taris: `ebo_m12aa` with the
+  `K_TARIS_DESTROYED` movie)
+* `40/20` (the Leviathan leg, `ebo_m40ad`)
+
+A bare `warp m12ab` from Dantooine matches none of them, so the death scripts ran and the
+sequence simply stopped. The same thing would happen to a real gunner staged that way.
+
+**With the random-ambush global set, it completes end to end:** `setglobal K_RANDOM_MINI_GAME
+true`, then `warp m12ab`, then `mgkill all`. The joiner logged
+`minigame lock: the minigame ended - control is yours again` 11 s after the kills. The host
+logged `world 6 'ebo_m12aa' up` / `minigame: exited - back in the shared world` 25 s after them,
+once the post-turret scene had played. The agent then ran the solo-return save adoption
+(`fresh host return save landed after 763 ms`). Both games stayed responsive.
+
+Rig recipe: `warp ebo_m12aa` -> `setglobal K_RANDOM_MINI_GAME true` -> `warp m12ab` ->
+`mgkill all` within the ~66 s unattended-loss window.

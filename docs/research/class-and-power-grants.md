@@ -409,3 +409,22 @@ fine — this section exists because that character has zero Force points):
 Regression check: run `stats` once BEFORE `addclass`/`levelup` on the same save and confirm it
 reports `fp 0/0` (or close to it) and the base class only — the negative control that this
 section's numbers are real, not stale/cached.
+
+### 9.8 Live result (2026-09-25)
+
+* **Lehon save:** `levelup 1 4` took class 5 from level 0 to level 6 and reported
+  `granted 4/4`. `stats` then read `hp 72/72 fp 36/82` with six powers known.
+* **`000010 - campaign_dantooine`:** the rig's level-1 Soldier + Guardian@0 carries a large XP
+  bank. `levelup 1 3` jumped Guardian 0 -> 19 on the first call (`granted 1/3 (reached the
+  max...)`). `stats` read `hp 240/240 fp 76/135`.
+
+So one `AutoLevelup` call can consume the whole XP bank, and `count` counts calls, not levels.
+On a character with no spare XP each call is one level, because the top-up only fills the gap to
+the next level. This is harmless for staging and is recorded so nobody reads `count` as exact.
+
+**Force points are real:** `GetMaxForcePoints` and the `+0x122` current value both moved with
+the level. Spending them with `cast` does NOT work yet. The queued node is type 0x0F, which
+RunActions sends to `CSWSCreature::AIActionWaitForEndOfRound` (0x513F60). It carries spell 10
+and the target, leaves the queue within ~3 s, and spends no Force points. This held for the
+caster itself and for the peer's stand-in, and nothing reached the partner. See effect-sync.md
+for the follow-up.
