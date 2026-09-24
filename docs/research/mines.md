@@ -670,3 +670,32 @@ untested even in single life (§12-13's live attempts were both against GIT mine
 party-placed mine's own `traps.2da` item reward, if any, follows the same
 `script_item_sync`/`party_pool_sync` ambiguity §13 already flags for GIT-mine recovery.
 
+### 14.7 Live run (2026-09-24, `80439e1`, `tar_m10aa`, both `placed_mine_sync = 1`)
+
+Both engines logged the fire gate at `0x58D59E` and `AIActionSetMine route verified (13 calls,
+18 byte runs)`; the joiner logged itself inert as a client.
+
+- **Capture -> serial -> replica (steps 2-5).** Joiner `placemine 3`: `captured local placement
+  #1 (local 0x148, ... at 113.00,116.00,2.25)`, then `own placement #1 (local 0x148) is session
+  mine #1 - kept, not rebuilt`. Host: `peer 2's placement #1 is session mine #1`, then `replica of
+  session mine #1 spawned - built party-placed mine 0x145 ... at (113.00, 116.00, 2.25), tag
+  COOP_PMINE_1`, the first live run of the native construction route, with no fault. `minestate`:
+  host `#1=0x145r` gate armed, joiner `#1=0x148o` gate inert.
+- **Client fire gate.** The joiner stood on its own mine: `fire gate refused a party-placed mine on
+  this client (total 1); the host's copy decides`. No damage on the joiner.
+- **Removal propagation.** `destroyobject 0x145` on the host: host `mine #1 (local 0x145) is gone
+  here - reported to the session` at 17:14:39.099; joiner `mine #1 (local 0x148) removed on the
+  session's authority (engine DestroyObject)` at 17:14:39.216. Both `minestate`s then 0 mapped.
+
+**Recipe correction (step 6).** Walking the HOST onto the replica does nothing, and correctly: the
+mine carries the party's faction (0) and a party's mines fire only on hostiles. The walk-on test
+needs a hostile crossing the host's replica; the Vulkars in this save were not hostile and
+`spawncreature n_sithsoldier001` refused here (failure 9), so detonation-by-enemy and
+damage-exactly-once on the host remain unobserved.
+
+**Open finding.** `placedmineaction recover|disarm` queues the retail skill request but the engine
+never performs it, on the host's replica AND on the joiner's own `placemine`-built mine. Both were
+built by this route's replay rather than by a real placement, so the retail action evidently needs
+state the replay does not set (the likeliest candidate is the trap's per-creature detection
+record). A retail-placed mine is unaffected on its placer; recovering a PARTNER's mine is the case
+that stays open.
