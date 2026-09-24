@@ -166,6 +166,15 @@ internal static unsafe class FuncInterpHook
         // at the in-game console on both rig instances. Does not shadow a retail verb (the
         // string "localvar" does not occur anywhere in the GOG swkotor.exe image).
         "localvar",
+
+        // The live-cast primitive (2026-09-24, docs/research/effect-sync.md §14): typed on
+        // both rig instances during the partner_buffs/enemy_effect_sync recipes, because those
+        // hooks need a REAL cast's creator id, which only an actual in-game cast produces.
+        // Does not shadow a retail verb — neither name appears in
+        // docs/research/console-cheats.md's retail table, checked the same way every prior
+        // addition here was (ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
+        // also asserts it at build time).
+        "cast", "grantpower",
     ];
 
     /// <summary>

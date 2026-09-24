@@ -388,6 +388,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 DepartGalaxyMap();
                 break;
 
+            case SharedBlock.CheatKindCast:
+                CastSpell(playerId);
+                break;
+
+            case SharedBlock.CheatKindGrantPower:
+                GrantPower(playerId);
+                break;
+
             default:
                 Answer(SharedBlock.CheatStatusRefused, $"unknown cheat kind {kind}");
                 break;

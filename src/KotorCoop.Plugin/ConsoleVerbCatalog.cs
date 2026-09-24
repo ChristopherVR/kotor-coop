@@ -158,5 +158,11 @@ internal static class ConsoleVerbCatalog
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
         ("chargen", "chargen quick [class 0-5] | chargen accept  (picks a class + Quick template, or presses Play)"),
         ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
+
+        // The live-cast primitive (2026-09-24, docs/research/effect-sync.md §14): a real
+        // player cast through the engine's own action queue, so a capture hook that needs the
+        // effect's creator to be the local player can finally be exercised.
+        ("cast", "cast <spell id|name> <target: me|0xid> [metamagic]  (dev-only: real cast through the engine's action queue; names: heal, cure, valor, stun, fear, forcepush, stasis)"),
+        ("grantpower", "grantpower <spell id|name> [classSlot]  (dev-only: engine's own AddKnownSpell, for a save that doesn't know the power yet)"),
     ];
 }

@@ -663,6 +663,37 @@ public static class CheatKinds
     /// <summary><see cref="MineAction"/> for a party-placed mine named by session serial (Target).</summary>
     public const uint PlacedMineAction = 92;
 
+    // 93-94 reserved (party-placed mines, unused). 95-99: the live-cast primitive
+    // (2026-09-24, docs/research/effect-sync.md §14) - the two verbs a real Force-power cast
+    // needs, since partner_buffs/enemy_effect_sync's capture hooks require the effect's
+    // creator to be the local player and applyeffect's VM apply always stamps creator
+    // 0x7F000000.
+
+    /// <summary>
+    /// <c>cast &lt;spell&gt; &lt;target&gt; [metamagic]</c> — makes the LOCAL PLAYER cast a
+    /// <c>spells.2da</c> row through the engine's own action queue: <c>Odyssey.CastSpellAtObject</c>
+    /// dispatches the VERIFIED <c>ActionCastSpellAtObject</c> VM routine (table index 501/0x1F5,
+    /// handler <c>CSWVirtualMachineCommands::ExecuteCommandCastSpell</c> 0x0052EE50) with
+    /// OBJECT_SELF redirected to the player, exactly the route a compiled script's own
+    /// <c>ActionCastSpellAtObject(...)</c> call takes and the SAME <c>CSWSCreature::
+    /// AddCastSpellActions</c> queuing function the client's radial-menu cast reaches through
+    /// <c>HandlePlayerToServerInputMessage</c>. Target = the object id (0x7FFFFFFF for the
+    /// caster's own body); Amount = the spell id; Charges = metamagic bits (0 for a plain
+    /// cast). See SharedBlock.CheatKindCast and docs/research/effect-sync.md §14.
+    /// </summary>
+    public const uint Cast = 95;
+
+    /// <summary>
+    /// <c>grantpower &lt;spell&gt; [classSlot]</c> — the companion verb for a save that does
+    /// not already know the power under test: runs the engine's own
+    /// <c>CSWSCreatureStats::AddKnownSpell(classIndex, spellId)</c> (0x005AA9B0) on the local
+    /// player, the same routine <c>ReadSpellsFromGff</c> and the level-up screen's debug path
+    /// use — never a raw poke of the known-spell bit array. Amount = the spell id; Charges =
+    /// the class slot (0 or 1, default 0). See SharedBlock.CheatKindGrantPower and
+    /// docs/research/effect-sync.md §14.
+    /// </summary>
+    public const uint GrantPower = 96;
+
     /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
