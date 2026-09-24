@@ -719,4 +719,128 @@ public class ReliableSenderTests
         Assert.False(accepted);
         Assert.Equal(1, sender.PendingCount);
     }
+
+    // ---- PlacedMineIntentSender (client -> host, single recipient, same shape as loot/grant) -
+
+    private static readonly PlacedMineRecord MineRecord = new(
+        TrapType: 3, X: 1f, Y: 2f, Z: 3f, OrientX: 1f, OrientY: 0f, DetectDc: 15, DisarmDc: 20, Faction: 1);
+
+    [Fact]
+    public void PlacedMine_FirstSendGoesOutOnTheVeryNextTickNotOnEnqueue()
+    {
+        // Like ReliableLootSender/DialogueGrantSender: Enqueue itself does not count as sent
+        // (Attempts stays 0), so the very next CollectDue call - even at the same instant -
+        // emits it regardless of the retransmit interval.
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+        PlacedMineIntentPacket? op = sender.Enqueue(
+            originPeerId: 1, PlacedMineIntentKind.Placed, moduleHash: 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord);
+
+        Assert.NotNull(op);
+        List<PlacedMineIntentPacket> due = sender.CollectDue(nowMs: 1_000);
+
+        Assert.Single(due);
+        Assert.Equal(op, due[0]);
+    }
+
+    [Fact]
+    public void PlacedMine_RetransmitsAfterIntervalNotBefore()
+    {
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+        sender.Enqueue(originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord);
+        sender.CollectDue(nowMs: 1_000); // first send, Attempts -> 1
+
+        Assert.Empty(sender.CollectDue(nowMs: 1_249));
+        Assert.Single(sender.CollectDue(nowMs: 1_250));
+    }
+
+    [Fact]
+    public void PlacedMine_AckStopsRetransmission()
+    {
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+        PlacedMineIntentPacket op = sender.Enqueue(
+            originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord)!;
+        sender.CollectDue(nowMs: 1_000);
+
+        sender.Acknowledge(originPeerId: 1, op.OpSequence);
+
+        Assert.Equal(0, sender.PendingCount);
+        Assert.Empty(sender.CollectDue(nowMs: 10_000));
+    }
+
+    [Fact]
+    public void PlacedMine_AckForAWrongOriginIsIgnored()
+    {
+        // The pending table is keyed only on sequence (a single origin per client sender), but
+        // Acknowledge still checks the origin matches before removing anything.
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+        PlacedMineIntentPacket op = sender.Enqueue(
+            originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord)!;
+        sender.CollectDue(nowMs: 1_000);
+
+        sender.Acknowledge(originPeerId: 2, op.OpSequence);
+
+        Assert.Equal(1, sender.PendingCount);
+        Assert.Single(sender.CollectDue(nowMs: 1_250));
+    }
+
+    [Fact]
+    public void PlacedMine_GoneReportCarriesTheMineSerialNotACapture()
+    {
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+
+        PlacedMineIntentPacket? op = sender.Enqueue(
+            originPeerId: 1, PlacedMineIntentKind.Gone, moduleHash: 0, captureSerial: 0, mineSerial: 7, default);
+
+        Assert.NotNull(op);
+        Assert.Equal(PlacedMineIntentKind.Gone, op!.Kind);
+        Assert.Equal(7u, op.MineSerial);
+    }
+
+    [Fact]
+    public void PlacedMine_LargeBurstIsDrainedAcrossTicksWithoutLoss()
+    {
+        const int count = 500;
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250, maxPending: count);
+
+        HashSet<uint> enqueued = [];
+        for (uint i = 0; i < count; i++)
+        {
+            PlacedMineIntentPacket? op = sender.Enqueue(
+                originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: i, mineSerial: 0, MineRecord);
+            Assert.NotNull(op);
+            enqueued.Add(op!.OpSequence);
+        }
+
+        List<PlacedMineIntentPacket> firstSend = sender.CollectDue(nowMs: 1_000);
+        Assert.Equal(count, firstSend.Count);
+        Assert.Equal(enqueued, firstSend.Select(op => op.OpSequence).ToHashSet());
+    }
+
+    [Fact]
+    public void PlacedMine_ClearDropsAllPending()
+    {
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250);
+        sender.Enqueue(originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord);
+
+        sender.Clear();
+
+        Assert.Equal(0, sender.PendingCount);
+        Assert.Empty(sender.CollectDue(nowMs: 10_000));
+    }
+
+    /// <summary>Pins the shared enqueue-past-cap contract — see
+    /// <see cref="Flag_EnqueuePastCapRefuses"/>.</summary>
+    [Fact]
+    public void PlacedMine_EnqueuePastCapRefuses()
+    {
+        PlacedMineIntentSender sender = new(retransmitIntervalMs: 250, maxPending: 2);
+        sender.Enqueue(originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 1, mineSerial: 0, MineRecord);
+        sender.Enqueue(originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 2, mineSerial: 0, MineRecord);
+
+        PlacedMineIntentPacket? refused = sender.Enqueue(
+            originPeerId: 1, PlacedMineIntentKind.Placed, 0xAAAA, captureSerial: 3, mineSerial: 0, MineRecord);
+
+        Assert.Null(refused);
+        Assert.Equal(2, sender.PendingCount);
+    }
 }
