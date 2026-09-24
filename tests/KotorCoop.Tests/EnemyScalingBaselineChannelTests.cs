@@ -15,8 +15,9 @@ public sealed unsafe class EnemyScalingBaselineChannelTests
     [Fact]
     public void ChannelFitsTheReservedRegionWithoutOverlap()
     {
-        Assert.Equal(0x5800, SharedBlock.TotalSize);
-        Assert.Equal(EnemyScalingBaselineChannel.RegionEnd, SharedBlock.TotalSize);
+        // The channel owns 0x5400..0x5800; later versions grow the block past it (v77 local vars).
+        Assert.Equal(0x5800, EnemyScalingBaselineChannel.RegionEnd);
+        Assert.True(SharedBlock.TotalSize >= EnemyScalingBaselineChannel.RegionEnd);
         Assert.Equal(EnemyScalingBaselineChannel.OffsetExportSequence, SharedBlock.OffsetEnemyBaselineExportSequence);
         Assert.Equal(EnemyScalingBaselineChannel.OffsetExportAck, SharedBlock.OffsetEnemyBaselineExportAck);
         Assert.Equal(EnemyScalingBaselineChannel.OffsetImportSequence, SharedBlock.OffsetEnemyBaselineImportSequence);
