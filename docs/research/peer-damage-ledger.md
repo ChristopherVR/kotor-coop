@@ -1442,8 +1442,10 @@ on its own (one call, damage every round).
   the intended rule: a downed player is never targeted.
 * **Both attack with similar damage:** the engine target alternated between the host PC and
   the joiner's stand-in roughly every 8 s. Neither side met the 1.5x margin, so
-  `threat_retarget` correctly stayed out. **Open:** the joiner logged no phantom hits during
-  those stretches, although the host's hound read `currentTarget 0xEA`.
+  `threat_retarget` correctly stayed out. The joiner logged no phantom hits in those
+  stretches only because `IncomingDamageController`'s `took N damage from a hit on our phantom`
+  line is capped at 20 per session, and the earlier runs had used it up. This was a logging
+  artifact, not a missed hit.
 
 `threat_retarget` was documented ON since 2026-09-03, but the plugin read it with a default of
 OFF and no shipped `coop.ini` set it. A fresh install therefore ran without it. It now defaults
