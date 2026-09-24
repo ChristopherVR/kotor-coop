@@ -66,12 +66,11 @@ follow_lead = any
 ; Each is `auto` (scales with how many players are connected; alone you always get the
 ; normal game) or a percent from 50 to 400. Two players on auto: enemies have 150% health
 ; and deal 115% damage, shops hold 150% stock, experience is unchanged.
-; enemy_health defaults to 100 because persisted scaled maxima are not yet idempotent across
-; save/load. Set it to `auto` explicitly to scale health by player count. enemy_damage remains
-; `auto` (checked in the running game); set either to 100 for the normal game. Store prices
+; enemy_health and enemy_damage are `auto` (both checked in the running game, health including
+; save and reload); set either to 100 for the normal game. Store prices
 ; default to retail 100%; a fixed percent scales both buying and selling by the same amount.
 ; `auto` currently stays at 100 until a balance curve is chosen.
-enemy_health = 100
+enemy_health = auto
 enemy_damage = auto
 xp_rate = auto
 store_stock = auto

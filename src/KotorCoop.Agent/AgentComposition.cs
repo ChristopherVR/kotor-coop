@@ -153,10 +153,9 @@ internal static class AgentComposition
 
             // Player-count scaling (docs/research/player-count-scaling.md). The fallbacks are
             // the same numbers CoopConfig's record defaults and parse fallbacks carry:
-            // health 100 until save/load idempotence exists (explicit `auto` opts in),
-            // damage/xp/store on the auto curve.
+            // health, damage, xp and store stock on the auto curve.
             Scaling = new PlayerCountScalingSettings(
-                config?.EnemyHealth ?? PlayerCountScalingRule.Vanilla,
+                config?.EnemyHealth ?? PlayerCountScalingRule.Auto,
                 config?.EnemyDamage ?? PlayerCountScalingRule.Auto,
                 config?.XpRate ?? PlayerCountScalingRule.Auto,
                 config?.StoreStock ?? PlayerCountScalingRule.Auto,

@@ -14,11 +14,10 @@ public sealed record PlayerCountScalingSettings(
 {
     /// <summary>The code fallbacks — the same numbers <c>CoopConfig</c>'s record defaults,
     /// its parse fallbacks and <c>BehaviourDigest.Default</c> carry (docs/CONFIG.md footnote
-    /// ³): enemy health at 100 because persisted scaled maxima are not yet idempotent across
-    /// load, enemy damage on the auto curve, XP/store stock on the auto curve, and neutral
-    /// store prices.</summary>
+    /// ³): enemy health, enemy damage, XP and store stock on the auto curve, and neutral store
+    /// prices.</summary>
     public static PlayerCountScalingSettings Default { get; } = new(
-        PlayerCountScalingRule.Vanilla, PlayerCountScalingRule.Auto,
+        PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto,
         PlayerCountScalingRule.Auto, PlayerCountScalingRule.Auto,
         PlayerCountScalingRule.Vanilla);
 }

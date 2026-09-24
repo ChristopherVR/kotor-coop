@@ -147,10 +147,10 @@ public class PlayerCountScalingRuleTests
     }
 
     [Fact]
-    public void TheShippedDefaultsKeepHealthVanillaUntilReloadIsIdempotent()
+    public void TheShippedDefaultsAreAutoForHealth()
     {
         PlayerCountScalingSettings d = PlayerCountScalingSettings.Default;
-        Assert.Equal(PlayerCountScalingRule.Vanilla, d.EnemyHealth); // saved scaled maxima compound across load
+        Assert.Equal(PlayerCountScalingRule.Auto, d.EnemyHealth); // save/load baseline live-verified 2026-09-24
         Assert.Equal(PlayerCountScalingRule.Auto, d.EnemyDamage); // live-verified 2026-09-19: a hit 4 -> 5 at two players
         Assert.Equal(PlayerCountScalingRule.Auto, d.XpRate);
         Assert.Equal(PlayerCountScalingRule.Auto, d.StoreStock);
@@ -181,16 +181,16 @@ public class PlayerCountScalingRuleTests
     }
 
     [Fact]
-    public void ConfigMissingHealthUsesVanillaWhileExplicitAutoIsPreserved()
+    public void ConfigMissingHealthUsesAutoAndExplicitValuesArePreserved()
     {
         string path = Path.Combine(Path.GetTempPath(), $"coop-scaling-{Guid.NewGuid():N}.ini");
         try
         {
             File.WriteAllText(path, "[coop]\nmode = host\n");
-            Assert.Equal(PlayerCountScalingRule.Vanilla, CoopConfig.TryLoad(path)!.EnemyHealth);
-
-            File.WriteAllText(path, "[coop]\nmode = host\nenemy_health = auto\n");
             Assert.Equal(PlayerCountScalingRule.Auto, CoopConfig.TryLoad(path)!.EnemyHealth);
+
+            File.WriteAllText(path, "[coop]\nmode = host\nenemy_health = 100\n");
+            Assert.Equal(PlayerCountScalingRule.Vanilla, CoopConfig.TryLoad(path)!.EnemyHealth);
         }
         finally
         {

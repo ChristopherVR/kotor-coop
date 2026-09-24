@@ -531,9 +531,9 @@ public sealed record CoopConfig
     // profiles/coop.ini.example.
 
     /// <summary>coop.ini <c>enemy_health</c>: enemy hit points, percent of vanilla, or
-    /// <c>auto</c>. Default <c>100</c> until save/load idempotence exists; set <c>auto</c>
-    /// explicitly to opt into the live player-count curve.</summary>
-    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Vanilla;
+    /// <c>auto</c>. Default <c>auto</c>: the max-hit-point write and its save/load baseline
+    /// (docs/research/enemy-health-persistence.md) are live-verified.</summary>
+    public int EnemyHealth { get; init; } = PlayerCountScalingRule.Auto;
 
     /// <summary>coop.ini <c>enemy_damage</c>: damage enemies deal to players, percent of
     /// vanilla, or <c>auto</c>. Default <c>auto</c>; the in-hook rewrite was live-verified with
@@ -1052,7 +1052,7 @@ public sealed record CoopConfig
             // Player-count scaling: "auto", a percent (with or without %), clamped 50-400;
             // absent or unparseable -> the record's own default (see the property group).
             EnemyHealth = PlayerCountScalingRule.ParseSetting(
-                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Vanilla),
+                kv.GetValueOrDefault("enemy_health"), PlayerCountScalingRule.Auto),
             EnemyDamage = PlayerCountScalingRule.ParseSetting(
                 kv.GetValueOrDefault("enemy_damage"), PlayerCountScalingRule.Auto),
             XpRate = PlayerCountScalingRule.ParseSetting(

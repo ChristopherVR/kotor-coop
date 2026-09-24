@@ -47,10 +47,11 @@ What you should know before starting:
 - **Internet play works** over a tunnel tool such as playit.gg. A router's own automatic
   port-opening (UPnP) is still unconfirmed, and there is no relay server for networks it
   can't reach.
-- **A few things are off by default and still being proved live**: enemies getting tougher
-  with more players (`enemy_health`, `enemy_damage`), story flags reaching the other player
-  (`local_var_sync`), and party-placed mines (`placed_mine_sync`) — each has a `coop.ini` key,
-  described in [docs/limitations.md](docs/limitations.md).
+- **Enemies get tougher with more players** (more health, harder hits), on by default; set
+  `enemy_health` / `enemy_damage` to `100` in `coop.ini` for the normal game.
+- **A few things are off by default and still being proved live**: story flags reaching the
+  other player (`local_var_sync`) and party-placed mines (`placed_mine_sync`) — each has a
+  `coop.ini` key, described in [docs/limitations.md](docs/limitations.md).
 - **Known issue:** disconnecting and reconnecting without loading a save can occasionally
   make the mod think you're on a different save and turn shared-world syncing off; loading
   your game once and reconnecting clears it. A fix is in progress.

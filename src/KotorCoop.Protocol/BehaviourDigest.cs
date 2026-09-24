@@ -172,8 +172,8 @@ public readonly record struct BehaviourDigest(
 
     /// <summary>Every field at its built-in default: everything on except the OFF-by-default
     /// keys, <c>interp_ms</c> at the built-in delay, <c>follow_lead</c> at "any", the four
-    /// scaling settings at their code fallbacks (<c>enemy_health</c> 100 until load-idempotent
-    /// persistence exists, <c>enemy_damage</c>/<c>xp_rate</c>/<c>store_stock</c> auto, and
+    /// scaling settings at their code fallbacks (<c>enemy_health</c>/<c>enemy_damage</c>/<c>xp_rate</c>/<c>store_stock</c>
+    /// auto, and
     /// <c>store_prices</c> 100 neutral; see
     /// docs/research/player-count-scaling.md). Used by test fakes and any <see cref="ICoopSession"/> that never computed a real
     /// one.</summary>
@@ -198,7 +198,7 @@ public readonly record struct BehaviourDigest(
         requireIdenticalSave: false,
         interpolationMs: ProtocolConstants.DefaultInterpolationDelayMs,
         followLead: "any",
-        enemyHealth: PlayerCountScalingRule.Vanilla,
+        enemyHealth: PlayerCountScalingRule.Auto,
         enemyDamage: PlayerCountScalingRule.Auto,
         xpRate: PlayerCountScalingRule.Auto,
         storeStock: PlayerCountScalingRule.Auto,
