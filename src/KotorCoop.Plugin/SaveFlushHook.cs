@@ -274,6 +274,12 @@ internal static unsafe class SaveFlushHook
         try
         {
             Requests++;
+
+            // Version 76: every request's exact slot/name, for the agent's settled-archive
+            // enemy-health baseline capture (docs/research/enemy-health-persistence.md). A
+            // re-issued held save re-enters here and simply republishes.
+            PluginHost.PublishEnemyBaselineSaveRequest(number, name);
+
             if (PluginHost.OnSaveGameRequested(self, number, name, player, arg4))
             {
                 return 1;

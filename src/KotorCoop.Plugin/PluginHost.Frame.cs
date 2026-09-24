@@ -523,6 +523,11 @@ internal static unsafe partial class PluginHost
                         _view?.PublishWorldLoadObserved();
                         Log("world: unannounced teardown - treating as a load, not a transition");
                         PluginEvents.RaiseWorldLoadObserved();
+                        _nextWorldAnnounced = false;
+                    }
+                    else
+                    {
+                        _nextWorldAnnounced = true;
                     }
 
                     _epoch = 0;
@@ -566,6 +571,10 @@ internal static unsafe partial class PluginHost
             {
                 if (_epoch != 0)
                 {
+                    // The world was replaced between two frames with no world-less frame in
+                    // between: only a transition this instance announced counts as one.
+                    _nextWorldAnnounced = _transitionPending || _doorTransitionAnnouncedThisEpoch
+                        || _moveToModulePendingSeen;
                     InvalidateAll("module changed");
                 }
 
@@ -574,6 +583,7 @@ internal static unsafe partial class PluginHost
                 DropHeldSaveOnWorldChange();
 
                 _epoch = epoch;
+                BeginEnemyBaselineWorld();
 
                 // A world just came up: sweep out any co-op stand-ins and map pins a MANUAL save
                 // baked into it (docs/research/save-ghosts.md). Armed here, before any controller

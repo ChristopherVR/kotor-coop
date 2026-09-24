@@ -91,42 +91,79 @@ internal static class EnemyScalingRule
 /// 500x/s). Fixed arrays, no allocation after construction, so the controller can consult it
 /// from the frame thread. Full means "stop scaling new enemies until the next module", which
 /// fails towards vanilla rather than towards a double write.
+///
+/// Version 76 (docs/research/enemy-health-persistence.md): an entry is either scaled here at
+/// first sighting, or IMPORTED from a verified save baseline. An imported entry is never
+/// multiplied again; it is only reconciled from its original maximum when the percentage
+/// differs, and verified against the live stored maximum before its first write.
+/// <see cref="Overflowed"/> records that an import did not fit, which makes the epoch's
+/// export incomplete.
 /// </summary>
 internal sealed class ScaledObjectLatch
 {
     private readonly uint[] _ids;
     private readonly ushort[] _baseMaximums;
     private readonly ushort[] _appliedPercents;
+    private readonly byte[] _flags;
     private int _count;
+
+    private const byte FlagImported = 1;
+    private const byte FlagVerified = 2;
 
     public ScaledObjectLatch(int capacity)
     {
         _ids = new uint[capacity];
         _baseMaximums = new ushort[capacity];
         _appliedPercents = new ushort[capacity];
+        _flags = new byte[capacity];
     }
 
     public int Count => _count;
 
+    public int Capacity => _ids.Length;
+
     public bool IsFull => _count >= _ids.Length;
 
-    public bool Contains(uint objectId)
+    /// <summary>An import did not fit (or repeated an id): the latch no longer holds the
+    /// complete scaled set, so nothing exported from it may claim completeness.</summary>
+    public bool Overflowed { get; private set; }
+
+    public bool Contains(uint objectId) => IndexOf(objectId) >= 0;
+
+    public int IndexOf(uint objectId)
     {
         for (int i = 0; i < _count; i++)
         {
             if (_ids[i] == objectId)
             {
-                return true;
+                return i;
             }
         }
 
-        return false;
+        return -1;
     }
 
     /// <summary>Records the unscaled maximum and percentage alongside the object id. This is
-    /// the controller's in-epoch source of truth for future baseline export; it deliberately
+    /// the controller's in-epoch source of truth for the baseline export; it deliberately
     /// does not imply that a load has been matched to persisted metadata.</summary>
-    public bool Add(uint objectId, int baseMaximum, int appliedPercent)
+    public bool Add(uint objectId, int baseMaximum, int appliedPercent) =>
+        AddCore(objectId, baseMaximum, appliedPercent, 0);
+
+    /// <summary>Seeds a verified save baseline. The object is treated as already scaled (a
+    /// first sighting never multiplies it) but its stored maximum is still checked against
+    /// the baseline before any write (<see cref="IsVerified"/>).</summary>
+    public bool AddImported(uint objectId, int baseMaximum, int appliedPercent)
+    {
+        if (AddCore(objectId, baseMaximum, appliedPercent, FlagImported))
+        {
+            return true;
+        }
+
+        Overflowed = true;
+        return false;
+    }
+
+    private bool AddCore(uint objectId, int baseMaximum, int appliedPercent, byte flags)
     {
         if (objectId == 0
             || Contains(objectId)
@@ -140,27 +177,51 @@ internal sealed class ScaledObjectLatch
         _ids[_count] = objectId;
         _baseMaximums[_count] = (ushort)baseMaximum;
         _appliedPercents[_count] = (ushort)appliedPercent;
+        _flags[_count] = flags;
         _count++;
         return true;
     }
 
-    /// <summary>Reads the first-sighting baseline retained for an id in this module epoch.</summary>
+    /// <summary>Reads the baseline retained for an id in this module epoch.</summary>
     public bool TryGetBaseline(uint objectId, out int baseMaximum, out int appliedPercent)
     {
-        for (int i = 0; i < _count; i++)
+        int index = IndexOf(objectId);
+        if (index < 0)
         {
-            if (_ids[i] == objectId)
-            {
-                baseMaximum = _baseMaximums[i];
-                appliedPercent = _appliedPercents[i];
-                return true;
-            }
+            baseMaximum = 0;
+            appliedPercent = 0;
+            return false;
         }
 
-        baseMaximum = 0;
-        appliedPercent = 0;
-        return false;
+        baseMaximum = _baseMaximums[index];
+        appliedPercent = _appliedPercents[index];
+        return true;
     }
 
-    public void Clear() => _count = 0;
+    public uint IdAt(int index) => _ids[index];
+
+    public int BaseAt(int index) => _baseMaximums[index];
+
+    public int PercentAt(int index) => _appliedPercents[index];
+
+    public bool IsImported(int index) => (_flags[index] & FlagImported) != 0;
+
+    public bool IsVerified(int index) => (_flags[index] & FlagVerified) != 0;
+
+    public void MarkVerified(int index) => _flags[index] |= FlagVerified;
+
+    /// <summary>After a reconciliation write: the stored maximum now represents this percent.</summary>
+    public void SetPercent(int index, int appliedPercent)
+    {
+        if (appliedPercent is >= EnemyScalingRule.MinPercent and <= EnemyScalingRule.MaxPercent)
+        {
+            _appliedPercents[index] = (ushort)appliedPercent;
+        }
+    }
+
+    public void Clear()
+    {
+        _count = 0;
+        Overflowed = false;
+    }
 }

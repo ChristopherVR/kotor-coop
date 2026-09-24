@@ -399,7 +399,11 @@ internal static unsafe partial class PluginHost
         // 72 adds the sampled runtime difficulty fields in SharedBlock.Difficulty.cs.
         // 73 adds the agent-published local session role word at 0x4E44.
         // 74 adds the read-only exact native load-request provenance mailbox at 0x4E50.
-        _block->Version = 75;
+        // 75 adds the resolved store price percent at 0x4C40 and the item-spawn provenance arrays.
+        // 76 adds the exact enemy-health baseline channel (world/export page, verdict/import
+        //    page, native save-request mailbox) at 0x5400..0x57C0 and grows TotalSize to 0x5800.
+        //    See SharedBlock.EnemyScalingBaseline.cs and docs/research/enemy-health-persistence.md.
+        _block->Version = 76;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent
