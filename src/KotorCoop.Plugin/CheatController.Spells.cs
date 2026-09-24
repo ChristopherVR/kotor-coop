@@ -27,6 +27,21 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
+        // effect-sync.md §14.11: the client-driven route (the exact function a real
+        // radial-menu Force-power click calls) tried FIRST; the raw VM ActionCastSpellAtObject
+        // route (Odyssey.CastSpellAtObject) only when the client path is unavailable. §14.9's
+        // live results showed the VM route never spends Force points for a player-controlled
+        // creature - the client route is what a real cast actually uses.
+        bool viaClient = Odyssey.CastSpellAtObjectViaClient(playerId, spellId, targetId, metaMagic, out string clientDiagnostic);
+        if (viaClient)
+        {
+            PluginHost.Log($"cast: spell {spellId} at 0x{targetId:X} via client route - {clientDiagnostic}");
+            Answer(SharedBlock.CheatStatusApplied, $"spell {spellId} at 0x{targetId:X} sent via client route");
+            return;
+        }
+
+        PluginHost.Log($"cast: client route unavailable ({clientDiagnostic}), falling back to the VM route");
+
         bool applied = Odyssey.CastSpellAtObject(playerId, spellId, targetId, metaMagic, out int failure);
         if (!applied)
         {
@@ -44,12 +59,17 @@ internal sealed unsafe partial class CheatController
             };
 
             PluginHost.Log($"cast: spell {spellId} at 0x{targetId:X} (metamagic {metaMagic}) refused - {reason}");
-            Answer(SharedBlock.CheatStatusEngineRefused, $"spell {spellId} at 0x{targetId:X} refused - {reason}");
+            Answer(
+                SharedBlock.CheatStatusEngineRefused,
+                $"spell {spellId} at 0x{targetId:X} refused - {reason} (client route: {clientDiagnostic})");
             return;
         }
 
-        PluginHost.Log($"cast: queued spell {spellId} at 0x{targetId:X} (metamagic {metaMagic}) for the local player");
-        Answer(SharedBlock.CheatStatusApplied, $"queued spell {spellId} at 0x{targetId:X} (metamagic {metaMagic})");
+        PluginHost.Log(
+            $"cast: queued spell {spellId} at 0x{targetId:X} (metamagic {metaMagic}) via VM route for the local player");
+        Answer(
+            SharedBlock.CheatStatusApplied,
+            $"queued spell {spellId} at 0x{targetId:X} (metamagic {metaMagic}) via VM route");
     }
 
     private void GrantPower(uint playerId)

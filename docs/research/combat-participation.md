@@ -1492,3 +1492,57 @@ section exists for):
    own between-checks convention.
 
 See `docs/research/effect-sync.md` §14.9 for the pointer back from the cast side.
+
+## §16 — `attack` routed through the retail client input path (2026-09-25), after §15's own
+recipe landed one hit and went silent
+
+§15's own NEEDS-LIVE recipe ran. `attack 0x<hound>` queued (head action 0x0F → 0x3E as expected)
+and the PC landed exactly ONE swing (40 hp → 34 hp), then the queue went empty and the PC never
+attacked again while the hound kept hitting it. `cast cure me`, issued while that attack was still
+nominally active, spent no FP — the combined recipe §15 proposed to close both open loops at once
+did not confirm either theory, because the raw VM `ActionAttackObject`/`ActionAttack` routes this
+section and effect-sync.md §14 built do not sustain a real per-tick combat round for a
+PLAYER-controlled creature. A real click-to-attack is not a single "swing" command; it is the
+CLIENT'S own sustained input (walk-to-target, repeated attack-request) landing on the server
+through the network message path, which the VM push never goes near.
+
+`docs/research/effect-sync.md` §14.11 has the full static trace (verified addresses,
+`CSWCCreature::PerformAttack 0x0060EEE0`/`CSWCCreature::PerformCastSpell 0x0060EF10`, the
+`SendPlayerToServerInput_*` sends, and what `HandlePlayerToServerInputMessage`'s CastSpell-subtype
+entry does beyond `AddCastSpellActions` that the raw VM route skips). Summary for this section:
+
+- `Odyssey.AttackTargetViaClient(attackerObjectId, targetObjectId, out diagnostic)`
+  (`src/KotorCoop.Plugin/Odyssey.Combat.AttackClient.cs`) calls `CSWCCreature::PerformAttack`
+  directly — the exact function a real click-to-attack calls — after verifying its full 33-byte
+  body against the build, translating both ids into the client id space
+  (`ServerToClientObjectIdFn`), and confirming the attacker is the client's own controlled
+  creature (`PerformAttack` has no actor argument, so it cannot act on anyone else).
+- `CheatController.Attack.cs`'s `Attack` now tries this FIRST and only falls back to the existing
+  `Odyssey.AttackTarget` VM route when the client route refuses on a precondition. The melee-range
+  snap (`CloseLocalPlayerToMeleeRange`) still runs before either route, since the client route's
+  own approach behavior is itself NEEDS-LIVE and a rig that can't path to range is a separate
+  failure mode from the one this pass closes.
+- Like `PerformSkill` (mines.md §14.10) and `PerformCastSpell` (effect-sync.md §14.11),
+  `PerformAttack` gives no success/failure signal of its own — a client-route `true` means "sent",
+  not "landed". §15's own one-hit-then-silence result also means a SINGLE call is not expected to
+  sustain a fight; the recipe below re-issues it, mirroring a held mouse button.
+
+### Updated live recipe
+
+1. Spawn or aggro a hostile, then `attack 0x<id>` once. Watch the plugin log for `attack: ... via
+   client route - sent client-side attack request ...` (confirms the client path, not the VM
+   fallback) and watch whether damage keeps landing on repeated ticks WITHOUT re-issuing the verb
+   — the client route's own sustained per-tick behavior, if it exists, should look different from
+   §15's one-hit result.
+2. If it still stalls after one hit, re-issue `attack 0x<id>` every few seconds and confirm that
+   keeps the fight going (the "held mouse button" model) before concluding the client route also
+   fails to sustain combat.
+3. Re-run the combined cast recipe: `attack 0x<hostile>`, then while it is still engaged
+   `cast cure me` (effect-sync.md §14.11 step 2 also says a plain out-of-combat `cast cure me`
+   should now be tried FIRST on its own, since the client cast route may not need an active
+   attack at all — test both orders).
+4. `attack stop` to clear the queue afterward, same as before.
+5. If either verb logs `client route unavailable (...)`, the reason string names the failed
+   precondition directly — most likely lead if it fires: the rig's controlled creature is not
+   what `GetClientPlayerCreatureFn` returns (check `party-reconciliation.md`'s claim/possess
+   discipline, the same class of failure mines.md §14.10 flagged for its own gate).

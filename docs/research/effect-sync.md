@@ -2192,3 +2192,76 @@ reuses `Odyssey.AttackTarget`, the same routine already driving mirrored-enemy/c
 never `Odyssey.QueueAttackAction`'s proven no-op) and the combined live recipe (`attack` a
 hostile, then `cast cure me` while the round is still active, watching `stats` for the FP spend
 this section's own theory predicts).
+
+### 14.11 `cast` (and `attack`) now go through the retail CLIENT input path first (2026-09-25) —
+VERIFIED(static), NEEDS-LIVE execution
+
+§14.10's own recipe was run. Result: `attack 0x<hound>` landed exactly ONE hit (40→34 hp) and then
+the PC's action queue went empty and never swung again while the hound kept hitting back; `cast
+cure me` issued while that (dead) attack was still nominally "queued" spent no FP (76/135
+unchanged). The raw VM routes this repo had built for both verbs — `Odyssey.AttackTarget`
+(`ExecuteCommandAttack`) and `Odyssey.CastSpellAtObject` (`ExecuteCommandCastSpell`) — do not
+sustain a real combat round for a PLAYER-controlled creature the way they do for a mirrored/AI
+one; every mechanism §14.8/§14.9 traced into a genuine FP-spending promotion needs state a
+synthetic one-shot VM push never establishes.
+
+**The fix: stop synthesizing the VM call, and call what the retail UI itself calls.** Full static
+RE (same tools, same verified-bytes discipline, no rig) of the client-side input path
+`docs/research/mines.md` §14.10 already proved out for `Recover`/`DisarmMine`:
+
+| Stage | Address | What it does |
+| --- | --- | --- |
+| `CSWCCreature::PerformCastSpell` | `0x0060EF10` | `__stdcall`, 7 args, `ret 0x1C`. No actor parameter at all — always acts on whichever creature the CLIENT currently controls (read via the same app-manager global every client call in this codebase uses). The ONLY non-degenerate caller in the whole binary (`tools/xrefs.py 0x60ef10`) is `CSWGuiTutorialBox::PerformForcePower` (0x006AA2C0-0x006AA341), which pushes `(nSpell, targetObjectId, &localVector3{0,0,0}, metaMagicOrDomainByte, 0, 0, 0)` — traced by hand through the reversed-push stdcall convention, then confirmed against the callee's own field reads in `SendPlayerToServerInput_CastSpell` (below). On success it calls that Send function; nothing here or in the call chain ever reports back whether the cast landed. |
+| `CSWCMessage::SendPlayerToServerInput_CastSpell` | `0x006776A0` | Builds the network/loopback message (`CreateWriteMessage 0x004D68A0`, type 4). Dereferences the location-vector argument UNCONDITIONALLY (`mov ebx,[esp+0x30]; fld [ebx+8]`, no null check) — a valid pointer to three floats is required even for a pure object-target cast. Writes the spell id (20 bits), three 8-bit fields (metamagic/domain/path-type), a flags byte, the target object id (skipped only when it equals the `0x7F000000` sentinel), and conditionally the location itself. |
+| `CSWCMessage::SendPlayerToServerInput_Attack` | `0x00677A90` | The attack sibling — one stack arg (target id), called by `CSWCCreature::PerformAttack` (0x0060EEE0, `__stdcall`, ret 4) as `SendPlayerToServerInput_Attack(channel, 0, targetId)`. `PerformAttack`'s ENTIRE body is 33 bytes: resolve the message channel (`GetSWCMessage 0x005ED6F0`), and if one exists, send — no other logic. |
+| `CSWSMessage::HandlePlayerToServerInputMessage` | `0x005254C0` | The same 36-entry dispatch table `mines.md` §14.10 found (`0x0052684C`). The CastSpell entry (index 17, `0x0052608E`) is the interesting one: it reads the wire fields, THEN — before calling `CSWSCreature::AddCastSpellActions` at `0x0052620C` — checks `[creature+0x4E0]` (`CreInCombat`/the in-combat dword `Odyssey.Combat.cs`'s `CreInCombat` already models) and, if it is not already `1`, calls `CSWSCreature::ActionManager(creature, mode=1)` (`0x004F8770`: `ComputeAIState` then a conditional `ClearAllActions(creature, true)` when `[creature+0x9F2] < 0xA`). It also validates the target through `0x005A5550` (the SAME target-validity check `ExecuteCommandCastSpell`'s own scan loop uses, effect-sync.md §14.8) and two bitstream-consistency checks (`0x004D6230`/`0x004D6240`) before ever reaching `AddCastSpellActions` — none of which our raw VM push performs. The Attack-subtype entry was not fully re-traced this pass (out of scope: `AddAttackActions`, not `AddCastSpellActions`, is its target), but its existence at a SEPARATE table index, reached only through `SendPlayerToServerInput_Attack`'s own subtype, is what a real click-to-attack goes through instead of `ExecuteCommandAttack`. |
+
+**What this does NOT resolve.** This pass did not finish tracing exactly how `HandlePlayerToServerInputMessage`'s extra setup (`ActionManager`, the two validity checks) turns into the `CSWSCombatRound.timer_ready` (`+0x934`) promotion §14.9 root-caused as the real gate — that remains open. The change here is not "we found the missing flag write"; it is "we stopped guessing at the mechanism and started calling the same entry point retail input already calls," on the theory (consistent with mines.md's own finding for skills) that letting the ENGINE do its own follow-through, rather than reimplementing pieces of it by hand, is more likely to land correctly than any further hand-derived VM push would.
+
+**Implementation** (`src/KotorCoop.Plugin/Odyssey.Spells.Client.cs`, `Odyssey.Combat.AttackClient.cs`):
+
+- `Odyssey.CastSpellAtObjectViaClient(casterObjectId, spellId, targetObjectId, metaMagic, out diagnostic)`
+  and `Odyssey.AttackTargetViaClient(attackerObjectId, targetObjectId, out diagnostic)` — same
+  verify-bytes-or-refuse discipline as every other native call in this codebase (checked against
+  the FULL function body for both `PerformCastSpell`, 62 bytes, and `PerformAttack`, 33 bytes, not
+  just a prologue slice — both functions are short enough to check outright), and the same client
+  id translation (`ServerToClientObjectIdFn`) and controlled-creature confirmation
+  (`GetClientPlayerCreatureFn`) `Odyssey.MineActions.cs` already established. Because neither
+  `PerformCastSpell` nor `PerformAttack` takes an actor argument — both always act on whichever
+  creature the client currently controls — the caster/attacker id is REQUIRED to already be the
+  local player's own creature; a request for anyone else is refused (`diagnostic` explains why)
+  rather than silently retargeted, matching how the `cast`/`attack` dev verbs already only ever
+  operate on the local player.
+- `CheatController.Spells.cs`'s `CastSpell` and `CheatController.Attack.cs`'s `Attack` try the
+  client route FIRST and only fall back to the existing VM route
+  (`Odyssey.CastSpellAtObject`/`Odyssey.AttackTarget`) when the client route refuses on a
+  precondition (no client app, caster/attacker is not the local player's own creature, target
+  does not resolve to a client id, or the verified bytes no longer match the build) — never as a
+  "try both" race. Both routes' own `Answer`/log text now says which route was actually used, and
+  the fallback log line always includes the client route's own refusal reason for the next
+  attempt to see.
+- Neither `PerformCastSpell` nor `PerformAttack` reports success/failure of its own (identical to
+  `PerformSkill`, mines.md §14.10) — a `true` return from either new function means "the client
+  message was sent," never "the cast landed" or "the swing connected." `attack`'s own live
+  result (one hit, then silence) also means a single `PerformAttack` call is not expected to
+  SUSTAIN a fight on its own; the live recipe below re-issues it, the same way a real click stays
+  held down.
+
+**Live recipe** (same rig, no code change needed to test):
+
+1. Load the level-19 Guardian save (fp known from prior passes) or `levelup`/`grantpower` a fresh
+   one.
+2. `cast cure me` while the PC is idle, no hostile nearby. Watch the plugin log for `cast: ... via
+   client route - sent client-side cast request ...` (confirms the client path was taken, not the
+   VM fallback) and `stats` before/after for the FP spend and hp change. This is the FIRST time a
+   cast is expected to work with no prior `attack` staging at all — if it does, §14.9's "needs an
+   active combat round" theory was only ever true for the VM route, not for casting in general.
+3. Separately, spawn a hostile and `attack 0x<id>` once. Watch whether damage keeps landing on
+   repeated ticks WITHOUT re-issuing `attack` (the client route's own approach-and-swing loop
+   sustaining itself, unlike the VM route's one-hit-then-silence). If it stalls after one hit
+   again, re-issue `attack 0x<id>` every few seconds (mirroring a held mouse button) and confirm
+   that keeps the fight going.
+4. If either verb's log shows `client route unavailable (...)` instead of `via client route`,
+   the refusal reason is the next static target (most likely: the rig's controlled creature is
+   not what `GetClientPlayerCreatureFn` returns — check `party-reconciliation.md`'s claim/possess
+   discipline first, the same lead mines.md §14.10 flagged for its own `type != 5` failure mode).

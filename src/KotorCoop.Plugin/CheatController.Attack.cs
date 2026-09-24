@@ -57,8 +57,30 @@ internal sealed unsafe partial class CheatController
 
         CloseLocalPlayerToMeleeRange(player, targetCreature, targetId);
 
-        bool ok = Odyssey.AttackTarget(playerId, targetId, out int failure);
+        // combat-participation.md §16: the client-driven route (the exact function a real
+        // click-to-attack calls) tried FIRST; the raw VM ActionAttackObject route
+        // (Odyssey.AttackTarget) only when the client path is unavailable (no client app, the
+        // player is not the client's own controlled creature, or the verified bytes no longer
+        // match). Landing exactly one hit and then going silent (2026-09-25 live result) is
+        // what motivated adding the client route at all - see the doc section for why.
+        bool viaClient = Odyssey.AttackTargetViaClient(playerId, targetId, out string clientDiagnostic);
         int headAfter = Odyssey.GetHeadActionType(player);
+
+        if (viaClient)
+        {
+            PluginHost.Log(
+                $"attack: 0x{playerId:X} -> 0x{targetId:X} via client route - {clientDiagnostic} "
+                + $"(head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            Answer(
+                SharedBlock.CheatStatusApplied,
+                $"attack 0x{targetId:X} sent via client route (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            return;
+        }
+
+        PluginHost.Log($"attack: client route unavailable ({clientDiagnostic}), falling back to the VM route");
+
+        bool ok = Odyssey.AttackTarget(playerId, targetId, out int failure);
+        headAfter = Odyssey.GetHeadActionType(player);
 
         if (!ok)
         {
@@ -77,16 +99,17 @@ internal sealed unsafe partial class CheatController
                 + $"(head action 0x{headBefore:X} -> 0x{headAfter:X})");
             Answer(
                 SharedBlock.CheatStatusEngineRefused,
-                $"attack: 0x{targetId:X} refused - {reason} (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+                $"attack: 0x{targetId:X} refused - {reason} ({clientDiagnostic}; "
+                + $"head action 0x{headBefore:X} -> 0x{headAfter:X})");
             return;
         }
 
         PluginHost.Log(
-            $"attack: 0x{playerId:X} ordered to attack 0x{targetId:X} "
+            $"attack: 0x{playerId:X} ordered to attack 0x{targetId:X} via VM route "
             + $"(head action 0x{headBefore:X} -> 0x{headAfter:X})");
         Answer(
             SharedBlock.CheatStatusApplied,
-            $"queued attack on 0x{targetId:X} (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            $"queued attack on 0x{targetId:X} via VM route (head action 0x{headBefore:X} -> 0x{headAfter:X})");
     }
 
     /// <summary>
