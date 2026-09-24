@@ -663,6 +663,28 @@ deployed with `build.ps1 -Install`; both in `danm13`, the Jedi Enclave courtyard
 8. World edge: warp away and back; plugin logs `localvar: world generation -> N` on each edge and
    re-applies nothing stale (no `applied` for a key whose value already matches).
 
+### 8.4 Live run (2026-09-24, `4f37ca8`)
+
+The first deploy showed the merged feature had never been wired: no `local vars:` line, because
+startup never installed the hook, never built the watch table and never published the status
+word, and the committed allowlist was empty. After those fixes both engines logged
+`local vars: SetLocalNumber/SetLocalBoolean call sites 0x5431FE/0x543232 ...; 384 allowlisted
+slot(s)` (recipe step 1).
+
+- **Natural capture and apply (steps 2-4).** `dan13_belaya` b10 read 0 on both. The host ran
+  Belaya's own conversation: `localvar: captured #1 module 0x2216749B object 0x4 b10 = 1`; the
+  host agent published it and the joiner's plugin logged `localvar: applied 'dan13_belaya' 0x4
+  b10 0 -> 1 (session value 1)`.
+- **Both directions (step 5).** With `localvar watch dan13_zhar b 5` on both, host `set 1` ->
+  joiner reads 1 (`applied ... 0 -> 1`); joiner `set 0` -> host reads 0.
+- **Shared-world gate.** When the joiner runs its OWN save, shared world state is correctly off
+  (GIT ids are not guaranteed to agree), and the pump now says so: `localvar: paused - shared
+  world state is off for this session`. The test above used a joiner on the host's world.
+
+Not run: the combat negative (step 6), the late-join snapshot (step 7) and the world-edge
+generation check (step 8). The trigger-walk consequence (Belaya not restarting her intro for the
+joiner) was not observed directly. `local_var_sync` stays OFF by default until those pass.
+
 ## Live pass (2026-08-22)
 
 Run against the GOG pair (`tools/demo.ps1`, block v47 / protocol 33, both builds clean, baseline
