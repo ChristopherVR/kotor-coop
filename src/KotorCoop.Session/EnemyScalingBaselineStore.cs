@@ -13,6 +13,13 @@ public static class EnemyScalingBaselineStore
 {
     public const int MaximumSidecarBytes = 4 * 1024 * 1024;
 
+    /// <summary>The sidecar lives INSIDE the save directory, beside SAVEGAME.sav, so the
+    /// staged-autosave copy (<c>PluginMenuLoader.TryStageSaveAsAutosaveFromDirectory</c>) and
+    /// the host-to-joiner world transfer (<c>WorldTransfer.ReadSaveDirectory</c>) carry it
+    /// with the archive it describes. The engine cleans the directory when it overwrites the
+    /// save, and a leftover is rejected anyway because it is bound to the archive's SHA-256.</summary>
+    public const string SidecarFileName = "kotorcoop-enemyscaling.json";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = false,
@@ -26,7 +33,9 @@ public static class EnemyScalingBaselineStore
         string saveArchivePath,
         EnemyScalingSaveKey saveKey,
         IReadOnlyList<EnemyScalingBaselineRecord> records,
-        out string diagnostic)
+        out string diagnostic,
+        IReadOnlyList<string>? coveredModules = null,
+        string? expectedArchiveSha256 = null)
     {
         diagnostic = "invalid input";
         if (string.IsNullOrWhiteSpace(sidecarPath)
@@ -43,7 +52,8 @@ public static class EnemyScalingBaselineStore
             saveKey.Name,
             saveKey.SaveIdentity,
             string.Empty,
-            records.ToArray());
+            records.ToArray(),
+            coveredModules?.ToArray());
         if (!EnemyScalingBaselineRule.IsValidDocument(unhashed, requireHash: false))
         {
             diagnostic = "invalid baseline document";
@@ -62,6 +72,15 @@ public static class EnemyScalingBaselineStore
             if (!TryHashArchive(saveArchivePath, out string archiveHash))
             {
                 diagnostic = "save archive unreadable";
+                return false;
+            }
+
+            // The caller joined its records against bytes it hashed itself; a different
+            // archive now would bind those records to content they were never checked against.
+            if (expectedArchiveSha256 is not null
+                && !string.Equals(expectedArchiveSha256, archiveHash, StringComparison.Ordinal))
+            {
+                diagnostic = "save archive changed after the baseline join";
                 return false;
             }
 
@@ -200,6 +219,116 @@ public static class EnemyScalingBaselineStore
 
             document = parsed;
             diagnostic = "matched";
+            return true;
+        }
+        catch (Exception ex) when (IsExpectedIoFailure(ex))
+        {
+            diagnostic = ex is JsonException ? "sidecar JSON invalid" : "sidecar read failed";
+            return false;
+        }
+    }
+
+    /// <summary>Content-bound read used by the load binding: the sidecar must describe
+    /// exactly these archive bytes (SHA-256) and the archive's own content identity
+    /// (<c>SaveDigest.TryComputeSaveIdentity</c>). Slot and directory name are deliberately
+    /// NOT required to match: a staged autosave or a transferred world is a byte-identical copy
+    /// of the archive under another directory name, and identical bytes hold identical
+    /// creatures, so the baselines are exactly as valid there.</summary>
+    public static bool TryReadForArchiveContent(
+        string sidecarPath,
+        string saveArchivePath,
+        uint saveIdentity,
+        out EnemyScalingBaselineDocument? document,
+        out string diagnostic)
+    {
+        document = null;
+        if (!TryReadCandidate(sidecarPath, saveArchivePath, out EnemyScalingBaselineDocument? parsed, out diagnostic))
+        {
+            return false;
+        }
+
+        if (saveIdentity == 0 || parsed!.SaveIdentity != saveIdentity)
+        {
+            diagnostic = "save identity mismatch";
+            return false;
+        }
+
+        if (!TryHashArchive(saveArchivePath, out string actualHash))
+        {
+            diagnostic = "save archive unreadable";
+            return false;
+        }
+
+        if (!CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(parsed.ArchiveSha256),
+                Convert.FromHexString(actualHash)))
+        {
+            diagnostic = "save archive content mismatch";
+            return false;
+        }
+
+        document = parsed;
+        diagnostic = "matched";
+        return true;
+    }
+
+    private static bool TryReadCandidate(
+        string sidecarPath,
+        string saveArchivePath,
+        out EnemyScalingBaselineDocument? document,
+        out string diagnostic)
+    {
+        document = null;
+        diagnostic = "invalid input";
+        if (string.IsNullOrWhiteSpace(sidecarPath) || string.IsNullOrWhiteSpace(saveArchivePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (AreSameFilePath(sidecarPath, saveArchivePath))
+            {
+                diagnostic = "sidecar path cannot be the save archive";
+                return false;
+            }
+
+            if (!File.Exists(sidecarPath))
+            {
+                diagnostic = "no sidecar";
+                return false;
+            }
+
+            using FileStream sidecar = new(sidecarPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (sidecar.Length is <= 0 or > MaximumSidecarBytes)
+            {
+                diagnostic = "sidecar missing or outside size limit";
+                return false;
+            }
+
+            byte[] bytes = new byte[checked((int)sidecar.Length)];
+            sidecar.ReadExactly(bytes);
+            if (sidecar.ReadByte() != -1)
+            {
+                diagnostic = "sidecar changed while being read";
+                return false;
+            }
+
+            if (!HasUniqueJsonProperties(bytes))
+            {
+                diagnostic = "sidecar contains duplicate JSON properties";
+                return false;
+            }
+
+            EnemyScalingBaselineDocument? parsed = JsonSerializer.Deserialize<EnemyScalingBaselineDocument>(bytes, JsonOptions);
+            if (!EnemyScalingBaselineRule.IsValidDocument(parsed, requireHash: true))
+            {
+                diagnostic = "sidecar schema or contents invalid";
+                return false;
+            }
+
+            document = parsed;
+            diagnostic = "parsed";
             return true;
         }
         catch (Exception ex) when (IsExpectedIoFailure(ex))

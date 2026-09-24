@@ -145,8 +145,10 @@ internal partial struct SharedBlock
     /// 2026-09-03 relay addendum): version 66 left no free bytes before 0x4C00 at all, so the
     /// region starts cleanly at the old boundary and uses 0x18 of the new 0x100.
     /// </summary>
-    /// <summary>Grown for the acknowledged 24-slot container-loot mailbox (protocol 59).</summary>
-    public const int TotalSize = 0x5400;
+    /// <summary>Grown for the acknowledged 24-slot container-loot mailbox (protocol 59), then
+    /// to 0x5400 for v75's item-spawn provenance arrays, then to 0x5800 for v76's exact
+    /// enemy-health baseline channel (SharedBlock.EnemyScalingBaseline.cs, 0x5400..0x57C0).</summary>
+    public const int TotalSize = 0x5800;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -251,6 +253,8 @@ internal partial struct SharedBlock
     /// provenance mailbox at 0x4E50..0x4EA8; the v74 block size was 0x4F00. Version 75 adds
     /// the resolved store price percent at 0x4C40 and grows the tail to 0x5400 for item-spawn
     /// generation, cursor-ticket and load-serial provenance; see SharedBlock.ItemTemplateSpawns.cs.
+    /// Version 76 adds the exact enemy-health baseline channel at 0x5400..0x57C0 and grows the
+    /// block to 0x5800; see SharedBlock.EnemyScalingBaseline.cs.
     /// </summary>
     [FieldOffset(0x08)] public uint Version;
     [FieldOffset(0x0C)] public uint Reserved;

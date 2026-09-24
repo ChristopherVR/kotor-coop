@@ -122,6 +122,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Browser.cs" Link="Plugin\SharedBlockView.Browser.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Dialogue.cs" Link="Plugin\SharedBlockView.Dialogue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.Party.cs" Link="Plugin\SharedBlockView.Party.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.EnemyScalingBaseline.cs" Link="Plugin\SharedBlock.EnemyScalingBaseline.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.EnemyScalingBaseline.cs" Link="Plugin\SharedBlockView.EnemyScalingBaseline.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\WorldLoadRule.cs" Link="Plugin\WorldLoadRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NewCharacterCaptureRule.cs" Link="Plugin\NewCharacterCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PostAdoptEquipRepairRule.cs" Link="Plugin\PostAdoptEquipRepairRule.cs" />

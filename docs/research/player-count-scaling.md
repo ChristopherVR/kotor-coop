@@ -1,7 +1,8 @@
 # Player-count scaling (review blocker #9, roadmap #41)
 
 Every fight was vanilla-balanced for two PCs. Five coop.ini keys now scale with the number of
-connected players. **Status: built; health save/load idempotence remains open.** The safe default
+connected players. **Status: built; health save/load idempotence is wired (block v76,
+[enemy-health-persistence.md](enemy-health-persistence.md)) but not yet live-verified.** The safe default
 for `enemy_health` is currently vanilla 100%; `auto` remains an explicit opt-in until persisted
 scaled maxima can be identified without multiplying them after reload. This prevents another
 automatic multiplication on future loads but does not restore saves that already contain a
@@ -128,7 +129,11 @@ targeted tests. No live transaction yet proves the modified return is displayed 
 intended. Prices remain retail by default; use a non-100 setting only after a live buy/sell A/B
 with a known base item and store verifies both transaction sides and the persuasion threshold.
 
-## Save/load health compounding (confirmed defect; open)
+## Save/load health compounding (confirmed defect; fix wired 2026-09-24, NEEDS-LIVE)
+
+The fix is described in [enemy-health-persistence.md](enemy-health-persistence.md): a
+per-world health gate in the plugin, an agent-side lineage, a settled-archive capture, and a
+load binding that works on content. The history below is kept as it was written.
 
 The per-epoch latch prevents repeated writes while a world is running, but it is deliberately
 cleared by `EnemyScalingController.Invalidate()` at every world epoch. The health write stores the
@@ -225,7 +230,8 @@ check and a mouse-driven purchase remain unexercised.
 1. `enemy_health = auto`, two players: `spawncreature n_sithsoldier001 1` on the host; log line
    `scaling: enemy 0x.. hp a/b -> c/d`, read back matches; `sethp.ps1` read shows the scaled hp.
 2. Kill it from the joiner; the client copy must not snap back to vanilla max (mirror clamp).
-3. Reload the module: the same enemies scale once, not twice.
+3. Reload the module: the same enemies scale once, not twice. The full recipe (save, reload,
+   percent change, dead enemy, fail closed) is at the end of enemy-health-persistence.md.
 4. `enemy_damage = auto`: `hurt` is local-only and does not exercise the hook; take a real hit
    from a spawned hostile and compare the `combat ground-truth` line's total to vanilla (x1.15).
 5. A hit on the partner's phantom: the partner's real body loses the scaled amount exactly once.
@@ -291,3 +297,27 @@ changes; it must not resurrect an enemy. The default remains 100%.
 
 Validation: the native x86 build passed with warnings as errors. The combined scaling,
 host-world-readiness, and host-away suite passed 30 tests with warnings as errors.
+
+### Exact baseline persistence wired (2026-09-24, shared block v76)
+
+Steps 1-4 of the plan are now connected end to end. The full design, the static evidence and
+the live recipe are in [enemy-health-persistence.md](enemy-health-persistence.md).
+
+- **Gating.** The plugin gates health per world generation (Pending until the agent's verdict).
+- **Latch.** Imported baselines are seeded so they are never re-multiplied, and they are
+  reconciled from the original maximum when the percent changes. The ratio is kept, and a
+  corpse is never resurrected.
+- **Export.** The plugin exports its latch page by page, and it publishes every native save
+  request.
+- **Lineage.** The agent keeps a lineage (new game / exact load / transitions) with per-module
+  coverage.
+- **Capture.** After a save, the agent waits for the archive to settle, then joins the latch
+  against the saved GIT `HitPoints`. `HitPoints` is the stored `+0xE0`: `SaveStats` writes it
+  at `0x5B1FCD`, and `ReadStatsFromGff` reads it back at `0x5B1264`.
+- **Load binding.** A load is bound by provenance, a later load edge (or a request made with
+  no world standing), and the archive's SHA-256 and identity.
+- **Latch release.** `Invalidate()` no longer releases the latch. "Transition flushed but not
+  taken" used to clear it, then rescaled the same standing creatures, which was a second
+  compounding path.
+
+The `enemy_health` default stays at 100%. Nothing here has run on the rig.

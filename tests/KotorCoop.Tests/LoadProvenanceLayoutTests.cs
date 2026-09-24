@@ -7,9 +7,10 @@ namespace KotorCoop.Tests;
 public sealed class LoadProvenanceLayoutTests
 {
     [Fact]
-    public void MailboxUsesTheAgreedV74FreeTailBeforeTheV75Extension()
+    public void MailboxUsesTheAgreedV74FreeTailBeforeTheLaterExtensions()
     {
-        Assert.Equal(0x5400, SharedBlock.TotalSize);
+        // v75 grew the block to 0x5400 and v76 to 0x5800; the v74 mailbox did not move.
+        Assert.Equal(0x5800, SharedBlock.TotalSize);
         Assert.Equal(0x4E50, SharedBlock.OffsetLoadProvenanceGeneration);
         Assert.Equal(0x4E54, SharedBlock.OffsetLoadProvenanceSlot);
         Assert.Equal(0x4E58, SharedBlock.OffsetLoadProvenanceSource);

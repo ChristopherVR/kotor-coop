@@ -24,6 +24,18 @@ internal static unsafe class LoadProvenanceHook
     private static bool _installed;
     private static uint _generation;
 
+    /// <summary>Both observers are in. Version 76: a world with no observed load request is a
+    /// new-game candidate only while this holds.</summary>
+    public static bool Installed => _installed;
+
+    /// <summary>The generation last published (0 = never). Version 76 attributes a changed
+    /// value to the next world-up.</summary>
+    public static uint PublishedGeneration => _generation;
+
+    /// <summary>Whether the last published request was made with no world standing (the main
+    /// menu, or after the in-session replay destroyed the server).</summary>
+    public static bool LastPublishedWithoutWorld { get; private set; }
+
     public static bool Install(SharedBlockView view, out string diagnostic)
     {
         ArgumentNullException.ThrowIfNull(view);
@@ -235,6 +247,7 @@ internal static unsafe class LoadProvenanceHook
         if (view is null) return;
 
         uint even = LoadProvenanceGeneration.Next(_generation, out uint odd);
+        LastPublishedWithoutWorld = !PluginHost.WorldStanding;
         _generation = even;
 
         view.BeginLoadProvenanceWrite(odd);

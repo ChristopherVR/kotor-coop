@@ -301,6 +301,33 @@ public sealed class EnemyScalingBaselineCollector
         return true;
     }
 
+    /// <summary>The last complete snapshot committed for exactly this module epoch, with the
+    /// export generation it came from. The caller decides whether that export is the final
+    /// or latest one it needs (<c>EnemyScalingPersistence</c> compares it with the plugin's
+    /// published export generation), so a newer partial export never hides the committed one
+    /// and a committed one is never mistaken for a newer latch state.</summary>
+    public bool TryGetCommittedSnapshot(
+        string module,
+        ulong moduleGeneration,
+        out ulong exportGeneration,
+        out IReadOnlyList<EnemyScalingLatchRecord> records)
+    {
+        exportGeneration = 0;
+        records = [];
+        if (_exactLoadSessionId == 0 || _capacityExceeded
+            || !TryNormalizeModule(module, out string normalized)
+            || !_completed.TryGetValue(normalized, out ModuleSnapshot? completed)
+            || completed.ModuleGeneration != moduleGeneration
+            || !completed.SnapshotComplete)
+        {
+            return false;
+        }
+
+        exportGeneration = completed.ExportGeneration;
+        records = completed.Records;
+        return true;
+    }
+
     private bool TryCommit(string module, StagedExport staged)
     {
         List<EnemyScalingLatchRecord> records = new();

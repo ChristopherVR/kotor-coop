@@ -68,6 +68,14 @@ public class SharedBlockNewRegionOffsetMirrorTests
         ("LootMailboxConsumedCount", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
         ("LootMailboxAckEpoch", "SharedBlock.Items.cs", "KotorGameBridge.ContainerLoot.cs"),
+
+        // Version 76, exact enemy-health baseline persistence: a drift here would read the
+        // plugin's latch export as garbage and silently leave every saved world refused.
+        ("EnemyBaselineExportSequence", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
+        ("EnemyBaselineExportAck", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
+        ("EnemyBaselineImportSequence", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
+        ("EnemyBaselineImportAck", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
+        ("EnemyBaselineSaveSequence", "SharedBlock.EnemyScalingBaseline.cs", "KotorGameBridge.EnemyScalingBaseline.cs"),
     ];
 
     [Fact]

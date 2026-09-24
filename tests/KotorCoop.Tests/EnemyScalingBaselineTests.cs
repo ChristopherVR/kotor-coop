@@ -148,7 +148,7 @@ public sealed class EnemyScalingBaselineStoreTests
             [new("lev_m40aa", 42, "guard", "n_sithsoldier001", 15, 150)], out _));
 
         string valid = File.ReadAllText(sidecar);
-        File.WriteAllText(sidecar, valid.Replace("\"SchemaVersion\":1", "\"SchemaVersion\":99", StringComparison.Ordinal));
+        File.WriteAllText(sidecar, valid.Replace("\"SchemaVersion\":2", "\"SchemaVersion\":99", StringComparison.Ordinal));
         Assert.False(EnemyScalingBaselineStore.TryReadForArchive(sidecar, archive, SaveKey, out var unsupported, out _));
         Assert.Null(unsupported);
 
@@ -157,8 +157,8 @@ public sealed class EnemyScalingBaselineStoreTests
         Assert.Null(unknownField);
 
         File.WriteAllText(sidecar, valid.Replace(
-            "\"SchemaVersion\":1,",
-            "\"SchemaVersion\":1,\"SchemaVersion\":1,",
+            "\"SchemaVersion\":2,",
+            "\"SchemaVersion\":2,\"SchemaVersion\":2,",
             StringComparison.Ordinal));
         Assert.False(EnemyScalingBaselineStore.TryReadForArchive(sidecar, archive, SaveKey, out var duplicateField, out _));
         Assert.Null(duplicateField);

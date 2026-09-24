@@ -25,16 +25,24 @@ public sealed record EnemyScalingBaselineRecord(
     int AppliedPercent);
 
 /// <summary>Schema for the mod-owned enemy-health baseline sidecar. The archive SHA-256 is
-/// calculated from the settled SAVEGAME.sav when the store writes this document.</summary>
+/// calculated from the settled SAVEGAME.sav when the store writes this document.
+///
+/// Schema 2 adds <see cref="CoveredModules"/>: the saved modules whose COMPLETE scaled set
+/// the records describe. A covered module with no records is proof that none of its saved
+/// creatures carries a scaled maximum; a saved module absent from the list is unknown and
+/// fails closed on load. A null list (never written by this build) means "the modules the
+/// records name".</summary>
 public sealed record EnemyScalingBaselineDocument(
     int SchemaVersion,
     int SaveSlot,
     string SaveName,
     uint SaveIdentity,
     string ArchiveSha256,
-    IReadOnlyList<EnemyScalingBaselineRecord> Records)
+    IReadOnlyList<EnemyScalingBaselineRecord> Records,
+    IReadOnlyList<string>? CoveredModules = null)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    public const int MaximumCoveredModules = 256;
     public const int MaximumRecords = 16_384;
     public const int MaximumSaveNameLength = 128;
     public const int MaximumModuleLength = 32;
@@ -65,17 +73,56 @@ public static class EnemyScalingBaselineRule
             return false;
         }
 
+        HashSet<string>? covered = null;
+        if (document.CoveredModules is not null)
+        {
+            if (document.CoveredModules.Count > EnemyScalingBaselineDocument.MaximumCoveredModules)
+            {
+                return false;
+            }
+
+            covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string? module in document.CoveredModules)
+            {
+                if (!IsValidResRef(module, EnemyScalingBaselineDocument.MaximumModuleLength) || !covered.Add(module!))
+                {
+                    return false;
+                }
+            }
+        }
+
         HashSet<(string Module, uint ObjectId)> identities = [];
         foreach (EnemyScalingBaselineRecord? record in document.Records)
         {
             if (!IsValidRecord(record)
-                || !identities.Add((record!.Module.ToLowerInvariant(), record.ObjectId)))
+                || !identities.Add((record!.Module.ToLowerInvariant(), record.ObjectId))
+                || (covered is not null && !covered.Contains(record.Module)))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <summary>The modules a valid document proves complete: the explicit schema-2 list, or
+    /// the modules its records name when the list is absent.</summary>
+    public static IReadOnlySet<string> CoveredModules(EnemyScalingBaselineDocument document)
+    {
+        HashSet<string> modules = new(StringComparer.OrdinalIgnoreCase);
+        if (document.CoveredModules is not null)
+        {
+            modules.UnionWith(document.CoveredModules);
+        }
+        else
+        {
+            foreach (EnemyScalingBaselineRecord record in document.Records)
+            {
+                modules.Add(record.Module);
+            }
+        }
+
+        return modules;
     }
 
     public static bool IsValidRecord(EnemyScalingBaselineRecord? record) =>
@@ -185,6 +232,15 @@ public static class EnemyScalingBaselineRule
     }
 
     private static bool IsValidSaveSlot(int slot) => slot >= -1 || slot == EnemyScalingSaveSlot.NoSaveSlot;
+
+    public static bool IsValidModule(string? value) =>
+        IsValidResRef(value, EnemyScalingBaselineDocument.MaximumModuleLength);
+
+    public static bool IsValidTag(string? value) =>
+        IsValidName(value, EnemyScalingBaselineDocument.MaximumTagLength);
+
+    public static bool IsValidTemplate(string? value) =>
+        IsValidResRef(value, EnemyScalingBaselineDocument.MaximumTemplateLength);
 
     private static bool IsValidResRef(string? value, int maxLength)
     {
