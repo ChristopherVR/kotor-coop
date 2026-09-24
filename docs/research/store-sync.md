@@ -3340,3 +3340,27 @@ A wrap can no longer be forced live after the fix (`setgold` rejects negatives, 
 clamps 290 → 0), so `GoldReadingRule`'s sanitiser is pinned by unit tests only
 (`GoldReadingRuleTests`, and `ProgressionPumpTests.AWrappedOverdraftOnTheHostIsWrittenBackAsBrokeNotBroadcastAsAFortune`
 / `AClientMirroringAboveTheCeilingDoesNotReportThePhantomSpend`).
+
+## Addendum (2026-09-24): two store-insert leaks found and fixed live
+
+Both surfaced while live-testing `store_prices` on the Dantooine enclave stores (`dan_droid`,
+`dan_general`), and both came from `InsertItemIntoStore` spawning the item through the player
+before moving it into the store (Odyssey.Store.cs).
+
+1. **Stock read as a player grant (`f4f0506`).** The moved item kept the spawning player as its
+   possessor. Once it left the party pool, `ReadPersonalPossessedItems` counted it as a new
+   personal PC item and `ScriptItemGrantPump` logged `script item grant: 6 new item(s) in the local
+   PC's inventory` twice for a 12-stack `store_stock` top-up — with a peer connected, the store's
+   stock would have been offered to them as a script reward. The insert now calls
+   `CSWSItem::SetPossessor(item, store, 1, 1, 0x7F000000)`, the exact call `CSWSStore::AcquireItem`
+   makes at `0x005C7725`. Re-run: a 39-unit top-up across 28 stacks, mirrored on the joiner,
+   produced no grant on either agent.
+2. **Pazaak cards leaked into the player (`92583bc`).** Creature acquisition converts a
+   `Pazaak_Card` (baseitems row 86) into a collection card and `Credits` (row 57) into gold, so
+   the spawn "failed" (`failure 8`) while the host kept the card, and a `g_i_pazsidebd001`
+   side-deck item appeared in the shared pool and replicated. The insert now reads the store's own
+   matching stock item's `base_item_id` (`CSWItem+0x0C`) and refuses rows 57/86 before spawning.
+   Note that `party-pool-sync.md`'s `0x17`/`0x2A` are the engine's comparison values from a
+   different field, not baseitems rows (row `0x2A` is `Armor_Class_8`; a first cut using them
+   refused armour). Re-run: six `g_i_pazcard_*` top-ups refused as `base item 0x56`, the other 22
+   stacks inserted, the host pool unchanged. Those Pazaak stacks stay at vanilla stock.
