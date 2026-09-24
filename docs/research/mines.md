@@ -853,3 +853,10 @@ in-range recover/disarm pass and a regression pass against GIT mines.
    NEW refusal (`actor is more than 1.0 unit from the mine...`) instead of the old, misleading
    "queued" — this is the regression check that the fix actually changes behaviour for the
    previously-silent-failure case.
+
+### 14.9 Live check of the range gate (2026-09-24)
+
+The joiner stood on its own `placemine` mine (distance 0) and ran `placedmineaction recover 1`:
+the request passed the new range gate and was queued, but after 20 s nothing had happened and both
+`minestate`s still mapped `#1`. Range was one precondition, not the only one. A real radial-menu
+recover (which the rig cannot click) is the remaining test; the diagnostic path stays open.

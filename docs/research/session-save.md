@@ -2382,3 +2382,10 @@ reconnect start genuinely unseeded; a fresh first join with no record behaves ex
 and the host refuses to seed a peer whose Hello names a different host session id even when the
 carried LoadSerial happens to match. Code/test evidence only — **NEEDS-LIVE**: disconnect,
 reconnect without loading, confirm no `W_SAVE` and every shared channel stays on.
+
+### Live repeat (2026-09-24)
+
+Aligned world, then the joiner ran `disconnect` (its pre-disconnect quicksave landed) and
+`reconnect` without loading. The joiner logged `save identity differs after a save on one side,
+with no load since the two last agreed - same world, not rejoining`; no `W_SAVE`, shared channels
+stayed on.
