@@ -313,7 +313,7 @@ internal static unsafe partial class Odyssey
             // the rank array, not the array itself. Live 2026-09-25 the rig Soldier's field read
             // 0x1812FC88 and the ranks behind it [0,0,0,0,0,0,0,4].
             nint stats = *(nint*)(serverActor + MineActionActorStatsOffset);
-            if (!ReadableObject(stats, MineActionSkillRankArrayOffset + sizeof(nint)))
+            if (!ReadableObject(stats, (nuint)(MineActionSkillRankArrayOffset + sizeof(nint))))
             {
                 return ", demolitionsRank=<stats unreadable>";
             }
