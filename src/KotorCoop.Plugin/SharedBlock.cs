@@ -1403,7 +1403,8 @@ internal partial struct SharedBlock
     public const uint CheatKindPlacedMineAction = 92;
 
     // 93-94 reserved (party-placed mines, unused). 95-99: the live-cast primitive
-    // (2026-09-24, docs/research/effect-sync.md §14).
+    // (2026-09-24, docs/research/effect-sync.md §14) and the minigame-kill primitive
+    // (2026-09-25, docs/research/minigames.md) share this block; 98-99 still free.
 
     /// <summary>
     /// <c>cast &lt;spell&gt; &lt;target&gt; [metamagic]</c> — makes the local player cast a
@@ -1424,4 +1425,15 @@ internal partial struct SharedBlock
     /// and docs/research/effect-sync.md §14.
     /// </summary>
     public const uint CheatKindGrantPower = 96;
+
+    /// <summary>
+    /// <c>mgkill &lt;all|n&gt;</c> — kills up to CheatAmount (-1 = all) currently-alive
+    /// minigame enemy fighters through the engine's own <c>SWMG_AdjustFollowerHitPoints</c> VM
+    /// routine, so a forced turret/gunnery ambush (e.g. the Ebon Hawk Sith-fighter sequence,
+    /// module <c>m12ab</c>) can be completed by the unattended rig without a human at the
+    /// controls: each fighter's real OnDeath script (e.g. <c>k_pebo_sthdeath2..7</c>) fires
+    /// exactly as it would for a live bullet kill. CheatAmount is the count (-1 for all). See
+    /// <c>IGameBridge.CheatKinds.MgKill</c> and docs/research/minigames.md.
+    /// </summary>
+    public const uint CheatKindMgKill = 97;
 }

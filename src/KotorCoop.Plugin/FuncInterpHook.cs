@@ -175,6 +175,13 @@ internal static unsafe class FuncInterpHook
         // addition here was (ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
         // also asserts it at build time).
         "cast", "grantpower",
+
+        // The minigame-kill primitive (2026-09-25, docs/research/minigames.md): typed on the
+        // host rig instance to finish a forced turret/gunnery ambush the unattended rig cannot
+        // play by actually shooting (e.g. the m12ab Ebon Hawk Sith-fighter sequence). Does not
+        // shadow a retail verb (ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
+        // asserts it at build time, same as every prior addition here).
+        "mgkill",
     ];
 
     /// <summary>

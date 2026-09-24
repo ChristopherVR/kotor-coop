@@ -164,5 +164,11 @@ internal static class ConsoleVerbCatalog
         // effect's creator to be the local player can finally be exercised.
         ("cast", "cast <spell id|name> <target: me|0xid> [metamagic]  (dev-only: real cast through the engine's action queue; names: heal, cure, valor, stun, fear, forcepush, stasis)"),
         ("grantpower", "grantpower <spell id|name> [classSlot]  (dev-only: engine's own AddKnownSpell, for a save that doesn't know the power yet)"),
+
+        // The minigame-kill primitive (2026-09-25, docs/research/minigames.md): finishes a
+        // forced turret/gunnery ambush (e.g. the m12ab Ebon Hawk Sith-fighter sequence) the
+        // unattended rig cannot play by actually shooting, through the engine's own
+        // SWMG_AdjustFollowerHitPoints VM routine so each fighter's real OnDeath script fires.
+        ("mgkill", "mgkill <all|n>  (dev-only: kills up to n - or all - alive minigame enemy fighters via the engine's own SWMG_AdjustFollowerHitPoints; repeat per wave)"),
     ];
 }

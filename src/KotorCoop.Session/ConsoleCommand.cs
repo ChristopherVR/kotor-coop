@@ -922,6 +922,17 @@ public enum CoopCommandKind
     /// only.
     /// </summary>
     GrantPower,
+
+    /// <summary>
+    /// <c>mgkill &lt;all|n&gt;</c> — LIVE-TEST PRIMITIVE (docs/research/minigames.md): kills up
+    /// to <see cref="CoopCommand.Amount"/> (-1 for "all") currently-alive minigame enemy
+    /// fighters through the engine's own <c>SWMG_AdjustFollowerHitPoints</c> VM routine, so a
+    /// forced turret/gunnery ambush the unattended rig cannot play (e.g. the Ebon Hawk
+    /// Sith-fighter sequence, module <c>m12ab</c>) can still be completed by the engine's own
+    /// scripts — each fighter's real OnDeath script fires exactly as a live bullet kill would.
+    /// Local only.
+    /// </summary>
+    MgKill,
 }
 
 /// <summary>
@@ -1151,6 +1162,7 @@ public static partial class ConsoleCommand
         new(["gamepad"], ParseGamepad),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),
+        new(["mgkill"], ParseMgKill),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

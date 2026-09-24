@@ -419,6 +419,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Cast] = CastSpell,
         [CoopCommandKind.GrantPower] = c => SendCheat(new CheatRequest(
             CheatKinds.GrantPower, Amount: c.Amount, Charges: c.EffectMagnitude)),
+        [CoopCommandKind.MgKill] = c => SendCheat(new CheatRequest(CheatKinds.MgKill, Amount: c.Amount)),
         [CoopCommandKind.FollowKick] = c => SendCheat(new CheatRequest(CheatKinds.FollowKick, Amount: c.Amount)),
 
         // Amount carries method*100 + slot — see CoopCommandKind.FollowStall for why this

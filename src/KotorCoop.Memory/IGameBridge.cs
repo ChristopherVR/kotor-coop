@@ -695,6 +695,21 @@ public static class CheatKinds
     public const uint GrantPower = 96;
 
     /// <summary>
+    /// <c>mgkill &lt;all|n&gt;</c> — LIVE-TEST PRIMITIVE for a forced turret/gunnery minigame
+    /// ambush (e.g. the Ebon Hawk Sith-fighter sequence, module <c>m12ab</c>) that the
+    /// unattended rig cannot finish by actually shooting: kills up to <c>n</c> (or all)
+    /// currently-alive minigame enemy fighters through the engine's own
+    /// <c>SWMG_AdjustFollowerHitPoints</c> VM routine (routine 590,
+    /// <c>Odyssey.TryKillMiniGameFighter</c>) — a large negative relative HP delta, so the
+    /// engine's own <c>CSWTrackFollower::OnDamage</c>/<c>OnDeath</c> chain runs exactly as a
+    /// real bullet kill would, firing whichever OnDeath script the fighter's own minigame data
+    /// names (e.g. <c>k_pebo_sthdeath2..7</c>) — never a raw field poke, never
+    /// <c>StartNewModule</c> called directly. Amount = -1 for "all", else a positive count.
+    /// See SharedBlock.CheatKindMgKill and docs/research/minigames.md.
+    /// </summary>
+    public const uint MgKill = 97;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it
