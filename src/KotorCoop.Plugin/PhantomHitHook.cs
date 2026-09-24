@@ -4,12 +4,16 @@ using System.Runtime.InteropServices;
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Watches the engine's single damage choke point, for THREE things at once: damage landing
+/// Watches the engine's single damage choke point, for FOUR things at once: damage landing
 /// on a peer's PHANTOM (forwarded to that peer's real character), damage the local player
-/// DEALS to anything (forwarded to whoever owns that creature's fight), and damage landing on
+/// DEALS to anything (forwarded to whoever owns that creature's fight), damage landing on
 /// a companion <c>companion_local_combat</c> has RELEASED to fight here (forwarded to the
 /// host, whose authoritative body never otherwise sees it — see
-/// docs/research/companion-state-sync.md §13 and <see cref="WatchCompanion"/>).
+/// docs/research/companion-state-sync.md §13 and <see cref="WatchCompanion"/>), and — on the
+/// HOST only — damage the host's own PC/party DEALS to its own live enemies, so
+/// <c>ThreatTable</c> can see the host's side of a shared fight and not just a remote peer's
+/// (THREAT_RETARGET, docs/research/peer-damage-ledger.md §9; see the region around
+/// <see cref="WatchThreatAttackers"/>).
 ///
 /// The choke point is <c>CSWSEffectListHandler::OnApplyDamage 0x004DFA40</c> — the damage
 /// analog of the animation hook's dispatch site: every point of weapon, grenade and force
@@ -507,6 +511,121 @@ internal static unsafe class PhantomHitHook
 
     public static DamageDealtTable Dealt => _dealt;
 
+    // ---- THREAT_RETARGET: the HOST's own PC/party damage ---------------------------
+    //
+    // Separate from _ourAttacker/_dealt above on purpose. Those exist for the peer-forwarding
+    // ledger, which only a MIRRORING instance (block.DamageDealtEnabled) ever populates — the
+    // HOST never does, because it applies its own damage through the engine natively and has
+    // nothing to forward. Sticky aggro (docs/research/peer-damage-ledger.md §9) needs the
+    // opposite: the HOST's own hits, fed into ThreatTable so a creature's current target (the
+    // host's PC/party) carries its OWN tracked threat instead of always reading 0 — §9.2's
+    // documented gap, the reason the retarget order fired every ~4s regardless of whether the
+    // host was still genuinely ahead. A second independent watch (never populated on a
+    // mirroring instance — PeerDamageController.RefreshThreatAttackers gates it on
+    // !block.DamageDealtEnabled) keeps this from ever touching the forwarding ledger at all.
+
+    private static readonly uint[] _threatAttacker = new uint[SharedBlock.PartyRosterSlots + 1];
+    private static int _threatAttackerCount;
+
+    /// <summary>Tells the hook whose damage feeds THREAT_RETARGET — the host's own PC plus
+    /// party roster. Same widen-then-narrow discipline as <see cref="WatchAttackers"/>, and
+    /// independent of it: a mirroring instance leaves this empty forever (see the region's own
+    /// remarks).</summary>
+    public static void WatchThreatAttackers(ReadOnlySpan<uint> objectIds)
+    {
+        int count = 0;
+        for (int i = 0; i < objectIds.Length && count < _threatAttacker.Length; i++)
+        {
+            if (objectIds[i] is not (0 or ObjectInvalid))
+            {
+                _threatAttacker[count++] = objectIds[i];
+            }
+        }
+
+        for (int i = count; i < _threatAttacker.Length; i++)
+        {
+            _threatAttacker[i] = 0;
+        }
+
+        _threatAttackerCount = count;
+    }
+
+    /// <summary>How many distinct (creature, host-attacker) pairs <see cref="DrainHostThreat"/>
+    /// can hold between two drains. A drain runs every <c>PeerDamageController.IntervalFrames</c>
+    /// pass (10 frames, same cadence the peer-forwarding ledger already uses), so this only has
+    /// to cover the pairs that actually took a hit within that ~0.17s window — generously sized
+    /// against the handful of enemies genuinely in melee with the host's party at once, not
+    /// against <see cref="SharedBlock.EnemyCapacity"/>.</summary>
+    public const int HostThreatCapacity = 32;
+
+    private static readonly uint[] _hostThreatCreature = new uint[HostThreatCapacity];
+    private static readonly uint[] _hostThreatAttacker = new uint[HostThreatCapacity];
+    private static readonly uint[] _hostThreatAmount = new uint[HostThreatCapacity];
+
+    /// <summary>Hits dropped so far because <see cref="HostThreatCapacity"/> was exhausted
+    /// between two drains — expected to stay at 0 in practice; published for the same
+    /// dashboard-style reason as <see cref="DamageDealtTable.Dropped"/>.</summary>
+    public static uint HostThreatDropped { get; private set; }
+
+    private static void AddHostThreat(uint creatureId, uint attackerId, uint amount)
+    {
+        for (int i = 0; i < HostThreatCapacity; i++)
+        {
+            if (_hostThreatCreature[i] == creatureId && _hostThreatAttacker[i] == attackerId)
+            {
+                _hostThreatAmount[i] += amount;
+                return;
+            }
+        }
+
+        for (int i = 0; i < HostThreatCapacity; i++)
+        {
+            if (_hostThreatCreature[i] == 0)
+            {
+                _hostThreatCreature[i] = creatureId;
+                _hostThreatAttacker[i] = attackerId;
+                _hostThreatAmount[i] = amount;
+                return;
+            }
+        }
+
+        HostThreatDropped++;
+    }
+
+    /// <summary>
+    /// Copies every (creature, attacker, amount) row accumulated since the last drain and
+    /// clears the table for the next pass — a delta per pass, not a cumulative total like
+    /// <see cref="DamageDealtTable"/>, because the reader (<c>PeerDamageController</c>'s own
+    /// 10-frame cadence) banks each row straight into <c>ThreatTable.AddThreat</c>, which is
+    /// itself the accumulator. FRAME THREAD ONLY, same caller as <see cref="Dealt"/>'s own
+    /// publish. Returns how many rows were copied.
+    /// </summary>
+    public static int DrainHostThreat(Span<uint> creatureIds, Span<uint> attackerIds, Span<uint> amounts)
+    {
+        int count = 0;
+        for (int i = 0; i < HostThreatCapacity; i++)
+        {
+            if (_hostThreatCreature[i] == 0)
+            {
+                continue;
+            }
+
+            if (count < creatureIds.Length && count < attackerIds.Length && count < amounts.Length)
+            {
+                creatureIds[count] = _hostThreatCreature[i];
+                attackerIds[count] = _hostThreatAttacker[i];
+                amounts[count] = _hostThreatAmount[i];
+                count++;
+            }
+
+            _hostThreatCreature[i] = 0;
+            _hostThreatAttacker[i] = 0;
+            _hostThreatAmount[i] = 0;
+        }
+
+        return count;
+    }
+
     // ---- companion damage TAKEN ---------------------------------------------------
 
     /// <summary>
@@ -595,6 +714,12 @@ internal static unsafe class PhantomHitHook
         Array.Clear(_serial);
         Array.Clear(_ourAttacker);
         _ourAttackerCount = 0;
+        Array.Clear(_threatAttacker);
+        _threatAttackerCount = 0;
+        Array.Clear(_hostThreatCreature);
+        Array.Clear(_hostThreatAttacker);
+        Array.Clear(_hostThreatAmount);
+        HostThreatDropped = 0;
         Array.Clear(_scaleTarget);
         _scaleTargetCount = 0;
         _dealt.Clear();
@@ -773,7 +898,11 @@ internal static unsafe class PhantomHitHook
             bool ours = slot < 0 && companionSlot < 0 && !SuppressDealt
                 && IsOursToCredit(target, targetId, effect);
 
-            if (slot < 0 && companionSlot < 0 && !ours)
+            uint hostThreatAttackerId = 0;
+            bool hostThreat = slot < 0 && companionSlot < 0 && !SuppressDealt
+                && IsHostThreatAttacker(target, targetId, effect, out hostThreatAttackerId);
+
+            if (slot < 0 && companionSlot < 0 && !ours && !hostThreat)
             {
                 return;
             }
@@ -811,38 +940,51 @@ internal static unsafe class PhantomHitHook
 
             if (slot < 0)
             {
-                // The ledger travels to the enemy OWNER, so it must be keyed in the
-                // owner's id space: a hit on a materialised stand-in is recorded under
-                // the owner id the body stands in for, not its local spawn id.
-                bool retainedLocal = MaterialisedEnemies.IsRetainedLocal(targetId)
-                    || MaterialisedEnemies.IsQuarantinedRetainedLocal(targetId);
-                uint ownerId;
-                if (retainedLocal)
+                if (ours)
                 {
-                    if (!MaterialisedEnemies.TryGetCurrentRetainedOwner(targetId, out ownerId))
+                    // The ledger travels to the enemy OWNER, so it must be keyed in the
+                    // owner's id space: a hit on a materialised stand-in is recorded under
+                    // the owner id the body stands in for, not its local spawn id.
+                    bool retainedLocal = MaterialisedEnemies.IsRetainedLocal(targetId)
+                        || MaterialisedEnemies.IsQuarantinedRetainedLocal(targetId);
+                    bool staleRetained = false;
+                    uint ownerId = 0;
+                    if (retainedLocal)
                     {
-                        return; // stale/unfinished retained proof must never become a raw host id
+                        // stale/unfinished retained proof must never become a raw host id
+                        staleRetained = !MaterialisedEnemies.TryGetCurrentRetainedOwner(targetId, out ownerId);
+                    }
+                    else
+                    {
+                        ownerId = MaterialisedEnemies.ToOwner(targetId);
+                    }
+
+                    if (!staleRetained)
+                    {
+                        uint creditId = ownerId != 0 ? ownerId : targetId;
+
+                        // ROUND 50: the decisive-control bypass — see
+                        // EnemyPresenceController.LocalCombatBypassId's own doc comment. This
+                        // hook is otherwise pure observation (it never suppresses or replaces
+                        // the engine's own damage application — the stub always resumes into
+                        // it), but a credited debt here is itself a write into the peer-damage
+                        // ledger, so the bypassed id must not accrue one either.
+                        if (creditId == 0 || creditId != EnemyPresenceController.LocalCombatBypassId)
+                        {
+                            _dealt.Add(creditId, (uint)total);
+                        }
                     }
                 }
-                else
+
+                // THREAT_RETARGET: the HOST's own hit, landing on its own live creature — no
+                // owner translation needed (this creature IS the owner's own copy, by
+                // definition: only the fight's owner ever has a non-empty _threatAttacker set,
+                // see RefreshThreatAttackers's own gate), so it is banked under targetId as-is.
+                if (hostThreat)
                 {
-                    ownerId = MaterialisedEnemies.ToOwner(targetId);
+                    AddHostThreat(targetId, hostThreatAttackerId, (uint)total);
                 }
 
-                uint creditId = ownerId != 0 ? ownerId : targetId;
-
-                // ROUND 50: the decisive-control bypass — see
-                // EnemyPresenceController.LocalCombatBypassId's own doc comment. This hook is
-                // otherwise pure observation (it never suppresses or replaces the engine's own
-                // damage application — the stub always resumes into it), but a credited debt
-                // here is itself a write into the peer-damage ledger, so the bypassed id must
-                // not accrue one either.
-                if (creditId == EnemyPresenceController.LocalCombatBypassId && creditId != 0)
-                {
-                    return;
-                }
-
-                _dealt.Add(creditId, (uint)total);
                 return;
             }
 
@@ -1010,9 +1152,29 @@ internal static unsafe class PhantomHitHook
     /// Whether this hit is one of OURS landing on someone else's creature — the thing the
     /// fight's owner needs to hear about.
     /// </summary>
-    private static bool IsOursToCredit(nint target, uint targetId, nint effect)
+    private static bool IsOursToCredit(nint target, uint targetId, nint effect) =>
+        TryMatchAttacker(target, targetId, effect, _ourAttacker, _ourAttackerCount, out _);
+
+    /// <summary>THREAT_RETARGET's own version of <see cref="IsOursToCredit"/>: is this hit one
+    /// of the HOST's own bodies (<see cref="_threatAttacker"/>) landing on a live creature —
+    /// and if so, which of our ids dealt it, since (unlike the forwarding ledger, which merges
+    /// every attacker into one total per target) <c>ThreatTable</c> needs the real id to key its
+    /// per-attacker row.</summary>
+    private static bool IsHostThreatAttacker(nint target, uint targetId, nint effect, out uint attackerId) =>
+        TryMatchAttacker(target, targetId, effect, _threatAttacker, _threatAttackerCount, out attackerId);
+
+    /// <summary>
+    /// Shared by <see cref="IsOursToCredit"/> and <see cref="IsHostThreatAttacker"/>: is this
+    /// hit's attacker one of <paramref name="attackerSet"/> (the first <paramref
+    /// name="attackerCount"/> entries), landing on a live creature that is not itself one of
+    /// that same set — reports which id matched, since a caller may need it.
+    /// </summary>
+    private static bool TryMatchAttacker(
+        nint target, uint targetId, nint effect, uint[] attackerSet, int attackerCount, out uint matchedAttacker)
     {
-        if (_ourAttackerCount == 0)
+        matchedAttacker = 0;
+
+        if (attackerCount == 0)
         {
             return false;
         }
@@ -1038,10 +1200,9 @@ internal static unsafe class PhantomHitHook
             return false;
         }
 
-        bool fromUs = false;
-        for (int i = 0; i < _ourAttackerCount; i++)
+        for (int i = 0; i < attackerCount; i++)
         {
-            uint id = _ourAttacker[i];
+            uint id = attackerSet[i];
 
             // Damage BETWEEN our own bodies is not a contribution to anyone's fight — and
             // the incoming-phantom-damage channel lands on the player through this very
@@ -1051,10 +1212,13 @@ internal static unsafe class PhantomHitHook
                 return false;
             }
 
-            fromUs |= id == attacker;
+            if (id == attacker)
+            {
+                matchedAttacker = attacker;
+            }
         }
 
-        return fromUs;
+        return matchedAttacker != 0;
     }
 
     /// <summary>
