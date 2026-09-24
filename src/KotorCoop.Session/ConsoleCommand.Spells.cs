@@ -128,4 +128,58 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(CoopCommandKind.GrantPower, Amount: spellId, EffectMagnitude: (uint)classSlot);
     }
+
+    /// <summary>The two-class, 20-level-per-class cap AutoLevelup is built against; a hard
+    /// ceiling on <c>levelup</c>'s own count so a mistyped huge number can't spin the loop.</summary>
+    private const int MaxLevelUpCount = 40;
+
+    /// <summary>
+    /// Parses <c>levelup &lt;classSlot 0|1 | classes.2da id&gt; [count]</c> — the companion of
+    /// <see cref="ParseCast"/>/<see cref="ParseGrantPower"/> that makes the local player a REAL
+    /// Jedi (docs/research/class-and-power-grants.md §9): runs the engine's own
+    /// <c>CSWSCreatureStats::AutoLevelup</c>, which always levels the LAST class slot
+    /// <c>addclass</c> left behind. See <see cref="CoopCommandKind.LevelUp"/>.
+    /// </summary>
+    private static CoopCommand ParseLevelUp(string[] rest)
+    {
+        const string usage = "levelup <classSlot 0|1 | classes.2da id> [count]  "
+            + "(AutoLevelup only ever levels the LAST class slot - see 'addclass'/'stats')";
+
+        if (rest.Length is < 1 or > 2)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+        }
+
+        if (!int.TryParse(rest[0], out int classArg) || classArg < 0 || classArg > 8)
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[0]}' is not a class slot (0/1) or a classes.2da id (0-8) - {usage}");
+        }
+
+        int count = 1;
+        if (rest.Length == 2 && (!int.TryParse(rest[1], out count) || count is < 1 or > MaxLevelUpCount))
+        {
+            return new CoopCommand(
+                CoopCommandKind.Invalid,
+                Error: $"'{rest[1]}' is not a level count (1-{MaxLevelUpCount})");
+        }
+
+        return new CoopCommand(CoopCommandKind.LevelUp, Amount: classArg, EffectMagnitude: (uint)count);
+    }
+
+    /// <summary>
+    /// Parses the argument-free <c>stats</c> — read-only report of the local player's class
+    /// levels, hit points, Force points and known powers. See
+    /// <see cref="CoopCommandKind.Stats"/>.
+    /// </summary>
+    private static CoopCommand ParseStats(string[] rest)
+    {
+        if (rest.Length != 0)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: "stats  (no arguments - reports the local player)");
+        }
+
+        return new CoopCommand(CoopCommandKind.Stats);
+    }
 }

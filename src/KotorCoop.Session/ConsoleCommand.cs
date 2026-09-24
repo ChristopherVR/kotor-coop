@@ -933,6 +933,29 @@ public enum CoopCommandKind
     /// Local only.
     /// </summary>
     MgKill,
+    /// <c>levelup &lt;classSlot 0|1 | classes.2da id&gt; [count]</c> — LIVE-TEST PRIMITIVE
+    /// (docs/research/class-and-power-grants.md §9): makes the local player a REAL Jedi through
+    /// the engine's own <c>CSWSCreatureStats::AutoLevelup</c> — the SAME routine the character
+    /// screen's "Auto Level-Up" button and the "Auto Level Up Party Members" option both reach —
+    /// so <see cref="Cast"/> finally has Force points to spend (effect-sync.md §14.7's dead
+    /// end: a level-1 test character has none). AutoLevelup always levels the LAST class slot
+    /// (<c>classes[class_count-1]</c>, whatever <c>addclass</c> most recently added); the
+    /// argument here must NAME that slot, either by index (0/1) or by its classes.2da row id, or
+    /// the verb refuses rather than silently leveling the wrong class. XP is topped up through
+    /// the same field write <see cref="GrantXp"/> uses. Grants no new POWER knowledge — that
+    /// stays <see cref="GrantPower"/>'s job. Amount the class slot or classes.2da id,
+    /// EffectMagnitude the level count (default 1, bounded 1-40). Local only.
+    /// </summary>
+    LevelUp,
+
+    /// <summary>
+    /// <c>stats</c> — LIVE-TEST PRIMITIVE / diagnostic (docs/research/class-and-power-
+    /// grants.md §9): read-only report of the local player's class levels, current/max hit
+    /// points, current/max Force points and known powers, so a live test (or an unattended
+    /// orchestrator reading the console) can confirm <see cref="LevelUp"/> actually worked
+    /// before trying <see cref="Cast"/>. Takes no arguments. Local only.
+    /// </summary>
+    Stats,
 }
 
 /// <summary>
@@ -1163,6 +1186,8 @@ public static partial class ConsoleCommand
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),
         new(["mgkill"], ParseMgKill),
+        new(["levelup"], ParseLevelUp),
+        new(["stats"], ParseStats),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

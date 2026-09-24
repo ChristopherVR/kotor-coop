@@ -182,6 +182,11 @@ internal static unsafe class FuncInterpHook
         // shadow a retail verb (ConsoleCompletionEngineTests.NoCoopVerbShadowsARetailConsoleVerb
         // asserts it at build time, same as every prior addition here).
         "mgkill",
+        // The make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-
+        // grants.md §9): typed on the rig to give a level-1 test character actual Force
+        // points before `cast`/`grantpower` can be exercised. Does not shadow a retail verb
+        // (checked the same way every prior addition here was).
+        "levelup", "stats",
     ];
 
     /// <summary>

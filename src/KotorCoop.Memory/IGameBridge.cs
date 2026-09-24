@@ -694,6 +694,26 @@ public static class CheatKinds
     /// </summary>
     public const uint GrantPower = 96;
 
+    // 97-99 remain reserved for the live-cast primitive (see the comment above GrantPower).
+    // 100-104: the make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-
+    // grants.md §9).
+
+    /// <summary>
+    /// <c>levelup &lt;classSlot 0|1 | classes.2da id&gt; [count]</c> — runs the engine's own
+    /// <c>CSWSCreatureStats::AutoLevelup</c> on the local player's LAST class slot, topping up
+    /// XP through the same raw field write <c>GrantXp</c> uses. Amount is the class slot or
+    /// classes.2da id; Charges is the level count. See <c>SharedBlock.CheatKindLevelUp</c> and
+    /// docs/research/class-and-power-grants.md §9.
+    /// </summary>
+    public const uint LevelUp = 100;
+
+    /// <summary>
+    /// <c>stats</c> — read-only report of the local player's class levels, current/max hit
+    /// points, current/max Force points and known powers. No arguments. See
+    /// <c>SharedBlock.CheatKindStats</c> and docs/research/class-and-power-grants.md §9.
+    /// </summary>
+    public const uint Stats = 101;
+
     /// <summary>
     /// <c>mgkill &lt;all|n&gt;</c> — LIVE-TEST PRIMITIVE for a forced turret/gunnery minigame
     /// ambush (e.g. the Ebon Hawk Sith-fighter sequence, module <c>m12ab</c>) that the

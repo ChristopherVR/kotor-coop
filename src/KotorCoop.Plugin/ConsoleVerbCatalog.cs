@@ -170,5 +170,9 @@ internal static class ConsoleVerbCatalog
         // unattended rig cannot play by actually shooting, through the engine's own
         // SWMG_AdjustFollowerHitPoints VM routine so each fighter's real OnDeath script fires.
         ("mgkill", "mgkill <all|n>  (dev-only: kills up to n - or all - alive minigame enemy fighters via the engine's own SWMG_AdjustFollowerHitPoints; repeat per wave)"),
+        // The make-a-real-Jedi primitive (2026-09-25, docs/research/class-and-power-grants.md
+        // §9): closes the "no Force points to cast with" dead end effect-sync.md §14.7 hit.
+        ("levelup", "levelup <classSlot 0|1 | classes.2da id> [count]  (dev-only: engine's own AutoLevelup on the LAST class slot; see 'addclass'/'stats')"),
+        ("stats", "stats  (dev-only: read-only class levels, hp/fp, known powers of your own player)"),
     ];
 }
