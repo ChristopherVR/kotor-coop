@@ -1192,29 +1192,21 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
             return false;
         }
 
-        // Never drive a body this instance spawned for a peer. Host-side encounter spawns
-        // allocate ids in the same range as local phantom spawns, so a raw id match is not
-        // paranoia — it is the one collision the id-identity assumption allows.
-        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
-        {
-            if (block.GetPhantomId(i) == enemy.ObjectId)
-            {
-                return false;
-            }
-        }
-
         // Translate through the materialisation map. An owner id with no local mapping
         // usually resolves directly (GIT identity); when it does not, the enemy exists
         // only in the owner's instance and a stand-in body is built for it.
         uint mapped = MaterialisedEnemies.ToLocal(enemy.ObjectId);
 
-        // ⚠ An unmapped owner id that numerically equals the LOCAL id of a body we
-        // spawned for a DIFFERENT owner enemy must never be resolved as if it were
-        // GIT-identical — that would drive our stand-in to two masters. It is exactly
-        // the phantom-id collision above, one table over.
-        if (mapped == 0 && MaterialisedEnemies.ToOwner(enemy.ObjectId) != 0)
+        // ⚠ An unmapped owner id that numerically equals a body THIS instance spawned — a
+        // peer's phantom, or our stand-in for a DIFFERENT owner enemy — must never be resolved
+        // as if it were GIT-identical: host encounter/script spawns allocate ids in the same
+        // range as our own spawns, so the collision is routine with many spawned enemies. The
+        // enemy has no local body of its own; build one. Live 2026-09-24: 52 host-spawned
+        // enemies, and every colliding id was left without a body for the rest of the module.
+        if (mapped == 0
+            && (IsOwnPhantomId(block, enemy.ObjectId) || MaterialisedEnemies.ToOwner(enemy.ObjectId) != 0))
         {
-            MaterialisedEnemies.TryMaterialise(enemy, now);
+            MaterialisedEnemies.TryMaterialise(enemy, now, knownCollision: true);
             return false;
         }
 
@@ -1838,6 +1830,19 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         _oneShotPrimed[slot] = false;
         _originalCaptured[slot] = false;
         _smoother.Reset(slot);
+    }
+
+    private static bool IsOwnPhantomId(SharedBlockView block, uint objectId)
+    {
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            if (block.GetPhantomId(i) == objectId)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsPlausiblePosition(Vec3 p) =>

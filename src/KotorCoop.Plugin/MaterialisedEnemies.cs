@@ -366,7 +366,10 @@ internal static unsafe class MaterialisedEnemies
     /// and latch-guarded like the phantom spawner; a failure is retried on a later pass.
     /// MAIN THREAD ONLY (VM dispatch).
     /// </summary>
-    public static void TryMaterialise(in EnemyPresenceView enemy, double now)
+    /// <param name="knownCollision">The owner id numerically equals a body this instance
+    /// spawned (a peer's phantom or another owner's stand-in). The existence sweep would find
+    /// that body and wrongly prove the enemy present, so it is skipped.</param>
+    public static void TryMaterialise(in EnemyPresenceView enemy, double now, bool knownCollision = false)
     {
         if (!Enabled || _spawnDisabled || enemy.Dead || enemy.Appearance == 0
             || RetainedBodies.ContainsOwner(enemy.ObjectId, Odyssey.GetPartyRosterObjectId))
@@ -388,7 +391,7 @@ internal static unsafe class MaterialisedEnemies
         // silence, because the log caps at five lines while the loop runs on. Zero on the host.
         for (int i = 0; i < _provenCount; i++)
         {
-            if (ProvenPresent[i] == enemy.ObjectId)
+            if (ProvenPresent[i] == enemy.ObjectId && !knownCollision)
             {
                 return;
             }
@@ -436,7 +439,7 @@ internal static unsafe class MaterialisedEnemies
         // in one session, measured. The full sweep is authoritative (it is what the phantom
         // spawner trusts) and is affordable here because it is rate-limited and only reached
         // when the cheap path has already failed.
-        if (CreatureFinder.FindByObjectId(enemy.ObjectId) != 0)
+        if (!knownCollision && CreatureFinder.FindByObjectId(enemy.ObjectId) != 0)
         {
             // REMEMBER IT. This is the line whose absence made the sweep storm; see the
             // ProvenPresent check at the top. Recording the proof is what turns "sweep for

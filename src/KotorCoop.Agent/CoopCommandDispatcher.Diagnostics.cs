@@ -238,10 +238,18 @@ public sealed partial class CoopCommandDispatcher
 
         string source = mirror ? "the owner's census" : "my own census";
 
+        // A mirror drives a host-only enemy through a stand-in with its own local id, so an
+        // owner id that has a stand-in counts as present even though it does not resolve raw.
+        IReadOnlySet<uint>? standIns = mirror ? bridge.ReadMaterialisedOwnerIds() : null;
         List<uint> unresolved = [];
+        int viaStandIn = 0;
         foreach (EnemyState enemy in census)
         {
-            if (!_kotor.TryResolveObjectHere(enemy.ObjectId, out _))
+            if (standIns is not null && standIns.Contains(enemy.ObjectId))
+            {
+                viaStandIn++;
+            }
+            else if (!_kotor.TryResolveObjectHere(enemy.ObjectId, out _))
             {
                 unresolved.Add(enemy.ObjectId);
             }
@@ -251,7 +259,7 @@ public sealed partial class CoopCommandDispatcher
         // without a mark; the previous round's answers were all cut off mid-sentence.
         Reply(
             $"census: {(mirror ? "MIRROR" : "OWNER")} {census.Count} id(s) '{module}': "
-            + $"{census.Count - unresolved.Count} resolve here, {unresolved.Count} do not");
+            + $"{census.Count - unresolved.Count} present ({viaStandIn} via stand-ins), {unresolved.Count} not");
 
         if (unresolved.Count > 0)
         {
