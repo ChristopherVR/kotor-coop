@@ -68,6 +68,23 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     /// <summary>Scratch for the attacker set: the PC plus the party roster.</summary>
     private readonly uint[] _attackers = new uint[PartyNpcSlots + 1];
 
+    /// <summary>THREAT_RETARGET's own copy of <see cref="_attackers"/> — same shape, built the
+    /// same way (<see cref="BuildLocalPartyIds"/>), but published to a separate watch (see
+    /// <see cref="RefreshThreatAttackers"/>'s own remarks on why: the two are refreshed under
+    /// opposite gates, so a shared array could be read by the damage hook half-built for
+    /// whichever purpose is not this instance's role today).</summary>
+    private readonly uint[] _threatAttackers = new uint[PartyNpcSlots + 1];
+
+    /// <summary>Scratch for draining <see cref="PhantomHitHook.DrainHostThreat"/> each pass.</summary>
+    private readonly uint[] _hostThreatCreatureScratch = new uint[PhantomHitHook.HostThreatCapacity];
+    private readonly uint[] _hostThreatAttackerScratch = new uint[PhantomHitHook.HostThreatCapacity];
+    private readonly uint[] _hostThreatAmountScratch = new uint[PhantomHitHook.HostThreatCapacity];
+
+    /// <summary>Scratch for <see cref="ThreatTable.CopyCreatureIds"/> each pass — sized like
+    /// the owed ledger itself, the same bound every other per-pass creature scratch in this
+    /// file uses.</summary>
+    private readonly uint[] _threatTrackedCreatures = new uint[SharedBlock.DamageLedgerCapacity];
+
     private int _countdown;
     private int _logged;
 
@@ -188,6 +205,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         _countdown = IntervalFrames;
 
         RefreshAttackers();
+        RefreshThreatAttackers();
         PublishDealt();
         ApplyOwed();
     }
@@ -199,8 +217,6 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     /// </summary>
     private void RefreshAttackers()
     {
-        int count = 0;
-
         // An empty set makes the hook's dealt path a single comparison and stop, which is
         // how the fight's OWNER opts out: its own damage is already authoritative, nobody
         // will ever read its ledger, and this sits inside every damage event in the game.
@@ -216,16 +232,52 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             return;
         }
 
-        uint player = Odyssey.GetPlayerObjectId();
-        if (player != 0)
+        int count = BuildLocalPartyIds(_attackers);
+        PhantomHitHook.WatchAttackers(_attackers.AsSpan(0, count));
+    }
+
+    /// <summary>
+    /// THREAT_RETARGET's own version of <see cref="RefreshAttackers"/> — tells the hook whose
+    /// damage feeds <c>ThreatTable</c> (docs/research/peer-damage-ledger.md §9). Same PC+party
+    /// id set, built by the same <see cref="BuildLocalPartyIds"/>, but gated the OPPOSITE way:
+    /// <see cref="RefreshAttackers"/> only builds its set on a MIRRORING instance
+    /// (<c>block.DamageDealtEnabled</c>) — the side that needs to forward damage because it
+    /// does not own the fight. This is entirely a host-side channel (§9.5 step 1): only an
+    /// instance that owns its own fights (<c>DamageDealtEnabled</c> false) ever needs
+    /// <c>ThreatTable</c> to know what ITS OWN party just dealt — a mirroring instance's local
+    /// view of an enemy is a display copy, not the live fight, so its own hits on that copy
+    /// would tell <c>ThreatTable</c> nothing true.
+    /// </summary>
+    private void RefreshThreatAttackers()
+    {
+        if (!Odyssey.ThreatRetargetEnabled || block.DamageDealtEnabled || SoloSegmentSpectateController.IsSpectating)
         {
-            _attackers[count++] = player;
+            PhantomHitHook.WatchThreatAttackers([]);
+            return;
+        }
+
+        int count = BuildLocalPartyIds(_threatAttackers);
+        PhantomHitHook.WatchThreatAttackers(_threatAttackers.AsSpan(0, count));
+    }
+
+    /// <summary>The PC plus every party-roster id that currently resolves to a live object,
+    /// written into <paramref name="destination"/> — the shared body behind both
+    /// <see cref="RefreshAttackers"/> and <see cref="RefreshThreatAttackers"/>. Returns how
+    /// many ids were written.</summary>
+    private static int BuildLocalPartyIds(Span<uint> destination)
+    {
+        int count = 0;
+
+        uint player = Odyssey.GetPlayerObjectId();
+        if (player != 0 && count < destination.Length)
+        {
+            destination[count++] = player;
         }
 
         nint serverInternal = ServerInternal();
         if (serverInternal != 0)
         {
-            for (int slot = 0; slot < PartyNpcSlots; slot++)
+            for (int slot = 0; slot < PartyNpcSlots && count < destination.Length; slot++)
             {
                 uint id = *(uint*)(serverInternal + PartyTableOffset + PartyObjectIds + (slot * 4));
                 if (id is 0 or Odyssey.ObjectInvalid || id == player)
@@ -238,12 +290,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 // one could collide with a creature that now holds that number.
                 if (Odyssey.ResolveServerObject(id) != 0)
                 {
-                    _attackers[count++] = id;
+                    destination[count++] = id;
                 }
             }
         }
 
-        PhantomHitHook.WatchAttackers(_attackers.AsSpan(0, count));
+        return count;
     }
 
     private static nint ServerInternal()
@@ -312,15 +364,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             }
         }
 
-        if (count == 0)
-        {
-            return;
-        }
-
         // Not while a conversation owns the screen. The dialogue system wipes every
         // hostile's action queue each tick in the talking instance, so a death landing now
         // would run its scripts into a scene that is mid-flight; the enemy channel freezes
-        // for the same reason and the debt is still owed on the next pass.
+        // for the same reason and the debt is still owed on the next pass — and a stale
+        // retarget order would run into the exact same frozen queue, so THREAT_RETARGET's own
+        // re-assert pass below is gated on this too, not only the owed-damage apply loop.
         if (Odyssey.IsConversationActive)
         {
             return;
@@ -430,8 +479,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
                 if (Odyssey.ThreatRetargetEnabled && threatAttackerId != 0)
                 {
-                    threatDebugRows = EvaluateThreat(
-                        objectId, creature, threatAttackerId, amount, threatNowSeconds, threatDebugRows);
+                    // Banking only here — the decision itself (and any resulting order) moved
+                    // to ReassertThreat below, which runs every pass regardless of whether a
+                    // peer's damage landed THIS pass, so a stale engine flip gets corrected on
+                    // schedule rather than only when the peer's next hit happens to trigger a
+                    // look (docs/research/peer-damage-ledger.md §9, stage 2).
+                    BankThreat(objectId, creature, threatAttackerId, amount, threatNowSeconds);
                 }
             }
             else if (_logged < 20)
@@ -439,6 +492,11 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 _logged++;
                 PluginHost.Log($"combat: peer damage refused for 0x{objectId:X} (failure {failure})");
             }
+        }
+
+        if (Odyssey.ThreatRetargetEnabled)
+        {
+            threatDebugRows = ReassertThreat(threatNowSeconds, threatDebugRows);
         }
 
         // Sticky: a pass with no owed damage leaves the last populated table in place rather
@@ -452,35 +510,98 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     }
 
     /// <summary>
+    /// THREAT_RETARGET stage 1 (docs/research/peer-damage-ledger.md §9): banks
+    /// <paramref name="amount"/> of threat for <paramref name="attackerId"/> against
+    /// <paramref name="creatureId"/> — the shared banking step both the owed-damage loop (a
+    /// peer's forwarded hit) and <see cref="ReassertThreat"/> (the HOST's own drained hit) call
+    /// into, so a plot/story actor is exempted from the table exactly once rather than twice.
+    /// Never a plot/story actor — the same exemption CombatController's own census-driven
+    /// mirror already grants a cutscene actor (EnemyView.Plot). Checked before anything is even
+    /// recorded, not just before the retarget itself, so a plot creature's row never exists for
+    /// blockpoke to read either.
+    /// </summary>
+    private void BankThreat(uint creatureId, nint creature, uint attackerId, int amount, double nowSeconds)
+    {
+        if (attackerId == 0 || amount <= 0 || Odyssey.IsPlot(creature))
+        {
+            return;
+        }
+
+        _threat.AddThreat(creatureId, attackerId, amount, nowSeconds);
+    }
+
+    /// <summary>
+    /// THREAT_RETARGET stage 2 (docs/research/peer-damage-ledger.md §9): drains the HOST's own
+    /// PC/party damage (<see cref="PhantomHitHook.DrainHostThreat"/>) into <see cref="_threat"/>
+    /// via <see cref="BankThreat"/>, then re-evaluates EVERY creature the table currently
+    /// tracks — not only the ones a peer's forwarded damage happened to touch this exact pass.
+    /// §11 of the same doc measured live that the engine's own AI pulls an already-engaged
+    /// creature back to the host on the host's OWN next landed hit, independent of anything
+    /// this channel does; running the decision every pass (bounded, as ever, by the 4s cooldown
+    /// and the fixed margin/floor) is what turns "the order eventually catches up once the peer
+    /// lands another hit" into "the order catches up on the very next pass the cooldown allows",
+    /// whether or not a peer hit landed that pass. Returns the debug-row count after every
+    /// evaluated creature's own row (see <see cref="EvaluateThreat"/>).
+    /// </summary>
+    private int ReassertThreat(double nowSeconds, int debugRows)
+    {
+        int drained = PhantomHitHook.DrainHostThreat(
+            _hostThreatCreatureScratch, _hostThreatAttackerScratch, _hostThreatAmountScratch);
+
+        for (int i = 0; i < drained; i++)
+        {
+            uint creatureId = _hostThreatCreatureScratch[i];
+            nint creature = Odyssey.ResolveServerObject(creatureId);
+            if (creature == 0)
+            {
+                continue; // gone since the hit landed; nothing left to bank it against
+            }
+
+            BankThreat(creatureId, creature, _hostThreatAttackerScratch[i], (int)_hostThreatAmountScratch[i], nowSeconds);
+        }
+
+        int tracked = _threat.CopyCreatureIds(_threatTrackedCreatures);
+        for (int i = 0; i < tracked; i++)
+        {
+            uint creatureId = _threatTrackedCreatures[i];
+            nint creature = Odyssey.ResolveServerObject(creatureId);
+            if (creature == 0)
+            {
+                continue; // its fight ended since the row was banked; PruneDecayed retires the row in its own time
+            }
+
+            debugRows = EvaluateThreat(creatureId, creature, nowSeconds, debugRows);
+        }
+
+        return debugRows;
+    }
+
+    /// <summary>
     /// THREAT_RETARGET (coop.ini <c>threat_retarget</c>, docs/research/peer-damage-ledger.md
-    /// §9): banks this pass's applied peer damage as threat against <paramref name="creatureId"/>,
-    /// and — if its current attack target clearly no longer deserves it — orders the retarget
-    /// directly through <see cref="Odyssey.AttackTarget"/> rather than relying on the engine's
-    /// own passive <c>+0x158</c>/<c>+0x160</c> write, which §8.10 measured live reaches no
-    /// native retargeting logic for an already-engaged creature.
+    /// §9): if <paramref name="creatureId"/>'s current attack target clearly no longer
+    /// deserves it, orders the retarget directly through <see cref="Odyssey.AttackTarget"/>
+    /// rather than relying on the engine's own passive <c>+0x158</c>/<c>+0x160</c> write, which
+    /// §8.10 measured live reaches no native retargeting logic for an already-engaged creature.
+    /// Pure evaluation — banking already happened (<see cref="BankThreat"/>, called by both of
+    /// this method's callers before it ever reaches here).
     ///
     /// Publishes one diagnostic row for <c>blockpoke.ps1 threat</c> whenever a top attacker is
     /// known, regardless of the decision — up to <see cref="SharedBlock.ThreatDebugCapacity"/>
     /// rows per pass. Returns the row count after this creature's own row (unchanged if this
     /// creature was skipped or the table was already full).
     /// </summary>
-    private int EvaluateThreat(
-        uint creatureId, nint creature, uint attackerId, int amount, double nowSeconds, int debugRows)
+    private int EvaluateThreat(uint creatureId, nint creature, double nowSeconds, int debugRows)
     {
-        // Never a plot/story actor — the same exemption CombatController's own census-driven
-        // mirror already grants a cutscene actor (EnemyView.Plot). Checked before anything is
-        // even recorded, not just before the retarget itself, so a plot creature's row never
-        // exists for blockpoke to read either.
+        // Never a plot/story actor — see BankThreat's own remarks; checked here too since a
+        // creature can be marked plot after its row was already banked under an earlier pass.
         if (Odyssey.IsPlot(creature))
         {
             return debugRows;
         }
 
-        _threat.AddThreat(creatureId, attackerId, amount, nowSeconds);
-
         // Never retarget a creature that is not hostile/in combat: 0 (no round pointer, or the
         // round has no live target) is exactly what ThreatRetargetRule.Decide reads as
-        // NotInCombat below — this call always runs (never gated on it) so the diagnostic row
+        // NotInCombat below — this read always runs (never gated on it) so the diagnostic row
         // still shows an idle creature's tracked threat.
         uint currentTargetId = Odyssey.GetCurrentAttackTargetId(creature);
 

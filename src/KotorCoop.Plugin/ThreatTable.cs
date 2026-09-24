@@ -48,6 +48,32 @@ internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWind
     /// <summary>How many creatures currently hold a row — for tests and the live dump.</summary>
     public int CreatureCount => _byCreature.Count;
 
+    /// <summary>
+    /// Copies every creature id currently holding at least one row into <paramref
+    /// name="destination"/>, stopping at its length, and returns how many were copied. Lets a
+    /// caller re-evaluate every tracked creature on a pass — not only the ones a fresh hit
+    /// happened to touch that same pass — which is what turns a retarget order into something
+    /// that re-asserts itself promptly once the engine's own AI flips a creature back, rather
+    /// than waiting for the next peer hit to notice (docs/research/peer-damage-ledger.md §9,
+    /// stage 2 of the sticky-aggro plan; see <c>PeerDamageController.ReassertThreat</c>). No
+    /// allocation: <c>Dictionary&lt;TKey,TValue&gt;.KeyCollection</c>'s enumerator is a struct.
+    /// </summary>
+    public int CopyCreatureIds(Span<uint> destination)
+    {
+        int count = 0;
+        foreach (uint creatureId in _byCreature.Keys)
+        {
+            if (count >= destination.Length)
+            {
+                break;
+            }
+
+            destination[count++] = creatureId;
+        }
+
+        return count;
+    }
+
     /// <summary>Banks <paramref name="amount"/> of threat for <paramref name="attackerId"/>
     /// against <paramref name="creatureId"/>, decaying whatever was already there first. A
     /// zero id or non-positive amount is ignored rather than creating a dead row. Also the

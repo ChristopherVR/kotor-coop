@@ -1255,3 +1255,174 @@ So the three cases are now all measured: the client attacks first → the engine
 and this channel's re-issued order splits the fight (§11.1); the host disengages → the engine's
 own AI moves to the client and stays there without help. `threat_retarget` only ever acts in the
 middle case, which is exactly the case it was built for.
+
+## 12. 2026-09-24: sticky-aggro stages 1+2 — the host's own damage is now tracked, and the
+retarget decision runs every pass instead of only when a peer's hit happens to land
+
+§9.2 flagged the gap this section closes, in the ORIGINAL doc comment on `ThreatTable`, before
+any live round ever ran: *"The HOST's own local PC/party damage to the same creature is NOT
+recorded here … So the current target's own threat reads 0 unless it happens to also be a
+tracked peer attacker id, which in practice means the retarget decision reduces to 'does the top
+peer attacker clear the absolute minimum', not a true margin over the incumbent's own
+contribution."* §11.1's 98-second round then measured exactly that shape live: 7 retarget orders
+against `current 0x7FFFFFFF threat 0` every single time — never once a real comparison against
+what the host had actually been dealing — and the project decision (2026-09-03, cited in
+docs/limitations.md and the roadmap) named the fix as a staged plan: (1) feed host PC/companion
+hits into `ThreatTable`, (2) re-assert immediately when the engine flips away from a clear
+leader, (3) only if still not sticky, detour `CSWSCreature::CreateNewAttackActions`. This section
+covers stages 1 and 2; stage 3 was not attempted (see §12.5).
+
+### 12.1 Stage 1 — the host's own hits, fed into the same table
+
+`PhantomHitHook` already had exactly the mechanism this needed, just gated the wrong way for the
+host's own purposes. `WatchAttackers`/`_ourAttacker`/`Dealt` exist so a MIRRORING instance (a
+client, `block.DamageDealtEnabled`) can tell the hook "this is my own damage, forward it to
+whoever owns the fight" — the host never populates that set, because it applies its own damage
+through the engine natively and has nothing to forward.
+
+A second, independent watch was added alongside it, gated the OPPOSITE way:
+`WatchThreatAttackers`/`_threatAttacker` (populated only when `!block.DamageDealtEnabled` — an
+instance that owns its own fights — and `Odyssey.ThreatRetargetEnabled`), feeding a small
+per-pass drain table (`DrainHostThreat`, `HostThreatCapacity = 32` distinct (creature, attacker)
+pairs between two drains) rather than the peer-forwarding ledger. The attacker-matching logic
+common to both (creature vtable check, corpse check, "not one of our own bodies" check) was
+factored out of `IsOursToCredit` into a shared `TryMatchAttacker`, so the two channels can never
+drift apart on what counts as a valid hit.
+
+The id banked for the host's PC is `0x7FFFFFFF` — not a placeholder, the engine's own real,
+permanent self-id for whichever creature a client currently drives (see
+`NewCharacterCaptureController`'s own remarks on `Odyssey.GetPlayerObjectId`, and the "`current
+0x7FFFFFFF`" seen throughout §11's own log excerpts). This is the SAME value
+`Odyssey.GetCurrentAttackTargetId` reads back out of a creature's live round when that creature
+is fighting the host's PC, so banking damage under this id is what makes `currentTargetThreat`
+stop reading 0 for the case §9.2 called out. Party NPCs bank under their own real object ids the
+same way a peer's phantom already does.
+
+`PeerDamageController.RefreshThreatAttackers` (parallel to the existing `RefreshAttackers`,
+sharing its id-gathering loop via a new `BuildLocalPartyIds` helper) builds this set from the PC
+plus every party-roster id that currently resolves to a live object, every 10-frame pass — same
+cadence `RefreshAttackers` already uses.
+
+### 12.2 Stage 2 — re-assert every pass, not only when a peer's damage lands this exact pass
+
+Before this change, `PeerDamageController.ApplyOwed` returned immediately when
+`block.DamageOwedCount == 0`, and the only place a retarget decision was ever evaluated was
+inside the owed-damage loop, once per peer-forwarded hit that pass. That meant a stale engine
+flip (§11.1: "the host PC's next landed hit pulls the AI back … within one or two of its
+rounds") could only ever be corrected on the NEXT peer hit that happened to land — in practice
+the ~4s cooldown already bounded this to roughly the observed cadence, but nothing made it
+happen SOONER than that even once the cooldown had cleared.
+
+`EvaluateThreat` was split into two: `BankThreat` (the plot-actor exemption plus the
+`ThreatTable.AddThreat` call — unchanged logic, just extracted so both the owed loop and the new
+host-drain path can call into it once) and `EvaluateThreat` itself, now PURE decision +
+retarget-order logic with no banking of its own. A new `ReassertThreat` runs unconditionally
+every pass `threat_retarget` is on (drains `DrainHostThreat` into `BankThreat` first, then calls
+`ThreatTable.CopyCreatureIds` — a new, non-allocating method — to walk every creature the table
+currently tracks and calls `EvaluateThreat` on each), regardless of whether `block.DamageOwedCount`
+was zero that pass. The `IsConversationActive` gate still covers it (retargeting into a frozen
+dialogue-instance action queue would be as wrong as applying damage into one).
+
+Net effect: a creature the engine flips back to the host is re-evaluated on literally the next
+`ApplyOwed` pass (every 10 frames, ~0.17s) once the 4s cooldown clears, whether or not the peer
+happens to land a fresh hit in that exact window — not "eventually, once the peer's next swing
+triggers a look."
+
+### 12.3 What changes in the decision itself
+
+With the host's own damage now genuinely banked, `ThreatRetargetRule.Decide`'s margin check
+(`topAttackerThreat >= currentTargetThreat * 1.5`) stops being trivially satisfied by any peer
+hit clearing the 15-point floor (§9.2's degenerate case: `current 0x7FFFFFFF threat 0`, so
+`anything >= 0 * 1.5`) and becomes an actual comparison between two tracked contributions. A
+peer that is merely matching the host's damage (a tie, or anything under 1.5x) no longer pulls
+the creature at all — the alternation §11.1 measured (7 orders in 98s, every one against a
+`threat 0` incumbent) should not reproduce the same way against a host that is genuinely still
+fighting hard, though whether it still reproduces at some smaller rate (the host's own damage
+naturally lags a little behind its own hits landing, same 10-frame batching as everything else
+in this file) is exactly what §12.4's live recipe has to measure.
+
+### 12.4 Unit coverage
+
+`ThreatTable`/`ThreatRetargetRule` stay engine-free (no change there — `PeerDamageController`
+itself still cannot be unit tested directly, same reason `ThreatRetargetRuleTests` scans its
+source instead of calling into it, see that test's own remarks). A new
+`tests/KotorCoop.Tests/StickyAggroIntegrationTests.cs` drives the two pure pieces together —
+the exact shape `PeerDamageController`'s engine-touching code wires up — covering:
+
+- The OLD degenerate shape (untracked host damage, any peer hit above the floor retargets) next
+  to the FIXED shape (same peer hit, now refused because the host's own tracked threat does not
+  clear the margin) side by side, so the fix is pinned by contrast, not just asserted.
+- A clear peer lead still retargets.
+- An exact tie (host == peer) never retargets either way — whichever id `TryGetTopAttacker`'s
+  own tie-break lands on, the decision is never `Retarget`.
+- A leader switch the ENGINE flips back mid-cooldown is correctly refused (`OnCooldown`) and
+  then correctly re-fires on the very next pass the cooldown allows — pinning stage 2's own
+  reason to exist, without needing a peer hit to land in that exact window.
+- The former leader genuinely retaking the lead (its own fresh damage, not a bare engine flip)
+  flips the decision the other way too.
+- "Going away" (a side that stops dealing damage) is not a separate rule — it is what decay
+  already models: the other side's tracked threat alone clears the margin once enough time has
+  passed with no fresh hits from the first side.
+
+NOT unit tested, and NOT changed by this pass: the "top attacker is downed or unresolvable"
+guard in `EvaluateThreat` (`Odyssey.ResolveServerObject`/`Odyssey.IsDowned`, both real engine
+calls) still runs exactly where it always did — AFTER `Decide` already says `Retarget`, right
+before `AttackTarget` is issued — deliberately left there rather than folded into the pure rule,
+because moving it earlier would mean resolving+downed-checking the top attacker on every
+evaluated creature every pass (now larger, since `ReassertThreat` evaluates every tracked
+creature, not only ones an owed row touched) rather than only the rare pass that is actually
+about to issue an order. This guard cannot be exercised without a live creature pointer, so it
+stays a live-recipe item (§12.6 step 5), same category of thing as `IsDowned` always was.
+
+### 12.5 Stage 3 — not attempted
+
+The task that produced this section explicitly gated stage 3 (a static-RE'd detour on
+`CSWSCreature::CreateNewAttackActions 0x005B6980`) on "only if [stages 1+2 are] still not
+sticky" — an empirical question that needs a live rig to answer, which was not available while
+this pass ran (see docs/kotor-coop-parallel-sessions and the task's own rule against launching
+the game). Stage 3 was therefore NOT designed, RE'd or implemented. If §12.6's live recipe shows
+stages 1+2 still alternating (rather than genuinely sticking once the host is clearly behind),
+`CreateNewAttackActions` is the next thing to open with `tools/disasm.py`/`xrefs.py`/`q.py` —
+its single caller and never-captured prologue are exactly as the task description left them.
+
+### 12.6 Live-verification recipe (NEEDS-LIVE — nothing in §12 has been run against a live rig)
+
+Same staging §9.5/§11 already established (`tar_m10aa`, `spawncreature tar10_vulkpoo002 N`
+reachable by both players, `attack <attacker> <target>` via `tools/blockpoke.ps1` for the HOST's
+own attacks — **the joiner can only attack by real mouse click, `blockpoke.ps1`'s `attack` verb
+is host-side only**, so the client side of every step below has to be driven by an actual click
+on the target, not a scripted forward):
+
+1. `threat_retarget=1` on the HOST (default, so this only matters if a rig's `coop.ini` was
+   overridden). Confirm the startup log line as §9.5 step 1 describes.
+2. Host attacks a fresh Vulkar first (`blockpoke.ps1 attack <hostPcId> <vulkarId>`), locking
+   `round+0x9CC` onto the host's own PC (`current 0x7FFFFFFF` in a `threat` dump). Let the host
+   land 2-3 real hits (watch `combat ground-truth: local PC took N damage` is NOT what to look
+   for here — that is incoming damage; look for the host's OWN damage-dealt log lines, or simply
+   the Vulkar's `blockpoke.ps1 ledger`/health falling under the host's own attack) before the
+   client joins in.
+3. **New check, not in §9.5**: `blockpoke.ps1 threat` on the host should now show a row for the
+   Vulkar with `currentTarget 0x7FFFFFFF` and a NON-ZERO threat value under that id — the direct
+   confirmation that stage 1 is banking the host's own damage (§9.5's original recipe never
+   checked this, because the mechanism did not exist yet).
+4. Client attacks the SAME Vulkar by a real mouse click and keeps swinging. Watch
+   `blockpoke.ps1 threat` on the host every 1-2s: does the peer's tracked threat have to clear a
+   real 1.5x margin over the host's own (nonzero) threat before `threat: … retargeted …` fires —
+   i.e. is there now a visible delay/requirement compared to §11.1's immediate-any-hit firing?
+5. Once retargeted, have the HOST land another real hit on the Vulkar (not scripted — through
+   actual gameplay, so the engine's own AI has a genuine reason to reconsider) and watch whether
+   the order re-fires sooner than the old ~4s-alternation cadence, or whether it now holds
+   because the host's own margin no longer clears 1.5x over the peer's (now larger) threat. This
+   is the core question §12.3 could not answer without a live rig.
+6. Cooldown-clear timing: with the client still swinging and the host genuinely disengaged
+   (moved away, `tp` on a solo test rig), confirm the order re-fires on the very first pass after
+   a stale flip clears the 4s cooldown — sample `threat` twice, 4-5s apart, immediately after an
+   engine flip back to the host with no NEW client hit landing in between (§12.2's stage-2 claim).
+7. Down/away: down the top attacker (client) mid-fight (e.g. `applyeffect damage <clientPcId>
+   9999` or a scripted knockdown) at the moment its threat would otherwise win, and confirm NO
+   retarget line fires while it is down — the unmoved guard §12.4 describes.
+8. No-regression: `threat_retarget=0` — confirm zero `threat:` lines and unchanged
+   `ledger`/`combat: applied …` behaviour, same closing check §9.5/§10.4 already established.
+
+If step 5 shows the order still flapping (the host's own margin never sustains a hold because
+its damage keeps pace with the peer's), that is the signal for §12.5's stage 3.
