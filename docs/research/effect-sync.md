@@ -2099,3 +2099,83 @@ directly):
    each `cast` call — specifically check whether a node of type 0x3F (`CheckMoveToFollowRadius`)
    is already present *before* the call, since that alone silently no-ops the request per the
    `GetNodeById` bail above.
+
+### 14.9 Follow-up (2026-09-25): the live "in combat but not attacking" control disproves the
+simple version of §14.8, and points at `StartCombatRound` instead
+
+The main session ran §14.8's recipe. Result 1 (out of combat) reproduced. Result 2 is the important
+one: with a kath hound actively hitting the PC (hp 140→105, `IN COMBAT, engaged`), `cast cure me`
+**still** failed — one node, then empty within 3 s, FP unchanged — and the PC's queue never grew a
+0x3E node. That rules out the reading of §14.8 that merely being *in combat* is enough; `AIActionCombat`
+(node type 0x3E) is not driven by being attacked, only by the caster itself having an active attack/
+combat-round action of its own.
+
+**Correction to §14.8's request/promote table.** Re-deriving `CSWSCreature::AddCastSpellActions`'s
+gating argument by hand across three heavily-interleaved 18-push call sites is error-prone, and the
+live payload evidence contradicts one of the three rows in that table. The queue captured live
+(`0xf 0x1 0x1 ... 0xa 0x0 0x0 0x0 0x0 0x7fffffff ...`) is byte-for-byte the shape of the node
+`AddCastSpellActions` builds at **0x004F9A6E–0x004F9A72** (`push edi; push 0xF; call
+CSWSObject::AddAction`) — which sits inside the `bPromote != 0` branch (0x0052F9572+), not the
+`bPromote == 0` "stash" branch (0x4F9475-0x4F956F) §14.8 assumed our VM call takes. So our `cast`
+verb's route through `ExecuteCommandCastSpell`/routine 501 *does* reach real per-target validation,
+not just a fire-and-forget stash — the earlier arg18=0 reading for the two `ExecuteCommandCastSpell`
+call sites (0x0052F0EA, 0x0052F26D) should be treated as unreliable, superseded by this live evidence,
+pending a redo with a disassembler that resolves stack offsets automatically instead of by hand.
+
+**What is now VERIFIED(static): a *separate*, round-scoped queue inside `CSWSCombatRound`, keyed off
+a single readiness flag.** `CSWSCombatRound` (class id 597, size 0x9D8, the struct at
+`creature+0x9C8`) owns its own linked list of round actions at `+0x9B0` (`CExoLinkedList
+<CSWSCombatRoundAction>*`), completely separate from `CSWSObject`'s action queue at `+0xFC`:
+
+- `CSWSCombatRound::AddSWSpellAction` (0x004D39B0, called from `AddCastSpellActions`'s `bPromote==0`
+  branch on `[this+0x9C8]`) allocates an 0x88-byte node, tags it `type=9` at node+0x10, fills it from
+  the caller's spell/target/metamagic args, and appends it via `CSWSCombatRound::AddAction`
+  (0x004D3660). `AddSWItemSpellAction` (0x004D3A90) is the item-triggered sibling.
+- `CSWSCombatRound::GetActionPending`/`GetSpellActionPending` (0x004D3580 / 0x004D35C0) scan that
+  list and report whether any queued round-action's start time has arrived (`combatround.timer >=
+  node[0]`).
+- `CSWSCreature::AIActionWaitForEndOfRound` (0x00513F60, the RunActions type-0x0F handler — fully
+  disassembled, does **not** read the rich payload of the node it's attached to at all) returns
+  "complete" only when **`[combatround+0x934] == 1` AND `GetSpellActionPending() == 0`**, "in
+  progress" otherwise. So a 0x0F node just polls two conditions; it never itself promotes anything.
+- `[combatround+0x934]` — the flag `AIActionWaitForEndOfRound` is gated on — is set to `1` in exactly
+  one place: `CSWSCombatRound::StartCombatRound` (0x004D5F70). Its 7 call sites are all inside the
+  cast/attack *execution* handlers themselves: 0x0050F73F (inside `AIActionItemCastSpell`),
+  0x00514E01/0x00514F12/0x00514FC8 (inside `AIActionCastSpell`, the RunActions type-0x0E handler —
+  confirmed via the jump table at 0x005801E4, slot 14 → 0x0057F80C → `call 0x514AF0`), and
+  0x005BC537/0x005BC56D/0x005BC59E (near `AIActionCombat`'s attack-resolution code). In other words:
+  **the only code that ever flips the round-ready flag is code that only runs once a cast or attack
+  action is *already executing*** — a chicken-and-egg the retail engine presumably resolves by the
+  player's attack (not the heal) being what starts the round in the first place.
+- A second consumer, `CSWSCreature::ProcessPendingCombatActions` (0x004F7530), also drains the
+  `CSWSCombatRound` action list, but **only** for node types 6 and 7 (equip/unequip — matches
+  `AddEquipAction`/`AddUnequipAction` in the same class) — it is not a generic promoter and does not
+  touch type 9 (spell).
+- `AIActionCombat` (0x005B6210, RunActions type 0x3E — confirmed sole `bPromote=1` caller, xrefs
+  checked) is only reachable when the *caster itself* has a 0x3E node in its own `CSWSObject` queue,
+  which is what result 2 above shows never happens for a PC that is being hit but not attacking.
+
+**Net effect:** every mechanism we've found that could turn a stashed/queued cast into FP-spend +
+heal is gated on the caster's own `CSWSCombatRound.timer_ready` flag (`+0x934`) or on a 0x3E node the
+caster only gets by itself attacking. Neither is satisfied by `cast cure me` alone, in or out of
+combat, matching both live results exactly. We have **not** conclusively traced the single remaining
+step — how a real player's Force-power click, with no melee attack involved, gets `+0x934` set to 1
+in retail — within this pass's budget; the two functions most likely to hold that answer
+(`CSWSObject::AddAction` at 0x004CEA20 and its sibling `CSWSObject::AddActionToFront`-style helper at
+0x004CCB00, both called with the 0xF/0x11/0x12/0x13/0x31 node types from `AddCastSpellActions`'s
+`bPromote!=0` branch) were not fully disassembled this pass.
+
+**No code change again** — the mechanism is not yet closed enough to write a
+verify-bytes-or-refuse call with confidence, and `StartCombatRound`/`AddAction`/`AddActionToFront`
+are exactly the class of raw engine nudge `docs/kotor-coop-engine-write-rules.md` warns against
+taking on partial understanding.
+
+**Best next live experiment (cheap, no code change):** have the PC issue a real melee/ranged
+**attack** against the hostile first (not just stand near it while it swings) — an actual attack
+action is the one thing confirmed to call `StartCombatRound` and set `+0x934=1` — then, while that
+attack sequence is still active, run `cast cure me`. If the heal now lands, `+0x934` readiness was
+the missing ingredient and the fix becomes "make sure the caster's own combat round is started
+before queuing the cast" (e.g. via a verified `AIActionAttack`/`AttackObject` call, not a raw flag
+poke) rather than anything in the VM dispatch itself. If it *still* fails, the promotion path is
+something else entirely (most likely inside `AddAction`/`AddActionToFront`/0x4CCB00, per the open
+question above) and that pair of functions should be the next static target.
