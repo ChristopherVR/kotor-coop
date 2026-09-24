@@ -113,8 +113,12 @@ public static class SaveDigest
 
             // A save retains previously visited modules. Only the active module's counters
             // and IDs describe this world; archive ordering can point at an old tutorial.
-            if (!SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource moduleSav)
-                || !outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
+            if (!SavedModuleSelection.TrySelect(saveDirectory, outer, out ArchiveResource moduleSav))
+            {
+                return TryComputeUnvisitedModuleIdentity(saveDirectory, savegame, outer, out digest);
+            }
+
+            if (!outer.TryRead(moduleSav.Resref, moduleSav.Extension, out byte[] inner))
             {
                 return false;
             }
@@ -160,6 +164,45 @@ public static class SaveDigest
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// The identity of a save whose active module was never visited: the engine's own
+    /// transition autosave, made the moment a party first enters a module, names that module
+    /// as LASTMODULE but stores no state for it (live 2026-09-25: `000001 - AUTOSAVE` into
+    /// danm14aa held danm13's .sav and no danm14aa one). The engine loads the pristine module
+    /// then, so its ids come from the module file. The digest mixes that pristine GIT with
+    /// the exact SAVEGAME.sav bytes. Adoption writes the host's file verbatim, so the same
+    /// save matches, and any other save that enters the same module differs.
+    /// </summary>
+    private static bool TryComputeUnvisitedModuleIdentity(
+        string saveDirectory, string savegame, ErfArchive outer, out uint digest)
+    {
+        digest = 0;
+        if (!PluginMenuLoader.TryReadSaveLastModuleName(saveDirectory, out string lastModule)
+            || string.IsNullOrEmpty(lastModule)
+            || outer.Resources.Any(resource => resource.Resref.Equals(lastModule, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false; // unreadable, or the module IS stored and selection refused it for a reason
+        }
+
+        string? savesDirectory = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(saveDirectory));
+        string? gameDirectory = savesDirectory is null ? null : Path.GetDirectoryName(savesDirectory);
+        if (gameDirectory is null
+            || !TryComputePristineModuleGit(gameDirectory, lastModule, out uint pristine))
+        {
+            return false;
+        }
+
+        uint h = FnvString(FnvOffset, "unvisited:" + lastModule.ToLowerInvariant());
+        h = FnvUInt(h, pristine);
+        foreach (byte b in File.ReadAllBytes(savegame))
+        {
+            h = (h ^ b) * FnvPrime;
+        }
+
+        digest = h == 0 ? 1u : h;
+        return true;
     }
 
     /// <summary>

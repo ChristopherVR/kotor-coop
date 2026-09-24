@@ -1886,3 +1886,19 @@ shipped recruit scripts (`PartyRosterTemplateTable`), the stale-mirrored-body re
 live. Still open: the seven never-exercised slots, one per planet (Bastila tar_m03aa, T3
 tar_m02ab, Mission tar_m04aa, Canderous tar_m02aa, Juhani danm13, HK-47 tat_m17ac, Jolee
 kas_m24aa) — a live target, not a reason to ship OFF.
+
+## Live recruitment sweep (2026-09-25)
+
+On `000010 - campaign_dantooine`, the host ran `recruit <slot>` for slots 6, 0, 1, 3, 4, 5 and
+7, calling `removeparty <slot>` after each. That is the engine's own `AddAvailableNPCByTemplate`
++ `AddPartyMember`, the same calls every recruit script makes. The joiner's roster channel
+added each one (`spawned NPC slot N as 0x.. to add them here` / `added NPC slot N`). A party of
+T3 + HK-47 then crossed `warp danm14aa` on both sides with both games responsive.
+
+**Bug found and fixed.** In the first sweep, slots 1 and 4 failed on the joiner with
+`reusing its own already-placed body 0x107 (GIT-identical ...)` followed by
+`could not add NPC slot 1 (failure 9)`. The host's freshly spawned Canderous was 0x107, which
+was the id of the body the joiner had spawned for Bastila a moment earlier (Jolee met HK-47's
+id the same way). Bodies spawned after load are not GIT-identical across instances. The reuse
+check now refuses any body this instance's party table already names for a different slot, so
+the joiner spawns its own body instead. The re-run added all seven.

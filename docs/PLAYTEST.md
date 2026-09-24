@@ -29,7 +29,7 @@ log; "the joiner's log" means the joining player's copy.
 | --- | --- | --- | --- |
 | 8 | Put on the **Sith uniform** (or any disguise) as one player. | The other player sees that stand-in change appearance and change back when it comes off. | Other player's log: `identity: phantom slot N ... now renders appearance R`. |
 | 9 | Enter the **Taris duel ring** and fight as one player while the other watches from the same area. | Note whether the partner's stand-in wanders into the ring and gets targeted. | Any enemy attacking the stand-in. Not handled yet, so this tells us how bad it is. |
-| 10 | Recruit **Mission**, **Zaalbar** and **Bastila** in turn with the other player present. | Each new companion appears for both players without leaving and rejoining. | Whether the joiner's roster shows each. Two of nine are confirmed. |
+| 10 | Recruit **Mission**, **Zaalbar** and **Bastila** in turn with the other player present. | Each new companion appears for both players without leaving and rejoining. | Whether the joiner's roster shows each. All nine slots are proven on the rig through the engine's own recruit calls; this row checks the real conversations. |
 
 ## Ebon Hawk and Dantooine
 

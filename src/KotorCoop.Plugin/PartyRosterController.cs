@@ -527,7 +527,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 : 0;
 
             if (PartyRosterBodyReuseRule.ShouldReuse(
-                    hostBodyId, gitPlacedBody != 0, IsOurOwnSpawnedBody(hostBodyId))
+                    hostBodyId, gitPlacedBody != 0, IsOurOwnSpawnedBody(hostBodyId, addSlot))
                 && Odyssey.AddAvailableNpcByTemplate(addSlot))
             {
                 // ⚠ The slot is recruited through the engine's own AddNPC even though the body is
@@ -747,7 +747,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         }
 
         bool foundLocally = CreatureFinder.FindByObjectId(hostBodyId) != 0;
-        if (!PartyRosterBodyReuseRule.ShouldReuse(hostBodyId, foundLocally, IsOurOwnSpawnedBody(hostBodyId)))
+        if (!PartyRosterBodyReuseRule.ShouldReuse(hostBodyId, foundLocally, IsOurOwnSpawnedBody(hostBodyId, slot)))
         {
             return false;
         }
@@ -756,11 +756,25 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         return true;
     }
 
-    private bool IsOurOwnSpawnedBody(uint objectId)
+    private bool IsOurOwnSpawnedBody(uint objectId, int forSlot)
     {
         if (!PartyRosterBodyReuseRule.IsWorthLookingUp(objectId))
         {
             return false;
+        }
+
+        // A body this instance already holds for a DIFFERENT companion. Ids of bodies spawned
+        // after load are not GIT-identical across instances: live 2026-09-25 the host's new
+        // Canderous was 0x107, the id the joiner had just spawned its own Bastila under, and
+        // the joiner "reused" Bastila for slot 1 (AddMember failure 9; Jolee hit HK-47's id the
+        // same way). SpawnAvailableNpc records every body in the party table, so the table
+        // names each one we made.
+        for (int slot = 0; slot < SharedBlock.PartyRosterSlots; slot++)
+        {
+            if (slot != forSlot && Odyssey.GetPartyRosterObjectId(slot) == objectId)
+            {
+                return true;
+            }
         }
 
         if (MaterialisedEnemies.ToOwner(objectId) != 0)

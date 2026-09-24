@@ -2389,3 +2389,19 @@ Aligned world, then the joiner ran `disconnect` (its pre-disconnect quicksave la
 `reconnect` without loading. The joiner logged `save identity differs after a save on one side,
 with no load since the two last agreed - same world, not rejoining`; no `W_SAVE`, shared channels
 stayed on.
+
+## Autosave into a never-visited module (2026-09-25)
+
+The engine's transition autosave is written as the party first enters a module. It names that
+module as LASTMODULE but stores no `.sav` for it, because the module has no state yet and the
+engine loads the pristine file. `SaveDigest.TryComputeSaveIdentity` returned false for such a
+save. The rig hit this after a `warp danm14aa` from the Enclave, which surfaced as the failing
+`ARealSaveDigestsWhenOneExists`. The consequences were world adoption refusing with
+"the staged world could not be fingerprinted" and the return-snapshot path serving nothing.
+
+The identity now falls back to `TryComputeUnvisitedModuleIdentity`: FNV over
+`unvisited:<module>`, the pristine module GIT digest, and the exact `SAVEGAME.sav` bytes.
+Adoption writes the host's files verbatim, so the same save still matches. A different save
+that enters the same module differs in its bytes, so the fallback cannot false-match. The
+fallback applies only when LASTMODULE is readable and the archive holds no member of that name;
+a stored-but-refused module still fails closed.
