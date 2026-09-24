@@ -88,6 +88,15 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
     private int _reconciledThisEpoch;
     private bool _mismatchLogged;
     private int _lastHealthPercent = EnemyScalingRule.Vanilla;
+
+    /// <summary>When the current world came up. See <see cref="UnresolvedImportGraceMs"/>.</summary>
+    private long _worldUpAtMs;
+
+    /// <summary>How long an Imported world waits for a session to resolve the percent before a
+    /// zero (unresolved) word is taken as solo play's vanilla. Live 2026-09-24: a joiner's
+    /// HostReload imported the host's 150% baselines while its agent was still reconnecting,
+    /// reconciled them to 100% (the zero word), and back to 150% 1.5 s later.</summary>
+    private const long UnresolvedImportGraceMs = 10_000;
     private int _lastDamagePercent = EnemyScalingRule.Vanilla;
 
     private uint _worldGeneration;
@@ -151,6 +160,7 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
         _scaled.Clear();
         _importGate.Reset(_worldGeneration);
         _mode = EnemyScalingHealthMode.Pending;
+        _worldUpAtMs = Environment.TickCount64;
         _exportGeneration = 1;
         _exportPageIndex = 0;
         _exportDirty = true;
@@ -246,8 +256,12 @@ internal sealed unsafe class EnemyScalingController(SharedBlockView block)
 
         // Pending/Refused worlds write nothing. A vanilla percent still scans an Imported world,
         // because a saved scaled creature must come back to its original maximum.
+        bool unresolvedImport = _mode == EnemyScalingHealthMode.Imported
+            && (word & 0xFFFF) == 0
+            && Environment.TickCount64 - _worldUpAtMs < UnresolvedImportGraceMs;
         if (_mode is EnemyScalingHealthMode.Fresh or EnemyScalingHealthMode.Imported
             && (healthPercent != EnemyScalingRule.Vanilla || _mode == EnemyScalingHealthMode.Imported)
+            && !unresolvedImport
             && _scanCountdown-- <= 0)
         {
             _scanCountdown = ScanIntervalFrames;
