@@ -934,3 +934,119 @@ while standing on the mine) and read the new `[actor gate: …]` suffix in the r
   points back at how this instance's controlled creature was claimed/possessed (`ClaimCreature`,
   `party-reconciliation.md`), since a live/controlled PC should never carry a non-creature type
   byte.
+
+### 14.11 Root cause found: Demolitions is trained-only, and `AddMineActions` checks it before
+the action is ever queued (2026-09-25)
+
+**Live result.** Joiner standing on its own freshly placed mine (`placemine`-built, serial #1,
+local `0x14E`), `placedmineaction recover 1`: the §14.10 suffix read
+`[actor gate: commandable=1, type=5(expect 5), tick=0, commandableLockOwned=False]`. The mine was
+still mapped 15 s later. Polling the joiner's own `CSWSObject+0xFC` action list (the shared
+`CSWSObject::AddAction`/`RunActions` queue) every second for 5 s right after the request showed it
+stayed **empty the whole time** — `CSWSObject::AddAction 0x004CEA20` was never called at all. That
+rules out `RunActions`' `[actor+8]==5` gate (§14.10) as the cause here (the action never reached
+the queue for RunActions to look at), and narrows the search to `AddMineActions 0x004F9DA0`'s own
+four gates, or the message never reaching `UseSkill` in the first place. `tick=0` is also fully
+consistent — the two-phase counter only exists on a queued action, so an empty queue reads `0` by
+construction, not because the first tick was skipped.
+
+**Static resolution: `skills.2da` + `CSWSCreatureStats::GetCanUseSkill 0x005AF880`.**
+`tools/kotorfiles.py 2da skills.2da` (read from the installed GOG game data, no process run) gives:
+
+| row | label | `Untrained` | `sol_class` (Soldier) |
+| --- | --- | --- | --- |
+| 0 | ComputerUse | 1 | 0 |
+| **1** | **Demolitions** | **0** | **1** |
+| 2 | Stealth | 0 | 0 |
+| 3 | Awareness | 1 | 1 |
+| 4 | Persuade | 1 | 0 |
+| 5 | Repair | 1 | 0 |
+| 6 | Security | 0 | 0 |
+| 7 | TreatInjury | 1 | 1 |
+
+Demolitions, Stealth and Security are the three skills with `Untrained=0` — matching KOTOR's own
+in-game skill descriptions ("may not be used untrained"). The `Untrained` column's in-memory
+destination was found directly: the string literal `"Untrained"` (VA `0x00748A10`) has exactly one
+xref, at `0x00550762`, inside the ruleset loader. Reading that function (`0x00550700`-`0x005507B6`)
+shows the write, unambiguously:
+
+```
+0x005507A6  lea edx,[ecx+ecx]        ; edx = UntrainedValue * 2   (0 or 2)
+0x005507A9  mov ecx,[eax+0x1c]        ; ecx = skillDef.flags
+0x005507AC  xor edx,ecx
+0x005507AE  and edx,2
+0x005507B1  xor ecx,edx
+0x005507B3  mov [eax+0x1c],ecx        ; flags = (flags & ~2) | (Untrained ? 2 : 0)
+```
+
+So `skillDef.flags` bit 2 is `Untrained` verbatim. `GetCanUseSkill 0x005AF880` (already partly
+disassembled in §14.10) branches on exactly this bit:
+
+* bit 2 **set** (`Untrained=1`) → walks the creature's class slots (`[stats+0x89]` count,
+  `[stats+eax*8+0xa7]` class id per slot) against a per-class skill-availability table
+  (`ruleset+0xac`, `classId*0x1a0`, via `0x005BE070`) — usable if ANY class lists the skill,
+  **regardless of rank**.
+* bit 2 **clear** (`Untrained=0`, Demolitions/Stealth/Security) → reads the creature's own rank
+  directly, `movsx eax, byte ptr [stats+0x168+skillIndex]` (the exact same array
+  `CSWSCreatureStats::GetSkillRank 0x005AA570` reads), and requires **`rank > 0`**
+  (`0x005AF924`-`0x005AF93A`) — no class check, no roll, just "have you put at least one point in
+  it."
+
+**This is the gate that refused the live attempt, and it is retail's own correct rule, not a bug
+in this mod.** The rig's controlled PC is a level-1 Soldier (per the coordinator's report) with
+(almost certainly) 0 ranks in Demolitions — a fresh Soldier's 2 skill points at level 1 do not
+have to go into Demolitions, and nothing in this session's setup forces them to. `AddMineActions`
+calls `GetCanUseSkill(stats, 1)` (`1` = Demolitions' row index) and silently returns before ever
+calling `AddAction` when it comes back false — **before** `AIActionRecoverMine`'s creator/party
+fast path (§14.10) ever gets a chance to run, because that fast path lives inside the queued
+action itself, which this gate prevented from ever being queued. A 0-rank actor therefore cannot
+recover or disarm ANY mine — not because of `TrapDisarmable`, not because of the range gate, not
+because of who placed it — full stop, matching real single-player KOTOR rules exactly.
+
+**`TrapDisarmable` was already proven true, and is not the cause.** `TryQueueMineAction`'s own
+pre-native-call check (`MineActionRule.Facts.Disarmable`, computed from `serverTrigger + 0x2C4`,
+§14.2/§14.8) already refuses BEFORE printing "queued" if the server trigger is not disarmable — so
+the fact that this live attempt reached the "queued" message and the `[actor gate: …]` suffix at
+all proves `PlaceTestMine`'s `+0x2C4 = 1` write (§14.2) landed correctly on this mine. No change to
+`PlaceTestMine`/`Odyssey.PlacedMines.cs` was needed or made.
+
+**Fix implemented: extend the same read-only `[actor gate: …]` suffix, no behaviour change.**
+`Odyssey.TryQueueMineAction` (`src/KotorCoop.Plugin/Odyssey.MineActions.cs`) now also reads, with
+direct memory reads only (no native calls, replicating exactly the two structures
+`GetCanUseSkill` itself reads):
+
+* `wireTargetId` — `[clientTrigger+4]`, the exact value `PerformSkill`'s own `mov eax,[ecx+4]`
+  will read and send as the message's target id (§14.10's other open question — this settles it:
+  the value is directly observable without replaying the message decode, and should equal
+  `clientMineId`, which `ClientTargetMatches` already checked).
+* `trapDisarmable` — the same `disarmable` fact already computed and enforced above, now also
+  surfaced in the suffix so it doesn't require cross-referencing a second log line.
+* `demolitionsRank` — `[[actor+0xA74]+0x168+1]` (`CSWSCreatureStats::GetSkillRank`'s own array,
+  Demolitions' row), a signed byte, direct read.
+* `untrainedAllowed` — bit 2 of `[[ruleset(0x7A3A28)+0xB4]+(1*0x20)+0x1C]`, the exact flags dword
+  `GetCanUseSkill` tests. On an unmodded install this reads `false` for Demolitions.
+* `canUseDemolitions` — `(rank>0).ToString()` when `untrainedAllowed=false` (the branch that
+  actually applies to Demolitions, exact match to what `GetCanUseSkill` will decide); reported as
+  `"unknown (Untrained=1 path uses a class-skill-list check not replicated here)"` if
+  `untrainedAllowed` ever reads `true` (a modded `skills.2da`), rather than guessing.
+
+No native write, packet, refusal rule, or `PlaceTestMine` field changed. `MineActionRule.Refusal`
+is untouched — this diagnostic intentionally does NOT turn "0 Demolitions ranks" into a pre-call
+refusal, because `AddMineActions`' `GetCanUseSkill` check already IS the authoritative, correct
+gate; duplicating it as a client-side refusal would just be a second copy of the same rule to keep
+in sync; the diagnostic's job is to make the native verdict visible, not to pre-empt it.
+
+**Corrected live recipe.** Repeat §14.8/§14.6's recover/disarm steps with an actor that has at
+least 1 Demolitions rank — either a party member naturally built with Demolitions points, or grant
+one with an existing dev stat tool if this rig has one, before judging success or failure. Read the
+new suffix fields: `demolitionsRank=0` (or any non-positive value) with `untrainedAllowed=False`
+now explains a "queued but nothing happens" result directly, without needing to poll the action
+queue by hand. With a qualified actor (`demolitionsRank>=1`), the creator/party fast path §14.10
+found in `AIActionRecoverMine` predicts an INSTANT, roll-free success for a party-placed mine
+recovered/disarmed by its own placer or by any party member — that combination (qualified actor +
+own/party mine) is the next live attempt this doc still needs.
+
+Tests: `dotnet build KotorCoop.slnx -warnaserror` clean; `pwsh src/KotorCoop.Plugin/build.ps1
+-WarnAsError` clean; `dotnet test KotorCoop.slnx` green (no test asserts the diagnostic string's
+exact text; `MineActionRule`'s existing suite is unaffected since its `Facts`/`Refusal` shape did
+not change).

@@ -34,6 +34,46 @@ internal static unsafe partial class Odyssey
     /// starts the timing bar and returns), non-zero once the roll/fast-path tick has run.</summary>
     private const int MineActionActorTickOffset = 0x97C;
 
+    /// <summary>CSWSCreature's own stats pointer (mines.md §14.10). Read-only: this is the same
+    /// field <c>AddMineActions 0x004F9DA0</c> and <c>GetCanUseSkill 0x005AF880</c> dereference
+    /// as <c>[creature+0xA74]</c>.</summary>
+    private const int MineActionActorStatsOffset = 0xA74;
+
+    /// <summary>Signed per-skill rank byte array on <c>CSWSCreatureStats</c> (mines.md §14.10),
+    /// confirmed against <c>CSWSCreatureStats::GetSkillRank 0x005AA570</c>
+    /// (<c>movsx edi, byte ptr [statsPtr+0x168+skillIndex]</c>). Index with a 0-based skills.2da
+    /// row (Demolitions = row 1).</summary>
+    private const int MineActionSkillRankArrayOffset = 0x168;
+
+    /// <summary>The skills.2da row for Demolitions (<c>skills.2da</c> row 1, `SKILL_DEMOLITIONS`).
+    /// `AIActionRecoverMine`/`AIActionDisarmMine`'s own skill-check pipeline uses this same row
+    /// for both mine actions (mines.md §14.10).</summary>
+    private const int DemolitionsSkillIndex = 1;
+
+    /// <summary>The loaded ruleset singleton (mines.md §14.10). `GetCanUseSkill 0x005AF880`
+    /// reads `[0x7A3A28]` directly for both the skill-definition table and the per-class
+    /// skill-availability table.</summary>
+    private const nint MineActionRulesetGlobal = 0x7A3A28;
+
+    /// <summary>Skill-definition array base, `ruleset+0xB4` (mines.md §14.10). One 0x20-byte
+    /// record per skills.2da row, indexed directly by skill id.</summary>
+    private const int MineActionSkillDefArrayOffset = 0xB4;
+
+    private const int MineActionSkillDefStride = 0x20;
+
+    /// <summary>Flags dword inside each skill-definition record (mines.md §14.10). Bit 2 is
+    /// written straight from skills.2da's `Untrained` column by the ruleset loader (confirmed by
+    /// disassembling the writer at `0x005507A6`-`0x005507B3`, reached from the `"Untrained"`
+    /// string literal xref): `flags = (flags &amp; ~2) | (Untrained ? 2 : 0)`. When this bit is
+    /// CLEAR (`Untrained=0` — Demolitions, Stealth and Security in retail `skills.2da`),
+    /// `GetCanUseSkill` requires the creature's OWN rank in that skill to be strictly greater than
+    /// 0 (`0x005AF924`-`0x005AF93A`) — a class-skill/creator/party fast path never enters into
+    /// this check, because it runs inside `AddMineActions`, strictly before the action is ever
+    /// queued, let alone ticked.</summary>
+    private const int MineActionSkillDefFlagsOffset = 0x1C;
+
+    private const int MineActionSkillDefUntrainedBit = 2;
+
     private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, void> DisableMineFromActionMenuFn =
         (delegate* unmanaged[Thiscall]<nint, int, nint, void>)0x00691900;
 
@@ -215,9 +255,9 @@ internal static unsafe partial class Odyssey
         // mines.md §14.10: the retail message pump gives this call NO way to observe whether
         // AddMineActions/RunActions actually queued or ticked the action - CSWSCreature::UseSkill
         // (0x004FBE40) returns 1 unconditionally regardless of what its callees decide, so a
-        // "queued" response here has never meant "will do something." These three reads are
-        // read-only (no engine state is written) and exist only so the next live attempt can see
-        // which precondition was false instead of guessing from a silent 20-second timeout.
+        // "queued" response here has never meant "will do something." These reads are read-only
+        // (no engine state is written) and exist only so the next live attempt can see which
+        // precondition was false instead of guessing from a silent 20-second timeout.
         string actorState = DescribeActorGateState();
 
         if (recover)
@@ -244,8 +284,65 @@ internal static unsafe partial class Odyssey
             byte actorType = *(byte*)(serverActor + MineActionActorTypeByteOffset);
             int tick = *(int*)(serverActor + MineActionActorTickOffset);
             bool lockOwned = PlayerCommandableLock.IsOwned;
+
+            // mines.md §14.10: this is exactly the object-id field PerformSkill/UseSkill reads
+            // off the CLIENT trigger ("mov eax,[ecx+4]" on the trigger passed as `this`) and
+            // sends as the message's target id - a direct read, no native call, no message
+            // decode replayed. It is expected to equal clientMineId (already checked above via
+            // ClientTargetMatches); surfaced here so a mismatch is visible without cross-
+            // referencing two log lines.
+            uint wireTargetId = *(uint*)(clientTrigger + MineActionObjectIdOffset);
+
+            string demolitions = DescribeDemolitionsGate();
+
             return $" [actor gate: commandable={commandable}, type={actorType}(expect 5), "
-                + $"tick={tick}, commandableLockOwned={lockOwned}]";
+                + $"tick={tick}, commandableLockOwned={lockOwned}, wireTargetId=0x{wireTargetId:X}, "
+                + $"trapDisarmable={disarmable}{demolitions}]";
+        }
+
+        string DescribeDemolitionsGate()
+        {
+            // mines.md §14.10: AddMineActions 0x004F9DA0 calls GetCanUseSkill(stats, 1) for
+            // every recover/disarm attempt, BEFORE the action is ever queued - the creator/party
+            // fast path inside AIActionRecoverMine/AIActionDisarmMine never gets a chance to run
+            // if this gate refuses. Replicated here as a direct, call-free read of the same two
+            // structures GetCanUseSkill 0x005AF880 itself reads, not an emulation of its full
+            // logic (the class-skill-list branch for an Untrained=1 skill is not replicated;
+            // Demolitions is Untrained=0 in retail skills.2da, so only the rank>0 branch applies).
+            nint stats = *(nint*)(serverActor + MineActionActorStatsOffset);
+            if (!ReadableObject(stats, MineActionSkillRankArrayOffset + DemolitionsSkillIndex + 1))
+            {
+                return ", demolitionsRank=<stats unreadable>";
+            }
+
+            sbyte rank = *(sbyte*)(stats + MineActionSkillRankArrayOffset + DemolitionsSkillIndex);
+
+            nint ruleset = *(nint*)MineActionRulesetGlobal;
+            if (!ReadableObject(ruleset, MineActionSkillDefArrayOffset + 4))
+            {
+                return $", demolitionsRank={rank}, untrainedAllowed=<ruleset unreadable>";
+            }
+
+            nint skillDefArray = *(nint*)(ruleset + MineActionSkillDefArrayOffset);
+            nint skillDef = skillDefArray + (DemolitionsSkillIndex * MineActionSkillDefStride);
+            if (!ReadableObject(skillDef, MineActionSkillDefFlagsOffset + 4))
+            {
+                return $", demolitionsRank={rank}, untrainedAllowed=<skill table unreadable>";
+            }
+
+            bool untrainedAllowed = (*(int*)(skillDef + MineActionSkillDefFlagsOffset) & MineActionSkillDefUntrainedBit) != 0;
+
+            // Retail skills.2da has Demolitions at Untrained=0, so untrainedAllowed should read
+            // false on an unmodded install and GetCanUseSkill's rank>0 branch is the one that
+            // actually runs (verdict below is exact for that branch). If untrainedAllowed reads
+            // true here (a modded skills.2da), GetCanUseSkill instead walks the actor's classes
+            // against a per-class skill-availability table this diagnostic does not replicate -
+            // the verdict is left unknown rather than guessed.
+            string verdict = untrainedAllowed
+                ? "unknown (Untrained=1 path uses a class-skill-list check not replicated here)"
+                : (rank > 0).ToString();
+
+            return $", demolitionsRank={rank}, untrainedAllowed={untrainedAllowed}, canUseDemolitions={verdict}";
         }
     }
 
