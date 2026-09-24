@@ -51,6 +51,23 @@ public sealed record EnemyState(
 /// different module. A receiver somewhere else must drop the snapshot rather than write the
 /// host's healths and positions onto whatever local bodies happen to hold those ids. The
 /// report direction has always carried its module; this is the same guard the other way.
+///
+/// <paramref name="PageIndex"/>/<paramref name="PageCount"/> (protocol 70) say where this
+/// packet sits when one tick's full census needs more than <see cref="MaxEntriesPerPacket"/>
+/// entries — the same degrade-to-several-datagrams fix <see cref="WorldSnapshotPacket"/>
+/// already ships, not the throttled multi-second cycle <see cref="CreatureLivenessPacket"/>
+/// uses: the census is resent every tick regardless of page count, because combat needs
+/// low-latency health and position, not eventual consistency. <paramref name="ServerTimeMs"/>
+/// doubles as the tick id every page of one cycle shares (exactly like
+/// <see cref="WorldSnapshotPacket.ServerTimeMs"/>), so a receiver can tell a fresh cycle's
+/// first page from a stray straggler of the previous one with no extra wire bytes. A page's
+/// own entries are already sorted fighting-first-then-nearest by the sender, so page 0 is
+/// always the most urgent one even when a later page never arrives.
 /// </summary>
 public sealed record EnemySnapshotPacket(
-    long ServerTimeMs, string Module, IReadOnlyList<EnemyState> Enemies);
+    long ServerTimeMs, string Module, IReadOnlyList<EnemyState> Enemies,
+    byte PageIndex = 0, byte PageCount = 1)
+{
+    /// <summary>See <see cref="ProtocolConstants.MaxEnemies"/>.</summary>
+    public const int MaxEntriesPerPacket = ProtocolConstants.MaxEnemies;
+}

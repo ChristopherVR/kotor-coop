@@ -10,8 +10,12 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.EnemySnapshot);
         w.WriteInt64(packet.ServerTimeMs);
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
+        w.WriteUInt8(packet.PageIndex);
+        w.WriteUInt8(packet.PageCount);
 
-        int count = Math.Min(packet.Enemies.Count, ProtocolConstants.MaxEnemies);
+        // Safety net, not the paging mechanism itself: a caller building one packet directly
+        // (rather than through EnemyCensusPaging.Paginate) still cannot overrun the buffer.
+        int count = Math.Min(packet.Enemies.Count, EnemySnapshotPacket.MaxEntriesPerPacket);
         w.WriteUInt8((byte)count);
 
         for (int i = 0; i < count; i++)
@@ -44,9 +48,11 @@ public static partial class PacketCodec
 
         long serverTime = r.ReadInt64();
         string module = r.ReadString();
+        byte pageIndex = r.ReadUInt8();
+        byte pageCount = r.ReadUInt8();
         byte count = r.ReadUInt8();
 
-        if (r.Failed || count > ProtocolConstants.MaxEnemies)
+        if (r.Failed || count > EnemySnapshotPacket.MaxEntriesPerPacket)
         {
             return null;
         }
@@ -77,6 +83,6 @@ public static partial class PacketCodec
                 oneShotSerial, oneShotAnimation, plot, appearance, faction));
         }
 
-        return new EnemySnapshotPacket(serverTime, module, enemies);
+        return new EnemySnapshotPacket(serverTime, module, enemies, pageIndex, pageCount);
     }
 }
