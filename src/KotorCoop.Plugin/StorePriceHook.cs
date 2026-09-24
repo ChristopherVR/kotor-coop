@@ -26,6 +26,13 @@ internal static unsafe class StorePriceHook
     private static nint _sellOriginal;
     private static SharedBlockView? _block;
 
+    /// <summary>Distinct price rewrites logged so far. The row text calls the getters every
+    /// frame, so only a change of (side, retail, scaled) is logged, up to the budget: enough to
+    /// read a live A/B off the plugin log without flooding it.</summary>
+    private const int LogBudget = 24;
+    private static int _logged;
+    private static long _lastLoggedKey = -1;
+
     public static bool IsInstalled => _installed;
 
     /// <summary>Verify both full prologues before patching either getter. MAIN THREAD ONLY.</summary>
@@ -147,12 +154,12 @@ internal static unsafe class StorePriceHook
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int OnBuyPrice(nint panel, nint item) => GetScaledPrice(_buyOriginal, panel, item);
+    private static int OnBuyPrice(nint panel, nint item) => GetScaledPrice(_buyOriginal, panel, item, sell: false);
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int OnSellPrice(nint panel, nint item) => GetScaledPrice(_sellOriginal, panel, item);
+    private static int OnSellPrice(nint panel, nint item) => GetScaledPrice(_sellOriginal, panel, item, sell: true);
 
-    private static int GetScaledPrice(nint original, nint panel, nint item)
+    private static int GetScaledPrice(nint original, nint panel, nint item, bool sell)
     {
         int retailPrice = ((delegate* unmanaged[Thiscall]<nint, nint, int>)original)(panel, item);
         try
@@ -164,7 +171,19 @@ internal static unsafe class StorePriceHook
                 percent = PlayerCountScalingRule.Vanilla;
             }
 
-            return StorePriceRule.ScaleRetailPrice(retailPrice, percent);
+            int scaled = StorePriceRule.ScaleRetailPrice(retailPrice, percent);
+            if (scaled != retailPrice && _logged < LogBudget)
+            {
+                long key = ((long)(uint)retailPrice << 32) | ((long)(uint)scaled << 1) | (sell ? 1L : 0L);
+                if (key != _lastLoggedKey)
+                {
+                    _lastLoggedKey = key;
+                    _logged++;
+                    PluginHost.Log($"store prices: {(sell ? "sell" : "buy")} {retailPrice} -> {scaled} ({percent}%) (#{_logged})");
+                }
+            }
+
+            return scaled;
         }
         catch
         {

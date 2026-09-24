@@ -209,6 +209,17 @@ reviewed baseline/current-health rule for percentage changes that preserves the 
 ratio without healing or over-damaging. Until that binding and persistence behavior are tested,
 `enemy_health` remains at the safe default of 100% and its reload checklist stays open.
 
+### Store price live A/B (2026-09-24)
+
+Host `store_prices = 200`, joiner left at the default; the joiner adopted 200 through the
+behaviour digest. `dan_droid` (`danm13`, markup 100, markdown 25): the host bought
+`g_i_drdltplat001` (retail 75) for 150; the joiner bought it for 150 and sold it back for 36
+(retail 18). The plugin logged each rewrite (`store prices: buy 75 -> 150 (200%)`,
+`sell 18 -> 36 (200%)`), including the row-text values. After a joiner `disconnect` the same buy
+cost the retail 75 and no rewrite was logged, confirming the session-scoped word resets. The
+transactions used the `buy`/`sell` verbs (the retail click handlers); the persuasion-threshold
+check and a mouse-driven purchase remain unexercised.
+
 ## NEEDS-LIVE checklist
 
 1. `enemy_health = auto`, two players: `spawncreature n_sithsoldier001 1` on the host; log line
