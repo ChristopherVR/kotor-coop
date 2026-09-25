@@ -1,7 +1,7 @@
-// Odyssey.PartySelectRelay.cs - the native OPEN half of CSWGuiPartySelection, RE'd this pass
-// (2026-09-25) from fresh disassembly of CGuiInGame::ShowPartySelection 0x0062DD20 and its
-// caller ExecuteCommandShowPartySelectionGUI 0x005438B0. Odyssey.PartySelect.cs (2026-08-28,
-// the `partyselect ok` verb) already owns the CONFIRM half of this same panel
+// Odyssey.PartySelectRelay.cs - the native OPEN half of CSWGuiPartySelection, RE'd 2026-09-25
+// from fresh disassembly of CGuiInGame::ShowPartySelection 0x0062DD20 and its caller
+// ExecuteCommandShowPartySelectionGUI 0x005438B0. Odyssey.PartySelect.cs (2026-08-28, the
+// `partyselect ok` verb) already owns the CONFIRM half of this same panel
 // (ConfirmPartySelect/GetPartySelectPanel) — this is a SEPARATE file, not an edit of that one,
 // so the existing live-tested confirm path is untouched; the two share no member names by
 // construction (distinct offset-constant names, distinct method names) and are safe to build
@@ -10,6 +10,23 @@
 // IsPlayerInCombat, GuiConversationActive, InGameGuiInitializedOffset, InGameGuiBusyOffset and
 // TryReadExoString are declared in other Odyssey.*.cs files and reused here UNQUALIFIED, the
 // same convention Odyssey.Store.cs's own header documents.
+//
+// ⚠ 2026-09-25 SECOND PASS: ShowPartySelectionGui below is NO LONGER what the relay's HOST side
+// calls. A live test of the first relay design (calling it directly with the requester's own
+// captured exit_script/forced NPCs) found the screen never actually opened while the call
+// itself reported success — CGuiInGame+0x78 non-null proves nothing, since ShowPartySelection
+// itself allocates it ONCE per module and reuses that same object forever after (see this
+// file's own ABI comments below), so a bare non-null read cannot distinguish "just opened" from
+// "constructed at some earlier, unrelated point and never freed". PartySelectHostRequestController
+// now re-fires the requester's own CAUSAL TRIGGER instead (OdysseyTriggers.FireTriggerForLocalPlayer
+// — the same call the already-live-proven `firetrigger` dev verb makes), which reaches
+// ShowPartySelection (if the retail script chain calls it at all) through the SAME path a real
+// walk-in would, with every side effect that entails (input class, pause, AddPanel via the
+// manager, and anything else ExecuteCommandShowPartySelectionGUI's own callers do) — none of
+// which this file's direct call ever replicated. The RE work below (the ABI, the persistent-object
+// finding, the forced-NPC flag layout) remains accurate and is kept for that value; the function
+// itself is simply unused by the shipped relay path now. See
+// PartySelectSuppressionController's own header for the live evidence.
 
 namespace KotorCoop.Plugin;
 

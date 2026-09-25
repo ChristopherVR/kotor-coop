@@ -14,7 +14,7 @@ public sealed partial class CoopClient
 
     /// <inheritdoc />
     public void RequestPartySelect(
-        string module, string exitScript, int forceNpc1, int forceNpc2, uint requestSerial)
+        string module, string exitScript, int forceNpc1, int forceNpc2, uint triggerId, uint requestSerial)
     {
         if (requestSerial == 0)
         {
@@ -25,7 +25,8 @@ public sealed partial class CoopClient
         // loop is encoding its own packets on another thread — see
         // CoopClient.RequestContainerLock's identical remark.
         SendFromCaller(
-            new PartySelectRequestPacket(_localPeerId, requestSerial, module, exitScript, forceNpc1, forceNpc2),
+            new PartySelectRequestPacket(
+                _localPeerId, requestSerial, module, exitScript, forceNpc1, forceNpc2, triggerId),
             static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 

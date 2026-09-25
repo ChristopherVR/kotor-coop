@@ -234,12 +234,13 @@ public sealed partial class KotorGameBridge
 
     /// <inheritdoc />
     public bool TryReadPartySelectClientCapture(
-        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2)
+        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2, out uint triggerId)
     {
         serial = 0;
         exitScript = string.Empty;
         forceNpc1 = -1;
         forceNpc2 = -1;
+        triggerId = 0;
 
         // Serial first, then the params — the reverse of the plugin's write order, so a torn
         // read pairs a serial with params written before it, never a newer capture's.
@@ -253,11 +254,12 @@ public sealed partial class KotorGameBridge
         return _memory.TryReadAsciiString(
                 _pluginBlock + BlockPartySelectClientExitScript, BlockPartySelectScriptLength, out exitScript)
             && _memory.TryReadInt32(_pluginBlock + BlockPartySelectClientForceNpc1, out forceNpc1)
-            && _memory.TryReadInt32(_pluginBlock + BlockPartySelectClientForceNpc2, out forceNpc2);
+            && _memory.TryReadInt32(_pluginBlock + BlockPartySelectClientForceNpc2, out forceNpc2)
+            && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectClientTriggerId, out triggerId);
     }
 
     /// <inheritdoc />
-    public bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2)
+    public bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2, uint triggerId)
     {
         if (_pluginBlock == 0)
         {
@@ -268,6 +270,7 @@ public sealed partial class KotorGameBridge
             _pluginBlock + BlockPartySelectHostExitScript, exitScript ?? string.Empty, BlockPartySelectScriptLength);
         ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostForceNpc1, forceNpc1);
         ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostForceNpc2, forceNpc2);
+        ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostTriggerId, triggerId);
 
         // Serial last, so the plugin never observes a half-written request. Continue from
         // whatever the block already holds, the same convention TryRequestGalaxyDepart uses.

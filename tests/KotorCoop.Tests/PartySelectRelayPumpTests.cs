@@ -7,11 +7,12 @@ using Xunit;
 namespace KotorCoop.Tests;
 
 /// <summary>
-/// docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section, driven directly
-/// (fake bridge + fake session, no sockets) — the vehicle <see cref="CreditGrantPumpTests"/>
-/// already established for this family of pump: a client's captured panel becomes a request
-/// (with resend/timeout), and a host's received request becomes an open attempt, an ack, and
-/// (once the screen closes) an outcome.
+/// docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section (both the first
+/// pass and the SECOND PASS trigger-replay correction), driven directly (fake bridge + fake
+/// session, no sockets) — the vehicle <see cref="CreditGrantPumpTests"/> already established
+/// for this family of pump: a client's captured panel becomes a request (with resend/timeout),
+/// and a host's received request becomes a trigger-fire attempt, an ack, and (once the screen
+/// closes) an outcome.
 /// </summary>
 public class PartySelectRelayPumpTests
 {
@@ -19,11 +20,11 @@ public class PartySelectRelayPumpTests
 
     private sealed class FakeBridge : IGameBridge
     {
-        public (uint Serial, string ExitScript, int Npc1, int Npc2)? ClientCapture { get; set; }
+        public (uint Serial, string ExitScript, int Npc1, int Npc2, uint TriggerId)? ClientCapture { get; set; }
 
         public List<string> ChatLines { get; } = [];
 
-        public List<(string ExitScript, int Npc1, int Npc2)> HostOpenRequests { get; } = [];
+        public List<(string ExitScript, int Npc1, int Npc2, uint TriggerId)> HostOpenRequests { get; } = [];
 
         public bool HostOpenAccepts { get; set; } = true;
 
@@ -46,11 +47,11 @@ public class PartySelectRelayPumpTests
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;
 
         public bool TryReadPartySelectClientCapture(
-            out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2)
+            out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2, out uint triggerId)
         {
             if (ClientCapture is { } c)
             {
-                (serial, exitScript, forceNpc1, forceNpc2) = c;
+                (serial, exitScript, forceNpc1, forceNpc2, triggerId) = c;
                 return true;
             }
 
@@ -58,12 +59,13 @@ public class PartySelectRelayPumpTests
             exitScript = string.Empty;
             forceNpc1 = -1;
             forceNpc2 = -1;
+            triggerId = 0;
             return false;
         }
 
-        public bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2)
+        public bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2, uint triggerId)
         {
-            HostOpenRequests.Add((exitScript, forceNpc1, forceNpc2));
+            HostOpenRequests.Add((exitScript, forceNpc1, forceNpc2, triggerId));
             return HostOpenAccepts;
         }
 
@@ -108,7 +110,7 @@ public class PartySelectRelayPumpTests
     {
         public bool EnemyAuthority { get; set; }
 
-        public List<(string Module, string ExitScript, int Npc1, int Npc2, uint RequestSerial)> Requested { get; } = [];
+        public List<(string Module, string ExitScript, int Npc1, int Npc2, uint TriggerId, uint RequestSerial)> Requested { get; } = [];
 
         public Queue<PartySelectResponsePacket> IncomingResponses { get; } = new();
 
@@ -117,8 +119,8 @@ public class PartySelectRelayPumpTests
         public List<(uint PeerId, PartySelectResponsePacket Response)> SentResponses { get; } = [];
 
         public void RequestPartySelect(
-            string module, string exitScript, int forceNpc1, int forceNpc2, uint requestSerial) =>
-            Requested.Add((module, exitScript, forceNpc1, forceNpc2, requestSerial));
+            string module, string exitScript, int forceNpc1, int forceNpc2, uint triggerId, uint requestSerial) =>
+            Requested.Add((module, exitScript, forceNpc1, forceNpc2, triggerId, requestSerial));
 
         public IReadOnlyList<PartySelectResponsePacket> DrainPartySelectResponses()
         {
@@ -225,7 +227,7 @@ public class PartySelectRelayPumpTests
         // Same rule GalaxyDeparture's own baseline uses: a leftover serial from an earlier
         // session must not become a fresh request the moment the agent attaches.
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
-        bridge.ClientCapture = (3, "k_pebn_swoop", -1, -1);
+        bridge.ClientCapture = (3, "k_pebn_swoop", -1, -1, 0x2);
 
         pump.PumpPartySelect(Local, []);
         pump.PumpPartySelect(Local, []);
@@ -241,11 +243,11 @@ public class PartySelectRelayPumpTests
         bridge.ClientCapture = null;
         pump.PumpPartySelect(Local, []);
 
-        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1);
+        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1, 0x2);
         pump.PumpPartySelect(Local, []);
 
         Assert.Single(session.Requested);
-        Assert.Equal((Module, "k_pebn_swoop", -1, -1, 1u), session.Requested[0]);
+        Assert.Equal((Module, "k_pebn_swoop", -1, -1, 0x2u, 1u), session.Requested[0]);
         Assert.Contains(bridge.ChatLines, l => l.Contains("asked"));
     }
 
@@ -255,7 +257,7 @@ public class PartySelectRelayPumpTests
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         bridge.ClientCapture = null;
         pump.PumpPartySelect(Local, []);
-        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1);
+        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1, 0x2);
         pump.PumpPartySelect(Local, []);
         int linesAfterAsk = bridge.ChatLines.Count;
 
@@ -271,7 +273,7 @@ public class PartySelectRelayPumpTests
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         bridge.ClientCapture = null;
         pump.PumpPartySelect(Local, []);
-        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1);
+        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1, 0x2);
         pump.PumpPartySelect(Local, []);
 
         session.IncomingResponses.Enqueue(
@@ -294,7 +296,7 @@ public class PartySelectRelayPumpTests
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         bridge.ClientCapture = null;
         pump.PumpPartySelect(Local, []);
-        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1);
+        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1, 0x2);
         pump.PumpPartySelect(Local, []);
 
         session.IncomingResponses.Enqueue(new PartySelectResponsePacket(1, 1, PartySelectResponseStatus.Opened, string.Empty));
@@ -305,6 +307,26 @@ public class PartySelectRelayPumpTests
         Assert.Contains(bridge.ChatLines, l => l.Contains("chose not to change"));
     }
 
+    [Fact]
+    public void ARequestIsResentWithTheSameSnapshottedParamsEvenIfALaterReadFails()
+    {
+        // The stored _partySelectActive* fields, not a fresh bridge read, drive a resend — a
+        // transient read failure on a LATER tick must not blank out the resend.
+        (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
+        bridge.ClientCapture = null;
+        pump.PumpPartySelect(Local, []);
+        bridge.ClientCapture = (1, "k_pebn_swoop", -1, -1, 0x2);
+        pump.PumpPartySelect(Local, []);
+        Assert.Single(session.Requested);
+
+        // Simulate a transient unreadable block on a later tick - the resend timer has not
+        // elapsed yet (SessionClock uses a real wall clock), so no second send happens within
+        // this test, but the important thing is nothing throws and state is untouched.
+        bridge.ClientCapture = null;
+        pump.PumpPartySelect(Local, []);
+        Assert.Single(session.Requested);
+    }
+
     // ---- host half --------------------------------------------------------------------------
 
     [Fact]
@@ -312,7 +334,7 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = false;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
 
         pump.PumpPartySelect(Local, []);
 
@@ -325,7 +347,7 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, "tar_m02af", "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, "tar_m02af", "k_pebn_swoop", -1, -1, 0x2));
 
         pump.PumpPartySelect(Local, []);
 
@@ -334,14 +356,33 @@ public class PartySelectRelayPumpTests
     }
 
     [Fact]
+    public void ARequestWithNoTriggerIdIsRefusedWithoutTouchingThePlugin()
+    {
+        // 2026-09-25 second pass: a live test found the DIRECT ShowPartySelection call
+        // unreliable, so the host now only ever acts via a causal trigger. A requester who
+        // captured no trigger (triggerId 0) is refused locally, with no plugin round trip.
+        (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
+        session.EnemyAuthority = true;
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0));
+
+        pump.PumpPartySelect(Local, []);
+
+        Assert.Empty(bridge.HostOpenRequests);
+        Assert.Single(session.SentResponses);
+        Assert.Equal(PartySelectResponseStatus.Refused, session.SentResponses[0].Response.Status);
+        Assert.Contains("trigger", session.SentResponses[0].Response.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AHostOpensASameModuleRequestAndAcksOpened()
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
 
         pump.PumpPartySelect(Local, []);
         Assert.Single(bridge.HostOpenRequests);
+        Assert.Equal(0x2u, bridge.HostOpenRequests[0].TriggerId);
 
         bridge.HostStatus = (1, 1); // applied=1, PartySelectHostStatusCode.Opened
         pump.PumpPartySelect(Local, []);
@@ -357,10 +398,10 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
 
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(6, 2, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(6, 2, Module, "k_pebn_swoop", -1, -1, 0x3));
         pump.PumpPartySelect(Local, []);
 
         Assert.Single(bridge.HostOpenRequests); // only the first ever reached the plugin
@@ -374,7 +415,7 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
 
         bridge.HostStatus = (1, 2); // applied=1, PartySelectHostStatusCode.Refused
@@ -384,7 +425,7 @@ public class PartySelectRelayPumpTests
         Assert.Equal(PartySelectResponseStatus.Refused, session.SentResponses[0].Response.Status);
 
         // Refused frees the debounce - a fresh request is accepted right away.
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(7, 3, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(7, 3, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
         Assert.Equal(2, bridge.HostOpenRequests.Count);
     }
@@ -394,7 +435,7 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
         bridge.HostStatus = (1, 1); // Opened
         pump.PumpPartySelect(Local, []);
@@ -406,7 +447,7 @@ public class PartySelectRelayPumpTests
         Assert.Equal(PartySelectResponseStatus.Confirmed, session.SentResponses[1].Response.Status);
 
         // The debounce is now free again.
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(8, 4, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(8, 4, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
         Assert.Equal(2, bridge.HostOpenRequests.Count);
     }
@@ -416,7 +457,7 @@ public class PartySelectRelayPumpTests
     {
         (TransitionPump pump, FakeBridge bridge, StubSession session) = Build();
         session.EnemyAuthority = true;
-        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1));
+        session.IncomingRequests.Enqueue(new PartySelectRequestPacket(5, 1, Module, "k_pebn_swoop", -1, -1, 0x2));
         pump.PumpPartySelect(Local, []);
         bridge.HostStatus = (1, 1); // Opened
         pump.PumpPartySelect(Local, []);

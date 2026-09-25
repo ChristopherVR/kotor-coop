@@ -942,6 +942,11 @@ public sealed partial class KotorGameBridge
     private const int BlockPartySelectHostOutcome = 0x5C44;
     private const int BlockPartySelectScriptLength = 16;
 
+    // 2026-09-25 second pass: relay the causal trigger, not a direct ShowPartySelection call —
+    // see SharedBlock.PartySelect.cs's own matching section.
+    private const int BlockPartySelectClientTriggerId = 0x5C48;
+    private const int BlockPartySelectHostTriggerId = 0x5C4C;
+
     // Class-grant relay (shared block version 68, region 0x4C20..0x4C38, inside the galaxy
     // region's free tail — TotalSize stays 0x4D00). Mirrors SharedBlock.OffsetClassGrant*.
     // Plugin -> agent: a script added a class to my player (serial + class). Agent -> plugin:

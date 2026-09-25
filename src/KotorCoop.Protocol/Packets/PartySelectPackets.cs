@@ -1,13 +1,24 @@
 namespace KotorCoop.Protocol;
 
 /// <summary>
-/// client -&gt; host: the exact <c>ShowPartySelectionGUI(string,int,int)</c> parameters this
-/// player's own suppressed <c>CSWGuiPartySelection</c> panel carried, plus the module it was
-/// raised in so a stale request (the sender has already moved on) is ignored rather than acted
-/// on late. See docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section.
+/// client -&gt; host: what this player's own suppressed <c>CSWGuiPartySelection</c> panel
+/// carried, plus the module it was raised in so a stale request (the sender has already moved
+/// on) is ignored rather than acted on late.
+///
+/// 2026-09-25 second pass: <paramref name="TriggerId"/> — the trigger this player's own real
+/// character most recently fired (correlated by <c>OdysseyTriggers.TryGetRecentLocalTrigger</c>,
+/// 0 when nothing recent enough) — is what the host actually acts on now, by re-firing that
+/// SAME trigger's OnEnter for its own player. <paramref name="ExitScript"/>/
+/// <paramref name="ForceNpc1"/>/<paramref name="ForceNpc2"/> (the panel's own
+/// <c>ShowPartySelectionGUI(string,int,int)</c> parameters) are relayed for DIAGNOSTICS ONLY —
+/// a live pass found calling <c>ShowPartySelection</c> directly with them unreliable, because
+/// the panel object is persistently reused and its fields can carry stale residue from an
+/// earlier, unrelated call. See docs/research/galaxy-map-and-party-select.md's 2026-09-25
+/// relay section (both the first pass and the "SECOND PASS" correction).
 /// </summary>
 public sealed record PartySelectRequestPacket(
-    uint PeerId, uint RequestSerial, string Module, string ExitScript, int ForceNpc1, int ForceNpc2)
+    uint PeerId, uint RequestSerial, string Module, string ExitScript, int ForceNpc1, int ForceNpc2,
+    uint TriggerId)
 {
     public const int MaxScriptLength = 16;
 }

@@ -150,6 +150,61 @@ internal static unsafe class OdysseyTriggers
     /// </summary>
     private const int TriggerMineGate = 0x2BC;
 
+    // ---- last-local-fire correlation (2026-09-25, party-select relay's second pass) --------
+    //
+    // docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section, live pass 2:
+    // calling CGuiInGame::ShowPartySelection directly (skipping whatever the retail script
+    // chain around it also does — input class, pause, and possibly more never fully RE'd)
+    // produced a live false "refused - busy" while the screen never actually opened. The fix
+    // is to run the SAME retail path a real walk-in takes — RunScript on the causal trigger's
+    // OnEnter, exactly what FireTrigger/FireTriggerForLocalPlayer already do — rather than call
+    // ShowPartySelection ourselves. PartySelectSuppressionController needs to know WHICH
+    // trigger (if any) most recently fired for THIS instance's own real player, so it can relay
+    // that trigger id instead of guessing at the panel's own (possibly stale — CGuiInGame+0x78
+    // is a persistent, reused object, see PartySelectSuppressionController's own header)
+    // exit_script field. Recorded from BOTH fire paths: this class's own FireTriggerForLocalPlayer
+    // (the dev-verb path, which never reaches TriggerFireHook — see that class's own header,
+    // "firing THROUGH the relay never reaches this call site") and TriggerRelayController's
+    // native-fire observation (the real walk-in path), so either one leaves a trail here.
+    private static uint _lastLocalTriggerId;
+    private static long _lastLocalTriggerAtMs;
+
+    /// <summary>Records that <paramref name="triggerId"/> just fired for THIS instance's own
+    /// real player (never a phantom, never a relayed/remote fire). Overwrites unconditionally —
+    /// only the MOST RECENT local fire is remembered, the same "one slot, always the freshest"
+    /// shape the party-select capture that reads this back needs.</summary>
+    public static void RecordLocalFire(uint triggerId)
+    {
+        _lastLocalTriggerId = triggerId;
+        _lastLocalTriggerAtMs = Environment.TickCount64;
+    }
+
+    /// <summary>The most recent locally-fired trigger, if it fired within
+    /// <paramref name="maxAgeMs"/> of now — the causal-correlation window
+    /// <see cref="PartySelectSuppressionController"/> uses to decide which trigger (if any) to
+    /// relay for a captured party-select panel. False (triggerId 0) when nothing has fired
+    /// locally yet, or the last one is older than the window.</summary>
+    public static bool TryGetRecentLocalTrigger(long maxAgeMs, out uint triggerId)
+    {
+        if (_lastLocalTriggerId != 0 && Environment.TickCount64 - _lastLocalTriggerAtMs <= maxAgeMs)
+        {
+            triggerId = _lastLocalTriggerId;
+            return true;
+        }
+
+        triggerId = 0;
+        return false;
+    }
+
+    /// <summary>Module change: the remembered trigger id belongs to the old area and may not
+    /// even resolve (or, worse, coincidentally resolve to something unrelated) in the new one.
+    /// </summary>
+    public static void InvalidateLocalFire()
+    {
+        _lastLocalTriggerId = 0;
+        _lastLocalTriggerAtMs = 0;
+    }
+
     private static int _triggerCallsVerified; // 0 unknown, 1 ok, -1 refused
 
     /// <summary>Verify-bytes-or-refuse, exactly like <see cref="Odyssey.VerifyEncounterCalls"/>:
@@ -372,6 +427,7 @@ internal static unsafe class OdysseyTriggers
             *(uint*)(trigger + TriggerLastEntered) = playerId;
             uint triggerObjectId = *(uint*)(trigger + ObjectIdOffset);
             string script = PeekScriptOnEnter(trigger);
+            RecordLocalFire(triggerObjectId);
             RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
             return $"firetrigger: fired 0x{ids[i]:X} OnEnter '{script}' for the local player";
         }

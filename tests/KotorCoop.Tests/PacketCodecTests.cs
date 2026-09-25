@@ -2016,7 +2016,7 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         PartySelectRequestPacket original = new(
             PeerId: 2, RequestSerial: 7, Module: "ebo_m12aa", ExitScript: "k_pebn_swoop",
-            ForceNpc1: -1, ForceNpc2: -1);
+            ForceNpc1: -1, ForceNpc2: -1, TriggerId: 0x2);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
@@ -2029,7 +2029,7 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         PartySelectRequestPacket original = new(
             PeerId: 2, RequestSerial: 7, Module: "ebo_m12aa", ExitScript: string.Empty,
-            ForceNpc1: 0, ForceNpc2: 4);
+            ForceNpc1: 0, ForceNpc2: 4, TriggerId: 0);
 
         int length = PacketCodec.Write(buffer, original);
         Assert.True(length > 0);
@@ -2041,7 +2041,7 @@ public class PacketCodecTests
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
         int length = PacketCodec.Write(
-            buffer, new PartySelectRequestPacket(2, 0, "ebo_m12aa", "k_pebn_swoop", -1, -1));
+            buffer, new PartySelectRequestPacket(2, 0, "ebo_m12aa", "k_pebn_swoop", -1, -1, 0x2));
 
         Assert.Null(PacketCodec.ReadPartySelectRequest(buffer[..length]));
     }

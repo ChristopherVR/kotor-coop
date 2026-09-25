@@ -15,7 +15,7 @@ public interface IPartySelectSession
     /// Default no-op for a session that predates this.
     /// </summary>
     void RequestPartySelect(
-        string module, string exitScript, int forceNpc1, int forceNpc2, uint requestSerial)
+        string module, string exitScript, int forceNpc1, int forceNpc2, uint triggerId, uint requestSerial)
     { }
 
     /// <summary>

@@ -111,6 +111,7 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
         _nativeFiredPublished.Clear();
         block.SetTriggerNativeFired([], ++_nativeFiredSerial);
         TriggerFireHook.Invalidate();
+        OdysseyTriggers.InvalidateLocalFire();
     }
 
     public void OnFrame()
@@ -448,6 +449,12 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
                 // "only the local player" semantics exactly.
                 continue;
             }
+
+            // Party-select relay correlation (2026-09-25 second pass): a REAL walk-in fire,
+            // unconditionally, ahead of this controller's OWN narrower allowlist/eligibility
+            // gates below — those serve the side-effect-replication feature this controller
+            // otherwise owns, not the party-select causal-correlation purpose this call serves.
+            OdysseyTriggers.RecordLocalFire(triggerId);
 
             if (!_nativeFiredThisModule.Add(triggerId))
             {

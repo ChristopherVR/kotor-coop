@@ -1,6 +1,6 @@
 namespace KotorCoop.Plugin;
 
-// Party-select relay (shared block version 81, region 0x5C00..0x5C48). See
+// Party-select relay (shared block version 81, region 0x5C00..0x5C50). See
 // SharedBlock.PartySelect.cs for the layout and docs/research/galaxy-map-and-party-select.md's
 // 2026-09-25 relay section for the design.
 internal sealed unsafe partial class SharedBlockView
@@ -8,13 +8,15 @@ internal sealed unsafe partial class SharedBlockView
     // ---- client half: this instance's own captured panel ---------------------------------
 
     /// <summary>Plugin -&gt; agent. Publishes "this instance's own client copy of the
-    /// party-select screen was just captured" — script and forced NPCs first, the serial
-    /// LAST, so the agent never pairs a new serial with the previous capture's params.</summary>
-    public void PublishPartySelectClientCapture(string exitScript, int forceNpc1, int forceNpc2)
+    /// party-select screen was just captured" — script, forced NPCs and the correlated trigger
+    /// id first, the serial LAST, so the agent never pairs a new serial with the previous
+    /// capture's params.</summary>
+    public void PublishPartySelectClientCapture(string exitScript, int forceNpc1, int forceNpc2, uint triggerId)
     {
         WriteAsciiField(SharedBlock.OffsetPartySelectClientExitScript, exitScript, SharedBlock.PartySelectScriptLength);
         *I32(SharedBlock.OffsetPartySelectClientForceNpc1) = forceNpc1;
         *I32(SharedBlock.OffsetPartySelectClientForceNpc2) = forceNpc2;
+        *U32(SharedBlock.OffsetPartySelectClientTriggerId) = triggerId;
         *U32(SharedBlock.OffsetPartySelectClientSerial) = *U32(SharedBlock.OffsetPartySelectClientSerial) + 1;
     }
 
@@ -26,6 +28,8 @@ internal sealed unsafe partial class SharedBlockView
     public int PartySelectClientForceNpc1 => *I32(SharedBlock.OffsetPartySelectClientForceNpc1);
 
     public int PartySelectClientForceNpc2 => *I32(SharedBlock.OffsetPartySelectClientForceNpc2);
+
+    public uint PartySelectClientTriggerId => *U32(SharedBlock.OffsetPartySelectClientTriggerId);
 
     // ---- host half: open a peer's requested screen here -----------------------------------
 
@@ -40,14 +44,17 @@ internal sealed unsafe partial class SharedBlockView
 
     public int PartySelectHostForceNpc2 => *I32(SharedBlock.OffsetPartySelectHostForceNpc2);
 
-    /// <summary>Agent -&gt; plugin. Writes a new open request — script and forced NPCs first,
-    /// the serial last, continuing from whatever is already there (the same convention
-    /// <c>TryRequestGalaxyDepart</c> uses).</summary>
-    public void RequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2)
+    public uint PartySelectHostTriggerId => *U32(SharedBlock.OffsetPartySelectHostTriggerId);
+
+    /// <summary>Agent -&gt; plugin. Writes a new open request — script, forced NPCs and the
+    /// trigger id first, the serial last, continuing from whatever is already there (the same
+    /// convention <c>TryRequestGalaxyDepart</c> uses).</summary>
+    public void RequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2, uint triggerId)
     {
         WriteAsciiField(SharedBlock.OffsetPartySelectHostExitScript, exitScript, SharedBlock.PartySelectScriptLength);
         *I32(SharedBlock.OffsetPartySelectHostForceNpc1) = forceNpc1;
         *I32(SharedBlock.OffsetPartySelectHostForceNpc2) = forceNpc2;
+        *U32(SharedBlock.OffsetPartySelectHostTriggerId) = triggerId;
         *U32(SharedBlock.OffsetPartySelectHostRequestSerial) = *U32(SharedBlock.OffsetPartySelectHostRequestSerial) + 1;
     }
 

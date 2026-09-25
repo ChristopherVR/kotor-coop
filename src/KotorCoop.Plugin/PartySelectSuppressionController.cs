@@ -21,12 +21,30 @@ namespace KotorCoop.Plugin;
 /// §2.4's own open question — whether suppressing via the sweep skips something the panel's
 /// own <c>exit_script</c> field would otherwise run (e.g. the Taris swoop-taxi's own dispatch,
 /// the only positively-confirmed trigger for this screen) — is answered by NOT relying on the
-/// sweep alone any more: 2026-09-25's relay (SharedBlock.PartySelect.cs) captures
-/// <c>exit_script</c> and the forced NPCs off the panel BEFORE sweeping it and asks the host to
-/// run the SAME screen, through the SAME native call, so whatever the exit script would have
-/// done runs on the host's own copy exactly as retail intends. The sweep-only design (host
-/// picks silently, the roster poll converges) remains the fallback when
-/// <c>party_select_relay</c> is off.
+/// sweep alone any more: 2026-09-25's relay (SharedBlock.PartySelect.cs) asks the host to
+/// replay whatever caused this panel to open. The sweep-only design (host picks silently, the
+/// roster poll converges) remains the fallback when <c>party_select_relay</c> is off, or when
+/// no causal trigger correlates with this capture (see the 2026-09-25 SECOND PASS note below).
+///
+/// ⚠ 2026-09-25 SECOND PASS: the FIRST relay design called <c>CGuiInGame::ShowPartySelection</c>
+/// directly on the host with the captured <c>exit_script</c> — live-tested, and WRONG. A live
+/// run found the host's own screen never actually opened (screenshotted, confirmed empty) while
+/// the direct call itself reported "opened" (<c>CGuiInGame+0x78</c> non-null right after the
+/// call): that signal proves nothing, because <c>+0x78</c> is a PERSISTENTLY REUSED object (see
+/// the CRASH FIX note below) — it is essentially always non-null once first constructed in a
+/// module, whether or not the call that just ran actually did anything. Worse, <c>exit_script</c>
+/// itself may be STALE: since the object is reused, its <c>+0x074</c> field can carry residue
+/// from an earlier, unrelated <c>ShowPartySelectionGUI</c> call rather than anything caused by
+/// THIS capture. The fix does not call <c>ShowPartySelection</c> at all any more — it relays
+/// the TRIGGER this instance's own real player most recently fired
+/// (<see cref="OdysseyTriggers.TryGetRecentLocalTrigger"/>) and the host re-fires that SAME
+/// trigger's OnEnter for ITS OWN player through <c>OdysseyTriggers.FireTriggerForLocalPlayer</c>
+/// — the IDENTICAL, already-live-proven call the <c>firetrigger</c> dev verb makes, so the
+/// host's engine runs byte-for-byte the same retail script chain a real walk-in would (input
+/// class, pause, <c>AddPanel</c>, and whatever else the retail dispatch does — all of it, for
+/// free, because nothing here re-implements any part of that chain). See
+/// <see cref="PartySelectHostRequestController"/> and <c>Odyssey.PartySelectRelay.cs</c>'s own
+/// updated header for what the (now unused, kept for its RE value) direct call still documents.
 ///
 /// ⚠ 2026-09-25 CRASH FIX: a live joiner-suppress-then-host-led-exit sequence produced a
 /// 100%-reproducible <c>CGuiInGame::ShutDown 0x0062C310</c> access violation on the CLIENT at
@@ -94,6 +112,12 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     /// See <see cref="PartySelectSuppressionRule.ShouldRelay"/>.</summary>
     private readonly bool _relayEnabled = PluginConfig.ReadBool("party_select_relay", true);
 
+    /// <summary>How stale a locally-fired trigger may be and still count as "what caused this
+    /// panel" (<see cref="OdysseyTriggers.TryGetRecentLocalTrigger"/>). Generous: the live
+    /// finding this window exists to cover fired within 3 ms, but a retail script chain can
+    /// stage a <c>DelayCommand</c> before actually opening the screen.</summary>
+    private const long TriggerCorrelationWindowMs = 5000;
+
     /// <summary>The panel this controller has already marked for the sweep, or 0. Never
     /// dereferenced again once set — see the class comment.</summary>
     private nint _panel;
@@ -156,6 +180,16 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         bool haveExitScript = Odyssey.TryReadPartySelectExitScript(panel, out string exitScript);
         Odyssey.ReadPartySelectForcedNpcs(panel, out int forceNpc1, out int forceNpc2);
 
+        // 2026-09-25 second pass: exit_script is kept for diagnostics only now — CGuiInGame+0x78
+        // is a persistently REUSED object (see the class header), so the field it carries at
+        // capture time can be stale residue from an earlier, unrelated call rather than
+        // something genuinely caused by whatever opened the panel THIS time. What the host
+        // actually replays is the TRIGGER this instance's own real player most recently fired
+        // (correlated by OdysseyTriggers, the same "one slot, freshest wins" signal the
+        // `firetrigger` dev verb and the native walk-in observer both already feed) — see
+        // PartySelectHostRequestController.
+        bool haveTrigger = OdysseyTriggers.TryGetRecentLocalTrigger(TriggerCorrelationWindowMs, out uint triggerId);
+
         uint* state = (uint*)(panel + PanelStateBits);
         *state = (*state & ~0x300u) | 0x400u;
 
@@ -170,18 +204,28 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         _guiManager = guiManager;
         _lastHandledPanel = panel;
 
-        if (PartySelectSuppressionRule.ShouldRelay(_enabled, _relayEnabled, isClientInLiveSession) && haveExitScript)
+        if (PartySelectSuppressionRule.ShouldRelay(_enabled, _relayEnabled, isClientInLiveSession) && haveTrigger)
         {
-            block.PublishPartySelectClientCapture(exitScript, forceNpc1, forceNpc2);
+            block.PublishPartySelectClientCapture(
+                haveExitScript ? exitScript : string.Empty, forceNpc1, forceNpc2, triggerId);
             block.PostLocalChatLine("asked the host to choose the party");
             PluginHost.Log($"party-select: client copy captured and relayed to the host "
-                + $"(exit_script='{exitScript}', forceNpc1={forceNpc1}, forceNpc2={forceNpc2})");
+                + $"(trigger=0x{triggerId:X}, exit_script='{exitScript}', forceNpc1={forceNpc1}, "
+                + $"forceNpc2={forceNpc2})");
         }
         else
         {
+            // No recent local trigger to correlate this capture with (or relay is off) —
+            // nothing reliable to ask the host to replay. Falls back to the original
+            // suppress-and-converge design: the host picks through its own unmodified screen
+            // whenever IT next visits this same trigger/screen, and PartyRosterController's
+            // poll still converges this client's roster regardless.
             block.PostLocalChatLine("party is chosen by the host");
             PluginHost.Log("party-select: client copy suppressed - the host is picking "
-                + "(PartyRosterController's poll converges the roster)");
+                + "(PartyRosterController's poll converges the roster)"
+                + (PartySelectSuppressionRule.ShouldRelay(_enabled, _relayEnabled, isClientInLiveSession)
+                    ? " - no recent local trigger to relay"
+                    : string.Empty));
         }
     }
 

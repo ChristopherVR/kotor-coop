@@ -15,6 +15,7 @@ public static partial class PacketCodec
         w.WriteString(packet.ExitScript, PartySelectRequestPacket.MaxScriptLength);
         w.WriteInt32(packet.ForceNpc1);
         w.WriteInt32(packet.ForceNpc2);
+        w.WriteUInt32(packet.TriggerId);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -32,13 +33,15 @@ public static partial class PacketCodec
         string exitScript = r.ReadString();
         int forceNpc1 = r.ReadInt32();
         int forceNpc2 = r.ReadInt32();
+        uint triggerId = r.ReadUInt32();
 
         if (r.Failed || requestSerial == 0)
         {
             return null;
         }
 
-        return new PartySelectRequestPacket(peerId, requestSerial, module, exitScript, forceNpc1, forceNpc2);
+        return new PartySelectRequestPacket(
+            peerId, requestSerial, module, exitScript, forceNpc1, forceNpc2, triggerId);
     }
 
     public static int Write(Span<byte> buffer, PartySelectResponsePacket packet)

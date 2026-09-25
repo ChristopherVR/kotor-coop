@@ -324,7 +324,19 @@ public static class ProtocolConstants
     /// silent, confusing capability gap worth a version gate even though nothing existing
     /// changed shape.
     /// </summary>
-    public const byte Version = 73;
+    /// <summary>
+    /// Version 74: <see cref="PartySelectRequestPacket"/> gains <c>TriggerId</c> (a live pass
+    /// on version 73 found calling <c>CGuiInGame::ShowPartySelection</c> directly on the host
+    /// unreliable — see the doc's own 2026-09-25 "SECOND PASS" section — so the host now
+    /// re-fires the requester's own causal trigger instead; the new field is what it fires).
+    /// Bumped because this CHANGES AN EXISTING PACKET'S SHAPE, unlike 72/73's purely additive
+    /// new types: a version-73 sender's <c>TriggerId</c>-less packet would desync a version-74
+    /// reader's field offsets for everything read after it. Both builds in any one session
+    /// always match (a version mismatch is refused outright at Hello), so there is no partial
+    /// compatibility to preserve — the gate exists purely to refuse the stale-build pairing
+    /// cleanly instead of silently misreading bytes.
+    /// </summary>
+    public const byte Version = 74;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

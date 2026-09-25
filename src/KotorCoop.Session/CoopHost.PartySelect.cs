@@ -27,7 +27,7 @@ public sealed partial class CoopHost
     /// unreachable today; wiring a real loopback is future work if this ever needs to be
     /// exercised.</remarks>
     public void RequestPartySelect(
-        string module, string exitScript, int forceNpc1, int forceNpc2, uint requestSerial)
+        string module, string exitScript, int forceNpc1, int forceNpc2, uint triggerId, uint requestSerial)
     {
         if (requestSerial == 0)
         {
@@ -37,7 +37,8 @@ public sealed partial class CoopHost
         lock (_gate)
         {
             _pendingPartySelectRequests.Add(
-                new PartySelectRequestPacket(HostPeerId, requestSerial, module, exitScript, forceNpc1, forceNpc2));
+                new PartySelectRequestPacket(
+                    HostPeerId, requestSerial, module, exitScript, forceNpc1, forceNpc2, triggerId));
         }
     }
 

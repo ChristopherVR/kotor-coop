@@ -77,6 +77,30 @@ internal partial struct SharedBlock
     public const int OffsetPartySelectHostOutcomeSerial = 0x5C40;
 
     /// <summary>Plugin -&gt; agent. <see cref="PartySelectHostOutcomeCode"/> for the last
-    /// finished screen. Region ends at 0x5C48; 0x5C48..0x6000 is free.</summary>
+    /// finished screen.</summary>
     public const int OffsetPartySelectHostOutcome = 0x5C44;
+
+    // ---- 2026-09-25 second pass: relay the CAUSAL TRIGGER, not a direct ShowPartySelection
+    // call ----------------------------------------------------------------------------------
+    //
+    // Live pass 2 found calling CGuiInGame::ShowPartySelection directly produced a false
+    // "refused - busy": CGuiInGame+0x78 is non-null essentially always (it is a persistently
+    // reused object, per this file's own +0x78 discussion elsewhere), so a live
+    // PanelExists-registered check right after the call is the only trustworthy "did it really
+    // open" signal, and the direct call was not actually opening anything — screenshotted
+    // proof, no screen. Fix: relay the trigger this instance's own real player most recently
+    // fired (OdysseyTriggers.TryGetRecentLocalTrigger) and have the HOST re-fire that SAME
+    // trigger's OnEnter for ITS OWN player via OdysseyTriggers.FireTriggerForLocalPlayer — the
+    // IDENTICAL call the already-live-proven `firetrigger` dev verb makes, so the host's engine
+    // runs byte-for-byte the same retail script chain a real walk-in would.
+
+    /// <summary>Plugin -&gt; agent. The trigger id <c>OdysseyTriggers.TryGetRecentLocalTrigger</c>
+    /// correlated with this capture, or 0 when none fired recently enough to trust.</summary>
+    public const int OffsetPartySelectClientTriggerId = 0x5C48;
+
+    /// <summary>Agent -&gt; plugin. The trigger id for the host to re-fire — copied verbatim
+    /// from the requester's <see cref="OffsetPartySelectClientTriggerId"/>. 0 means "no known
+    /// causal trigger" — the host refuses outright rather than guessing at a direct call.
+    /// Region ends at 0x5C50; 0x5C50..0x6000 is free.</summary>
+    public const int OffsetPartySelectHostTriggerId = 0x5C4C;
 }

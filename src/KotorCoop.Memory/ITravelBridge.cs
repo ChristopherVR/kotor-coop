@@ -163,26 +163,34 @@ public interface ITravelBridge
     /// The party-select request THIS instance's own player most recently captured (a client's
     /// own suppressed <c>CSWGuiPartySelection</c> panel, captured before being swept):
     /// <paramref name="serial"/> bumps once per capture (0 = never), <paramref name="exitScript"/>
-    /// and the forced NPC slots are the panel's own <c>ShowPartySelectionGUI</c> parameters.
-    /// De-duplicate on the serial. Default false when this bridge has no plugin.
+    /// and the forced NPC slots are the panel's own <c>ShowPartySelectionGUI</c> parameters
+    /// (diagnostics only as of the 2026-09-25 second pass — see
+    /// <paramref name="triggerId"/>'s own remark), and <paramref name="triggerId"/> is the
+    /// trigger this instance's own real player most recently fired, correlated with the
+    /// capture — 0 when nothing recent enough to trust. De-duplicate on the serial. Default
+    /// false when this bridge has no plugin.
     /// </summary>
     bool TryReadPartySelectClientCapture(
-        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2)
+        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2, out uint triggerId)
     {
         serial = 0;
         exitScript = string.Empty;
         forceNpc1 = -1;
         forceNpc2 = -1;
+        triggerId = 0;
         return false;
     }
 
     /// <summary>
-    /// HOST only: asks the plugin to open this instance's own party-selection screen with the
-    /// given exit script and forced NPCs — the native call a peer's request asked for. The
-    /// plugin acks through <see cref="TryReadPartySelectHostStatus"/>. Default false when there
-    /// is no plugin.
+    /// HOST only: asks the plugin to open this instance's own party-selection screen for a
+    /// peer's request. 2026-09-25 second pass: the plugin does this by re-firing
+    /// <paramref name="triggerId"/>'s OnEnter for the host's own player (the SAME call the
+    /// <c>firetrigger</c> dev verb makes) rather than calling <c>ShowPartySelection</c> directly
+    /// — <paramref name="exitScript"/>/<paramref name="forceNpc1"/>/<paramref name="forceNpc2"/>
+    /// are carried through for logging only. The plugin acks through
+    /// <see cref="TryReadPartySelectHostStatus"/>. Default false when there is no plugin.
     /// </summary>
-    bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2) => false;
+    bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2, uint triggerId) => false;
 
     /// <summary>
     /// What the plugin did with the last <see cref="TryRequestPartySelectHostOpen"/> request:

@@ -19,6 +19,16 @@ internal sealed partial class TransitionPump
     /// screen; an answer for the old serial is simply ignored once it arrives).</summary>
     private uint _partySelectActiveRequestSerial;
 
+    /// <summary>Snapshotted at the moment of capture, not re-read from the block every tick —
+    /// a resend must carry the SAME params even if a later tick's block read happens to fail
+    /// transiently (the block fields themselves do not change again until a NEW capture, which
+    /// replaces <see cref="_partySelectActiveRequestSerial"/> too).</summary>
+    private uint _partySelectActiveTriggerId;
+
+    private string _partySelectActiveExitScript = string.Empty;
+    private int _partySelectActiveForceNpc1 = -1;
+    private int _partySelectActiveForceNpc2 = -1;
+
     private int _partySelectAttempts;
     private long _partySelectNextSendAtMs;
 
@@ -34,7 +44,7 @@ internal sealed partial class TransitionPump
     private void PumpPartySelectClient(in PlayerState local, IReadOnlyList<RemotePeer> peers)
     {
         bool readable = bridge.TryReadPartySelectClientCapture(
-            out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2);
+            out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2, out uint triggerId);
 
         // Same baselining rule PublishOwnGalaxyDeparture uses: the block outlives sessions in
         // this process, so a leftover serial from before this session must not be treated as a
@@ -48,12 +58,16 @@ internal sealed partial class TransitionPump
         {
             _partySelectBaselineSerial = serial;
             _partySelectActiveRequestSerial = serial;
+            _partySelectActiveTriggerId = triggerId;
+            _partySelectActiveExitScript = exitScript;
+            _partySelectActiveForceNpc1 = forceNpc1;
+            _partySelectActiveForceNpc2 = forceNpc2;
             _partySelectAttempts = 0;
             _partySelectNextSendAtMs = 0;
 
             string host = PeerLabel(CoopHost.HostPeerId, peers);
-            log($"party-select: asking {host} to choose the party (exit_script='{exitScript}', "
-                + $"forceNpc1={forceNpc1}, forceNpc2={forceNpc2})");
+            log($"party-select: asking {host} to choose the party (trigger=0x{triggerId:X}, "
+                + $"exit_script='{exitScript}', forceNpc1={forceNpc1}, forceNpc2={forceNpc2})");
             bridge.PostChatLine($"asked {host} to choose the party");
         }
 
@@ -74,7 +88,8 @@ internal sealed partial class TransitionPump
             else
             {
                 session.RequestPartySelect(
-                    local.Module, exitScript, forceNpc1, forceNpc2, _partySelectActiveRequestSerial);
+                    local.Module, _partySelectActiveExitScript, _partySelectActiveForceNpc1,
+                    _partySelectActiveForceNpc2, _partySelectActiveTriggerId, _partySelectActiveRequestSerial);
                 _partySelectAttempts++;
                 _partySelectNextSendAtMs = now + PartySelectResendMs;
             }
@@ -168,10 +183,27 @@ internal sealed partial class TransitionPump
                 continue;
             }
 
+            if (request.TriggerId == 0)
+            {
+                // No causal trigger to replay — refuse right here, without ever touching the
+                // plugin: PartySelectSuppressionController only relays when it correlated one
+                // (docs/research/galaxy-map-and-party-select.md's 2026-09-25 SECOND PASS note),
+                // so this should be rare, but a stale/old-build sender is still possible.
+                log($"party-select: refusing peer {request.PeerId}'s request #{request.RequestSerial} - "
+                    + "no trigger id to replay");
+                session.SendPartySelectResponse(
+                    request.PeerId,
+                    new PartySelectResponsePacket(
+                        request.RequestSerial, 1, PartySelectResponseStatus.Refused,
+                        "no known trigger to replay"));
+                continue;
+            }
+
             _partySelectHostActive = new PartySelectHostState(request.PeerId, request.RequestSerial, false);
             _partySelectHostAppliedBaseline = bridge.TryReadPartySelectHostStatus(out uint applied, out _) ? applied : 0;
 
-            if (!bridge.TryRequestPartySelectHostOpen(request.ExitScript, request.ForceNpc1, request.ForceNpc2))
+            if (!bridge.TryRequestPartySelectHostOpen(
+                request.ExitScript, request.ForceNpc1, request.ForceNpc2, request.TriggerId))
             {
                 log($"party-select: could not hand request #{request.RequestSerial} to the plugin (no block?)");
                 session.SendPartySelectResponse(
@@ -183,7 +215,7 @@ internal sealed partial class TransitionPump
             }
 
             log($"party-select: opening peer {request.PeerId}'s request #{request.RequestSerial} "
-                + $"(exit_script='{request.ExitScript}')");
+                + $"(trigger=0x{request.TriggerId:X}, exit_script='{request.ExitScript}')");
         }
 
         if (_partySelectHostActive is not { } active)
@@ -225,7 +257,8 @@ internal sealed partial class TransitionPump
             session.SendPartySelectResponse(
                 active.PeerId,
                 new PartySelectResponsePacket(
-                    active.RequestSerial, 1, PartySelectResponseStatus.Refused, "busy"));
+                    active.RequestSerial, 1, PartySelectResponseStatus.Refused,
+                    "the host's engine did not open a screen for that trigger"));
             _partySelectHostActive = null;
         }
     }

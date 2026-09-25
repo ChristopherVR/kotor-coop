@@ -10,12 +10,21 @@ internal enum PartySelectHostStatusCode : uint
 }
 
 /// <summary>
-/// The host half of the party-select relay (SharedBlock.PartySelect.cs): acts on the agent's
-/// "open party-select with these params" request by calling
-/// <see cref="Odyssey.ShowPartySelectionGui"/> — the same native call the retail
-/// <c>ShowPartySelectionGUI</c> nwscript action reaches — and then watches the screen it just
-/// opened to tell the agent, later, whether the host confirmed or cancelled
-/// (<see cref="PartySelectOutcomeRule"/>).
+/// The host half of the party-select relay (SharedBlock.PartySelect.cs). 2026-09-25 SECOND
+/// PASS: acts on the agent's "open party-select for this request" by re-firing the CAUSAL
+/// TRIGGER for the host's own player — <c>OdysseyTriggers.FireTriggerForLocalPlayer</c>, the
+/// IDENTICAL, already-live-proven call the <c>firetrigger</c> dev verb makes — rather than
+/// calling <c>CGuiInGame::ShowPartySelection</c> directly. See
+/// <see cref="PartySelectSuppressionController"/>'s own header for why the direct call was
+/// live-tested and found wrong (a false "opened" signal off a persistently-reused object, and
+/// possibly-stale <c>exit_script</c> data).
+///
+/// Firing the trigger is synchronous (the script's own FIRST few lines run inline, inside this
+/// call), but the retail script chain commonly stages a <c>DelayCommand</c> before it actually
+/// reaches <c>ShowPartySelectionGUI</c> — so whether a real screen appears is NOT decided in the
+/// same frame the trigger fires. This controller therefore fires once, then POLLS for the panel
+/// to register over a several-second window before declaring the request opened or refused,
+/// rather than checking same-frame the way the (now-abandoned) direct-call design did.
 ///
 /// Runs from the same <see cref="PluginHost.OnFrame"/> schedule
 /// <see cref="PartySelectSuppressionController"/> does, right after it: suppression only ever
@@ -24,9 +33,28 @@ internal enum PartySelectHostStatusCode : uint
 /// </summary>
 internal sealed unsafe class PartySelectHostRequestController(SharedBlockView block)
 {
+    private enum Phase
+    {
+        Idle,
+        WatchingOpen,
+        WatchingOutcome,
+    }
+
+    /// <summary>How long to poll for the panel to register after firing the trigger before
+    /// declaring the request refused. Generous — a <c>DelayCommand(1.5, ...)</c>-shaped script
+    /// (the swoop-taxi's own dispatch, §2.2) plus loading/frame slack.</summary>
+    private const long OpenTimeoutMs = 8_000;
+
+    private Phase _phase = Phase.Idle;
+
     private uint _appliedRequestSerial;
 
-    /// <summary>The panel this controller opened and is watching for a close, or 0 while
+    /// <summary>The request currently being watched for an open, or 0 in <see cref="Phase.Idle"/>.</summary>
+    private uint _pendingSerial;
+
+    private long _watchOpenDeadlineMs;
+
+    /// <summary>The panel this controller found open and is watching for a close, or 0 while
     /// nothing is in flight.</summary>
     private nint _watchedPanel;
 
@@ -43,6 +71,8 @@ internal sealed unsafe class PartySelectHostRequestController(SharedBlockView bl
     public void Invalidate()
     {
         _appliedRequestSerial = block.PartySelectHostRequestSerial;
+        _phase = Phase.Idle;
+        _pendingSerial = 0;
         _watchedPanel = 0;
         _watchedGuiManager = 0;
     }
@@ -54,10 +84,15 @@ internal sealed unsafe class PartySelectHostRequestController(SharedBlockView bl
             return;
         }
 
-        if (_watchedPanel != 0)
+        switch (_phase)
         {
-            PollOutcome();
-            return;
+            case Phase.WatchingOpen:
+                PollWatchOpen();
+                return;
+
+            case Phase.WatchingOutcome:
+                PollOutcome();
+                return;
         }
 
         uint serial = block.PartySelectHostRequestSerial;
@@ -68,39 +103,76 @@ internal sealed unsafe class PartySelectHostRequestController(SharedBlockView bl
 
         _appliedRequestSerial = serial;
 
-        string exitScript = block.PartySelectHostExitScript;
-        int npc1 = block.PartySelectHostForceNpc1;
-        int npc2 = block.PartySelectHostForceNpc2;
+        uint triggerId = block.PartySelectHostTriggerId;
+        if (triggerId == 0)
+        {
+            Refuse(serial, "no known trigger to replay (the requester's own capture found no "
+                + "recent local trigger to correlate — see PartySelectSuppressionController)");
+            return;
+        }
 
-        bool opened = Odyssey.ShowPartySelectionGui(exitScript, npc1, npc2, out string detail);
-        if (opened && TryLocatePanel(out nint panel, out nint guiManager))
+        uint hostPlayerId = Odyssey.GetPlayerObjectId();
+        if (hostPlayerId == 0)
+        {
+            Refuse(serial, "no player loaded");
+            return;
+        }
+
+        string result = OdysseyTriggers.FireTriggerForLocalPlayer($"0x{triggerId:X}", hostPlayerId);
+        PluginHost.Log($"party-select: request #{serial} - {result}");
+
+        if (!result.Contains("fired "))
+        {
+            Refuse(serial, result);
+            return;
+        }
+
+        // Do NOT ack yet: the fire only ran the script's first few lines — whether a real
+        // screen appears is decided by whatever that script does next, possibly after a
+        // DelayCommand. See the class header.
+        _pendingSerial = serial;
+        _watchOpenDeadlineMs = Environment.TickCount64 + OpenTimeoutMs;
+        _phase = Phase.WatchingOpen;
+    }
+
+    private void Refuse(uint serial, string detail)
+    {
+        block.PartySelectHostStatus = (uint)PartySelectHostStatusCode.Refused;
+        block.PartySelectHostApplied = serial;
+        PluginHost.Log($"party-select: refused request #{serial} - {detail}");
+    }
+
+    private void PollWatchOpen()
+    {
+        if (TryLocatePanel(out nint panel, out nint guiManager))
         {
             _watchedPanel = panel;
             _watchedGuiManager = guiManager;
             _rosterMaskAtOpen = Odyssey.TryReadPartyRoster(out _, out uint mask) ? mask : 0;
+
             block.PartySelectHostStatus = (uint)PartySelectHostStatusCode.Opened;
-            PluginHost.Log($"party-select: opened request #{serial} for the host "
-                + $"(exit_script='{exitScript}', forceNpc1={npc1}, forceNpc2={npc2})");
-        }
-        else
-        {
-            block.PartySelectHostStatus = (uint)PartySelectHostStatusCode.Refused;
-            PluginHost.Log($"party-select: refused request #{serial} - {detail}");
+            block.PartySelectHostApplied = _pendingSerial;
+            PluginHost.Log($"party-select: request #{_pendingSerial} opened for the host");
+
+            _phase = Phase.WatchingOutcome;
+            return;
         }
 
-        // Status first, applied last: the agent reads applied, then status, so a torn read
-        // can only ever show "not handled yet" — the same convention GalaxyDepartureController
-        // uses.
-        block.PartySelectHostApplied = serial;
+        if (Environment.TickCount64 < _watchOpenDeadlineMs)
+        {
+            return;
+        }
+
+        Refuse(_pendingSerial, $"no screen appeared within {OpenTimeoutMs} ms of firing the trigger");
+        _phase = Phase.Idle;
+        _pendingSerial = 0;
     }
 
     /// <summary>
-    /// <c>ShowPartySelectionGui</c> reports success by <c>CGuiInGame+0x78</c> being non-null
-    /// right after the call, but that raw pointer is the same one
-    /// <see cref="PartySelectSuppressionController"/>'s own header warns against trusting
-    /// without a registration check — so this re-resolves through the exact same
-    /// manager-registered path that controller uses, rather than reusing the bare pointer
-    /// <c>ShowPartySelectionGui</c> already saw.
+    /// <c>PanelExists</c>-registered check — the same manager-registered path
+    /// <see cref="PartySelectSuppressionController"/> uses, exposed here so this controller
+    /// never has to guess from a raw <c>CGuiInGame+0x78</c> read (see the class header's own
+    /// discussion of why that pointer alone proves nothing).
     /// </summary>
     private static bool TryLocatePanel(out nint panel, out nint guiManager) =>
         PartySelectSuppressionController.TryGetOpenPartySelectionPanel(out panel, out guiManager);
@@ -126,5 +198,7 @@ internal sealed unsafe class PartySelectHostRequestController(SharedBlockView bl
 
         _watchedPanel = 0;
         _watchedGuiManager = 0;
+        _phase = Phase.Idle;
+        _pendingSerial = 0;
     }
 }

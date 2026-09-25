@@ -2433,3 +2433,168 @@ run above).
    host, then have the joiner `firetrigger ebn12_ebonexit` again) — expect the joiner's chat to show
    `the host could not open the party screen (a conversation is active)` and the host's own dialogue
    to be undisturbed.
+
+
+## 2026-09-25 SECOND PASS — the direct `ShowPartySelection` call was wrong; replay the causal trigger instead
+
+**Supersedes §4/§7's host-open mechanism above.** §1-§8 above (the "2026-09-25" section) shipped
+and was live-tested the same day. Result, reported back by the live session: the wire works end
+to end — the joiner's `firetrigger ebn12_ebonexit` produces "asked the host to choose the party"
+on the joiner and `party-select: opening peer 2's request #1 (exit_script='k_pebn_exithawk')` on
+the host — but the host's plugin then logged `party-select: refused request #1 - opened` (a
+contradiction: it thought it opened, then refused) and a host screenshot taken 4 s later showed
+**no party-select screen at all**. The host was idle in `ebo_m12aa` — no GUI, no combat, no
+dialogue — so nothing should have blocked a real open.
+
+### Root cause: `CGuiInGame+0x78` non-null proves nothing
+
+§1 above already established, from fresh disassembly, that `ShowPartySelection` allocates
+`CGuiInGame+0x78` **exactly once per module** and reuses that SAME object for every subsequent
+call. This makes a bare "is it non-null" read after the direct call worthless as a success
+signal: the object can easily be non-null from an EARLIER, unrelated point (this exact same
+persistence is what caused the original "+0x78 never goes null again" write-storm finding this
+doc's §2.4/2026-08-28 section documents). `TryGetOpenPartySelectionPanel`'s own `PanelExists`
+registration check is the trustworthy signal — and it correctly reported NOT registered, which is
+what actually should have happened, since the SCREEN NEVER OPENED. The bug was calling
+`ShowPartySelection` directly at all: `exit_script='k_pebn_exithawk'` — the value captured off the
+JOINER's own panel and relayed to the host — is itself suspect for the same reason: since the
+panel object is reused, its `+0x074` field can carry residue from an earlier, unrelated
+`ShowPartySelectionGUI` call rather than anything caused by the capture that read it. (Whether
+that is what happened here specifically was not independently confirmed; it does not need to be
+— the design below sidesteps the whole question.)
+
+Calling `ShowPartySelection` directly also never replicated whatever ELSE
+`ExecuteCommandShowPartySelectionGUI`'s own callers do around it — input class, pause state,
+`AddPanel` via the manager (all visible inside `ShowPartySelection`'s own body, §1's disassembly),
+and possibly more upstream in the real script dispatch that was never traced. The coordinator's
+own framing: "find by disassembly what [the wrapper] does besides calling `ShowPartySelection`...
+and replicate it" was the fallback option; the preferred one, taken here, is to not need to
+replicate anything at all.
+
+### The fix: relay the CAUSAL TRIGGER, run it through the VM exactly like a real walk-in
+
+Rather than trying to reconstruct "what native call did the panel's own opening logic make", the
+host now re-runs the SAME retail script dispatch a real walk-in would — `RunScript` on the
+trigger's own `OnEnter` field, exactly what `CSWSTrigger::EventHandler`'s generic-script branch
+does natively (already traced in full by `TriggerFireHook`'s own header) and exactly what the
+already-live-proven `firetrigger` dev verb already does (`OdysseyTriggers.FireTriggerForLocalPlayer`)
+— the same call the coordinator's own comparison test used for the WORKING host-led path
+("host `firetrigger ebn12_ebonexit`... DOES show the screen and a real OK click departs
+correctly"). Everything downstream — input class, pause, `AddPanel`, whatever else the retail
+dispatch does that was never fully traced — happens for free, because nothing here re-implements
+any part of that chain; it IS that chain.
+
+**New correlation primitive**, `OdysseyTriggers.TryGetRecentLocalTrigger`/`RecordLocalFire`:
+the trigger this instance's own REAL player (never a phantom, never a relayed fire) most recently
+fired, fed from BOTH fire paths —
+
+* the dev-verb path (`FireTriggerForLocalPlayer`), which never reaches `TriggerFireHook`'s own
+  hook site at all (that class's own header: "Firing THROUGH the relay... never reaches this call
+  site" — it calls `RunScript` directly, same as the natural path bypasses nothing);
+* the natural walk-in path, via `TriggerRelayController.HandleNativeFireObservation`'s existing
+  "is this MY OWN real character entering" filter (already computed there for a different
+  purpose — recorded here too, ahead of that controller's own narrower allowlist/eligibility
+  gates, since those serve the side-effect-replication feature, not this correlation).
+
+`PartySelectSuppressionController` now captures this trigger id (a 5 s correlation window —
+generous for a `DelayCommand`-shaped script, tight enough to reject a stale unrelated fire) instead
+of relying on the panel's own possibly-stale fields to drive the host. If no recent local trigger
+correlates, the capture is NOT relayed at all — it falls back to the original silent-suppress
+design (no misleading request sent).
+
+`PartySelectHostRequestController` (rewritten): on a request with `TriggerId != 0`, calls
+`OdysseyTriggers.FireTriggerForLocalPlayer($"0x{triggerId:X}", hostPlayerId)` — this IS the exact
+"host firetrigger ebn12_ebonexit" call, just driven by a network request instead of a console
+command. Firing is synchronous, but the retail script chain can stage a `DelayCommand` before it
+actually reaches `ShowPartySelectionGUI`, so the controller does NOT ack same-frame any more — it
+polls `TryGetOpenPartySelectionPanel` for up to 8 seconds before declaring the request opened or
+refused. A `TriggerId` of 0 (no correlated trigger at all) is refused immediately by the AGENT
+pump, without ever touching the plugin — nothing reliable to replay.
+
+`exit_script`/`forceNpc1`/`forceNpc2` are still relayed and logged, now for DIAGNOSTICS ONLY —
+they play no part in driving the host's own action any more.
+
+### Wire: protocol version 74
+
+`PartySelectRequestPacket` gains `TriggerId` (uint, 0 = none). This CHANGES AN EXISTING PACKET'S
+SHAPE (unlike 72/73's purely additive new types), so `ProtocolConstants.Version` bumps 73 → 74 —
+a version-73 sender's packet (no `TriggerId` field) would desync a version-74 reader's field
+offsets for everything after it. Both peers in a session always match versions (a mismatch is
+refused outright at Hello), so there is no partial-compatibility case to design for.
+
+### VERIFIED vs INFERRED vs NEEDS-LIVE, this second pass
+
+| Claim | Status |
+| --- | --- |
+| The false "opened"/screenshotted-empty finding itself | Live-CONFIRMED, reported by the coordinator's own test |
+| `CGuiInGame+0x78` non-null proving nothing (persistent, reused object) | VERIFIED by disassembly (§1 above), now understood to explain the live false positive too |
+| `OdysseyTriggers.FireTriggerForLocalPlayer` reproduces the working host-led path exactly | Already live-proven — it IS the `firetrigger` verb's own implementation, unchanged here |
+| The correlation window (5 s) actually spans the real gap between a `firetrigger` call (or a real walk-in) and the panel opening | NEEDS-LIVE — chosen generously but not measured |
+| The 8 s open-poll timeout is long enough for a real `DelayCommand`-shaped script | NEEDS-LIVE |
+| `PartySelectOutcomeRule`'s roster-diff confirm/cancel read, now applied to a panel opened via a REAL script dispatch rather than a direct call | Still NEEDS-LIVE — unchanged design, new opening mechanism |
+| The whole round trip: joiner `firetrigger`, host receives, host's OWN screen actually appears on screen this time, `partyselect ok`/a real click confirms, both land on the planet | NEEDS-LIVE — nothing in this rebuild has been run against the game |
+
+### What changed (files)
+
+* `src/KotorCoop.Plugin/OdysseyTriggers.cs` — `RecordLocalFire`/`TryGetRecentLocalTrigger`/
+  `InvalidateLocalFire`; `FireTriggerForLocalPlayer` now records its own fire.
+* `src/KotorCoop.Plugin/TriggerRelayController.cs` — records a real walk-in local fire too;
+  invalidates the correlation on module change.
+* `src/KotorCoop.Plugin/PartySelectSuppressionController.cs` — captures the correlated trigger
+  id instead of driving the relay off `exit_script`/forced NPCs; those are diagnostics only now.
+* `src/KotorCoop.Plugin/PartySelectHostRequestController.cs` — rewritten: fires the trigger via
+  `OdysseyTriggers.FireTriggerForLocalPlayer` instead of calling
+  `Odyssey.ShowPartySelectionGui`; polls up to 8 s before declaring open/refused.
+* `src/KotorCoop.Plugin/Odyssey.PartySelectRelay.cs` — `ShowPartySelectionGui` kept (the RE
+  remains accurate and useful) but no longer called by the relay; header updated to say so.
+* `src/KotorCoop.Plugin/SharedBlock.PartySelect.cs` / `SharedBlockView.PartySelect.cs` — two new
+  fields, `OffsetPartySelectClientTriggerId`/`OffsetPartySelectHostTriggerId` (`0x5C48`/`0x5C4C`,
+  region now `0x5C00..0x5C50`).
+* `src/KotorCoop.Protocol/Packets/PartySelectPackets.cs`, `PacketCodec.PartySelect.cs`,
+  `PacketType.cs` unchanged types, `ProtocolConstants.cs` (Version 73→74) —
+  `PartySelectRequestPacket` gains `TriggerId`.
+* `src/KotorCoop.Memory/ITravelBridge.cs`, `KotorGameBridge.Travel.cs`,
+  `KotorGameBridge.PluginBlock.cs` — thread `triggerId` through both bridge calls.
+* `src/KotorCoop.Session/IPartySelectSession.cs`, `CoopClient.PartySelect.cs`,
+  `CoopHost.PartySelect.cs`, `Pumps/TransitionPump.PartySelect.cs` — thread `triggerId` through;
+  the host pump now refuses a `TriggerId == 0` request locally, before ever asking the plugin.
+* Tests: `PartySelectRelayPumpTests.cs` updated for the new shapes, plus a new case
+  (`ARequestWithNoTriggerIdIsRefusedWithoutTouchingThePlugin`) and a resend-snapshot case.
+  `PacketCodecTests.cs` updated for the new field.
+
+### Updated NEEDS-LIVE recipe (replaces §8 above)
+
+Same prerequisite and staging as §8 (a save that has left the Endar Spire, or
+`setglobal K_CURRENT_PLANET 15` on both instances — Dantooine, matching the crash-fix control
+run).
+
+1. `demo.ps1 -ClientAutoCharacter -Isolated`, both land in `ebo_m12aa`.
+2. Host: `warp danm14aa from13` then `warp ebo_m12aa` (fresh module — the host's own
+   `CGuiInGame+0x78` unconstructed this visit).
+3. Joiner: `firetrigger ebn12_ebonexit`. Expect the joiner's log to show
+   `party-select: client copy captured and relayed to the host (trigger=0x...`, and the
+   joiner's chat to show `asked the host to choose the party`.
+4. Host: expect `party-select: fired 0x... OnEnter '...' for the local player` (the
+   `FireTriggerForLocalPlayer` result string) FOLLOWED, within a few seconds, by
+   `party-select: request #N opened for the host` and the real screen on screen — capture with
+   `tools/shot.ps1` this time to CONFIRM it (the whole point of this pass: the earlier "opened"
+   claim was false). The host's chat should show `<joiner> wants to leave - choose your party`.
+   If instead the log shows `no screen appeared within 8000 ms`, that means the retail script
+   chain this trigger reaches genuinely does not call `ShowPartySelectionGUI` — a real, useful
+   negative result (matches the 2026-09-19 pass's own finding that `k_pebn_leavhawk`/
+   `k_pebn_exithawk` contain no such call as read from their own decompiled source) — in which
+   case try the swoop-taxi trigger instead (`k_pebn_loc01`..`09`, confirmed §2.2 to call
+   `ShowPartySelectionGUI` directly) to validate the mechanism on a KNOWN-good trigger first.
+5. Host: `partyselect ok` (the existing verb) or a real click.
+6. Expect: normal retail confirm behaviour (unchanged — this relay never touches what confirming
+   does, only who gets asked), both peers land on the destination through the EXISTING
+   transition-announce/follow machinery, and the host's log shows
+   `party-select: the host confirmed a party` / `party-select: request #N finished (Confirmed)`.
+7. Crash-fix re-check (unchanged from §8): after a later party-select capture/suppress on the
+   joiner, run a normal module transition and confirm no `CClientExoAppInternal::UnloadModule`
+   crash.
+8. Busy/negative check (unchanged from §8, wording updated): start a dialogue on the host, then
+   have the joiner `firetrigger ebn12_ebonexit` again — expect
+   `the host's engine did not open a screen for that trigger` on the joiner (not "busy" — the
+   plugin no longer claims to know WHY, only that no screen appeared) and the host's own dialogue
+   undisturbed.
