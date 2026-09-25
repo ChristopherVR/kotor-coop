@@ -394,9 +394,9 @@ the same expression `CoopAgent.cs`'s own call site uses (§5).
    non-flagged quest item would simply stop mirroring in personal mode, which is the SAME failure
    shape a story would have shown before `party_pool_sync` existed at all (a per-engine-siloed
    item), not a new crash or corruption class.
-2. **The credits-reward relay (§4.2) is unit/pump-tested only, never watched on a live rig** —
-   the conversation-window scoping, the same-tick amplification guard and the host-side inbox
-   dedup fix are all reasoned and tested against fakes, not a real two-instance session.
+2. **The credits-reward relay (§4.2) has one live pass (Zuulan, §11 step 6)**. The
+   host-led path is proven. A joiner-led payout and a forced resend (§10 step 10) have not been
+   run on a rig; they are covered by tests against fakes.
 3. **The joiner's personal backpack/credits do not survive a disconnect/rejoin, by product
    decision** (§6) — not a gap to close, a deliberate scope boundary: the joiner's own game
    owns that state, the same as any other single-player progress.
