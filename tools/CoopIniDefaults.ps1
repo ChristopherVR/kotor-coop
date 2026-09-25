@@ -189,6 +189,7 @@ $script:CoopIniDeveloperKeyDefaults = @{
     interaction_locks                  = '1'
     party_roster_sync                  = '1'
     party_select_host_only             = '1'
+    party_select_relay                 = '1'
     galaxy_map_host_only               = '1'
     party_follow_refresh_final_node    = '0'
     party_follow_extend_final_node     = '0'

@@ -135,7 +135,7 @@ internal static class PluginConfig
         "party_follow_refresh_final_node", "party_follow_stall_recovery",
         "party_follow_stall_recovery_method", "party_pool_sync", "party_pool_trace",
         "phantom_gait_diagnostics",
-        "party_roster_sync", "party_select_host_only", "party_together_fix",
+        "party_roster_sync", "party_select_host_only", "party_select_relay", "party_together_fix",
         "pause_button_hook", "pause_sync", "pazaak_detect", "perf_trace", "phantom_targetable",
         "poison_sync", "removeparty_hook", "save_flush", "script_item_sync",
         "session_save_host_refusal", "smooth_ms", "solo_segment_any_module", "solo_segment_modules",

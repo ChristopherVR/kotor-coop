@@ -32,6 +32,7 @@ public interface ICoopSession :
     IPartyPoolSession,
     IStoreSession,
     ICreditGrantSession,
+    IPartySelectSession,
     IDisposable
 {
 }

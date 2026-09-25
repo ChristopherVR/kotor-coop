@@ -313,7 +313,18 @@ public static class ProtocolConstants
     /// every other new wire surface in this family gets one, even though nothing existing
     /// changed shape.
     /// </summary>
-    public const byte Version = 72;
+    /// <summary>
+    /// Version 73: two new packet types, <see cref="PacketType.PartySelectRequest"/>/
+    /// <see cref="PacketType.PartySelectResponse"/> — the party-select relay
+    /// (docs/research/galaxy-map-and-party-select.md's 2026-09-25 section): a client's own
+    /// suppressed <c>CSWGuiPartySelection</c> screen asks the host to open its own copy with
+    /// the same parameters, instead of the roster poll converging silently with nobody able to
+    /// pick. Bumped for the same reason version 72 was: a pre-73 peer has no handler for either
+    /// type, so an OLDER host would never learn a NEWER client wanted to leave at all — a
+    /// silent, confusing capability gap worth a version gate even though nothing existing
+    /// changed shape.
+    /// </summary>
+    public const byte Version = 73;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

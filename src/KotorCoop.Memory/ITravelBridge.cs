@@ -156,4 +156,58 @@ public interface ITravelBridge
         status = 0;
         return false;
     }
+
+    // ---- party-select relay -------------------------------------------------------
+
+    /// <summary>
+    /// The party-select request THIS instance's own player most recently captured (a client's
+    /// own suppressed <c>CSWGuiPartySelection</c> panel, captured before being swept):
+    /// <paramref name="serial"/> bumps once per capture (0 = never), <paramref name="exitScript"/>
+    /// and the forced NPC slots are the panel's own <c>ShowPartySelectionGUI</c> parameters.
+    /// De-duplicate on the serial. Default false when this bridge has no plugin.
+    /// </summary>
+    bool TryReadPartySelectClientCapture(
+        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2)
+    {
+        serial = 0;
+        exitScript = string.Empty;
+        forceNpc1 = -1;
+        forceNpc2 = -1;
+        return false;
+    }
+
+    /// <summary>
+    /// HOST only: asks the plugin to open this instance's own party-selection screen with the
+    /// given exit script and forced NPCs — the native call a peer's request asked for. The
+    /// plugin acks through <see cref="TryReadPartySelectHostStatus"/>. Default false when there
+    /// is no plugin.
+    /// </summary>
+    bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2) => false;
+
+    /// <summary>
+    /// What the plugin did with the last <see cref="TryRequestPartySelectHostOpen"/> request:
+    /// <paramref name="applied"/> echoes the request's own serial once handled, and
+    /// <paramref name="status"/> is the plugin's <c>PartySelectHostStatusCode</c> (1 opened,
+    /// 2 refused). False when there is no plugin.
+    /// </summary>
+    bool TryReadPartySelectHostStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// HOST only: what happened to the screen this instance most recently opened via
+    /// <see cref="TryRequestPartySelectHostOpen"/>, once it closed: <paramref name="serial"/>
+    /// bumps once per finished screen, and <paramref name="outcome"/> is the plugin's
+    /// <c>PartySelectOutcomeCode</c> (1 confirmed, 2 cancelled). De-duplicate on the serial.
+    /// False when there is no plugin.
+    /// </summary>
+    bool TryReadPartySelectHostOutcome(out uint serial, out uint outcome)
+    {
+        serial = 0;
+        outcome = 0;
+        return false;
+    }
 }

@@ -53,6 +53,10 @@ public class PacketHandlerRegistryTests
         // Party-placed mine replication (docs/research/mines.md §14): a client's placement/gone
         // report is a reliable intent to the host; the host never receives its own roster or ack.
         PacketType.PlacedMineIntent,
+        // Party-select relay (docs/research/galaxy-map-and-party-select.md, 2026-09-25): a
+        // client's suppressed panel becomes a request to the host; the host never receives its
+        // own response.
+        PacketType.PartySelectRequest,
         PacketType.None,
     ];
 
@@ -88,6 +92,9 @@ public class PacketHandlerRegistryTests
         // Party-placed mine replication: the host's ack of this client's own intent, and the
         // host's canonical-set roster level; a client never receives another client's intent.
         PacketType.PlacedMineIntentAck, PacketType.PlacedMineRoster,
+        // Party-select relay: the host's answer to this client's own request; a client never
+        // receives another client's request.
+        PacketType.PartySelectResponse,
         PacketType.None,
     ];
 

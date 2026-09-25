@@ -1026,6 +1026,10 @@ internal static unsafe partial class PluginHost
                 try
                 {
                     _partySelectSuppression?.OnFrame();
+                    // The host half of the same relay: opens a peer's requested screen and watches
+                    // for its outcome. Never races the suppression controller above — one only ever
+                    // fires on a client, the other only ever on a host.
+                    _partySelectHostRequest?.OnFrame();
                     // Same footing as the party-select screen: a client's companion Equipment page is
                     // closed, never reconciled — companion gear is the host's (companion_equip_host_only).
                     _companionEquipSuppression?.OnFrame();

@@ -63,4 +63,38 @@ public class PartySelectSuppressionRuleTests
         // get suppressed.
         Assert.False(PartySelectSuppressionRule.IsAlreadyHandled(candidate: 0x2000, lastHandled: 0x1000));
     }
+
+    // ShouldRelay (2026-09-25): whether a captured panel is ALSO relayed to the host as a
+    // request, rather than just silently suppressed. Requires both keys AND the same
+    // "am I a client right now" signal ShouldSuppress uses.
+
+    [Fact]
+    public void RelaysWhenBothKeysAreOnAndItIsAClient()
+    {
+        Assert.True(PartySelectSuppressionRule.ShouldRelay(
+            hostOnlyEnabled: true, relayEnabled: true, isClientInLiveSession: true));
+    }
+
+    [Fact]
+    public void DoesNotRelayWhenHostOnlyIsOffEvenIfRelayIsOn()
+    {
+        // Relay is a refinement of suppression, not an independent feature — if the client's
+        // own screen is not being suppressed at all, there is nothing to relay.
+        Assert.False(PartySelectSuppressionRule.ShouldRelay(
+            hostOnlyEnabled: false, relayEnabled: true, isClientInLiveSession: true));
+    }
+
+    [Fact]
+    public void DoesNotRelayWhenRelayIsOffEvenIfHostOnlyIsOn()
+    {
+        Assert.False(PartySelectSuppressionRule.ShouldRelay(
+            hostOnlyEnabled: true, relayEnabled: false, isClientInLiveSession: true));
+    }
+
+    [Fact]
+    public void DoesNotRelayOnTheHostsOwnInstance()
+    {
+        Assert.False(PartySelectSuppressionRule.ShouldRelay(
+            hostOnlyEnabled: true, relayEnabled: true, isClientInLiveSession: false));
+    }
 }

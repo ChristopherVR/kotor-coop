@@ -2007,4 +2007,81 @@ public class PacketCodecTests
         Assert.NotNull(decoded);
         Assert.Equal(original.PlayerName, decoded.PlayerName);
     }
+
+    // ---- party-select relay (2026-09-25) --------------------------------------------------
+
+    [Fact]
+    public void PartySelectRequestRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartySelectRequestPacket original = new(
+            PeerId: 2, RequestSerial: 7, Module: "ebo_m12aa", ExitScript: "k_pebn_swoop",
+            ForceNpc1: -1, ForceNpc2: -1);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPartySelectRequest(buffer[..length]));
+    }
+
+    [Fact]
+    public void PartySelectRequestRoundTripsWithForcedNpcs()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartySelectRequestPacket original = new(
+            PeerId: 2, RequestSerial: 7, Module: "ebo_m12aa", ExitScript: string.Empty,
+            ForceNpc1: 0, ForceNpc2: 4);
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPartySelectRequest(buffer[..length]));
+    }
+
+    [Fact]
+    public void PartySelectRequestRejectsAZeroSerial()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new PartySelectRequestPacket(2, 0, "ebo_m12aa", "k_pebn_swoop", -1, -1));
+
+        Assert.Null(PacketCodec.ReadPartySelectRequest(buffer[..length]));
+    }
+
+    [Theory]
+    [InlineData(PartySelectResponseStatus.Opened)]
+    [InlineData(PartySelectResponseStatus.Confirmed)]
+    [InlineData(PartySelectResponseStatus.Cancelled)]
+    [InlineData(PartySelectResponseStatus.Refused)]
+    [InlineData(PartySelectResponseStatus.AlreadyPending)]
+    public void PartySelectResponseRoundTrips(PartySelectResponseStatus status)
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        PartySelectResponsePacket original = new(RequestSerial: 7, ResponseSerial: 1, status, Detail: "a full-screen GUI is already open");
+
+        int length = PacketCodec.Write(buffer, original);
+        Assert.True(length > 0);
+        Assert.Equal(original, PacketCodec.ReadPartySelectResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void PartySelectResponseRejectsAZeroSerial()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new PartySelectResponsePacket(0, 1, PartySelectResponseStatus.Opened, string.Empty));
+
+        Assert.Null(PacketCodec.ReadPartySelectResponse(buffer[..length]));
+    }
+
+    [Fact]
+    public void PartySelectResponseRejectsAnUnknownStatus()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(
+            buffer, new PartySelectResponsePacket(7, 1, PartySelectResponseStatus.Opened, string.Empty));
+
+        // status byte: header(4) + RequestSerial(4) + ResponseSerial(4)
+        buffer[12] = 0xEE;
+
+        Assert.Null(PacketCodec.ReadPartySelectResponse(buffer[..length]));
+    }
 }

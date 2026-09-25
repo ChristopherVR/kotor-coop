@@ -31,6 +31,19 @@ internal static class PartySelectSuppressionRule
         enabled && isClientInLiveSession;
 
     /// <summary>
+    /// Whether a captured panel should ALSO be relayed to the host as a request (2026-09-25),
+    /// rather than just silently suppressed. Relay only ever makes sense as a REFINEMENT of
+    /// suppression — a client whose screen is not suppressed in the first place already gets
+    /// to pick locally (desync risk aside, that is a different feature entirely) — so this
+    /// requires <paramref name="hostOnlyEnabled"/> too, not just its own key.
+    /// </summary>
+    /// <param name="hostOnlyEnabled">coop.ini <c>party_select_host_only</c>.</param>
+    /// <param name="relayEnabled">coop.ini <c>party_select_relay</c> (default ON).</param>
+    /// <param name="isClientInLiveSession">See the type's own doc comment.</param>
+    public static bool ShouldRelay(bool hostOnlyEnabled, bool relayEnabled, bool isClientInLiveSession) =>
+        hostOnlyEnabled && relayEnabled && isClientInLiveSession;
+
+    /// <summary>
     /// Live pass 2026-08-28 (docs/research/galaxy-map-and-party-select.md's dated section):
     /// <c>CGuiInGame+0x78</c> reads as a live, vtable-matched <c>CSWGuiPartySelection*</c> from
     /// the very first frame after a fresh save load and NEVER goes null again — 70,000+
