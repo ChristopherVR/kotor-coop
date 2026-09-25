@@ -310,8 +310,19 @@ public sealed partial class CoopAgent
         // measured live, the joiner's agent silently exited mid-play and the host ran on
         // alone. Log the tick's failure and keep pumping; give up only when it fails
         // continuously for ~10 seconds, which means the game is actually gone.
-        int consecutiveFailures = 0;
-        int maxConsecutiveFailures = _settings.PollRate * 10;
+        // ⚠ RECOVERY (2026-09-25, docs/research/disconnect-reconnect.md's bridge-concurrency
+        // section): a corrupted Dictionary/List throws the exact same
+        // InvalidOperationException on EVERY later tick — the collection does not repair
+        // itself, so retrying the read alone was retrying a certain failure for the full 10s
+        // before this loop gave up and shut the agent down, silently dropping the player out
+        // of co-op while their game kept running (live: joiner agent, leg ~11 of a 20-leg
+        // module-warp soak). PumpFailureTracker's decisions (log full/repeat, reset the
+        // bridge's caches, give up) are pulled out into a pure, timer-free class so they are
+        // unit-testable without a real PeriodicTimer — this loop just executes what it says.
+        // Kept as a second line of defence for whatever the lock below does not cover: it
+        // should no longer be needed now that every multi-threaded bridge entry point is
+        // serialized (<see cref="IGameBridge.Sync"/>).
+        PumpFailureTracker failureTracker = new(_settings.PollRate);
 
         try
         {
@@ -320,22 +331,80 @@ public sealed partial class CoopAgent
                 sw.Restart();
                 try
                 {
-                    PumpOnce();
-                    consecutiveFailures = 0;
+                    // The whole tick is one bridge transaction: every other thread that
+                    // touches this bridge (the command dispatcher's poll loop, the join flow,
+                    // SessionManager's rejoin task, the server-discovery beacon) takes the
+                    // SAME lock around its own bridge calls, so this blocks them out for the
+                    // tick's duration rather than interleaving with them. See
+                    // IGameBridge.Sync's remarks — safe here because PumpOnce never calls into
+                    // SessionManager/CoopCommandDispatcher (only IGameBridge and this class's
+                    // own ICoopSession, which holds no lock this could invert against).
+                    lock (_bridge.Sync)
+                    {
+                        PumpOnce();
+                    }
+
+                    failureTracker.RecordSuccess();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    if (++consecutiveFailures == 1 || consecutiveFailures % _settings.PollRate == 0)
+                    PumpFailureAction action = failureTracker.RecordFailure(ex);
+
+                    if (action.LogFullException)
                     {
-                        // Name the frame: a transient read failure and a null-reference bug
-                        // print the same one-line message otherwise (live 2026-09-02, a host's
-                        // in-world reload logged an NRE with nowhere to look).
-                        Log?.Invoke($"pump tick failed ({consecutiveFailures} in a row): {ex.Message}"
-                            + $" [{ex.GetType().Name} at {TopFrame(ex)}]");
+                        // FULL exception, first failure only: a transient read failure and a
+                        // genuine bug print the same one-line message otherwise (live
+                        // 2026-09-02, a host's in-world reload logged an NRE with nowhere to
+                        // look), and the collection-corruption shape above is only nameable
+                        // from the stack trace — TopFrame alone does not say WHICH Dictionary/
+                        // List threw.
+                        Log?.Invoke($"pump tick failed (1 in a row): {ex}");
+                    }
+                    else if (action.LogRepeatSummary)
+                    {
+                        // Repeats: back to the one-line form so a long stall does not flood
+                        // the log with the same stack trace every tick.
+                        Log?.Invoke($"pump tick failed ({failureTracker.ConsecutiveFailures} in a row): "
+                            + $"{ex.Message} [{ex.GetType().Name} at {TopFrame(ex)}]");
                     }
 
-                    if (consecutiveFailures >= maxConsecutiveFailures)
+                    if (action.ResetCaches)
                     {
+                        // Only ever tried once per failure run: if a fresh cache does not fix
+                        // it, the problem is not the cache, and retrying the reset every tick
+                        // would just mask a real failure for the whole 10s window.
+                        Log?.Invoke(
+                            $"pump tick failing the same way {action.ConsecutiveSameExceptionCount} times "
+                            + "in a row; resetting the bridge's caches and retrying");
+
+                        try
+                        {
+                            _bridge.ResetCaches();
+                        }
+                        catch (Exception resetEx)
+                        {
+                            Log?.Invoke($"pump: ResetCaches itself failed: {resetEx.Message}");
+                        }
+                    }
+
+                    if (action.Shutdown)
+                    {
+                        // The player's own screen must say co-op stopped — without this the
+                        // agent just vanishes from the log and the player keeps playing
+                        // believing they are still connected (live: exactly this shape, the
+                        // joiner's game kept running solo with no on-screen sign anything had
+                        // changed). Best-effort: a bridge that cannot even post a chat line
+                        // has nothing left to lose by trying.
+                        try
+                        {
+                            _bridge.PostChatLine(
+                                "Co-op stopped: the game stopped responding to the co-op agent.");
+                        }
+                        catch (Exception chatEx)
+                        {
+                            Log?.Invoke($"pump: could not post the co-op-stopped chat line: {chatEx.Message}");
+                        }
+
                         Log?.Invoke("pump failing continuously; the game is gone, shutting down");
                         break;
                     }

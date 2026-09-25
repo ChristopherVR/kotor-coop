@@ -41,32 +41,38 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public void ForgetWorldShadows()
     {
-        _saveDigests?.InvalidateLoadedWorld();
+        // ⚠ SERIALIZED — see KotorGameBridge.Sync. Called from the join flow's
+        // AdoptAndReconnectAsync (a different thread from the pump, which reads these same
+        // shadow dictionaries every world-state pass) right after a world adoption settles.
+        lock (Sync)
+        {
+            _saveDigests?.InvalidateLoadedWorld();
 
-        // Doors. Clearing the module name too is what forces the next scan to take the
-        // "entered a new module" path in full, including the silent-baseline flag — clearing
-        // only the dictionaries would leave _doorBaselined true and announce every door in the
-        // module as a fresh change.
-        _doorShadow.Clear();
-        _doorModule = string.Empty;
-        _doorBaselined = false;
-        _nextDoorScanTicks = 0;
+            // Doors. Clearing the module name too is what forces the next scan to take the
+            // "entered a new module" path in full, including the silent-baseline flag — clearing
+            // only the dictionaries would leave _doorBaselined true and announce every door in the
+            // module as a fresh change.
+            _doorShadow.Clear();
+            _doorModule = string.Empty;
+            _doorBaselined = false;
+            _nextDoorScanTicks = 0;
 
-        _placeableShadow.Clear();
-        _placeableBaselineTrapped.Clear();
-        _placeableModule = string.Empty;
-        _placeableBaselined = false;
-        _nextPlaceableScanTicks = 0;
+            _placeableShadow.Clear();
+            _placeableBaselineTrapped.Clear();
+            _placeableModule = string.Empty;
+            _placeableBaselined = false;
+            _nextPlaceableScanTicks = 0;
 
-        // Floor mines: same edge-publisher shape, same reason.
-        _mineTracker.Reset();
-        _mineModule = string.Empty;
-        _nextMineScanTicks = 0;
+            // Floor mines: same edge-publisher shape, same reason.
+            _mineTracker.Reset();
+            _mineModule = string.Empty;
+            _nextMineScanTicks = 0;
 
-        // Globals. The shadow arrays are re-taken by TryResolveGlobals against the new world;
-        // dropping them makes the next collect a baseline rather than a diff against the
-        // previous save's values.
-        _shadowBooleans = null;
-        _shadowNumbers = null;
+            // Globals. The shadow arrays are re-taken by TryResolveGlobals against the new world;
+            // dropping them makes the next collect a baseline rather than a diff against the
+            // previous save's values.
+            _shadowBooleans = null;
+            _shadowNumbers = null;
+        }
     }
 }

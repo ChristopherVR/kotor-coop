@@ -428,7 +428,19 @@ public sealed partial class KotorGameBridge
     /// the list, because this is decoration on a lobby screen and a missing face must not
     /// stop a server being advertised.
     /// </summary>
+    /// <summary>⚠ SERIALIZED — see <see cref="KotorGameBridge.Sync"/>. Called both from the
+    /// pump's own party read and from the host's server-discovery beacon lambda
+    /// (<c>SessionManager.Connect</c>'s <c>portraits:</c> argument), on a different thread.
+    /// Calls <see cref="EnumerateCreatures"/> and mutates <c>_portraitResRefs</c>.</summary>
     public IReadOnlyList<string> ReadPartyPortraits()
+    {
+        lock (Sync)
+        {
+            return ReadPartyPortraitsCore();
+        }
+    }
+
+    private IReadOnlyList<string> ReadPartyPortraitsCore()
     {
         List<string> portraits = [];
 

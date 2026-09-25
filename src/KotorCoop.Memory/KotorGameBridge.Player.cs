@@ -7,7 +7,36 @@ namespace KotorCoop.Memory;
 
 public sealed partial class KotorGameBridge
 {
+    /// <summary>
+    /// ⚠ SERIALIZED (2026-09-25, docs/research/disconnect-reconnect.md's bridge-concurrency
+    /// section): this bridge is shared by the pump, the command dispatcher's own 150ms poll
+    /// loop (<c>MaintainSessionSave</c>), the join flow and the server-discovery beacon, none
+    /// of which coordinate with each other. A module transition makes THIS method (via the
+    /// <c>moduleChanged || worldReloaded</c> branch below) clear <c>_creatureCache</c>/
+    /// <c>_liveCache</c>/<c>_scanCache</c> (<see cref="InvalidateCreatureCache"/>) and
+    /// <c>_itemTags</c>/<c>_itemAddresses</c> — plain Dictionary/List fields, not concurrent
+    /// collections — while <see cref="TryResolve"/>'s own scan can be writing the SAME fields
+    /// from another thread. Measured live: two threads both logged "adopted the engine's own
+    /// creature" 1 ms apart right after a transition, then every later pump tick threw
+    /// <c>InvalidOperationException</c> ("A concurrent update was performed on this
+    /// collection and corrupted its state") forever, because a corrupted Dictionary/List stays
+    /// corrupted. <see cref="KotorGameBridge.Sync"/> is taken here (and in
+    /// <see cref="TryResolve"/>, <see cref="EnumerateCreatures"/>, <see cref="ClearCoopState"/>,
+    /// <see cref="ReadEnemies"/>, <see cref="ReadPartyPortraits"/>,
+    /// <see cref="ForgetWorldShadows"/> and the world/chargen-load pollers below) so every
+    /// caller is automatically serialized without having to remember to lock at its own call
+    /// site. <c>Lock</c> (Monitor semantics), not <c>SemaphoreSlim</c>: this method calls
+    /// <see cref="TryResolve"/> below, which re-enters the same lock on the same thread.
+    /// </summary>
     public bool TryReadLocalState(out PlayerState state)
+    {
+        lock (Sync)
+        {
+            return TryReadLocalStateCore(out state);
+        }
+    }
+
+    private bool TryReadLocalStateCore(out PlayerState state)
     {
         state = PlayerState.Empty;
 
@@ -520,40 +549,80 @@ public sealed partial class KotorGameBridge
     ///
     /// The set is <see cref="SessionScopedBlockLevels"/>; see its remarks for why teardown is
     /// a list rather than a run of hand-written writes.
+    ///
+    /// ⚠ SERIALIZED — see <see cref="TryReadLocalState"/>'s remarks. Called from
+    /// <c>SessionManager.TearDownSession</c> while that manager's OWN lock (its private
+    /// <c>_gate</c>) is held, so the lock taken here must never be the OUTER lock anywhere
+    /// else in this codebase (i.e. nothing may hold <see cref="Sync"/> and then call into
+    /// <c>SessionManager</c>) — that would invert the two locks' acquisition order across
+    /// threads and deadlock. <see cref="Sync"/> stays the innermost lock for exactly that
+    /// reason: this class never calls back into the session layer.
     /// </summary>
     public void ClearCoopState()
     {
-        if (_pluginBlock != 0)
+        lock (Sync)
         {
-            foreach ((_, int offset) in SessionScopedBlockLevels)
+            if (_pluginBlock != 0)
             {
-                _memory.TryWrite(_pluginBlock + offset, 0u);
+                foreach ((_, int offset) in SessionScopedBlockLevels)
+                {
+                    _memory.TryWrite(_pluginBlock + offset, 0u);
+                }
+
+                // Every agent-side LATCH whose only job is "I have already raised that level".
+                // Lowering a level without lowering its latch is worse than not lowering it at
+                // all: the next session never raises it again.
+                _encounterWatchWritten = false;
+                _damageDealtEnabled = false;
             }
 
-            // Every agent-side LATCH whose only job is "I have already raised that level".
-            // Lowering a level without lowering its latch is worse than not lowering it at
-            // all: the next session never raises it again.
-            _encounterWatchWritten = false;
-            _damageDealtEnabled = false;
+            // A new session deals fresh peer ids, so keeping the old slot map would hold slots
+            // for players who no longer exist and push the new ones down the block.
+            _slots.Clear();
+
+            // Round 103 (docs/research/party-reconciliation.md): SessionManager keeps this SAME
+            // bridge instance alive across a disconnect and the reconnect that follows it, so this
+            // agent-side write cache is exactly the kind of latch the class comment above warns
+            // about — outside the _pluginBlock guard because the cache must not survive into the
+            // next session even if the plugin momentarily reads unattached right now (a transient
+            // that must not leave stale entries for whenever it re-attaches). Without this, a
+            // reconnect whose first PartySnapshot reads byte-identical to whatever was mirrored
+            // right before the disconnect finds the cache still agreeing with it and skips
+            // rewriting the very PartyPresenceCount level the loop above just zeroed — the
+            // companion mirror never re-arms. See PartyPresenceWriteCache's own doc comment.
+            _partyPresenceCache.Reset();
+
+            ReleasePartyFreeze();
         }
+    }
 
-        // A new session deals fresh peer ids, so keeping the old slot map would hold slots
-        // for players who no longer exist and push the new ones down the block.
-        _slots.Clear();
-
-        // Round 103 (docs/research/party-reconciliation.md): SessionManager keeps this SAME
-        // bridge instance alive across a disconnect and the reconnect that follows it, so this
-        // agent-side write cache is exactly the kind of latch the class comment above warns
-        // about — outside the _pluginBlock guard because the cache must not survive into the
-        // next session even if the plugin momentarily reads unattached right now (a transient
-        // that must not leave stale entries for whenever it re-attaches). Without this, a
-        // reconnect whose first PartySnapshot reads byte-identical to whatever was mirrored
-        // right before the disconnect finds the cache still agreeing with it and skips
-        // rewriting the very PartyPresenceCount level the loop above just zeroed — the
-        // companion mirror never re-arms. See PartyPresenceWriteCache's own doc comment.
-        _partyPresenceCache.Reset();
-
-        ReleasePartyFreeze();
+    /// <summary>
+    /// Recovery primitive for <c>CoopAgent</c>'s pump-failure loop — see
+    /// <see cref="IPlayerBridge.ResetCaches"/>'s remarks. Reuses the exact reset primitives
+    /// <see cref="TryReadLocalStateCore"/> already runs on every module change
+    /// (<see cref="InvalidateCreatureCache"/>, <see cref="ForgetWorldShadows"/>, the item tag/
+    /// address cache, the spawned-item and item-creation observation caches, the party-pool
+    /// suppression cache) plus the two small standalone caches those do not cover (module
+    /// display names, portrait resrefs). Deliberately does NOT touch <c>_player</c>/
+    /// <c>_phantoms</c> (the next <see cref="TryResolve"/> re-derives them from a live scan,
+    /// same as any other resolve) or the plugin block / session state
+    /// <see cref="ClearCoopState"/> owns.
+    /// </summary>
+    public void ResetCaches()
+    {
+        lock (Sync)
+        {
+            InvalidateCreatureCache();
+            ForgetWorldShadows();
+            _itemTags.Clear();
+            _itemAddresses.Clear();
+            _itemTagsBuiltAtMs = 0;
+            ClearSpawnedItemResrefCache();
+            ClearItemCreationObservationCache();
+            ClearPartyPoolSuppressionCache();
+            _moduleNames.Clear();
+            _portraitResRefs.Clear();
+        }
     }
 
     public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers)

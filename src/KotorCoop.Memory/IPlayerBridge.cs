@@ -28,6 +28,18 @@ public interface IPlayerBridge
     /// </summary>
     void ClearCoopState() { }
 
+    /// <summary>
+    /// Recovery primitive: drops every agent-side CACHE (creature/scan addresses, item tag/
+    /// address, module-name, portrait, world-state shadow dictionaries, ...) without touching
+    /// the plugin block or any session state — unlike <see cref="ClearCoopState"/>, this is
+    /// safe to call mid-session, with a session still connected, while the player is still in
+    /// the world. Built for <c>CoopAgent</c>'s pump-failure loop: a corrupted Dictionary/List
+    /// (see <see cref="IGameBridge.Sync"/>'s remarks) throws the SAME exception forever once
+    /// corrupted, so retrying the read alone can never recover — replacing the cache with a
+    /// fresh empty one can. Default is a no-op on bridges with nothing cached.
+    /// </summary>
+    void ResetCaches() { }
+
     /// <summary>Agent -> plugin. Publishes a valid local session role atomically: known host,
     /// known client, or unknown when no live session role can be proven. Default is a no-op on
     /// bridges without an in-process plugin block.</summary>

@@ -26,6 +26,16 @@ public sealed record CreatureRef(nint Address, uint ObjectId, string Tag, bool I
 /// </summary>
 public sealed partial class KotorGameBridge : IGameBridge
 {
+    /// <summary>
+    /// Explicit member, not just <see cref="IGameBridge"/>'s default: every <c>lock (Sync)</c>
+    /// inside this class's own partials refers to an unqualified <c>Sync</c>, which only
+    /// resolves against a member THIS class declares — an interface default implementation is
+    /// reachable only through an interface-typed reference, never unqualified from inside the
+    /// implementing class. See <see cref="IGameBridge.Sync"/> for why this exists and the
+    /// lock-ordering rule that keeps it deadlock-free.
+    /// </summary>
+    public object Sync => this;
+
     private readonly ProcessMemory _memory;
     private readonly bool _ownsMemory;
     private readonly int _maxPhantoms;

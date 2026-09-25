@@ -13,7 +13,18 @@ public sealed partial class KotorGameBridge
     /// from the player, which is the same test the engine's own targeting uses, and it
     /// keeps party members, neutral NPCs and other players' phantoms out of the list.
     /// </summary>
+    /// <summary>⚠ SERIALIZED — see <see cref="KotorGameBridge.Sync"/>. Called from the pump's
+    /// enemy census AND from the command dispatcher's <c>PumpEnemyScalingPersistence</c>, on a
+    /// different thread.</summary>
     public List<EnemyState> ReadEnemies(IReadOnlyList<Vector3f> otherPlayers)
+    {
+        lock (Sync)
+        {
+            return ReadEnemiesCore(otherPlayers);
+        }
+    }
+
+    private List<EnemyState> ReadEnemiesCore(IReadOnlyList<Vector3f> otherPlayers)
     {
         List<EnemyState> enemies = [];
 

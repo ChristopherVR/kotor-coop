@@ -286,10 +286,28 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 (byte)KotorCoop.Protocol.ProtocolConstants.MaxPeers,
                 () => (_session?.GetStats().PeerCount ?? 0) + 1,
                 locked: settings.Password.Length > 0,
-                module: () => bridge.TryReadLocalState(out var state) ? state.Module : string.Empty,
+                // TryReadLocalState/ReadPartyPortraits already serialize themselves against
+                // the pump and every other bridge caller (see IGameBridge.Sync); the explicit
+                // lock here is belt-and-suspenders so this lambda's OWN two-call sequence
+                // (module, then — on the next beacon — portraits) never straddles a
+                // in-progress reset either, and documents that this beacon runs on its own
+                // Task.Run thread, never the pump's.
+                module: () =>
+                {
+                    lock (bridge.Sync)
+                    {
+                        return bridge.TryReadLocalState(out var state) ? state.Module : string.Empty;
+                    }
+                },
                 // Read live, like the count and the module: a browsing player sees the
                 // party as it is now, not as it was when the session started.
-                portraits: bridge.ReadPartyPortraits);
+                portraits: () =>
+                {
+                    lock (bridge.Sync)
+                    {
+                        return bridge.ReadPartyPortraits();
+                    }
+                });
         }
 
         // A host has nobody to wait for; only a client's attempt can go unanswered

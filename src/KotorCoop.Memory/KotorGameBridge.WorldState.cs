@@ -12,8 +12,16 @@ public sealed partial class KotorGameBridge
     /// <summary>Live engine read, never retained — see the interface remarks. The "areaXX"
     /// fallback is deliberately NOT applied here: a caller labelling a census wants "the
     /// name is unreadable" reported as failure, not disguised as a placeholder name.</summary>
-    public bool TryReadCurrentModule(out string module) =>
-        EngineGlobals.TryReadModuleName(_memory, out module) && module.Length > 0;
+    public bool TryReadCurrentModule(out string module)
+    {
+        // ⚠ SERIALIZED — see KotorGameBridge.Sync. Read directly by the host's
+        // server-discovery beacon lambda on its own thread, alongside the pump and the
+        // command dispatcher.
+        lock (Sync)
+        {
+            return EngineGlobals.TryReadModuleName(_memory, out module) && module.Length > 0;
+        }
+    }
     // ---- world state -------------------------------------------------------------
 
     private byte[]? _shadowBooleans;
@@ -195,14 +203,20 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public bool TryRequestAdoptedWorldLoad(bool inSession, out string diagnostic)
     {
-        bool ok = PluginMenuLoader.TryRequestLoad(
-            _memory, out nint block, out diagnostic, adoptedWorld: true, inSession: inSession);
-        if (ok)
+        // ⚠ SERIALIZED — see KotorGameBridge.Sync. Reached from the join flow, from
+        // SessionManager's rejoin background task, AND (as the every-later-join path) from the
+        // command dispatcher's own poll loop, each on its own thread.
+        lock (Sync)
         {
-            _menuLoadBlock = block;
-        }
+            bool ok = PluginMenuLoader.TryRequestLoad(
+                _memory, out nint block, out diagnostic, adoptedWorld: true, inSession: inSession);
+            if (ok)
+            {
+                _menuLoadBlock = block;
+            }
 
-        return ok;
+            return ok;
+        }
     }
 
     /// <summary>The block the new-character capture was armed against, for
@@ -216,13 +230,16 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public bool TryArmNewCharacterCapture(out string diagnostic)
     {
-        bool ok = PluginMenuLoader.TryArmNewCharacterCapture(_memory, out nint block, out diagnostic);
-        if (ok)
+        lock (Sync)
         {
-            _joinChargenBlock = block;
-        }
+            bool ok = PluginMenuLoader.TryArmNewCharacterCapture(_memory, out nint block, out diagnostic);
+            if (ok)
+            {
+                _joinChargenBlock = block;
+            }
 
-        return ok;
+            return ok;
+        }
     }
 
     /// <summary>
@@ -238,12 +255,15 @@ public sealed partial class KotorGameBridge
     /// while nothing has been armed yet or the block cannot be read.</summary>
     public bool TryGetNewCharacterCapture(out uint state, out uint bytes, out string saveDirectory)
     {
-        state = 0;
-        bytes = 0;
-        saveDirectory = string.Empty;
-        return _joinChargenBlock != 0
-            && PluginMenuLoader.TryReadNewCharacterCapture(
-                _memory, _joinChargenBlock, out state, out bytes, out saveDirectory);
+        lock (Sync)
+        {
+            state = 0;
+            bytes = 0;
+            saveDirectory = string.Empty;
+            return _joinChargenBlock != 0
+                && PluginMenuLoader.TryReadNewCharacterCapture(
+                    _memory, _joinChargenBlock, out state, out bytes, out saveDirectory);
+        }
     }
 
     /// <summary>Polls the outcome of the last <see cref="TryRequestAdoptedWorldLoad"/> (or
@@ -252,10 +272,13 @@ public sealed partial class KotorGameBridge
     /// been requested yet or the block cannot be read.</summary>
     public bool TryGetAdoptedWorldLoadStatus(out uint applied, out int status)
     {
-        applied = 0;
-        status = 0;
-        return _menuLoadBlock != 0
-            && PluginMenuLoader.TryReadStatus(_memory, _menuLoadBlock, out applied, out status);
+        lock (Sync)
+        {
+            applied = 0;
+            status = 0;
+            return _menuLoadBlock != 0
+                && PluginMenuLoader.TryReadStatus(_memory, _menuLoadBlock, out applied, out status);
+        }
     }
 
     /// <summary>
