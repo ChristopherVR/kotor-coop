@@ -16,7 +16,7 @@ the retail binary's disassembly (already done by a cited prior doc), or asserted
 test. **INFERRED** = a reasoned deduction from evidence that was read, not independently
 re-derived from scratch this pass. **NEEDS-LIVE** = reasoned but never watched happen on a
 running two-instance rig. Nothing in this document was run against a live game — it is a
-static-research pass plus two small, clearly-safe doc/config-comment fixes (§5).
+static-research pass plus one small, comment-only config fix (§5).
 
 ---
 
@@ -349,9 +349,73 @@ into the same module, `party_pool_sync`/`store_sync` at their shipped defaults).
 
 ## 7. K1 key/plot item census and merchant availability
 
-*(Filled in from a static scan of the compiled game scripts and store templates —
-`GetItemPossessedBy`/possession-gate call sites across every module, cross-referenced against
-every `.utm` merchant template's `ItemList`. See the scan's own methodology note for coverage
-and any tags that could not be resolved statically.)*
+### 7.1 Method (VERIFIED against game data, 2026-09-25)
 
-TODO — scan in progress; see the accompanying commit/update once the game-file pass completes.
+- `nwscript.nss` (extracted with `tools/kotorfiles.py`) declares `object
+  GetItemPossessedBy(object oCreature, string sItemTag);` at routine **30**. K1 has no `HasItem`;
+  this is the only "does X hold tag Y" routine.
+- Every `.ncs` was walked with `tools/localvaraudit.py`'s abstract stack interpreter (imported,
+  unmodified; a scratch subclass recorded each ACTION 30 with its creature and tag arguments):
+  all 1,784 BIF-global scripts plus every script in all 117 `modules\` stems. Result: 689 call
+  sites in 443 scripts, **156 distinct literal tags**.
+- Every store template (`.utm`, 30 templates in 20 modules; none are global) was read for its
+  `ItemList` and joined on tag. **34 of the 156 tags are sold somewhere; 122 are not.**
+- **Gaps.** 32 scripts exceeded the interpreter's step budget and yielded no hits (mostly large
+  combat-escalation and area-dispatch scripts: `k_ai_master`, `k_pdan_14a/14b/14d_area`,
+  `k_ptat_*dlg`, `k_psta_hostscn2/3`, ...); 4 more are partial. A call inside them would be
+  missed. 31 call sites pass a variable tag; all are inside the computer-spike/repair-part
+  minigame helpers and resolve to `K_COMPUTER_SPIKE`/`K_REPAIR_PART`. `"-"` (`temp_at02`) and
+  `w_crystal` (`test18`) are dev leftovers, not gates.
+- **Creature argument.** Almost every call passes `GetFirstPC()` or `GetPCSpeaker()`, never a
+  party loop (exceptions: `k_pman_suituse`, `k_pkor_open_door`, `k38a_init_wardrd` iterate
+  `GetPartyMemberByIndex`). Per §1 this still resolves through the party-wide repository, so
+  what matters in co-op is whether the item is in **that engine's** pool — not which body.
+
+### 7.2 Plot gates that can be bought (the only ones §3(a)'s "buys" scenario applies to)
+
+| Tag | Gate | Where checked | Sold by |
+| --- | --- | --- | --- |
+| `rakghoulserum` | Taris rakghoul-cure sidequest (Zelka / Gendar) | `k_ptar_gendarser`, `k_ptar_hasserum`, `k_ptar_noserum`, `k_ptar_takeserum`; `tar_m02ab`..`tar_m10ac` | `zelkastore001/002/004/005`, `tar_m02ac` |
+| `ptar_permacrete` | Taris apartments feud (Matrik) | `k_ptar_matrikcs0`, `k_ptar_matrikdet`; `tar_m03*`, `tar_m10*` | `keblastore`, `tar_m02ac` |
+| `tat20_banthafod` | Tatooine bantha-fodder / Sand People ambush chain | `k_ptat_hasfodder`, `k_ptat_gotfodder`, `k_ptat_banthdlg`, `k_ptat_ambushed` ...; `tat_m18aa/ac`, `tat_m20aa` | `kas_twostore`, `tat_m17ab` |
+| `g_i_belt006/007/008/010`, (`geno_stealth` not sold) | Korriban academy stealth shortcut (optional); `g_i_belt010` also `k_pend_carth14` on the Endar Spire | `k_pkor_open_door`, `k38a_init_wardrd` | general stores on Taris, Tatooine, Kashyyyk, Korriban |
+
+Everything else sold and checked (medpacs, stims, grenades, `k_computer_spike`,
+`k_repair_part`, `gizkapoison`, a few weapons) is a "do you have spare gear" cost check, not a
+story gate.
+
+### 7.3 Plot items no store sells (quest-given or found only)
+
+Main quest: `kor_starpad` (Korriban star-map datapad), `dan_map1/2` (Dantooine ruins),
+`lev40_spacesuit` and `tar09_icebreaker` (Leviathan escape), `ptar_sitharmor` +
+`ptar_sithpapers` (Taris Sith-base disguise), `bast_temp_saber`, `sta_temp_saber`/`sta_light1`/
+`sta_shortlight1` (Leviathan/Star Forge scripted sabers), `g_shipparts` (Ebon Hawk parts,
+Unknown World), `unk42_key`, `punk_holocron`, `ancienttome`, `g_head`, `unk_researchpad`,
+`holocron`. Manaan: the Sunry trial evidence (`w_*`, `g_mandat1/2/3`, `g_manaanvis`,
+`g_puzdat`) and the Hrakert set (`man28_envirosuit`/`sonic`/`toxic`/`environment`, §4a).
+Korriban academy: `k33_itm_sithmdln`, `k35_itm_*`, `k36_itm_holocron`, `k37_itm_freed*`,
+`k39_itm_*`, `kor37_datapad01/02`, `kor_itm_sithtabl`. Kashyyyk: `kas22_resouceid`,
+`kas23_baccasword`, `kas24_*` (incl. `kas24_joleeamule`), `kas25_*`. Taris: `ptar_*journal`,
+`ptar_sbpasscrd`, `ptar_shieldcodes`, `tar05_synthodor`, `tar08_comppass`, `tar10_*` (swoop),
+`tar_spice`. Tatooine: `tat17_*`, `tat18_*`, `tat20_gaffi*`, `tat20aa_westmap`. Dantooine:
+`dan13_plotcrys`, `dan14_*`, `dan14ae_blk/whtcrystal`, `dan16_key`.
+
+These reach the player through dialogue rewards, script grants or container/corpse loot, so
+§3(a)'s buy scenario does not apply to them. What does apply is §3(c) (a solo-acquired copy is
+left behind on rejoin unless equipped — none of these are equippable except the scripted sabers,
+which the engine hands out and takes back itself) and §4a (whether the other engine receives the
+grant at all).
+
+### 7.4 What this means per scenario, for the items that matter
+
+- **(a)/(b) with one of the four buyable gates.** While connected, a buy on either side lands
+  in both pools (§1), so either player's Zelka/Matrik/fodder conversation passes. After the
+  joiner leaves without saving, the host keeps the item and the shrunk stock; the joiner's own
+  saves never had it, and their own Taris/Tatooine run is untouched. If the joiner saved first,
+  that save is the §4 graft.
+- **(c) with a buyable gate item.** A joiner who bought `rakghoulserum` solo and rejoins arrives
+  without it (loose items do not travel). No duplicate. The host's quest state is the host's.
+- **The one real inconsistency surface is §4**, and the census does not change its shape: the
+  graft save carries the host's `GLOBALVARS.res`, so a Taris-quest global the host set sits
+  beside whatever serum/permacrete/fodder is in that save's pool — consistent with the host's
+  story, not the joiner's.
