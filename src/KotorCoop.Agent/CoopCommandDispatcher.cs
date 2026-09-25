@@ -180,6 +180,7 @@ public sealed partial class CoopCommandDispatcher(
                     DrainChat();
                     ReflectCheatAnswer();
                     DrainAutomaticLoot();
+                    DrainAutomaticFirstSaberBuild();
                     DrainAutomaticPartyPool();
                     DrainAutomaticStore();
                     DrainAutomaticPartyPoolV2();

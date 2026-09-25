@@ -168,13 +168,18 @@ public sealed record AgentSettings
     public bool ClassGrantSync { get; init; }
 
     /// <summary>
-    /// On the RECEIVING side of a dialogue/script item grant, give each player their OWN
-    /// class's lightsaber colour for Zhar's saber-construction reward instead of mirroring
-    /// whichever colour the builder's own class happened to be — coop.ini
-    /// <c>first_saber_color_sync</c>, docs/research/class-and-power-grants.md §10. Purely
-    /// local: no plugin/native change, no wire format change, each connected instance decides
-    /// for itself from its own <c>IPlayerBridge.ReadLocalClassIds</c>. OFF by default (NEEDS-
-    /// LIVE) — with it off, behaviour is byte-for-byte what it was before this setting existed.
+    /// Give every OTHER player their OWN class's lightsaber colour when any one player finishes
+    /// Zhar's saber-construction reward, instead of leaving them with nothing (the reward
+    /// equips into a weapon slot the same script tick it is created, so the generic dialogue/
+    /// script item-grant diff never sees it — docs/research/class-and-power-grants.md §11
+    /// records the live-confirmed miss). Detection is a <c>PlayerState</c> equip-slot edge;
+    /// delivery is the existing world-progression flag channel (no new packet); the build/equip
+    /// is <c>Pumps.FirstLightsaberBuildPump</c>'s own automatic <c>equip</c> cheat, run locally
+    /// on each OTHER player's own engine from their OWN class — never a copy of the builder's
+    /// colour. Purely local otherwise: no plugin/native change, no wire format change beyond
+    /// one new flag id in the existing flag store. Coop.ini <c>first_saber_color_sync</c>. OFF
+    /// by default (NEEDS-LIVE) — with it off, behaviour is exactly what it was before this
+    /// setting existed.
     /// </summary>
     public bool FirstSaberColorSync { get; init; }
 
