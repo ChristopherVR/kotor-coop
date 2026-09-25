@@ -498,3 +498,9 @@ heap on.
      stealth gate (§7.2), so a bought stealth belt is shared by design.
    - Kebla's stock dropped on both engines through the store channel.
    - The host's purse went 3201 -> 2851. The joiner's stayed at 201.
+8. **Script item grants (PASS, 2026-09-25).** `scriptgive` goes through the engine's own
+   `CreateItemOnObject` path, the same one a dialogue reward script uses. The host scriptgave
+   `g_i_medeqpmnt01`, which stayed host-only. Then it scriptgave `dan14_diary` (quest). Joiner
+   agent: `added 'dan14_diary' x1 to the party pool`. A reward fired from a real dialogue node
+   has not been watched, because no ungated item-giving node exists on Dantooine or Taris
+   outside a cutscene.
