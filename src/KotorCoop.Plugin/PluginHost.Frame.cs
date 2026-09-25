@@ -432,6 +432,7 @@ internal static unsafe partial class PluginHost
             // hook is dormant at the menu; the ~ console routes through FuncInterpHook.)
             _chatInput?.OnFrame();
             _chatOverlay?.OnFrame();
+            _chatMessagesScreen?.OnFrame();
 
             // Also before the epoch gate: the pad drives the main menu's cursor too, and its
             // release-everything path must run on the very frame a world goes away.

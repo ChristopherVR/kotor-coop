@@ -251,6 +251,12 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `movie_relay` | ON² | relay a mid-module `PlayMovie` to peers | [cinematics.md](research/cinematics.md) |
 | `item_template_spawn_sync` | ON | capture the real blueprint resref of every item `CreateItemOnObject` creates, for `script_item_sync` | [item-identity.md §13](research/item-identity.md) |
 
+### Chat UI
+
+| Key | Default (code) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `chat_messages_screen` | OFF (NEEDS-LIVE) | also mirror every chat line into the RETAIL pause-menu Messages screen's dialogue-history ring (Escape -> Messages), so it survives after the always-on overlay fades. Plugin-only (`PluginConfig.ReadBool`), no CoopConfig/AgentComposition reader — a purely local rendering choice that does not need cross-peer negotiation, the same reasoning `gui_probe`/`frame_stats` already use | [chat-ui.md](research/chat-ui.md) |
+
 ### Transitions & world state
 
 | Key | Default (code) | Meaning | Doc |

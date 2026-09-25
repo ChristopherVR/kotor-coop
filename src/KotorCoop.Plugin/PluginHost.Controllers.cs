@@ -50,6 +50,7 @@ internal static unsafe partial class PluginHost
         _death = new DeathController(_view);
         _spectate = new SpectateController(_view);
         _chatOverlay = new ChatOverlayController(_view);
+        _chatMessagesScreen = new ChatMessagesScreenController(_view);
         // Beside the log, in the game directory the plugin was loaded from: the recall
         // history is per-install, which is what a player means by "my commands".
         _consoleAssist = new ConsoleAssistController(
