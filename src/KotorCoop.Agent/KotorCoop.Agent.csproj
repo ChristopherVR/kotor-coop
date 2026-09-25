@@ -62,6 +62,19 @@
   -->
   <ItemGroup>
     <Compile Include="..\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
+
+    <!--
+      The dashboard's own command line (DashboardInputLine.cs) completes and recalls history
+      through the SAME dependency-free classes the in-game ~ console uses, linked in by
+      source exactly like LogRotation.cs above rather than copied — so the two consoles can
+      never drift onto two different verb lists or two different history behaviours. Also
+      linked into tests/KotorCoop.Tests/KotorCoop.Tests.csproj; see
+      ConsoleCompletionEngine.cs's own doc comment for why these compile cleanly with no
+      engine/pointer dependency.
+    -->
+    <Compile Include="..\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
+    <Compile Include="..\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />
+    <Compile Include="..\KotorCoop.Plugin\ConsoleHistoryRing.cs" Link="Plugin\ConsoleHistoryRing.cs" />
   </ItemGroup>
 
 </Project>

@@ -9,6 +9,37 @@ spawned body is flushed before the module unloads, and the peer follows). See
 [console-cheats.md](research/console-cheats.md) for the full authority reasoning, the wire
 format, and the live-verification checklist — this page is the short reference.
 
+## The agent window's own command line
+
+Every co-op verb on this page (not the retail-engine ones — see "Agent vs in-game" below) is
+also reachable from the agent's own console window: an always-visible `>` prompt at the
+bottom, added because typing at `~` requires alt-tabbing into a focused game window, and
+nothing in-game had ever needed the agent's command surface before a plugin was even attached.
+
+- Type and it runs through the exact same parser and dispatcher as a `~` console line —
+  `CoopCommandDispatcher.RunTypedLine`, the identical entry point `DrainInputs` uses for a
+  line the shared block hands over from the in-game console — and answers through the same
+  `Reply`/`Chat` sink, so a reply here and a reply there are never two different code paths.
+- **Tab** / **Shift+Tab** complete the first token and cycle through matches (backward on
+  Shift+Tab); a short dropdown (top 6) lists every match while more than one applies, and a
+  usage hint with the argument you're on marked appears once the verb is unambiguous.
+- **Up** / **Down** recall the last ~50 submitted lines (never storing the same line twice in
+  a row).
+- **Backspace / Delete / Left / Right / Home / End** edit in place; **Esc** clears the line;
+  **Enter** submits and echoes the command plus its reply into a small scrollback shown above
+  the prompt.
+- **F2** drops a demo item, **F3** picks one up — the dashboard's own item-sync test hotkeys
+  (bare `D`/`P` before typed text needed the letter keys back).
+
+**Agent vs in-game:** the agent side only ever completes the co-op verbs above — it has no
+way to see the game's own retail command table (`giveitem`, `heal`, ...), which only the
+in-process plugin can read. Typing one of those at the agent's prompt still runs (the
+dispatcher reports it "unknown"), since only the game engine itself understands a retail
+cheat; type those at the in-game `~` console instead. Both consoles share the *same*
+`ConsoleVerbCatalog.cs`/`ConsoleCompletionEngine.cs`/`ConsoleHistoryRing.cs` source files
+(`KotorCoop.Agent.csproj` links them in exactly the way `KotorCoop.Tests.csproj` already did),
+so a co-op verb added to one automatically completes on the other.
+
 ## Chat overlay
 
 Your partner's messages and status lines (`say`, connection changes, "hosting on port...")

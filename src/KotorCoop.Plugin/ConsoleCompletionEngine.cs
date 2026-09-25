@@ -145,6 +145,72 @@ internal sealed class ConsoleCompletionEngine
     }
 
     /// <summary>
+    /// Shift+Tab's step: the same cycle <see cref="Complete"/> drives, but backward — sharing
+    /// its candidate list and cursor, so a forward Tab followed immediately by a backward
+    /// Shift+Tab lands back on the candidate the forward step started from, the way a shell's
+    /// reverse-cycle normally behaves. Typing since the last completion restarts the cycle
+    /// exactly the same way <see cref="Complete"/>'s own check does. The first backward step
+    /// of a fresh cycle starts from the LAST candidate rather than the first, so Shift+Tab on
+    /// an untouched prefix reaches the end of the list in one press instead of walking there
+    /// forward.
+    /// </summary>
+    public string? CompleteReverse(string buffer)
+    {
+        Split(buffer, out string lead, out string token, out string rest);
+        if (rest.Length > 0)
+        {
+            // The verb is finished: nothing to complete, same as Complete.
+            Reset();
+            return null;
+        }
+
+        if (_cycleCandidates is { } cycling
+            && string.Equals(token, _lastProduced, StringComparison.Ordinal))
+        {
+            // _cycleIndex is "one past whatever Complete/CompleteReverse last produced", so
+            // stepping backward TWO positions from it (mod length) is the candidate before
+            // that one.
+            int at = (((_cycleIndex - 2) % cycling.Length) + cycling.Length) % cycling.Length;
+            string previous = cycling[at];
+            _cycleIndex = (at + 1) % cycling.Length;
+            _lastProduced = previous;
+            return lead + previous;
+        }
+
+        string prefix = token.ToLowerInvariant();
+        string[] candidates = Candidates(prefix);
+        if (candidates.Length == 0)
+        {
+            Reset();
+            return null;
+        }
+
+        _cycleCandidates = candidates;
+        string last = candidates[^1];
+        _cycleIndex = 0;
+        _lastProduced = last;
+        return lead + last;
+    }
+
+    /// <summary>
+    /// The full ranked candidate list for the token currently being typed — co-op verbs
+    /// first, then the engine's, same order <see cref="Candidates"/> already produces for
+    /// <see cref="Hint"/> — for a caller that wants more than one capped line (e.g. a
+    /// multi-row dropdown). Same boundary as <see cref="Hint"/>: empty once the first token is
+    /// complete and an argument follows, or the buffer has nothing typed yet.
+    /// </summary>
+    public string[] CandidatesFor(string buffer)
+    {
+        Split(buffer, out _, out string token, out string rest);
+        if (token.Length == 0 || rest.Length > 0)
+        {
+            return [];
+        }
+
+        return Candidates(token.ToLowerInvariant());
+    }
+
+    /// <summary>
     /// The one hint line to draw under the console, or empty for none. While the first
     /// token is being typed this is the candidate list ("connect  clear  cls"); once the
     /// token is a complete verb (arguments follow, or it is the only match) it becomes that

@@ -84,6 +84,11 @@ corner, fading out after a few seconds -- Page Up/Page Down scrolls back through
 console and the chat readout are configurable (position, size, how long lines last) in
 coop.ini.
 
+The agent window has a command line of its own, always visible at the bottom: a > prompt with
+Tab completion (Shift+Tab cycles backward, and a short dropdown shows the top matches as you
+type), Up/Down recall and a small scrollback of the last few replies. Same commands, same
+dispatcher, no alt-tabbing into the game required. F2 drops a demo item, F3 picks one up.
+
 The host's game decides what happens with enemies and the party; each player owns their own character.
 Only one conversation runs at a time -- the other player watches it live. If your partner
 goes to the main menu their character disappears and a line says so; a one-line status in

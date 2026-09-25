@@ -109,6 +109,67 @@ public class ConsoleCompletionEngineTests
         Assert.Equal("connect", engine.Complete("connect"));
     }
 
+    // ---- CompleteReverse (Shift+Tab) --------------------------------------------
+
+    [Fact]
+    public void ReverseThenForwardReturnsToTheSameCandidate()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+
+        string forward = engine.Complete("c") ?? throw new InvalidOperationException("expected a completion");
+        string forwardAgain = engine.Complete(forward) ?? throw new InvalidOperationException("expected a completion");
+        Assert.NotEqual(forward, forwardAgain);
+
+        string? back = engine.CompleteReverse(forwardAgain);
+        Assert.Equal(forward, back);
+    }
+
+    [Fact]
+    public void ReverseOnAFreshPrefixStartsFromTheLastCandidate()
+    {
+        // c -> connect, clear, cls (declared order); reverse should reach "cls" first.
+        Assert.Equal("cls", NewEngine().CompleteReverse("c"));
+    }
+
+    [Fact]
+    public void ReverseWrapsBackToTheLastCandidate()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+        Assert.Equal("cls", engine.CompleteReverse("c"));
+        Assert.Equal("clear", engine.CompleteReverse("cls"));
+        Assert.Equal("connect", engine.CompleteReverse("clear"));
+
+        // Wraps back to the end of the list.
+        Assert.Equal("cls", engine.CompleteReverse("connect"));
+    }
+
+    [Fact]
+    public void ReverseDoesNothingPastCompletion()
+    {
+        ConsoleCompletionEngine engine = NewEngine();
+        Assert.Null(engine.CompleteReverse("connect "));
+    }
+
+    // ---- CandidatesFor -----------------------------------------------------------
+
+    [Fact]
+    public void CandidatesForListsEveryMatch()
+    {
+        Assert.Equal(["connect", "clear", "cls"], NewEngine().CandidatesFor("c"));
+    }
+
+    [Fact]
+    public void CandidatesForIsEmptyOnceAnArgumentFollows()
+    {
+        Assert.Empty(NewEngine().CandidatesFor("connect "));
+    }
+
+    [Fact]
+    public void CandidatesForIsEmptyOnAnEmptyBuffer()
+    {
+        Assert.Empty(NewEngine().CandidatesFor(""));
+    }
+
     // ---- Hint ------------------------------------------------------------------
 
     [Fact]
