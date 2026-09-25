@@ -101,6 +101,13 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
+            // A container each engine fills with its own party's items (the Leviathan party
+            // locker) is not a shared chest: equal ids on the two sides name different items.
+            if (ContainerLootExemptionRule.IsExempt(module, ReadExoString(address + OffTag)))
+            {
+                continue;
+            }
+
             // Only a container has a repository; a plain placeable's field is 0. This also
             // rejects a mis-scanned hit, whose +0x36C is unlikely to be a valid pointer.
             if (!_memory.TryReadPointer(address + PlaceableRepositoryField, out nint repo) || repo == 0)
