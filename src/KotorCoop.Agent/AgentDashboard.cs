@@ -5,10 +5,23 @@ using KotorCoop.Session;
 namespace KotorCoop.Agent;
 
 /// <summary>
-/// Console readout for the run command, plus the demo drop key. Reads the live agent from
-/// the <see cref="SessionManager"/> each tick rather than holding a fixed one, so the view
-/// follows connect/disconnect/reconnect: between sessions there is no agent and the readout
-/// says so instead of rendering stale peers.
+/// The agent's own full-screen TUI — a compact status header, a scrolling transcript (chat,
+/// session events, command echoes/replies, and any stray console output captured on its way
+/// to corrupting the screen), and an always-visible command line, laid out the way Claude
+/// Code's own terminal UI is: everything owned, nothing left to the shell's scrollback.
+///
+/// This class is the ORCHESTRATOR only — it owns no rendering or layout logic of its own.
+/// Layout/wrapping/scroll-state are pure, unit-tested classes it drives each tick:
+/// <see cref="KotorCoop.Agent.TranscriptBuffer"/> (the scrollback), <see cref="DashboardInputLine"/>
+/// (the command line's buffer/caret/history/completion), and <see cref="FrameComposer"/> (turns
+/// all of it into exactly <c>height</c> rows for the current window). <see cref="TerminalScreen"/>
+/// is the one piece that actually touches the OS: the alternate screen buffer, VT mode, and the
+/// <c>Console.Out</c>/<c>Console.Error</c> capture that keeps a stray <c>Console.WriteLine</c>
+/// from corrupting the paint.
+///
+/// Reads the live agent from the <see cref="SessionManager"/> each tick rather than holding a
+/// fixed one, so the view follows connect/disconnect/reconnect: between sessions there is no
+/// agent and the readout says so instead of rendering stale peers.
 /// </summary>
 public sealed class AgentDashboard(
     SessionManager manager,
@@ -18,40 +31,41 @@ public sealed class AgentDashboard(
     CoopCommandDispatcher? dispatcher = null)
 {
     /// <summary>The always-visible command line: buffer/caret/history/completion, all pure —
-    /// see <see cref="DashboardInputLine"/>'s own doc comment. Constructed unconditionally
-    /// (it is cheap and holds no console handle); whether it is ever drawn or fed a key
-    /// depends on <see cref="_showInputLine"/>, decided once in <see cref="RunAsync"/>.</summary>
+    /// see <see cref="DashboardInputLine"/>'s own doc comment.</summary>
     private readonly DashboardInputLine _input = new();
 
-    /// <summary>Whether this run can show and drive the input line at all: false when input
+    /// <summary>The scrolling transcript — see <see cref="TranscriptBuffer"/>'s own doc
+    /// comment. Fed by <see cref="Note"/> (session events, command replies/echoes) and, once
+    /// the TUI is up, by <see cref="TerminalScreen"/>'s captured stray console output.</summary>
+    private readonly TranscriptBuffer _transcript = new();
+
+    /// <summary>Non-null only while the interactive TUI is running (<c>canPosition</c> in
+    /// <see cref="RunAsync"/>) — owns the alternate screen and the console capture. Painting
+    /// goes through <see cref="TerminalScreen.Screen"/>, never <c>Console.Out</c>, which this
+    /// class has redirected out from under itself for exactly that reason.</summary>
+    private TerminalScreen? _terminal;
+
+    /// <summary>Whether this run can show and drive the command line at all: false when input
     /// is redirected (<c>Console.IsInputRedirected</c>), set once at the top of
-    /// <see cref="RunAsync"/>. Output being redirected already skips <see cref="Render"/>
-    /// entirely (see the two-outputs remark on <see cref="RunAsync"/>), so this is the one
-    /// remaining case — a real console window fed piped/redirected stdin — that needs its own
-    /// guard: keys are never read there, so there is nothing for a drawn prompt to reflect.</summary>
+    /// <see cref="RunAsync"/>.</summary>
     private bool _showInputLine;
 
-    /// <summary>The frame row the prompt line ("&gt; buffer") landed on this Render() pass, or
-    /// -1 when none was drawn — how <see cref="PositionInputCaret"/> finds where to put the
-    /// real OS caret after <see cref="FlushFrame"/> repaints the screen.</summary>
-    private int _promptFrameRow = -1;
+    /// <summary>F1: swaps the transcript for the full details panel (the old NETWORK/GAME
+    /// MEMORY/THIS PLAYER/SHARED WORLD readout) in the middle region.</summary>
+    private bool _detailsOpen;
 
-    /// <summary>Row in the frame where the input area starts, or -1 when there is none.
-    /// FlushFrame keeps the rows from here on pinned to the bottom of the window.</summary>
-    private int _inputAreaStartRow = -1;
+    /// <summary>The content width and transcript viewport height <see cref="RenderInteractive"/>
+    /// last computed — what a PageUp/PageDown/Ctrl+Home/Ctrl+End key clamps a scroll against,
+    /// since <see cref="TranscriptBuffer"/> needs both to answer "how far can this scroll".</summary>
+    private int _lastContentWidth = 1;
+    private int _lastTranscriptViewportHeight = 1;
 
-    /// <summary>How many of the last replies/chat/event lines (from <see cref="Note"/>) and
-    /// echoed commands are kept above the prompt.</summary>
-    private const int ScrollbackCapacity = 8;
-
-    /// <summary>How many ranked completion candidates the dropdown shows at once.</summary>
-    private const int MaxDropdownRows = 6;
-
-    /// <summary>Guards <see cref="_scrollback"/>: <see cref="Note"/> can be called from the
-    /// pump thread (session events) as well as from this dashboard's own command submit, and
-    /// <see cref="Render"/> reads it every 200 ms tick.</summary>
-    private readonly Lock _scrollbackGate = new();
-    private readonly List<string> _scrollback = [];
+    /// <summary>The previous frame's signature (see <see cref="ComputeSignature"/>) — a paint
+    /// is skipped entirely when nothing about the composed frame changed since last tick, so
+    /// an idle, disconnected dashboard is not rewriting an identical screen five times a
+    /// second. Width/height are folded into the signature so a resize always repaints even if
+    /// every row's TEXT happens to be unchanged.</summary>
+    private string? _lastSignature;
 
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
@@ -170,8 +184,8 @@ public sealed class AgentDashboard(
     /// <summary>
     /// The outcome of the last drop or pick-up. A property rather than a field because every
     /// assignment must ALSO reach the log file: this note is where a drop says why it refused
-    /// ("not a readable item here", "ground full"), and it used to render only on the
-    /// dashboard's own screen. An unattended run — which is how this project tests — could
+    /// ("not a readable item here", "ground full"), and it belongs in the transcript exactly
+    /// like any other event. An unattended run — which is how this project tests — could
     /// therefore not tell a refusal from nothing having happened at all, which is exactly
     /// what blocked verifying the item-identity apply path live on 2026-08-15.
     /// </summary>
@@ -205,11 +219,20 @@ public sealed class AgentDashboard(
         bool canReadKeys = !Console.IsInputRedirected;
         _showInputLine = canReadKeys;
 
-        if (canPosition)
+        // ⚠ TWO COMPLETELY DIFFERENT PATHS, because a real terminal and a redirected pipe want
+        // opposite things. Interactive gets the full TUI: alternate screen, captured stray
+        // output, the command line, all of it. Redirected gets exactly what it always has —
+        // one compact status line per change, straight to the pipe — because that is what
+        // tools/demo.ps1 and any log-scraping automation already parse; growing the TUI's own
+        // machinery into that path would change behaviour nothing asked to have changed.
+        if (!canPosition)
         {
-            Console.Clear();
-            Console.CursorVisible = false;
+            await RunNonInteractiveAsync(canReadKeys, cancellationToken).ConfigureAwait(false);
+            return;
         }
+
+        _terminal = new TerminalScreen(Note);
+        _terminal.Enter();
 
         try
         {
@@ -226,25 +249,9 @@ public sealed class AgentDashboard(
                 }
 
                 CheckDropFile();
+                RenderInteractive();
 
-                // ⚠ TWO DIFFERENT OUTPUTS, because a screen and a log file want opposite
-                // things. On a console the readout is redrawn in place five times a second,
-                // which is right there and unreadable anywhere else: redirected, every
-                // redraw APPENDS another full copy, so a few minutes of running produced
-                // thousands of screens of near-identical text — reported from use as the
-                // log "spamming". Redirected output now gets one compact line, and only
-                // when something actually changed.
-                if (canPosition)
-                {
-                    Render();
-                    FlushFrame();
-                    PositionInputCaret();
-                }
-
-                // The log is written whenever one was asked for, and also when there is no
-                // console to draw on — so a windowed run still leaves a record and a
-                // redirected one is not silent.
-                if (logFile is not null || !canPosition)
+                if (logFile is not null)
                 {
                     WriteLogLine();
                 }
@@ -255,10 +262,35 @@ public sealed class AgentDashboard(
         }
         finally
         {
-            if (canPosition)
+            _terminal.Exit();
+        }
+    }
+
+    /// <summary>The pre-TUI behaviour, byte for byte: a compact log line per change (plus a
+    /// heartbeat), no screen, no console capture — see <see cref="RunAsync"/>'s own remark on
+    /// why this stays separate rather than reusing any TUI machinery.</summary>
+    private async Task RunNonInteractiveAsync(bool canReadKeys, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(200));
+
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
-                Console.CursorVisible = true;
+                if (canReadKeys)
+                {
+                    while (Console.KeyAvailable)
+                    {
+                        HandleKey(Console.ReadKey(intercept: true));
+                    }
+                }
+
+                CheckDropFile();
+                WriteLogLine();
             }
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -297,20 +329,22 @@ public sealed class AgentDashboard(
     }
 
     /// <summary>
-    /// Routes one key press. F2/F3 (the drop/pick-up demo hotkeys — moved off the bare D/P
-    /// letters once those became ordinary typed characters for the command line below) are
-    /// handled first and unconditionally: they are function keys, never something a player
-    /// would be typing into a command, so there is no ambiguity in always treating them as
-    /// hotkeys regardless of what is in the buffer. Everything else edits
-    /// <see cref="_input"/> — a no-op when <see cref="_showInputLine"/> is false, since
-    /// <see cref="RunAsync"/> only ever calls this from inside its own
-    /// <c>canReadKeys</c> guard, but the field is checked anyway so this method stays correct
-    /// if that ever changes.
+    /// Routes one key press. F1/F2/F3 are handled first and unconditionally: function keys
+    /// are never something a player would be typing into a command, so there is no ambiguity
+    /// in always treating them as hotkeys regardless of what is in the buffer. Everything else
+    /// edits <see cref="_input"/> or scrolls <see cref="_transcript"/> — a no-op when
+    /// <see cref="_showInputLine"/> is false, since <see cref="RunAsync"/> only ever calls
+    /// this from inside its own <c>canReadKeys</c> guard, but the field is checked anyway so
+    /// this method stays correct if that ever changes.
     /// </summary>
     private void HandleKey(ConsoleKeyInfo keyInfo)
     {
         switch (keyInfo.Key)
         {
+            case ConsoleKey.F1:
+                _detailsOpen = !_detailsOpen;
+                return;
+
             case ConsoleKey.F2:
                 Drop(null);
                 return;
@@ -348,11 +382,35 @@ public sealed class AgentDashboard(
                 return;
 
             case ConsoleKey.Home:
-                _input.MoveHome();
+                if ((keyInfo.Modifiers & ConsoleModifiers.Control) != 0)
+                {
+                    _transcript.ScrollToTop(_lastContentWidth, _lastTranscriptViewportHeight);
+                }
+                else
+                {
+                    _input.MoveHome();
+                }
+
                 return;
 
             case ConsoleKey.End:
-                _input.MoveEnd();
+                if ((keyInfo.Modifiers & ConsoleModifiers.Control) != 0)
+                {
+                    _transcript.ScrollToBottom();
+                }
+                else
+                {
+                    _input.MoveEnd();
+                }
+
+                return;
+
+            case ConsoleKey.PageUp:
+                _transcript.ScrollUp(TranscriptPage(), _lastContentWidth, _lastTranscriptViewportHeight);
+                return;
+
+            case ConsoleKey.PageDown:
+                _transcript.ScrollDown(TranscriptPage(), _lastContentWidth, _lastTranscriptViewportHeight);
                 return;
 
             case ConsoleKey.Escape:
@@ -379,13 +437,19 @@ public sealed class AgentDashboard(
         }
     }
 
+    /// <summary>A page of transcript scroll: the viewport height minus one row of overlap, so
+    /// the line at the edge of the previous page is still visible as an anchor — the same
+    /// convention a terminal pager uses.</summary>
+    private int TranscriptPage() => Math.Max(_lastTranscriptViewportHeight - 1, 1);
+
     /// <summary>
-    /// Enter: echoes the submitted line into the scrollback and runs it through the SAME
+    /// Enter: echoes the submitted line into the transcript and runs it through the SAME
     /// dispatcher the ~ console feeds — <see cref="CoopCommandDispatcher.RunTypedLine"/> —
     /// so the reply comes back through <see cref="Note"/> exactly as any other console reply
-    /// does. Blank lines submit nothing (<see cref="DashboardInputLine.Submit"/> already
-    /// returns empty for one), matching the in-game console's own "Enter on nothing does
-    /// nothing" behaviour.
+    /// does. Snaps the view back to the bottom even if it had been scrolled up: submitting a
+    /// command is a strong signal the player wants to see what happens next. Blank lines
+    /// submit nothing (<see cref="DashboardInputLine.Submit"/> already returns empty for one),
+    /// matching the in-game console's own "Enter on nothing does nothing" behaviour.
     /// </summary>
     private void SubmitInput()
     {
@@ -395,11 +459,12 @@ public sealed class AgentDashboard(
             return;
         }
 
-        PushScrollback($"> {line}");
+        _transcript.Append($"> {line}");
+        _transcript.ScrollToBottom();
 
         if (dispatcher is null)
         {
-            PushScrollback("(no command dispatcher wired to this dashboard)");
+            _transcript.Append("(no command dispatcher wired to this dashboard)");
             return;
         }
 
@@ -450,7 +515,7 @@ public sealed class AgentDashboard(
         ItemDropRequest.Outcome outcome = ItemDropRequest.Drop(manager, bridge, resref);
 
         // The cycle only advances on a drop that happened. A refused one used to advance it
-        // too, so pressing D through a disconnected patch silently skipped blueprints.
+        // too, so pressing F2 through a disconnected patch silently skipped blueprints.
         if (outcome.Dropped)
         {
             _dropIndex++;
@@ -460,24 +525,19 @@ public sealed class AgentDashboard(
     }
 
     /// <summary>
-    /// One compact, timestamped line for a log file or a pipe — written only when the
-    /// session's shape changes, plus a heartbeat so a healthy quiet session still shows it
-    /// is alive.
-    ///
-    /// The fields are the ones worth grepping for after the fact: who is connected, how the
-    /// link is behaving, whether memory access is still working, where the player is and how
-    /// many bodies each channel is driving. Everything cosmetic stays on the screen version.
-    /// </summary>
-    /// <summary>
-    /// An EVENT line from the session layer (a revive, a channel decision, a pump
-    /// failure), written straight to the log file and to a redirected console. Distinct
-    /// from the periodic status line: events are never deduplicated — each one happened.
-    /// Thread-safe by way of File.AppendAllText; callers are the pump thread.
+    /// An EVENT line from the session layer (a revive, a channel decision, a pump failure), a
+    /// command reply/chat, or a captured stray console line: pushed into the transcript,
+    /// written to the log file, and — only in the REDIRECTED/non-interactive case, where there
+    /// is no transcript being drawn at all — echoed to the (redirected) stdout. Distinct from
+    /// <see cref="WriteLogLine"/>'s periodic status line: events are never deduplicated, each
+    /// one happened. Thread-safe (<see cref="TranscriptBuffer"/> and <c>File.AppendAllText</c>
+    /// both are); callers include the pump thread and, once the TUI is up,
+    /// <see cref="TerminalScreen"/>'s own capture callback.
     /// </summary>
     public void Note(string line)
     {
         string entry = $"[{DateTime.Now:HH:mm:ss}] * {line}";
-        PushScrollback(line);
+        _transcript.Append(line);
 
         if (logFile is not null)
         {
@@ -495,33 +555,15 @@ public sealed class AgentDashboard(
             }
         }
 
+        // Console.IsOutputRedirected is the TRUE OS-level check (unaffected by
+        // TerminalScreen's Console.SetOut) and therefore stays false for the entire life of
+        // the interactive TUI, so this branch only ever fires in RunNonInteractiveAsync's own
+        // path — where there is no transcript to look at, so the (redirected) stdout IS the
+        // record, same as it always was.
         if (Console.IsOutputRedirected)
         {
             Console.Out.WriteLine(entry);
             Console.Out.Flush();
-        }
-    }
-
-    /// <summary>Appends one line to the small scrollback shown above the prompt, dropping the
-    /// oldest once past <see cref="ScrollbackCapacity"/>. Thread-safe — see
-    /// <see cref="_scrollbackGate"/>'s own doc comment.</summary>
-    private void PushScrollback(string line)
-    {
-        lock (_scrollbackGate)
-        {
-            _scrollback.Add(line);
-            while (_scrollback.Count > ScrollbackCapacity)
-            {
-                _scrollback.RemoveAt(0);
-            }
-        }
-    }
-
-    private List<string> ScrollbackSnapshot()
-    {
-        lock (_scrollbackGate)
-        {
-            return [.. _scrollback];
         }
     }
 
@@ -585,21 +627,188 @@ public sealed class AgentDashboard(
         }
     }
 
-    private void Render()
+    // ---- the TUI: header / transcript-or-details / input / footer, composed then painted ---
+
+    /// <summary>
+    /// One tick of the interactive TUI: builds the state <see cref="FrameComposer"/> needs,
+    /// composes it to the current window size, and paints it (skipping the actual write when
+    /// nothing changed — see <see cref="_lastSignature"/>).
+    /// </summary>
+    private void RenderInteractive()
+    {
+        int width = Math.Max(Console.WindowWidth, 1);
+        int height = Math.Max(Console.WindowHeight, 1);
+        int contentWidth = Math.Max(width - 1, 1);
+
+        DashboardFrameState partial = new()
+        {
+            Header = BuildHeaderLines(),
+            DetailsOpen = _detailsOpen,
+            ShowInput = _showInputLine,
+            DropdownCandidates = _showInputLine ? _input.Candidates : [],
+            Hint = _showInputLine ? _input.Hint : string.Empty,
+            InputBuffer = _input.Buffer,
+            InputCaret = _input.Caret,
+            Footer = BuildFooter(),
+        };
+
+        int middleHeight = FrameComposer.MiddleHeight(partial, width, height);
+        _lastContentWidth = contentWidth;
+        _lastTranscriptViewportHeight = middleHeight;
+
+        DashboardFrameState state = _detailsOpen
+            ? partial with { Details = BuildDetailsLines() }
+            : partial with { TranscriptRows = BuildTranscriptRows(contentWidth, middleHeight) };
+
+        ComposedFrame frame = FrameComposer.Compose(state, width, height);
+        Paint(frame, width, height);
+    }
+
+    /// <summary>
+    /// The transcript's visible slice, tagged with meaning-based colouring, plus a trailing
+    /// "N new" marker (replacing the topmost row that would otherwise have shown) when the
+    /// view is scrolled up and something arrived below it.
+    /// </summary>
+    private List<FrameRow> BuildTranscriptRows(int contentWidth, int viewportHeight)
+    {
+        List<FrameRow> rows = [];
+        bool showMarker = !_transcript.IsFollowing && _transcript.NewSinceScrolled > 0 && viewportHeight > 0;
+        int rowsHeight = showMarker ? viewportHeight - 1 : viewportHeight;
+
+        foreach (string line in _transcript.VisibleRows(contentWidth, rowsHeight))
+        {
+            rows.Add(new FrameRow(line, TranscriptKindFor(line)));
+        }
+
+        if (showMarker)
+        {
+            rows.Add(new FrameRow(
+                $"── ↓ {_transcript.NewSinceScrolled} new line(s) below ─ Ctrl+End to jump down ──",
+                RowKind.Dim));
+        }
+
+        return rows;
+    }
+
+    /// <summary>Colours a transcript line by MEANING, not by parsing — the same heuristic the
+    /// pre-TUI dashboard used: a line naming a failure is red, one naming a healthy state
+    /// green, an echoed command stands out, the rest is plain.</summary>
+    private static RowKind TranscriptKindFor(string text)
+    {
+        if (text.StartsWith("> ", StringComparison.Ordinal))
+        {
+            return RowKind.Heading;
+        }
+
+        if (text.Contains("FAIL", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("not supported", StringComparison.Ordinal)
+            || text.Contains("disconnect", StringComparison.OrdinalIgnoreCase))
+        {
+            return RowKind.Fail;
+        }
+
+        if (text.Contains(" ok", StringComparison.Ordinal)
+            || text.Contains("authoritative", StringComparison.Ordinal)
+            || text.Contains("mirroring", StringComparison.Ordinal))
+        {
+            return RowKind.Ok;
+        }
+
+        return RowKind.Transcript;
+    }
+
+    /// <summary>
+    /// The compact status header: 2 lines disconnected, 4 connected (role/link/peers/rtt,
+    /// this player, other players, a one-line memory+pump summary). Everything this used to
+    /// spell out across NETWORK/GAME MEMORY/THIS PLAYER/SHARED WORLD sections is still there —
+    /// press F1 for the details panel; the header exists so the transcript is not crowded out
+    /// by a readout taller than the window, which is what made the previous dashboard
+    /// "impossible to scroll or see anything" in practice.
+    /// </summary>
+    private List<FrameRow> BuildHeaderLines()
     {
         CoopAgent? agent = manager.Agent;
-
-        // ⚠ Every line names WHAT it is and WHAT the number means. The old readout was a
-        // grid of bare abbreviations — "tx/rx", "flags v0", "phantoms=4", "hp 12/0" — and
-        // was reported straight back as "the format is still very confusing what everything
-        // means". A readout nobody can read is not a diagnostic.
-        WriteLine("=== KOTOR CO-OP AGENT ============================================");
-        WriteLine($" attached   {bridge.Description}");
+        List<FrameRow> lines = [];
 
         if (agent is null)
         {
-            RenderDisconnected();
-            return;
+            lines.Add(new FrameRow(
+                $"KOTOR CO-OP — not connected — session {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}",
+                RowKind.Heading));
+            lines.Add(new FrameRow(
+                $"attached {bridge.Description}  —  type connect/host below, or press ~ in-game",
+                RowKind.Dim));
+            return lines;
+        }
+
+        SessionStats stats = agent.Session.GetStats();
+        PlayerState local = agent.LastLocalState;
+        IReadOnlyList<RemotePeer> peers = agent.LastPeers;
+
+        string role = agent.Session.IsEnemyAuthority ? "HOST" : "CLIENT";
+        lines.Add(new FrameRow(
+            $"KOTOR CO-OP — {role}  link {stats.Status}  peers {stats.PeerCount}  rtt {stats.RoundTripMs:F0}ms"
+            + (stats.PacketsDropped > 0 ? $"  {stats.PacketsDropped} MALFORMED" : string.Empty),
+            stats.PacketsDropped > 0 ? RowKind.Fail : RowKind.Heading));
+
+        lines.Add(new FrameRow(
+            $"you: {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
+            + $"  hp {DescribeHealth(local.Health, local.MaxHealth)}  {DescribeState(local)}",
+            RowKind.Plain));
+
+        string peersLine = peers.Count == 0
+            ? "players: nobody else connected yet"
+            : "players: " + string.Join(", ", peers.Select(peer =>
+                $"{peer.Name} ({(peer.IsInModule(local.Module) ? "here" : peer.State.Module)}, "
+                + $"{DescribeHealth(peer.State.Health, peer.State.MaxHealth)})"));
+        lines.Add(new FrameRow(peersLine, RowKind.Plain));
+
+        string memory = agent.LastReadSucceeded
+            ? agent.Bridge.CanWriteRemotes && !agent.LastWriteSucceeded ? "WRITE-FAILING" : "ok"
+            : $"READ-FAILING({agent.ReadFailureCount})";
+
+        string compatFlag = string.Empty;
+        CompatibilityVerdict? verdict = agent.Session.Compatibility;
+        if (verdict is not null)
+        {
+            SessionCapabilities off = SessionCapabilities.All & ~verdict.Allowed;
+            if (off != SessionCapabilities.None || verdict.Warnings.Count > 0)
+            {
+                compatFlag = "  content: see F1 for what's off/warned";
+            }
+        }
+
+        lines.Add(new FrameRow(
+            $"memory {memory}  pump {agent.PumpAverageMs:F1}ms avg ({agent.PumpPeakMs:F1}ms peak){compatFlag}",
+            memory == "ok" ? RowKind.Ok : RowKind.Fail));
+
+        return lines;
+    }
+
+    /// <summary>
+    /// F1's details panel: the full readout the header no longer has room for — network
+    /// stats, content-compatibility verdict, game-memory read/write health, this player's
+    /// exact position, every other player with their state, the shared-world combat/enemy
+    /// census, and the ground-item/last-drop demo affordance. Replaces the transcript in the
+    /// middle region while open; the transcript itself keeps recording underneath.
+    /// </summary>
+    private List<FrameRow> BuildDetailsLines()
+    {
+        List<FrameRow> rows = [];
+        void Row(string text, RowKind kind = RowKind.Plain) => rows.Add(new FrameRow(text, kind));
+
+        CoopAgent? agent = manager.Agent;
+        Row("=== DETAILS (F1 to close) ============================================", RowKind.Heading);
+        Row($" attached   {bridge.Description}");
+
+        if (agent is null)
+        {
+            Row(string.Empty);
+            Row($" session    {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
+            Row(string.Empty);
+            Row(" not connected. In-game: press ~ and type  connect <ip> [password] | reconnect");
+            Row(" Or type it in the command line below - it reaches the same dispatcher.");
+            return rows;
         }
 
         SessionStats stats = agent.Session.GetStats();
@@ -610,35 +819,57 @@ public sealed class AgentDashboard(
             ? "HOST - this game owns the enemies, doors and companions"
             : "CLIENT - this game mirrors the host's world";
 
-        WriteLine(string.Empty);
-        WriteLine(" NETWORK");
-        WriteLine($" role       {role}");
-        WriteLine($" link       {stats.Status}");
-        WriteLine($" players    {stats.PeerCount} other connected      round trip {stats.RoundTripMs:F0} ms");
-        WriteLine($" traffic    {stats.PacketsSent} sent / {stats.PacketsReceived} received      "
-            + (stats.PacketsDropped > 0 ? $"{stats.PacketsDropped} MALFORMED" : "none malformed"));
+        Row(string.Empty);
+        Row(" NETWORK", RowKind.Heading);
+        Row($" role       {role}");
+        Row($" link       {stats.Status}");
+        Row($" players    {stats.PeerCount} other connected      round trip {stats.RoundTripMs:F0} ms");
+        Row($" traffic    {stats.PacketsSent} sent / {stats.PacketsReceived} received      "
+            + (stats.PacketsDropped > 0 ? $"{stats.PacketsDropped} MALFORMED" : "none malformed"),
+            stats.PacketsDropped > 0 ? RowKind.Fail : RowKind.Plain);
 
+        CompatibilityVerdict? verdict = agent.Session.Compatibility;
+        if (verdict is not null)
+        {
+            SessionCapabilities off = SessionCapabilities.All & ~verdict.Allowed;
+            if (off != SessionCapabilities.None || verdict.Warnings.Count > 0)
+            {
+                Row(string.Empty);
+                Row($" content    {verdict.Summary}");
 
-        WriteContentSection(agent);
+                if (off != SessionCapabilities.None)
+                {
+                    Row($"            OFF: {off.ToString().Replace(", ", " ")}  (a mod/save difference makes these unsafe)",
+                        RowKind.Fail);
+                }
+
+                for (int i = 0; i < verdict.Warnings.Count && i < 3; i++)
+                {
+                    Row($"            {verdict.Warnings[i]}", RowKind.Fail);
+                }
+            }
+        }
 
         string readStatus = agent.LastReadSucceeded ? "ok" : $"FAILING ({agent.ReadFailureCount} failures)";
         string writeStatus = agent.Bridge.CanWriteRemotes
             ? agent.LastWriteSucceeded ? "ok" : "FAILING"
             : "not supported by this profile (read-only)";
+        bool memoryOk = agent.LastReadSucceeded && (!agent.Bridge.CanWriteRemotes || agent.LastWriteSucceeded);
 
-        WriteLine(string.Empty);
-        WriteLine(" GAME MEMORY");
-        WriteLine($" reading    {readStatus}          writing    {writeStatus}");
-        WriteLine($" pump cost  {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak   (budget {agent.PumpBudgetMs:F0} ms)");
-        WriteLine(string.Empty);
-        WriteLine(" THIS PLAYER");
-        WriteLine($" area       {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
+        Row(string.Empty);
+        Row(" GAME MEMORY", RowKind.Heading);
+        Row($" reading    {readStatus}          writing    {writeStatus}", memoryOk ? RowKind.Ok : RowKind.Fail);
+        Row($" pump cost  {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak   (budget {agent.PumpBudgetMs:F0} ms)");
+
+        Row(string.Empty);
+        Row(" THIS PLAYER", RowKind.Heading);
+        Row($" area       {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
             + $"      at {local.Position}  facing {local.Facing:F2}");
-        WriteLine($" health     {DescribeHealth(local.Health, local.MaxHealth)}");
-        WriteLine($" state      {DescribeState(local)}");
-        WriteLine(string.Empty);
-        WriteLine($" OTHER PLAYERS ({peers.Count})");
+        Row($" health     {DescribeHealth(local.Health, local.MaxHealth)}");
+        Row($" state      {DescribeState(local)}");
 
+        Row(string.Empty);
+        Row($" OTHER PLAYERS ({peers.Count})", RowKind.Heading);
         for (int i = 0; i < Math.Max(peers.Count, 1); i++)
         {
             if (i < peers.Count)
@@ -649,10 +880,9 @@ public sealed class AgentDashboard(
 
                 // ⚠ A MIRRORING PEER NEVER SETS FlagPaused, so reading its state alone shows
                 // "exploring" while its game is visibly frozen — reported from play. The flag
-                // deliberately carries only a player's OWN pause (a mirrored one is excluded
-                // at the source, or two instances latch each other paused forever), so the
-                // shared half has to be supplied here: if THIS player holds a pause, every
-                // peer standing in this module is frozen by it, whatever their flags say.
+                // deliberately carries only a player's OWN pause, so the shared half has to be
+                // supplied here: if THIS player holds a pause, every peer standing in this
+                // module is frozen by it, whatever their flags say.
                 string state = DescribeState(peer.State);
                 if (here && local.IsPaused && !peer.State.IsPaused)
                 {
@@ -661,12 +891,11 @@ public sealed class AgentDashboard(
                         : $"{state}, PAUSED (mirroring yours)";
                 }
 
-                WriteLine($"   {peer.Name,-12} {where,-18} {DescribeHealth(peer.State.Health, peer.State.MaxHealth),-20}"
-                    + state);
+                Row($"   {peer.Name,-12} {where,-18} {DescribeHealth(peer.State.Health, peer.State.MaxHealth),-20}" + state);
             }
             else
             {
-                WriteLine("   (nobody else connected yet)");
+                Row("   (nobody else connected yet)");
             }
         }
 
@@ -690,266 +919,108 @@ public sealed class AgentDashboard(
             }
         }
 
-        WriteLine(string.Empty);
-        WriteLine(" SHARED WORLD");
-        WriteLine($" combat     {DescribeSharedCombat(local, peers)}");
-        WriteLine($" enemies    {enemies.Count} tracked - {alive} alive, {dead} dead"
+        Row(string.Empty);
+        Row(" SHARED WORLD", RowKind.Heading);
+        Row($" combat     {DescribeSharedCombat(local, peers)}");
+        Row($" enemies    {enemies.Count} tracked - {alive} alive, {dead} dead"
             + (agent.Session.IsEnemyAuthority ? "   (published by this game)" : "   (received from the host)"));
 
         DialogueState convo = agent.Session.GetDialogue();
         string convoWho = convo.OwnerPeerId == agent.Session.LocalPeerId
             ? "you are"
             : $"peer {convo.OwnerPeerId} is";
-        WriteLine($" talking    {(convo.Active ? $"{convoWho} talking" + (convo.SpeakerName.Length > 0 ? $" to {convo.SpeakerName}" : string.Empty) : "nobody is talking")}");
+        Row($" talking    {(convo.Active ? $"{convoWho} talking" + (convo.SpeakerName.Length > 0 ? $" to {convo.SpeakerName}" : string.Empty) : "nobody is talking")}");
 
-        // Ground items are a demo affordance, not session health: one summary line, and the
-        // resrefs only when there is something to say. The readout has to fit a default
-        // console without resizing — reported as "we have to resize it to see everything".
         List<GroundItem> items = agent.Session.Items.Snapshot();
         string itemNames = items.Count == 0
             ? "none"
             : string.Join(", ", items.Take(3).Select(item => item.Resref)) + (items.Count > 3 ? ", ..." : string.Empty);
+        Row($" items      {items.Count} on the ground: {itemNames}");
 
-        WriteLine($" items      {items.Count} on the ground: {itemNames}");
-
-        if (_lastDropNote.Length > 0)
+        if (_lastDropNoteValue.Length > 0)
         {
-            WriteLine($" last drop  {_lastDropNote}");
+            Row($" last drop  {_lastDropNoteValue}");
         }
 
-        RenderInputArea();
+        return rows;
     }
 
-    /// <summary>Steady-state readout while no session is live (between connects).</summary>
-    private void RenderDisconnected()
-    {
-        WriteLine($"session  {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
-        WriteLine(string.Empty);
-        WriteLine("not connected.");
-        WriteLine(string.Empty);
-        WriteLine("In-game: press ~ and type  connect <ip> [password] | reconnect | help");
-        WriteLine("Or type it below - this window's own command line reaches the same dispatcher.");
-
-        // A little padding so this shorter screen still fills roughly the same vertical
-        // space the connected readout does - not load-bearing for correctness (FlushFrame
-        // blanks every row up to the window height on every call regardless of how many
-        // lines were actually written), just cosmetic stability. Cut down from the 18 this
-        // used before RenderInputArea existed, which would otherwise push the prompt row
-        // below a normal-height terminal window and off the visible, clamped frame.
-        for (int i = 0; i < 6; i++)
-        {
-            WriteLine(string.Empty);
-        }
-
-        RenderInputArea();
-    }
+    private string BuildFooter() => _showInputLine
+        ? "F1 details    F2 drop    F3 pick up    PgUp/PgDn scroll    Tab complete    Ctrl+C quit"
+        : "(no command line: input is redirected)    F1 details    F2 drop    F3 pick up    Ctrl+C to stop";
 
     /// <summary>
-    /// The bottom of every frame, connected or not: the scrollback (last few replies, chat
-    /// and session-event lines, plus every command this window itself submitted), the
-    /// completion hint or dropdown for whatever is typed right now, the prompt line itself,
-    /// and the key legend. Shared by <see cref="Render"/> and <see cref="RenderDisconnected"/>
-    /// because the dispatcher answers `connect`/`host`/`help` just as well before a session
-    /// exists as during one — see <see cref="CoopCommandDispatcher.RunTypedLine"/>.
+    /// Paints one composed frame in a SINGLE write to the real terminal (never
+    /// <c>Console.Out</c> — see <see cref="_terminal"/>'s own doc comment): cursor home, each
+    /// row's colour/text/reset/clear-to-end-of-line, then the real caret placed on the input
+    /// row. Skips the write entirely when <see cref="ComputeSignature"/> matches the previous
+    /// frame — an idle dashboard between the 200 ms ticks costs nothing extra.
     /// </summary>
-    private void RenderInputArea()
+    private void Paint(ComposedFrame frame, int width, int height)
     {
-        _promptFrameRow = -1;
-        _inputAreaStartRow = _frame.Count;
-        WriteLine(string.Empty);
-
-        if (!_showInputLine)
+        string signature = ComputeSignature(frame, width, height);
+        if (signature == _lastSignature)
         {
-            WriteLine(" (no command line: input is redirected)    F2 drop    F3 pick up    Ctrl+C to stop");
             return;
         }
 
-        foreach (string line in ScrollbackSnapshot())
+        _lastSignature = signature;
+
+        System.Text.StringBuilder sb = new();
+        sb.Append("\x1b[H");
+
+        for (int i = 0; i < frame.Rows.Count; i++)
         {
-            WriteLine(" " + line);
+            FrameRow row = frame.Rows[i];
+            sb.Append(SgrFor(row.Kind)).Append(row.Text).Append("\x1b[0m\x1b[K");
+            if (i < frame.Rows.Count - 1)
+            {
+                sb.Append("\r\n");
+            }
         }
 
-        // The dropdown (one candidate per row) replaces the hint line while the first token
-        // is still ambiguous - the hint would otherwise just be the same candidates joined
-        // onto one capped line, which is redundant with rows already showing them in full.
-        IReadOnlyList<string> candidates = _input.Candidates;
-        if (candidates.Count > 1)
+        if (frame.CaretRow >= 0 && frame.CaretColumn >= 0)
         {
-            foreach (string candidate in candidates.Take(MaxDropdownRows))
-            {
-                WriteLine($"   {candidate}");
-            }
-
-            if (candidates.Count > MaxDropdownRows)
-            {
-                WriteLine($"   ... {candidates.Count - MaxDropdownRows} more");
-            }
+            sb.Append($"\x1b[{frame.CaretRow + 1};{frame.CaretColumn + 1}H\x1b[?25h");
         }
         else
         {
-            string hint = _input.Hint;
-            if (hint.Length > 0)
-            {
-                WriteLine($" {hint}");
-            }
+            sb.Append("\x1b[?25l");
         }
 
-        // Row captured BEFORE the prompt line is appended, so it is exactly the row the
-        // prompt lands on once FlushFrame paints _frame - see PositionInputCaret.
-        _promptFrameRow = _frame.Count;
-        WriteLine($"> {_input.Buffer}");
-        WriteLine(" F2 drop    F3 pick up    Tab complete (Shift+Tab back)    Up/Down history    "
-            + "Esc clear    Ctrl+C to stop");
+        // _terminal is always set by the time this runs — RenderInteractive is only ever
+        // called from inside RunAsync's canPosition branch, after TerminalScreen.Enter().
+        _terminal!.Screen.Write(sb.ToString());
+        _terminal.Screen.Flush();
     }
 
-    /// <summary>
-    /// Puts the real OS caret on the prompt row/column <see cref="RenderInputArea"/> just
-    /// drew, once <see cref="FlushFrame"/> has repainted the screen. Cheap (one Win32 call)
-    /// and run every tick, so it costs nothing toward the "no flicker" requirement the rest
-    /// of this class already meets by redrawing in place — this only ever repositions a
-    /// caret, never touches a character cell. Off (and the caret hidden) whenever there is no
-    /// prompt to point at: redirected input, or a window too short to show the prompt row at
-    /// all.
-    /// </summary>
-    private void PositionInputCaret()
+    private static string ComputeSignature(ComposedFrame frame, int width, int height)
     {
-        if (_promptFrameRow < 0)
+        System.Text.StringBuilder sb = new();
+        sb.Append(width).Append('x').Append(height).Append('|')
+          .Append(frame.CaretRow).Append(',').Append(frame.CaretColumn).Append('|');
+
+        foreach (FrameRow row in frame.Rows)
         {
-            Console.CursorVisible = false;
-            return;
+            sb.Append((int)row.Kind).Append(':').Append(row.Text).Append('\u0001');
         }
 
-        int height = Math.Max(Console.WindowHeight - 1, 1);
-        if (_promptFrameRow >= height)
-        {
-            Console.CursorVisible = false;
-            return;
-        }
-
-        int width = Math.Max(Console.WindowWidth - 1, 1);
-        int column = Math.Min(2 + _input.Caret, width - 1);
-
-        try
-        {
-            Console.SetCursorPosition(column, _promptFrameRow);
-            Console.CursorVisible = true;
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            // A resize landed between computing height/width and setting the position.
-            // Missing one frame's caret is harmless; the next tick recomputes both.
-            Console.CursorVisible = false;
-        }
+        return sb.ToString();
     }
 
-    /// <summary>
-    /// What the two installs agreed on. Without this the headline mod-compatibility feature
-    /// is invisible: a channel silently switched off (the peer's appearance, say, because
-    /// their appearance.2da differs) looks exactly like a bug, and the player has no way to
-    /// tell the difference. Says nothing while everything is on and nothing was warned
-    /// about, so the normal case costs no space.
-    /// </summary>
-    private void WriteContentSection(CoopAgent agent)
+    private static string SgrFor(RowKind kind) => kind switch
     {
-        CompatibilityVerdict? verdict = agent.Session.Compatibility;
-        if (verdict is null)
-        {
-            return;
-        }
-
-        SessionCapabilities off = SessionCapabilities.All & ~verdict.Allowed;
-        if (off == SessionCapabilities.None && verdict.Warnings.Count == 0)
-        {
-            return;
-        }
-
-        WriteLine($"content  {verdict.Summary}");
-
-        if (off != SessionCapabilities.None)
-        {
-            WriteLine($"         OFF: {off.ToString().Replace(", ", " ")}  (a mod/save difference makes these unsafe)");
-        }
-
-        for (int i = 0; i < verdict.Warnings.Count && i < 3; i++)
-        {
-            WriteLine($"         {verdict.Warnings[i]}");
-        }
-
-        WriteLine(string.Empty);
-    }
-
-    /// <summary>The frame being built. Lines are collected and flushed together so the
-    /// readout can be clamped to the window.</summary>
-    private readonly List<string> _frame = [];
-
-    private void WriteLine(string text)
-    {
-        if (Console.IsOutputRedirected)
-        {
-            Console.WriteLine(text);
-            return;
-        }
-
-        _frame.Add(text);
-    }
-
-    /// <summary>
-    /// Paints the collected frame, clamped to the window so it CANNOT scroll.
-    ///
-    /// ⚠ Scrolling is what makes an in-place readout flicker. Writing one more line than the
-    /// window holds scrolls everything up by one, so the next redraw starting at (0,0) lands
-    /// against shifted content and the screen alternates between two mis-aligned versions of
-    /// itself — reported as "flickering between different views every second". Never write
-    /// the last row, and always pad to the full width so a shorter frame cannot leave pieces
-    /// of a longer one behind.
-    /// </summary>
-    private void FlushFrame()
-    {
-        int height = Math.Max(Console.WindowHeight - 1, 1);
-        int width = Math.Max(Console.WindowWidth - 1, 1);
-
-        // Keep the command line visible: the readout is often taller than the window (live
-        // 2026-09-25, a 30-row window hid the prompt entirely). When it does not fit, cut
-        // the readout, never the input area, and move the prompt row up to match.
-        int inputStart = _inputAreaStartRow;
-        _inputAreaStartRow = -1;
-        if (_frame.Count > height && inputStart >= 0 && inputStart < _frame.Count)
-        {
-            int inputRows = _frame.Count - inputStart;
-            int keep = Math.Max(height - inputRows, 0);
-            if (keep < inputStart)
-            {
-                int removed = inputStart - keep;
-                _frame.RemoveRange(keep, removed);
-                if (_promptFrameRow >= 0)
-                {
-                    _promptFrameRow -= removed;
-                }
-            }
-        }
-
-        Console.SetCursorPosition(0, 0);
-
-        ConsoleColor previous = Console.ForegroundColor;
-        for (int i = 0; i < height; i++)
-        {
-            string line = i < _frame.Count ? _frame[i] : string.Empty;
-            if (line.Length > width)
-            {
-                line = line[..width];
-            }
-
-            // Colour by MEANING, not by parsing: a line naming a failure is red, one naming
-            // a healthy state green, headings white, the rest dim — so a glance answers
-            // "is this session alright" without reading any of it.
-            Console.ForegroundColor = ColourFor(line);
-            Console.Write(line.PadRight(width));
-            Console.Write('\n');
-        }
-
-        Console.ForegroundColor = previous;
-        _frame.Clear();
-    }
+        RowKind.Heading => "\x1b[1;97m",
+        RowKind.Fail => "\x1b[91m",
+        RowKind.Ok => "\x1b[92m",
+        RowKind.Dim => "\x1b[90m",
+        RowKind.Dropdown => "\x1b[96m",
+        RowKind.Hint => "\x1b[90m",
+        RowKind.InputPrompt => "\x1b[97m",
+        RowKind.Footer => "\x1b[90m",
+        RowKind.Transcript => "\x1b[37m",
+        _ => "\x1b[0m",
+    };
 
     /// <summary>
     /// The player's situation in words: fighting, paused, talking, down. These are the
@@ -1046,27 +1117,4 @@ public sealed class AgentDashboard(
     /// what this agent can see.</summary>
     private static string DescribeHealth(int current, int max) =>
         max > 0 ? $"{current}/{max}" : $"{current} (maximum unknown)";
-
-    private static ConsoleColor ColourFor(string text)
-    {
-        if (text.Contains("FAIL", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("not supported", StringComparison.Ordinal)
-            || text.Contains("disconnect", StringComparison.OrdinalIgnoreCase))
-        {
-            return ConsoleColor.Red;
-        }
-
-        if (text.Contains(" ok", StringComparison.Ordinal)
-            || text.Contains("authoritative", StringComparison.Ordinal)
-            || text.Contains("mirroring", StringComparison.Ordinal))
-        {
-            return ConsoleColor.Green;
-        }
-
-        // A heading is a line that starts in column 0 with a word; continuation lines are
-        // indented, and those stay dim so the shape of the readout is visible at a glance.
-        return text.Length > 0 && !char.IsWhiteSpace(text[0])
-            ? ConsoleColor.White
-            : ConsoleColor.DarkGray;
-    }
 }

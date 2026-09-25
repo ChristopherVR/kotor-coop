@@ -9,27 +9,50 @@ spawned body is flushed before the module unloads, and the peer follows). See
 [console-cheats.md](research/console-cheats.md) for the full authority reasoning, the wire
 format, and the live-verification checklist — this page is the short reference.
 
-## The agent window's own command line
+## The agent window's own console
 
-Every co-op verb on this page (not the retail-engine ones — see "Agent vs in-game" below) is
-also reachable from the agent's own console window: an always-visible `>` prompt at the
-bottom, added because typing at `~` requires alt-tabbing into a focused game window, and
-nothing in-game had ever needed the agent's command surface before a plugin was even attached.
+The agent window is a full-screen TUI of its own — the same shape a terminal chat app or
+Claude Code's own console is — added because typing at `~` requires alt-tabbing into a
+focused game window, and the old scrolling readout could get so tall that other stray output
+(a coop.ini diagnostic, a census note) scrolled the whole window out of view underneath it.
+Top to bottom:
 
-- Type and it runs through the exact same parser and dispatcher as a `~` console line —
-  `CoopCommandDispatcher.RunTypedLine`, the identical entry point `DrainInputs` uses for a
-  line the shared block hands over from the in-game console — and answers through the same
-  `Reply`/`Chat` sink, so a reply here and a reply there are never two different code paths.
-- **Tab** / **Shift+Tab** complete the first token and cycle through matches (backward on
-  Shift+Tab); a short dropdown (top 6) lists every match while more than one applies, and a
-  usage hint with the argument you're on marked appears once the verb is unambiguous.
-- **Up** / **Down** recall the last ~50 submitted lines (never storing the same line twice in
-  a row).
-- **Backspace / Delete / Left / Right / Home / End** edit in place; **Esc** clears the line;
-  **Enter** submits and echoes the command plus its reply into a small scrollback shown above
-  the prompt.
-- **F2** drops a demo item, **F3** picks one up — the dashboard's own item-sync test hotkeys
-  (bare `D`/`P` before typed text needed the letter keys back).
+- A **status header** (2-4 lines): role/link/peers/round-trip, this player's area/hp/state,
+  the other players, and a memory/pump-cost summary.
+- A **transcript** filling the middle: chat, session events, every command typed here (echoed
+  as `> the command`) and its reply, and any stray console output any component still writes
+  directly (captured so it lands here instead of corrupting the screen — see "Own console,
+  captured output" below). Newest at the bottom; **PageUp**/**PageDown** scroll it back,
+  **Ctrl+Home**/**Ctrl+End** jump to the top/bottom, and a `↓ N new` marker appears while
+  scrolled up and something new arrives.
+- **F1** swaps the transcript for a details panel with everything the old long readout showed
+  (network stats, content-compatibility verdict, exact position, every peer, the shared-world
+  combat/enemy census) — press F1 again to go back to the transcript.
+- The **command line**: type and it runs through the exact same parser and dispatcher as a
+  `~` console line — `CoopCommandDispatcher.RunTypedLine`, the identical entry point
+  `DrainInputs` uses for a line the shared block hands over from the in-game console — and
+  answers through the same `Reply`/`Chat` sink, so a reply here and a reply there are never
+  two different code paths.
+  - **Tab** / **Shift+Tab** complete the first token and cycle through matches (backward on
+    Shift+Tab); a dropdown (top 6 + a count of the rest) lists every match while more than one
+    applies, and a usage hint with the argument you're on marked appears once the verb is
+    unambiguous.
+  - **Up** / **Down** recall the last ~50 submitted lines (never storing the same line twice
+    in a row).
+  - **Backspace / Delete / Left / Right / Home / End** edit in place (a line longer than the
+    window scrolls horizontally, keeping the caret in view); **Esc** clears the line;
+    **Enter** submits, echoes it into the transcript, and snaps the view back to the bottom.
+- A one-line **footer**: `F1 details  F2 drop  F3 pick up  PgUp/PgDn scroll  Tab complete
+  Ctrl+C quit`. F2 drops a demo item, F3 picks one up — the dashboard's own item-sync test
+  hotkeys (bare `D`/`P` before typed text needed the letter keys back).
+
+**Own console, captured output.** While this TUI is up it owns the terminal completely: an
+alternate screen buffer (so nothing can ever scroll the view — the old "impossible to scroll
+or see anything" failure mode this replaced), and `Console.Out`/`Console.Error` redirected to
+a capture writer, so ANY component that still calls `Console.WriteLine`/`Console.Error` (a
+`coop.ini: N developer switch(es)...` diagnostic, a `[census] ...` note, a background thread's
+catch-all) lands as an ordinary transcript line instead of painting into the middle of the
+screen. Ctrl+C, a crash, or the process exiting all restore the real terminal.
 
 **Agent vs in-game:** the agent side only ever completes the co-op verbs above — it has no
 way to see the game's own retail command table (`giveitem`, `heal`, ...), which only the
