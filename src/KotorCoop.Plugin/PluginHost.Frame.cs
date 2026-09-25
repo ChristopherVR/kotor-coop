@@ -1059,9 +1059,14 @@ internal static unsafe partial class PluginHost
                 // verb (CheatController) ran the identical accept dispatch from, three times live.
                 _galaxyDeparture?.OnFrame();
 
-                // A script's AddMultiClass captured on this instance to publish, or a peer's class to
-                // add to the local player - same schedule, same one-call-per-frame shape.
+                // A script's AddMultiClass captured on this instance to publish - same schedule,
+                // same one-call-per-frame shape.
                 _classGrant?.OnFrame();
+
+                // A peer's Jedi choice happened: check whether THIS player needs the class-choice
+                // popup, and drive it while it is showing. Never forces the peer's exact class -
+                // see JediChoicePromptController's own remarks (2026-09-25).
+                _jediChoicePrompt?.OnFrame();
 
                 // After the combat pass, so the enemy the owner has just killed is already off the
                 // dealt ledger before this publishes it — and so a peer's damage lands on a copy

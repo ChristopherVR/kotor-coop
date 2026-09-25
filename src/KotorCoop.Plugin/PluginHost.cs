@@ -106,6 +106,7 @@ internal static unsafe partial class PluginHost
     private static MidModuleMovieController? _movieRelay;
     private static GalaxyDepartureController? _galaxyDeparture;
     private static ClassGrantController? _classGrant;
+    private static JediChoicePromptController? _jediChoicePrompt;
     private static EnemyEffectController? _enemyEffects;
     private static PlacedMineController? _placedMines;
 

@@ -3,14 +3,16 @@ namespace KotorCoop.Session;
 /// <summary>What the receiver does with a peer's class grant this tick.</summary>
 public enum ClassGrantReplayPath
 {
-    /// <summary>Ask the plugin to add the class to the local player, now.</summary>
+    /// <summary>Ask the plugin to check whether this player needs the class-choice popup, now.</summary>
     Apply,
 
     /// <summary>Keep the grant and look again next tick — this instance is mid its own load
     /// (a cross-world engine write is the transition-window poison
-    /// docs/research/transition-crashes.md exists to keep out) or mid-conversation (the
-    /// class list is read by dialogue gates; changing it under a running conversation is
-    /// exactly the kind of mid-line write nothing here needs to risk).</summary>
+    /// docs/research/transition-crashes.md exists to keep out), mid-conversation (the class list
+    /// is read by dialogue gates; changing it under a running conversation is exactly the kind
+    /// of mid-line write nothing here needs to risk, and the popup itself IS a conversation, so
+    /// this also keeps two prompts from ever racing), or mid-combat (2026-09-25: a popup during
+    /// a fight is exactly the kind of screen the task's own gating list rules out).</summary>
     Wait,
 }
 
@@ -59,14 +61,23 @@ public static class ClassGrantReplayRule
     public const uint StatusAlreadyHas = 4;
     public const uint StatusSlotFull = 5;
 
-    public static ClassGrantReplayPath Decide(string localModule, bool inDialogue, bool localMidTransition)
+    /// <summary>The class-choice popup is now showing on the receiver's own screen; the eventual
+    /// pick (whichever class the player chooses) arrives later through the ordinary
+    /// class-announce channel, not through this request/ack pair. Added 2026-09-25 — see
+    /// <c>KotorCoop.Plugin.JediChoicePromptController</c>, the only producer of it.</summary>
+    public const uint StatusPrompted = 6;
+
+    /// <summary><paramref name="inCombat"/> added 2026-09-25: the task's own gating list for the
+    /// class-choice popup is "not in a conversation, not loading, not in combat" — the first two
+    /// were already this rule's job; combat is new.</summary>
+    public static ClassGrantReplayPath Decide(string localModule, bool inDialogue, bool localMidTransition, bool inCombat = false)
     {
         if (localModule.Length == 0 || Pumps.ModuleNameGuard.IsFallbackModuleName(localModule) || localMidTransition)
         {
             return ClassGrantReplayPath.Wait;
         }
 
-        return inDialogue ? ClassGrantReplayPath.Wait : ClassGrantReplayPath.Apply;
+        return inDialogue || inCombat ? ClassGrantReplayPath.Wait : ClassGrantReplayPath.Apply;
     }
 
     /// <summary><paramref name="status"/> is the plugin's answer (0 when it never came);
@@ -77,6 +88,7 @@ public static class ClassGrantReplayRule
         {
             case StatusApplied:
             case StatusAlreadyHas:
+            case StatusPrompted:
                 return ClassGrantReplayOutcome.Done;
 
             case StatusBadClass:

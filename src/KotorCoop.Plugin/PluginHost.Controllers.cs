@@ -60,6 +60,7 @@ internal static unsafe partial class PluginHost
         _movieRelay = new MidModuleMovieController(_view);
         _galaxyDeparture = new GalaxyDepartureController(_view);
         _classGrant = new ClassGrantController(_view);
+        _jediChoicePrompt = new JediChoicePromptController(_view);
         _enemyEffects = new EnemyEffectController(_view);
         _placedMines = new PlacedMineController(_view);
         _pause = new PauseController(_view);

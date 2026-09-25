@@ -1490,4 +1490,14 @@ internal partial struct SharedBlock
     /// <c>IGameBridge.CheatKinds.Stats</c> and docs/research/class-and-power-grants.md §9.
     /// </summary>
     public const uint CheatKindStats = 101;
+
+    /// <summary>
+    /// <c>jedichoice</c> — DEV VERB / LIVE-TEST PRIMITIVE (docs/research/class-and-power-grants.md's
+    /// 2026-09-25 section): manufactures a local "a peer's Jedi choice happened" request by
+    /// bumping <see cref="OffsetClassGrantRequestSerial"/> directly, exactly the shape a real
+    /// relay would write, so <c>JediChoicePromptController</c>'s popup can be exercised on ONE
+    /// instance without a second player or the Dantooine conversation. No arguments; local only.
+    /// See <c>IGameBridge.CheatKinds.JediChoice</c>.
+    /// </summary>
+    public const uint CheatKindJediChoice = 102;
 }

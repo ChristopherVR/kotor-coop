@@ -18,10 +18,53 @@ public sealed partial class CoopHost
     /// script), only a peer's.</summary>
     private readonly Queue<ClassGrantPacket> _classGrantInbox = new();
 
+    /// <summary>
+    /// Whether ANY player's Jedi choice has ever happened this session — the durable fact a
+    /// LATE joiner needs (docs/research/class-and-power-grants.md's 2026-09-25 "requirement 3"),
+    /// which <see cref="ClassGrantSender"/>'s own retransmit-until-ack table cannot answer once
+    /// every CURRENTLY connected peer has acked an op and it retires (the same gap
+    /// <c>ResyncContainerLoot</c>'s own remarks describe for container loot: "a removal is
+    /// announced once, reliably, and then never mentioned again"). Never cleared for the life of
+    /// the process; a module change does not undo a class.
+    /// </summary>
+    private bool _jediChoiceEverHappened;
+
+    /// <summary>The most recent class id seen, kept ONLY so a late-joiner resync's synthetic
+    /// packet has something plausible to log — the receiver never applies it directly any more
+    /// (see <c>KotorCoop.Plugin.JediChoicePromptController</c>).</summary>
+    private int _lastJediChoiceClassId;
+
+    /// <summary>Unacked class-grant ops still in flight, for tests (mirrors
+    /// <see cref="MaterialisedLootPendingCount"/>).</summary>
+    public int ClassGrantPendingCount => _classGrantSender.PendingCount;
+
     /// <summary>The host's own character just gained a class; broadcast it reliably to every
     /// client. Enqueue-only — the tick loop does the sending and retransmits.</summary>
-    public void PublishClassGrant(int classId) =>
+    public void PublishClassGrant(int classId)
+    {
+        _jediChoiceEverHappened = true;
+        _lastJediChoiceClassId = classId;
         _classGrantSender.EnqueueLocal(HostPeerId, classId, SessionClock.NowMs);
+    }
+
+    /// <summary>
+    /// Re-announces "a Jedi choice happened" for a freshly (re-)admitted peer, so it is checked
+    /// against its OWN character even when the original grant already fully retired (every peer
+    /// present at the time acked it) before this peer arrived — the gap
+    /// <see cref="ClassGrantSender.ResetBackoff"/> alone cannot close, since that only speeds up
+    /// an op still PENDING. A brand-new (never-acked) packet under the HOST's identity is queued
+    /// regardless of who originally made the choice — attribution in the receiver's log line is
+    /// a minor cosmetic cost, and the receiver's own local "do I already have a class" check
+    /// makes this a safe no-op for a peer who does not need it. Called from
+    /// <c>HandleHello</c> on (re-)admission, alongside the other Resync* calls.
+    /// </summary>
+    private void ResyncJediChoice(long nowMs)
+    {
+        if (_jediChoiceEverHappened)
+        {
+            _classGrantSender.EnqueueLocal(HostPeerId, _lastJediChoiceClassId, nowMs);
+        }
+    }
 
     public IReadOnlyList<ClassGrantPacket> DrainClassGrants()
     {
@@ -100,6 +143,8 @@ public sealed partial class CoopHost
             if (fresh)
             {
                 _classGrantInbox.Enqueue(grant);
+                _jediChoiceEverHappened = true;
+                _lastJediChoiceClassId = grant.ClassId;
             }
         }
     }

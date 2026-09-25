@@ -4,20 +4,22 @@ using KotorCoop.Protocol;
 namespace KotorCoop.Session.Pumps;
 
 /// <summary>
-/// The class-grant relay (docs/research/class-and-power-grants.md, coop.ini
+/// The Jedi-choice relay (docs/research/class-and-power-grants.md, coop.ini
 /// <c>class_grant_sync</c>): a script's <c>AddMultiClass(nClass, GetPC())</c> — Master Dorak's
-/// Jedi path choice on Dantooine — runs on the engine that owns the conversation only, so the
-/// other player's character never became a Jedi (docs/review-seamless-2026-09-18.md blocker
-/// #1). The plugin captures the call at the VM handler (<c>AddMultiClassHook</c> → block region
-/// 0x4C20), this announces it reliably (<see cref="ClassGrantPacket"/>), and every receiver asks
-/// its own plugin to run the SAME handler on its own character (<c>Odyssey.AddMultiClass</c>,
-/// <c>ClassGrantController</c>).
+/// Jedi path choice on Dantooine, or a peer's own class-choice popup pick — runs on the engine
+/// that owns it only, so no OTHER player's character learns the choice happened
+/// (docs/review-seamless-2026-09-18.md blocker #1). The plugin captures the call at the VM
+/// handler (<c>AddMultiClassHook</c> → block region 0x4C20), this announces it reliably
+/// (<see cref="ClassGrantPacket"/>), and every OTHER receiver asks its own plugin to check
+/// whether IT needs the SAME popup — never to copy the sender's exact class
+/// (docs/research/class-and-power-grants.md's 2026-09-25 section: one player's pick is never
+/// forced onto another).
 ///
 /// Same three-part shape as <see cref="TransitionPump.PumpGalaxyDeparture"/>: announce our
 /// own edge (baselined on the first read, since the block outlives sessions in the same
-/// process), take every peer's, and drive one apply at a time through request + ack + retry.
-/// Unlike a departure a grant never expires and needs no same-module test — see
-/// <see cref="ClassGrantReplayRule"/>.
+/// process), take every peer's, and drive one check-and-maybe-prompt at a time through
+/// request + ack + retry. Unlike a departure a Jedi choice never expires and needs no
+/// same-module test — see <see cref="ClassGrantReplayRule"/>.
 /// </summary>
 internal sealed class ClassGrantPump(
     IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log)
@@ -136,7 +138,7 @@ internal sealed class ClassGrantPump(
         bool midTransition = ModuleNameGuard.IsFallbackModuleName(local.Module)
             || (changedModule && now - moduleSettledAtMs < settings.ModuleSettleMs);
 
-        if (ClassGrantReplayRule.Decide(local.Module, bridge.IsInDialogue, midTransition) == ClassGrantReplayPath.Wait)
+        if (ClassGrantReplayRule.Decide(local.Module, bridge.IsInDialogue, midTransition, local.IsInCombat) == ClassGrantReplayPath.Wait)
         {
             return;
         }
@@ -144,9 +146,13 @@ internal sealed class ClassGrantPump(
         ClassGrantPacket grant = _current;
         _appliedBaseline = bridge.TryReadClassGrantStatus(out uint applied, out _) ? applied : 0;
 
+        // The class id travels with the request only for the plugin's log line and this one's
+        // own diagnostics — since 2026-09-25 the receiver never forces it onto the local player
+        // (docs/research/class-and-power-grants.md): it checks whether THIS character already
+        // has a Jedi class and, if not, shows its own popup instead.
         if (!bridge.TryRequestClassGrant(grant.ClassId))
         {
-            log($"could not hand {PeerLabel(grant.OriginPeerId, peers)}'s class grant to the plugin (no block?)");
+            log($"could not hand {PeerLabel(grant.OriginPeerId, peers)}'s Jedi choice to the plugin (no block?)");
             _current = null;
             return;
         }
@@ -154,8 +160,8 @@ internal sealed class ClassGrantPump(
         _attempts++;
         _inFlight = true;
         _requestedAtMs = now;
-        log($"applying {PeerLabel(grant.OriginPeerId, peers)}'s class grant #{grant.OpSequence} "
-            + $"({CreatureClassNames.Display(grant.ClassId)}) to this character (attempt {_attempts}/{ClassGrantReplayRule.MaxAttempts})");
+        log($"{PeerLabel(grant.OriginPeerId, peers)}'s Jedi choice happened (grant #{grant.OpSequence}) - "
+            + $"checking whether this character needs to choose too (attempt {_attempts}/{ClassGrantReplayRule.MaxAttempts})");
     }
 
     private void PollApply(IReadOnlyList<RemotePeer> peers)
@@ -189,27 +195,32 @@ internal sealed class ClassGrantPump(
         {
             case ClassGrantReplayOutcome.Done:
                 _current = null;
-                if (status == ClassGrantReplayRule.StatusAlreadyHas)
+                if (status == ClassGrantReplayRule.StatusPrompted)
                 {
-                    log($"this character already had {name}; {leader}'s grant #{grant.OpSequence} needed nothing");
+                    log($"this character is being asked to choose a Jedi class of their own (from {leader}'s Jedi choice, grant #{grant.OpSequence})");
+                }
+                else if (status == ClassGrantReplayRule.StatusAlreadyHas)
+                {
+                    log($"this character already has a Jedi class; {leader}'s grant #{grant.OpSequence} needed nothing");
                 }
                 else
                 {
+                    // StatusApplied: only the local addclass dev verb's own engine-call path
+                    // produces this any more, never the network relay - kept for completeness.
                     log($"this character is now a {name} (from {leader}'s grant #{grant.OpSequence})");
-                    bridge.PostChatLine($"{leader} became a {name} — so did you. Level up to take the class.");
                 }
 
                 return;
 
             case ClassGrantReplayOutcome.GiveUp:
                 _current = null;
-                log($"giving up on {leader}'s class grant #{grant.OpSequence} ({name}): plugin status {status} after {_attempts} attempt(s)");
-                bridge.PostChatLine($"could not add {name} to your character (status {status})");
+                log($"giving up on {leader}'s Jedi-choice grant #{grant.OpSequence}: plugin status {status} after {_attempts} attempt(s)");
+                bridge.PostChatLine($"could not check whether you need to choose a Jedi class (status {status})");
                 return;
 
             default:
                 _retryAtMs = now + ClassGrantReplayRule.RetryMs;
-                log($"the engine refused adding {name} - retrying in {ClassGrantReplayRule.RetryMs} ms");
+                log($"the plugin did not answer the Jedi-choice check - retrying in {ClassGrantReplayRule.RetryMs} ms");
                 return;
         }
     }

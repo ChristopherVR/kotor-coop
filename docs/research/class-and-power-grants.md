@@ -429,7 +429,231 @@ and the target, leaves the queue within ~3 s, and spends no Force points. This h
 caster itself and for the peer's stand-in, and nothing reached the partner. See effect-sync.md
 for the follow-up.
 
-## 10. First lightsaber colour, per player (2026-09-25)
+## 10. Redesign: everybody picks their OWN class (2026-09-25)
+
+Every section above shipped and was live-verified against a design that turns out to be wrong
+in one important way: §6's relay literally forwards the CLASS ID (§7's `addclass 3` →
+`classes 1:[0@1,-1@0] -> 2:[0@1,3@0]` on the peer) — so the first player through Dorak's
+conversation picks a class for EVERY connected player, whether they wanted it or not. The user's
+own report: "Each player must choose their OWN Jedi class." This section replaces the apply
+half of the relay; the capture/announce half (§6, `AddMultiClassHook`, `ClassGrantController`'s
+`DrainCaptures`, the wire packet's bytes) is unchanged.
+
+### 10.1 The new contract
+
+1. Whoever runs Dorak's conversation (host OR joiner — see docs/research/dialogue-sync.md's
+   "the joiner CAN start conversations" correction; conversations are single-owner) picks their
+   class there, exactly as retail.
+2. Every OTHER connected player whose character does NOT already carry a Jedi class (Guardian 3
+   / Consular 4 / Sentinel 5) is shown a private popup on their OWN screen and picks their OWN
+   class, applied through the SAME `Odyssey.AddMultiClass` VM-handler call §3 already verified —
+   never a raw poke, and never the peer's exact class.
+3. A player who already has a Jedi class (rejoining, or their own character already chose) is
+   never prompted again — `JediChoiceRule.Decide` reads BOTH class slots, not just slot 0.
+4. A late joiner, or a peer disconnected at the exact moment of the choice, is checked again the
+   next time they are admitted (`CoopHost.ResyncJediChoice`, §10.4).
+5. The relay now carries "a Jedi choice happened", never "apply this class to the receiver".
+
+### 10.2 No NCS compiler exists in this repo — the popup needed none
+
+The task asked to check for a native K1 class-selection GUI first. None was found: `k_pdan_makejedi`
+(§3-§4) is the ONLY code path in the shipped game that ever calls `AddMultiClass`, and it runs
+entirely from Dorak's dialogue tree (three visible replies at `dan13_dorak.dlg` Entry
+76→77/78/79, §7a) — there is no separate class-selection panel anywhere in the client's GUI
+manager or resource list this pass could find. So the popup is a small co-op conversation, per
+the task's own fallback plan.
+
+Building one hit a wall the task anticipated ("compile NCS with the repo's existing approach…
+otherwise document exactly how the existing `k_coop_` assets are produced"): **this repo has
+never compiled a line of NWScript.** `git grep`-ing for `nwnnsscomp`/`.nss`/`.ncs` across
+`tools/`, `docs/`, `src/` finds nothing, and the two prior `k_coop_` override assets
+(`k_coop_phantom.utc`, `k_coop_spawn.utw` —
+`KotorCoop.Memory.GameFiles.PhantomBlueprint`/`SpawnWaypointBlueprint`) are PURE DATA: every
+`Script*` field in `PhantomBlueprint` is shipped blank, on purpose ("no NCS authoring", its own
+doc comment). Standing up a K1-compatible NWScript compiler (verifying a third-party tool
+against this project's byte-exact, sha256-matched-engine ethos) is a much larger undertaking
+than this task's scope, and the existing `k_coop_` precedent already answers the question: this
+repo's established approach IS "pure data mod, no new compiled scripts, ever".
+
+**So `k_coop_jediclass.dlg` (`JediClassDialogueBlueprint.cs`, same
+`GffWriter`/`GffWriterStruct`/`GffWriterList` API the other two blueprints use) carries NO
+scripts at all** — every `Script` field on every entry and reply is blank. Its field set is
+copied struct-for-struct from the smallest dlg found in the game's own resources
+(`danm13_s.rim:dan13_droid.dlg`, decoded with `tools/kotorfiles.py gff …` against the local GOG
+install, one entry/one reply, 17 and 15 fields respectively — the exact counts the blueprint's
+`AddEntry`/`AddReply` helpers reproduce), the same "clone a decoded stock struct" method
+`PhantomBlueprint`'s own doc comment describes.
+
+Structure: `StartingList[0]` → `EntryList[0]` ("Choose the training you will pursue"), whose
+`RepliesList` offers `ReplyList[0..2]` (Guardian/Consular/Sentinel, in that order — the GFF list
+POSITION is stable because this code builds it, unlike a shipped .dlg's slot compaction
+docs/research/dialogue-sync.md warns about). Each reply's `EntriesList` links to its OWN
+terminal `EntryList` index (1/2/3), whose `RepliesList` is EMPTY — the same "an empty link list
+ends the conversation" shape the shipped sample's own terminal reply already uses, with no
+script needed. `JediChoiceRule.ClassForTerminalEntry` maps entry index → `classes.2da` row; both
+sides (`JediChoiceRule.cs` constants and `JediClassDialogueBlueprint.cs` constants) are
+duplicated by hand — the plugin cannot reference `KotorCoop.Memory` (NativeAOT win-x86 vs the
+agent's x64, the same split `CheatKindSyncTests.cs` documents for `CheatKinds`) — and
+cross-checked by `JediChoiceRelayTests.TheDialogueConstantsMatchTheBlueprint`.
+
+Since there is no script to run `AddMultiClass`, **the PLUGIN drives it**:
+`JediChoicePromptController` starts the conversation, then watches
+`Odyssey.GetDialogueNodeIndex()` (§"Node sync" above, `CSWSDialog+0x70`, already live-verified
+2026-08-11) every frame; landing on one of the three terminal indices calls
+`Odyssey.AddMultiClass(player, classId, isReplay: false)` directly — the identical, already-live
+-verified VM-handler call §3/§7 use, just invoked by the controller instead of by a script. Not
+a replay, so `AddMultiClassHook` captures it as a genuine local grant and the EXISTING announce
+path (§6) republishes it — for free, extending the chain to a third, fourth, … player with no
+new wire logic.
+
+⚠ NEEDS-LIVE, more than anything else in this document: whether the ENGINE accepts a
+conversation whose speaker and listener are the SAME object id. `Odyssey.StartConversation` is
+called `(playerObjectId, playerObjectId, "k_coop_jediclass")` — a self-talk conversation, chosen
+because it needs no NPC, no proximity and no spawn. Nothing in this pass's static reading rules
+it out (`BeginConversation`'s participant resolution was never fully decoded — see
+docs/research/dialogue-sync.md's own "NEEDS-LIVE" list), but nothing proves it either. If it
+turns out the engine refuses (or silently no-ops) a self-talk conversation, the fallback is to
+target the existing `k_coop_phantom` creature (already spawned near a remote peer for other
+purposes) or a new inert placeable/waypoint instead of the player itself — a one-line change to
+`JediChoicePromptController.StartPrompt`'s `npcObjectId` argument, nothing else in this design
+depends on speaker==listener.
+
+### 10.3 Why the relay's wire bytes did not need to change, and why the protocol version still bumped
+
+`ClassGrantPacket(OriginPeerId, OpSequence, ClassId)` is UNCHANGED — `ClassId` still travels,
+purely for the receiver's chat/log line ("Malak's Jedi choice happened") and the announcer's own
+"you are now a Guardian" message. What changed is what the RECEIVER does with it:
+
+* **Before:** `ClassGrantController.ApplyRequest` read `ClassGrantRequestClass` and called
+  `Odyssey.AddMultiClass(player, thatExactClass, isReplay: true)` unconditionally (refused only
+  by `ClassGrantApplyRule`'s slot-full/already-has/bad-class checks).
+* **Now:** `JediChoicePromptController` (new file, the OLD `ApplyRequest` method deleted)
+  reads the SAME `ClassGrantRequestSerial` field, but only asks "does this character have ANY
+  Jedi class yet" (`JediChoiceRule.Decide`, checking BOTH slots — `ClassGrantApplyRule.Decide`
+  is left alone, still used by the local `addclass` dev verb, which still forces an exact class
+  for rig testing). If not, it shows the popup; the popup's own pick is what eventually calls
+  `AddMultiClass`, always with the LOCAL player's OWN choice.
+
+No `SharedBlock` layout change was needed either: the same six offsets
+(`OffsetClassGrantSerial/Class/RequestSerial/RequestClass/Applied/Status`) are reused verbatim,
+with `RequestClass` now vestigial (kept only so the wire's field shape needs no bump) and one
+new `ClassGrantStatusCode` value (`Prompted = 6`, "the popup is up; the class arrives later
+through the announce channel, not this ack").
+
+Even though not one byte on the wire moved, `ProtocolConstants.Version` bumped 70 → 71 anyway.
+The project's own rule ("bumped on any wire-FORMAT change") does not strictly require this — but
+an old peer and a new peer exchanging the IDENTICAL bytes would silently disagree about what
+those bytes mean (old: force my class onto you; new: check whether you need your own popup) —
+exactly the class of bug version-gating exists to catch at Hello, even though this instance of
+it has no byte-level symptom. See `ProtocolConstants.cs`'s own version-71 entry for the reasoning
+recorded in the changelog.
+
+### 10.4 The late-join / reconnect gap, and how it is closed
+
+`ClassGrantSender`'s retransmit-until-ack table (`CollectDue`) retires an op once EVERY peer
+CURRENTLY known has acked it — exactly like every other reliable-broadcast channel in this
+codebase (container loot, materialised loot, party pool, store). That is correct for "deliver to
+who's here now" but wrong for "a player who joins after the op already retired must still learn
+the choice happened" (task requirement 3's second clause) — the identical gap
+`ResyncContainerLoot`/`ResyncMaterialisedLoot`/`ResyncPartyPool`/`ResyncStore` already exist to
+close for their own channels, all called from `CoopHost.HandleHello` on a `freshlyAdmitted` peer
+(`CoopHost.Connection.cs`).
+
+`CoopHost` now tracks `_jediChoiceEverHappened` (set the moment it either publishes its own
+grant or relays a client's — never cleared for the life of the process; a module change does not
+undo a class) and `ResyncJediChoice` re-enqueues a BRAND NEW, never-acked `ClassGrantPacket`
+under the HOST's own identity for any (re)admitted peer, once that flag is set. Attribution in
+the resync case is a minor cosmetic cost — the log might credit the host for a choice a client
+actually made — but the receiver's own `JediChoiceRule.Decide` check ("do I already have a
+class") makes an unneeded resync a safe no-op, exactly the same reasoning
+`ResyncMaterialisedLoot`'s own dedup gives for a peer that already applied an op before it
+dropped.
+
+Live-verified test shape (`JediChoiceResyncTests.cs`, loopback host/client pairs, no live game):
+a grant fully retires against one already-connected peer, THEN a second peer joins — and still
+receives a fresh copy. A separate test confirms a joiner receives NOTHING when no Jedi choice
+has happened yet (the resync must not manufacture one).
+
+### 10.5 The `jedichoice` dev verb
+
+`addclass <n>` (§7) still exists, unchanged, for forcing an EXACT class onto the local player —
+still useful for exercising `AddMultiClassHook`/the announce path/`ClassGrantCaptureRule`
+without touching the new popup at all. `jedichoice` (no arguments, `CheatKinds.JediChoice` /
+`SharedBlock.CheatKindJediChoice = 102`) is new: it manufactures a LOCAL "a peer's Jedi choice
+happened" request by bumping `ClassGrantRequestSerial` directly — the exact field a real relay
+bumps — so `JediChoicePromptController`'s popup can be exercised on ONE instance, with no second
+player and no Dantooine conversation. If the local character already has a Jedi class, the verb
+answers with an immediate `AlreadyHas` ack and no popup — itself a test of the never-re-prompt
+rule.
+
+### 10.6 NEEDS-LIVE checklist for this section
+
+Nothing in §10 has run in the actual game (the unit tests in `ClassGrantRelayTests.cs`,
+`GffWriterTests.cs` and `JediChoiceResyncTests.cs` cover every PURE rule and the resync's wire
+delivery; nothing exercises the popup itself, which needs `Odyssey`/engine calls no test host
+can make). A precise live recipe:
+
+1. **Host chooses via Dorak, joiner is prompted.** Both in a Soldier/Scout/Scoundrel save,
+   `class_grant_sync=1` on both installs (default). Host reaches Dorak's terminal reply (§7a's
+   recipe, or the `addclass` dev verb as a stand-in for the conversation itself). Expect the
+   joiner's plugin log: `jedi-choice: request #1 - showing the class-choice prompt
+   (k_coop_jediclass)`, then the popup itself on the joiner's screen (NEEDS-LIVE: does self-talk
+   even open one — §10.2's caveat). Joiner picks a DIFFERENT class than the host. Expect:
+   `resolve party` on both sides shows two DIFFERENT Jedi classes, and the host's own log never
+   shows a second `AddMultiClass` for its own character.
+2. **Joiner chooses via Dorak, host is prompted.** Mirror of 1, joiner-led (per
+   docs/research/dialogue-sync.md, the joiner CAN start and hold a real conversation).
+3. **Rejoin with a class already: no prompt.** A player who already has a Jedi class
+   disconnects and reconnects (or the same save is loaded fresh): expect
+   `jedi-choice: request #N - this character already has a Jedi class (…); nothing to prompt` in
+   the log, and no popup.
+4. **Late join: prompt.** A THIRD player connects for the first time after 1 or 2 already
+   happened (their character has no Jedi class yet). Expect `CoopHost.ResyncJediChoice` to fire
+   on admission (`freshlyAdmitted` in the host's log/behaviour) and the new player to see the
+   popup within the same tick budget as a live grant.
+5. **Never re-prompt within a session.** Trigger `jedichoice` twice in a row on the same
+   character before answering the first popup: expect the SECOND request to be logged as
+   "coalesced into the prompt already on screen" and only ONE popup ever shown.
+6. **The popup is never mirrored.** While a popup is up on one instance, confirm the OTHER
+   instance's `DialogueSpectateController`/follow machinery shows nothing (no serial bump, no
+   partner tag) — the exemption `JediChoicePromptController.IsPromptActive` provides.
+
+### 10.7 Open risks not resolved by this pass
+
+* **Self-talk conversation, unverified (§10.2).** The single biggest live-verification risk in
+  this whole section.
+* **Story flags that assume THE PC made Dorak's choice.** Some later content may read a global
+  (`DAN_PATH_STATE` or similar) that only the ORIGINAL chooser's script sets — a player who got
+  their class from the popup rather than the real conversation never runs `k_pdan_saber12/13/14`
+  (§7a), so any quest/journal/reward state those scripts ALSO set (the saber crystal item, the
+  `dan_trials` journal entries) is NOT replicated for the popup player. This document's §"Feats
+  and Force powers" already established that feats/powers/levels were always per-player; this
+  redesign does not change that, but it widens the same gap to cover the Dantooine
+  saber-crystal reward and journal entries too — the popup grants ONLY the class, deliberately
+  (never a raw copy of quest state, which is out of scope here and would need its own relay,
+  the same as the existing `dialogue_item_sync`/`script_item_sync` channels handle for OTHER
+  scripted rewards).
+* **Cross-instance globals are not synced by this pass.** `Odyssey.TryReadGlobalNumber`/
+  `TryWriteGlobal` (Odyssey.Globals.cs) exist and could read `DAN_PATH_STATE` locally, but each
+  instance simulates its OWN world state — there is no general mechanism in this codebase that
+  replicates an arbitrary script global from one player's engine to another's (only specific,
+  purpose-built channels like this one exist). The late-join fix (§10.4) is therefore a
+  SESSION-layer fact (`CoopHost._jediChoiceEverHappened`), not a game-engine one; it answers
+  "has ANY player's Jedi choice happened", not "what does Dantooine's own story state say" —
+  which is exactly what the task's own risk list anticipated.
+* **Both peers must run the same build.** Since the wire bytes are unchanged (§10.3), a
+  mismatched pre-71/post-71 pair would be REJECTED at Hello rather than silently misbehave — but
+  only because the version was bumped specifically for this reason; there is no independent
+  runtime check that both sides agree on what a `ClassGrantPacket` means beyond that gate.
+* **The popup versus following a PEER's real conversation, at the same moment.** The exemption
+  (§10.2, `IsPromptActive`) stops `DialogueSpectateController.PublishLocal` from announcing the
+  popup outward, but `PublishLocal`'s early return also skips `FollowRemote` for that frame —
+  if a peer's OWN conversation starts in the exact window this player's popup is up, the follow
+  is simply delayed a frame rather than colliding with it (the engine's own one-conversation
+  rule and `DialogueGateHook`'s token would refuse a second real conversation opening on this
+  player regardless). Not exercised live; flagged here rather than assumed safe.
+
+## 11. First lightsaber colour, per player (2026-09-25)
 
 Closes the review doc's "Zhar saber construction reward" row for the case two players have (or
 will have) DIFFERENT Jedi classes: today the construction reward mirrors whichever ONE colour
@@ -437,7 +661,7 @@ the builder's engine created to every connected player, regardless of that playe
 Static research + design + implementation this pass; **nothing here has been run on a live
 process** — tagged NEEDS-LIVE throughout, unit-tested at the pure-rule and pump level instead.
 
-### 10.1 Retail mechanics — VERIFIED by static NCS decode (this pass)
+### 11.1 Retail mechanics — VERIFIED by static NCS decode (this pass)
 
 Decoded with a small reuse of `tools/localvaraudit.py`'s own NCS decoder/abstract interpreter
 (`decode()`/`Interp`, the same machinery the file already uses for `SetLocalBoolean` audits) —
@@ -486,7 +710,7 @@ PC's class fields directly.** In single-player this is invisible, because `DAN_P
 the class `k_pdan_makejedi` grants both come from the SAME dialogue choice on the SAME (only)
 character. In a co-op world where two players can hold different classes, one shared global
 cannot represent two different players' two different choices at once — which is exactly why
-today's generic item-mirror channel (§10.2) copies whatever `DAN_PATH_STATE` happened to say
+today's generic item-mirror channel (§11.2) copies whatever `DAN_PATH_STATE` happened to say
 onto every connected player, right or wrong for their own class.
 
 **Scan for other callers, whole game (this pass):** every module archive referencing any of the
@@ -503,9 +727,9 @@ the interpreter's reachability answer (one other script, `k_pdan_14a_area.ncs`'s
 routine, hit the interpreter's recursion-depth budget before reaching every branch — inconclusive
 by the interpreter alone, but the same string-table evidence applies to it directly since all
 three strings sit in the identical straight-line load sequence). Treated as a closed question for
-design purposes; see §10.6 for the residual risk this leaves.
+design purposes; see §11.6 for the residual risk this leaves.
 
-### 10.2 What "the shared party pool" the task named actually is here
+### 11.2 What "the shared party pool" the task named actually is here
 
 The task brief says the reward "lands in the shared party pool" and that "the party item pool is
 synced as one shared stash across players" (`docs/research/party-pool-sync.md`). That document's
@@ -521,9 +745,9 @@ through `PublishDialogueGrant`/the give-loot cheat channel, applied on the peer 
 default. This is worth stating precisely because the fix below depends on it: each player's
 inventory is genuinely a SEPARATE `CSWInventory` on a SEPARATE engine process — "shared" here
 only ever meant "the generic mirror channel copies items 1:1 between them", never a literal
-single stash object. That is exactly the property the design in §10.3 exploits.
+single stash object. That is exactly the property the design in §11.3 exploits.
 
-### 10.3 Design — a receiver-side substitution, not a sender-side change
+### 11.3 Design — a receiver-side substitution, not a sender-side change
 
 **Choice: intercept on the RECEIVING side's apply step, not the sending side's detection.**
 `DialoguePump`/`ScriptItemGrantPump` keep announcing exactly what their own engine created,
@@ -541,15 +765,15 @@ otherwise be queued for a local give unchanged:
 - Does the RECEIVING player already possess one of those three resrefs (read fresh, every call,
   via the SAME `IGameBridge.ReadPersonalPossessedItems` sweep `ScriptItemGrantPump` already
   uses)? If so: **Skip** — drop the give, log why, never touch the crystal (the receiver never
-  had one to begin with — see §10.4) and never re-arm anything, because the check is re-derived
+  had one to begin with — see §11.4) and never re-arm anything, because the check is re-derived
   from the live inventory every time, not a one-shot flag. This is what makes a resync, a
   retransmit, a rejoin or a late join's backlog naturally idempotent.
 - Otherwise, read the RECEIVING player's own current class ids (`IPlayerBridge.ReadLocalClassIds`,
-  §10.5 — a NEW, purely local, `ReadProcessMemory`-only reader, no engine call, mirroring the
+  §11.5 — a NEW, purely local, `ReadProcessMemory`-only reader, no engine call, mirroring the
   plugin's own already-verified `Odyssey.ClassGrant.cs::TryReadLocalClassList` offsets on the x64
   agent side, duplicated because the x86 plugin and this x64 agent cannot share an assembly — the
   same reasoning item-identity.md §14 already gives for its own stack-identity duplication) and
-  map through the SAME retail table §10.1 found (`FirstLightsaberColorRule.ResrefForClass`):
+  map through the SAME retail table §11.1 found (`FirstLightsaberColorRule.ResrefForClass`):
   **Substitute** the resref if it disagrees with what the sender announced, **PassThrough**
   unchanged if it already agrees, or (no resolvable Jedi class yet on this player — a timing gap
   against whatever grants classes) **PassThrough** the builder's own colour rather than silently
@@ -581,7 +805,7 @@ instead of a different item entirely. Nothing in `FirstLightsaberColorRule` itse
 `LootPump`, `IGameBridge` or any wire type — it is a pure `(string, IReadOnlyList<int>, bool) ->
 Result` function in `KotorCoop.Protocol`, by design, so it survives that kind of change unchanged.
 
-### 10.4 What was built
+### 11.4 What was built
 
 **Protocol** (`KotorCoop.Protocol`): `FirstLightsaberColorRule.cs` — the pure decision above
 (`PassThrough`/`Substitute`/`Skip`), plus the retail `ResrefForClass` table and
@@ -618,7 +842,7 @@ a differing class substitutes, a matching class passes through, an already-owned
 drops the give entirely, an unrelated item in the SAME grant is never touched, a resend after the
 first grant landed is skipped not doubled).
 
-### 10.5 NEEDS-LIVE
+### 11.5 NEEDS-LIVE
 
 Nothing in this section has run against the real game. In rough order of what would invalidate
 the most:
@@ -644,12 +868,12 @@ the most:
 5. **A rejoin/reload after the fact.** Disconnect the receiver after it holds its own correct
    saber, reconnect, and confirm no second grant is queued (the "already has one" check reads
    the LIVE inventory on the reconnecting instance, not a value carried over the wire).
-6. **§10.1's one open item**: `k_pdan_14a_area.ncs`'s interpreter-depth-budget timeout. If a rig
+6. **§11.1's one open item**: `k_pdan_14a_area.ncs`'s interpreter-depth-budget timeout. If a rig
    session ever reaches Dantooine part 2 with `first_saber_color_sync=1`, watch for an
    unexpected `first lightsaber:` log line outside the Zhar construction chain — that would mean
-   this script's string table is not what §10.1 concluded it was.
+   this script's string table is not what §11.1 concluded it was.
 
-### 10.6 Open risks
+### 11.6 Open risks
 
 1. **Dependency on the parallel per-player-class work.** This feature only produces the RIGHT
    colour once the receiving player already has their own resolved Jedi class at the moment the
@@ -658,7 +882,7 @@ the most:
    PassThrough (today's exact behaviour: the builder's own colour), never a crash and never a
    dropped saber, but not yet the fully-correct outcome either. No live timing data exists yet
    for how large this gap typically is.
-2. **`k_pdan_14a_area.ncs`'s unresolved script (§10.1).** Static evidence (the string-table shape)
+2. **`k_pdan_14a_area.ncs`'s unresolved script (§11.1).** Static evidence (the string-table shape)
    argues it is not a real second grant source, but the interpreter itself could not independently
    confirm it by reachability. Bounded risk: even in the worst case, the item it would trigger
    this rule on is only ever one of the three canonical resrefs, its effect at worst substitutes

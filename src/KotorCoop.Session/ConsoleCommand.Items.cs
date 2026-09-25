@@ -347,6 +347,12 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.AddClass, Amount: classId);
     }
 
+    // jedichoice  - DEV VERB, see CoopCommandKind.JediChoice. No arguments.
+    private static CoopCommand ParseJediChoice(string[] rest) =>
+        rest.Length == 0
+            ? new CoopCommand(CoopCommandKind.JediChoice)
+            : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: jedichoice  (takes no arguments)");
+
     // setglobal <name> <int|true|false|on|off>  - LIVE-TEST PRIMITIVE, see CoopCommandKind.SetGlobal.
     private static CoopCommand ParseSetGlobal(string[] rest)
     {

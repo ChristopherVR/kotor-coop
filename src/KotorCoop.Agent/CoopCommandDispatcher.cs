@@ -416,6 +416,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.RemoveParty] = c => SendCheat(new CheatRequest(CheatKinds.RemoveParty, Amount: c.Amount)),
         [CoopCommandKind.SetGold] = c => SendCheat(new CheatRequest(CheatKinds.SetGold, Amount: c.Amount)),
         [CoopCommandKind.AddClass] = c => SendCheat(new CheatRequest(CheatKinds.AddClass, Amount: c.Amount)),
+        [CoopCommandKind.JediChoice] = _ => SendCheat(new CheatRequest(CheatKinds.JediChoice)),
         [CoopCommandKind.Cast] = CastSpell,
         [CoopCommandKind.GrantPower] = c => SendCheat(new CheatRequest(
             CheatKinds.GrantPower, Amount: c.Amount, Charges: c.EffectMagnitude)),
