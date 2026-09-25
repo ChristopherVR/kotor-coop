@@ -116,7 +116,8 @@ whoever joined; "Both" behaves the same on either side.
   servers                    Client  List co-op games found on the local network.
   disconnect                 Both    Tear down the current session.
   reconnect                  Both    Restart the last session with the same address/settings.
-  say <message>              Both    Send a chat line to the other player.
+  say <message>              Both    Send a chat line to the other player. Past chat is kept
+                                     in the pause menu's Messages screen (Dialog tab).
   status                     Both    Show the connection state. While hosting, also shows your
                                      public address and UPnP status (see "Play over the
                                      internet" below).

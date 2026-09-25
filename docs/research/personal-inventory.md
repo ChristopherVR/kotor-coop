@@ -628,7 +628,23 @@ live-observed numbers), including an ordering assertion that the Co-op-slot mirr
 adoption performs afterward reflects the transformed content, not a fresh copy of the
 un-grafted host world.
 
-### NEEDS-LIVE — nothing in this section has run against the game
+### Live run 2026-09-25 (PASS)
+
+Setup: host purse 5000 plus `pooladd g_w_ionblstr01 1` (ordinary) and
+`pooladd dan13_bluecryst 1` (quest). Joiner purse 777 plus `pooladd g_i_medeqpmnt01 2`. The
+joiner disconnected (capture into `000052 - Co-op`) and the host ran `save dupfix_host`. Then
+`demo.ps1 -Stop` and `demo.ps1 -ClientAutoCharacter -Isolated`. Joiner agent:
+- `world adoption: credits_mode = personal - party gold set to your own 777 (from '000052 -
+  Co-op'), not the host's`
+- `world adoption: inventory_mode = personal - backpack set to your own 1 item(s) plus 3 shared
+  quest item(s) from the host (the host's own 1 item(s) do not carry over)`
+
+Purses afterwards were host 5000 and joiner 777. The joiner's pool listed 4 ids (its medpacs
+plus `dan13_plotcrys`, `man28_envirosuit` and `g_i_pazsidebd001` from the host). No
+`g_w_ionblstr01` line appeared on the joiner after the rejoin. The `shared`-mode regression
+check and the bare-reconnect check below were not run.
+
+### Original recipe (the live run above followed it)
 
 The recipe below reproduces the exact live-observed bug's numbers and was NOT run this pass
 (the task explicitly withheld the rig — another stream owns it).

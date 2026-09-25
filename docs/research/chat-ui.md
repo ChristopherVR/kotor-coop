@@ -272,7 +272,7 @@ about chat argues for building it now.
    default (`chat_messages_screen`), NEEDS-LIVE.
 3. **Typing:** no change — Enter opens the console prefilled with `say `, exactly as today.
 
-## 6. The prototype (`chat_messages_screen`, default OFF, NEEDS-LIVE)
+## 6. The prototype (`chat_messages_screen`; default ON since the §7 live run)
 
 - `src/KotorCoop.Plugin/Odyssey.Dialogue.MessagesScreen.cs` — the write side:
   `Odyssey.AppendChatLineToMessagesScreen(speaker, text)`, the `AppendToDialogBufferFn`
@@ -339,3 +339,23 @@ rig). In order of what would be checked first:
 5. **The config toggle itself.** `chat_messages_screen=0` (the default) — confirm chat still
    works exactly as today (overlay + console) and the Messages Dialogue tab shows only real
    game dialogue, nothing from chat.
+
+## 7. Live run 2026-09-25 (now default ON)
+
+Two GOG installs on the isolated rig. Players opened the Messages screen with the plugin's
+`input click` on the Messages icon (686,17 in an 800x600 window).
+
+- **Lines land in the Dialog tab.** Chat sent from each side appeared as `Lanik: …` and
+  `Malak: …` on the receiver, and `you: …` on the sender, after the game's own lines.
+- **History survives an area change.** After the host warped to `danm14aa` and the joiner
+  followed, the earlier lines were still there, and new chat was appended.
+- **Filtering was needed, and is now in.** The first pass mirrored every overlay line. Console
+  replies (`module danm14aa at …`) and two save diagnostics leaked into the inbox. Chat lines
+  now carry a leading 0x01 marker (`KotorGameBridge.PostInboxChatLine`, written by the agent's
+  `Chat()`). The inbox keeps only marked lines, and the overlay strips the marker. After the
+  change, the joiner's inbox showed only chat plus the game's own lines. The two diagnostics
+  (`save identity differs …` and the character-capture outcome) moved to the log.
+- **The ring is saved with the world.** After a full main-menu rejoin (world adoption), the
+  joiner's inbox held `Malak: inbox filter check` from before the disconnect, carried in the
+  host's save.
+- **A conversation interleaved with chat** was not exercised.

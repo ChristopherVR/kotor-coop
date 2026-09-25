@@ -207,7 +207,8 @@ and what it does: [docs/CONFIG.md](docs/CONFIG.md).
 
 Press `~` in-game for a console (`connect`/`disconnect`/`reconnect` manage the session
 without a restart; Tab-completes, Up/Down recalls history) and **Enter** to chat with your
-partner. Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
+partner. Missed a message? Past chat is kept in the game's own Messages screen (pause menu,
+Messages, Dialog tab). Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
 
 ## Troubleshooting
 

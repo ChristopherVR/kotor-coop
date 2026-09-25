@@ -1,7 +1,7 @@
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// coop.ini <c>chat_messages_screen</c> (default OFF, NEEDS-LIVE prototype - see
+/// coop.ini <c>chat_messages_screen</c> (default ON since the 2026-09-25 live pass - see
 /// docs/research/chat-ui.md). Mirrors every chat line the always-on overlay
 /// (<see cref="ChatOverlayController"/>) already shows into the RETAIL pause-menu Messages
 /// screen's dialogue-history ring, via <see cref="Odyssey.AppendChatLineToMessagesScreen"/>, so a
@@ -23,7 +23,7 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe class ChatMessagesScreenController(SharedBlockView block)
 {
-    private readonly bool _enabled = PluginConfig.ReadBool("chat_messages_screen", false);
+    private readonly bool _enabled = PluginConfig.ReadBool("chat_messages_screen", true);
 
     /// <summary>Leading byte of a chat line meant for the inbox; mirrors
     /// KotorGameBridge.ChatInboxMarker.</summary>

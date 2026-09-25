@@ -255,7 +255,7 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 
 | Key | Default (code) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `chat_messages_screen` | OFF (NEEDS-LIVE) | also mirror every chat line into the RETAIL pause-menu Messages screen's dialogue-history ring (Escape -> Messages), so it survives after the always-on overlay fades. Plugin-only (`PluginConfig.ReadBool`), no CoopConfig/AgentComposition reader — a purely local rendering choice that does not need cross-peer negotiation, the same reasoning `gui_probe`/`frame_stats` already use | [chat-ui.md](research/chat-ui.md) |
+| `chat_messages_screen` | ON | keep player chat (not command replies or notices) in the retail pause-menu Messages screen's Dialog tab (Escape -> Messages), as a scrollable history that survives area changes. Live-verified 2026-09-25 (docs/research/chat-ui.md). | [chat-ui.md](research/chat-ui.md) |
 
 ### Transitions & world state
 
