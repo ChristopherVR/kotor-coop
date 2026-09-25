@@ -8,7 +8,12 @@ param(
     # automation from reaching a second instance. Minimising it parks it without stopping
     # it: a minimised instance still simulates at full speed (measured).
     [switch]$Minimize,
-    [switch]$Restore
+    [switch]$Restore,
+    # Isolated-rig companion to -Restore (docs/research/isolated-rig.md): un-minimises WITHOUT
+    # activating (SW_SHOWNOACTIVATE instead of SW_RESTORE), so an off-screen/background
+    # instance never steals the OS foreground or the user's keyboard focus. No effect without
+    # -Restore.
+    [switch]$NoActivate
 )
 
 Add-Type @'
@@ -35,8 +40,9 @@ if ($Minimize) {
 }
 
 if ($Restore) {
-    [Win]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
-    "pid $ProcId restored"
+    $show = if ($NoActivate) { 4 } else { 9 }   # SW_SHOWNOACTIVATE : SW_RESTORE
+    [Win]::ShowWindow($hwnd, $show) | Out-Null
+    "pid $ProcId restored$(if ($NoActivate) { ' (no-activate)' } else { '' })"
     return
 }
 

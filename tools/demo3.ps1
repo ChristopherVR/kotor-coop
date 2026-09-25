@@ -39,7 +39,13 @@ param(
     [switch]$Stop,
     [switch]$CreateGame3,
     [switch]$NoAgents,
-    [switch]$SkipLaunch
+    [switch]$SkipLaunch,
+    # Same isolated-rig switch as demo.ps1 (docs/research/isolated-rig.md): keeps all three
+    # windows off the user's visible desktop and never activates them for the FINAL layout
+    # (the per-instance launch positioning above stays cosmetic either way).
+    [switch]$Isolated,
+    [int]$MonitorX = 6000,
+    [int]$MonitorY = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -286,12 +292,21 @@ else {
     $pid3 = Start-InstanceWithRetries -Directory $Game3 -Instance 3 -X 415 -Y 340
 }
 
-# Restore all three now that nothing else needs to steal the foreground.
-foreach ($p in $pid1, $pid2, $pid3) { & $movewin -ProcId $p -Restore | Out-Null }
+# Restore all three now that nothing else needs to steal the foreground. -Isolated:
+# un-minimise WITHOUT activating, and land all three off the user's visible desktop instead
+# of at the screen origin.
+foreach ($p in $pid1, $pid2, $pid3) { & $movewin -ProcId $p -Restore -NoActivate:$Isolated | Out-Null }
 Start-Sleep -Milliseconds 500
-& $movewin -ProcId $pid1 -X 0   -Y 0   | Out-Null
-& $movewin -ProcId $pid2 -X 830 -Y 0   | Out-Null
-& $movewin -ProcId $pid3 -X 415 -Y 340 | Out-Null
+$offX = $Isolated ? $MonitorX : 0
+$offY = $Isolated ? $MonitorY : 0
+& $movewin -ProcId $pid1 -X ($offX + 0)   -Y ($offY + 0)   | Out-Null
+& $movewin -ProcId $pid2 -X ($offX + 830) -Y ($offY + 0)   | Out-Null
+& $movewin -ProcId $pid3 -X ($offX + 415) -Y ($offY + 340) | Out-Null
+
+if ($Isolated) {
+    "isolated: all three windows placed at x=$offX.. (never activated; tools\shot.ps1 and " +
+        "tools\click.ps1/blockpoke's 'input' verb both work regardless of position or occlusion)"
+}
 
 ''
 "instance 1 (host)  : pid $pid1   $Game1"
