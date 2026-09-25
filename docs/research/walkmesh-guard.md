@@ -361,3 +361,13 @@ src/KotorCoop.Plugin/build.ps1 -WarnAsError`); the widespread use of `Vector3f.Z
    (e.g. hold a save/load dialog open) so its own local read has a real chance to sample a
    not-yet-placed player creature, and confirm the peer's phantom holds its last position
    instead of being driven to `(0,0,0)` and later faulting.
+
+## 9. Live run 2026-09-25
+
+On `demo.ps1 -ClientAutoCharacter -Isolated`, danm13, host at (187.3, 74.3):
+- `walkto 187 100` answered `refused: not walkable here (off the walkmesh)`. The plugin
+  logged one `move refused: 0x7FFFFFFF -> (187.0,100.0,0.0) - destination is not on the
+  walkmesh (CSWSArea::PositionWalkable said no)`. Both games stayed up. Before the guard this
+  exact command crashed the engine at 0x58063B every time.
+- `walkto 187 96` still walked; `where` read (187.0, 96.0).
+The 20-leg follow soak result is recorded in status-engineering.md.
