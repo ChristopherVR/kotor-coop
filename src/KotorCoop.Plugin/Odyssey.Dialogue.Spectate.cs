@@ -182,8 +182,15 @@ internal static unsafe partial class Odyssey
     // line is appended to. Located live by finding the on-screen sentence in
     // the heap and walking back to who held it (docs/research/dialogue-sync.md):
     //
-    //   gui + 0x1040  capacity (reads 0x40 = 64)
-    //   gui + 0x1054  first record; stride 0x10
+    //   [gui + 0xFC]  the buffer: 64 records, stride 0x10 (CGuiInGame.dialog_buffer)
+    //   gui + 0x104   the live count; CGuiInGame::AppendToDialogBuffer 0x62B680 appends at
+    //                 [count] and, once count hits 0x40, shifts every record down one first
+    //
+    // ⚠ Until 2026-09-25 this read `gui + 0x1054`, the address the live heap search found. That
+    // is 0x430 bytes PAST the end of the 0xC24-byte CGuiInGame. It only worked because the
+    // engine allocates the buffer right after the GUI object. Under a full page heap the read
+    // hit the guard page and killed the game at world-up (RVA 0xDA387). On an ordinary heap it
+    // read a neighbour's memory whenever the layout differed.
     //   record: { char* text; u32 len; char* speaker; u32 speakerLen }   (lens include the null)
     //
     // This beats reading the CSWSDialog tree on every axis: the text is already
@@ -197,8 +204,9 @@ internal static unsafe partial class Odyssey
     // newest); a shift-when-full changes many, of which the newest is the highest; a wrap
     // changes exactly the newest. All three cases agree with this rule.
 
-    /// <summary>CGuiInGame + this = first record of the dialogue history ring.</summary>
-    private const int GuiDialogueRing = 0x1054;
+    /// <summary>CGuiInGame + this = <c>dialog_buffer</c>, the pointer to the history records
+    /// (<c>mov ecx,[edi+0xFC]</c> in AppendToDialogBuffer 0x62B680).</summary>
+    private const int GuiDialogueBufferPtr = 0xFC;
 
     private const int GuiDialogueRingSlots = 64;
 
@@ -231,10 +239,18 @@ internal static unsafe partial class Odyssey
         // conversation already knows which slot is newest (all populated slots differ from
         // the zeroed signature table on the first pass; the highest wins, which is the
         // newest under the append order observed live).
+        nint ring = *(nint*)(gui + GuiDialogueBufferPtr);
+        if (!LooksLikeHeapPointer(ring)
+            || !NativeMethods.IsReadable(ring, (nuint)(GuiDialogueRingSlots * GuiDialogueRecordStride)))
+        {
+            _ringNewest = -1;
+            return false;
+        }
+
         int changed = -1;
         for (int i = 0; i < GuiDialogueRingSlots; i++)
         {
-            nint record = gui + GuiDialogueRing + i * GuiDialogueRecordStride;
+            nint record = ring + i * GuiDialogueRecordStride;
             uint signature = (uint)*(nint*)record ^ (uint)(*(int*)(record + 4) * 2654435761);
             if (signature != RingSignatures[i])
             {
@@ -258,7 +274,7 @@ internal static unsafe partial class Odyssey
             return true; // active but no line seen yet -> empty
         }
 
-        nint newest = gui + GuiDialogueRing + _ringNewest * GuiDialogueRecordStride;
+        nint newest = ring + _ringNewest * GuiDialogueRecordStride;
 
         if (line != null)
         {
