@@ -1620,6 +1620,152 @@ vanishes completely can be lost track of. `stealth_visual_sync` therefore stays 
 pending a product decision (hidden vs. the shimmer, which would need the party-member render
 path). Still open: whether an enemy's own detection skips the stand-in.
 
+### 12.10 The translucent shimmer, not the hide — `stealth_partner_visual`, default `translucent` (2026-09-25)
+
+§12.9's screenshot left an open product question: retail KOTOR draws a stealthed PARTY MEMBER
+as a translucent shimmer to its own side, never hidden, but our stand-in vanished completely.
+This finds the client-side render path retail actually uses, and ships a lever that reproduces
+it — **product decision: default is `translucent`**, not the old cautious OFF.
+
+**Where the shimmer comes from — `CSWCCreature::SetStealthState` (`0x00613930`) — VERIFIED
+by disassembly, `tools/disasm.py`, GOG 1.0.3, disk == memory.** Thiscall, `ret 8`
+(`mode: int, arg2: int`), field `CSWCCreature+0x194` (`stealth_state`, symbol DB):
+
+```
+0x00613935  mov edi, [esp+0x18]        ; mode (first stack arg)
+0x00613939  cmp edi, 1
+0x0061393E  mov esi, ecx                ; esi = this (CSWCCreature)
+...                                     ; mode==1, old [esi+0x194]==0 (0->1 edge): pushes vfx
+                                        ; row 0x1F40 (8000) if a capability check passes, else
+                                        ; row 0x1F42 (8002); color args 0x7F000000/0x7F000000
+                                        ; both times (~50% alpha) — then falls into the shared
+                                        ; tail
+...                                     ; mode==0, old [esi+0x194]==1 (1->0 edge):
+                                        ; DeleteVisualEffect (vtable+0xB8) on whichever of
+                                        ; 0x1F40/0x1F42 is up, then a one-shot "decloak" row
+                                        ; 0x1F41 (8001), same color args
+0x00613A1A  call [vtable+0xB4]          ; AddVisualEffect(id, flag, color1, color2, 0, 0, &buf)
+0x00613A55  mov [esi+0x194], edi        ; ALWAYS stores mode, whichever branch ran
+0x00613A60  ret 8
+```
+
+`vtable+0xB4`/`+0xB8` on `CSWCCreature`'s own vtable (`0x0074F5F8`, `tools/q.py class
+CSWCCreature`) resolve in the symbol DB to `CSWCObject::AddVisualEffect` (`0x0063D970`) and
+`CSWCObject::DeleteVisualEffect` (`0x0063F400`) — confirmed by reading the vtable slots
+directly out of the binary and matching them against `functions.address`. `arg2` is read
+NOWHERE in the callee body (checked across the whole `0x613930`-`0x613A60` span) — every call
+site passes something different there and it never matters. The three vfx row numbers
+(8000/8001/8002) are VERIFIED numerically; their `visualeffects.2da` English names are NOT —
+this repo has no copy of that 2da (same gap §3's state-effect sub-codes hit) — but the alpha
+argument pattern (`0x7F000000` in every branch) is enough to identify the mechanism as a
+translucency shader/fallback pair plus a one-shot transition flash, independent of the name.
+
+**It is the GENERAL stealth cosmetic, not party-member-only — VERIFIED.** `tools/xrefs.py
+0x613930` finds exactly TWO direct call sites in the whole image, BOTH inside
+`CSWCMessage::HandleServerToPlayerCreatureUpdate_Update` (`0x006655E0`) — the client's ordinary
+per-creature network-update handler. Disassembly of the caller (`0x666700`-`0x666915`) shows
+the gate: `cmp bl, 1` / `jne` selects the mode==1 vs. mode==0 call from a packet-carried flag
+(`bl`), landing on this same function either way — i.e. ANY creature whose client twin is told
+"your stealth flag changed" gets this call, exactly the way a Sith stealth unit or a real party
+member would. This is the retail stealth SHIMMER itself, and it has nothing to do with
+`CSWSCreature::SetStealthMode` (§12.4, `CSWSCreature+0x4D1`) — different class, different
+field, different call site.
+
+**Why the SERVER field hides the stand-in instead — INFERRED from disassembly, matches
+§12.9's screenshot exactly.** `CSWSCreature::BroadcastStealthDetectionData` (`0x004EC7A0`) is a
+per-observer loop: it walks the player list, compares each candidate's area id against the
+stealthing creature's (`[ebx+0x8C]` vs `[eax+0x8C]`), and only for a match sends that observer
+a targeted network message (`0x4AEDB0`, opcode `0x10`). This is the detection-relevance
+broadcast gate a real stealthed creature's very EXISTENCE travels through: an observer who has
+never "detected" it is simply never sent updates for it, so its client twin is never
+created/kept, and nothing `SetStealthState` does could matter — full hide. Writing
+`CSWSCreature+0x4D1` (`Odyssey.SetStealthMode`, what `stealth_visual_sync = 1` did) pushes our
+stand-in down this SAME gate, even though the "observer" here is a co-op partner's whole
+screen, not an NPC's line of sight — hence §12.9's finding.
+
+**The lever: leave the SERVER field alone, call the CLIENT function directly.** Calling
+`SetStealthState` on the stand-in's CLIENT twin (never touching `+0x4D1`) keeps it exactly as
+relevant/broadcast as it always was — nothing about detection changes — while it wears the
+same translucency vfx a real party member's own stealth draws. `Odyssey.SetStealthVisualState`
+(`src/KotorCoop.Plugin/Odyssey.StealthVisual.cs`) resolves the stand-in's CLIENT object through
+`CClientExoApp::GetGameObject` (`0x005ED580`, the same delegate Odyssey.Dialogue.Bark.cs
+already declares and this reuses) via the documented `id | 0x80000000` server-to-client id
+conversion, guards the vtable against `CSWCCreature`'s (`0x0074F5F8`, the same constant
+Odyssey.Combat.AttackClient.cs already verifies against — refuses on a body whose client twin
+has not materialised yet, exactly the per-frame-write rule's "torn-down body" hazard), then
+calls `SetStealthState(mode, 0)` and reads `+0x194` back to confirm. Considered and rejected:
+(a) "make the engine's own detection check treat the stand-in as party-side" — would mean
+patching `BroadcastStealthDetectionData` itself (a NEW hook on a function nothing here has
+touched, versus reusing an already-general client entry point with zero new hooks); (c) nothing
+better found — the client function already IS "the same one the retail stealth render uses",
+which is exactly what the task asked for.
+
+**Config: `stealth_partner_visual = translucent | hidden | off`, default `translucent`
+(replaces `stealth_visual_sync`).** Pure decision/migration logic lives in
+`StealthVisualMode.cs` (dependency-free, unit-tested — `tests/KotorCoop.Tests/
+StealthVisualModeTests.cs`), consumed by `PhantomController.ApplyStealthVisual`:
+
+- `translucent` (NEW, default) → `Odyssey.SetStealthVisualState` (this section's lever).
+- `hidden` → `Odyssey.SetStealthMode` (§12.4's SERVER field — byte-for-byte the old
+  `stealth_visual_sync = 1` behaviour).
+- `off` → no engine call at all; the stand-in stays fully visible. Only `stealth_sync`'s
+  targeting release (§12.4, a separate key) still applies.
+
+**Migration.** `stealth_partner_visual` wins outright when present in `coop.ini` (a
+misspelling becomes `translucent`, not a silent fall-through to the old key). Otherwise an
+EXPLICITLY-present `stealth_visual_sync` reproduces its old meaning exactly — truthy → `hidden`,
+anything else it was explicitly set to → `off` (what a false `stealth_visual_sync` already
+meant: no call at all). Only when NEITHER key is in the file does the new default,
+`translucent`, apply. An existing installed `coop.ini` that never mentions either key silently
+gains the new shimmer look on upgrade — the 2026-09-25 product decision; one that already set
+`stealth_visual_sync` keeps behaving identically. Both `stealth_partner_visual` and the legacy
+`stealth_visual_sync` are in `PluginConfig`'s and `CoopConfig`'s `DeveloperKnownKeys` lists
+(mirrored, per the config-default-drift discipline); this is a purely LOCAL rendering choice —
+never added to either side's `BehaviourDigest`/host-adoption set, the same as `stealth_sync`
+and the old `stealth_visual_sync` already were not.
+
+**Per-frame-write discipline.** `PhantomController.ApplyStealthVisual` already latched
+per-slot on the edge before this change (§12.4); this pass only changes WHICH engine call fires
+on that edge, reusing the SAME `_stealthVisualApplied`/`_stealthVisualKnown` arrays (reset on
+respawn/module change in `PhantomController.cs`, unchanged) — so stealth on/off, a stand-in
+respawn and a module change all re-latch correctly with no new bookkeeping. The configured tier
+is read once at construction (a `readonly` field), so it cannot change mid-session.
+
+### 12.11 NEEDS-LIVE — the exact recipe (not run this pass; static analysis only)
+
+Uses the `stealth on`/`stealth off` dev verb §12.9 added (the real engine toggle, via
+`tools/blockpoke.ps1`'s console) and `tools/shot.ps1` (plugin GL readback) for the screenshot
+half:
+
+1. **Translucent, the new default.** Do NOT set `stealth_partner_visual` (or set it to
+   `translucent` explicitly) on the HOST. Joiner: `stealth on` on the Dantooine Enclave
+   courtyard (or any open area). Host log within about a second: `phantom 0x..: back to
+   neutral; attackers released (peer is in stealth)` (unchanged, `stealth_sync`) then `phantom
+   0x..: engine stealth mode ON (translucent, stealth_partner_visual)`. Host screenshot
+   (`tools/shot.ps1`): the joiner's stand-in should be VISIBLE but tinted/shimmering, not
+   absent — this is the one thing §12.9 could not show and this pass exists to fix. `stealth
+   off` on the joiner: host logs `joined the friendly faction (partner_buffs)` and `engine
+   stealth mode OFF (translucent, stealth_partner_visual)`; screenshot should show the stand-in
+   back to its normal opaque render. Watch for any crash and for the shimmer getting stuck on
+   after `stealth off` — either is a reason to fall back to `hidden` and report it here.
+2. **Hidden, the old behaviour, for a regression check.** Host `coop.ini`:
+   `stealth_partner_visual = hidden`. Repeat step 1's toggle; expect BYTE-FOR-BYTE §12.9's
+   result (host log says `hidden` instead of `translucent`; screenshot shows the stand-in fully
+   absent while stealthed).
+3. **Off.** Host `coop.ini`: `stealth_partner_visual = off`. Repeat step 1's toggle; expect NO
+   `engine stealth mode` log line at all (the method returns before doing anything), and the
+   screenshot shows the stand-in fully visible and NORMAL (no shimmer) throughout — only the
+   pre-existing "back to neutral / joined the friendly faction" targeting lines should appear.
+4. **Migration check.** Host `coop.ini`: remove `stealth_partner_visual` entirely, set
+   `stealth_visual_sync = 1`. Repeat step 1; expect the SAME result as step 2 (`hidden`), and
+   the plugin's startup log to show the developer-switch line for `stealth_visual_sync` (not
+   `stealth_partner_visual`, since that key is absent).
+5. **Detection question, still open from §12.9.** With `stealth_partner_visual = translucent`
+   and a hostile nearby who has not detected the stealthed peer, confirm the hostile still
+   ignores the stand-in (this is `stealth_sync`'s targeting release, unrelated to the visual
+   tier, but worth reconfirming now that the body stays fully relevant/broadcast rather than
+   hidden by the detection gate).
+
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
 Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the

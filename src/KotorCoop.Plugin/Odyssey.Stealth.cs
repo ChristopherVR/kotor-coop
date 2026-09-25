@@ -1,9 +1,15 @@
 namespace KotorCoop.Plugin;
 
 /// <summary>
-/// Odyssey — the engine's own stealth-mode setter, for a peer's stand-in
-/// (<c>stealth_visual_sync</c>, default OFF, NEEDS-LIVE). See docs/research/effect-sync.md
-/// §12.4 for the disassembly this rests on.
+/// Odyssey — the engine's own SERVER-side stealth-mode setter, for a peer's stand-in
+/// (<c>stealth_partner_visual = hidden</c> — the <c>Kind.Hidden</c> tier of
+/// <see cref="StealthVisualMode"/>; the old boolean <c>stealth_visual_sync = 1</c> mapped here
+/// too, and still does via <see cref="StealthVisualMode.Resolve"/>'s migration). See
+/// docs/research/effect-sync.md §12.4 for the disassembly this rests on, and §12.9/§12.10 for
+/// why writing this SERVER field fully hides the stand-in (the detection-relevance broadcast
+/// gate) rather than drawing the translucent shimmer — which is why the DEFAULT tier since
+/// 2026-09-25 calls the CLIENT-only cosmetic instead (<see cref="Odyssey.SetStealthVisualState"/>,
+/// Odyssey.StealthVisual.cs).
 /// </summary>
 internal static unsafe partial class Odyssey
 {
