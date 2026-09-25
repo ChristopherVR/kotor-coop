@@ -437,10 +437,12 @@ internal sealed partial class GamepadController
             + $"{(_cursorToggle ? " (cursor forced)" : "")}; keys held {held}"
             + $"{(_leftHeld ? " +LMB" : "")}{(_rightHeld ? " +RMB" : "")}; "
             + $"DI: {(DirectInputKeyboardHook.IsKeyboardWrapped ? "keyboard wrapped" : DirectInputKeyboardHook.IsDirectInputWrapped ? "IDirectInput8 wrapped, keyboard not yet" : "not wrapped")}, "
+            + $"mouse {(DirectInputMouseHook.IsWrapped ? "wrapped" : "not wrapped")}, "
             + $"{DirectInputKeyboardHook.RealReads} reads, {DirectInputKeyboardHook.InjectedEvents} injected, "
             + $"{DirectInputKeyboardHook.PendingEvents} pending, {DirectInputKeyboardHook.DroppedEvents} dropped, "
             + $"last read hr 0x{DirectInputKeyboardHook.LastReadHr:X8} shape {DirectInputKeyboardHook.LastReadShape}"
             + (DirectInputKeyboardHook.LastDiagnostic is { } diag ? $" ({diag})" : "")
+            + $"; isolate real input {(DirectInputKeyboardHook.IsolateRealInput ? "ON" : "off")}"
             + $"; cursor speed x{_cursorSpeed:0.##}"
             + (Odyssey.TryGetCursor(out int cx, out int cy) ? $" at {cx},{cy} of {Odyssey.ScreenWidth}x{Odyssey.ScreenHeight}" : "")
             + $"; engine input {(Odyssey.IsInputActive ? "active" : "inactive")}"
