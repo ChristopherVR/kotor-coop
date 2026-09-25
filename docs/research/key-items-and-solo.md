@@ -16,7 +16,7 @@ the retail binary's disassembly (already done by a cited prior doc), or asserted
 test. **INFERRED** = a reasoned deduction from evidence that was read, not independently
 re-derived from scratch this pass. **NEEDS-LIVE** = reasoned but never watched happen on a
 running two-instance rig. Nothing in this document was run against a live game — it is a
-static-research pass plus one small, comment-only config fix (§5).
+static-research pass plus the small fixes in §5 (one behaviour fix with tests, doc corrections).
 
 ---
 
@@ -75,19 +75,27 @@ shared economy while connected), not a leak — the crux question the parent tas
 
 **The risk shifts to what a SAVE FILE captures, not to whether the live mirror works.** A
 save's `Mod_PlayerList[0]` entry (`module.ifo`, what `PlayerIfo.BuildPifo` copies for the
-join/rejoin carry) is a **static, at-rest** representation — the live engine's
-`CSWPartyTable+0x118`/`+0xFC` are a **separate resource, `PARTYTABLE.res`**, at the save-archive
-top level (`docs/research/world-adoption.md`'s own save-size breakdown: `SAVEGAME.sav` 584 KB,
-`PARTYTABLE.res` 11 KB, `GLOBALVARS.res` 58 KB, as separate members). `PlayerIfo.TryExtractPlayer`
-(`src/KotorCoop.Memory/PlayerIfo.cs:74-141`) opens `PARTYTABLE.res` **only** to read
-`PT_CONTROLLED_NP` (the Leviathan-rescue guard, lines 83-94) and discards everything else in
-it — the shared item pool and party gold **never travel through the pifo/sidecar mechanism at
-all.** Only `Mod_PlayerList[0]` — equipped-slot item ids, class/level/stats/feats/alignment,
-appearance, the personal Pazaak deck (`PersonalPazaak.Capture`) — is copied byte-for-byte
-(`BuildPifo`, lines 154-183; `Min1HP` is the one field explicitly stripped, an unrelated
-pre-existing fix). This single fact — **loose/backpack items and gold live in `PARTYTABLE.res`,
-which the carry mechanism never touches; only equipped gear and character stats live in
-`Mod_PlayerList[0]`, which it copies whole** — is the key to every scenario below.
+join/rejoin carry) holds only what belongs to that one creature. The party-wide state lives
+elsewhere in the save, **VERIFIED by reading every save on the rig install** (7 saves, 20
+module entries, scratch reader over `tools/kotorfiles.py`):
+
+| What | Where in the save | Seen on disk |
+| --- | --- | --- |
+| loose items (the party stash, `CSWPartyTable+0x118` live) | `SAVEGAME.sav` → **`INVENTORY.res`** (`INV `, top-level `ItemList`) | 1-4 entries per save |
+| party credits (`CSWPartyTable+0xFC` live) | **`PARTYTABLE.res` → `PT_GOLD`** | present in every save |
+| the PC's own `ItemList` | `<module>.sav` → `module.ifo` → `Mod_PlayerList[0].ItemList` | **0 entries in all 20** |
+| the PC's worn gear | `Mod_PlayerList[0].Equip_ItemList` | 2 entries in all 20 |
+| a `Gold` field on the PC | `Mod_PlayerList[0].Gold` | 0 in all 20 |
+
+So the at-rest layout matches §1's live one: the engine writes the stash and the credits to
+party-level resources and leaves the PC's own item list empty. `PlayerIfo.TryExtractPlayer`
+(`src/KotorCoop.Memory/PlayerIfo.cs:74-141`) reads `Mod_PlayerList[0]` only (it opens
+`PARTYTABLE.res` just for the `PT_CONTROLLED_NP` Leviathan guard, lines 83-94, and never touches
+`INVENTORY.res`), and `BuildPifo` (lines 154-183) copies that struct byte-for-byte: worn gear,
+class/level/stats/feats/alignment, appearance, the personal Pazaak deck
+(`PersonalPazaak.Capture`), minus `Min1HP`. **Loose items and credits therefore never travel
+through the pifo/sidecar carry at all; worn gear and character stats always do.** Every
+scenario below follows from this.
 
 ---
 
@@ -103,20 +111,31 @@ which the carry mechanism never touches; only equipped gear and character stats 
 Read literally, "inventory... come[s] from the host's save" on **every** (re)join — the
 project's own design already states that a joiner's own solo inventory is discarded and
 replaced by whatever the host's world's shared pool currently holds. §1's engine-level finding
-is *why* that is structurally true (inventory and gold are `PARTYTABLE.res` fields, which the
-carry mechanism was never built to move), not a new design decision.
+is *why* that is structurally true (loose items live in `INVENTORY.res` and credits in
+`PARTYTABLE.res`, neither of which the carry mechanism reads), not a new design decision.
 
-**"Their own save on disk is never written" was true when this was written (2026-08-13) and is
-still true for a joiner who never manually saves** (VERIFIED — nothing found this pass changed
-it). It stopped being the *whole* story on 2026-08-21, when `docs/research/session-save.md`
-shipped `ClientCharacterPersistence` (the "resume tomorrow" sidecar) plus, as its recommended
-trigger, **an ordinary player-driven in-game Save while adopted into the host's world** — which
-*does* write a real, engine-produced save into the joiner's own `saves\` directory. That save
-is the one place the two halves of this document collide: it is written by the retail engine,
-so it faithfully captures `PARTYTABLE.res` (the current shared pool + shared gold) exactly as
-`Mod_PlayerList[0]` from an in-session live engine, but the *world* it captures is the host's
-current module/globals/journal, not the joiner's own story. See §3 below for exactly what that
-means per scenario.
+**"Their own save on disk is never written" is no longer true, and has not been since
+2026-09-18** (VERIFIED in code). Two slots on the joiner's own install are written while they
+are connected:
+
+- `saves\000001 - AUTOSAVE` — the staged copy of the host's world (adoption, as designed).
+- `saves\000000 - QUICKSAVE` — **the joiner's own quicksave slot.** `CoopCommandDispatcher.
+  MaintainPeriodicCapture` (`src/KotorCoop.Agent/CoopCommandDispatcher.SaveLoad.cs:128-218`)
+  sends `CheatKinds.QuickSave` every `character_capture_interval_min` minutes (default **10**,
+  `CoopConfig.cs:521`) while idle, and `CaptureCharacterOnDisconnect` (`:1801-1861`) sends one
+  more on every clean disconnect. The plugin's `QuickSave` is `CClientExoAppInternal::DoQuickSave`
+  `0x005F4B50`, whose directory is `SAVES:000000 - QUICKSAVE` (`docs/research/world-adoption.md`,
+  "The save primitive"). The purpose is sound (a crash no longer loses everything since the
+  last door, `docs/review-seamless-2026-09-18.md` §2); the side effect is that the joiner's
+  single-player quicksave is overwritten with a save of the host's world within ten minutes of
+  joining, and again on leaving.
+
+Any save the joiner makes by hand while connected lands the same way. Every one of these is a
+real engine save of the live session, so it holds that session's `INVENTORY.res` (the shared
+pool), `PARTYTABLE.res` (the shared purse) and `Mod_PlayerList[0]` (the joiner's character) —
+and the host's module, `GLOBALVARS.res` and journal. Before this pass the player-facing docs
+(`README.md`, `docs/limitations.md`, `tools/package-README.txt`) still promised "your own save
+files are never changed"; §5 corrects them.
 
 ---
 
@@ -124,226 +143,178 @@ means per scenario.
 
 ### (a) Joiner buys a key item from a host-world store, then disconnects and loads own solo save
 
-- **If the joiner never manually saved during the session**: nothing on the joiner's disk
-  changes at all (VERIFIED, world-adoption.md's own guarantee, unmodified since 2026-08-13).
-  Loading any pre-existing solo save shows exactly what it always did. The item is genuinely
-  gone from the joiner's perspective, not merely hidden — it was never written to a save file
-  the solo game will ever open. **This is the documented, intended trade, not a bug** — though
-  it is easy for a player to be surprised that a purchase "vanishes" with no on-screen warning.
-- **If the joiner DID save in-game before disconnecting**: the item — already in the joiner's
-  own live copy of `CSWPartyTable+0x118` at the moment of purchase (§1), and there whether or
-  not `party_pool_sync` ever needed to mirror anything, since the purchase happened on the
-  joiner's own engine — is captured into that save's `PARTYTABLE.res` and does reappear when
-  that specific save is loaded solo. But (§4) that save is a graft of the HOST's world/journal/
-  globals onto the joiner's own character, not a continuation of the joiner's own story.
-- **Store depletion** (`store_sync=2`, default ON): the purchase is applied to the HOST's own
-  engine too — mode 2's host is the single source of truth and applies a client's buy *intent*
-  to its own engine via the same apply primitive (`docs/research/shared-inventory-v2.md` §2.1/
-  §2.7; `docs/research/store-sync.md` §2.4). The merchant's stock is permanently reduced on the
-  host's own subsequent save regardless of what the joiner does afterward — correct and
-  intended (one shared economy while connected), **provided `party_pool_sync` also
-  successfully mirrored the physical item into the host's own pool**, which mode 2 is designed
-  to do automatically (§1 — a purchase already sits in the buyer's own party-shared repository
-  the instant it happens, no separate deposit step). Both mode-2 channels have extensive
-  documented histories of transient live bugs before landing (`shared-inventory-v2.md` §§5-10,
-  `store-sync.md`'s many live-pass sections) — they are currently shipped ON after real
-  live-testing through 2026-09-24, but a **fresh regression in either channel specifically
-  would produce "the host's story loses the merchant's stock permanently, and the joiner who
-  paid for it has nothing to show for it once they disconnect without saving"** — worth a
-  periodic live recheck (see §6), not a currently-open defect this pass found.
+- **Named solo saves** (anything but slots 000000/000001): untouched (VERIFIED — no code path
+  writes them). Loading one shows what it always did; the co-op purchase is not in it.
+- **The quicksave slot** (and the autosave slot): now holds the host's world with the bought
+  item in its `INVENTORY.res` and the shared purse in `PT_GOLD`. Quick Load, or loading that
+  slot in single player, puts the joiner in the host's story holding the co-op item (§4). This
+  is automatic — the joiner does not have to save anything for it to happen.
+- **Store depletion** (`store_sync=2`, default ON): the purchase is applied to the host's own
+  engine as well — the mode-2 host is the single source of truth and applies a client's buy
+  intent to its own engine (`docs/research/shared-inventory-v2.md` §2.1/§2.7,
+  `docs/research/store-sync.md` §2.4). The item itself is already in the joiner's party pool
+  the instant it is bought (§1) and `party_pool_sync=2` mirrors it to the host. After the joiner
+  leaves, the host keeps both the item and the shrunk stock, and its next save records them —
+  the host's story continues coherently. Both channels have long histories of transient live
+  bugs (`shared-inventory-v2.md` §§5-10); a fresh regression in the pool channel alone would
+  leave the host with the stock gone and no item. Worth the periodic recheck in §6, not an open
+  defect this pass found.
 
 ### (b) Host buys it, joiner disconnects and plays solo
 
-Symmetric to (a), **not** asymmetric — mode 2's snapshot is host → every client, so a host
-purchase reaches the joiner's own live engine the same way a joiner's purchase reaches the
-host's. If the joiner never saves, nothing persists to their own solo save (same guarantee).
-If the joiner does save before disconnecting, their save now also contains the host-bought
-item and the current merged gold total — the identical §4 "graft" risk, just contributed from
-the other direction. **"Nothing joiner-side is affected" is only true if the joiner never
-saves during the session** — which `session-save.md`'s own design explicitly wants to
-encourage (its whole point is enabling "resume tomorrow").
+Symmetric: the mode-2 snapshot is host → every client, so the host's purchase is in the
+joiner's live pool too, and therefore in the joiner's quicksave (§2) the next time the periodic
+or pre-disconnect quicksave lands. Named solo saves are untouched. The host's own story is
+consistent (the host bought it in the host's world).
 
 ### (c) Joiner plays solo, buys/finds the item, then rejoins the host
 
-Per §1/§2: **loose/backpack items from the joiner's solo save are discarded on rejoin, not
-duplicated.** `PlayerIfo.TryExtractPlayer`/`BuildPifo` never reads or copies `PARTYTABLE.res`'s
-item repository — only `Mod_PlayerList[0]` (equipped slots + stats). A solo-bought/found LOOSE
-item is simply left behind, silently, with no on-screen warning that this will happen — a
-real, if narrow, UX/data-loss gap, but **not** a duplication risk.
+**Loose items from the solo game do not come into co-op, and are not duplicated.**
+`PlayerIfo.TryExtractPlayer`/`BuildPifo` never read the solo save's `INVENTORY.res`, and the
+world the joiner adopts brings the host's `INVENTORY.res`. The solo item stays in the solo save
+and is absent in co-op, silently — a UX gap, not a duplication risk.
 
-**The one narrower exception: an EQUIPPED item.** `Equip_ItemList` genuinely lives on
-`Mod_PlayerList[0]` (per-creature, always — this is not a shared-pool field even for a live
-PC), so it **does** travel via the pifo. If a joiner solo-equips a unique-tagged key item and
-then rejoins, that specific item arrives in the host's world attached to the joiner's carried
-character, and could in principle coexist with an independent copy of the same tag already
-present somewhere in the host's own, independently-progressed world/story state — a genuine,
-narrow duplication/uniqueness risk. In practice most K1 "key" plot props are non-equippable
-plot tokens (datapads, disks, plot-flagged quest items), which fall under the "loose item,
-discarded" case instead — see §7's item census for which named items are actually equippable.
+**Which character comes in.** With `join_mode = auto` (the default) the carried character is
+the co-op sidecar, not a solo save, so solo play is not meant to reach co-op at all. It could,
+through one path, fixed this pass (§5): the disconnect/periodic capture falls back to "the
+newest own save" when its quicksave is refused (combat, a conversation — `GetIsAllowedToSave`),
+and a solo save made between sessions is newer than the sidecar, so the rollback guard let it
+through. The co-op character then became the single-player PC — a different character
+entirely if the player runs two — with its worn gear, level and alignment. With
+`join_mode = save`, carrying the newest own save is the documented behaviour.
+
+**Worn gear is the one inventory a carried character brings.** `Equip_ItemList` lives on
+`Mod_PlayerList[0]` and travels. Under `join_mode = save` a solo-equipped unique item therefore
+arrives in the host's world and can coexist with a copy the host's story holds. §7 shows the
+K1 gate items are almost all non-equippable plot props; the equippable ones (the scripted
+sabers) are handed out and taken back by the engine itself, so the practical exposure is small.
 
 ### (d) Credits spent in co-op vs. the joiner's own solo credits
 
-Two genuinely separate storage locations that only ever meet through a live wire mirror, never
-through a saved-file reconciliation. The shared purse **is** `partyTable+0xFC` on each
-process's own live engine, kept converged by `PumpProgressionHost`/`PumpProgression`'s
-per-peer contribution-ledger merge (`docs/research/progression-sync.md`, live-verified
-2026-08-27 and again 2026-09-03 for the wrapped-overdraft fix). It is never additively
-re-derived from a save file and is never itself written to a save file except through the same
-mechanism as items: an ordinary in-game Save while connected writes whatever
-`partyTable+0xFC` currently reads into that save's `PARTYTABLE.res`.
+Separate storage that meets only through the live mirror. The shared purse is
+`partyTable+0xFC` on each engine, converged by `PumpProgressionHost`/`PumpProgression`'s
+contribution ledger (`docs/research/progression-sync.md`, live-verified 2026-08-27 and
+2026-09-03). On disk it is `PARTYTABLE.res → PT_GOLD` (VERIFIED, §1 table); the carry never
+reads it.
 
-- If the joiner never saves: the shared-session credit total evaporates the instant they
-  disconnect; their own solo saves' credit fields are completely untouched — symmetric with
-  items.
-- If the joiner does save mid-session: their own subsequent "solo" credits become whatever the
-  shared purse happened to read at that instant — potentially a large windfall from the host's
-  own earnings, or a near-zero balance if the party had just spent it down — the same §4 "graft"
-  risk, applied to a number instead of an item.
-- On the HOST's side, nothing about the joiner disconnecting changes anything: the host's next
-  save captures `partyTable+0xFC` as it stands, which correctly and permanently includes every
-  credit either player earned or spent while connected. This half of the design is intended and
-  works as shipped.
+- Named solo saves keep their own `PT_GOLD`; nothing in a session changes it.
+- The joiner's quicksave (and any save they make while connected) records the shared purse
+  at that moment — possibly a windfall from the host's earnings, possibly near zero.
+- A rejoin does not bring solo credits in: the adopted world's `PARTYTABLE.res` is the host's.
+- The host's next save records the purse as it stands, including everything either player
+  earned or spent. Intended, and working.
 
 ---
 
-## 4. The biggest concrete risk: a client session-save is secretly the host's world
+## 4. The main inconsistency: the joiner's quicksave becomes the host's game
 
-Not previously named this way in any doc this pass found. `docs/research/session-save.md`'s
-own design (§2.3) states session-save is meant to be "character-only... does NOT attempt to
-make the client's own save directory a faithful copy of the shared WORLD." The **shipped
-implementation** achieves the character carry-over by letting the retail engine write a real,
-complete save of the CURRENT (host-staged) world, and only reading the character back out of
-it for the *next* adopt-in (`session-save.md` "Phase 1 shipped", item 5). Nothing stops a
-player from instead picking that exact save from the main menu's Load Game list directly.
+`docs/research/session-save.md` §2.3 describes session save as "character-only". The shipped
+mechanism gets the character by letting the engine write a complete save of the live (host)
+world and reading the character back out of it. Since 2026-09-18 that save is made
+automatically, every ten minutes and on leaving, into the slot a single-player habit reaches
+for first — Quick Load.
 
-**Consequence**: a save a joiner made mid-session, if loaded outside a co-op session, drops the
-player into the HOST's module/journal/globals — quests the joiner may never have personally
-experienced, companions recruited on the host's own timeline, world flags set by the host's own
-choices — with the joiner's own character's stats/gear/level grafted onto it. This is not
-"corruption" (nothing crashes, nothing is malformed), but it is a genuine story-consistency
-surprise: the save-list UI gives no indication that a particular slot is "really the host's
-game," and a player who saves out of habit during co-op (which the mod's own design wants to
-encourage, for crash-safety and "resume tomorrow") can end up treating it as their own solo
-continuation without realising what it actually contains.
+Loaded outside a session, it puts the joiner in the host's module, journal and globals —
+quests they never started, companions the host recruited, flags set by the host's choices —
+with their co-op character and the co-op items and purse. Nothing is malformed, but the story
+is the host's, and the load list shows it as an ordinary quicksave. This is the concrete shape
+of "keeps a host plot item that makes its solo story inconsistent": not one item leaking, but a
+whole save of the host's world sitting in a single-player slot. It also destroys whatever
+single-player quicksave was there.
 
-This is the concrete shape of the parent task's "keeps a host plot item that makes its solo
-story inconsistent" concern: it is not that a specific item leaks in isolation — it's that the
-**entire save**, including any co-op-acquired items/credits, is a snapshot of the host's world
-that happens to look exactly like an ordinary solo save in the load list.
+**Proposed rule** (a feature, not a small fix, so not done here): co-op must not write the
+joiner's single-player quicksave slot. The capture needs a save the engine writes and the
+extractor can read, not the quicksave slot specifically. `CServerExoAppInternal::SaveGame
+0x4B58A0` formats `SAVES:%06d - %s` from a number and a name (`world-adoption.md`, "The save
+primitive"), so a plugin call through `CClientExoApp::SendSaveGameRequest 0x5ED670` with a
+dedicated slot (a high number named `COOP`) instead of `DoQuickSave` would keep the capture and
+leave the player's quicksave alone. `FindCaptureSource` picks by mtime, so it would find the
+dedicated slot unchanged. NEEDS-RE for the slot number/name the save list tolerates, then a
+live pass. Until then the player docs say it plainly (§5).
 
 ---
 
 ## 4a. Not every key item is covered by a sync channel — a documented, still-open gap
 
 §1's "a purchase already lands in the shared pool, and `party_pool_sync=2` mirrors it" is
-specifically about **store purchases and manual shared-stash deposits**. It does not cover
-every way K1 hands the player a key item. Two purpose-built channels exist for the rest:
+about **store purchases and stash deposits**. The rest of K1's grants have their own channels:
 
 - **`dialogue_item_sync`** (`AgentSettings.cs:138-140`, default ON) — diffs the local PC's
-  inventory only *while this instance owns a conversation*, catching a dialogue node's own
-  `CreateItemOnObject`/`GiveItem` reward (`docs/research/dialogue-consequences.md` §3, live
-  pass 2026-08-24/27).
-- **`script_item_sync`** (`AgentSettings.cs:142-158`, default ON since 2026-08-27) — the
-  explicit complement: diffs the local PC's inventory *whenever this instance is NOT in a
-  conversation*, meant to catch "an OnEnter trigger, an OnDeath script, a cutscene, a heartbeat
-  script" grant (`AgentSettings.cs:144-145`), live-verified across three controls
-  (`dialogue-consequences.md`'s script-item-sync section).
+  inventory while this instance owns a conversation (`docs/research/dialogue-consequences.md`
+  §3).
+- **`script_item_sync`** (`AgentSettings.cs:142-158`, default ON since 2026-08-27) — diffs it
+  whenever this instance is not in a conversation, for "an OnEnter trigger, an OnDeath script,
+  a cutscene, a heartbeat script".
 
-Despite both shipping ON well before it was written, **`docs/research/manaan-hrakert-rift.md`
-(2026-09-18)** documents a still-open, live-reasoned gap for exactly this class of item: the
-Hrakert Station envirosuit (`man28_envirosuit`, `BaseItem 64` "Plot_Useable_Items", `Plot 1`)
-is granted by `k_pman_suituse`, an `OnUsed` placeable script — `GetItemPossessedBy(member,
-"man28_envirosuit")` gates the airlock dialogue that lets a player through. That doc's own
-finding: *"Only the engine that used it gets the item... any `GetItemPossessedBy(..,
-"man28_envirosuit")` gate on its engine (`k_pman_airlock01`) fails"* for whichever
-player did not personally click the suit locker. The doc does not cross-reference
-`script_item_sync` at all (it reasons only about the dialogue-specific `ItemOpKind`/
-`DialogueGrantSender` channel), so it is genuinely unclear from the written record whether
-`ScriptItemGrantPump`'s generic "not in a conversation" diff would actually catch an `OnUsed`
-placeable grant too, or whether something about a `Plot 1`-flagged item, or the specific timing
-of a placeable interaction, defeats it. **NEEDS-LIVE, flagged rather than resolved here** — this
-is outside the present task's scope (which is about purchased/bought key items, not every grant
-mechanism in the game), but it means a reader should not assume every "key item" this document's
-§7 census finds is automatically safe just because `party_pool_sync`/`dialogue_item_sync`/
-`script_item_sync` are all ON by default. The shipped mitigation for the envirosuit specifically
-is architectural, not a sync fix: the non-driving player is kept out of the Hrakert
-Station/sea-floor/Rift modules entirely and spectates (`manaan-hrakert-rift.md` §4, "Option A").
+`docs/research/manaan-hrakert-rift.md` (2026-09-18) nevertheless records a gap for an `OnUsed`
+placeable grant: `man28_envirosuit` (`BaseItem 64`, `Plot 1`) is created by `k_pman_suituse` and
+gates `k_pman_airlock01`; "only the engine that used it gets the item". That doc reasons only
+about the dialogue channel and never mentions `script_item_sync`, so whether
+`ScriptItemGrantPump` catches this grant is unknown from the record. **NEEDS-LIVE.** The shipped
+mitigation is architectural: the non-driving player stays out of the Hrakert sea floor and Rift
+and spectates (`manaan-hrakert-rift.md` §4, Option A).
 
 ---
 
-## 5. Fixes made this pass (small, safe, doc/comment-only — no behaviour change)
+## 5. Fixes made this pass
 
-`src/KotorCoop.Session/CoopConfig.cs`'s top-of-file `<summary>` example block (the first place
-a developer or a config-writing script would look) had drifted out of date: it still showed
-`party_pool_sync = 0 ; ... (NEEDS-LIVE, default off)` and never mentioned `store_sync` at all,
-while the ACTUAL defaults (the per-property doc comments a few hundred lines down, and the
-parse code itself) have been `party_pool_sync = 2` / `store_sync = 2`, both ON, since
-2026-08-29. This is exactly the "config default drift" hazard already named in this project's
-own conventions (multiple readers of one default must agree) — here the drift was between two
-COMMENTS in the same file, not between two independent readers, but it is the same class of
-trap: the top-of-file example is the one a human is most likely to trust at a glance. Fixed to
-read:
+1. **The capture fallback no longer lifts a single-player save into the co-op character**
+   (§3c). `ClientCharacterPersistence.Capture` gained a `connectedSinceUtc` floor: a source whose
+   `SAVEGAME.sav` was written before the current connection began is refused (`Kept`, the
+   sidecar is left as it is). `SessionSaveWatch` records the floor at its first observation
+   after `Reset` (the dispatcher resets it on every tick with no session, so this is the first
+   tick of the connection) and passes it to every capture entry point (`ObserveClient`,
+   `CaptureOnDisconnect`/`CaptureNow`, `CaptureNowWritten`). Nothing that should be captured is
+   lost: every save the session itself makes is captured as it lands, and the own-load path
+   (`TryCaptureVerifiedLoadSource`) does not go through `Capture`. Tests:
+   `ClientCharacterPersistenceTests.CaptureNeverLiftsASinglePlayerSaveWrittenBeforeThisConnection`,
+   `SessionSaveWatchTests.DisconnectCaptureRefusesASaveWrittenBeforeTheConnectionBegan`;
+   `ClientCaptureFiresOnlyOnASaveIdentityChange`'s fixture now writes its "save happened" during
+   the connection, as a real one is. NEEDS-LIVE: recipe 4 below.
+2. **Player docs no longer promise the joiner's saves are untouched.** `README.md`,
+   `docs/limitations.md` ("Bringing your own character") and `tools/package-README.txt` now say
+   the autosave and quicksave slots hold the host's world while connected, and to keep
+   single-player progress in a named save.
+3. **`CoopConfig.cs`'s top-of-file example** said `party_pool_sync = 0 ... default off` and
+   omitted `store_sync`; both default to `2`, ON, since 2026-08-29 (the property doc comments
+   and the parser already said so). Comment only.
 
-```
-party_pool_sync = 2        ; sync the shared party item pool: 0 off, 1 the legacy op-log
-                            ; (docs/research/party-pool-sync.md), 2 the host-authoritative
-                            ; redesign (default, live-verified since 2026-08-29) -
-                            ; docs/research/shared-inventory-v2.md
-store_sync = 2              ; sync merchant store stock: same 0/1/2 modes as party_pool_sync,
-                            ; 2 is the default (live-verified since 2026-08-29) -
-                            ; docs/research/store-sync.md and docs/research/shared-inventory-v2.md
-```
-
-No functional/config-parsing code was touched — `CoopConfig.ParseSyncMode`/the property
-initializers already had the correct `2`/`2` defaults (§0); only the misleading example text
-changed. `dotnet build KotorCoop.slnx` clean (comment-only change, no plugin touched, so
-`build.ps1` was not needed). No new test needed — nothing observable by a test changed.
-
-No other fix was made this pass. The session-save "graft" risk (§4) and the equipped-item
-duplication risk (§3c) are both real but are **design-level** gaps, not small/local bugs — a
-fix would mean either warning the player in the save-list UI, marking a session-save
-specially so it cannot silently masquerade as an ordinary solo save, or teaching the rejoin
-path to warn/refuse when an equipped item's tag might collide with the host's own world state.
-Each is a real feature, not a "clearly-safe small fix," and is left for the roadmap (§6).
+Not fixed (design-level, left for the roadmap): the quicksave slot itself (§4's proposed
+rule), the silent loss of solo loose items on (re)join (§3c — a one-line on-screen note at join
+would do), and the equipped-item uniqueness edge under `join_mode = save`.
 
 ---
 
-## 6. Live recipes (NOT run this pass — static research only)
+## 6. Live recipes for the main session (NOT run this pass)
 
-Two real GOG installs, a live co-op session already running (host + one client, both loaded
-into the same module, `party_pool_sync`/`store_sync` at their shipped defaults).
+Two GOG installs, shipped defaults (`join_mode = auto`, `party_pool_sync`/`store_sync` = 2,
+`character_capture_interval_min` = 10), host + one joiner in the same module. Before starting,
+on the joiner's install copy `saves\000000 - QUICKSAVE` aside and make one named solo save.
+Rebuild and `-Install` first so the §5 fix is on the rig.
 
-1. **(a) Joiner buys, disconnects without saving.** Client opens any store, buys an item whose
-   tag is not already in the party pool, confirms via `items`/an inspect verb that it is in
-   the shared pool. `disconnect` from the console (no in-game Save first). From the main menu,
-   load any of the client's OWN pre-existing saves. Expect: the item is absent, exactly as it
-   was before the session — confirms §3(a)'s "own save never written" claim still holds with
-   `party_pool_sync=2`/`store_sync=2` at their current defaults.
-2. **(a, continued) Joiner buys, saves, disconnects.** Repeat the buy, then use the in-game
-   Save menu (a new/overwritten slot), THEN disconnect. Load that specific save from the main
-   menu. Expect: the item is present, but the module/journal/NPCs match the HOST's world at the
-   moment of the buy, not the joiner's own prior solo progress — confirms §4's "graft" claim
-   directly, and is the single most important scenario to watch for anything surprising (a
-   crash, a broken quest reference, a companion the joiner never recruited standing in their
-   party).
-3. **(b) Host buys, joiner disconnects.** Reverse roles of #1 — confirms §3(b)'s symmetry claim
-   (the item reaches the joiner's own live pool via the mirror while connected, but never
-   touches their own save unless they explicitly save).
-4. **(c) Joiner solo-buys/finds a LOOSE item, then rejoins.** Disconnect the joiner first,
-   have them buy/find an item solo and save, then rejoin the host (`agent adopt` /
-   auto-rejoin). Expect: the item is NOT present in the joiner's inventory once adopted into
-   the host's world — confirms §3(c)'s "loose items are discarded, not duplicated" claim.
-5. **(c, continued) Joiner solo-EQUIPS a distinctively-tagged item, then rejoins.** Same as #4
-   but equip the item (weapon/armor/whatever slot) before saving and rejoining. Expect: the
-   item IS present, equipped, on the joiner's carried character once adopted — confirms the
-   narrower equipped-item exception, and is worth checking specifically with one of the K1 key
-   items identified in §7 that happens to be equippable, if any were found.
-6. **(d) Credits.** `grantgold <amount>` on one side (the existing dev verb,
-   `docs/research/progression-sync.md`'s own live-verified mechanism) while connected, confirm
-   convergence on both sides within the documented ~5 s window, then disconnect the joiner
-   WITHOUT saving and confirm their own solo save's credits are completely unaffected; repeat
-   WITH a save before disconnecting and confirm the joiner's own save now shows the shared
-   total, not their own pre-session balance.
+1. **(a) Joiner buys, disconnects.** Joiner opens a Taris store (`zelkastore*` or `keblastore`,
+   `tar_m02ac`, which sell the gate items `rakghoulserum`/`ptar_permacrete`, §7) and buys one.
+   On the host the item appears in its pool (`party pool:` lines, or `items`) and the stock
+   drops. `disconnect` on the joiner; its agent log shows `character capture: pre-disconnect
+   quicksave landed`. Then on the joiner, from the main menu:
+   - load the named solo save → no serum, own credits (named saves untouched);
+   - load `000000 - QUICKSAVE` → the host's module/journal, serum present, shared credits (§4).
+   `python tools/saveinspect.py` on both; compare `INVENTORY.res` and `PT_GOLD`.
+2. **(a), host side.** The host saves after the joiner left and reloads: serum in the pool,
+   stock still reduced, Zelka's conversation takes the has-serum branch (`k_ptar_hasserum`).
+3. **(b) Host buys, joiner leaves.** Reverse of #1: the host buys `tat20_banthafod`
+   (`kas_twostore`, `tat_m17ab`); it reaches the joiner's pool; disconnect; the joiner's
+   quicksave has it, the named save does not.
+4. **(c) Solo between sessions — the §5 fix.** On the joiner, load the named solo save and
+   make a NEW named save (newer than the sidecar). Rejoin. Within 10 minutes start a fight and
+   `disconnect` mid-combat (the quicksave is refused). Expect `pre-disconnect quicksave did not
+   land`, then `... predates this co-op connection ... kept the sidecar`; the next join carries
+   the co-op character, not the solo PC. Before the fix the sidecar took the solo PC.
+5. **(c) Loose item left behind.** In the solo game buy a stim or `g_i_belt010`, save, rejoin:
+   absent in co-op, still in the solo save.
+6. **(d) Credits.** `grantgold 500` on either side; both converge within ~5 s; disconnect the
+   joiner: the named save's `PT_GOLD` is unchanged, the quicksave's `PT_GOLD` is the shared
+   purse.
 
 ---
 
@@ -410,9 +381,9 @@ grant at all).
 
 - **(a)/(b) with one of the four buyable gates.** While connected, a buy on either side lands
   in both pools (§1), so either player's Zelka/Matrik/fodder conversation passes. After the
-  joiner leaves without saving, the host keeps the item and the shrunk stock; the joiner's own
-  saves never had it, and their own Taris/Tatooine run is untouched. If the joiner saved first,
-  that save is the §4 graft.
+  joiner leaves, the host keeps the item and the shrunk stock; the joiner's named saves never
+  had it and their own Taris/Tatooine run is untouched, but their quicksave slot now holds the
+  host's world with the item in it (§4).
 - **(c) with a buyable gate item.** A joiner who bought `rakghoulserum` solo and rejoins arrives
   without it (loose items do not travel). No duplicate. The host's quest state is the host's.
 - **The one real inconsistency surface is §4**, and the census does not change its shape: the

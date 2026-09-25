@@ -39,8 +39,18 @@ namespace KotorCoop.Agent;
 /// false-positive (an ordinary transition trips the digest edge too) that shipped it OFF by
 /// default in phase 1.
 /// </summary>
-public sealed class SessionSaveWatch(string gameDirectory)
+public sealed class SessionSaveWatch(string gameDirectory, Func<DateTime>? utcNow = null)
 {
+    private readonly Func<DateTime> _utcNow = utcNow ?? (() => DateTime.UtcNow);
+
+    /// <summary>When this connection began: the first observation after <see cref="Reset"/>
+    /// (which the dispatcher runs on every tick with no session). Passed to every capture as
+    /// its floor, so a save the player made on their own BETWEEN sessions — newer than the
+    /// sidecar, so the rollback rule alone lets it through — is never lifted into the co-op
+    /// character by the newest-save fallback (docs/research/key-items-and-solo.md §5).
+    /// <see cref="DateTime.MinValue"/> until the first observation.</summary>
+    private DateTime _connectedSinceUtc = DateTime.MinValue;
+
     /// <summary>The exact line the host's own screen shows when it detects itself loading a
     /// different save mid-session. Matches roadmap item 14 phase 1's required wording.</summary>
     public const string HostRefusalMessage =
@@ -91,6 +101,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
     {
         _watch = SaveIdentityWatchState.Initial;
         _sessionBaselineIdentity = 0;
+        _connectedSinceUtc = DateTime.MinValue;
 
         _ownClassifyWatch = SaveIdentityWatchState.Initial;
         _ownLoadWatch = SerialEdgeWatchState.Initial;
@@ -226,7 +237,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
         }
 
         CharacterCapture capture = ClientCharacterPersistence.Capture(
-            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic);
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, _connectedSinceUtc, out string diagnostic);
         characterWritten = capture == CharacterCapture.Written;
         return FormatCapture(capture, diagnostic);
     }
@@ -257,7 +268,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
         }
 
         CharacterCapture result = ClientCharacterPersistence.Capture(
-            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic);
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, _connectedSinceUtc, out string diagnostic);
         outcome = $"session-saved character{(result == CharacterCapture.Failed ? " NOT" : string.Empty)} captured: {diagnostic}";
         return result == CharacterCapture.Written;
     }
@@ -284,7 +295,7 @@ public sealed class SessionSaveWatch(string gameDirectory)
 
     private string? Capture(string currentSaveDirectory) =>
         FormatCapture(ClientCharacterPersistence.Capture(
-            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, out string diagnostic), diagnostic);
+            SavesDirectory, currentSaveDirectory, _sessionBaselineIdentity, _connectedSinceUtc, out string diagnostic), diagnostic);
 
     private static string FormatCapture(CharacterCapture capture, string diagnostic) => capture switch
     {
@@ -299,6 +310,11 @@ public sealed class SessionSaveWatch(string gameDirectory)
     /// both can share this one place that updates <see cref="_watch"/>.</summary>
     private (bool JustEstablished, bool Changed) Advance(uint digestNow)
     {
+        if (_connectedSinceUtc == DateTime.MinValue)
+        {
+            _connectedSinceUtc = _utcNow();
+        }
+
         SaveIdentityWatchState before = _watch;
         (SaveIdentityWatchState next, bool changed) = SaveIdentityWatch.Observe(_watch, digestNow);
         _watch = next;

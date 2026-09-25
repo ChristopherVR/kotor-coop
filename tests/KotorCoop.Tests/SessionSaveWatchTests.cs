@@ -168,7 +168,10 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.Null(watch.ObserveClient(0, save)); // unresolved: nothing happens
         Assert.Null(watch.ObserveClient(0x1111, save)); // baseline: no capture yet
 
-        string? outcome = watch.ObserveClient(0x2222, save); // a save happened
+        // A save happened — during the connection, as every real one that moves the digest
+        // does (a save written before it began is refused: DisconnectCaptureRefuses...).
+        File.SetLastWriteTimeUtc(Path.Combine(save, "SAVEGAME.sav"), DateTime.UtcNow.AddSeconds(1));
+        string? outcome = watch.ObserveClient(0x2222, save);
         Assert.NotNull(outcome);
         Assert.Contains("session-saved character", outcome, StringComparison.OrdinalIgnoreCase);
 
@@ -194,6 +197,35 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.True(ClientCharacterPersistence.TryReadSidecar(
             Path.Combine(saves, "saves"), out GffStruct read, out _, out _));
         Assert.Equal("Bastila Shan", read.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void DisconnectCaptureRefusesASaveWrittenBeforeTheConnectionBegan()
+    {
+        // The pre-disconnect quicksave was refused, so the dispatcher hands over the newest own
+        // save — a single-player one made between sessions. docs/research/key-items-and-solo.md §5.
+        string solo = BuildSave("Solo character");
+        string saves = TempDirectory();
+        DateTime clock = DateTime.UtcNow;
+        SessionSaveWatch watch = new(saves, () => clock);
+
+        File.SetLastWriteTimeUtc(Path.Combine(solo, "SAVEGAME.sav"), clock.AddMinutes(-30));
+        watch.ObserveClient(0x1111, null); // the first tick with a session: the connection floor
+
+        string? outcome = watch.CaptureOnDisconnect(solo);
+        Assert.Contains("before this connection", outcome, StringComparison.Ordinal);
+        Assert.False(ClientCharacterPersistence.TryReadSidecar(Path.Combine(saves, "saves"), out _, out _, out _));
+
+        // A save made during the connection is captured.
+        File.SetLastWriteTimeUtc(Path.Combine(solo, "SAVEGAME.sav"), clock.AddSeconds(5));
+        Assert.True(watch.CaptureNowWritten(solo, out _));
+
+        // Reset (no session) clears the floor; the next connection sets its own.
+        watch.Reset();
+        clock = clock.AddHours(1);
+        watch.ObserveClient(0x2222, null);
+        File.SetLastWriteTimeUtc(Path.Combine(solo, "SAVEGAME.sav"), clock.AddMinutes(-1));
+        Assert.Contains("before this connection", watch.CaptureOnDisconnect(solo), StringComparison.Ordinal);
     }
 
     [Fact]

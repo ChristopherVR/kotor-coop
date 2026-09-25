@@ -97,7 +97,12 @@ own body. Your **co-op character** is separate from any single-player save on th
 install: the mod makes it with you the first time you join, keeps it
 (`saves\kotorcoop-character.*`), and carries it into the host's world on every join after
 that. `coop.ini`'s `join_mode` controls this (`auto`, the default; `newcharacter` makes a new
-one; `save` carries your own most recent save instead). Your own saves are never touched.
+one; `save` carries your own most recent save instead). While you are connected the mod
+writes two of the game's own slots: the autosave (the host's world you are playing in) and
+the quicksave (it quicksaves every 10 minutes and as you leave, to keep your co-op character
+current). Both then hold the host's world — its story, the shared credits and anything bought
+or found together — not your single-player game, and so does any save you make yourself while
+connected. Your other saves are never touched: keep single-player progress in a named save.
 Details: [docs/research/world-adoption.md](docs/research/world-adoption.md).
 
 **Playing over the internet.** The reliable way today is a free tunnel program on the host,
