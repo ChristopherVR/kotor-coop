@@ -10,6 +10,8 @@ internal static unsafe partial class PluginHost
 {
     /// <summary>World identity last frame; 0 = no stable world was seen.</summary>
     private static ulong _epoch;
+    private static long _worldUpAtMs;
+    private static ulong _followWarpHeldEpoch;
 
     /// <summary>True while the pre-store flush window is open (trans_pending set).</summary>
     private static bool _transitionPending;
@@ -590,6 +592,7 @@ internal static unsafe partial class PluginHost
                 DropHeldSaveOnWorldChange();
 
                 _epoch = epoch;
+                _worldUpAtMs = Environment.TickCount64;
                 BeginEnemyBaselineWorld();
 
                 // A world just came up: sweep out any co-op stand-ins and map pins a MANUAL save
@@ -763,7 +766,7 @@ internal static unsafe partial class PluginHost
                 return;
             }
 
-            if (_travel is { HasPendingRequest: true } travel)
+            if (_travel is { HasPendingRequest: true } travel && FollowWarpMayStart())
             {
                 // Announce THIS frame, before any flush or the eventual Odyssey.TravelToModule
                 // call — the same "before the teardown, not after" timing _transitionPending uses
