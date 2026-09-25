@@ -807,3 +807,239 @@ Acceptance remains open: retrieve the actual stored items, compare both inventor
 locker removals, and verify original properties, upgrades and ownership without duplication.
 The `loottake` staging command creates a fresh equivalent item after removal, so it cannot
 prove preservation of customized equipment and must not close this check.
+
+## 10. `k_plev_partyhawk`/`k_plev_killbc` are dead code; retail return is a manual loot; and the
+shipped `ContainerLoot` sync collides with it (2026-09-25, static only, no rig touched)
+
+This pass answers review blocker #4's open gear-return question completely from the shipped
+data: a whole-game bytecode scan for every possible caller, a full disassembly of the one
+reachable script chain, a field-by-field read of `lev40_ptylocker.utp`, and a read of the
+mod's own shipped `ContainerLoot` sync code (`src/KotorCoop.Memory/KotorGameBridge.
+ContainerLoot.cs`, `src/KotorCoop.Session/Pumps/LootPump.cs`). Method: `tools/localvaraudit.py`'s
+`decode()`/`load_signatures()`/`Module` (the same NCS decoder §1 already documents) driven from
+a scratchpad script, plus `tools/kotorfiles.py`'s GFF reader. No game process was started; no
+memory was read or written; §9's own staged-rig evidence is not repeated here, only explained.
+
+### 10.1 VERIFIED: `k_plev_partyhawk` has zero callers anywhere in the shipped game
+
+§9.8 found no GFF-field caller inside `lev_m40aa`. This pass extends that to **every compiled
+script in the game**: `chitin.key`'s full BIF resource table (1,784 distinct `.ncs` resrefs) and
+every module's own local `.ncs` resources across all 21,314 module-local scripts in
+`modules/*.rim` (every module in the install, not just the Leviathan chain), decoded and scanned
+for the `CONST` string `"k_plev_partyhawk"` or `"k_plev_killbc"` (the two names a dynamic
+`ExecuteScript`/`AssignCommand`-by-string call would have to push as a literal). The **only**
+two hits in the entire scan are inside `k_plev_partyhawk` itself, at its own two script slots
+(module and `_s.rim` copies of the same compiled bytes):
+
+```
+lev_m40aa:k_plev_partyhawk   pc=108  CONST str = "k_plev_killbc"   (its own ShowPartySelectionGUI arg)
+lev_m40aa_s:k_plev_partyhawk pc=108  CONST str = "k_plev_killbc"   (identical, the _s.rim shadow copy)
+```
+
+No script anywhere — not `k_plev_freecs2` (the actual dialogue terminus, see §10.2), not any
+other Leviathan/Ebon-Hawk/galaxy-map script, not any of the other 21,000+ module scripts, not
+any BIF include — ever names `k_plev_partyhawk`. Cross-checked a second, independent way:
+`module_owners()` (the same GFF-field-wiring walker §1/§9.8 used) over `lev_m40aa`, `lev_m40ab`,
+`lev_m40ac`, `lev_m40ad`, `ebo_m40aa`, `ebo_m40ad`, `STUNT_16`, `STUNT_31b`, `STUNT_18` and
+`M12ab` returns no owner for either script in any `dlg`/`utc`/`utd`/`utp`/`utt`/`git`/`are`/`ifo`
+field. Between "no GFF field names it" and "no compiled script's bytecode names it as a string,"
+static analysis has no third way for the retail engine to reach `k_plev_partyhawk`. **VERIFIED:
+`k_plev_partyhawk` (and therefore its exit script `k_plev_killbc`, the `GiveItem` ×10+sweep
+that returns the locker's contents) is unreachable dead content in the shipped v1.0.3 game** —
+not merely "no caller found this pass," a whole-binary-plus-every-module negative result.
+
+### 10.2 VERIFIED: the actual reachable dialogue chain ends in `k_plev_freecs2`, which never calls it
+
+`k_plev_freeparty` (the brig-computer's release script, §3.4) ends with `SwitchPlayerCharacter
+(-1)` (offset 1613, restoring the real PC) then `ActionStartConversation` on
+`GetObjectByTag("lev40_freetalker")` with an empty `sDialogResRef` argument (offset 1885, all
+11 args are the NWScript defaults `""`/`0`) — an empty resref means "use the target's own
+`Conversation` field," which `lev40_freetalker.utp`'s `Conversation` field is `lev40_bast400`
+(confirmed directly off the GFF, not inferred from the doc's earlier prose).
+
+`lev40_bast400.dlg` has **two** `StartingList` entries, walked node-by-node this pass
+(`EntryList`/`ReplyList`/`EntriesList`/`RepliesList`, full graph, no truncation):
+
+* `E[42]` — no `Active` condition (always eligible) — a short "everyone runs for it" scene
+  (`k_plev_runout`, per-companion branches on `k_plev_escplot1x..5x`, i.e. which NPC is the
+  staged rescuer) that funnels every branch to `E[58]→R[72] (k_plev_killcand)→E[59]
+  (k_plev_freecs0)→R[73]→E[60] (k_plev_freecs1)→R[74] (k_plev_freecs2)`. **`R[74]` has no
+  `EntriesList` — it is a leaf** (confirmed: `EndConversation`/`EndConverAbort` on the `.dlg`
+  root are both empty strings too), so the conversation simply ends there.
+* `E[0]` — gated `Active = k_plev_rescue1`. Full disassembly of `k_plev_rescue1` (108 bytes):
+  `GetGlobalBoolean("Lev_Rescue")` (routine 578) then a compare against the constant `0` and an
+  immediate return — the standard compiled shape of `return !GetGlobalBoolean("Lev_Rescue");`.
+  Since `k_plev_freeparty` itself calls `SetGlobalBoolean(TRUE, "LEV_RESCUE")` at offset 1164,
+  **well before** its offset-1885 `ActionStartConversation`, `Lev_Rescue` is already `TRUE` by
+  the time `lev40_bast400.dlg`'s starting list is evaluated, so `k_plev_rescue1` is `FALSE` and
+  `E[0]` is never eligible through this caller. (`E[0]`'s own subtree happens to reuse the exact
+  script names §3.2 already attributed to the Saul interrogation — `k_plev_saulover`,
+  `k_plev_journals`, `k_plev_tortfade`, `k_plev_goescape` — and `lev40_bast400` has exactly one
+  owner in the whole module, `lev40_freetalker`, per `module_owners()`; this branch is either
+  reached from some pre-rescue context this pass did not chase further, or is itself vestigial.
+  Either way it plays no part in the post-rescue gear question.)
+
+Full disassembly of `k_plev_freecs2` (1,393 bytes, every `ACTION` call, none omitted): two
+`GetObjectByTag`+`DestroyObject` pairs (the `bastila`/`carth` scene bodies), two `GetLocation`
+calls, `SetGlobalFadeIn`, one `SpawnAvailableNPC`, `GetObjectByTag("bastila")`/`("carth")`,
+`AddPartyMember(2)` then `AddPartyMember(0)` (Carth then Bastila — the two companions rejoin
+the active roster), and finally `ShipBuild()`/`AurPostString(...)` (an Xbox-era
+achievement/telemetry pair seen elsewhere in the game's finale scripts, unrelated to items).
+**There is no `ShowPartySelectionGUI` call, no `ExecuteScript` call, and no `GiveItem` call
+anywhere in `k_plev_freecs2`.** `k_plev_freecs0` and `k_plev_freecs1` (the two preceding nodes,
+also fully disassembled) are walk/camera-fade choreography only — `ActionMoveToObject`,
+`ActionOpenDoor`, `SetGlobalFadeOut`, no party or item calls at all.
+
+**This is a second, independent confirmation of §10.1 from the other direction**: not only does
+no script ever name `k_plev_partyhawk`, the one script the retail engine actually does reach at
+the end of the freed-party conversation contains no code path that could reach it either. It
+also explains §9.4's live observation exactly: both engines' `lev40_ptylocker` still held all
+eight items after "native party-selection confirmation completed" — because the confirmation
+observed there could not have been `k_plev_partyhawk`'s panel (nothing ever opens one on this
+path); whatever panel `partyselect ok` acted on that run, it was not the Leviathan gear-return
+screen, consistent with §9.5's later finding that the diagnostic itself needed hardening.
+
+### 10.3 VERIFIED: `lev40_ptylocker` is a stock, always-usable container — no script needed
+
+Every field of `lev40_ptylocker.utp` read directly off the GFF this pass: `Static = 0`,
+`Useable = 1`, `HasInventory = 1`, `PartyInteract = 1`, `Lockable = 0`, `Locked = 0`,
+`KeyRequired = 0`, `Plot = 1` (indestructible, not "non-interactable" — `Plot` only blocks
+combat destruction), and **every** `On*`/`Conversation` field (`OnUsed`, `OnOpen`, `OnClosed`,
+`OnInvDisturbed`, `OnEndDialogue`, `OnHeartbeat`, `OnUserDefined`, `Conversation`, …) is an empty
+string. Its template `ItemList` is empty too — nothing is pre-populated; everything a player
+finds inside came from the ten (plus a general-inventory sweep) `GiveItem` calls
+`k_plev_escsetup` ran on module entry (§3.2). In other words this is exactly the same kind of
+placeable as any footlocker in the game: walking up and using it opens the retail container/
+loot-transfer GUI with no script involved at all, because none is needed for a plain
+`HasInventory=1` placeable. **The retail return of the party's gear on the Leviathan is not a
+script effect at all — it is the player manually opening `lev40_ptylocker` (at
+`(9.6115, 69.6777, 9.0)` in `lev_m40aa`) and taking the items out by hand, the same as any other
+container in the game.** The review's original framing ("Saul's `GiveItem`", an automatic
+GetFirstPC-targeted return) described `k_plev_killbc`'s code faithfully but that code never
+runs; §5.3 #5's "gear return on the joiner" question needs to be re-read against that.
+
+On the (moot, since it never executes) content of `k_plev_killbc` itself: this pass's full
+disassembly (336 instructions, every `ACTION` listed) found **no `GetFirstPC` call anywhere in
+the script** — the ten `GetItemInSlot`/`GiveItem` pairs (slots 10,1,3,0,9,7,5,8,4 plus a
+`GetFirstItemInInventory`/`GiveItem` pair, then a truncated `GetFirstItemInInventory` that is
+almost certainly the head of a `GetNextItemInInventory` sweep loop over whatever else the
+locker holds) resolve their recipient from a local variable set up before this pass's decoded
+window (offset < 670), most consistent with a bare `OBJECT_SELF` rather than an explicit
+`GetFirstPC()` call. Which object the engine sets as `OBJECT_SELF` when it runs a
+`ShowPartySelectionGUI` exit-script was not traced further (would need disassembling
+`CSWGuiPartySelection::AcceptParty 0x006BE560`'s `RunScript` call site) — moot for retail
+behaviour, but relevant to §10.4 below if this dead script were ever revived.
+
+### 10.4 A concrete co-op risk the dead-code finding surfaces: `ContainerLoot`'s same-save-id
+assumption does not hold for this locker
+
+§10.1-§10.3 close the "does the joiner's suppressed party-select skip an exit script" question
+(moot — nobody's party-select runs one). But the shipped mod already has a **generic** container
+handled for taking items out of any shared placeable, and this pass read it
+(`src/KotorCoop.Memory/KotorGameBridge.ContainerLoot.cs`,
+`src/KotorCoop.Session/Pumps/LootPump.cs`), and it is a real, different risk for exactly this
+locker:
+
+* `CollectContainerLootRemovals()` scans every live placeable with an inventory once a second,
+  diffs the current item-object-id set against last scan's, and reports any id that disappeared
+  as a `(containerId, itemId)` removal — **both raw engine object ids**, not tags or resrefs.
+* `PumpContainerLoot` publishes every removal either side discovers to the session, and
+  `TryWriteContainerLoot` replays the **merged** removal set (its own plus every peer's) into
+  this instance's own copy of each container, deleting the item **by that same object id** —
+  idempotent if the id is already gone, but with no other identity check.
+* The code's own header comment states the assumption this rests on: *"Host-authoritative and
+  object-id keyed (**same save => same ids**)"* — true for an ordinary loot chest, whose
+  contents are baked into the GIT and created identically, in the identical order, when both
+  engines load the identical module.
+
+`lev40_ptylocker` breaks that assumption in a way no other shared container in the game does:
+its contents are **not** baked into the GIT (§10.3's empty template `ItemList`) — they are
+created at runtime by `k_plev_escsetup`'s ten `GiveItem` calls, run **independently on each
+engine** (§3.2: "both do — it is a trigger on the entry point, `GetIsPC` passes for either PC"),
+moving each engine's **own** PC's gear plus its own copies of Bastila's and Carth's gear into
+its own copy of the placeable. The container object id itself is the same on both engines (a
+GIT-placed static placeable, the one case the assumption does hold for); the **items inside are
+not the same items** — they are each engine's own PC's personal effects, independently created.
+If the two engines' object-id allocators happen to be in lockstep at that point in the script
+(plausible, since both run the identical `k_plev_escsetup` script in the identical order off the
+identical trigger, but not something this pass can prove without a live counter comparison), the
+ten items created on the host and the ten created on the joiner would receive **parallel, not
+identical, ids that collide under this scheme**. The consequence: the **first** player to loot
+even one item from their own locker would cause `PumpContainerLoot` to publish that
+`(containerId, itemId)` removal; the **other** engine's `TryWriteContainerLoot` would then
+delete "the same" id from **its own, independently-populated** copy of `lev40_ptylocker` —
+silently destroying that player's own about-to-be-collected gear, before they ever opened the
+container, with no error and no log distinguishing "the peer looted this" from "this was never
+the same item to begin with." This is a plain consequence of reading the existing sync code
+against §10.3's finding, not yet live-observed — **NEEDS-LIVE** to confirm the ids actually do
+line up closely enough to collide (they might not, if any other object creation diverges the
+two engines' counters beforehand, in which case the failure mode is more likely "nothing
+transfers" than "the wrong item vanishes" — either way, the sync is unsound for this container).
+
+### 10.5 Recipe for a live pass (the main session; static analysis stops here)
+
+Reaching the natural retail trigger no longer means finding a dialogue branch — there isn't one
+to find. The minimal live check is: does opening `lev40_ptylocker` by hand work correctly for
+BOTH players, and does one player's pickup silently affect the other's copy (§10.4)?
+
+1. **Saves.** `ls "C:/GOG Games/Star Wars KOTOR (GOG)/saves"` lists `000036 - lev_gate_host`
+   (saved 08:57:26 per §9.4, right after the real native party-selection confirmation and
+   release — both `ItemList`/`Equip_ItemList` empty on the host PC, locker still holding all
+   eight items) as the closest existing checkpoint; §9.4 names the joiner's paired save as
+   `000031 - lev_gate_joiner` on the joiner's own separate GOG install (`kotor-coop-gog-is-
+   primary-target`'s "two separate folders" — not inspected this pass, out of the single game
+   directory this task scoped). Loading these skips redoing the torture/rescue sequence. A
+   fresh run instead of a reload: `warp lev_m40aa`, `setglobal LEV_ESCAPE 4`, drive
+   `lev40_transformer`/`lev40_detcompdlg` as §6 already lays out through to the freed-party
+   conversation's end (`k_plev_freecs2`), on BOTH engines separately (no dialogue token hand-off
+   needed here since each engine runs its own copy of the whole brig sequence, §5.3 #6).
+2. **Baseline read.** Before either player touches the locker, save both engines under new
+   names and read each save's `lev40_ptylocker` `ItemList` and each PC's `ItemList`/
+   `Equip_ItemList` with `tools/kotorfiles.py gff "<save>:PARTYTABLE.res" --path ...` (or
+   `tools/saveinspect.py`, whichever already resolves the per-object GFF struct with upgrade
+   sub-structs preserved) — record each item's resref, tag and any `UpgradeLevel`/upgrade-slot
+   substructures. This is the "exactly once, with upgrades" ground truth; do not use `loottake`
+   for this proof (its own doc comment: it "creates a fresh equivalent item after removal," so
+   it cannot show upgrade preservation, per §9.8's own caveat).
+3. **Host loots first.** On the HOST only, open and loot `lev40_ptylocker` (a real click, per
+   `kotor-coop-screen-capture-rules` — console tooling cannot drive the container GUI, per
+   `container-sync.md`'s own finding). Save. Read both the host's and the **joiner's** saves
+   again (joiner should NOT have looted anything yet). Compare the joiner's locker `ItemList`
+   against the baseline: if any item vanished from the joiner's copy without the joiner doing
+   anything, §10.4's cross-deletion is confirmed live. Watch both plugin logs for the loot-pump
+   activity (`PumpContainerLoot`/`ContainerLootRemoval` — check the current log line text at
+   time of testing, since none of the reviewed source in this file emits a dedicated message
+   distinguishing a local removal from a replayed peer removal).
+4. **Joiner loots second.** Whether or not step 3 found a collision, have the joiner loot
+   whatever remains in their own copy, save, and read their own inventory the same way. Confirm
+   every item the joiner's `k_plev_escsetup` run originally stripped is present exactly once,
+   with the same resref, tag and upgrade substructure as the baseline read in step 2 — not a
+   `loottake`-fabricated equivalent.
+5. **Regression.** Re-run §6's step 5 (`removeparty` bursts in `lev_m40ad` must not begin a
+   solo segment) is unaffected by this section and does not need repeating.
+
+### 10.6 Revised answer to §5.3 #5 (gear return on the joiner) — do not implement
+
+The old open question ("does the joiner's suppressed party-select run `k_plev_killbc`") is
+closed: nobody's party-select runs it, host or joiner, because nothing ever opens that specific
+panel. The real, now better-understood gap is narrower than §5.3 #5 described:
+
+* **No relay of an exit script is needed** — there is none to relay. Each player naturally loots
+  their own engine's copy of `lev40_ptylocker`, which already holds exactly that engine's own
+  PC's (and its own copies of the companions') gear, by the ordinary container-loot interaction
+  every other footlocker in the game already gets for free. This is **S to document, and likely
+  needs NO new code** for the "each player gets their own gear back" part.
+- **What DOES need a design (not implemented here, per the task):** exempting `lev40_ptylocker`
+  — or, more generally, any placeable a per-engine script populates independently rather than
+  the GIT baking in identically — from the generic object-id-keyed `ContainerLoot` relay
+  described in §10.4, so one player's pickup can never delete the other's not-yet-collected
+  items. The smallest correct shape: a container id allowlist/denylist (or a "was this
+  container's current content baselined from the GIT, or did it change out from under the
+  baseline scan before the first player ever opened it" heuristic) that `PumpContainerLoot`
+  checks before publishing or applying a removal for that specific container id in that
+  specific module — everything else about the existing mechanism (the idempotent apply, the
+  merged-history broadcast) stays as-is for every container that DOES satisfy the same-save-
+  same-ids assumption. This is a **narrow, additive** change (a per-container opt-out list keyed
+  by module+tag, checked at both `CollectContainerLootRemovals` and `TryWriteContainerLoot`),
+  not a rework of the container-loot mechanism itself, and it generalises beyond the Leviathan
+  to any other future per-engine-populated container the mod adds.
