@@ -1612,8 +1612,13 @@ Enclave courtyard.
 - On `stealth off`, host: `joined the friendly faction (partner_buffs)` and `engine stealth
   mode OFF (stealth_visual_sync)`.
 - Both games kept running with no crash, and the stand-in was not left stuck in stealth.
-Still open: what the stand-in looks like on the host's screen (the capture method failed on
-this run; see isolated-rig.md), and whether an enemy's own detection actually skips it.
+**The visual (same day, plugin screenshot readback):** with the joiner stealthed, the host's
+screen showed only the host's own character; the joiner's stand-in was fully hidden. After
+`stealth off` both were visible side by side again. Single-player KOTOR draws a stealthed party
+member as a translucent shimmer to its own side, so this is not full parity: a partner who
+vanishes completely can be lost track of. `stealth_visual_sync` therefore stays OFF by default,
+pending a product decision (hidden vs. the shimmer, which would need the party-member render
+path). Still open: whether an enemy's own detection skips the stand-in.
 
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
