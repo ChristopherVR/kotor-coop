@@ -776,6 +776,24 @@ internal static unsafe partial class PluginHost
         }
     }
 
+    /// <summary>The `input` console verb, from CheatController (main thread, the cheat
+    /// drain). Returns the one-line reply the console prints. Unlike
+    /// <see cref="OnGamepadConsole"/> this needs no per-instance state, so it calls straight
+    /// into the static <see cref="InputInjectionController"/>.</summary>
+    public static string OnInputConsole(string arguments)
+    {
+        try
+        {
+            return InputInjectionController.HandleConsole(arguments);
+        }
+        catch (Exception ex)
+        {
+            string failed = $"input: console verb failed: {ex.Message}";
+            Log(failed);
+            return failed;
+        }
+    }
+
     public static void Log(string message)
     {
         try

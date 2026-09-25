@@ -44,6 +44,10 @@ internal static unsafe class FuncInterpHook
         // The controller layer's verb (docs/research/gamepad.md §5). Not a retail verb.
         "gamepad",
 
+        // The isolated rig's synthetic mouse/keyboard (docs/research/isolated-rig.md). Not a
+        // retail verb.
+        "input",
+
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
         "census", "resolve", "firescript",
