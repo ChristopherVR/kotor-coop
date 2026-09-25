@@ -29,11 +29,12 @@ param(
 
 if (-not $RealMouse) {
     $blockpoke = Join-Path $PSScriptRoot 'blockpoke.ps1'
-    $bpArgs = @()
-    if ($ProcId -ne 0) { $bpArgs += @('-ProcId', $ProcId) } else { $bpArgs += @('-ProcessName', $ProcessName) }
+    # Hashtable splat: an array splat hands '-ProcId' over as a positional string, which
+    # blockpoke's Command ValidateSet rejects.
+    $bpArgs = @{}
+    if ($ProcId -ne 0) { $bpArgs.ProcId = $ProcId } else { $bpArgs.ProcessName = $ProcessName }
     $verb = if ($HoverOnly) { "input move $X $Y" } else { "input click $X $Y" + $(if ($Right) { ' right' } else { '' }) }
-    $bpArgs += @('console', $verb)
-    & $blockpoke @bpArgs
+    & $blockpoke @bpArgs console $verb
     Start-Sleep -Milliseconds $SettleMs
     return
 }

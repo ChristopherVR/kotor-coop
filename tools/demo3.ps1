@@ -44,7 +44,7 @@ param(
     # windows off the user's visible desktop and never activates them for the FINAL layout
     # (the per-instance launch positioning above stays cosmetic either way).
     [switch]$Isolated,
-    [int]$MonitorX = 6000,
+    [int]$MonitorX = 0,
     [int]$MonitorY = 0
 )
 
@@ -304,6 +304,7 @@ $offY = $Isolated ? $MonitorY : 0
 & $movewin -ProcId $pid3 -X ($offX + 415) -Y ($offY + 340) | Out-Null
 
 if ($Isolated) {
+    foreach ($p in $pid1, $pid2, $pid3) { & $movewin -ProcId $p -Ghost }
     "isolated: all three windows placed at x=$offX.. (never activated; tools\shot.ps1 and " +
         "tools\click.ps1/blockpoke's 'input' verb both work regardless of position or occlusion)"
 }

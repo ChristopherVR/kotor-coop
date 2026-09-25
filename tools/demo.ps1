@@ -41,13 +41,15 @@ param(
     # occlusion, so screenshots and control still work; see the doc for the one remaining
     # gap (the automated menu-load step still focuses the window briefly).
     [switch]$Isolated,
-    # Where "off the user's view" means: default is 6000px right of the origin, well past
+    # Where the windows sit. Default 0,0: on the primary monitor but ghosted (invisible,
+    # click-through, see movewin.ps1 -Ghost), because an off-monitor D3D window captures black.
+    # Older note: 6000px right of the origin was the first choice, well past
     # any normal multi-monitor span (GetSystemMetrics(SM_CXVIRTUALSCREEN) on this rig's own
     # desk is 4480px). Point this at a real monitor's origin instead (e.g. a second GPU
     # output nobody looks at, or a virtual/indirect display driver's origin once one is
     # installed) to have DWM compose the windows somewhere concretely off-screen rather than
     # merely past the edge of the virtual desktop.
-    [int]$MonitorX = 6000,
+    [int]$MonitorX = 0,
     [int]$MonitorY = 0
 )
 
@@ -276,6 +278,8 @@ Start-Sleep -Milliseconds 500
 & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid2 -X $pos2X -Y $pos2Y
 
 if ($Isolated) {
+    & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid1 -Ghost
+    & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid2 -Ghost
     "isolated: both windows placed at x=$pos1X.. (never activated; tools\shot.ps1 and " +
         "tools\click.ps1/blockpoke's 'input' verb both work regardless of position or occlusion)"
 }

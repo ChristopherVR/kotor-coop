@@ -87,6 +87,35 @@ px per §5 of mouse-cursor-input.md) and confirm the load screen opens.
 
 ### 3. Window placement: `demo.ps1`/`demo3.ps1 -Isolated`
 
+**Correction from the first live run (2026-09-25).** Off-screen placement does NOT work for
+the game. With both KOTOR windows at x=6000 and x=6830, `shot.ps1` captured solid black. The
+same windows moved back onto a monitor captured normally: 294 of 300 sampled points were lit,
+with PrintWindow and with a plain screen grab alike. Windows only composes a D3D window's
+content while the window overlaps a monitor. The earlier "works at x=10000" check used
+Notepad, which draws through GDI.
+
+Two ways around it were measured on the live game:
+- A 5-pixel sliver left on the monitor edge captured normally (293/300).
+- A fully transparent, click-through layered window ON the monitor captured normally
+  (294/300). The screen at the same spot showed whatever was behind it (all 300 points differed
+  from the captured game image), so the user never sees it.
+
+`-Isolated` uses the second: **ghost mode** (`movewin.ps1 -Ghost`, undo with `-Unghost`). The
+window gets `WS_EX_LAYERED` with alpha 0, `WS_EX_TRANSPARENT` (mouse clicks pass through to
+whatever is underneath), `WS_EX_TOOLWINDOW` (not on the taskbar or in Alt-Tab), and the bottom
+of the z-order. `-MonitorX` now defaults to 0, so the windows sit on the primary monitor,
+invisibly. The first capture right after a window returns to a monitor can come back black;
+the next one a few seconds later is fine.
+
+Also verified live on a ghosted, unfocused window: `click.ps1` (the plugin's `input click`)
+opened the Messages screen, and the capture showed it. `click.ps1` needed one fix on the way:
+it splatted `-ProcId` as an array, which reached blockpoke as a positional string. It now uses
+a hashtable splat.
+
+The weighing below is kept for the record. The driver option is still the answer if a truly
+separate monitor is wanted.
+
+
 Three options were weighed for "where does the window live":
 
 | Option | Verdict |
@@ -126,7 +155,9 @@ at the main menu) would close this gap; it is a separate, larger change to
   first live pass), no setup — `tools\click.ps1` (default) or `blockpoke.ps1 console 'input
   ...'`.
 * **Windows never appear on your monitor for the steady-state part of a run**:
-  `pwsh tools\demo.ps1 -Isolated` (or `demo3.ps1 -Isolated`). No install needed. The windows
+  `pwsh tools\demo.ps1 -Isolated` (or `demo3.ps1 -Isolated`). No install needed. The games
+  sit on your primary monitor as invisible, click-through windows, which is what lets
+  screenshots keep working (verified live 2026-09-25). The windows
   will still flash onto the real foreground briefly during the automated save-load step at the
   start of a run (see the gap above) — after that, nothing.
 * **If you want the windows to live on an actual (virtual) monitor instead of merely off the
