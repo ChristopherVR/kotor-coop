@@ -210,12 +210,16 @@ without a restart; Tab-completes, Up/Down recalls history) and **Enter** to chat
 partner. Missed a message? Past chat is kept in the game's own Messages screen (pause menu,
 Messages, Dialog tab). Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
 
-The agent window (the separate program that keeps the two games in sync) has the same command
-line built in: a `>` prompt at the bottom you can type into any time, with Tab completion, a
-candidate dropdown as you type, Up/Down history and a small scrollback of the last few
-replies — handy for typing a command without alt-tabbing into the game, or when nothing has
-loaded yet. F2 drops a demo item and F3 picks one up (used to be the bare `D`/`P` keys, moved
-once letters became something you could type).
+The agent window (the separate program that keeps the two games in sync) is its own full-screen
+console, laid out the way a chat app or Claude Code's own terminal is: a short status line up
+top, a scrolling transcript of chat/replies/events filling the middle, and a `>` prompt built in
+at the bottom you can type into any time — with Tab completion and a candidate dropdown as you
+type, Up/Down history — handy for typing a command without alt-tabbing into the game, or when
+nothing has loaded yet. PageUp/PageDown scroll the transcript back (a "N new" marker shows while
+scrolled up and something new arrives); **F1** opens a details panel with everything the old
+readout showed (network stats, this player, other players, the shared world). F2 drops a demo
+item and F3 picks one up (used to be the bare `D`/`P` keys, moved once letters became something
+you could type).
 
 ## Troubleshooting
 

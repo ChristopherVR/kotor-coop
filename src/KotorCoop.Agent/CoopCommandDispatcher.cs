@@ -688,21 +688,24 @@ public sealed partial class CoopCommandDispatcher(
     /// </summary>
     private void Reply(string text)
     {
-        // The log sink already writes to a redirected stdout, timestamped. Writing here too
-        // would double every line in a piped run; writing nowhere would lose them in a
-        // windowed one. So: the window when there is a window, the sink otherwise — and the
-        // sink always, because the file is the record.
+        // ⚠ Log ALONE, never also a direct Console.WriteLine alongside it. AgentDashboard.Note
+        // (what Log is wired to in the live agent — AgentComposition.Compose) already renders
+        // every line it receives: into the TUI's own transcript while the dashboard's screen is
+        // up, or straight to the redirected stdout in the non-interactive case (Note's own
+        // Console.IsOutputRedirected branch). A second, independent Console.WriteLine here used
+        // to be how a reply ever reached an interactive window at all, back when Note() only
+        // wrote to the log file; now that Note() renders too, keeping this would print every
+        // reply TWICE - once via the capture writer TerminalScreen installs (since
+        // Console.IsOutputRedirected stays false for the whole life of the TUI, that branch
+        // still ran) landing in the transcript as a bare "[coop] ..." line, and once again from
+        // Note's own direct transcript push. Only the no-Log case (no dashboard at all - a
+        // future host, or a test) still needs a console line of its own.
         if (Log is not { } log)
         {
             Console.WriteLine($"[coop] {text}");
         }
         else
         {
-            if (!Console.IsOutputRedirected)
-            {
-                Console.WriteLine($"[coop] {text}");
-            }
-
             log(text);
         }
 
@@ -720,11 +723,6 @@ public sealed partial class CoopCommandDispatcher(
         }
         else
         {
-            if (!Console.IsOutputRedirected)
-            {
-                Console.WriteLine($"[coop] {text}");
-            }
-
             log(text);
         }
 
