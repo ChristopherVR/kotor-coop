@@ -29,6 +29,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [minimap-peers.md](minimap-peers.md) | A peer's arrow on the minimap (not just the M-screen) | Implemented, live-verified (screenshot), ON by default |
 | [realtime-creature-movement.md](realtime-creature-movement.md) | The per-frame position-drive recipe every mirror channel uses | RE reference; the recipe is live-verified through its callers |
 | [phantom-locomotion.md](phantom-locomotion.md) | Why a phantom slides instead of walking/running | Root-caused, fixed, live-verified, 0% idle-while-moving |
+| [walkmesh-guard.md](walkmesh-guard.md) | `walkto 187 100` crashed `swkotor.exe` (unchecked -1 triangle index in `GetTriangleAdjacency`); one guard (`Odyssey.TryValidateMoveDestination`) now covers every mover, plus a source-side fix for a peer's own agent publishing `(0,0,0)` mid-load | Root-caused, fixed, unit-tested, NEEDS-LIVE |
 
 ## Travel & transitions
 

@@ -278,7 +278,13 @@ public sealed partial class KotorGameBridge
             body, rightWeapon, leftWeapon, ReadLocalFlags(creature),
             _oneShotAnimation, _oneShotSequence);
 
-        if (!state.IsPlausible)
+        // Walkmesh guard, source side (docs/research/walkmesh-guard.md §3): IsPlausible alone
+        // accepts the exact origin (a creature can genuinely stand there), but a joiner's
+        // phantom crashed on danm14aa after this instance read (0,0,0) off a player creature
+        // that existed but had not been placed yet during THIS instance's own module load, and
+        // republished it as a truthful position. Treated as a failed read like any other
+        // implausible one: hold the last published state, do not mint a fresh poisoned one.
+        if (!state.IsPlausible || state.Position.IsOrigin)
         {
             OnFailure();
             state = PlayerState.Empty;

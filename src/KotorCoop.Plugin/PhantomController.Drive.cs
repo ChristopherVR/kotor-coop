@@ -311,6 +311,23 @@ internal sealed unsafe partial class PhantomController
                 _repathCooldown[i]--;
             }
 
+            // Walkmesh guard, source side (docs/research/walkmesh-guard.md §3): a joiner's
+            // phantom crashed on danm14aa shortly after arriving there because the HOST's own
+            // agent republished (0,0,0) while the host's module was still loading — a raw
+            // SetPosition write does not itself fault, but the body then sat off-mesh until
+            // some later engine tick's own pathing check did. Unlike TrySpawnOne's own gate
+            // (PhantomController.Lifecycle.IsPlausiblePosition), nothing here screened
+            // remote.Position on every subsequent DRIVEN frame. The cheap sanity check only
+            // (no engine call: this runs at up to ~60 Hz per phantom, and the walkability
+            // call belongs at the low-frequency choke points below — SnapTo/MoveToLocation —
+            // that actually risk TestDirectLine). Holds the body at its last good position
+            // instead of driving it toward the poison value; health/appearance/hit-forwarding
+            // above still ran this frame.
+            if (!WalkmeshGuardRule.IsRemotePositionDriveable(remote.Position))
+            {
+                continue;
+            }
+
             Vec3 at = Odyssey.GetPosition(phantom);
             float pdx = remote.Position.X - at.X;
             float pdy = remote.Position.Y - at.Y;

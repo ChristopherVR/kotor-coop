@@ -294,6 +294,21 @@ internal static unsafe partial class Odyssey
     {
         failure = 0;
 
+        // Walkmesh guard (docs/research/walkmesh-guard.md): reject before ever queuing the
+        // action, not after the engine's own pathing faults on it. `walkto 187 100` in danm13
+        // is exactly this — an off-mesh endpoint that TestDirectLine's own triangle walk does
+        // not survive (CSWRoomSurfaceMesh::GetTriangleAdjacency, unchecked -1 index). A mover
+        // that does not even resolve gets MoveRejectReason.NoArea from the guard itself (fail
+        // closed rather than dispatch unguarded), so this always runs before failure codes
+        // 1/2/4/5/6/9 below get a chance to mean something else.
+        nint mover = ResolveServerObject(creatureObjectId);
+        if (!TryValidateMoveDestination(mover, destination, out MoveRejectReason rejectReason))
+        {
+            LogMoveRefusalOnce(mover, creatureObjectId, destination, rejectReason);
+            failure = rejectReason == MoveRejectReason.NotWalkable ? 8 : 7;
+            return false;
+        }
+
         nint implementer = GetImplementer(out nint vm, out nint internalVm);
         if (implementer == 0)
         {

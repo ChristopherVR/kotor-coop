@@ -197,6 +197,7 @@ internal static unsafe partial class PluginHost
         _cheats?.Invalidate();
         PhantomHitHook.Invalidate();
         AnimationHook.InvalidateCreatureTable();
+        Odyssey.InvalidateMoveGuardLog();
         _doors?.Invalidate();
         _placeables?.Invalidate();
         _localVars?.Invalidate();

@@ -262,10 +262,12 @@ internal sealed unsafe partial class CheatController
     /// the teleport. Moving somebody ELSE's character would mean writing a position their own
     /// instance overwrites on its next tick.
     ///
-    /// ⚠ NEEDS-LIVE: nothing here consults the walkmesh. The staged form the agent produces
-    /// (<c>goto &lt;player&gt;</c>) lands on a point a peer is standing on, which is on the
-    /// mesh by construction; hand-typed coordinates are the player's own risk and the answer
-    /// says so.
+    /// Walkmesh-guarded (docs/research/walkmesh-guard.md): <see cref="Odyssey.SnapTo"/> now
+    /// validates the destination itself (NaN/inf, the area-origin sentinel, and the engine's
+    /// own <c>CSWSArea::PositionWalkable</c>) before ever writing it, so the staged form
+    /// (<c>goto &lt;player&gt;</c>, always on a point a peer is standing on) still lands, and
+    /// a hand-typed off-mesh coordinate is refused with a clear reason instead of being
+    /// written and left to fault some later engine tick.
     /// </summary>
     private void Teleport(nint player)
     {
@@ -278,7 +280,11 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
-        Odyssey.SnapTo(player, destination);
+        if (!Odyssey.SnapTo(player, destination))
+        {
+            Answer(SharedBlock.CheatStatusRefused, "the teleport was refused (not on the walkmesh)");
+            return;
+        }
 
         Vec3 landed = Odyssey.GetPosition(player);
         Answer(
@@ -293,6 +299,14 @@ internal sealed unsafe partial class CheatController
     /// crossing. No retry/watch machinery unlike <see cref="UseDoor"/>'s walk — this is a
     /// one-shot instrument for an unattended live pass, which can just reissue the command if
     /// the VM was mid-call (failure 4).
+    ///
+    /// Walkmesh-guarded (docs/research/walkmesh-guard.md): <see cref="Odyssey.MoveToLocation"/>
+    /// now rejects an off-mesh destination itself (failure 7 = not a plausible/non-origin
+    /// point, failure 8 = the engine's own <c>CSWSArea::PositionWalkable</c> said no) BEFORE
+    /// ever queuing <c>ActionMoveToLocation</c> — this is the exact live crash
+    /// (`walkto 187 100` in danm13, <c>CSWSArea::TestDirectLine</c> ->
+    /// <c>CSWRoomSurfaceMesh::GetTriangleAdjacency</c>'s unchecked -1 index) that motivated
+    /// the guard.
     /// </summary>
     private void WalkTo(uint playerId)
     {
@@ -305,11 +319,18 @@ internal sealed unsafe partial class CheatController
         }
 
         bool accepted = Odyssey.MoveToLocation(playerId, destination, run: true, out int failure);
+        string refusalReason = failure switch
+        {
+            7 => "not walkable here (destination is not a finite in-world point)",
+            8 => "not walkable here (off the walkmesh)",
+            _ => $"the walk was refused (failure {failure})",
+        };
+
         Answer(
             accepted ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
             accepted
                 ? $"walking to {destination.X:F1},{destination.Y:F1}"
-                : $"the walk was refused (failure {failure})");
+                : refusalReason);
     }
 
     /// <summary>
