@@ -36,6 +36,10 @@ public sealed class AgentDashboard(
     /// real OS caret after <see cref="FlushFrame"/> repaints the screen.</summary>
     private int _promptFrameRow = -1;
 
+    /// <summary>Row in the frame where the input area starts, or -1 when there is none.
+    /// FlushFrame keeps the rows from here on pinned to the bottom of the window.</summary>
+    private int _inputAreaStartRow = -1;
+
     /// <summary>How many of the last replies/chat/event lines (from <see cref="Note"/>) and
     /// echoed commands are kept above the prompt.</summary>
     private const int ScrollbackCapacity = 8;
@@ -751,6 +755,7 @@ public sealed class AgentDashboard(
     private void RenderInputArea()
     {
         _promptFrameRow = -1;
+        _inputAreaStartRow = _frame.Count;
         WriteLine(string.Empty);
 
         if (!_showInputLine)
@@ -902,6 +907,26 @@ public sealed class AgentDashboard(
     {
         int height = Math.Max(Console.WindowHeight - 1, 1);
         int width = Math.Max(Console.WindowWidth - 1, 1);
+
+        // Keep the command line visible: the readout is often taller than the window (live
+        // 2026-09-25, a 30-row window hid the prompt entirely). When it does not fit, cut
+        // the readout, never the input area, and move the prompt row up to match.
+        int inputStart = _inputAreaStartRow;
+        _inputAreaStartRow = -1;
+        if (_frame.Count > height && inputStart >= 0 && inputStart < _frame.Count)
+        {
+            int inputRows = _frame.Count - inputStart;
+            int keep = Math.Max(height - inputRows, 0);
+            if (keep < inputStart)
+            {
+                int removed = inputStart - keep;
+                _frame.RemoveRange(keep, removed);
+                if (_promptFrameRow >= 0)
+                {
+                    _promptFrameRow -= removed;
+                }
+            }
+        }
 
         Console.SetCursorPosition(0, 0);
 

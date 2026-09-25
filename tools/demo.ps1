@@ -325,7 +325,9 @@ function Start-AgentConsole {
     # -NoExit so a crashed or exited agent leaves its last words on screen instead of the
     # window vanishing with the evidence in it. The pid is recorded so -Stop can close the
     # window too — otherwise every run leaves another pair of dead terminals behind.
-    $console = Start-Process -FilePath 'pwsh' -ArgumentList '-NoExit', '-Command', $command -PassThru
+    # -Isolated: start minimised so the rig never puts a window in front of the user.
+    $style = $Isolated ? 'Minimized' : 'Normal'
+    $console = Start-Process -FilePath 'pwsh' -ArgumentList '-NoExit', '-Command', $command -WindowStyle $style -PassThru
     Add-Content -Path (Join-Path $WorkDir 'consoles.txt') -Value $console.Id
 }
 

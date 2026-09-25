@@ -329,17 +329,22 @@ $drop2 = Join-Path $WorkDir 'drop2.txt'
 $drop3 = Join-Path $WorkDir 'drop3.txt'
 Remove-Item $drop1, $drop2, $drop3 -ErrorAction SilentlyContinue
 
+# -Isolated: the redirected agents have no readout to watch, so keep their windows hidden.
+$agentWindowStyle = $Isolated ? 'Hidden' : 'Normal'
+
 Start-Process -FilePath $agent -ArgumentList `
     'run', '--pid', $pid1, '--kotor', '--host', '--port', $Port, '--name', $Name1, '--drop-file', $drop1 `
     -RedirectStandardOutput (Join-Path $WorkDir 'agent1.log') `
-    -RedirectStandardError  (Join-Path $WorkDir 'agent1.err')
+    -RedirectStandardError  (Join-Path $WorkDir 'agent1.err') `
+    -WindowStyle $agentWindowStyle
 
 Start-Sleep -Seconds 4
 
 Start-Process -FilePath $agent -ArgumentList `
     'run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2 `
     -RedirectStandardOutput (Join-Path $WorkDir 'agent2.log') `
-    -RedirectStandardError  (Join-Path $WorkDir 'agent2.err')
+    -RedirectStandardError  (Join-Path $WorkDir 'agent2.err') `
+    -WindowStyle $agentWindowStyle
 
 # Stagger the two joins rather than racing them. The host assigns peer ids under a lock so a
 # simultaneous join is safe, but a staggered one makes the logs readable - and the whole
@@ -349,7 +354,8 @@ Start-Sleep -Seconds 6
 Start-Process -FilePath $agent -ArgumentList `
     'run', '--pid', $pid3, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name3, '--drop-file', $drop3 `
     -RedirectStandardOutput (Join-Path $WorkDir 'agent3.log') `
-    -RedirectStandardError  (Join-Path $WorkDir 'agent3.err')
+    -RedirectStandardError  (Join-Path $WorkDir 'agent3.err') `
+    -WindowStyle $agentWindowStyle
 
 Start-Sleep -Seconds 10
 
