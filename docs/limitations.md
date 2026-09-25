@@ -44,7 +44,7 @@ conversation at a time, one person drives the galaxy map).
 | Disconnecting and reconnecting without loading a save | **Works, with a catch** | Usually you just reconnect and you're back in the shared world. There is a known bug where the mod occasionally mistakes the reconnect for a different save and turns off shared-world syncing; a fix is in progress. If that happens, load your game once (yours or the host's) and reconnect. |
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
 | The host's game crashes or drops off | **Works** | Within about six seconds you are released to keep playing solo, and the mod reconnects automatically when the host comes back. |
-| Three or more players | **Works** | Up to eight, same rules. Long sessions with three players walking through many doors have not been stress-tested. |
+| Three or more players | **Works** | Up to eight, same rules. Three players walking through many doors was stress-tested on 2026-09-17: twelve area changes in about half an hour, and every single time all three arrived in the same place and could see each other properly. Nothing crashed. |
 | Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it turned off because of it. A very different save asks you to rejoin. An item that has the same name but was changed by a mod on one side only is not detected. |
 | Wrong version of the mod on one side | **Works** | Refused in about a second with a clear message, instead of a silent timeout. |
 
@@ -198,10 +198,11 @@ A few things look like bugs and aren't:
 
 Built and automatically tested, but nobody has watched them on the running game yet:
 
-- Internet play through a real home router's own automatic port-opening (UPnP): tried once on
-  2026-09-10 and it did not work (see the internet row above). Tunnel-based internet play
-  (e.g. playit.gg) has been watched working end-to-end, which is a different path. The
-  reachability self-check and the status wording it drives (2026-09-18) are unit-tested but
+- A player on a *different* internet connection joining through the automatic port-opening. The
+  router half was checked on 2026-09-17 (a real home router was asked to open the port, agreed, and
+  confirmed afterwards that it had); nobody has yet come in from outside through it. Tunnel-based
+  internet play (e.g. playit.gg) has been watched working end-to-end, which is a different path.
+  The reachability self-check and the status wording it drives (2026-09-18) are unit-tested but
   have not yet been watched against a real router.
 - The Windows Firewall rule the installer adds (2026-09-18) has not yet been watched making the
   difference on a real second PC.
@@ -218,6 +219,9 @@ Built and automatically tested, but nobody has watched them on the running game 
   hop have narrower live evidence; this does not establish a complete story path. Missing
   implementation and live checks are separated in the current table at the end of
   [review-seamless-2026-09-18.md](review-seamless-2026-09-18.md).
+- A physical gamepad. The controller support was verified with a simulated one. On 2026-09-17 the
+  mod was confirmed to find Windows' controller support on a real PC and to correctly report "no
+  pad" for two Xbox pads that were paired but switched off — nobody was there to switch one on.
 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.
 
