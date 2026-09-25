@@ -991,6 +991,19 @@ public enum CoopCommandKind
     /// order. Local only.
     /// </summary>
     ShowGuiEquip,
+
+    /// <summary>
+    /// <c>input click &lt;x&gt; &lt;y&gt; [left|right]</c> / <c>input move &lt;x&gt; &lt;y&gt;</c>
+    /// / <c>input key &lt;dik&gt; [down|up|tap]</c> — the isolated rig's synthetic mouse and
+    /// keyboard (docs/research/isolated-rig.md): the argument string crosses in
+    /// <see cref="CoopCommand.Address"/>, same shape as <see cref="Gamepad"/>, and is
+    /// interpreted by the plugin's <c>InputInjectionController.HandleConsole</c>. Mouse rides
+    /// the same <c>PostMessage</c> window-message path <c>GamepadController</c> already uses
+    /// for its cursor, minus the <c>SetCursorPos</c> call, so the user's real pointer never
+    /// moves; keys go in through the existing <c>DirectInputKeyboardHook</c> buffered-event
+    /// queue. Works with no world loaded, same as <see cref="Gamepad"/>. Local only.
+    /// </summary>
+    Input,
 }
 
 /// <summary>
@@ -1218,6 +1231,7 @@ public static partial class ConsoleCommand
         new(["galaxymap"], ParseGalaxyMap),
         new(["galaxyaccept"], ParseGalaxyAccept),
         new(["gamepad"], ParseGamepad),
+        new(["input"], ParseInput),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),
         new(["mgkill"], ParseMgKill),

@@ -760,6 +760,15 @@ public static class CheatKinds
     public const uint ShowGuiEquip = 99;
 
     /// <summary>
+    /// <c>input click &lt;x&gt; &lt;y&gt; [left|right]</c> / <c>input move &lt;x&gt; &lt;y&gt;</c>
+    /// / <c>input key &lt;dik&gt; [down|up|tap]</c> — synthetic mouse/keyboard for the isolated
+    /// rig (docs/research/isolated-rig.md): no OS-level SendInput, no real cursor movement.
+    /// Handled before the plugin's "no player loaded" gate, same as <see cref="Gamepad"/>, so
+    /// it can click the main menu. See <c>SharedBlock.CheatKindInput</c>.
+    /// </summary>
+    public const uint Input = 103;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

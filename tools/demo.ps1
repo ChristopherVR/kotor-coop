@@ -31,12 +31,36 @@ param(
     # truncation for a liveness-reconciliation live test (docs/research/creature-liveness.md).
     # Empty by default: no effect on the ordinary demo.
     [string[]]$Agent1ExtraArgs = @(),
-    [string[]]$Agent2ExtraArgs = @()
+    [string[]]$Agent2ExtraArgs = @(),
+    # Keeps both windows off the user's visible desktop and never activates them (no
+    # SetForegroundWindow, no SW_RESTORE) for the "play while the rig runs" workflow
+    # (docs/research/isolated-rig.md). Positions the pair at ($MonitorX,$MonitorY) and
+    # ($MonitorX+830,$MonitorY) instead of (0,0)/(830,0), and un-minimises with
+    # SW_SHOWNOACTIVATE instead of SW_RESTORE. tools\shot.ps1's PrintWindow path and
+    # tools\click.ps1/blockpoke's `input` verb both work regardless of position or
+    # occlusion, so screenshots and control still work; see the doc for the one remaining
+    # gap (the automated menu-load step still focuses the window briefly).
+    [switch]$Isolated,
+    # Where "off the user's view" means: default is 6000px right of the origin, well past
+    # any normal multi-monitor span (GetSystemMetrics(SM_CXVIRTUALSCREEN) on this rig's own
+    # desk is 4480px). Point this at a real monitor's origin instead (e.g. a second GPU
+    # output nobody looks at, or a virtual/indirect display driver's origin once one is
+    # installed) to have DWM compose the windows somewhere concretely off-screen rather than
+    # merely past the edge of the virtual desktop.
+    [int]$MonitorX = 6000,
+    [int]$MonitorY = 0
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe'
+
+# The two placements below (main-menu client parked at instance-2's slot, and the final
+# side-by-side layout) share this pair so -Isolated only has to be decided once.
+$pos1X = $Isolated ? $MonitorX : 0
+$pos1Y = $Isolated ? $MonitorY : 0
+$pos2X = $Isolated ? ($MonitorX + 830) : 830
+$pos2Y = $Isolated ? $MonitorY : 0
 
 # Defined ABOVE the -Stop block because -Stop restores the flag on the way out. (A
 # PowerShell function does not exist until its definition line has executed.)
@@ -198,7 +222,7 @@ if (-not $SkipLaunch) {
         # a character to carry, which is precisely the case join_mode = newcharacter does not
         # cover. It sits at the main menu until New Game and character creation are driven.
         "instance 2 left at the main menu (join_mode = $clientJoinMode): no save loaded"
-        & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X 830 -Y 0
+        & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X $pos2X -Y $pos2Y
         $global:LASTEXITCODE = 0
     }
     else {
@@ -215,14 +239,14 @@ if (-not $SkipLaunch) {
             Write-Warning "instance 2 auto-load failed; activation-cycling the window (retry $attempt/4)"
             & $movewin -ProcId $second.Id -Minimize
             Start-Sleep -Seconds 2
-            & $movewin -ProcId $second.Id -Restore
+            & $movewin -ProcId $second.Id -Restore -NoActivate:$Isolated
             Start-Sleep -Seconds 3
             & $agent load --pid $second.Id --load-save $Save
         }
     }
 
     if ($LASTEXITCODE -ne 0) {
-        & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X 830 -Y 0
+        & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $second.Id -X $pos2X -Y $pos2Y
         if ([Console]::IsInputRedirected) {
             # Non-interactive run (trap 24: Read-Host would die, not wait). Leave the
             # menu up and keep going; the agent attaches once a save is loaded by
@@ -244,10 +268,17 @@ $pid1 = $procs[0].Id
 $pid2 = $procs[1].Id
 
 # Side by side, so one screenshot shows both players. Safe now that both are loaded.
-& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid1 -Restore
+# -Isolated: un-minimise WITHOUT activating, and land both off the user's visible desktop
+# instead of at the screen origin.
+& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid1 -Restore -NoActivate:$Isolated
 Start-Sleep -Milliseconds 500
-& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid1 -X 0 -Y 0
-& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid2 -X 830 -Y 0
+& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid1 -X $pos1X -Y $pos1Y
+& (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $pid2 -X $pos2X -Y $pos2Y
+
+if ($Isolated) {
+    "isolated: both windows placed at x=$pos1X.. (never activated; tools\shot.ps1 and " +
+        "tools\click.ps1/blockpoke's 'input' verb both work regardless of position or occlusion)"
+}
 
 ''
 "instance 1: pid $pid1   instance 2: pid $pid2"

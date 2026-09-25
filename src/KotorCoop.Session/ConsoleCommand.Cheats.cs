@@ -388,6 +388,18 @@ public static partial class ConsoleCommand
     /// <summary>Mirrors the plugin's <c>SharedBlock.CheatTextLength</c> (32) less the null.</summary>
     public const int GamepadTextMaxLength = 31;
 
+    // input click <x> <y> [left|right] | input move <x> <y> | input key <dik> [down|up|tap] -
+    // see CoopCommandKind.Input. Same shape as ParseGamepad above: the plugin's
+    // InputInjectionController.HandleConsole owns the subcommand grammar, this just carries
+    // the text across the same 31-byte cheat-text slot.
+    private static CoopCommand ParseInput(string[] rest)
+    {
+        string text = rest.Length == 0 ? "status" : string.Join(' ', rest);
+        return text.Length > GamepadTextMaxLength
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: $"input: arguments too long (max {GamepadTextMaxLength} characters)")
+            : new CoopCommand(CoopCommandKind.Input, Address: text);
+    }
+
     // galaxyaccept  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GalaxyAccept. A TOP-LEVEL verb,
     // deliberately not a `galaxymap` subcommand: it drives HandleInputEvent directly (the same
     // shape skipkey uses), not GalaxyMapVerbRule's ShowGalaxyMapGui/HideGalaxyMapGui/

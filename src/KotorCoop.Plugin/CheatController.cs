@@ -109,6 +109,15 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             return;
         }
 
+        // Same reasoning as Gamepad above: the isolated rig needs to click the main menu
+        // (Connect, Load, New Game) before any world exists, so this cannot wait for the
+        // player-loaded gate below.
+        if (kind == SharedBlock.CheatKindInput)
+        {
+            Answer(SharedBlock.CheatStatusApplied, PluginHost.OnInputConsole(ReadCheatText()));
+            return;
+        }
+
         nint player = Odyssey.GetPlayerCreaturePointer();
         uint playerId = Odyssey.GetPlayerObjectId();
 

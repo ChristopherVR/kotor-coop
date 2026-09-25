@@ -1500,4 +1500,19 @@ internal partial struct SharedBlock
     /// See <c>IGameBridge.CheatKinds.JediChoice</c>.
     /// </summary>
     public const uint CheatKindJediChoice = 102;
+
+    /// <summary>
+    /// <c>input click &lt;x&gt; &lt;y&gt; [left|right]</c> / <c>input move &lt;x&gt; &lt;y&gt;</c>
+    /// / <c>input key &lt;dik&gt; [down|up|tap]</c> — synthetic mouse/keyboard for the isolated
+    /// rig (docs/research/isolated-rig.md), so a test session never has to move the user's real
+    /// cursor or steal keyboard focus. Mouse goes in as the same <c>PostMessage</c> window
+    /// messages <see cref="GamepadController"/> already posts for its cursor (Recipe A,
+    /// docs/research/mouse-cursor-input.md §6) with NO <c>SetCursorPos</c> call; keys go in
+    /// through <see cref="DirectInputKeyboardHook"/>'s existing buffered-event queue, the same
+    /// one the gamepad layer feeds. <see cref="OffsetCheatText"/> carries the whole argument
+    /// string; the reply is the plugin's answer, same shape as <see cref="CheatKindGamepad"/>.
+    /// Needs no world — see <c>InputInjectionController</c>. See
+    /// <c>IGameBridge.CheatKinds.Input</c>.
+    /// </summary>
+    public const uint CheatKindInput = 103;
 }
