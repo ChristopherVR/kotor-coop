@@ -899,3 +899,23 @@ the most:
    for that side's own colour to come out right; the setting name and doc say so, but a rig
    session should confirm the console/log output makes this obvious enough that a live tester
    does not spend time toggling it on the wrong machine.
+
+### 10.8 Live result (2026-09-25)
+
+Rig with the full page heap on. On this rig every character already carried an empty (level-0)
+Guardian slot from earlier tests, so the slot was hidden first by setting the class count
+(`stats+0x89`) back to 1 on both players.
+* **Host takes a class, the joiner is prompted (PASS).** Host `addclass 3` runs the engine's
+  own AddMultiClass handler, the same call Dorak's `k_pdan_makejedi` makes. The host logged
+  `a script added class 3 ... published as grant #1`. The joiner logged
+  `jedi-choice: request #1 - showing the class-choice prompt (k_coop_jediclass)`, and its screen
+  showed "The Force is strong in you. Choose the training you will pursue." with the three paths:
+  the self-talk conversation opens fine. The joiner picked Sentinel (`selectreply 2`) and logged
+  `the local player chose class 5 at the prompt`. Result: host Guardian (3), joiner Sentinel (5).
+  The joiner's pick was re-announced, and the host answered `already has a Jedi class; nothing to
+  prompt`.
+* **Joiner first, host prompted (PASS).** Joiner `addclass 4`; the host got the prompt and chose
+  Guardian. Result: joiner Consular (4), host Guardian (3). The joiner's log shows no dialogue
+  mirroring of the popup.
+* **Existing Jedi never re-prompted (PASS).** `jedichoice` on a character that already has a Jedi
+  class logs `already has a Jedi class (2:[0,3]); nothing to prompt`.
