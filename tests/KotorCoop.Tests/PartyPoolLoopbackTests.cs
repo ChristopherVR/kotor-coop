@@ -264,7 +264,17 @@ public class PartyPoolLoopbackTests
             Agent = new CoopAgent(
                 Bridge,
                 session,
-                new AgentSettings { HeavyPumpIntervalMs = heavyPumpIntervalMs, PartyPoolSyncEnabled = true, PartyPoolSyncMode = 1 });
+                new AgentSettings
+                {
+                    HeavyPumpIntervalMs = heavyPumpIntervalMs,
+                    PartyPoolSyncEnabled = true,
+                    PartyPoolSyncMode = 1,
+                    // This suite exercises the shared mirror channel with ordinary resrefs;
+                    // inventory_mode's personal default would hide them from the wire (same
+                    // pin as SharedInventoryV2LoopbackTests).
+                    InventoryPersonal = false,
+                    CreditsPersonal = false,
+                });
             _autoDrain = autoDrain;
 
             _task = Task.Run(() => RunAsync(_cts.Token));
