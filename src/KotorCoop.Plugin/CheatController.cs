@@ -118,6 +118,15 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             return;
         }
 
+        // Also needs no world: the rig wants a screenshot of the main menu itself (e.g. to
+        // confirm an `input click` landed), and this runs from inside the SwapBuffers frame
+        // hook regardless of whether a module is loaded - see ScreenshotController.
+        if (kind == SharedBlock.CheatKindScreenshot)
+        {
+            Answer(SharedBlock.CheatStatusApplied, PluginHost.OnScreenshotConsole(ReadCheatText()));
+            return;
+        }
+
         nint player = Odyssey.GetPlayerCreaturePointer();
         uint playerId = Odyssey.GetPlayerObjectId();
 

@@ -1,29 +1,54 @@
-# Screenshots one game window's OWN CONTENT — regardless of what else is on top of it, and
-# regardless of where on (or off) the desktop it sits. docs/research/isolated-rig.md.
+# Screenshots one game window's OWN CONTENT — regardless of what else is on top of it,
+# regardless of where on (or off) the desktop it sits, and regardless of whether it is even
+# composited at all. docs/research/isolated-rig.md.
 #
-# Primary path: PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT) asks DWM directly for that
-# window's composed surface. Unlike a screen-rectangle grab (CopyFromScreen at the window's
-# position, what this script used to do exclusively) it is correct under occlusion and at an
-# off-screen position, because it never reads the desktop at all — only unlike a raw
-# GetDC(hwnd)+BitBlt (what made older per-window captures in this repo "come back black" for a
-# D3D/OpenGL window, see tools/siteclip.ps1's header) it asks DWM for the ALREADY-COMPOSITED
-# frame instead of the window's own device context, which is what makes it work for KOTOR's
-# swapchain at all. Needs DWM composition (on by default since Windows 8) and the window to be
-# NOT MINIMIZED; an exclusive-fullscreen swapchain bypasses DWM entirely and this will not see
-# it either — run KOTOR windowed (the rig already does).
+# Primary path (default, since 2026-09-25): the plugin's own `screenshot` console verb
+# (ScreenshotController, via blockpoke.ps1's `console` verb — the same mechanism click.ps1's
+# default `input` path already uses). The plugin reads pixels straight out of the GL context
+# from inside the hooked GDI32!SwapBuffers frame callback and writes a BMP to
+# <gamedir>\kotorcoop-shots\<name>.bmp; this script polls for that file and converts it to
+# -OutPath. Needs the out-of-process agent attached to the game instance (same requirement
+# every other `blockpoke console ...` verb has) — same precondition -PrintWindow/
+# -ForceScreenCapture do NOT have, which is why this script still falls back to them
+# automatically if the plugin path fails for any reason (agent not attached, no reply, no file).
 #
-# Fallback (used automatically if PrintWindow fails, or returns a suspiciously flat image — the
-# old symptom): the original screen-rectangle CopyFromScreen, which needs the window on-screen,
-# unoccluded and briefly brought to the foreground (it un-minimizes and raises the window, same
-# as before). Same parameters as before; nothing about the caller-visible contract changed.
+# Why not PrintWindow anymore: measured live 2026-09-25 that PrintWindow(hwnd, hdc,
+# PW_RENDERFULLCONTENT) is UNRELIABLE for this game. A KOTOR window fully visible on screen and
+# unoccluded (a plain CopyFromScreen of it had 294/300 lit sample points — genuinely on
+# screen and rendering) captured solid BLACK via PrintWindow on the very same pass; it had
+# worked in an earlier pass against the same kind of window. DWM evidently does not always have
+# a composed surface to hand back for this game's OpenGL swapchain, even when the window is
+# demonstrably visible — so PrintWindow is no longer trustworthy enough to be the default,
+# though it is kept available via -PrintWindow (see below) since it needs no session/agent at
+# all and is still occasionally the more convenient check.
+#
+# -PrintWindow: the old default chain — PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT) first
+# (asks DWM directly for the window's composed surface; correct under occlusion and at an
+# off-screen position when it works at all, wrong roughly as often as right per the finding
+# above), falling back automatically to the screen-rectangle grab below if it fails or returns a
+# suspiciously flat image. Needs DWM composition (on by default since Windows 8) and the window
+# to be NOT MINIMIZED; an exclusive-fullscreen swapchain bypasses DWM entirely and this will not
+# see it either.
+#
+# -ForceScreenCapture: the original screen-rectangle CopyFromScreen, which needs the window
+# on-screen, unoccluded and briefly brought to the foreground (it un-minimizes and raises the
+# window). The last-resort fallback every other path already falls back to.
+#
+# Same -OutPath/-ProcessName/-ProcId/-FullScreen contract as before regardless of method.
 param(
     [string]$OutPath,
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
     [switch]$FullScreen,
+    # Force the old PrintWindow-first chain (skips the plugin path entirely).
+    [switch]$PrintWindow,
     # Skip straight to the screen-rectangle fallback (for comparison, or a machine with DWM
-    # composition disabled).
-    [switch]$ForceScreenCapture
+    # composition disabled). Also skips the plugin path.
+    [switch]$ForceScreenCapture,
+    # Plugin path only: read GL_FRONT (whatever the last swap already presented) instead of the
+    # default GL_BACK (this frame's just-rendered, not-yet-presented image). Try this if the
+    # default comes back black — see docs/research/isolated-rig.md.
+    [switch]$Front
 )
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -51,6 +76,58 @@ public class WinApi {
 $proc = if ($ProcId -ne 0) { Get-Process -Id $ProcId -ErrorAction SilentlyContinue }
         else { Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Select-Object -First 1 }
 if (-not $proc) { Write-Error "target process not running"; exit 1 }
+
+# Plugin path: drives ScreenshotController through blockpoke.ps1's `console` verb (the same
+# mechanism click.ps1's default `input` path already uses), then polls for the BMP it writes.
+# Returns $null (nothing usable at all) or an object with .Path ($null on failure) and .Detail
+# (the console reply / the reason it gave up), so the caller can log exactly why it is falling
+# back rather than just silently trying the next method.
+function Get-PluginScreenshot {
+    param([System.Diagnostics.Process]$Proc, [switch]$UseFront)
+
+    $gameDir = $null
+    try { $gameDir = Split-Path -Parent $Proc.Path } catch {}
+    if (-not $gameDir) {
+        try { $gameDir = Split-Path -Parent $Proc.MainModule.FileName } catch {}
+    }
+    if (-not $gameDir) {
+        try {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($Proc.Id)" -ErrorAction Stop
+            if ($cim -and $cim.ExecutablePath) { $gameDir = Split-Path -Parent $cim.ExecutablePath }
+        } catch {}
+    }
+    if (-not $gameDir) {
+        return [pscustomobject]@{ Path = $null; Detail = 'could not determine the game directory from the process' }
+    }
+
+    # Alnum only, well under ScreenshotController's 24-character cap - a plain timestamp is
+    # unique enough for one script invocation and never collides across processes.
+    $name = 'shot' + (Get-Date -Format 'HHmmssfff')
+    $verb = if ($UseFront) { "screenshot $name front" } else { "screenshot $name" }
+
+    $blockpoke = Join-Path $PSScriptRoot 'blockpoke.ps1'
+    $reply = (& $blockpoke -ProcId $Proc.Id console $verb 2>&1 | Out-String).Trim()
+
+    if ($reply -match 'NO REPLY') {
+        return [pscustomobject]@{ Path = $null; Detail = "console verb got no reply - is the out-of-process agent attached to this instance? ($reply)" }
+    }
+
+    $bmpPath = Join-Path (Join-Path $gameDir 'kotorcoop-shots') "$name.bmp"
+    $deadline = (Get-Date).AddSeconds(8)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $bmpPath)) {
+        Start-Sleep -Milliseconds 150
+    }
+
+    if (-not (Test-Path -LiteralPath $bmpPath)) {
+        return [pscustomobject]@{ Path = $null; Detail = "'$bmpPath' never appeared within 8s ($reply)" }
+    }
+
+    # The plugin's FileStream has already closed by the time the file is visible at all (it
+    # writes then disposes synchronously on the render thread before answering the cheat), but
+    # give the filesystem a moment before this process opens it too.
+    Start-Sleep -Milliseconds 100
+    return [pscustomobject]@{ Path = $bmpPath; Detail = $reply }
+}
 
 $hwnd = $proc.MainWindowHandle
 if ($hwnd -eq [IntPtr]::Zero) { Write-Error 'no main window handle'; exit 1 }
@@ -119,8 +196,29 @@ function Test-LooksBlank {
 $method = $null
 $bmp = $null
 $x = 0; $y = 0; $w = 0; $h = 0
+$pluginBmpPath = $null
 
-if (-not $ForceScreenCapture) {
+if (-not $PrintWindow -and -not $ForceScreenCapture) {
+    $plugin = Get-PluginScreenshot -Proc $proc -UseFront:$Front
+    if ($null -ne $plugin -and $plugin.Path) {
+        try {
+            $bmp = New-Object System.Drawing.Bitmap $plugin.Path
+            $pluginBmpPath = $plugin.Path
+            $method = "plugin GL readback ($(if ($Front) { 'front' } else { 'back' }) buffer, kotorcoop-shots\$([System.IO.Path]::GetFileName($plugin.Path)))"
+            $w = $bmp.Width; $h = $bmp.Height; $x = 0; $y = 0
+        }
+        catch {
+            Write-Warning "plugin screenshot file '$($plugin.Path)' could not be opened: $_"
+            $bmp = $null
+        }
+    }
+    else {
+        $detail = if ($null -ne $plugin) { $plugin.Detail } else { 'unknown failure' }
+        Write-Warning "plugin screenshot unavailable ($detail) - falling back to PrintWindow"
+    }
+}
+
+if ($null -eq $bmp -and -not $ForceScreenCapture) {
     $full = Get-PrintWindowCapture -Hwnd $hwnd -W $winW -H $winH
     if ($null -ne $full -and -not (Test-LooksBlank $full)) {
         $method = 'PrintWindow (DWM composed; occlusion/position-independent)'
@@ -180,4 +278,8 @@ if ($null -eq $bmp) {
 $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 
-"captured ${w}x${h} at ($x,$y) via $method -> $OutPath"
+if ($pluginBmpPath) {
+    "captured ${w}x${h} via $method -> $OutPath (raw BMP left at $pluginBmpPath)"
+} else {
+    "captured ${w}x${h} at ($x,$y) via $method -> $OutPath"
+}

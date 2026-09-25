@@ -772,6 +772,15 @@ public static class CheatKinds
     public const uint Stealth = 104;
 
     /// <summary>
+    /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side GL
+    /// screenshot for the isolated rig (docs/research/isolated-rig.md): PrintWindow is
+    /// unreliable against this game's OpenGL surface. Handled before the plugin's "no player
+    /// loaded" gate, same as <see cref="Gamepad"/>/<see cref="Input"/>. See
+    /// <c>SharedBlock.CheatKindScreenshot</c>.
+    /// </summary>
+    public const uint Screenshot = 105;
+
+    /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it
     /// is also the engine's own verified player object id (docs/re/object-model.md), so it

@@ -795,6 +795,26 @@ internal static unsafe partial class PluginHost
         }
     }
 
+    /// <summary>The `screenshot` console verb, from CheatController (main thread, the cheat
+    /// drain) - which is itself called from inside the hooked GDI32!SwapBuffers frame callback,
+    /// BEFORE the real swap runs, so this is already at the right point in the frame to read
+    /// the just-rendered back buffer. Unlike <see cref="OnGamepadConsole"/> this needs no
+    /// per-instance state, so it calls straight into the static
+    /// <see cref="ScreenshotController"/>.</summary>
+    public static string OnScreenshotConsole(string arguments)
+    {
+        try
+        {
+            return ScreenshotController.HandleConsole(arguments);
+        }
+        catch (Exception ex)
+        {
+            string failed = $"screenshot: console verb failed: {ex.Message}";
+            Log(failed);
+            return failed;
+        }
+    }
+
     public static void Log(string message)
     {
         try

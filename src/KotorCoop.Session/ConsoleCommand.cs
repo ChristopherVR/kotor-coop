@@ -1008,6 +1008,23 @@ public enum CoopCommandKind
     /// <summary><c>stealth on|off</c> - the local player's engine stealth mode (a live-test
     /// primitive for stealth targeting and <c>stealth_visual_sync</c>). Local only.</summary>
     Stealth,
+
+    /// <summary>
+    /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — a plugin-side
+    /// screenshot for the isolated rig (docs/research/isolated-rig.md), because
+    /// <c>PrintWindow</c> is unreliable against this game's OpenGL surface (measured live
+    /// 2026-09-25: a fully on-screen, unoccluded window captured solid black). The argument
+    /// string crosses in <see cref="CoopCommand.Address"/>, same shape as
+    /// <see cref="Gamepad"/>/<see cref="Input"/>, and is interpreted by the plugin's
+    /// <c>ScreenshotController.HandleConsole</c>: <c>glReadPixels</c> from inside the hooked
+    /// <c>GDI32!SwapBuffers</c> frame callback, written as a 24-bit BMP to
+    /// <c>&lt;gamedir&gt;\kotorcoop-shots\&lt;name&gt;.bmp</c>. Default reads <c>GL_BACK</c>
+    /// (this frame's just-rendered, not-yet-presented image); <c>front</c> reads
+    /// <c>GL_FRONT</c> (whatever the previous swap already presented — the currently displayed
+    /// frame) for the case the back-buffer read comes out black. Works with no world loaded,
+    /// same as <see cref="Gamepad"/>/<see cref="Input"/>. Local only.
+    /// </summary>
+    Screenshot,
 }
 
 /// <summary>
@@ -1237,6 +1254,7 @@ public static partial class ConsoleCommand
         new(["gamepad"], ParseGamepad),
         new(["input"], ParseInput),
         new(["stealth"], ParseStealth),
+        new(["screenshot"], ParseScreenshot),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),
         new(["mgkill"], ParseMgKill),

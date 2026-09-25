@@ -147,10 +147,102 @@ menu-click driver to the plugin's `input` verb (which already works with no worl
 at the main menu) would close this gap; it is a separate, larger change to
 `KotorCoop.Agent/GameInput.cs`'s click path, out of scope for this pass's budget.
 
+## 4. PrintWindow is unreliable for this game; the plugin now takes its own screenshots (2026-09-25)
+
+**Finding, measured live:** `tools\shot.ps1`'s `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT)`
+path (§1 above) is NOT reliable against this game. A KOTOR window fully visible on screen and
+unoccluded — a plain `CopyFromScreen` of the same window had 294/300 lit sample points, i.e.
+genuinely on screen and rendering — captured solid BLACK via `PrintWindow` on the very same
+pass. An earlier pass had seen `PrintWindow` work against a window of the same kind. DWM
+evidently does not consistently have a composed surface to hand back for this game's OpenGL
+swapchain, even when the window is demonstrably visible and on top — so `PrintWindow`'s
+correctness is intermittent, not just "needs composition" as §1 originally documented, and it
+can no longer be the default.
+
+**Fix: a plugin-side screenshot**, since the one thing guaranteed to hold the real pixels is the
+GL context itself. New console verb `screenshot <name> [front]` / `screenshot status`, plumbed
+exactly like `gamepad`/`input`/`stealth` (Session `ConsoleCommand` →
+`CoopCommandKind.Screenshot` → Agent `CoopCommandDispatcher` → `SharedBlock.CheatKindScreenshot
+= 105` / `IGameBridge.CheatKinds.Screenshot = 105` → plugin `CheatController` →
+`src/KotorCoop.Plugin/ScreenshotController.cs`):
+
+* **Hook site**: the existing `GDI32!SwapBuffers` IAT hook (`src/KotorCoop.Plugin/FrameHook.cs`,
+  IAT slot `0x0073D00C`) — the same one `ChatInputController`/`ChatOverlay`/`GamepadController`
+  already run on every frame. `CheatController.OnFrame` (which reads the console-driven cheat
+  request) runs late inside that same callback, i.e. BEFORE the real `SwapBuffers` call the
+  Detour makes at the very end — so a screenshot request lands inside the SAME
+  already-proven-safe frame slot every other per-frame plugin write uses, with no new hook.
+* **GL calls**: `glReadBuffer(GL_BACK` or `GL_FRONT)`, `glPixelStorei(GL_PACK_ALIGNMENT, 1)`,
+  `glReadPixels(0, 0, w, h, GL_BGR_EXT, GL_UNSIGNED_BYTE, buffer)`, `glGetError()` for
+  diagnostics, and `glGetIntegerv(GL_VIEWPORT, ...)` as a fallback for `w`/`h` if the engine's
+  own `Odyssey.ScreenWidth`/`ScreenHeight` globals (`SCREEN_WIDTH`/`SCREEN_HEIGHT`,
+  `0x0078D1D4`/`0x0078D1D8` — already used by `GamepadController`/`InputInjectionController` for
+  the same client-pixel space `tools\shot.ps1` captures) read zero. All five resolved once via
+  `GetProcAddress` on `opengl32.dll` — they are core GL 1.1 exports, no
+  `wglGetProcAddress`/extension-string dance needed. No `wglMakeCurrent`: the render thread
+  already has its GL context current at this point in the frame (it just finished drawing),
+  which is also why this must run from the frame hook and nowhere else.
+* **Two buffers, one call site, no deferred hook**: `back` (default) reads `GL_BACK` at this
+  point in THIS frame — the just-rendered, not-yet-presented image. `front` reads `GL_FRONT` at
+  the exact same point — which holds whatever the PREVIOUS frame's swap already presented, i.e.
+  the currently-displayed image, since a front buffer's contents are stable between swaps. Both
+  reads happen synchronously in the same `ScreenshotController.Capture` call; there is
+  deliberately no "read after our own hooked swap" mechanism (which would need a second,
+  unverified hook point) — `front` does not need one, because GL_FRONT is valid to read at any
+  time, not only immediately after a swap.
+* **Format**: 24-bit uncompressed BMP, written with zero dependencies (no System.Drawing, no
+  zlib) — `GL_BGR_EXT` pixel format matches a BMP's native byte order exactly, and
+  `glReadPixels`' row order (bottom row first, GL's lower-left origin) matches a
+  positive-`biHeight` BMP's row order (also bottom-up) exactly, so no row flip and no channel
+  swap are needed. ⚠ NEEDS-LIVE: confirm the image is right-side up against the real game —
+  nothing in this pass could run `swkotor.exe` (rig locked by the main session); if it comes out
+  upside down the fix is a negative `biHeight` (top-down BMP) or reversing the row-copy loop,
+  not both.
+* **Transport**: the cheat-text slot is 31 bytes (`SharedBlock.CheatTextLength` less the null) —
+  nowhere near an absolute path. So the verb takes a short NAME
+  (`ScreenshotController`'s own safety check: letters/digits/`_`/`-`, max 24 chars) and always
+  writes to a fixed, predictable location, `<gamedir>\kotorcoop-shots\<name>.bmp`.
+  `tools\shot.ps1` generates the name, polls for that file, and opens/converts it to whatever
+  `-OutPath` was actually asked for.
+* **Latching**: no per-frame re-capture — `CheatController.OnFrame`'s own existing
+  `_appliedSerial` gate (shared by every cheat kind) already ensures `Execute`/`HandleConsole`
+  runs exactly once per new console line, so no separate latch was needed for this verb
+  specifically.
+* **Needs no world**: handled at the very top of `CheatController.Execute`, before the "no
+  player loaded" gate — same as `gamepad`/`input` — so a main-menu screenshot works (useful for
+  confirming an `input click` on the main menu actually landed).
+
+**`tools\shot.ps1`** (updated): the plugin path is now the DEFAULT — `blockpoke.ps1 console
+'screenshot <name>'` (same mechanism `click.ps1`'s default `input` path already uses), then
+polls for the BMP and opens/converts it. `-PrintWindow` forces the old PrintWindow-first chain
+(§1); `-ForceScreenCapture` forces the screen-rectangle grab; the new `-Front` switch requests
+`screenshot <name> front`. The plugin path automatically falls back to `-PrintWindow`'s chain
+(and from there to `-ForceScreenCapture`) if the console verb gets no reply (agent not attached
+to this instance) or the BMP never appears within 8s — the script always reports which method
+actually produced the image. Needs the out-of-process agent attached to the target instance,
+the same precondition every other `blockpoke console ...` verb already has (`gamepad`, `input`);
+`-PrintWindow`/`-ForceScreenCapture` do not need it, which is why they remain the fallback chain
+rather than being retired.
+
+**Which method to use**: the plugin path (default) needs no window visibility, composition, or
+occlusion state at all — it is correct whether the window is on top, covered, ghosted
+(`movewin.ps1 -Ghost`), or off-screen, because it never asks the desktop compositor anything.
+`-PrintWindow` is kept for when no agent is attached (e.g. debugging the rig launch itself,
+before a session exists) but is now known-unreliable, not a fallback to trust blindly.
+`-ForceScreenCapture` still needs the window genuinely on-screen and briefly foregrounded, same
+as always. **NEEDS-LIVE**: this whole verb (both `back` and `front`), and the BMP's row
+orientation, against the real game — the rig was locked by the other session for this entire
+pass.
+
 ## User-facing summary
 
-* **Screenshots while occluded/off-screen**: works today, no setup, `tools\shot.ps1` unchanged
-  in interface.
+* **Screenshots while occluded/off-screen/ghosted**: `tools\shot.ps1`, same interface as
+  before (`-OutPath -ProcessName -ProcId -FullScreen`). Default method changed (§4,
+  2026-09-25): a plugin-side GL readback rather than `PrintWindow`, since `PrintWindow` measured
+  unreliable against this game's OpenGL surface — captured solid black once, against a window
+  measured genuinely on screen and rendering. Needs the out-of-process agent attached to the
+  target instance (same precondition `input`/`gamepad` already have); falls back to the old
+  `PrintWindow`-then-screen-capture chain automatically if not. **NEEDS-LIVE.**
 * **Clicks/keys while unfocused/off-screen**: works today (once `input`'s plumbing gets its
   first live pass), no setup — `tools\click.ps1` (default) or `blockpoke.ps1 console 'input
   ...'`.
