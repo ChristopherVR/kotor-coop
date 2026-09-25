@@ -243,6 +243,14 @@ public class SharedInventoryV2LoopbackTests
                     PartyPoolSyncMode = 2,
                     StoreSyncMode = 2,
                     PartyPoolTrace = trace,
+                    // This suite exercises the underlying host-authoritative mirror channel
+                    // itself (shared-inventory-v2.md), with ordinary non-quest resrefs
+                    // ("g_i_medeqpmnt01" etc.) — inventory_mode's new personal-by-default
+                    // filter (docs/research/personal-inventory.md) would otherwise hide every
+                    // one of them from the wire. SharedInventoryV2PumpTests.cs's own
+                    // "PersonalMode..." tests cover the filter itself.
+                    InventoryPersonal = false,
+                    CreditsPersonal = false,
                 });
 
             Agent.Log = msg => Logs.Enqueue(msg);
