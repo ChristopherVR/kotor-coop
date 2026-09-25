@@ -256,6 +256,8 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.ContainerLootAck] = HandleContainerLootAck,
             [PacketType.DialogueGrant] = HandleDialogueGrant,
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
+            [PacketType.CreditGrant] = HandleCreditGrant,
+            [PacketType.CreditGrantAck] = HandleCreditGrantAck,
             [PacketType.ClassGrant] = HandleClassGrant,
             [PacketType.ClassGrantAck] = HandleClassGrantAck,
             [PacketType.PlacedMineIntentAck] = HandlePlacedMineIntentAck,
@@ -522,6 +524,16 @@ public sealed partial class CoopClient : ICoopSession
             if (grantLength > 0)
             {
                 _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, grantLength));
+            }
+        }
+
+        // Same one-recipient shape as ContainerLoot above.
+        foreach (CreditGrantPacket op in _creditGrantSender.CollectDue(LootRecipients, now))
+        {
+            int creditLength = PacketCodec.Write(_sendBuffer, op);
+            if (creditLength > 0)
+            {
+                _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, creditLength));
             }
         }
 

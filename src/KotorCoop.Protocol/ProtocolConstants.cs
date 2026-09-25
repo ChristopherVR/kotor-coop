@@ -302,7 +302,18 @@ public static class ProtocolConstants
     /// builds share bytes right through, so the version is bumped even though nothing on the
     /// wire itself changed.
     /// </summary>
-    public const byte Version = 71;
+    /// <summary>
+    /// Version 72: two new packet types, <see cref="PacketType.CreditGrant"/>/
+    /// <see cref="PacketType.CreditGrantAck"/> — a reliable "my conversation just handed my
+    /// player N credits" relay for <c>credits_mode = personal</c>
+    /// (docs/research/personal-inventory.md §4). Bumped because a pre-72 peer has no handler
+    /// registered for either type at all (an unknown <c>PacketType</c> is simply ignored by the
+    /// dispatch table, not a hard failure), so the OLDER peer would silently never receive a
+    /// quest-reward credit its NEWER partner tried to relay — worth a version gate the same way
+    /// every other new wire surface in this family gets one, even though nothing existing
+    /// changed shape.
+    /// </summary>
+    public const byte Version = 72;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

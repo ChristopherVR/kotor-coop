@@ -250,6 +250,8 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.InteractionClaim] = HandleInteractionClaim,
             [PacketType.DialogueGrant] = HandleDialogueGrant,
             [PacketType.DialogueGrantAck] = HandleDialogueGrantAck,
+            [PacketType.CreditGrant] = HandleCreditGrant,
+            [PacketType.CreditGrantAck] = HandleCreditGrantAck,
             [PacketType.ClassGrant] = HandleClassGrant,
             [PacketType.ClassGrantAck] = HandleClassGrantAck,
             [PacketType.PlacedMineIntent] = HandlePlacedMineIntent,
@@ -497,6 +499,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastPartyPoolV2(now, recipients);
         BroadcastStoreV2(now, recipients);
         BroadcastDialogueGrant(now, recipients);
+        BroadcastCreditGrant(now, recipients);
         BroadcastClassGrant(now, recipients);
         BroadcastPlacedMineRoster(now, recipients);
         BroadcastPhantomDamage(recipients);

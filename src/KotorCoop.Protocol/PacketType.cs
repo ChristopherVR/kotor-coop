@@ -752,4 +752,17 @@ public enum PacketType : byte
     /// client spawns what it lacks and removes a replica whose serial is absent.
     /// </summary>
     PlacedMineRoster = 102,
+
+    /// <summary>
+    /// Reliable, either direction (whichever peer owns the conversation reports; the host
+    /// relays a client's report to every other client): "my own conversation just handed my
+    /// local player <see cref="CreditGrantPacket.Amount"/> credits" —
+    /// <see cref="CreditGrantPacket"/>. <c>credits_mode = personal</c> only —
+    /// docs/research/personal-inventory.md §4.
+    /// </summary>
+    CreditGrant = 103,
+
+    /// <summary>Acknowledges one <see cref="CreditGrant"/> op — <see cref="CreditGrantAckPacket"/>,
+    /// keyed by (origin, sequence), same shape as <see cref="DialogueGrantAck"/>.</summary>
+    CreditGrantAck = 104,
 }

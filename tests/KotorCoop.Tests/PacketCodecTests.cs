@@ -1082,6 +1082,37 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void CreditGrantPacketsRoundTrip()
+    {
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+
+        CreditGrantPacket op = new(OriginPeerId: 7, OpSequence: 42, Amount: 350);
+        int opLength = PacketCodec.Write(buffer, op);
+        CreditGrantPacket? read = PacketCodec.ReadCreditGrant(buffer[..opLength]);
+
+        Assert.NotNull(read);
+        Assert.Equal(op, read);
+
+        CreditGrantAckPacket ack = new(3, 7, 42);
+        int ackLength = PacketCodec.Write(buffer, ack);
+        Assert.Equal(ack, PacketCodec.ReadCreditGrantAck(buffer[..ackLength]));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-1000)]
+    public void CreditGrantWithANonPositiveAmountIsRejected(int amount)
+    {
+        // Written through the normal codec (bypassing CreditGrantSender's own guard) to prove
+        // the CODEC refuses too - a malformed or hostile peer's claim of a non-positive (or,
+        // worse, a credits REMOVAL) grant must never be trusted.
+        Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
+        int length = PacketCodec.Write(buffer, new CreditGrantPacket(1, 1, amount));
+        Assert.Null(PacketCodec.ReadCreditGrant(buffer[..length]));
+    }
+
+    [Fact]
     public void DialogueGrantFitsInOneDatagramAtMaxItems()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
