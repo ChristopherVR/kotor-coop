@@ -187,16 +187,24 @@ internal sealed class ScriptItemGrantPump(
 
         _baseline = [.. result.NewBaseline];
 
-        if (result.ToPublish.Count == 0)
+        // A starter lightsaber is per player when first_saber_color_sync is on: every other
+        // player builds their own class's colour (FirstLightsaberBuildPump), so the builder's
+        // saber must not also be copied to them. Live 2026-09-25 the joiner's gold saber reached
+        // the host twice through this relay, on top of the host's own blue one.
+        IReadOnlyList<MaterialisedLootItem> toPublish = settings.FirstSaberColorSync
+            ? [.. result.ToPublish.Where(i => !FirstLightsaberColorRule.IsCanonicalFirstSaber(i.Resref))]
+            : result.ToPublish;
+
+        if (toPublish.Count == 0)
         {
             return;
         }
 
-        log($"script item grant: {result.ToPublish.Count} new item(s) in the local PC's "
-            + $"inventory outside dialogue: {string.Join(", ", result.ToPublish.Select(i => i.Resref))}");
+        log($"script item grant: {toPublish.Count} new item(s) in the local PC's "
+            + $"inventory outside dialogue: {string.Join(", ", toPublish.Select(i => i.Resref))}");
 
         // Empty partner tag: PartnerTag is diagnostic-only (see DialogueGrantPacket's own
         // doc), and there is no conversation to name here.
-        session.PublishDialogueGrant(string.Empty, result.ToPublish);
+        session.PublishDialogueGrant(string.Empty, toPublish);
     }
 }

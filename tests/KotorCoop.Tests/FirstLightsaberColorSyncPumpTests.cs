@@ -296,7 +296,7 @@ public class FirstLightsaberColorSyncPumpTests
     /// is round 2's bug, reproduced, so the fix above is proven to matter and not just present.
     /// </summary>
     [Fact]
-    public void WithoutSuppressionTheSameSequenceWouldHaveBeenRepublished()
+    public void AStarterSaberIsNeverRelayedAsAScriptGrantEvenWithoutSuppression()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
         bridge.ClassIds = [5];
@@ -305,12 +305,15 @@ public class FirstLightsaberColorSyncPumpTests
         agent.PumpOnce();
         Assert.True(agent.TryDequeuePendingFirstSaberBuild(out string resref));
 
-        // No NoteLocalItemGiven call this time.
+        // No NoteLocalItemGiven call this time. Live 2026-09-25 the BUILDER's own saber also
+        // reached the other player through this relay (twice), so starter sabers are now filtered
+        // out of both grant relays whenever first_saber_color_sync is on: each player builds their
+        // own colour instead.
         bridge.Possessed = [(resref, new ItemIdentity(1, 0, 0, 0, 0))];
 
         agent.PumpOnce();
 
-        Assert.NotEmpty(session.PublishedGrants);
+        Assert.Empty(session.PublishedGrants);
     }
 
     [Fact]

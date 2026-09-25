@@ -508,6 +508,12 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         _dialogueGrantBaseline = after;
         _dialogueGrantHasBaseline = true;
 
+        // Per-player starter lightsabers: see ScriptItemGrantPump's identical filter.
+        if (settings.FirstSaberColorSync)
+        {
+            gained.RemoveAll(i => FirstLightsaberColorRule.IsCanonicalFirstSaber(i.Resref));
+        }
+
         if (gained.Count == 0)
         {
             return DialogueGrantSampleResult.Completed;
