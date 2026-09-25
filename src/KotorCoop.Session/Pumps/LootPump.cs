@@ -11,8 +11,15 @@ namespace KotorCoop.Session.Pumps;
 /// </summary>
 internal sealed class LootPump(
     IGameBridge bridge, ICoopSession session, RecentlySyncedItems recentlySyncedItems,
-    Action<string> log)
+    AgentSettings settings, Action<string> log)
 {
+    /// <summary>Every possessor-id set this pump asked <see cref="IGameBridge.ReadPersonalPossessedItems"/>
+    /// about for the "does the local player already have a first saber" check —
+    /// deliberately the well-known local-player sentinel, the SAME id
+    /// <see cref="Pumps.ScriptItemGrantPump"/> already samples under.</summary>
+    private static readonly HashSet<uint> LocalPlayerIdSet = [AgentWellKnownIds.LocalPlayerObjectId];
+
+
     /// <summary>
     /// One item still owed to a target, queued for the automatic give-loot path to submit
     /// through the same arbitrated cheat channel a human's <c>giveloot</c> console command
@@ -185,15 +192,49 @@ internal sealed class LootPump(
             log($"dialogue grant: received {grant.Items.Count} item(s) from peer {grant.OriginPeerId} "
                 + $"('{grant.PartnerTag}'), queueing");
 
-            foreach (MaterialisedLootItem item in grant.Items)
+            foreach (MaterialisedLootItem originalItem in grant.Items)
             {
+                MaterialisedLootItem item = originalItem;
+
+                // Zhar's saber-construction reward (docs/research/class-and-power-grants.md
+                // §10) mirrors the BUILDER's own colour to every other player through this
+                // exact channel. Behind first_saber_color_sync (OFF by default, NEEDS-LIVE),
+                // substitute or skip so each receiver ends up with their OWN class's colour
+                // instead — never touches any OTHER item this channel carries.
+                if (settings.FirstSaberColorSync
+                    && FirstLightsaberColorRule.IsCanonicalFirstSaber(originalItem.Resref))
+                {
+                    bool alreadyHasOne = bridge.ReadPersonalPossessedItems(LocalPlayerIdSet)
+                        .Any(possessed => FirstLightsaberColorRule.IsCanonicalFirstSaber(possessed.Resref));
+
+                    FirstLightsaberColorRule.Result decision = FirstLightsaberColorRule.Evaluate(
+                        originalItem.Resref, bridge.ReadLocalClassIds(), alreadyHasOne);
+
+                    if (decision.Decision == FirstLightsaberColorRule.Decision.Skip)
+                    {
+                        log($"first lightsaber: dropping '{originalItem.Resref}' from peer "
+                            + $"{grant.OriginPeerId} - the local player already has a first saber");
+                        continue;
+                    }
+
+                    if (decision.Decision == FirstLightsaberColorRule.Decision.Substitute)
+                    {
+                        log($"first lightsaber: substituting '{decision.Resref}' for "
+                            + $"'{originalItem.Resref}' from peer {grant.OriginPeerId} - matches "
+                            + "the local player's own class");
+                        item = originalItem with { Resref = decision.Resref };
+                    }
+                }
+
                 // This is a PEER's grant — either a genuine dialogue reward or (now that
                 // script-item-sync exists) that peer's OWN script grant, relayed through the
                 // exact same DialogueGrantPacket channel. Either way it is about to be applied
                 // to the LOCAL PC's inventory through the give-loot cheat channel
                 // (TryDequeuePendingLoot below), which ScriptItemGrantPump's own sweep would
                 // otherwise see as a brand-new row and re-broadcast right back — see
-                // docs/research/dialogue-consequences.md's script-item-sync section.
+                // docs/research/dialogue-consequences.md's script-item-sync section. Recorded
+                // under the resref that will actually appear locally (the substituted one, if
+                // any), never the sender's original.
                 recentlySyncedItems.Record(item.Resref, 1, Environment.TickCount64);
 
                 // Count-check-and-enqueue must be one atomic operation under the SAME lock

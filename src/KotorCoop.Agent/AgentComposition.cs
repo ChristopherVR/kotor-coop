@@ -122,6 +122,8 @@ internal static class AgentComposition
             ScriptItemSync = config?.ScriptItemSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
             ClassGrantSync = config?.ClassGrantSync ?? true,
+            // OFF with no coop.ini too: NEEDS-LIVE, purely local, no plugin key at all.
+            FirstSaberColorSync = config?.FirstSaberColorSync ?? false,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
             EnemyEffectSync = config?.EnemyEffectSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.

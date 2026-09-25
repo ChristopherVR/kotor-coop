@@ -168,6 +168,17 @@ public sealed record AgentSettings
     public bool ClassGrantSync { get; init; }
 
     /// <summary>
+    /// On the RECEIVING side of a dialogue/script item grant, give each player their OWN
+    /// class's lightsaber colour for Zhar's saber-construction reward instead of mirroring
+    /// whichever colour the builder's own class happened to be — coop.ini
+    /// <c>first_saber_color_sync</c>, docs/research/class-and-power-grants.md §10. Purely
+    /// local: no plugin/native change, no wire format change, each connected instance decides
+    /// for itself from its own <c>IPlayerBridge.ReadLocalClassIds</c>. OFF by default (NEEDS-
+    /// LIVE) — with it off, behaviour is byte-for-byte what it was before this setting existed.
+    /// </summary>
+    public bool FirstSaberColorSync { get; init; }
+
+    /// <summary>
     /// Relay a non-damage effect a client casts on a mirrored enemy to the host, which replays
     /// it on the real body — docs/research/enemy-effects.md, coop.ini <c>enemy_effect_sync</c>.
     /// OFF by default (NEEDS-LIVE). The plugin reads the same key for its capture and apply

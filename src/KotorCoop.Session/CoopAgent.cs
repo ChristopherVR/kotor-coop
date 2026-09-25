@@ -162,7 +162,7 @@ public sealed partial class CoopAgent
 
         _barkPump = new BarkPump(bridge, session);
         _transitionPump = new TransitionPump(bridge, session, settings, _log);
-        _lootPump = new LootPump(bridge, session, _recentlySyncedItems, _log);
+        _lootPump = new LootPump(bridge, session, _recentlySyncedItems, settings, _log);
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         // Player-count scaling (docs/research/player-count-scaling.md): one resolved set of
         // percents per agent, recomputed every tick from the effective settings and the live

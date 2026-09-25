@@ -724,4 +724,48 @@ public sealed partial class KotorGameBridge
             && _memory.TryReadInt32(stats + StatsFaction, out faction);
     }
 
+    /// <summary><c>CSWSCreatureStats::class_count</c> — byte, 0..2. Same offset the PLUGIN's
+    /// <c>Odyssey.ClassGrant.cs</c> already reads natively; duplicated here because the x86
+    /// NativeAOT plugin and this x64 agent cannot share an assembly (the same reason
+    /// item-identity.md §14's stack-identity mask is duplicated).</summary>
+    private const int StatsClassCount = 0x089;
+
+    /// <summary><c>CSWSCreatureStats::classes</c> — <c>CSWSCreatureStats_ClassInfo[2]</c> at
+    /// +0x08C, stride 0x28.</summary>
+    private const int StatsClasses = 0x08C;
+
+    /// <summary><c>CSWSCreatureStats_ClassInfo::class_id</c> — byte at +0x1B.</summary>
+    private const int ClassInfoClassId = 0x1B;
+
+    private const int ClassInfoStride = 0x28;
+
+    /// <inheritdoc cref="IPlayerBridge.ReadLocalClassIds"/>
+    public IReadOnlyList<int> ReadLocalClassIds()
+    {
+        if (_player is not { } player)
+        {
+            return [];
+        }
+
+        if (!_memory.TryReadPointer(player.Address + OffCreatureStats, out nint stats) || stats == 0)
+        {
+            return [];
+        }
+
+        if (!_memory.TryRead(stats + StatsClassCount, out byte classCount) || classCount == 0)
+        {
+            return [];
+        }
+
+        List<int> classIds = new(2);
+        for (int slot = 0; slot < classCount && slot < 2; slot++)
+        {
+            if (_memory.TryRead(stats + StatsClasses + slot * ClassInfoStride + ClassInfoClassId, out byte classId))
+            {
+                classIds.Add(classId);
+            }
+        }
+
+        return classIds;
+    }
 }

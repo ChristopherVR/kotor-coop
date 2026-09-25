@@ -329,6 +329,13 @@ public sealed record CoopConfig
     /// false)</c> fallback. docs/research/class-and-power-grants.md.</summary>
     public bool ClassGrantSync { get; init; } = true;
 
+    /// <summary>coop.ini <c>first_saber_color_sync</c> — on the receiving side of a dialogue/
+    /// script item grant, give each player their OWN class's colour for Zhar's saber-
+    /// construction reward instead of mirroring the builder's colour. OFF by default,
+    /// NEEDS-LIVE. Purely local (no plugin key to keep in sync with — this never touches the
+    /// native side). docs/research/class-and-power-grants.md §10.</summary>
+    public bool FirstSaberColorSync { get; init; }
+
     /// <summary>coop.ini <c>enemy_effect_sync</c> — relay a non-damage effect a CLIENT casts on a
     /// mirrored enemy (Stasis, Stun, Fear, Whirlwind, Force Push, Slow, Paralysis, Sleep, a
     /// grenade rider) to the host, which replays it on the enemy's real body. OFF by default,
@@ -1061,6 +1068,7 @@ public sealed record CoopConfig
             ScriptItemSync = !kv.ContainsKey("script_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
             ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
+            FirstSaberColorSync = IsTruthy(kv.GetValueOrDefault("first_saber_color_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")
                 || IsTruthy(kv.GetValueOrDefault("dialogue_fast_join")),
             PartyFastPump = !kv.ContainsKey("party_fast_pump")

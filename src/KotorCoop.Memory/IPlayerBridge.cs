@@ -115,6 +115,18 @@ public interface IPlayerBridge
         return false;
     }
 
+    // ---- first-lightsaber colour (docs/research/class-and-power-grants.md §10) ----------
+
+    /// <summary>
+    /// This instance's own player's class ids, in slot order (0-2 entries, <c>classes.2da</c>
+    /// rows) — <c>CSWSCreatureStats::classes</c>, read directly with <c>ReadProcessMemory</c>,
+    /// no engine call. Used only by <c>FirstLightsaberColorRule</c>, on the receiving side of a
+    /// Zhar saber-construction grant, to give each player their OWN class's saber colour rather
+    /// than mirroring whichever colour the builder's own class happened to be. Empty when no
+    /// world is loaded, the local player has no stats block, or this bridge has no such reader.
+    /// </summary>
+    IReadOnlyList<int> ReadLocalClassIds() => [];
+
     /// <summary>
     /// Pushes this session's RESOLVED player-count scaling into the plugin's shared block
     /// (docs/research/player-count-scaling.md): <paramref name="combatWord"/> carries the enemy
