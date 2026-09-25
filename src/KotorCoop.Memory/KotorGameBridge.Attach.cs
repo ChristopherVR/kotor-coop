@@ -153,7 +153,19 @@ public sealed partial class KotorGameBridge
     /// Callers that need fresh FIELD values still get them: only the address list is cached,
     /// and every read through those addresses is live.
     /// </summary>
+    /// <summary>⚠ SERIALIZED — see <see cref="KotorGameBridge.Sync"/>. Also reached directly
+    /// (not only through <see cref="TryResolve"/>) by <see cref="ReadPartyPortraits"/> and the
+    /// command dispatcher's <c>UnconfirmedCreatureScan</c> diagnostic, both of which run on
+    /// threads other than the pump.</summary>
     public List<CreatureRef> EnumerateCreatures()
+    {
+        lock (Sync)
+        {
+            return EnumerateCreaturesCore();
+        }
+    }
+
+    private List<CreatureRef> EnumerateCreaturesCore()
     {
         long nowMs = Environment.TickCount64;
 
@@ -458,17 +470,27 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public IReadOnlyList<CreatureRef> UnconfirmedCreatureScan()
     {
-        EnumerateCreatures();
-        return _creatureCache ?? [];
+        // ⚠ SERIALIZED — see KotorGameBridge.Sync. The scan and the field read below must be
+        // ONE atomic step: EnumerateCreatures() releases the lock the instant it returns, so a
+        // second thread's InvalidateCreatureCache()/EnumerateCreatures() could otherwise land
+        // between the call and the read and hand back a torn or just-cleared _creatureCache.
+        lock (Sync)
+        {
+            EnumerateCreaturesCore();
+            return _creatureCache ?? [];
+        }
     }
 
     /// <summary>Drops the cached creature list — call when the world changes underneath it.</summary>
     public void InvalidateCreatureCache()
     {
-        _creatureCache = null;
-        _liveCache = null;
-        _gateLastLine = string.Empty;
-        _scanCache.Clear();
+        lock (Sync)
+        {
+            _creatureCache = null;
+            _liveCache = null;
+            _gateLastLine = string.Empty;
+            _scanCache.Clear();
+        }
     }
 
     /// <summary>
@@ -485,6 +507,17 @@ public sealed partial class KotorGameBridge
     /// a door opening is still seen on the next pass.
     /// </summary>
     private List<nint> CachedScan(uint vtable, int limit, int ttlMs)
+    {
+        // ⚠ SERIALIZED — see KotorGameBridge.Sync. _scanCache is shared by every world-object
+        // reader (creatures, doors, placeables, encounters, mines); ItemScanWorker guards its
+        // OWN state with its own lock, but not this Dictionary.
+        lock (Sync)
+        {
+            return CachedScanCore(vtable, limit, ttlMs);
+        }
+    }
+
+    private List<nint> CachedScanCore(uint vtable, int limit, int ttlMs)
     {
         long nowMs = Environment.TickCount64;
 
@@ -580,8 +613,25 @@ public sealed partial class KotorGameBridge
     /// <summary>
     /// Locates the player and claims phantom bodies. Called at startup and again if reads
     /// start failing, since a module transition destroys and rebuilds every object.
+    ///
+    /// ⚠ SERIALIZED (see <see cref="KotorGameBridge.Sync"/> and
+    /// <see cref="TryReadLocalState"/>'s remarks). The comment further down about "two threads
+    /// resolve at once" pre-dates this lock and describes the half of the hazard that atomic
+    /// field-reassignment already covered (a torn diagnostic string); it did NOT cover
+    /// <see cref="EnumerateCreatures"/>'s own <c>_creatureCache</c>/<c>_liveCache</c>/
+    /// <c>_scanCache</c> Dictionary/List fields, which is what actually corrupted (2026-09-25,
+    /// docs/research/disconnect-reconnect.md's bridge-concurrency section) when the pump and
+    /// the command dispatcher's poll loop both re-resolved after the same module transition.
     /// </summary>
     public bool TryResolve(out string diagnostic)
+    {
+        lock (Sync)
+        {
+            return TryResolveCore(out diagnostic);
+        }
+    }
+
+    private bool TryResolveCore(out string diagnostic)
     {
         // Find the plugin's shared block FIRST, before any world state. The block is created
         // when the plugin loads and has nothing to do with a loaded module, so it must be

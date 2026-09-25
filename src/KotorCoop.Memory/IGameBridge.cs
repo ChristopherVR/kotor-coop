@@ -818,4 +818,40 @@ public interface IGameBridge :
     IJournalBridge,
     IDisposable
 {
+    /// <summary>
+    /// The monitor every external entry point into this bridge takes (via C#'s <c>lock</c>
+    /// statement) to serialize access to its mutable per-instance state — creature/scan
+    /// caches, module-name cache, door/placeable/container "shadow" dictionaries, the peer
+    /// slot map, and the rest of the Dictionary/List/HashSet fields <c>KotorGameBridge</c>
+    /// keeps between calls, none of which are concurrent collections.
+    ///
+    /// A bridge is shared by the pump (<c>CoopAgent.PumpOnce</c>), the command dispatcher's
+    /// own ~150ms poll loop, the join flow, <c>SessionManager</c>'s rejoin background task and
+    /// the host's server-discovery beacon — five call paths that never coordinated with each
+    /// other. Two of them racing into the same Dictionary/List field is exactly what corrupted
+    /// live 2026-09-25 (see <c>docs/research/disconnect-reconnect.md</c>'s bridge-concurrency
+    /// section): a joiner's pump began throwing <c>InvalidOperationException</c>
+    /// ("A concurrent update was performed on this collection and corrupted its state") on
+    /// EVERY tick right after a module transition, because two threads both re-resolved the
+    /// player at the same instant.
+    ///
+    /// The lock lives INSIDE the affected <c>KotorGameBridge</c> methods themselves (see
+    /// <c>TryReadLocalState</c>, <c>TryResolve</c>, <c>EnumerateCreatures</c>,
+    /// <c>ClearCoopState</c>, <c>ReadEnemies</c>, <c>ReadPartyPortraits</c>,
+    /// <c>ForgetWorldShadows</c> and the world/chargen-load pollers) rather than being taken by
+    /// every one of those five callers individually: a caller that forgets to lock is a bug
+    /// that only shows up under a race, while a method that does not lock itself is caught by
+    /// the concurrency test the moment it is exercised. It composes correctly with itself
+    /// (one bridge method calling another on the same thread just re-enters) and with
+    /// <c>SessionManager</c>'s own private lock, which is sometimes held WHILE calling a
+    /// locked bridge method (its teardown/rejoin paths) — that direction is fine and is the
+    /// ONLY nesting direction that exists in this codebase; nothing may hold THIS lock and
+    /// then call into <c>SessionManager</c>/<c>CoopCommandDispatcher</c>, or the two locks'
+    /// acquisition order would invert across threads and deadlock.
+    ///
+    /// Default is <c>this</c>: sufficient because nothing outside this seam has a reason to
+    /// lock on a bridge instance itself, and it means a test fake needs no changes to satisfy
+    /// this member.
+    /// </summary>
+    object Sync => this;
 }

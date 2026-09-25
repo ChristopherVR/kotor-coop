@@ -1182,3 +1182,159 @@ visit is well under it; a host at the main menu is well over it. `0` disables ju
 trigger. Loopback-tested (`HostAwayRuleTests`: away past a 500 ms timeout → `HostLost` while
 still `IsConnected`; back → restored; a brief away never trips it). NEEDS-LIVE: the host
 pressing Quit to Main Menu on the rig with the joiner mid-fight, then Load Game back in.
+
+## 14. Bridge concurrency: two threads, one non-thread-safe `KotorGameBridge` (2026-09-25)
+
+**Live bug** (joiner agent, 20-leg module-warp soak): at leg ~11 the joiner agent's pump began
+failing EVERY tick with
+
+    pump tick failed (1 in a row): Operations that change non-concurrent collections must have
+    exclusive access. A concurrent update was performed on this collection and corrupted its
+    state. [InvalidOperationException at ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported]
+
+then, after 300 identical failures, `pump failing continuously; the game is gone, shutting
+down` — the agent exited and the joiner silently dropped out of co-op while their game kept
+running. Immediately before the first failure, the log showed the SAME resolve line twice
+within 1 ms:
+
+    [resolve] player: adopted the engine's own creature 0xC353538 (id 0x7FFFFFFA)
+    [resolve] player: adopted the engine's own creature 0xC353538 (id 0x7FFFFFFA)
+
+— two threads running `KotorGameBridge.TryReadLocalState`/`TryResolve` at the same instant,
+right after a module transition (the exact window both methods re-resolve in — see
+`KotorGameBridge.Player.cs`'s existing "two threads resolve at once during a mid-session load"
+remark, which pre-dates this fix and only covered a torn diagnostic *string*, not the
+Dictionary/List caches below it).
+
+**Root cause.** `KotorGameBridge` is one instance shared for the whole session by FIVE
+independent call paths that never coordinated with each other:
+
+1. `CoopAgent.RunAsync` → `PumpOnce()` (`src/KotorCoop.Session/CoopAgent.cs`) — the pump,
+   ticking at `AgentSettings.PollRate` Hz.
+2. `CoopCommandDispatcher.RunAsync` (`src/KotorCoop.Agent/CoopCommandDispatcher.cs`) — its own
+   ~150 ms poll loop; `MaintainSessionSave` (`CoopCommandDispatcher.SaveLoad.cs`) calls
+   `bridge.TryReadLocalState` directly every tick, and `PumpEnemyScalingPersistence` calls
+   `bridge.ReadEnemies`.
+3. The join flow — `JoinFlow`/`MenuAutoLoad` run on a `Task.Run` in
+   `AgentComposition.Compose` (~line 417) and call `bridge.TryReadLocalState`,
+   `TryArmNewCharacterCapture`, `TryGetNewCharacterCapture`, `TryGetAdoptedWorldLoadStatus`,
+   `ForgetWorldShadows`.
+4. `SessionManager`'s rejoin background task (`CoopCommandDispatcher.SaveLoad.cs`'s
+   `_rejoinTask`) calls `SessionManager.RejoinAfterLoadAsync`, which disconnects (tearing down
+   through `bridge.ClearCoopState()`) and later calls `bridge.TryRequestAdoptedWorldLoad`.
+5. The host's server-discovery beacon (`SessionManager.Connect`'s `ServerDiscovery
+   .StartAdvertising` call, `src/KotorCoop.Session/SessionManager.cs`) reads
+   `bridge.TryReadLocalState`/`bridge.ReadPartyPortraits` on its own `Task.Run` loop every
+   beacon interval.
+
+None of these took any lock. Several of `KotorGameBridge`'s per-instance caches are plain
+`Dictionary`/`List`/`HashSet` fields — not concurrent collections — and are both read and
+mutated by more than one of the five paths above:
+
+- `_creatureCache`, `_liveCache` (`KotorGameBridge.Attach.cs`) and `_scanCache` (same file,
+  `Dictionary<uint, (List<nint> Hits, long AtMs)>`, shared by the creature/door/placeable/
+  container/encounter/mine scans via `CachedScan`) — reassigned and cleared by
+  `EnumerateCreatures`/`TryResolve`/`InvalidateCreatureCache`, called from paths 1, 2 (via
+  `ReadPartyPortraits`/`ReadEnemies`) and 3.
+- `_itemTags`, `_itemAddresses` (`KotorGameBridge.Items.cs`) — cleared on every module change
+  inside `TryReadLocalState`, read by item/loot reads from path 2.
+- `_moduleNames` (`KotorGameBridge.Menu.cs`) and `_portraitResRefs`
+  (`KotorGameBridge.Party.cs`) — populated by `DescribeModule`/`PortraitResRef`, the latter
+  reached from `ReadPartyPortraits`, called by both path 1 and path 5.
+- `_doorShadow`, `_placeableShadow`, `_placeableBaselineTrapped` (`KotorGameBridge.Doors.cs`/
+  `Placeables.cs`) and the globals shadow arrays — cleared by `ForgetWorldShadows`, called
+  from path 3 while path 1 reads them every world-state pass.
+- `_slots` (peer slot map) and `PartyPresenceWriteCache` — cleared by `ClearCoopState`, called
+  from path 4 (under `SessionManager`'s own lock) while path 1 writes through them every tick.
+
+This is the exact shape `docs/research/client-server-halves`/`transition-window-rules`
+describe for OTHER subsystems: a module transition is the one moment every one of these
+five paths independently notices "the world changed" and reaches for the same reset/rescan
+code at once.
+
+**The fix — locking lives inside the bridge, not at each call site.** `IGameBridge.Sync`
+(`src/KotorCoop.Memory/IGameBridge.cs`) is a `object Sync => this;` default member every
+`IGameBridge` implementation gets for free (so no existing test fake needed to change).
+`KotorGameBridge` gives it an explicit member (`KotorGameBridge.cs`) — a default interface
+implementation is only reachable through an interface-typed reference, never unqualified from
+inside the implementing class, so the class needs its own `Sync` to write `lock (Sync)`
+internally.
+
+The lock is taken INSIDE the affected `KotorGameBridge` methods themselves —
+`TryReadLocalState`, `TryResolve`, `EnumerateCreatures`, `CachedScan`,
+`UnconfirmedCreatureScan`, `InvalidateCreatureCache`, `ClearCoopState`, `ResetCaches`,
+`ReadEnemies`, `ReadPartyPortraits`, `ForgetWorldShadows`, `TryReadCurrentModule`,
+`TryRequestAdoptedWorldLoad`, `TryArmNewCharacterCapture`, `TryGetNewCharacterCapture`,
+`TryGetAdoptedWorldLoadStatus` — each via a thin public wrapper around a `*Core`/private
+method so the diff stays a signature change plus a few lines, not a re-indent of the whole
+method body. This was chosen over having every one of the five callers above take the lock at
+its own call site for two reasons:
+
+1. **Fewer places to get it wrong.** A caller that forgets to lock is a latent bug that only
+   shows up under a race, months later, on someone's rig — exactly how this one was found.
+   A bridge method that does not lock itself is caught by `BridgeConcurrencyTests` the moment
+   it is exercised.
+2. **It sidesteps a real deadlock hazard caller-side locking would have created.**
+   `SessionManager` holds its own private `_gate` lock across `TearDownSession` (→
+   `bridge.ClearCoopState()`) and `TryRequestAdoptedWorldLoad` (→
+   `bridge.TryRequestAdoptedWorldLoad`) — i.e. `_gate` OUTER, a bridge call INNER. If
+   `CoopCommandDispatcher.RunAsync`'s tick body had taken `bridge.Sync` around its WHOLE loop
+   (which calls `manager.Poll()`/`manager.Disconnect()`, both of which can reach `_gate`), the
+   dispatcher thread would sometimes hold `Sync` OUTER while trying to acquire `_gate` INNER —
+   the opposite nesting order from `SessionManager`'s rejoin task (`_gate` outer, `Sync`
+   inner) on a different thread. That is a textbook AB-BA deadlock: thread D holds `Sync`,
+   blocked on `_gate`; thread R holds `_gate`, blocked on `Sync`. Locking only inside the
+   bridge methods (which never call into `SessionManager`/`CoopCommandDispatcher`) means
+   `Sync` is NEVER the outer lock anywhere in this codebase, so the only nesting direction
+   that exists is `_gate` outer / `Sync` inner, which is consistent everywhere and therefore
+   deadlock-free.
+
+`Lock`/Monitor semantics (via C#'s `lock` statement), not `SemaphoreSlim`: `TryReadLocalState`
+calls `TryResolve` internally, `ReadPartyPortraits`/`ReadEnemies` call `EnumerateCreatures`,
+and `ResetCaches` calls `InvalidateCreatureCache`/`ForgetWorldShadows` — all same-thread
+re-entrant calls that a non-reentrant `SemaphoreSlim` would self-deadlock on.
+
+`CoopAgent.RunAsync` ALSO wraps its whole `PumpOnce()` call in `lock (_bridge.Sync)` — safe
+(verified `PumpOnce` never reaches `SessionManager`, only `IGameBridge` and this class's own
+`ICoopSession`, which holds no lock this could invert against) and gives the pump exclusive
+use of the bridge for its entire tick, a stronger guarantee than relying on each individual
+method's own lock. `GameLifecycle.GetPhase()` and the server-discovery `module`/`portraits`
+lambdas (`SessionManager.Connect`) also take `bridge.Sync` explicitly at their call sites,
+belt-and-suspenders (`GameLifecycle` currently constructs a fresh throwaway bridge per call,
+so this is presently uncontended, but protects any future caller that hands it the shared
+one — see `SaveLoader.WaitFor(GamePhase.InWorld)`, which already polls this from a thread
+other than the pump during a mid-session load).
+
+**Diagnostics** (`CoopAgent.RunAsync`): the first pump-tick failure of a run now logs the FULL
+exception (`ex.ToString()`, stack trace included) — `ex.Message` alone cannot say which
+Dictionary/List threw. Later failures on the same cadence as before (every `PollRate` ticks)
+still use the one-line summary, so a long stall does not flood the log with repeated stack
+traces.
+
+**Recovery.** `IGameBridge.ResetCaches()` drops every agent-side CACHE (creature/scan
+addresses, item tag/address, module-name, portrait, world-state shadows) without touching the
+plugin block or session state — safe to call mid-session. `CoopAgent.RunAsync`'s new
+`PumpFailureTracker` (`src/KotorCoop.Session/PumpFailureTracker.cs`, pulled out of the timer
+loop so it is unit-testable without a real `PeriodicTimer`) calls it once a SAME exception
+TYPE has failed `PumpFailureTracker.ResetCachesAfterSameFailures` (5) times in a row — a
+corrupted collection throws the identical exception every tick, so this is reached in a
+fraction of a second at any realistic poll rate, well before the unchanged ~10 s shutdown
+ceiling. This is a second line of defence for whatever `Sync` does not cover; it should not be
+needed for the bug class above now that the hotspot methods serialize themselves. If the
+agent still gives up after ~10 s of continuous failures, it now posts a chat line
+(`bridge.PostChatLine("Co-op stopped: ...")`) before shutting down, so the player sees co-op
+stopped instead of the agent silently vanishing while their game keeps running solo.
+
+**Tests:** `tests/KotorCoop.Tests/BridgeConcurrencyTests.cs` (many threads hammering
+`TryResolve`/`EnumerateCreatures`/`TryReadLocalState`/`ReadPartyPortraits`/`ReadEnemies`/
+`ResetCaches`/`ClearCoopState`/`ForgetWorldShadows` at once — asserts nothing throws, and that
+`Sync` is a stable per-instance lock rather than a fresh object per access),
+`tests/KotorCoop.Tests/PumpFailureTrackerTests.cs` (the reset/shutdown decision logic, timer-
+free) and `tests/KotorCoop.Tests/CoopAgentPumpFailureRecoveryTests.cs` (end-to-end through the
+real `CoopAgent.RunAsync`: a repeating failure actually calls `ResetCaches`, a healthy bridge
+never does).
+
+NEEDS-LIVE: a real 20-leg module-warp soak (the shape that found this) run again with this fix
+in place, watching for either a clean run or, if the resolve race still fires under real
+engine timing this pass could not reproduce off a live game, a `ResetCaches` recovery instead
+of a shutdown.
