@@ -477,6 +477,12 @@ heap on.
    personally (no medpacs, purse 0).
 5. **Shared mode unchanged (PASS).** Both set to shared: medpacs mirrored (stack 3 on the joiner)
    and the purse was one (joiner 300 -> 301 after the host's +300).
-6. **Quest-reward credits relay: NOT run live.** The only danm13 payer, `ebo46_lurarka` E36
-   (`k_pebo_lurarka13`), sits behind Sasha-quest replies the staged save cannot reach. It is
-   covered by unit and pump tests only.
+6. **Quest-reward credits relay (PASS, 2026-09-25).** Lurarka's payer (`ebo46_lurarka` E36)
+   sits behind Sasha-quest replies the staged save cannot reach, so a scan of every module's
+   scripts for `GiveGoldToCreature` (routine 322) found payers reachable without gates. On
+   `danm14ab` the host ran `startdialog 0x2 dan_zuulan` (Zuulan is not spawned yet, so a droid
+   stood in) and took "You must pay for your crimes" then "give me the credits". This reaches
+   R6 `k_pdan_zuul01`, which pays 200. Host agent:
+   `credit grant: local conversation handed +200 credits - requesting the peer's own purse
+   receive the same amount`. Joiner agent: `credit grant: received +200 from peer 1, purse 1 ->
+   201`. Both purses read 1 -> 201 afterwards, so each was paid once with no double pay.
