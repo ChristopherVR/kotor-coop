@@ -32,6 +32,9 @@ public class PacketHandlerRegistryTests
         PacketType.MidModuleMovie, PacketType.DialogueRequest, PacketType.Chat, PacketType.Bark,
         PacketType.TransitionMovies, PacketType.TransitionAnnounce, PacketType.InteractionClaim,
         PacketType.DialogueGrant, PacketType.DialogueGrantAck, PacketType.Ping, PacketType.Bye,
+        // Credits-reward relay (docs/research/personal-inventory.md §4): symmetric like
+        // DialogueGrant above, both directions.
+        PacketType.CreditGrant, PacketType.CreditGrantAck,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck, PacketType.PartyPoolSyncRequest,
         PacketType.StoreOp, PacketType.StoreAck, PacketType.StoreSyncRequest,
         // v2 (host-authoritative absolute snapshot + client intents, docs/research/
@@ -61,6 +64,7 @@ public class PacketHandlerRegistryTests
         PacketType.Welcome, PacketType.Reject, PacketType.WorldSnapshot, PacketType.FlagAck,
         PacketType.FlagSnapshot, PacketType.ItemAck, PacketType.JournalAck,
         PacketType.ContainerLootAck, PacketType.DialogueGrant, PacketType.DialogueGrantAck,
+        PacketType.CreditGrant, PacketType.CreditGrantAck,
         PacketType.JournalSnapshot, PacketType.EnemySnapshot, PacketType.WorldDigest,
         PacketType.PartySnapshot, PacketType.PartyRoster, PacketType.DialogueSnapshot,
         PacketType.TriggerRelay, PacketType.PhantomDamage, PacketType.PeerEffect, PacketType.Bark,

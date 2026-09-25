@@ -91,6 +91,8 @@ public sealed partial class CoopAgent
     private readonly WorldStatePump _worldStatePump;
     private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
+
+    private readonly CreditGrantPump _creditGrantPump;
     private readonly ClassGrantPump _classGrantPump;
     private readonly FirstLightsaberBuildPump _firstLightsaberBuildPump;
     private readonly PlacedMinePump _placedMinePump;
@@ -192,6 +194,7 @@ public sealed partial class CoopAgent
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
         _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
+        _creditGrantPump = new CreditGrantPump(bridge, session, settings, _log);
         _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
         _firstLightsaberBuildPump = new FirstLightsaberBuildPump(bridge, session, settings, _log);
         _placedMinePump = new PlacedMinePump(bridge, session, settings, _log);
@@ -923,6 +926,14 @@ public sealed partial class CoopAgent
         {
             PerfPhaseStart();
             _scriptItemGrantPump.PumpScriptItemGrants(
+                local.Module, _dialoguePump.IsOwningConversation, localReadable: LastReadSucceeded);
+            PerfPhaseEnd(PumpPhase.ScriptItemGrant);
+
+            // credits_mode = personal (docs/research/personal-inventory.md §4): relays a quest
+            // reward's credits to the peer's own purse. Reads the same already-updated
+            // IsOwningConversation flag as the script-item pump above, same tick.
+            PerfPhaseStart();
+            _creditGrantPump.PumpCreditGrants(
                 local.Module, _dialoguePump.IsOwningConversation, localReadable: LastReadSucceeded);
             PerfPhaseEnd(PumpPhase.ScriptItemGrant);
         }

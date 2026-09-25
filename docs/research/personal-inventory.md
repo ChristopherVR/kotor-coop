@@ -15,6 +15,39 @@ running two-instance rig — nothing in this pass touched a live process.
 
 ---
 
+## 0. 2026-09-25 follow-up — the credits-reward gap closed; the backpack-carry gap dropped
+
+The first pass shipped the party-pool/credits mode gating (§§2-3) but left two things
+explicitly, honestly open: quest-reward credits only reaching the conversation-driving player,
+and the joiner's personal backpack/credits not surviving a disconnect/rejoin. This follow-up
+round resolved both, in two different ways:
+
+- **§4 — the credits-reward relay is now BUILT.** A wholly new, additive wire channel
+  (`CreditGrantPacket`/`CreditGrantAckPacket`, protocol 71 → 72), deliberately NOT a field
+  bolted onto `DialogueGrantPacket` — see §4.1 for why that path was tried first and rejected.
+  Detects a gold rise while `credits_mode = personal` AND this instance owns a conversation
+  (`CreditGrantRule`, a pure rule), relays it reliably (`CreditGrantSender`, modelled on
+  `DialogueGrantSender`, with its own host-side inbox dedup — a gap the ORIGINAL dialogue-grant
+  channel still has, not inherited here), and applies it directly to the peer's own purse
+  (`Pumps.CreditGrantPump`). A same-tick amplification guard (§4.1) closes the exact "a
+  receiver's own applied change gets misdetected as a fresh local grant" shape this codebase's
+  history warns about. Unit/pump-tested; not run against a live process (§9).
+- **§6 — the personal-inventory carry is DROPPED, by product decision, not merely deferred.**
+  The user's own call: *"the joiner's own backpack does NOT need to survive in the host — the
+  joiner is responsible for it."* A first attempt at wiring §6's original design end to end
+  (`PersonalInventoryCarrySnapshot`, `PersonalInventorySidecar`,
+  `Pumps.PersonalInventoryRestorePump`, plus a `PartyPoolPumpV2.TryEnqueueExternalAdd` hook) was
+  built and passing 32 tests in this same round, then REMOVED WHOLE — code, tests and the
+  `PersonalInventoryCarryRule` pure core alike — once that decision landed, rather than left
+  half-wired or merely disabled. §6 below is rewritten to state the decision plainly, not to
+  describe a design that no longer exists in the tree.
+
+Both builds clean (`dotnet build KotorCoop.slnx`, `src/KotorCoop.Plugin/build.ps1
+-WarnAsError` — the plugin was not touched by either the credits relay or the removed carry
+attempt).
+
+---
+
 ## 1. The one engine fact this whole design rests on
 
 **VERIFIED**, `docs/research/key-items-and-solo.md` §1 (itself citing a full disassembly of
@@ -82,7 +115,7 @@ a story gate and silent breakage.
 | Store stock (`store_sync=2`) | Shared stock, unchanged | **Unchanged — orthogonal.** A store's stock is a `CGameObject`'s own repository, not a player's backpack (`docs/research/store-sync.md` §1.2); nothing about `inventory_mode` touches it. Buying/selling already only ever moves the ACTING player's own credits/items (the store-sync channel never touched a non-buyer's backpack) — this is item 5 of the product brief, already true before this pass |
 | Dialogue/script item grants (`dialogue_item_sync`/`script_item_sync`) | A reward node's/script's grant is diffed off the granting engine and relayed to the peer, landing in the PEER'S OWN backpack via the give-loot cheat channel (`docs/research/dialogue-consequences.md` §3) | **Unchanged relay mechanism** — each player still gets their own copy, delivered as it always was. The one thing that changes is downstream: once that copy lands in the receiver's own party pool, personal mode's own party-pool filter (row above) simply never re-publishes it onward as if it were a fresh local deposit, for a NON-quest item — see §3.2 for why that matters and why it needed no new code |
 | Credits (`Pumps.PartyPump.PumpProgression`) | One merged purse: every peer's earn/spend contribution folds in, host publishes the result, clients overwrite their own gold with it | Nobody's contribution folds in; XP still merges (a separate, unrelated concern — see §4) but gold never does. Each engine's own gold reading is left exactly as its own engine produced it |
-| Quest reward gold (`GiveGoldToCreature` inside a dialogue/script) | Reaches the shared purse through the SAME merge above (`docs/research/dialogue-consequences.md` line 72: *"Already merged (gold ledger)"*) | **Open gap, not solved this pass** — see §4 |
+| Quest reward gold (`GiveGoldToCreature` inside a dialogue/script) | Reaches the shared purse through the SAME merge above (`docs/research/dialogue-consequences.md` line 72: *"Already merged (gold ledger)"*) | Relayed to every peer's own purse in full, through a SEPARATE new channel (`CreditGrantPump`) scoped to a conversation window — see §4.2 |
 
 ### 2.3 Why the filter sits where it sits, and why it does not touch the pump's own arithmetic
 
@@ -188,30 +221,55 @@ settings.CreditsPersonal)`), consulted at exactly three points:
 through the real combat pipeline (`docs/research/progression-sync.md`'s own reasoning for why XP
 merges by max rather than by ledger) — `credits_mode` has nothing to say about it.
 
-### 4.2 The open gap: quest-reward gold, honestly not solved this pass
+### 4.2 The credits-reward relay (built 2026-09-25 follow-up)
 
-`GiveGoldToCreature` (a dialogue/script gold reward) has never had its own relay — it has always
-reached the OTHER player purely as a side effect of the SAME contribution ledger that also merges
+`GiveGoldToCreature` (a dialogue/script gold reward) never had its own relay — it always reached
+the OTHER player purely as a side effect of the SAME contribution ledger that also merges
 ordinary earn/spend (`docs/research/dialogue-consequences.md` line 72: *"Already merged (gold
 ledger), listed for context only"*). Turning that ledger off in `credits_mode = personal` (§4.1)
-therefore has a real, product-visible consequence this pass does NOT close: **a credits reward
-granted inside a conversation or script currently reaches only the player whose engine is driving
-that conversation/script** — the non-driving player's own gold is unaffected, because nothing
-folds a contribution into it any more.
+therefore had a real, product-visible consequence the first pass left open: a credits reward
+granted inside a conversation reached only the player whose engine was driving it.
 
-**Why this was not fixed this pass, and what the real fix looks like.** The item-grant relay
-(`DialogueItemSync`/`ScriptItemSync`) already solves the identical shaped problem for ITEMS: it
-diffs the local PC's inventory while this instance owns a conversation/script window and relays
-the delta to the peer as a fresh grant (`docs/research/dialogue-consequences.md` §3). The correct
-fix for gold is the same shape, one layer over: diff the local PC's GOLD during that same
-ownership window and relay the delta as a credit grant to the peer's own engine (a new,
-narrow wire message — not a new merge design, and not the SAME contribution ledger, since that
-ledger's own shape is what personal mode is turning off). Building and wire-testing that parallel
-channel under the schedule for this pass was judged not worth the risk of a rushed, unverified new
-packet type sitting next to a brand-new config surface already touching two hardened channels;
-it is recorded here explicitly, in `docs/limitations.md` (the "Your credits" row) and in
-`docs/review-seamless-2026-09-18.md`'s new row, as the single concrete next-build item for whoever
-picks this up.
+**The fix, as actually shipped**: a wholly new, additive channel — `CreditGrantPacket`/
+`CreditGrantAckPacket` (`PacketType` 103/104, protocol bumped 71 → 72), `CreditGrantSender`
+(reliable retransmit-until-ack, modelled directly on `DialogueGrantSender`), `ICreditGrantSession`
+(a SEPARATE interface, both members default no-op), and `Pumps.CreditGrantPump` — rather than a
+field bolted onto the EXISTING `DialogueGrantPacket`/`IDialogueSession.PublishDialogueGrant`,
+which was the first design tried and rejected: `PublishDialogueGrant`'s signature is overridden
+by concrete test fixtures this pass must not touch (one of them owned, at the same time, by
+another concurrently running pass — see the design's own note on why a brand-new, additive
+interface sidesteps that collision entirely rather than needing coordination).
+
+**Detection** (`CreditGrantRule`, pure): scoped ONLY to a conversation this instance owns
+(`DialoguePump.IsOwningConversation`, read-only, the pump was not modified) — narrower than the
+item channels' own two-window design (`DialoguePump` + `ScriptItemGrantPump`), deliberately: K1's
+dialogue windows lock ordinary player input (no looting, no selling mid-conversation), which is
+what keeps a gold RISE during the window a reliable signal of a genuine reward. Sampling gold
+OUTSIDE a conversation too, the way script-item-sync does for items, was left out on purpose — a
+gold false positive leaks real currency across the personal/shared boundary the player was told
+would hold, a materially worse failure than an item channel's own equivalent (a briefly-duplicate-
+looking item).
+
+**Never double-pay on resync**: `CreditGrantSender.EnqueueRelay` refuses an already-queued
+(origin, sequence) pair (tested directly, `CreditGrantSenderTests`); `CoopClient`'s inbox dedups
+by the same pair (mirroring the pre-existing dialogue-grant channel); `CoopHost`'s inbox NOW ALSO
+dedups the same way — a gap this pass found and closed while building the new channel, since the
+ORIGINAL `CoopHost.HandleDialogueGrant` has no such guard on its own inbox (left as-is; fixing an
+unrelated channel mid-pass was judged out of scope, but is flagged here for whoever next touches
+it).
+
+**The amplification guard**: a grant this instance just APPLIED to its own purse must never, on a
+later tick where this same player also happens to own a separate conversation, read as if that
+conversation had just produced the same amount — `Pumps.CreditGrantPump` folds the applied
+amount straight into its own detect baseline the instant it lands, closing the exact "a
+receiver's own applied change gets misdetected as a fresh local action" shape this codebase's
+history (`docs/research/shared-inventory-v2.md`) warns about repeatedly. Covered directly by
+`CreditGrantPumpTests.AppliedGrantIsNeverMisreadAsAFreshLocalGrantOnALaterTick`.
+
+**Status**: unit/pump-tested (`CreditGrantRuleTests`, `CreditGrantSenderTests`,
+`CreditGrantPumpTests`, plus codec round-trip and handler-registry coverage) — 303 targeted tests
+green alongside every pre-existing test this pass's files touch. NEEDS-LIVE: nothing here has run
+against a real two-instance rig — see §9/§10.
 
 ---
 
@@ -249,111 +307,39 @@ knob.
 
 ---
 
-## 6. Persistence — the joiner's personal backpack across disconnect/rejoin
+## 6. The joiner's personal backpack is NOT carried across disconnect/rejoin — a product decision
 
-### 6.1 What the product brief asks for, restated precisely
+The first pass's own brief asked for the joiner's personal (non-quest) backpack and credits to
+survive a disconnect/rejoin, restored into whatever world is adopted next. A first attempt at
+this was designed and, in a 2026-09-25 follow-up round, fully built and passing 32 tests: a
+`PersonalInventoryCarryRule` pure core (filter-carriable / excess-only restore-ops / a dedup
+guard keyed on the host's own stable `WorldDigest.SaveIdentity`, never the raw per-process
+`WorldEpoch`), a `PersonalInventoryCarrySnapshot` live-bridge capture wired into the SAME points
+`ClientCharacterPersistence` already captures the character from, a `PersonalInventorySidecar`
+file, and a `Pumps.PersonalInventoryRestorePump` replaying the carried delta through a small new
+`PartyPoolPumpV2.TryEnqueueExternalAdd` hook into the exact same cheat-channel primitive the
+party-pool sync itself uses.
 
-"The joiner's personal backpack + credits must survive disconnect/rejoin and world adoption...
-restore into the staged host world on adoption; never duplicate on rejoin; host's own items never
-leak into the joiner's sidecar and vice versa." This is the ONE part of this pass's brief that is
-design-only this round — see §6.4 for what IS built (the pure core, tested) and §6.5 for why the
-live-engine wiring itself is not, and §8 for the concrete follow-up.
+**That whole design was then REMOVED**, in the same round, on an explicit product decision:
 
-### 6.2 Why this is NOT a save-file editing problem (and why that matters)
+> "The joiner's own backpack does NOT need to survive in the host — the joiner is responsible
+> for it."
 
-The obvious-looking approach — read the joiner's `INVENTORY.res`/`PARTYTABLE.res` out of their own
-last save and splice it into the staged autosave's copy of the same files — was considered and
-rejected. `INVENTORY.res` lives INSIDE the outer `SAVEGAME.sav` ERF archive as a member (VERIFIED,
-`docs/research/key-items-and-solo.md` §1's table), and this codebase has no ERF-REBUILDING
-primitive anywhere — every existing save manipulation (`PlayerIfo.TryNeutralisePifo`) is a
-fixed-size, IN-PLACE byte patch of one 16-byte key cell, deliberately chosen BECAUSE it never has
-to resize or relocate anything in the archive. Writing a genuinely new or larger `INVENTORY.res`
-member would mean building a real ERF writer from scratch under this pass's own schedule — exactly
-the kind of "invent a new, unverified low-level primitive under time pressure" this codebase's own
-documented culture (`docs/research/shared-inventory-v2.md`'s whole "why the op-log design cannot
-be patched into safety" chapter) warns against.
+This is a deliberate simplification, not a missed deadline: a joiner's personal items and
+credits belong to THEIR OWN game, the same way any other single-player progress does, and
+nothing in this codebase is expected to carry them into a host's world across a disconnect —
+matching, in spirit, `docs/research/key-items-and-solo.md` §1's own long-standing fact that
+loose items already never travelled through the pifo/character-sidecar carry, for either mode,
+before this feature existed at all. Personal mode does not change that: a joiner who disconnects
+and later rejoins (the same host or a different one) simply starts again with whatever the
+newly-adopted world's own pool already holds, and picks up new personal items/credits from
+there — exactly as before this whole feature shipped.
 
-### 6.3 The design this document recommends instead: replay through the LIVE engine channel
-
-`Odyssey.AddItemToPartyPool`/`RemovePartyPoolStack` (`docs/research/party-pool-sync.md` §2.3-2.4)
-already exist, are already verified against the real party-pool repository, and are EXACTLY the
-primitive needed: given a resref + `ItemIdentity` + count, spawn it into the local player's pool.
-The recommended mechanism, once built:
-
-1. **Capture** (on disconnect, or periodically like `ClientCharacterPersistence` already does for
-   the character): read the joiner's OWN live party-pool totals through the EXISTING
-   `IPartyPoolBridge.TryScanPartyPoolTotals` bridge read (no new engine surface), filter OUT
-   quest items (`!QuestItemCatalog.IsQuestItemTag` — those already travel with the world, not the
-   character) and filter out anything the sidecar already knows it carried last time (the dedup
-   marker, step 3 below), and write the result as a THIRD sidecar file alongside
-   `kotorcoop-character.pifo`/`.json` (e.g. `kotorcoop-character-inventory.json`: a plain
-   `(resref, charges, maxCharges, upgrades, flags, count)` list plus a gold integer) — reusing
-   `ClientCharacterPersistence`'s existing atomic temp-then-rename write pattern.
-2. **Restore** (once the joiner's own engine has finished loading the newly staged world and the
-   party-pool bridge reports ready): replay each carried entry as a synthetic LOCAL intent — the
-   exact same `CheatKinds.PartyPoolAdd` single-slot cheat channel `party_pool_sync` already
-   arbitrates, requesting exactly the primitive the channel was built for. No save file is ever
-   touched; the restore is indistinguishable, from the engine's point of view, from the player
-   having those items already and the pump discovering them on its very first scan.
-3. **Dedup marker**: the sidecar's own metadata (mirroring `SidecarMetadata.CapturedAtUtc`) gains
-   a `RestoredIntoWorldEpoch`/generation stamp, set the moment the restore intents are QUEUED (not
-   merely captured) for a given staged world's `WorldLoadSerial`
-   (`docs/research/session-save.md`'s own generation idiom) — a second adoption of the SAME staged
-   world (e.g. a reconnect before the world changed again) sees the stamp already matches and
-   skips the replay outright, closing the "never duplicate on rejoin" requirement.
-
-### 6.4 What IS built this pass: the pure carry/merge core
-
-`src/KotorCoop.Protocol/PersonalInventoryCarryRule.cs` (`PersonalInventoryCarryEntry`,
-`FilterCarriable`, `ComputeRestoreOps`, `ShouldSkipRestore`) implements and unit-tests
-(`PersonalInventoryCarryRuleTests.cs`) exactly the three pure decisions §6.3 above describes,
-against `PartyPoolStackKey` directly (no new key type): which scanned stacks are even worth
-carrying (quest items excluded — they travel with the world already), how much of a carried
-stack still needs to be re-applied once compared against whatever the adopted world's pool
-already holds (the excess-only arithmetic that makes a retry or a second look idempotent), and
-the world-generation dedup guard that stops a second adoption of the SAME staged world from
-replaying a restore already queued for it. This is deliberately the entire "hard part" proven
-correct and tested in isolation — a caller with a live bridge/dispatcher only has to (1) scan,
-filter and serialise into the sidecar, and (2) once per adopted world, scan again, call
-`ComputeRestoreOps`, and enqueue each result through the existing `CheatKinds.PartyPoolAdd`
-channel. What is NOT built is exactly that caller — see below.
-
-### 6.5 Why the wiring itself is design-only this pass, not built
-
-Two honest reasons, stated plainly rather than glossed over:
-
-1. **The capture side needs a call site this pass did not have budget to wire correctly.**
-   `ClientCharacterPersistence.Capture` (character-only today) is invoked from several places in
-   `CoopCommandDispatcher.SaveLoad.cs` (periodic capture, pre-disconnect capture, verified-load
-   capture) — extending it to ALSO snapshot the live party pool needs a
-   `IPartyPoolBridge` reference threaded to a class that currently only touches
-   `PlayerIfo`/GFF file bytes, and needs its own care about capturing at the RIGHT moment (the
-   same "must not accidentally capture the STAGED host world's pool instead of the joiner's own"
-   class of bug `ClientCharacterPersistence.Capture`'s own three refusals already guard for the
-   character — a personal-inventory capture would need the identical three guards independently
-   re-derived for a different bridge read).
-2. **The restore side's dedup marker interacts with world-epoch/generation bookkeeping
-   (`docs/research/same-module-reload-and-rejoin-identity.md`'s own "never restart per-peer
-   serials at 1" lesson) that this pass did not have room to design AND unit-test carefully.** A
-   half-built restore path that duplicates items on a same-module reload would be strictly worse
-   than not building it at all, per this codebase's own house rule (`shared-inventory-v2.md`'s
-   entire moral: a plausible-sounding design that has not been proven against a real edge case is
-   a liability, not a feature).
-
-**What ships this pass instead, honestly**: the personal-inventory FEATURE (party pool/credits
-gating, §§2-4) does not depend on §6.3 at all — it works correctly for the ordinary case (a single
-continuous session). §6's own gap is specifically the DISCONNECT/REJOIN edge: today, a joiner who
-disconnects and later rejoins (the SAME host or a different one) does NOT carry forward whatever
-personal (non-quest) items or credits they held — they simply start again with whatever the
-newly-adopted world's own pool holds, the same "loose items do not travel through the pifo/sidecar
-carry" fact `docs/research/key-items-and-solo.md` §1 already documents for the OLDER, pre-personal-
-mode world. Personal mode does not make this worse than it already was; it just makes the gap more
-salient, because a personal player is now expected to accumulate real, non-quest progress of their
-own that solo saves already never had a story reason to preserve. No new `docs/limitations.md` row
-is needed for it — the existing "Bringing your own character" row already covers gear-and-stats
-persistence, and loose items were never part of that promise, before or after this pass — but it
-IS the top follow-up item named in this document and in `docs/review-seamless-2026-09-18.md`'s new
-row.
+**What remains in the tree**: nothing carry-specific. `QuestItemCatalog`/`InventorySyncRule`
+(§2-3, the mode gating itself) and the credits-reward relay (§4) are both untouched by this
+decision — only the disconnect/rejoin CARRY was ever in question. No sidecar file, no restore
+pump, no `PartyPoolPumpV2` hook, no `PersonalInventoryCarryRule` — all deleted along with their
+tests, cleanly, rather than left disabled or half-wired.
 
 ---
 
@@ -408,10 +394,12 @@ the same expression `CoopAgent.cs`'s own call site uses (§5).
    non-flagged quest item would simply stop mirroring in personal mode, which is the SAME failure
    shape a story would have shown before `party_pool_sync` existed at all (a per-engine-siloed
    item), not a new crash or corruption class.
-2. **Quest-reward credits currently pay only the conversation-driving player in personal
-   `credits_mode`** (§4.2) — an explicitly open, named gap, not a silent one.
-3. **The joiner's personal backpack/credits do not survive a disconnect/rejoin** (§6) — design
-   only this pass; the ordinary continuous-session case is unaffected.
+2. **The credits-reward relay (§4.2) is unit/pump-tested only, never watched on a live rig** —
+   the conversation-window scoping, the same-tick amplification guard and the host-side inbox
+   dedup fix are all reasoned and tested against fakes, not a real two-instance session.
+3. **The joiner's personal backpack/credits do not survive a disconnect/rejoin, by product
+   decision** (§6) — not a gap to close, a deliberate scope boundary: the joiner's own game
+   owns that state, the same as any other single-player progress.
 4. **Migration (§7) is inferred, not live-tested** — the mechanism is trivial by construction (a
    pure filter with no state of its own to migrate), but "trivial by construction" has been wrong
    before in this exact family of channel (`shared-inventory-v2.md`'s whole history) and deserves
@@ -454,8 +442,16 @@ Two `tools/demo.ps1` instances, shipped defaults (`inventory_mode = personal`,
    console/log to show it adopting personal mode; confirm the joiner's ALREADY-HELD items are not
    retroactively hidden or duplicated by the adoption itself (a live check for §7's own migration
    reasoning).
-8. **The open gap, confirmed rather than assumed.** With `credits_mode = personal`, have the
-   NON-driving player receive a `GiveGoldToCreature` reward through a conversation the OTHER
-   player is running (e.g. a quest turn-in). Confirm the reward currently reaches only the
-   conversation owner's purse — the exact, named limitation §4.2 documents, watched happening
-   once rather than left as a hypothesis.
+8. **The credits-reward relay actually pays both players.** With `credits_mode = personal`, have
+   the NON-driving player watch their own purse while the OTHER player runs a conversation with a
+   genuine `GiveGoldToCreature` reward node (a quest turn-in). Confirm BOTH players' purses rise
+   by the full reward amount — the exact failure §4.2's earlier "open gap" text described, now
+   expected to be fixed; watch the `credit grant: local conversation handed +N credits...`/
+   `credit grant: received +N from peer...` log lines on each side.
+9. **The credits relay never fires outside a conversation.** With `credits_mode = personal`,
+   loot or sell for ordinary gold OUTSIDE any conversation; confirm no `credit grant:` line
+   appears on either side (§4.2's own "conversation-window-only" scoping) and the peer's purse
+   stays unaffected — the false-positive risk that scoping exists to avoid.
+10. **A resent credit grant never double-pays.** Force a lost-ack scenario (e.g. a brief
+    disconnect right after a reward node fires) and confirm the receiving purse rises by exactly
+    the reward amount once the link recovers, not twice.
