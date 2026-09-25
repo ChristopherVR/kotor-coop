@@ -136,6 +136,23 @@ public enum BehaviourFlags : uint
     /// warning, since "the NPC remembers our talk on your screen and not mine" is exactly the
     /// desync this key exists to close.</summary>
     LocalVarSync = 1 << 18,
+
+    /// <summary>coop.ini <c>inventory_mode</c> (personal/shared — <see cref="AgentSettings"/>).
+    /// Whether each engine's own party backpack stays its own (only quest items still mirror)
+    /// or the pool keeps mirroring everything, today's behaviour. HOST-AUTHORITATIVE: the party
+    /// pool channel is one host-published snapshot every peer converges toward
+    /// (docs/research/shared-inventory-v2.md), so the two sides must agree on WHAT that
+    /// snapshot is allowed to contain or one side's items would flicker in and out of the
+    /// other's view. See docs/research/personal-inventory.md.</summary>
+    InventoryPersonal = 1 << 19,
+
+    /// <summary>coop.ini <c>credits_mode</c> (personal/shared). Whether party gold stays each
+    /// side's own (no ledger merge) or the two purses fold into one shared total, today's
+    /// behaviour. HOST-AUTHORITATIVE for the same reason as <see cref="InventoryPersonal"/>: the
+    /// gold ledger is host-published (docs/research/progression-sync.md), so a client running a
+    /// different mode would either starve the host's merge of its own contribution or have its
+    /// own purse silently overwritten by a merge it opted out of.</summary>
+    CreditsPersonal = 1 << 20,
 }
 
 /// <summary>
@@ -260,7 +277,9 @@ public readonly record struct BehaviourDigest(
         int xpRate = PlayerCountScalingRule.Auto,
         int storeStock = PlayerCountScalingRule.Auto,
         int storePrices = PlayerCountScalingRule.Vanilla,
-        bool localVarSync = false)
+        bool localVarSync = false,
+        bool inventoryPersonal = true,
+        bool creditsPersonal = true)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -290,6 +309,8 @@ public readonly record struct BehaviourDigest(
         Set(mapRevealSync, BehaviourFlags.MapRevealSync);
         Set(requireIdenticalSave, BehaviourFlags.RequireIdenticalSave);
         Set(localVarSync, BehaviourFlags.LocalVarSync);
+        Set(inventoryPersonal, BehaviourFlags.InventoryPersonal);
+        Set(creditsPersonal, BehaviourFlags.CreditsPersonal);
 
         return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }

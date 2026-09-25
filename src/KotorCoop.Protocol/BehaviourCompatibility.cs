@@ -97,6 +97,8 @@ public static class BehaviourCompatibility
         CompareFlag(BehaviourFlags.MapRevealSync, "map_reveal_sync", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.RequireIdenticalSave, "require_identical_save", hostAuthoritative: false);
         CompareFlag(BehaviourFlags.LocalVarSync, "local_var_sync", hostAuthoritative: false);
+        CompareFlag(BehaviourFlags.InventoryPersonal, "inventory_mode", hostAuthoritative: true);
+        CompareFlag(BehaviourFlags.CreditsPersonal, "credits_mode", hostAuthoritative: true);
 
         if (host.InterpolationMs != peer.InterpolationMs)
         {

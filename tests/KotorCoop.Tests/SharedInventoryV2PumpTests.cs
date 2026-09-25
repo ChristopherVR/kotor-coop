@@ -1278,4 +1278,100 @@ public class SharedInventoryV2PumpTests
 
         Assert.True(requeued > 0, "a dropped apply must be re-queued once its expiry genuinely elapses");
     }
+
+    // ---- inventory_mode = personal (docs/research/personal-inventory.md) ------------------
+
+    private static readonly PartyPoolStackKey QuestSerum =
+        new("rakghoulserum", 0, 0, 0, ItemIdentity.FlagKnown);
+
+    /// <summary>Default (<c>inventoryPersonalMode: false</c>) must stay byte-for-byte: passing
+    /// no argument at all reproduces every pre-existing test above unchanged, which the whole
+    /// suite already pins. This one just says so explicitly for the new parameter.</summary>
+    [Fact]
+    public void OmittingInventoryPersonalModeIsIdenticalToPassingFalse()
+    {
+        ScriptedBridge bridgeA = new();
+        bridgeA.Pool[Medpac] = 3;
+        StubClientSession sessionA = new();
+        PartyPoolPumpV2 pumpA = new(bridgeA, sessionA, _ => { });
+        pumpA.Pump(Caps);
+
+        ScriptedBridge bridgeB = new();
+        bridgeB.Pool[Medpac] = 3;
+        StubClientSession sessionB = new();
+        PartyPoolPumpV2 pumpB = new(bridgeB, sessionB, _ => { });
+        pumpB.Pump(Caps, inventoryPersonalMode: false);
+
+        Assert.Equal(sessionA.PoolIntents, sessionB.PoolIntents);
+    }
+
+    [Fact]
+    public void PersonalModeClientNeverPublishesOrReconcilesANonQuestItem()
+    {
+        ScriptedBridge bridge = new();
+        bridge.Pool[Medpac] = 3; // a genuine local surplus - would normally be reported on sight
+        StubClientSession session = new();
+        session.PoolSnapshot[Medpac] = 0;
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+
+        for (int i = 0; i < 5; i++)
+        {
+            pump.Pump(Caps, inventoryPersonalMode: true);
+        }
+
+        Assert.Empty(session.PoolIntents);
+        Assert.False(pump.TryDequeuePendingApply(out _));
+        // The item is still genuinely there locally - personal mode never touches the engine,
+        // it only stops the wire channel from ever mentioning the key.
+        Assert.Equal(3, bridge.Pool[Medpac]);
+    }
+
+    [Fact]
+    public void PersonalModeClientStillSyncsAQuestItemExactlyAsBefore()
+    {
+        ScriptedBridge bridge = new();
+        bridge.Pool[QuestSerum] = 1;
+        StubClientSession session = new();
+        session.PoolSnapshot[QuestSerum] = 0;
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps, inventoryPersonalMode: true);
+
+        Assert.Single(session.PoolIntents);
+        Assert.Equal(("rakghoulserum", (ushort)1), (session.PoolIntents[0].Key.Resref, session.PoolIntents[0].Count));
+    }
+
+    [Fact]
+    public void PersonalModeHostPublishesOnlyQuestItemsInItsSnapshot()
+    {
+        ScriptedBridge bridge = new();
+        bridge.Pool[Medpac] = 4;
+        bridge.Pool[QuestSerum] = 1;
+        StubClientSession session = new() { IsEnemyAuthority = true };
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps, inventoryPersonalMode: true);
+
+        Assert.NotNull(session.PublishedHostPoolSnapshot);
+        Assert.Equal(new[] { QuestSerum }, session.PublishedHostPoolSnapshot!.Keys);
+    }
+
+    [Fact]
+    public void PersonalModeHostRefusesANonQuestIntentButAcceptsAQuestOne()
+    {
+        ScriptedBridge bridge = new();
+        StubClientSession session = new() { IsEnemyAuthority = true };
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(2, 1, PartyPoolOpKind.Add, Medpac, 1));
+        session.HostPoolIntents.Add(new PartyPoolIntentPacketV2(2, 2, PartyPoolOpKind.Add, QuestSerum, 1));
+
+        PartyPoolPumpV2 pump = new(bridge, session, _ => { });
+        pump.Pump(Caps, inventoryPersonalMode: true);
+
+        Assert.Contains((2u, 1u, false), session.HostPoolResults);
+        Assert.DoesNotContain(session.HostPoolResults, r => r.Serial == 2 && !r.Accepted);
+        Assert.True(pump.TryDequeuePendingApply(out CoopAgent.PendingPartyPoolApply queued));
+        Assert.Equal(QuestSerum, queued.Key);
+        Assert.False(pump.TryDequeuePendingApply(out _));
+    }
 }

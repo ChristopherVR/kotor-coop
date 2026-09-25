@@ -328,6 +328,20 @@ public sealed record CoopConfig
     /// </summary>
     public bool ScriptItemSync { get; init; } = true;
 
+    /// <summary>coop.ini <c>inventory_mode</c> (`personal`/`shared`). True ("personal", the
+    /// default) means each engine's own party backpack stays its own — the party-pool channel
+    /// mirrors only a quest item between peers; false ("shared") is today's behaviour, every
+    /// stack mirrors. See docs/research/personal-inventory.md.</summary>
+    public bool InventoryPersonal { get; init; } = true;
+
+    /// <summary>coop.ini <c>credits_mode</c> (`personal`/`shared`). True ("personal") means
+    /// each side's own gold stays its own, no ledger merge; false ("shared", today's behaviour)
+    /// merges into one purse. Absent from coop.ini, this follows <see cref="InventoryPersonal"/>
+    /// (see the parse in <see cref="TryLoad"/>) rather than a fixed default of its own, so a
+    /// player who only sets <c>inventory_mode = shared</c> does not end up with a half-personal,
+    /// half-shared economy by accident.</summary>
+    public bool CreditsPersonal { get; init; } = true;
+
     /// <summary>coop.ini <c>class_grant_sync</c> — relay a script's <c>AddMultiClass</c> (the
     /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
     /// NEEDS-LIVE; must match the plugin's own <c>PluginConfig.ReadBool("class_grant_sync",
@@ -868,6 +882,7 @@ public sealed record CoopConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
+        "inventory_mode", "credits_mode",
         "enemy_health", "enemy_damage", "xp_rate", "store_stock", "store_prices",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
@@ -1006,6 +1021,16 @@ public sealed record CoopConfig
         bool host = kv.TryGetValue("mode", out string? mode)
             && mode.Equals("host", StringComparison.OrdinalIgnoreCase);
 
+        // Tolerant the same way JoinModeRule.Parse is: anything other than the literal
+        // "shared" (case-insensitive) - absent, misspelled, "personal" itself - resolves to the
+        // new default, personal. credits_mode, left unset, follows whatever inventory_mode just
+        // resolved to rather than a fixed default of its own - see CreditsPersonal's own remarks.
+        bool inventoryPersonal = !string.Equals(
+            kv.GetValueOrDefault("inventory_mode"), "shared", StringComparison.OrdinalIgnoreCase);
+        bool creditsPersonal = kv.TryGetValue("credits_mode", out string? creditsModeRaw)
+            ? !string.Equals(creditsModeRaw, "shared", StringComparison.OrdinalIgnoreCase)
+            : inventoryPersonal;
+
         return new CoopConfig
         {
             Host = host,
@@ -1072,6 +1097,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("dialogue_item_sync")),
             ScriptItemSync = !kv.ContainsKey("script_item_sync")
                 || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
+            InventoryPersonal = inventoryPersonal,
+            CreditsPersonal = creditsPersonal,
             ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             FirstSaberColorSync = IsTruthy(kv.GetValueOrDefault("first_saber_color_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")

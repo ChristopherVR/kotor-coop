@@ -161,7 +161,13 @@ public sealed class ProgressionPumpTests
     {
         ProgressionBridge bridge = new();
         StubSession session = new() { EnemyAuthority = host };
-        CoopAgent agent = new(bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0 });
+        // This file tests the original merged-purse ledger mechanism itself (credits_mode =
+        // shared) — inventory_mode/credits_mode's new personal-by-default
+        // (docs/research/personal-inventory.md) would otherwise stop every contribution here
+        // from ever folding into the purse. CoopConfigTests/InventorySyncRuleTests cover the
+        // new default and its own gating directly.
+        CoopAgent agent = new(
+            bridge, session, new AgentSettings { HeavyPumpIntervalMs = 0, CreditsPersonal = false });
         return (agent, bridge, session);
     }
 

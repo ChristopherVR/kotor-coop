@@ -244,9 +244,17 @@ internal sealed class PartyPump(
 
         ObserveLocalGold(gold);
 
+        // coop.ini credits_mode = personal (host-authoritative — see SessionOverrides):
+        // InventorySyncRule.ShouldMergeCredits false means each side's own gold stays exactly
+        // as its own engine produced it — see docs/research/personal-inventory.md §4 for what
+        // this deliberately does and does not cover (XP still merges either way; only the gold
+        // ledger's fold/overwrite is gated).
+        bool mergeCredits = InventorySyncRule.ShouldMergeCredits(
+            session.Overrides.CreditsPersonal ?? settings.CreditsPersonal);
+
         if (session.IsEnemyAuthority)
         {
-            PumpProgressionHost(gold, rawGold, experience);
+            PumpProgressionHost(gold, rawGold, experience, mergeCredits);
             return;
         }
 
@@ -255,23 +263,28 @@ internal sealed class PartyPump(
 
         if (session.TryGetProgression(out uint hostGold, out uint hostExperience))
         {
-            // Never below our own XP: a max on both ends means neither instance can pull the
-            // other backwards while a report is in flight.
-            if (bridge.TryWriteProgression(hostGold, Math.Max(hostExperience, experience)))
+            // credits_mode = personal: never let the host's purse overwrite this engine's own —
+            // only experience still merges (max on both ends means neither instance can pull
+            // the other backwards while a report is in flight).
+            uint targetGold = mergeCredits ? hostGold : gold;
+            if (bridge.TryWriteProgression(targetGold, Math.Max(hostExperience, experience)))
             {
                 // Re-baseline to what the engine will actually hold, not what was asked for:
                 // the write clamps at the engine ceiling, and a baseline above it would read
                 // back as a phantom spend the size of the difference.
-                _lastObservedGold = Math.Min(hostGold, GoldReadingRule.Max);
+                _lastObservedGold = Math.Min(targetGold, GoldReadingRule.Max);
             }
         }
     }
 
     /// <summary>
     /// The host: spend every client's outstanding contribution against the party table, then
-    /// publish the result.
+    /// publish the result. When <paramref name="mergeCredits"/> is false (credits_mode =
+    /// personal), every peer's earn/spend report is drained and its baseline advanced — so
+    /// nothing replays as a backlog if the mode later changes — but never folded into
+    /// <c>purse</c>: the host's own purse only ever reflects the host's own local gold reading.
     /// </summary>
-    private void PumpProgressionHost(uint gold, uint rawGold, uint experience)
+    private void PumpProgressionHost(uint gold, uint rawGold, uint experience, bool mergeCredits = true)
     {
         long purse = gold;
         uint rawExperience = experience;
@@ -327,14 +340,22 @@ internal sealed class PartyPump(
                 continue;
             }
 
-            purse += earned - spent;
+            // credits_mode = personal: advance the baseline (so this contribution is never
+            // replayed as a backlog later) without folding it into the host's own purse.
+            if (mergeCredits)
+            {
+                purse += earned - spent;
+            }
 
             _appliedProgression[report.PeerId] = (
                 report.Generation,
                 Math.Max(applied.Earned, report.GoldEarned),
                 Math.Max(applied.Spent, report.GoldSpent));
 
-            log($"purse: peer {report.PeerId} contributed +{earned} -{spent}, party gold {gold} -> {purse}");
+            if (mergeCredits)
+            {
+                log($"purse: peer {report.PeerId} contributed +{earned} -{spent}, party gold {gold} -> {purse}");
+            }
         }
 
         // The party cannot owe money: the engine's gold is unsigned, and a negative write
