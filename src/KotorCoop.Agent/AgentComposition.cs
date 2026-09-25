@@ -205,7 +205,23 @@ internal static class AgentComposition
             // engine's own array does not hold is an id nobody can key work by — the peer
             // damage forwarded against one is owed for ever — so the drop is stated, never
             // silent.
-            resolveDiag.CensusDiagnostic = message => Console.WriteLine($"[census] {message}");
+            // Log only (like [resolve] above): on the console it repeated into the player's
+            // agent-window transcript every census pass (live 2026-09-25).
+            resolveDiag.CensusDiagnostic = message =>
+            {
+                if (options.LogFile is null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    File.AppendAllText(options.LogFile, $"[{DateTime.Now:HH:mm:ss.fff}] [census] {message}{Environment.NewLine}");
+                }
+                catch
+                {
+                }
+            };
         }
 
         // Behaviour-flag negotiation (docs/roadmap-seamless.md Tier 1 item 7): fingerprint
