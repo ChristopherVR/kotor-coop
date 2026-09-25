@@ -37,8 +37,13 @@ namespace KotorCoop.Session;
 ///   client_door_refusal = 1    ; refuse a client's own premature door crossing (default ON,
 ///                               ; live-verified - docs/research/transition-smoothness.md's
 ///                               ; live-pass section)
-///   party_pool_sync = 0        ; sync the shared party item pool (NEEDS-LIVE, default off) -
-///                               ; docs/research/party-pool-sync.md
+///   party_pool_sync = 2        ; sync the shared party item pool: 0 off, 1 the legacy op-log
+///                               ; (docs/research/party-pool-sync.md), 2 the host-authoritative
+///                               ; redesign (default, live-verified since 2026-08-29) -
+///                               ; docs/research/shared-inventory-v2.md
+///   store_sync = 2             ; sync merchant store stock: same 0/1/2 modes as party_pool_sync,
+///                               ; 2 is the default (live-verified since 2026-08-29) -
+///                               ; docs/research/store-sync.md and docs/research/shared-inventory-v2.md
 ///   solo_segment_spectate = 1  ; the OWNER's fight, the other player spectates during a
 ///                               ; story-forced solo segment (default ON, live-verified) -
 ///                               ; docs/research/star-forge-finale.md

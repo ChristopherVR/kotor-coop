@@ -473,6 +473,38 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void CaptureNeverLiftsASinglePlayerSaveWrittenBeforeThisConnection()
+    {
+        // docs/research/key-items-and-solo.md §5: session 1 ended with a capture at T0; the
+        // player then played SOLO (a different character, even) and saved at T1; session 2
+        // was joined at T2 and left with the pre-disconnect quicksave refused (combat). The
+        // newest own save is the solo one and it IS newer than the sidecar — without the
+        // connection floor the co-op character became the single-player PC.
+        string saves = TempDirectory();
+        Assert.True(ClientCharacterPersistence.TryWriteSidecar(
+            saves, BuildPlayer("Co-op character"), 7, DateTime.UtcNow.AddHours(-2), out _));
+        string solo = BuildSaveIn(saves, "000002 - Solo run", "tar_m02aa", 0x10, "Solo character");
+        File.SetLastWriteTimeUtc(Path.Combine(solo, "SAVEGAME.sav"), DateTime.UtcNow.AddHours(-1));
+        DateTime connectedAt = DateTime.UtcNow.AddMinutes(-5);
+
+        Assert.Equal(CharacterCapture.Kept, ClientCharacterPersistence.Capture(
+            saves, solo, hostSaveIdentity: 7, connectedAt, out string diagnostic));
+        Assert.Contains("before this connection", diagnostic, StringComparison.Ordinal);
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct read, out _, out _));
+        Assert.Equal("Co-op character", read.GetLocString("FirstName")!.Text());
+
+        // A save this connection wrote (the in-session quicksave) is captured as before.
+        File.SetLastWriteTimeUtc(Path.Combine(solo, "SAVEGAME.sav"), DateTime.UtcNow);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+            saves, solo, hostSaveIdentity: 7, connectedAt, out _));
+
+        // No floor (MinValue) keeps the pre-existing behaviour for callers that have none.
+        Assert.Equal(CharacterCapture.Kept, ClientCharacterPersistence.Capture(
+            saves, solo, hostSaveIdentity: 7, out diagnostic));
+        Assert.Contains("no newer than the sidecar", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void StagedMarkerToleratesAbsentAndCorruptFiles()
     {
         string saves = TempDirectory();

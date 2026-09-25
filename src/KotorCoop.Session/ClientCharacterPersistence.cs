@@ -319,6 +319,25 @@ public static class ClientCharacterPersistence
         string savesDirectory,
         string saveDirectory,
         uint hostSaveIdentity,
+        out string diagnostic) =>
+        Capture(savesDirectory, saveDirectory, hostSaveIdentity, DateTime.MinValue, out diagnostic);
+
+    /// <summary>
+    /// <see cref="Capture(string, string, uint, out string)"/> with a third refusal: a source
+    /// written before <paramref name="connectedSinceUtc"/> (the start of the connection the
+    /// capture belongs to) is a single-player save, not this session's, and is never lifted
+    /// into the co-op character. Every in-session capture path runs while connected and every
+    /// save the session itself makes is captured as it lands, so the only thing this refuses
+    /// is the newest-save FALLBACK (a refused pre-disconnect/periodic quicksave) landing on a
+    /// save the player made on their own between sessions — which is newer than the sidecar,
+    /// so the rollback rule above does not catch it (docs/research/key-items-and-solo.md §5).
+    /// <see cref="DateTime.MinValue"/> = no floor.
+    /// </summary>
+    public static CharacterCapture Capture(
+        string savesDirectory,
+        string saveDirectory,
+        uint hostSaveIdentity,
+        DateTime connectedSinceUtc,
         out string diagnostic)
     {
         string sourceName = Path.GetFileName(saveDirectory);
@@ -326,6 +345,15 @@ public static class ClientCharacterPersistence
         if (StagedSave.IsStagedCopy(savesDirectory, saveDirectory))
         {
             diagnostic = $"'{sourceName}' is the staged copy of the host's world, not this install's own save - kept the sidecar";
+            return CharacterCapture.Kept;
+        }
+
+        if (connectedSinceUtc != DateTime.MinValue
+            && TryGetSaveLastWriteUtc(saveDirectory, out DateTime writtenUtc)
+            && writtenUtc < connectedSinceUtc)
+        {
+            diagnostic = $"'{sourceName}' (written {writtenUtc:u}) predates this co-op connection ({connectedSinceUtc:u}) - "
+                + "written before this connection began, so it is a single-player save; kept the sidecar";
             return CharacterCapture.Kept;
         }
 
