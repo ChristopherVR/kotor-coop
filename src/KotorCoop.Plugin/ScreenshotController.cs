@@ -47,6 +47,7 @@ internal static unsafe class ScreenshotController
     private const uint GlFront = 0x0404;
     private const uint GlBack = 0x0405;
     private const uint GlPackAlignment = 0x0D05;
+    private const uint GlReadBufferQuery = 0x0C02; // GL_READ_BUFFER
     private const uint GlUnsignedByte = 0x1401;
     private const uint GlViewport = 0x0BA2;
     private const uint GlBgrExt = 0x80E0; // GL_BGR / GL_BGR_EXT - matches a BMP's native byte order, no channel swap needed.
@@ -153,6 +154,19 @@ internal static unsafe class ScreenshotController
         // Tightly packed rows (no row padding from GL's own side) - this controller does the
         // BMP row padding itself in WriteBmp, since GL's row alignment and a BMP's 4-byte row
         // alignment are unrelated requirements.
+        // GL error flags stick until read, and the engine never reads them: a flag its own
+        // rendering left set was reported as OUR failure (live 2026-09-25, 0x0502 on some
+        // frames). Drain them first, so the check below sees only this read's outcome.
+        for (int i = 0; i < 16 && _glGetError() != GlNoError; i++)
+        {
+        }
+
+        // Save and restore what this changes: the engine may read pixels itself.
+        int savedReadBuffer = 0;
+        int savedPackAlignment = 4;
+        _glGetIntegerv(GlReadBufferQuery, &savedReadBuffer);
+        _glGetIntegerv(GlPackAlignment, &savedPackAlignment);
+
         _glPixelStorei(GlPackAlignment, 1);
         _glReadBuffer(front ? GlFront : GlBack);
 
@@ -162,6 +176,12 @@ internal static unsafe class ScreenshotController
         }
 
         uint glError = _glGetError();
+        if (savedReadBuffer != 0)
+        {
+            _glReadBuffer((uint)savedReadBuffer);
+        }
+
+        _glPixelStorei(GlPackAlignment, savedPackAlignment);
         if (glError != GlNoError)
         {
             return $"screenshot: FAILED - glReadPixels reported GL error 0x{glError:X4} "
