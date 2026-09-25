@@ -160,6 +160,7 @@ internal static class ConsoleVerbCatalog
         ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
         ("stealth", "stealth on|off  (the local player's engine stealth mode; a live-test primitive)"),
         ("input", "input click <x> <y> [left|right] | input move <x> <y> | input key <dik hex/dec> [down|up|tap] | input status  (isolated-rig synthetic mouse/keyboard, no real cursor movement)"),
+        ("screenshot", "screenshot <name> [front] | screenshot status  (plugin-side GL screenshot for the isolated rig; writes <gamedir>\\kotorcoop-shots\\<name>.bmp - PrintWindow is unreliable for this OpenGL game)"),
 
         // The live-cast primitive (2026-09-24, docs/research/effect-sync.md §14): a real
         // player cast through the engine's own action queue, so a capture hook that needs the

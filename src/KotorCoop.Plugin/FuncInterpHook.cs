@@ -49,6 +49,10 @@ internal static unsafe class FuncInterpHook
         "input",
         "stealth",
 
+        // The isolated rig's plugin-side screenshot (docs/research/isolated-rig.md):
+        // PrintWindow is unreliable for this OpenGL game. Not a retail verb.
+        "screenshot",
+
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.
         "census", "resolve", "firescript",

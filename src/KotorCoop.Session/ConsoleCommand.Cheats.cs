@@ -405,6 +405,19 @@ public static partial class ConsoleCommand
             : new CoopCommand(CoopCommandKind.Input, Address: text);
     }
 
+    // screenshot <name> [front] | screenshot status  - see CoopCommandKind.Screenshot. Same
+    // shape as ParseGamepad/ParseInput above: the plugin's ScreenshotController.HandleConsole
+    // owns the grammar and the file-name safety check; this only carries the text across the
+    // same 31-byte cheat-text slot (which is also why the path itself can never travel here -
+    // see docs/research/isolated-rig.md for the fixed-directory transport this uses instead).
+    private static CoopCommand ParseScreenshot(string[] rest)
+    {
+        string text = rest.Length == 0 ? "status" : string.Join(' ', rest);
+        return text.Length > GamepadTextMaxLength
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: $"screenshot: arguments too long (max {GamepadTextMaxLength} characters)")
+            : new CoopCommand(CoopCommandKind.Screenshot, Address: text);
+    }
+
     // galaxyaccept  - LIVE-TEST PRIMITIVE, see CoopCommandKind.GalaxyAccept. A TOP-LEVEL verb,
     // deliberately not a `galaxymap` subcommand: it drives HandleInputEvent directly (the same
     // shape skipkey uses), not GalaxyMapVerbRule's ShowGalaxyMapGui/HideGalaxyMapGui/

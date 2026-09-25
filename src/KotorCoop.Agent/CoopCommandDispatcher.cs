@@ -377,6 +377,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Gamepad] = c => SendCheat(new CheatRequest(CheatKinds.Gamepad, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.Input] = c => SendCheat(new CheatRequest(CheatKinds.Input, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.Stealth] = c => SendCheat(new CheatRequest(CheatKinds.Stealth, Text: c.Address ?? string.Empty)),
+        [CoopCommandKind.Screenshot] = c => SendCheat(new CheatRequest(CheatKinds.Screenshot, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
         [CoopCommandKind.MineAction] = c => QueueMineAction(c),
         [CoopCommandKind.LocalVar] = c => QueueLocalVar(c),

@@ -1520,4 +1520,19 @@ internal partial struct SharedBlock
     /// Odyssey.SetStealthMode, the setter the stealth button reaches. A live-test primitive for
     /// stealth targeting and stealth_visual_sync. <c>IGameBridge.CheatKinds.Stealth</c>.</summary>
     public const uint CheatKindStealth = 104;
+
+    /// <summary>
+    /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side screenshot
+    /// for the isolated rig (docs/research/isolated-rig.md), added because <c>PrintWindow</c>
+    /// measured unreliable against this game's OpenGL surface (a fully on-screen, unoccluded
+    /// window captured solid black 2026-09-25). <see cref="OffsetCheatText"/> carries
+    /// <c>"&lt;name&gt;"</c> or <c>"&lt;name&gt; front"</c>; <see cref="ScreenshotController"/>
+    /// reads it from inside the hooked <c>GDI32!SwapBuffers</c> frame callback (BEFORE the real
+    /// swap runs), via <c>glReadPixels</c> resolved by <c>GetProcAddress</c> on
+    /// <c>opengl32.dll</c>, and writes a 24-bit BMP to
+    /// <c>&lt;gamedir&gt;\kotorcoop-shots\&lt;name&gt;.bmp</c> — the path itself never crosses
+    /// the 31-byte cheat-text slot. Needs no world, same as <see cref="CheatKindGamepad"/>/
+    /// <see cref="CheatKindInput"/>. <c>IGameBridge.CheatKinds.Screenshot</c>.
+    /// </summary>
+    public const uint CheatKindScreenshot = 105;
 }
