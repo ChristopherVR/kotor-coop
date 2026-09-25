@@ -42,8 +42,10 @@ internal static class InputInjectionController
                 "move" => Move(parts),
                 "click" => Click(parts),
                 "key" => Key(parts),
+                "text" => Text(arguments),
+                "char" => Char(parts),
                 _ => "input: usage input click <x> <y> [left|right] | input move <x> <y> | "
-                    + "input key <dik hex/dec> [down|up|tap] | input status",
+                    + "input key <dik hex/dec> [down|up|tap] | input text <chars> | input char back|enter | input status",
             };
         }
         catch (Exception ex)
@@ -114,10 +116,78 @@ internal static class InputInjectionController
         uint up = right ? NativeMethods.WmRButtonUp : NativeMethods.WmLButtonUp;
         nuint heldFlag = right ? NativeMethods.MkRButton : NativeMethods.MkLButton;
 
+        // The release goes out a few frames later (OnFrame). Posting both at once lands the down
+        // and the up in the same engine frame; some panels (list rows, modal OK) then only
+        // highlight instead of activating (live 2026-09-25).
         NativeMethods.PostMessage(window, down, heldFlag, lParam);
-        NativeMethods.PostMessage(window, up, 0, lParam);
+        _pendingUpMessage = up;
+        _pendingUpLParam = lParam;
+        _pendingUpFrames = 3;
 
         return $"input: clicked {(right ? "right" : "left")} at {x},{y} (client)";
+    }
+
+    private static uint _pendingUpMessage;
+    private static nint _pendingUpLParam;
+    private static int _pendingUpFrames;
+
+    /// <summary>Releases a click's button a few frames after its press. Called every main-loop
+    /// tick (menu and in-world). MAIN THREAD ONLY.</summary>
+    public static void OnFrame()
+    {
+        if (_pendingUpFrames <= 0 || --_pendingUpFrames > 0)
+        {
+            return;
+        }
+
+        nint window = Odyssey.GameWindow;
+        if (window != 0)
+        {
+            NativeMethods.PostMessage(window, _pendingUpMessage, 0, _pendingUpLParam);
+        }
+    }
+
+    /// <summary><c>input text &lt;chars&gt;</c>: posts WM_CHAR per character, which is what an
+    /// engine edit box reads (the DirectInput `key` path does not reach it).</summary>
+    private static string Text(string arguments)
+    {
+        int start = arguments.IndexOf("text", StringComparison.OrdinalIgnoreCase);
+        string text = start < 0 ? string.Empty : arguments[(start + 4)..].TrimStart();
+        nint window = Odyssey.GameWindow;
+        if (window == 0 || text.Length == 0)
+        {
+            return "input text: nothing to type (or no game window yet)";
+        }
+
+        EnsureUnfocusedDelivery();
+        foreach (char c in text)
+        {
+            NativeMethods.PostMessage(window, NativeMethods.WmChar, c, 1);
+        }
+
+        return $"input: typed {text.Length} character(s)";
+    }
+
+    /// <summary><c>input char back|enter</c>: the control characters an edit box acts on.</summary>
+    private static string Char(string[] parts)
+    {
+        nint window = Odyssey.GameWindow;
+        if (window == 0 || parts.Length < 2)
+        {
+            return "input char: usage input char back|enter [count]";
+        }
+
+        bool enter = parts[1].Equals("enter", StringComparison.OrdinalIgnoreCase);
+        byte c = enter ? NativeMethods.AsciiCarriageReturn : NativeMethods.AsciiBackspace;
+        int count = parts.Length > 2 && int.TryParse(parts[2], out int n) ? Math.Clamp(n, 1, 64) : 1;
+        EnsureUnfocusedDelivery();
+        for (int i = 0; i < count; i++)
+        {
+            NativeMethods.PostMessage(window, NativeMethods.WmChar, c, 1);
+        }
+
+        string what = enter ? "enter" : "backspace";
+        return $"input: sent {count} {what}";
     }
 
     private static string Key(string[] parts)

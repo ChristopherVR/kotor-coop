@@ -338,6 +338,15 @@ internal static unsafe partial class PluginHost
         // Console history/completion follows the ~ console itself, which opens at the menu
         // AND in-world — so it lives on this hook, not the (menu-dormant) SwapBuffers one.
         _consoleAssist?.OnFrame();
+
+        InputInjectionController.OnFrame();
+
+        // World-independent rig requests (input, screenshot, gamepad) at the main menu, where
+        // the SwapBuffers hook that normally serves them is dormant.
+        if (!Odyssey.TryGetWorldEpoch(out _))
+        {
+            _cheats?.OnMenuFrame();
+        }
     }
 
     /// <summary>How long the worker thread may go unseen before the game thread says so. The

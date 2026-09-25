@@ -99,6 +99,44 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
         }
     }
 
+    /// <summary>
+    /// The world-independent requests (gamepad, input, screenshot) from the main-loop hook,
+    /// which also runs at the main menu. The SwapBuffers hook that drives OnFrame is dormant
+    /// there, so before this a menu `input click` or `screenshot` timed out (live 2026-09-25,
+    /// "the game never answered that"). Same serial bookkeeping as OnFrame; anything else is
+    /// left for OnFrame. MAIN THREAD ONLY.
+    /// </summary>
+    public void OnMenuFrame()
+    {
+        uint serial = block.CheatSerial;
+        if (serial == _appliedSerial)
+        {
+            return;
+        }
+
+        uint kind = block.CheatKind;
+        if (kind != SharedBlock.CheatKindGamepad
+            && kind != SharedBlock.CheatKindInput
+            && kind != SharedBlock.CheatKindScreenshot)
+        {
+            return;
+        }
+
+        _appliedSerial = serial;
+        try
+        {
+            Execute(kind);
+        }
+        catch (Exception ex)
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, $"cheat threw: {ex.GetType().Name}");
+        }
+        finally
+        {
+            block.CheatApplied = serial;
+        }
+    }
+
     private void Execute(uint kind)
     {
         // Needs no world: the pad is worth inspecting (and the virtual pad worth driving) on
