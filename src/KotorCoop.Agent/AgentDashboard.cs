@@ -287,9 +287,9 @@ public sealed class AgentDashboard(
 
     /// <summary>
     /// The interactive TUI's whole lifecycle: redirect Console.Out/Error to a capture writer,
-    /// build the Terminal.Gui application and window, run it (blocking, so on a background
-    /// task), and restore everything in <c>finally</c> regardless of how it ends — cancellation,
-    /// Ctrl+C (handled inside the TUI itself; see <see cref="OnGlobalKeyDown"/>), or a crash.
+    /// run <see cref="RunTuiOnDedicatedThread"/> to completion, and restore everything in
+    /// <c>finally</c> regardless of how it ends — cancellation, Ctrl+C (handled inside the TUI
+    /// itself; see <see cref="OnGlobalKeyDown"/>), or a crash.
     /// </summary>
     private async Task RunTuiAsync(CancellationToken cancellationToken)
     {
@@ -306,57 +306,167 @@ public sealed class AgentDashboard(
         Console.SetOut(outCapture);
         Console.SetError(errorCapture);
 
-        IApplication app = Application.Create().Init();
-        _app = app;
-
-        using System.Threading.Timer tickTimer = new(
-            _ =>
-            {
-                try
-                {
-                    app.Invoke(() =>
-                    {
-                        CheckDropFile();
-                        RefreshHeaderAndFooter();
-                    });
-                }
-                catch
-                {
-                    // Best-effort: the app may be mid-shutdown between the timer firing and
-                    // the Invoke call reaching a main loop that is no longer pumping.
-                }
-            },
-            null,
-            TimeSpan.FromMilliseconds(200),
-            TimeSpan.FromMilliseconds(200));
-
-        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
-        {
-            try
-            {
-                app.Invoke(() => RequestQuit(app));
-            }
-            catch
-            {
-                // Best-effort, same reasoning as the timer callback above.
-            }
-        });
-
         try
         {
-            Window window = BuildWindow(app);
-            await Task.Run(() => app.Run(window)).ConfigureAwait(false);
+            // ⚠ A DEDICATED thread (TaskCreationOptions.LongRunning), never the shared
+            // ThreadPool. Regression fixed 2026-09-26: a live join hung after
+            // "pre-disconnect quicksave did not land within the wait ..." with nothing
+            // logged for minutes afterward - a genuine deadlock, root-caused and reproduced
+            // against the real library in tests/KotorCoop.Tests/AgentDashboardThreadingTests.cs
+            // (see TickOnTimerThread's own doc comment for the confirmed mechanism: Terminal.
+            // Gui's TimedEvents.RunTimers() holds its own lock for a due callback's whole
+            // duration, so a callback blocked on SessionManager's _gate also blocks every
+            // OTHER thread's Invoke - including the join-flow thread's own Note() calls,
+            // issued from inside the very Disconnect() call that holds _gate: a genuine
+            // AB-BA cycle, not just latency). That fix (never gathering manager.Agent inside
+            // an Invoke callback) is what actually closes the deadlock.
+            //
+            // This dedicated thread is a SEPARATE, independently-justified correctness fix
+            // found investigating the same regression, not a workaround for it: the previous
+            // shape here (await Task.Run(() => app.Run(window))) parked app.Run's whole
+            // session-long blocking call on an ORDINARY shared ThreadPool worker, and left
+            // IApplication.MainThreadId (stamped once, in Init(), never reassigned by Run())
+            // pointing at whatever thread happened to call Init() rather than the thread that
+            // actually pumps the main loop, so Invoke's "already on the main thread" fast path
+            // could never trigger even for code genuinely running on the pump thread. A
+            // dedicated thread costs nothing extra (this app has exactly one) and gives
+            // Init()+Run() the same thread, as the library's own docs assume.
+            await Task.Factory.StartNew(
+                () => RunTuiOnDedicatedThread(cancellationToken),
+                cancellationToken,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default).ConfigureAwait(false);
         }
         finally
         {
-            _app = null;
-
             outCapture.FlushPending();
             errorCapture.FlushPending();
             Console.SetOut(realOut);
             Console.SetError(realError);
+        }
+    }
 
+    /// <summary>
+    /// Runs on the dedicated thread <see cref="RunTuiAsync"/> starts: builds the Terminal.Gui
+    /// application/window, arms the self-rescheduling periodic tick (see
+    /// <see cref="TickOnTimerThread"/>), and blocks in <c>app.Run(window)</c> until
+    /// <see cref="RequestQuit"/> stops it (Ctrl+C from inside the TUI, or the cancellation
+    /// token firing from outside it).
+    /// </summary>
+    private void RunTuiOnDedicatedThread(CancellationToken cancellationToken)
+    {
+        IApplication app = Application.Create().Init();
+        _app = app;
+
+        System.Threading.Timer? tickTimer = null;
+
+        try
+        {
+            Window window = BuildWindow(app);
+
+            // Self-rescheduling (re-armed at the END of each tick, in TickOnTimerThread's own
+            // finally) rather than a plain repeating Timer: a repeating Timer keeps firing the
+            // NEXT tick on schedule even while the PREVIOUS one is still blocked gathering
+            // data, and under load that piles up OVERLAPPING ticks - each its own ThreadPool
+            // work item - all competing for threads at once. Self-rescheduling guarantees at
+            // most one tick in flight, so a single slow tick (SessionManager._gate contended
+            // for up to CharacterCaptureCadenceRule.SaveWaitMs, 5s, during a live join) costs
+            // exactly one delayed refresh, never a growing backlog.
+            tickTimer = new System.Threading.Timer(
+                _ => TickOnTimerThread(app, tickTimer!),
+                null,
+                TimeSpan.FromMilliseconds(200),
+                System.Threading.Timeout.InfiniteTimeSpan);
+
+            using CancellationTokenRegistration registration = cancellationToken.Register(() =>
+            {
+                try
+                {
+                    app.Invoke(() => RequestQuit(app));
+                }
+                catch
+                {
+                    // Best-effort: the app may be mid-shutdown.
+                }
+            });
+
+            app.Run(window);
+        }
+        finally
+        {
+            tickTimer?.Dispose();
+            _app = null;
             app.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// One periodic tick, running on <see cref="RunTuiOnDedicatedThread"/>'s own dedicated
+    /// thread (NOT the Terminal.Gui main loop): gathers the drop-file check and the header/
+    /// footer TEXT here, then marshals only the (fast, non-blocking) view-text assignment
+    /// onto the UI thread via <c>Invoke</c>.
+    ///
+    /// ⚠ THE OTHER HALF OF THE REGRESSION FIX <see cref="RunTuiAsync"/> DESCRIBES, and the
+    /// half that actually deadlocked a live join (2026-09-26; see
+    /// tests/KotorCoop.Tests/AgentDashboardThreadingTests.cs for the confirmed mechanism,
+    /// found by running it against the real library). <see cref="BuildHeaderLines"/> reads
+    /// <c>manager.Agent</c>, which takes <c>SessionManager</c>'s own lock (<c>_gate</c>) - a
+    /// lock a background join-flow thread can legitimately hold for several seconds at a time
+    /// (<c>SessionManager.Disconnect</c>/<c>DisconnectCore</c> hold it across
+    /// <c>OnDisconnecting</c>, and <c>CoopCommandDispatcher.CaptureCharacterOnDisconnect</c>'s
+    /// own blocking save-landed poll runs entirely inside that window).
+    ///
+    /// Gathering it HERE means a long <c>_gate</c> wait only delays THIS tick's own refresh.
+    /// Gathering it inside the <c>Invoke</c> callback instead would run it ON the Terminal.Gui
+    /// main loop thread - and Terminal.Gui's own <c>TimedEvents.RunTimers()</c> (what the main
+    /// loop calls every iteration to run due callbacks) holds ITS OWN lock
+    /// (<c>_timeoutsLockToken</c>) for the callback's ENTIRE duration, not just to dequeue it.
+    /// Every OTHER thread's <c>Invoke</c> call needs that exact lock to enqueue
+    /// (<c>TimedEvents.Add</c>), so a callback stuck on <c>_gate</c> would ALSO block every
+    /// <c>Note()</c> call the join flow itself makes to report its own progress - and since
+    /// the join flow calls <c>Note()</c> from INSIDE the very <c>SessionManager.Disconnect</c>
+    /// call that holds <c>_gate</c>, that is a genuine AB-BA deadlock between the two locks,
+    /// not just added latency. A live join reproduced exactly this: nothing logged past
+    /// "pre-disconnect quicksave ..." ever again.
+    /// </summary>
+    private void TickOnTimerThread(IApplication app, System.Threading.Timer tickTimer)
+    {
+        try
+        {
+            CheckDropFile();
+            string headerText = string.Join('\n', BuildHeaderLines());
+            string footerText = BuildFooter();
+
+            app.Invoke(() =>
+            {
+                if (_headerLabel is { } header)
+                {
+                    header.Text = headerText;
+                }
+
+                if (_footerLabel is { } footer)
+                {
+                    footer.Text = footerText;
+                }
+            });
+        }
+        catch
+        {
+            // Best-effort: the app may be mid-shutdown, or the game process may have gone
+            // away mid-read (manager.Agent/CheckDropFile talk to it) - a missed tick is
+            // harmless, the next one 200ms later picks up wherever this one left off.
+        }
+        finally
+        {
+            try
+            {
+                tickTimer.Change(TimeSpan.FromMilliseconds(200), System.Threading.Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Torn down mid-tick (RunTuiOnDedicatedThread's own finally already disposed
+                // it); nothing left to reschedule.
+            }
         }
     }
 
@@ -1004,16 +1114,6 @@ public sealed class AgentDashboard(
         {
             int maxTop = Math.Max(view.Lines - view.Viewport.Height, 0);
             view.Viewport = view.Viewport with { Y = Math.Min(savedTop, maxTop) };
-        }
-
-        RefreshFooter();
-    }
-
-    private void RefreshHeaderAndFooter()
-    {
-        if (_headerLabel is { } header)
-        {
-            header.Text = string.Join('\n', BuildHeaderLines());
         }
 
         RefreshFooter();
