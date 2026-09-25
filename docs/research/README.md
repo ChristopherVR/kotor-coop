@@ -111,6 +111,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | [console-open-safe.md](console-open-safe.md) | Programmatically opening the `~` console | RE reference, implemented |
 | [console-cheats.md](console-cheats.md) | Console assist plus the co-op staging cheats | Implemented, live-verified; missing the `recruit` verb (added after this doc's last verb-table update) |
 | [chat-input-scroll.md](chat-input-scroll.md) | In-game chat input and overlay scrolling | RE reference, implemented |
+| [chat-ui.md](chat-ui.md) | Better retail UI surfaces for chat: a persistent inbox, a bark bubble, typing | `CGuiInGame::AppendToDialogBuffer 0x0062B680` verified end to end (the retail Messages screen's Dialogue tab shares its ring with this mod's existing spectate read); `chat_messages_screen` prototype ships OFF, NEEDS-LIVE. Overlay/console recommended unchanged; bark-bubble-over-sender scoped as future work (needs a sender→phantom id path) |
 | [text-color-alpha.md](text-color-alpha.md) | Screen text with color/alpha | RE reference, implemented |
 | [native-browser-panel.md](native-browser-panel.md) | Repurposing `CSWGuiSaveLoad` as the server browser | RE reference, implemented |
 | [server-browser.md](server-browser.md) | The main-menu scrollable server list | RE reference, implemented |

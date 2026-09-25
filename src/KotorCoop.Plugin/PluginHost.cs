@@ -99,6 +99,7 @@ internal static unsafe partial class PluginHost
     private static DeathController? _death;
     private static SpectateController? _spectate;
     private static ChatOverlayController? _chatOverlay;
+    private static ChatMessagesScreenController? _chatMessagesScreen;
     private static ConsoleAssistController? _consoleAssist;
     private static DialogueSpectateController? _dialogueSpectate;
     private static EncounterController? _encounters;

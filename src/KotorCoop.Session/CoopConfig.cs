@@ -899,7 +899,7 @@ public sealed record CoopConfig
     private static readonly string[] DeveloperKnownKeys =
     [
         "activate_render_on_start", "bark_replay", "bark_sync", "behaviour_override_reader",
-        "character_capture_interval_min", "class_grant_sync", "client_door_refusal",
+        "character_capture_interval_min", "chat_messages_screen", "class_grant_sync", "client_door_refusal",
         "client_encounters", "client_load_rejoin", "client_temp_death_suppress",
         "companion_damage_sync", "companion_equip_host_only", "companion_gear_sync",
         "companion_local_combat", "companion_local_combat_range", "companion_xp_sync",
