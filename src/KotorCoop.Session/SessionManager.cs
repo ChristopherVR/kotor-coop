@@ -476,10 +476,18 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         Action? onHostWorldUnavailable = null)
     {
         if (!TryBeginRejoin(expectedGeneration, cancellationToken, out IPEndPoint endpoint,
-                out SessionSettings settings, out long generation))
+                out SessionSettings settings, out SessionOverrides overrides, out long generation))
         {
             return null;
         }
+
+        // docs/research/personal-inventory.md: the negotiated value from the session that was
+        // just torn down (captured inside TryBeginRejoin's lock, BEFORE the teardown, since
+        // Current is null the instant this method's caller sees it) — the best signal a rejoin
+        // has, falling back to this install's own coop.ini when nothing was ever negotiated
+        // (never connected, or the host never differed from local).
+        bool inventoryPersonal = overrides.InventoryPersonal ?? agentSettings.InventoryPersonal;
+        bool creditsPersonal = overrides.CreditsPersonal ?? agentSettings.CreditsPersonal;
 
         AdoptedWorld? adopted;
         if (carriedIsAuthoritative && carriedCharacter is { } coop)
@@ -494,7 +502,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 Log,
                 cancellationToken,
                 worldTransferUdpFallback,
-                onHostWorldUnavailable).ConfigureAwait(false);
+                onHostWorldUnavailable,
+                inventoryPersonal,
+                creditsPersonal).ConfigureAwait(false);
         }
         else
         {
@@ -514,7 +524,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
                 Log,
                 cancellationToken,
                 worldTransferUdpFallback,
-                onHostWorldUnavailable).ConfigureAwait(false);
+                onHostWorldUnavailable,
+                inventoryPersonal,
+                creditsPersonal).ConfigureAwait(false);
         }
 
         if (adopted is null)
@@ -545,12 +557,14 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         CancellationToken cancellationToken,
         out IPEndPoint endpoint,
         out SessionSettings settings,
+        out SessionOverrides overrides,
         out long generation)
     {
         lock (_gate)
         {
             endpoint = null!;
             settings = null!;
+            overrides = SessionOverrides.None;
             generation = _lifecycleGeneration;
             if (cancellationToken.IsCancellationRequested)
             {
@@ -568,6 +582,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
             endpoint = _lastEndpoint;
             settings = _lastSettings;
+            // Read BEFORE the teardown below: the session (and its negotiated overrides) is
+            // gone the instant DisconnectCore returns, so this is the last point a rejoin can
+            // know what the host it was just talking to actually negotiated.
+            overrides = _session?.Overrides ?? SessionOverrides.None;
             DisconnectCore();
             return true;
         }
@@ -659,11 +677,17 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         bool host;
         IPEndPoint? endpoint;
         SessionSettings? settings;
+        SessionOverrides overrides;
         lock (_gate)
         {
             host = _lastHost;
             endpoint = _lastEndpoint;
             settings = _lastSettings;
+            // Read BEFORE Disconnect() below tears the session down — docs/research/
+            // personal-inventory.md: this is the admitted-but-degraded connection's own
+            // negotiated inventory_mode/credits_mode, the best signal available at adoption
+            // time for the every-later-join path (JoinFlow.AdoptWithCoopCharacterAsync).
+            overrides = _session?.Overrides ?? SessionOverrides.None;
         }
 
         if (host || endpoint is null || settings is null)
@@ -671,6 +695,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             Log?.Invoke("new character: nothing to join (not a joined client, or never connected)");
             return null;
         }
+
+        bool inventoryPersonal = overrides.InventoryPersonal ?? agentSettings.InventoryPersonal;
+        bool creditsPersonal = overrides.CreditsPersonal ?? agentSettings.CreditsPersonal;
 
         Disconnect();
 
@@ -683,7 +710,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
             expectedSaveIdentity: 0,
             Log,
             cancellationToken,
-            worldTransferUdpFallback).ConfigureAwait(false);
+            worldTransferUdpFallback,
+            onNoWorldAvailable: null,
+            inventoryPersonal,
+            creditsPersonal).ConfigureAwait(false);
 
         if (adopted is null)
         {

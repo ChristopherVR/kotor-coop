@@ -504,3 +504,170 @@ heap on.
    agent: `added 'dan14_diary' x1 to the party pool`. A reward fired from a real dialogue node
    has not been watched, because no ungated item-giving node exists on Dantooine or Taris
    outside a cutscene.
+
+---
+
+## 12. A REJOIN duplicated the host's purse and backpack — fixed 2026-09-25
+
+**Live-verified bug (2026-09-25 on the rig)**, filed against the whole design above: with
+`inventory_mode`/`credits_mode = personal` (the shipped defaults), a joiner who rejoins through
+world adoption (main menu -> join -> the host's world staged into `saves\000001 - AUTOSAVE`
+with the joiner's character transplanted, §"Headline" above and `docs/research/world-adoption.md`)
+came up with the HOST's party gold and the HOST's party backpack. Evidence: host purse 5000,
+joiner purse 777; joiner disconnected (its pre-disconnect capture landed in the dedicated Co-op
+slot, `000052 - Co-op`, per `docs/research/session-save.md`'s "dedicated co-op save slot"
+entry); host saved; full relaunch (`demo.ps1 -Stop` then `demo.ps1 -ClientAutoCharacter`); after
+`world adoption: adopted 'danm13' … carrying the character from your co-op character`, BOTH
+purses read 5000 and the joiner's party pool repository listed exactly the host's items.
+
+### Root cause, with the exact resources and fields (VERIFIED, read off real GOG saves)
+
+§1 above already states the engine fact: a live PC's backpack and gold are `CSWPartyTable`
+fields (`+0x118`/`+0xFC`), never per-creature, and `PlayerIfo.TryExtractPlayer`/`BuildPifo`
+(what a pifo carries) reads only `Mod_PlayerList[0]` — worn gear, stats, alignment — never the
+party-wide resources. Read directly off a real save this pass (`C:\GOG Games\Star Wars KOTOR
+(GOG)\saves`, read-only, via `tools/kotorfiles.py`):
+
+| Resource | Container | Field(s) | Type |
+| --- | --- | --- | --- |
+| Party gold | `PARTYTABLE.res` — a loose file beside `SAVEGAME.sav` in the save directory (the SAME file `PersonalPazaak` already reads/writes for the personal-card overlay) | `PT_GOLD` | DWORD |
+| Party backpack | `SAVEGAME.sav` (the OUTER ERF — confirmed via `ERF.TryFindMember`: it holds `AVAILNPC0.utc`, `<module>.4pc` (the nested module save), `INVENTORY.res`, `REPUTE.fac` as SIBLING top-level members) → **`INVENTORY.res`** (GFF file type `INV `, resource type 0/"res") | root `ItemList`, a List of item structs (struct id 0). Each item struct carries `BaseItem` (INT), `Tag` (CExoString), `Identified`/`Stolen`/`Dropable`/`Pickpocketable`/`NonEquippable`/`NewItem`/`DELETING` (BYTE), `StackSize` (WORD), `Charges`/`MaxCharges`/`ModelVariation` (BYTE), `Cost`/`AddCost`/`Upgrades` (DWORD), `Description`/`DescIdentified`/`LocalizedName` (CExoLocString), `PropertiesList` (List), position/orientation (FLOAT x6) — **and `Plot` (BYTE)**, present on every item, which the LIVE party-pool wire key (`PartyPoolStackKey`) has no room for at all (§2.1's own caveat) but a save-file reader gets for free. **There is no template-ResRef field on a save's item struct** — a picked-up item is fully inlined, and `Tag` is the only name-shaped field, confirming §2.1's remark that the census's `Tags` set (built from `GetItemPossessedBy` call sites, which match by TAG) is the right thing to match a save-file item against, alongside the `Plot` bit. | — |
+
+Adoption (`WorldAdoption.FetchStageAndVerifyAsync`) stages the host's `SAVEGAME.sav`/
+`PARTYTABLE.res` into the autosave slot VERBATIM (`WorldTransfer.WriteSaveDirectory`), then
+writes only `Temp\pifo.ifo` (the character). Nothing between those two steps ever touched
+`INVENTORY.res`/`PT_GOLD` — the whole reason `party_pool_sync=2`/the credits ledger exist is to
+mirror LIVE engines, and staging a save once at adoption time is outside either channel's reach
+by construction. So every rejoin under `personal` mode handed the joiner a full copy of the
+host's purse and backpack: duplication, not a mirror, and the exact inverse of what `personal`
+mode promises.
+
+### The fix
+
+A pure save-file transform, run at STAGING time — the same place the character is transplanted
+in (`WorldAdoption.FetchStageAndVerifyAsync`, right after `PersonalPazaak.Restore`, before
+`CoopSaveRedirect.MirrorIntoCoopSlot`):
+
+* **`KotorCoop.Memory.GameFiles.ErfWriter`** (new) — a general "replace one member's bytes
+  inside an ERF/SAV archive, keep everything else byte for byte" primitive. The codebase had a
+  reader (`ErfArchive`) but no writer at all; `INVENTORY.res` cannot be edited any other way
+  since it lives INSIDE the `SAVEGAME.sav` container, not as a loose file. Since the entry COUNT
+  never changes, the header/loc-str block/key table/resource table never move — only the
+  resource table's per-entry offset/size cells are rewritten and the data block is re-laid-out
+  fresh after it.
+* **`KotorCoop.Memory.PersonalInventoryGraft`** (new) — `Apply(gameDirectory, stagedSaveDirectory,
+  inventoryPersonal, creditsPersonal, log)`:
+  * Locates the joiner's own latest capture via the dedicated Co-op save slot
+    (`CoopSaveSlot.IsCoopSlot`, `saves\<any prefix> - Co-op`) — READ BEFORE
+    `CoopSaveRedirect.MirrorIntoCoopSlot` (later in the SAME adoption) overwrites that same slot
+    with a copy of the just-staged host world; this ordering is the whole reason the graft has
+    to run where it does.
+  * `credits_mode = personal`: rewrites the staged `PARTYTABLE.res`'s `PT_GOLD` to the joiner's
+    own gold from that capture, or **0** when no own capture exists yet (a true first join) —
+    never the host's purse, per the product brief.
+  * `inventory_mode = personal`: rewrites the staged `SAVEGAME.sav`'s `INVENTORY.res` `ItemList`
+    to the joiner's own NON-quest items from that same capture, PLUS the STAGED (host) world's
+    QUEST items — classified with `QuestItemCatalog.IsQuestItem(plotFlag, tag)`, using the
+    item's own `Plot` byte directly (stricter than the live channel, which only ever gets the
+    resref-only `IsQuestItemTag` half of that rule). The host's own non-quest items never
+    appear; a stale quest-item copy from the joiner's own earlier capture is dropped in favour
+    of the host's current one (the two sets are disjoint by construction, so the merge needs no
+    dedup logic). With no own capture, the backpack is the host's quest items only.
+  * Equipped gear is untouched — it lives on `Mod_PlayerList[0].Equip_ItemList`, a different
+    resource this class never reads, so nothing here can double it.
+  * A pure no-op in EITHER direction when the matching mode is `shared` — `shared` mode stays
+    byte-for-byte today's behaviour, asserted directly by
+    `PersonalInventoryGraftTests.SharedModeIsAByteForByteNoOpInBothDirections`.
+* **Negotiation.** `WorldAdoption`'s adopt overloads gained `bool inventoryPersonal = false, bool
+  creditsPersonal = false` (default OFF — today's/`shared` behaviour, so every pre-existing
+  caller and test is unaffected without being touched). Each production call site resolves the
+  negotiated value the same way every other host-authoritative flag in this codebase does
+  (`session.Overrides.X ?? settings.X`), from the best signal available AT ADOPTION TIME:
+  * `SessionManager.AdoptWithNewCharacterAsync` (the every-later-join path,
+    `JoinFlow.AdoptWithCoopCharacterAsync` — the exact path the live bug reproduced through) and
+    `RejoinAfterLoadAsync` both capture `_session?.Overrides ?? SessionOverrides.None`
+    **inside the same lock, BEFORE the pre-adoption `Disconnect()`/teardown** — the admitted
+    connection's own negotiated `inventory_mode`/`credits_mode` from its Hello/Welcome, the last
+    point either is knowable before the session that negotiated it is gone. Falls back to this
+    install's own `AgentSettings.InventoryPersonal`/`CreditsPersonal` (coop.ini) only when
+    nothing was ever negotiated (never connected before, or the host never differed from local)
+    — never a silent "unknown", since `BehaviourDigest`'s flags always resolve to a concrete
+    bool.
+  * `AdoptCommand.cs` (`agent adopt`, the bare CLI dev verb) never negotiates with anything
+    before adopting, so it reads `CoopConfig.TryLoad(CoopConfig.PathFor(gameDirectory))` directly
+    — this install's own coop.ini, the only signal that exists at that call site.
+
+### Bare reconnect and the host's own direction (checked, not affected)
+
+* **A bare reconnect never re-stages a save.** `SessionManager.Reconnect()` calls `ConnectCore`
+  directly against `_lastSettings` — no call to `WorldAdoption` anywhere on that path. The
+  joiner's own live `CSWPartyTable` (gold, backpack) is untouched in memory; nothing on disk is
+  rewritten. Consistent with `docs/research/disconnect-reconnect.md`'s own settled fact ("World
+  transfer / adoption is a startup path, not a session one. A mid-session reconnect never
+  re-stages a save, which is correct.") — this bug needed a real ADOPTION (a save-mismatch
+  rejoin, or a fresh join/relaunch) to reproduce, never a plain network blip.
+* **There is no "host adopts the joiner" direction.** Adoption is inherently host-to-joiner by
+  construction (`WorldTransfer.ServeAsync` on the host, `WorldAdoption.TryAdoptAsync`/
+  `TryAdoptWithCharacterAsync` on the joiner) — a host never runs any `WorldAdoption` call
+  against itself, so there is no symmetric "joiner's purse leaks into the host" bug to fix. The
+  host's own save is written only by the host's own ordinary saves, exactly as in single player.
+
+### Tests
+
+`tests/KotorCoop.Tests/ErfWriterTests.cs` (the new write primitive: replace-in-place, a shrunk
+member, case-insensitive resref match, a missing member throws, a type mismatch on the same
+resref still counts as missing, a too-short buffer throws) and
+`tests/KotorCoop.Tests/PersonalInventoryGraftTests.cs` (gold becomes the joiner's own; zero with
+no own capture; the backpack merge — own non-quest + host quest, host's own non-quest items
+never appear, a stale joiner quest copy is not duplicated in; `shared` mode is a byte-for-byte
+no-op in both directions independently) — all against real ERF/GFF bytes, no mocking of the file
+layer. `tests/KotorCoop.Tests/WorldAdoptionTests.cs` gained
+`PersonalModeGraftsTheJoinersOwnGoldAndBackpackNotTheHosts`, an end-to-end pass through the real
+`WorldAdoption.TryAdoptAsync` staging path (host purse 5000/joiner capture 777, the exact
+live-observed numbers), including an ordering assertion that the Co-op-slot mirror the SAME
+adoption performs afterward reflects the transformed content, not a fresh copy of the
+un-grafted host world.
+
+### NEEDS-LIVE — nothing in this section has run against the game
+
+The recipe below reproduces the exact live-observed bug's numbers and was NOT run this pass
+(the task explicitly withheld the rig — another stream owns it).
+
+1. **Set up.** Two GOG installs, shipped defaults (`inventory_mode`/`credits_mode = personal`),
+   rebuilt and deployed (`build.ps1 -Install` on both if the plugin changed — it did NOT this
+   pass, only `KotorCoop.Memory`/`KotorCoop.Session`/`KotorCoop.Agent`). Host + joiner in the
+   same module.
+2. Host: `grantgold 5000` (from whatever it started at, up to 5000). Joiner: `grantgold 777`.
+3. Host: `pooladd g_w_ionblstr01 1` (an ordinary item — must NOT reach the joiner after the
+   steps below). Host: `pooladd dan13_bluecryst 1` (a quest item — Tag `dan13_plotcrys`, §11
+   step 2's own fix — must reach the joiner).
+4. Joiner: `disconnect`. Expect the pre-disconnect capture log line naming the dedicated Co-op
+   slot (`character capture: redirected the fresh save to '... - Co-op'` or the disconnect
+   equivalent), and that slot's own `PARTYTABLE.res`/`INVENTORY.res` should show gold 777 and
+   the joiner's own items (NOT the host's `g_w_ionblstr01`/`dan13_bluecryst` — `party_pool_sync`
+   never mirrored the host's ordinary item to begin with, and the quest item was added AFTER
+   the joiner's disconnect in step 3 above so it should not even be present at this point —
+   reorder step 3 before step 2's `grantgold`/disconnect if the recipe is run literally, so the
+   quest item has a chance to mirror to the joiner's OWN pool first and this recipe instead
+   proves it does NOT ride along a rejoin as a duplicate).
+5. Host: `save x`.
+6. Joiner: `demo.ps1 -Stop` then `demo.ps1 -ClientAutoCharacter` (a full relaunch, `join_mode =
+   auto`, sidecar present — the every-later-join path).
+7. **Expected**, after `world adoption: adopted '...' … carrying the character from your co-op
+   character`:
+   * Joiner purse reads **777**, not 5000. `grantgold 1` on the joiner should read 777 -> 778;
+     the host's own purse is untouched at 5000 (or 5001 if the host also ran `grantgold 1`).
+   * Joiner's `items`/party-pool listing shows `dan13_bluecryst` (the shared quest item) but
+     NOT `g_w_ionblstr01` (the host's own ordinary item).
+   * The log names which capture the gold/backpack came from
+     (`world adoption: credits_mode = personal - party gold set to your own 777 (from '... -
+     Co-op')`, `world adoption: inventory_mode = personal - backpack set to your own N item(s)
+     plus M shared quest item(s) from the host …`).
+8. **Regression check — `shared` mode.** Repeat with both installs' `inventory_mode`/
+   `credits_mode = shared`: the joiner should come up with the HOST's purse/backpack exactly as
+   before this fix (today's/`shared` behaviour, unchanged).
+9. **A bare reconnect is unaffected.** With `personal` mode still on, disconnect the joiner and
+   `connect 127.0.0.1` (not a full relaunch) while the worlds still match: no adoption fires
+   (`W_SAVE` absent), and the joiner's own purse/backpack are exactly what they were before the
+   disconnect — confirms the "bare reconnect never re-stages a save" claim above live, not just
+   by code inspection.
