@@ -18,28 +18,34 @@ whenever a coop.ini they load sets one of these, and a similar line for any key 
 recognises at all, so a stray or copy-pasted line is never silently in effect with nothing
 pointing at it.
 
-**Behaviour-flag negotiation (2026-08-27).** Twenty of the keys below (and two CLI-only ones,
-`--no-party-sync` and `--require-identical-save`) are now compared between the two peers at
-join time — `coop.ini`/CLI settings used to run purely from local disk with no way to tell a
-player their partner had a different value, unlike the game-content fingerprint further down
-this doc. A difference is always a **warning** (`W_CFG <key> host=<v> you=<v>`, once per key,
-through the same stdout/`~`-console/in-game-overlay path a content warning uses) — never a
-refusal, never a dropped channel. For nine keys that gate a channel the HOST already drives by
-design, a CLIENT additionally **adopts the host's value at runtime** rather than keep running
-its own: `party_sync`, `effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`,
-`script_item_sync`, `dialogue_item_sync`, `dialogue_recruit_sync`, `movie_relay`. Four of those
-nine (`party_sync`, `script_item_sync`, `dialogue_item_sync`, `movie_relay`) are live-consulted
-directly by the `KotorCoop.Session` pump that runs the channel; the other five
-(`effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`, `dialogue_recruit_sync`)
-are gated entirely inside the separate PLUGIN process, so adoption for them crosses that
-process boundary instead — the agent pushes the adopted bits into the plugin's shared block
-every tick they change, and each of the five plugin controllers resolves its effective value
-from there instead of its own construction-time `coop.ini` read. All nine are host-adopted
-end to end as of 2026-08-27. See [mod-compatibility.md](research/mod-compatibility.md)'s
-"Behaviour-flag negotiation" section for the full design and the exact wire shape. Nothing
-here changes what a key is READ as locally (`CoopConfig`/`AgentSettings` still describe this
-install's own coop.ini/CLI exactly as before); adoption lives in a separate, session-scoped
-`SessionOverrides` layer. All nine of these are developer switches below, not player settings.
+**Behaviour-flag negotiation (2026-08-27, extended 2026-09-25).** Twenty-two of the keys below
+(and two CLI-only ones, `--no-party-sync` and `--require-identical-save`) are now compared
+between the two peers at join time — `coop.ini`/CLI settings used to run purely from local disk
+with no way to tell a player their partner had a different value, unlike the game-content
+fingerprint further down this doc. A difference is always a **warning** (`W_CFG <key> host=<v>
+you=<v>`, once per key, through the same stdout/`~`-console/in-game-overlay path a content
+warning uses) — never a refusal, never a dropped channel. For nine keys that gate a channel the
+HOST already drives by design, a CLIENT additionally **adopts the host's value at runtime**
+rather than keep running its own: `party_sync`, `effect_sync`, `trigger_relay`, `liveness_sync`,
+`map_reveal_sync`, `script_item_sync`, `dialogue_item_sync`, `dialogue_recruit_sync`,
+`movie_relay`. Four of those nine (`party_sync`, `script_item_sync`, `dialogue_item_sync`,
+`movie_relay`) are live-consulted directly by the `KotorCoop.Session` pump that runs the
+channel; the other five (`effect_sync`, `trigger_relay`, `liveness_sync`, `map_reveal_sync`,
+`dialogue_recruit_sync`) are gated entirely inside the separate PLUGIN process, so adoption for
+them crosses that process boundary instead — the agent pushes the adopted bits into the plugin's
+shared block every tick they change, and each of the five plugin controllers resolves its
+effective value from there instead of its own construction-time `coop.ini` read. All nine are
+host-adopted end to end as of 2026-08-27, and all nine are developer switches below, not player
+settings. **Two more, `inventory_mode`/`credits_mode` (2026-09-25), follow the identical
+host-authoritative-adoption rule** — live-consulted directly by `PartyPoolPumpV2`/`PartyPump`,
+same as the four session-side keys above — but unlike the other nine, both are PLAYER settings
+(the "Your character" table above), since choosing personal vs. shared inventory is a first-class
+gameplay decision, not a tuning knob. See [mod-compatibility.md](research/mod-compatibility.md)'s
+"Behaviour-flag negotiation" section for the full design and the exact wire shape, and
+[personal-inventory.md](research/personal-inventory.md) for the two newest keys' own design.
+Nothing here changes what a key is READ as locally (`CoopConfig`/`AgentSettings` still describe
+this install's own coop.ini/CLI exactly as before); adoption lives in a separate, session-scoped
+`SessionOverrides` layer.
 
 Every default below is the CODE's own fallback — what applies if the key is absent from
 `coop.ini` entirely. **The file that actually ships** (`profiles/coop.ini.example`, staged
