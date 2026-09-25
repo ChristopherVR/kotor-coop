@@ -1334,7 +1334,8 @@ free) and `tests/KotorCoop.Tests/CoopAgentPumpFailureRecoveryTests.cs` (end-to-e
 real `CoopAgent.RunAsync`: a repeating failure actually calls `ResetCaches`, a healthy bridge
 never does).
 
-NEEDS-LIVE: a real 20-leg module-warp soak (the shape that found this) run again with this fix
-in place, watching for either a clean run or, if the resolve race still fires under real
-engine timing this pass could not reproduce off a live game, a `ResetCaches` recovery instead
-of a shutdown.
+**Live 2026-09-25 (PASS).** The same soak shape, 30 legs this time, with the host warping
+danm13 ↔ danm14aa every 30 s on the isolated rig. There was no `pump tick failed`, no cache
+reset and no shutdown on either agent. The joiner logged 50 follow lines and followed every
+leg, and both games and both agents were still up at the end. The unfixed build had lost the
+joiner's agent at leg 11.
