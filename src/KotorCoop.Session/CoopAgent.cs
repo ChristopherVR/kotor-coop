@@ -782,11 +782,11 @@ public sealed partial class CoopAgent
         _classGrantPump.Pump(local, peers, _changedModule, _moduleSettledAtMs);
 
         // The first-lightsaber-colour relay (docs/research/class-and-power-grants.md §11):
-        // announce this character's own Zhar-built saber (an equip-slot edge, not an inventory
-        // diff — see the pump's own doc for why), and build this character's own colour once
-        // any party member's build is announced. Nothing at all when first_saber_color_sync is
-        // off.
-        _firstLightsaberBuildPump.Pump(local, _changedModule, _moduleSettledAtMs);
+        // announce this character's own Zhar-built saber (equipped OR just sitting in the
+        // backpack/pool — see the pump's own doc for why both are watched), and give this
+        // character their own colour once any party member's build is announced. Nothing at all
+        // when first_saber_color_sync is off.
+        _firstLightsaberBuildPump.Pump(local);
 
         // Party-placed floor mines (docs/research/mines.md §14): publish a local placement or a
         // local removal, hand the plugin the host's canonical set, one spawn request at a time.
@@ -1218,7 +1218,7 @@ public sealed partial class CoopAgent
     /// exactly; see <see cref="FirstLightsaberBuildPump"/> for the decision.</summary>
     public bool TryDequeuePendingFirstSaberBuild(out string resref)
     {
-        return _firstLightsaberBuildPump.TryDequeuePendingBuild(out resref);
+        return _firstLightsaberBuildPump.TryDequeuePendingGive(out resref);
     }
 
     /// <summary>One party-pool add/remove this instance's own engine still owes, queued for the

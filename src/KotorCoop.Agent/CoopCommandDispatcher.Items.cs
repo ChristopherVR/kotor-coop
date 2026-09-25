@@ -346,15 +346,18 @@ public sealed partial class CoopCommandDispatcher
 
     /// <summary>
     /// The automatic half of the first-lightsaber-colour relay
-    /// (docs/research/class-and-power-grants.md §11): submits this character's own build through
-    /// the SAME <c>equip</c> cheat channel (<see cref="CheatKinds.Equip"/>) the companion-gear
-    /// staging verb already ships — create-then-equip in one engine call, so the new saber never
-    /// sits in the backpack (which, on a live PC, IS the shared party pool — see
-    /// docs/research/key-items-and-solo.md §1). Target 0 and a default (0) slot both mean "the
-    /// local player, the right-weapon slot" to <c>CheatController.Progression.cs</c>'s own
-    /// handler — the SAME defaults the manual <c>equip</c> console verb relies on. Same single-
-    /// slot-channel discipline as <see cref="DrainAutomaticLoot"/>: skip this tick when busy, the
-    /// queue holds the request until the channel frees up.
+    /// (docs/research/class-and-power-grants.md §11): gives this character their own colour
+    /// through the EXACT same give-loot cheat channel and suppression discipline
+    /// <see cref="DrainAutomaticLoot"/> already uses — <see cref="CoopAgent.NoteLocalItemGiven"/>
+    /// FIRST, so <c>ScriptItemGrantPump</c>'s own sweep does not mistake this give for a script
+    /// grant and re-broadcast it (round 2's live-caught duplicate: the OLD design used the
+    /// <c>equip</c> cheat instead, whose create-then-unlink sequence was independently
+    /// re-detected and re-broadcast through two different channels with no suppression at all).
+    /// Deliberately NOT an equip — retail's own construction reward does not auto-equip either
+    /// (live-confirmed round 2), and equipping bypasses the level-1 Weapon Proficiency:
+    /// Lightsaber prerequisite a raw engine equip call has no reason to respect. The saber lands
+    /// in the receiver's own backpack, exactly where retail leaves the builder's own copy; the
+    /// receiver equips it themselves; the game's own prerequisite check applies normally.
     /// </summary>
     private void DrainAutomaticFirstSaberBuild()
     {
@@ -368,7 +371,10 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        Log?.Invoke($"first lightsaber: submitting '{resref}' through the equip channel");
-        SendCheat(new CheatRequest(CheatKinds.Equip, Target: 0, Text: resref), quiet: true);
+        Log?.Invoke($"first lightsaber: submitting '{resref}' through the giveloot channel");
+        agent.NoteLocalItemGiven(CheatKinds.LocalPlayerTarget, resref);
+        SendCheat(new CheatRequest(
+            CheatKinds.GiveLoot, Target: CheatKinds.LocalPlayerTarget, Text: resref, Amount: 1),
+            quiet: true);
     }
 }
