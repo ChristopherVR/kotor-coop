@@ -1600,6 +1600,21 @@ Defaults after this pass: Fear/Stunned stay ON (now live-verified); `disguise_sy
 - **Stealth targeting: PASS (flag path).** With host + joiner on the Endar Spire deck, the joiner's stealth byte (`creature+0x4D1`, read with a raw poke because no console verb toggles stealth) was set to 1: the host logged `phantom 0x14E: back to neutral; attackers released (peer is in stealth)` within about a second, and clearing it logged `phantom 0x14E: joined the player faction; local enemies can fight it`. That proves the read, the `FlagStealth` publication and the stand-in's release from targeting. Not proven: the real engine toggle (`SetActivity` -> `SetStealthMode`, which sets other state the raw byte does not), enemies actually ignoring the stand-in, and `stealth_visual_sync`.
 - **Poison, `poison_sync` off: capture PASS, tick path INCONCLUSIVE.** `applyeffect poison 0x14E 12000 1` on the host: `effects` showed `captured/forwarded poison ... serial 1` (once per application, as designed); the joiner logged `not replaying kind 15 ... its coop.ini key poison_sync is off`. Over 15 s (the effect lasts 12 s) no `combat: took N damage` line reached the joiner and its hit points stayed 9, so §10.3's inference (that the tick path forwards poison damage) was NOT confirmed; poison row 1 may simply not tick on a stand-in. The double-count question (`poison_sync=1` on top of the tick path) needs a poison that visibly ticks first, so `poison_sync` stays OFF.
 
+### 12.9 Live verification, part 3 (2026-09-25): the real stealth toggle
+
+A new dev verb, `stealth on|off`, calls `Odyssey.SetStealthMode` on the local player: the
+engine setter the stealth button reaches, not the raw `creature+0x4D1` byte poke of §12.8.
+Host `coop.ini` had `stealth_visual_sync = 1`; the joiner ran the verb on the Dantooine
+Enclave courtyard.
+- Joiner: `cheat: stealth on ... the mode field reads it`.
+- Host, the same second: `phantom 0x160: back to neutral; attackers released (peer is in
+  stealth)` and `phantom 0x160: engine stealth mode ON (stealth_visual_sync, NEEDS-LIVE)`.
+- On `stealth off`, host: `joined the friendly faction (partner_buffs)` and `engine stealth
+  mode OFF (stealth_visual_sync)`.
+- Both games kept running with no crash, and the stand-in was not left stuck in stealth.
+Still open: what the stand-in looks like on the host's screen (the capture method failed on
+this run; see isolated-rig.md), and whether an enemy's own detection actually skips it.
+
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
 Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the
