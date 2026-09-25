@@ -1,3 +1,16 @@
+# Clicks (or hovers) at a CLIENT pixel in a running KOTOR window.
+#
+# Default path (isolated rig, docs/research/isolated-rig.md): goes through the plugin's own
+# `input` console verb (InputInjectionController, via blockpoke.ps1's `console` verb), which
+# posts the SAME window messages a real mouse click produces (Recipe A,
+# docs/research/mouse-cursor-input.md §6) directly into the target HWND's queue. This never
+# touches the OS cursor at all -- no SendInput, no SetCursorPos -- so it works whatever else is
+# on top of the window, wherever the window sits on (or off) screen, and without moving the
+# user's own mouse. It DOES need the out-of-process agent attached to that game instance (the
+# same requirement every other `blockpoke console ...` verb already has).
+#
+# -RealMouse keeps the old behaviour for comparison/fallback: real SendInput, which moves the
+# user's actual cursor and requires the window to be focused and unoccluded.
 param(
     [Parameter(Mandatory = $true)][int]$X,
     [Parameter(Mandatory = $true)][int]$Y,
@@ -6,8 +19,24 @@ param(
     [int]$SettleMs = 250,
     # Move the cursor and stop, without pressing. KOTOR only draws an object's name while
     # the cursor rests on it, so hovering is how you find out what is under a pixel.
-    [switch]$HoverOnly
+    [switch]$HoverOnly,
+    # Right-click instead of left. Ignored with -HoverOnly.
+    [switch]$Right,
+    # Use the old real-OS-input path (SendInput + SetForegroundWindow): moves the user's actual
+    # cursor, needs focus, and needs the window to be unoccluded. Off by default.
+    [switch]$RealMouse
 )
+
+if (-not $RealMouse) {
+    $blockpoke = Join-Path $PSScriptRoot 'blockpoke.ps1'
+    $bpArgs = @()
+    if ($ProcId -ne 0) { $bpArgs += @('-ProcId', $ProcId) } else { $bpArgs += @('-ProcessName', $ProcessName) }
+    $verb = if ($HoverOnly) { "input move $X $Y" } else { "input click $X $Y" + $(if ($Right) { ' right' } else { '' }) }
+    $bpArgs += @('console', $verb)
+    & $blockpoke @bpArgs
+    Start-Sleep -Milliseconds $SettleMs
+    return
+}
 
 Add-Type @'
 using System;
