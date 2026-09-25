@@ -486,3 +486,13 @@ heap on.
    `credit grant: local conversation handed +200 credits - requesting the peer's own purse
    receive the same amount`. Joiner agent: `credit grant: received +200 from peer 1, purse 1 ->
    201`. Both purses read 1 -> 201 afterwards, so each was paid once with no double pay.
+7. **Store purchases (PASS, 2026-09-25).** On `tar_m02ac` the host bought three things from
+   Kebla (`xxkeblastore`) with `openstore`/`buy`. First the post-load Status Summary had to go
+   (`popmodal`, then `closegui`). Results:
+   - `g_w_ionblstr01` (ordinary) stayed in the host's backpack only.
+   - `ptar_permacrete` (plot) mirrored: joiner agent `added 'ptar_permacrete' x1 to the party
+     pool`.
+   - `g_i_belt010` mirrored too. The census treats the stealth belts as the buyable Korriban
+     stealth gate (§7.2), so a bought stealth belt is shared by design.
+   - Kebla's stock dropped on both engines through the store channel.
+   - The host's purse went 3201 -> 2851. The joiner's stayed at 201.
