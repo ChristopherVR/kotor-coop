@@ -268,4 +268,38 @@ public class ContentCompatibilityTests
         Assert.NotNull(decoded);
         Assert.Equal(digest, decoded.Digest);
     }
+
+    [Fact]
+    public void CombineKeepsEveryPeersDropsAndEachFindingOnce()
+    {
+        CompatibilityNote save = new(CompatibilityCode.Save, SessionCapabilities.Enemies | SessionCapabilities.Doors, "different save");
+        CompatibilityVerdict clean = new(RefusalReason.None, SessionCapabilities.All, []);
+        CompatibilityVerdict differentSave = new(RefusalReason.None, SessionCapabilities.All & ~(SessionCapabilities.Enemies | SessionCapabilities.Doors), [save]);
+
+        CompatibilityVerdict combined = ContentCompatibility.Combine([clean, differentSave, differentSave]);
+
+        Assert.Equal(differentSave.Allowed, combined.Allowed);
+        Assert.Single(combined.Notes);
+        Assert.Equal(RefusalReason.None, combined.Refusal);
+    }
+
+    [Fact]
+    public void CombineIsOrderIndependentSoAHostWithTwoPeersNeverFlaps()
+    {
+        CompatibilityNote save = new(CompatibilityCode.Save, SessionCapabilities.Enemies, "different save");
+        CompatibilityVerdict clean = new(RefusalReason.None, SessionCapabilities.All, []);
+        CompatibilityVerdict differentSave = new(RefusalReason.None, SessionCapabilities.All & ~SessionCapabilities.Enemies, [save]);
+
+        Assert.Equal(
+            ContentCompatibility.Combine([clean, differentSave]).Dropped,
+            ContentCompatibility.Combine([differentSave, clean]).Dropped);
+    }
+
+    [Fact]
+    public void CombineOfNoPeersAllowsEverything()
+    {
+        CompatibilityVerdict combined = ContentCompatibility.Combine([]);
+        Assert.Equal(SessionCapabilities.All, combined.Allowed);
+        Assert.Empty(combined.Notes);
+    }
 }

@@ -179,7 +179,7 @@ public sealed partial class CoopHost
                     peer.PartyPoolReleaseWhenReady = false;
                 }
 
-                _compatibility = EffectiveVerdict(peer);
+                _compatibility = ContentCompatibility.Combine(_peers.Values.Select(EffectiveVerdict));
             }
         }
     }

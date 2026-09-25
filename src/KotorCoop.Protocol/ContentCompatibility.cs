@@ -308,6 +308,41 @@ public static class ContentCompatibility
         | SessionCapabilities.GroundItems | SessionCapabilities.Party | SessionCapabilities.Store;
 
     /// <summary>
+    /// The session-wide verdict a host shows when several peers are connected: every channel
+    /// ANY peer's verdict dropped stays dropped (the same intersection
+    /// <c>CoopHost.Capabilities</c> takes), and each finding is kept once, from the first peer
+    /// that raised it. Live 2026-09-25: with two joiners, one on the host's save and one not, the
+    /// host published whichever peer's digest arrived last. Its announcer then logged
+    /// "shared again" about once a second for the whole session.
+    /// </summary>
+    public static CompatibilityVerdict Combine(IEnumerable<CompatibilityVerdict> verdicts)
+    {
+        ArgumentNullException.ThrowIfNull(verdicts);
+        SessionCapabilities allowed = SessionCapabilities.All;
+        List<CompatibilityNote> notes = [];
+        HashSet<CompatibilityCode> seen = [];
+        RefusalReason refusal = RefusalReason.None;
+        foreach (CompatibilityVerdict verdict in verdicts)
+        {
+            allowed &= verdict.Allowed;
+            if (refusal == RefusalReason.None)
+            {
+                refusal = verdict.Refusal;
+            }
+
+            foreach (CompatibilityNote note in verdict.Notes)
+            {
+                if (seen.Add(note.Code))
+                {
+                    notes.Add(note);
+                }
+            }
+        }
+
+        return new CompatibilityVerdict(refusal, allowed, notes);
+    }
+
+    /// <summary>
     /// Refines a verdict with world-time facts. A different globals catalogue drops world
     /// state and doors (the keys would name different variables); a different save drops
     /// every object-id-keyed channel; a different GIT for the module both players are
