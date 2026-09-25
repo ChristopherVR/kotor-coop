@@ -200,7 +200,7 @@ public sealed class ScriptItemGrantPumpTests
         (CoopAgent agent, ScriptItemBridge bridge, ScriptItemSession session) = Build(scriptItemSync: false);
 
         agent.PumpOnce();
-        bridge.Possessed = [("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
         agent.PumpOnce();
         agent.PumpOnce();
 
@@ -227,13 +227,13 @@ public sealed class ScriptItemGrantPumpTests
 
         agent.PumpOnce(); // seeds an empty baseline
 
-        bridge.Possessed = [("g_w_lghtsbr01", new ItemIdentity(1, 3, 3, 0x5, ItemIdentity.FlagKnown))];
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 3, 3, 0x5, ItemIdentity.FlagKnown))];
         agent.PumpOnce(); // a script placed it there between the two reads
 
         (string partnerTag, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
         Assert.Equal(string.Empty, partnerTag);
         MaterialisedLootItem item = Assert.Single(items);
-        Assert.Equal("g_w_lghtsbr01", item.Resref);
+        Assert.Equal("g_w_blstrpstl001", item.Resref);
         Assert.Equal(0x5u, item.Identity.Upgrades);
     }
 
@@ -307,7 +307,7 @@ public sealed class ScriptItemGrantPumpTests
         // Enter a conversation and gain an item mid-conversation the way a reward node would —
         // this window belongs entirely to DialoguePump.PumpDialogueItemGrants.
         bridge.Local = bridge.Local with { Flags = PlayerState.FlagInDialogue };
-        bridge.Possessed = [("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
         agent.PumpOnce();
         agent.PumpOnce();
 
@@ -323,7 +323,7 @@ public sealed class ScriptItemGrantPumpTests
 
         // Own a conversation, gain an item (DialoguePump's own territory), then leave it.
         bridge.Local = bridge.Local with { Flags = PlayerState.FlagInDialogue };
-        bridge.Possessed = [("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
+        bridge.Possessed = [("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown))];
         agent.PumpOnce();
 
         bridge.Local = bridge.Local with { Flags = 0 };
@@ -392,12 +392,12 @@ public sealed class ScriptItemGrantPumpTests
         bridge.Possessed =
         [
             .. bridge.Possessed,
-            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
         ];
         agent.PumpOnce();
 
         (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
-        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+        Assert.Equal("g_w_blstrpstl001", Assert.Single(items).Resref);
     }
 
     /// <summary>
@@ -447,12 +447,12 @@ public sealed class ScriptItemGrantPumpTests
         bridge.Possessed =
         [
             .. bridge.Possessed,
-            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
         ];
         agent.PumpOnce();
 
         (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
-        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+        Assert.Equal("g_w_blstrpstl001", Assert.Single(items).Resref);
     }
 
     /// <summary>
@@ -544,7 +544,7 @@ public sealed class ScriptItemGrantPumpTests
         bridge.Possessed =
         [
             ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
-            ("g_w_lghtsbr01", new ItemIdentity(2, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_blstrpstl001", new ItemIdentity(2, 0, 0, 0, ItemIdentity.FlagKnown)),
         ];
         agent.PumpOnce();
         Assert.Empty(session.PublishedGrants);
@@ -553,7 +553,7 @@ public sealed class ScriptItemGrantPumpTests
         bridge.LastPossessedItemReadWasComplete = true;
         agent.PumpOnce();
         MaterialisedLootItem item = Assert.Single(Assert.Single(session.PublishedGrants).Items);
-        Assert.Equal("g_w_lghtsbr01", item.Resref);
+        Assert.Equal("g_w_blstrpstl001", item.Resref);
     }
 
     /// <summary>The bridge's own between-lives verdict gates the same way, independently of
@@ -590,11 +590,11 @@ public sealed class ScriptItemGrantPumpTests
         bridge.Possessed =
         [
             .. bridge.Possessed,
-            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
         ];
         agent.PumpOnce();
         (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
-        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+        Assert.Equal("g_w_blstrpstl001", Assert.Single(items).Resref);
     }
 
     /// <summary>A blip with NO epoch edge afterwards (a transient read failure in a world that
@@ -615,11 +615,11 @@ public sealed class ScriptItemGrantPumpTests
         bridge.Possessed =
         [
             .. bridge.Possessed,
-            ("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
+            ("g_w_blstrpstl001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown)),
         ];
         agent.PumpOnce();
 
         (_, IReadOnlyList<MaterialisedLootItem> items) = Assert.Single(session.PublishedGrants);
-        Assert.Equal("g_w_lghtsbr01", Assert.Single(items).Resref);
+        Assert.Equal("g_w_blstrpstl001", Assert.Single(items).Resref);
     }
 }

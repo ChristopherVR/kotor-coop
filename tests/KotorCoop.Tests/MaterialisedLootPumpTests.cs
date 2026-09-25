@@ -263,8 +263,11 @@ public class MaterialisedLootPumpTests
         agent.PumpOnce();
 
         Assert.Equal(2, session.Published.Count);
-        Assert.Single(bridge.PossessedQueries);
-        Assert.Equal(2, bridge.PossessedQueries[0].Count);
+        // Only the corpse sweeps count: other pumps (the first-saber watch) read the local
+        // player's own inventory (0x7FFFFFFF) on the same bridge.
+        var corpseSweeps = bridge.PossessedQueries.Where(q => !q.Contains(0x7FFFFFFFu)).ToList();
+        Assert.Single(corpseSweeps);
+        Assert.Equal(2, corpseSweeps[0].Count);
     }
 
     /// <summary>Object ids are reassigned per module load, so an id remembered as dead in one

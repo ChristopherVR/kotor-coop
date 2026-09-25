@@ -155,13 +155,13 @@ public sealed class DialogueGrantPumpTests
         bridge.InDialogue = true;
         pump.PumpDialogue(State(bridge), SessionCapabilities.All);
 
-        bridge.Possessed = [("g_w_lghtsbr01", Identity(1))];
+        bridge.Possessed = [("g_w_blstrpstl001", Identity(1))];
         bridge.InDialogue = false;
         Thread.Sleep(350);
         pump.PumpDialogue(State(bridge), SessionCapabilities.All);
 
         MaterialisedLootItem item = Assert.Single(Assert.Single(session.Grants).Items);
-        Assert.Equal("g_w_lghtsbr01", item.Resref);
+        Assert.Equal("g_w_blstrpstl001", item.Resref);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public sealed class DialogueGrantPumpTests
         bridge.Possessed =
         [
             ("g_w_shortswrd01", Identity(9)),
-            ("g_w_lghtsbr01", Identity(1)),
+            ("g_w_blstrpstl001", Identity(1)),
         ];
         bridge.LastPossessedItemReadWasComplete = false;
         Thread.Sleep(350);
@@ -210,7 +210,7 @@ public sealed class DialogueGrantPumpTests
         Assert.Single(session.Grants);
         IReadOnlyList<MaterialisedLootItem> recovered = session.Grants[0].Items;
         Assert.Single(recovered);
-        Assert.Equal("g_w_lghtsbr01", recovered[0].Resref);
+        Assert.Equal("g_w_blstrpstl001", recovered[0].Resref);
     }
 
     [Fact]
@@ -263,7 +263,7 @@ public sealed class DialogueGrantPumpTests
             ("g_i_pazaak", Identity(2)),
             ("g_a_clothes01", Identity(3)),
             ("g_w_shortsword", Identity(4)),
-            ("g_w_lghtsbr01", Identity(5)),
+            ("g_w_blstrpstl001", Identity(5)),
         ];
         pump.PumpDialogue(State(bridge), SessionCapabilities.All);
 
@@ -309,11 +309,11 @@ public sealed class DialogueGrantPumpTests
         bridge.Possessed =
         [
             ("g_i_pazaak", Identity(2)),
-            ("g_w_lghtsbr01", Identity(3)),
+            ("g_w_blstrpstl001", Identity(3)),
         ];
         agent.PumpOnce();
         Assert.Equal(2, session.Grants.Count);
-        Assert.Equal("g_w_lghtsbr01", Assert.Single(session.Grants[1].Items).Resref);
+        Assert.Equal("g_w_blstrpstl001", Assert.Single(session.Grants[1].Items).Resref);
         Assert.Equal(string.Empty, session.Grants[1].PartnerTag);
     }
 
@@ -332,7 +332,7 @@ public sealed class DialogueGrantPumpTests
             ("g_i_pazaak", Identity(2)),
             ("g_a_clothes01", Identity(3)),
             ("g_w_shortsword", Identity(4)),
-            ("g_w_lghtsbr01", Identity(5)),
+            ("g_w_blstrpstl001", Identity(5)),
         ];
         pump.PumpDialogue(State(bridge), SessionCapabilities.All);
 
