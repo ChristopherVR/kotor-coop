@@ -158,6 +158,7 @@ internal static class ConsoleVerbCatalog
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
         ("chargen", "chargen quick [class 0-5] | chargen accept  (picks a class + Quick template, or presses Play)"),
         ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
+        ("stealth", "stealth on|off  (the local player's engine stealth mode; a live-test primitive)"),
         ("input", "input click <x> <y> [left|right] | input move <x> <y> | input key <dik hex/dec> [down|up|tap] | input status  (isolated-rig synthetic mouse/keyboard, no real cursor movement)"),
 
         // The live-cast primitive (2026-09-24, docs/research/effect-sync.md §14): a real

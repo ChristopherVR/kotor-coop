@@ -120,6 +120,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.ShowGuiEquip] = "showgui equip 1",
         [CoopCommandKind.JediChoice] = "jedichoice",
         [CoopCommandKind.Input] = "input click 485 322",
+        [CoopCommandKind.Stealth] = "stealth on",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one

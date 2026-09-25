@@ -1004,6 +1004,10 @@ public enum CoopCommandKind
     /// queue. Works with no world loaded, same as <see cref="Gamepad"/>. Local only.
     /// </summary>
     Input,
+
+    /// <summary><c>stealth on|off</c> - the local player's engine stealth mode (a live-test
+    /// primitive for stealth targeting and <c>stealth_visual_sync</c>). Local only.</summary>
+    Stealth,
 }
 
 /// <summary>
@@ -1232,6 +1236,7 @@ public static partial class ConsoleCommand
         new(["galaxyaccept"], ParseGalaxyAccept),
         new(["gamepad"], ParseGamepad),
         new(["input"], ParseInput),
+        new(["stealth"], ParseStealth),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),
         new(["mgkill"], ParseMgKill),

@@ -47,6 +47,7 @@ internal static unsafe class FuncInterpHook
         // The isolated rig's synthetic mouse/keyboard (docs/research/isolated-rig.md). Not a
         // retail verb.
         "input",
+        "stealth",
 
         // A diagnostic, not a cheat: prints what this instance's enemy census holds and what
         // its own engine says about each id. It shadows nothing the retail console owns.

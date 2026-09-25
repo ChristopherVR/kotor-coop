@@ -768,6 +768,9 @@ public static class CheatKinds
     /// </summary>
     public const uint Input = 103;
 
+    /// <summary>`stealth on|off` - see <c>SharedBlock.CheatKindStealth</c>.</summary>
+    public const uint Stealth = 104;
+
     /// <summary>
     /// Mirrors <c>SharedBlock.CheatTargetLocalPlayer</c> — equal by VALUE (not by reference;
     /// the plugin is NativeAOT win-x86 and cannot be referenced from here), chosen because it

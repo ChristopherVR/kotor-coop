@@ -127,6 +127,16 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             return;
         }
 
+        if (kind == SharedBlock.CheatKindStealth)
+        {
+            bool on = ReadCheatText().Trim().Equals("on", StringComparison.OrdinalIgnoreCase);
+            bool ok = Odyssey.SetStealthMode(player, on);
+            PluginHost.Log($"cheat: stealth {(on ? "on" : "off")} on the local player - {(ok ? "the mode field reads it" : "the mode field did NOT change")}");
+            Answer(ok ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                $"stealth {(on ? "on" : "off")}{(ok ? string.Empty : " refused by the engine")}");
+            return;
+        }
+
         switch (kind)
         {
             case SharedBlock.CheatKindGod:

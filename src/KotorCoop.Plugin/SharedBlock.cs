@@ -1515,4 +1515,9 @@ internal partial struct SharedBlock
     /// <c>IGameBridge.CheatKinds.Input</c>.
     /// </summary>
     public const uint CheatKindInput = 103;
+
+    /// <summary>`stealth on|off`: the local player's engine stealth mode through
+    /// Odyssey.SetStealthMode, the setter the stealth button reaches. A live-test primitive for
+    /// stealth targeting and stealth_visual_sync. <c>IGameBridge.CheatKinds.Stealth</c>.</summary>
+    public const uint CheatKindStealth = 104;
 }
