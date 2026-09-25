@@ -27,7 +27,7 @@ namespace KotorCoop.Protocol;
 /// (docs/ARCHITECTURE.md) can pull it into the NativeAOT build unchanged if a future pass wants
 /// the plugin side to classify locally too.
 /// </summary>
-public static class QuestItemCatalog
+public static partial class QuestItemCatalog
 {
     /// <summary>
     /// The literal tags from key-items-and-solo.md §7.2 (the four store-purchasable gates) and
@@ -76,7 +76,7 @@ public static class QuestItemCatalog
     /// §2.1's key shape) — see <see cref="IsQuestItem"/> for the fuller two-signal rule a
     /// caller with the item's own Plot flag in hand should prefer instead.</summary>
     public static bool IsQuestItemTag(string? resref) =>
-        !string.IsNullOrEmpty(resref) && Tags.Contains(resref);
+        !string.IsNullOrEmpty(resref) && (Resrefs.Contains(resref) || Tags.Contains(resref));
 
     /// <summary>The full rule: a quest item is the engine's own Plot flag OR a census tag —
     /// either one is sufficient. Prefer this over <see cref="IsQuestItemTag"/> alone whenever

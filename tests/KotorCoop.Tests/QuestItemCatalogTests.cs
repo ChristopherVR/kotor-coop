@@ -59,4 +59,17 @@ public class QuestItemCatalogTests
         Assert.NotEmpty(QuestItemCatalog.Tags);
         Assert.All(QuestItemCatalog.Tags, tag => Assert.False(string.IsNullOrWhiteSpace(tag)));
     }
+
+    [Theory]
+    [InlineData("dan13_bluecryst")]   // tag dan13_plotcrys, resref differs: live 2026-09-25 it never mirrored
+    [InlineData("ptar_rakghoulser")]  // the buyable Taris serum
+    [InlineData("man28_envirosuit")]
+    public void APlotItemsResrefIsAQuestPoolKey(string resref) =>
+        Assert.True(QuestItemCatalog.IsQuestItemTag(resref));
+
+    [Theory]
+    [InlineData("g_i_medeqpmnt01")]
+    [InlineData("g_w_lghtsbr01")]
+    public void AnOrdinaryItemIsNot(string resref) =>
+        Assert.False(QuestItemCatalog.IsQuestItemTag(resref));
 }

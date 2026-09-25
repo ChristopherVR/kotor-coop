@@ -455,3 +455,28 @@ Two `tools/demo.ps1` instances, shipped defaults (`inventory_mode = personal`,
 10. **A resent credit grant never double-pays.** Force a lost-ack scenario (e.g. a brief
     disconnect right after a reward node fires) and confirm the receiving purse rises by exactly
     the reward amount once the link recovers, not twice.
+
+## 11. Live result (2026-09-25)
+
+Two-player rig on `000010 - campaign_dantooine`, shipped defaults (personal/personal), full page
+heap on.
+1. **Non-quest item stays personal (PASS).** Host `pooladd g_i_medeqpmnt01 3`: the joiner's
+   inventory never gained it.
+2. **Quest item mirrors (PASS, after a fix).** The first attempt, `pooladd dan13_bluecryst 1`,
+   never reached the joiner. `QuestItemCatalog.IsQuestItemTag` compared the pool key's RESREF with
+   a list of TAGS, and the pool carries no Plot bit. This crystal's resref is `dan13_bluecryst`
+   and its tag is `dan13_plotcrys`. Fixed with a generated table,
+   `QuestItemCatalog.Resrefs`: the 129 resrefs of every retail UTI (557 in the base archives,
+   436 in module RIMs) with Plot = 1 or a census tag. Re-run: the joiner got
+   `0x14E dan13_bluecryst yours [pool]`, while the medpacs stayed host-only.
+3. **Credits stay separate (PASS).** Host `grantgold 500` (0 -> 500); the joiner then read
+   0 -> 1 on its own `grantgold 1`, and the host read 500 -> 501. No `credit grant:` line
+   appeared outside a conversation (step 9).
+4. **Negotiation (PASS).** With the joiner's coop.ini set to shared, it logged
+   `W_CFG inventory_mode host=1 you=0` and `adopted host's inventory_mode`, then behaved
+   personally (no medpacs, purse 0).
+5. **Shared mode unchanged (PASS).** Both set to shared: medpacs mirrored (stack 3 on the joiner)
+   and the purse was one (joiner 300 -> 301 after the host's +300).
+6. **Quest-reward credits relay: NOT run live.** The only danm13 payer, `ebo46_lurarka` E36
+   (`k_pebo_lurarka13`), sits behind Sasha-quest replies the staged save cannot reach. It is
+   covered by unit and pump tests only.
