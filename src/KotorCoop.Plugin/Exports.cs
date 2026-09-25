@@ -229,11 +229,14 @@ internal static unsafe class Exports
 
         int result = _directInput8Create(instance, version, riid, output, outer);
 
-        // Gamepad support (GamepadController): the IDirectInput8 the game is about to receive
-        // is wrapped so the keyboard device it creates from it can carry the pad's key events.
-        // A vptr swap on the returned object only, fenced like EnsureStarted above; coop.ini
-        // gamepad = 0 leaves the object exactly as the real DLL returned it.
-        if (result >= 0 && PluginConfig.ReadBool("gamepad", true))
+        // Gamepad support (GamepadController) AND input isolation (docs/research/isolated-rig.md)
+        // both need the same wrap: the IDirectInput8 the game is about to receive is replaced so
+        // the keyboard/mouse devices it creates from it can be proxied (pad key events appended,
+        // or a real read neutralised). A vptr swap on the returned object only, fenced like
+        // EnsureStarted above; with BOTH coop.ini gamepad = 0 and isolate_real_input = 0 the
+        // object is left exactly as the real DLL returned it. isolate_real_input alone (gamepad
+        // off) still wraps, so a rig install does not need gamepad = 1 for isolation to work.
+        if (result >= 0 && (PluginConfig.ReadBool("gamepad", true) || DirectInputKeyboardHook.IsolateRealInput))
         {
             try
             {

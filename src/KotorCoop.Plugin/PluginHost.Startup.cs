@@ -26,6 +26,19 @@ internal static unsafe partial class PluginHost
 
     private static void InstallHooks()
     {
+        // coop.ini isolate_real_input (default 0, rig-only - docs/research/isolated-rig.md):
+        // read BEFORE DirectInput8Create's caller wraps the mouse/keyboard devices below, so the
+        // very first CreateDevice already sees the right flag. Never touches a real player;
+        // only tools/demo.ps1 or demo3.ps1's -Isolated switch ever writes a 1, and only in the
+        // two rig installs, only for the run.
+        DirectInputKeyboardHook.IsolateRealInput = PluginConfig.ReadBool("isolate_real_input", false);
+        if (DirectInputKeyboardHook.IsolateRealInput)
+        {
+            Log("input isolation: ON (coop.ini isolate_real_input=1) - real keyboard/mouse "
+                + "input to this game is dropped; the plugin's own synthetic input (input/gamepad "
+                + "console verbs) still works");
+        }
+
         // Install the frame hook from here because DirectInput8Create - our caller - is
         // verified to run on the game's main thread during startup. Installing from the
         // worker thread would patch an import from the wrong thread.

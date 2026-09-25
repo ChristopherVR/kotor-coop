@@ -234,6 +234,139 @@ as always. **NEEDS-LIVE**: this whole verb (both `back` and `front`), and the BM
 orientation, against the real game — the rig was locked by the other session for this entire
 pass.
 
+## 5. Input isolation: the REAL keyboard/mouse must never reach an isolated window (2026-09-25)
+
+**The bug, as reported.** Live on 2026-09-25, with `-Isolated` running (both windows ghosted —
+invisible, click-through, on the user's primary monitor while they played something else): the
+host's in-game camera kept swinging between two plugin screenshots taken seconds apart, with
+nobody at that instance's keyboard or mouse. This is unacceptable on its own (a rig run must not
+be affected by, or leak into, whatever the user is doing on their real desktop) and it is also a
+correctness hazard for every other test this rig runs — a screenshot, a click assertion, a
+combat log could all be quietly contaminated by the user's own unrelated mouse movement.
+
+### Mechanism (evidence)
+
+**VERIFIED (static RE, this repo's own disassembly, docs/research/mouse-cursor-input.md and
+docs/re/frame-hook.md) — two completely separate input paths exist, and only one of them was
+ever guarded:**
+
+1. **The cursor / clicks are window-message-driven, not DirectInput.** `Global::WinMessageHandler
+   0x00402800` reads `WM_MOUSEMOVE`/`WM_*BUTTON*` straight out of `lParam` and that is the ONLY
+   place the cursor position (`CClientExoAppInternal+0x3C8/+0x3CC`) is ever written — see
+   mouse-cursor-input.md's whole answer sheet. `DIMOUSESTATE.rgbButtons` is never even read.
+   Consequence: a `WS_EX_TRANSPARENT` ghost window (`movewin.ps1 -Ghost`, §3 above) already
+   protects this path structurally — Windows routes mouse hit-testing straight through a
+   transparent window to whatever is underneath it, so the ghosted KOTOR window does not receive
+   real `WM_MOUSEMOVE`/`WM_*BUTTON*` for the point under the user's real cursor at all. This is
+   why `input click`/`input move` (`InputInjectionController`, `PostMessage`-based) were already
+   safe and already worked unfocused (§2 above) — and also why this path was NOT the bug.
+
+2. **The camera is DirectInput-driven, and nothing guarded it.** The engine polls a SEPARATE
+   `IDirectInputDevice8` mouse object once a frame, immediate mode, `cbData 0x10`
+   (`DIMOUSESTATE`) — `CExoInputInternal::UpdateMouseDelta 0x005E0110` →
+   `CExoRawInputInternal::GetMouseState 0x005E4050` → `IDirectInputDevice8::GetDeviceState`
+   (docs/re/frame-hook.md's "polling path", VERIFIED) — and turns `lX`/`lY` straight into the
+   camera look axes (`CExoInputInternal+0x3A0/+0x3A4`, mouse-cursor-input.md §"CORRECTION to the
+   working assumption"). This device is set up with `SetCooperativeLevel(hwnd, 0x0A)`
+   (`CExoRawInputInternal::InitializeDirectInputMouse 0x005E3FA0`, VERIFIED), the same flag value
+   the keyboard uses. **Before this pass the mouse device was never wrapped at all** — only the
+   keyboard was (`DirectInputKeyboardHook`, built for the gamepad layer) — so any successful poll
+   of it passed the real, physical mouse's relative motion straight through, unfiltered, with no
+   regard for window focus, ghosting, click-through or z-order (DirectInput's device polling has
+   nothing to do with Win32 window-message routing — it is a completely separate path).
+
+**A concrete, in-repo candidate for HOW a background window's poll could still succeed (INFERRED,
+not live-confirmed this pass — flagged NEEDS-LIVE below):** a background/unfocused window is not
+normally able to keep this device acquired — the keyboard's own empirical behaviour under the
+identical `0x0A` cooperative level is to fail every read with `DIERR_NOTACQUIRED 0x8007000C`
+while unfocused (`DirectInputKeyboardHook`'s own doc comment, live-verified 2026-09-03). But
+`CClientExoApp::SetInputActive 0x005EDA10` — read via disassembly 2026-09-03,
+`Odyssey.Input.cs`'s own comment on that thunk — "writes the flag, **re-Acquires the keyboard
+and mouse devices**". `Odyssey.EnsureInputActive()` calls that function DIRECTLY, in-process,
+every single time the rig's own synthetic input needs to get past `WinMessageHandler`'s activity
+gate (`InputInjectionController.EnsureUnfocusedDelivery`, `GamepadController.OnFrame`'s virtual-
+pad branch) — a call that is not gated by the window's real OS foreground state the way a genuine
+`WM_ACTIVATE` sequence would be. That re-Acquire is a plausible, concrete mechanism for the real
+mouse device's `Acquire()` to succeed again even while the ghost window is never the OS foreground
+window. The fix below does not depend on resolving this further: whatever the exact path that let
+a real poll through, neutralising the state at the proxy makes it irrelevant.
+
+### The fix
+
+`isolate_real_input` (coop.ini, default `0` — never affects a real player):
+
+* **Mouse — new wrap.** `src/KotorCoop.Plugin/DirectInputMouseHook.cs`: the same forwarding-
+  proxy technique `DirectInputKeyboardHook` already uses (a patched vptr crashes the game —
+  DirectInput validates the vptr it is handed — so a real `IDirectInputDevice8` is wrapped, never
+  copied), reusing that class's own `BuildProxyTable`/`NewProxy` rather than duplicating them.
+  `DirectInputKeyboardHook.CreateDeviceDetour` now recognises GUID_SysMouse (one byte off
+  GUID_SysKeyboard: `...2B60` vs `...2B61`) alongside the keyboard's GUID_SysKeyboard and wraps
+  whichever device the game just created. When isolating, `GetDeviceState` zeroes the entire
+  16-byte `DIMOUSESTATE` (`lX`, `lY`, `lZ`, all 4 button bytes) it hands back, regardless of what
+  the real device reported — "the real mouse did not move and no button is down", the only thing
+  this device is ever polled for. Off (the default): a byte-for-byte passthrough, so a real
+  player sees no change of any kind, only the cost of one extra indirection DirectInput itself
+  already required.
+* **Keyboard — extended, already-wrapped path.** `DirectInputKeyboardHook.GetDeviceStateDetour`/
+  `GetDeviceDataDetour` now drop every REAL key transition when isolating (immediate-state bytes
+  masked to the plugin's own held/synthetic state only; buffered real events hidden by reporting
+  zero of them before the existing synthetic-append loop runs) while the plugin's OWN queued
+  synthetic events — `input key ...`, the gamepad layer — are completely unaffected, since they
+  were never read from the real device in the first place.
+* **Pure logic, tested directly** (no engine pointer involved): `InputIsolationRule.cs` — what
+  count of real buffered events survives, how a state byte is masked, whether a given
+  `GetDeviceState` size is the plain `DIMOUSESTATE` this device ever actually uses. See
+  `tests/KotorCoop.Tests/InputIsolationRuleTests.cs`.
+* **No new window-message hook.** The cursor/click path (§"Mechanism" point 1 above) is already
+  structurally protected by ghosting (`WS_EX_TRANSPARENT`), and building a new inline detour on
+  `WinMessageHandler` to filter messages would be the kind of hook this repo has been burned by
+  before when shipped without a live pass (`docs/research/*` "hook prologue = whole instructions"
+  — a relocated prologue that splits an instruction crashed every computer-terminal reply for
+  weeks before it was caught). Out of scope for a pass that cannot launch the game to verify it;
+  left as a documented gap, not silently assumed safe. If a future isolated layout ever stops
+  using a transparent window, this gap needs re-examining first.
+* **Wiring:** `PluginHost.Startup.cs` reads `isolate_real_input` before any device gets wrapped
+  (`DirectInputKeyboardHook.IsolateRealInput`, set once per process start) and logs when it is on.
+  `Exports.DirectInput8Create`'s wrap gate now also fires on `isolate_real_input` alone (not only
+  `gamepad`), so a rig install does not need `gamepad = 1` for isolation to take effect. Three
+  config readers agree on the OFF default: the plugin's own `PluginConfig.ReadBool`, the digest-
+  only key lists in both `PluginConfig.cs` and `KotorCoop.Session/CoopConfig.cs` (developer
+  switch, not player-facing — docs/CONFIG.md's "Diagnostics (rig-only)" table), matching the
+  pattern `docs/config-default-drift.md`'s own note insists on for every default.
+* **`tools/demo.ps1`/`demo3.ps1 -Isolated`** now write `isolate_real_input = 1` into every
+  instance's coop.ini for the run (same `Set-CoopIniKey` helper `join_mode`/`auto_start_agent`
+  already use, written BEFORE the game process launches so the first `DirectInput8Create` already
+  sees it) and restore `0` on `-Stop` — the rig must never leave a player's install silently
+  eating their own input after the run ends, the same rule `auto_start_agent`/`join_mode` already
+  follow.
+
+### NEEDS-LIVE
+
+Nobody could launch the game this pass (explicit instruction). Two things are unverified:
+
+1. **The fix itself.** Launch `pwsh tools\demo.ps1 -Isolated`, then take two plugin screenshots
+   of the HOST instance (`tools\shot.ps1`, or `blockpoke console 'screenshot <name>'`) about 10
+   seconds apart while physically moving the real mouse around on the desk in between. The camera
+   must be in the exact same orientation in both images — no drift, no swing. Before this fix the
+   same recipe is what caught the bug in the first place. `blockpoke console 'input status'`
+   (or `gamepad status`) should report `DI mouse wrapped` and `isolate real input ON`.
+2. **Synthetic input still works while isolating.** `input click 686 17` (client px, the
+   Messages icon per the demo's own click-test convention — mouse-cursor-input.md §5's runtime-
+   formula caveat still applies at other resolutions) must still open the Messages screen with
+   `isolate_real_input = 1` in effect — confirming the plugin's own `PostMessage`-based clicks and
+   `DirectInputKeyboardHook.Enqueue`-based keys are genuinely unaffected by isolation, only the
+   real hardware is. If the mouse device never gets wrapped (`DI mouse not wrapped` in `input
+   status`) on a real machine, check whether `DirectInput8Create` actually created a
+   `GUID_SysMouse` device before the plugin's `CreateDeviceDetour` ran, or capture the GUID it
+   see instead — `IsSystemMouse`'s byte layout is decoded from the same, unverified-live pattern
+   `IsSystemKeyboard` already uses successfully, so a mismatch would point at something else
+   about this specific machine's DirectInput setup, not the decode itself.
+3. **The exact re-acquire mechanism** in the "Mechanism" section above is INFERRED, not
+   confirmed — the fix does not depend on it being right, but if a future session has spare rig
+   time, watching `CClientExoApp::SetInputActive`/the mouse device's `Acquire()` return value
+   around an `EnsureInputActive()` call while the window is genuinely backgrounded would close
+   that gap for good.
+
 ## User-facing summary
 
 * **Screenshots while occluded/off-screen/ghosted**: `tools\shot.ps1`, same interface as

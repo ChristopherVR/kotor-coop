@@ -173,6 +173,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\GamepadTextEntry.cs" Link="Plugin\GamepadTextEntry.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoff.cs" Link="Plugin\RetainedEnemyHandoff.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoffProof.cs" Link="Plugin\RetainedEnemyHandoffProof.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\InputIsolationRule.cs" Link="Plugin\InputIsolationRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

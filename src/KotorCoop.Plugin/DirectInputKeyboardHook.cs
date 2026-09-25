@@ -30,6 +30,15 @@ namespace KotorCoop.Plugin;
 /// All of it runs on the game's main thread: the game creates its devices and reads them
 /// there, and the frame hook that queues events runs there too — so the queue is a plain
 /// ring with no locking.
+///
+/// <see cref="CreateDeviceDetour"/> also recognises the system MOUSE device (GUID_SysMouse) and
+/// hands it to <see cref="DirectInputMouseHook"/> — a second, sibling proxy built with this
+/// class's own <see cref="BuildProxyTable"/>/<see cref="NewProxy"/> (kept <c>internal</c> so it
+/// can be reused rather than duplicated). See <see cref="IsolateRealInput"/> and
+/// docs/research/isolated-rig.md's "Input isolation" section for why the mouse needed wrapping
+/// too: the engine polls it once a frame for the camera look axes
+/// (<c>CExoInputInternal::UpdateMouseDelta</c>), a path that has nothing to do with the cursor
+/// or window messages and so was not covered by the keyboard wrap above.
 /// </summary>
 internal static unsafe class DirectInputKeyboardHook
 {
@@ -89,6 +98,18 @@ internal static unsafe class DirectInputKeyboardHook
     /// for a real pad, whose events are only ever queued while the window IS foreground.
     /// </summary>
     public static bool DeliverWhileUnacquired { get; set; }
+
+    /// <summary>
+    /// coop.ini <c>isolate_real_input</c> (default 0, off for every real player): when true,
+    /// every REAL keyboard press is dropped before the engine ever sees it —
+    /// <see cref="GetDeviceStateDetour"/> answers with only the plugin's own held (synthetic)
+    /// keys, <see cref="GetDeviceDataDetour"/> answers with only the plugin's own queued
+    /// (synthetic) events. <see cref="DirectInputMouseHook"/> reads this SAME flag for the
+    /// mouse device. Set once, from <c>PluginConfig.ReadBool("isolate_real_input", false)</c> —
+    /// only <c>tools/demo.ps1</c>/<c>demo3.ps1 -Isolated</c> ever turn it on, and only for the
+    /// run. See docs/research/isolated-rig.md's "Input isolation" section.
+    /// </summary>
+    public static bool IsolateRealInput { get; set; }
 
     public static (uint ObjectSize, uint Flags, uint Capacity, bool HasBuffer) LastReadShape { get; private set; }
 
@@ -176,14 +197,21 @@ internal static unsafe class DirectInputKeyboardHook
         int hr = createDevice(real, guid, device, outer);
         try
         {
-            if (hr >= 0 && device != null && *device != 0 && IsSystemKeyboard(guid))
+            if (hr >= 0 && device != null && *device != 0)
             {
-                WrapKeyboard(device);
+                if (IsSystemKeyboard(guid))
+                {
+                    WrapKeyboard(device);
+                }
+                else if (DirectInputMouseHook.IsSystemMouse(guid))
+                {
+                    DirectInputMouseHook.Wrap(device);
+                }
             }
         }
         catch (Exception ex)
         {
-            LastDiagnostic = $"keyboard wrap failed: {ex.Message}";
+            LastDiagnostic = $"input device wrap failed: {ex.Message}";
         }
 
         return hr;
@@ -253,7 +281,7 @@ internal static unsafe class DirectInputKeyboardHook
             byte* state = (byte*)data;
             for (int i = 0; i < 256; i++)
             {
-                state[i] |= Held[i];
+                state[i] = InputIsolationRule.MaskKeyboardStateByte(IsolateRealInput, state[i], Held[i]);
             }
         }
 
@@ -300,7 +328,12 @@ internal static unsafe class DirectInputKeyboardHook
         }
         else
         {
-            count = *inOut;
+            // Isolating: the real device may well have real key events waiting (a rig window is
+            // never foreground, but a brief re-acquire during the automated load step, or a
+            // stray background-eligible read, could still hand some back) - hide them by
+            // reporting zero of them, exactly as the synthetic-append loop below expects, so it
+            // overwrites buffer[0..) with the plugin's own queued events instead.
+            count = InputIsolationRule.VisibleRealEventCount(IsolateRealInput, *inOut);
         }
         byte* buffer = (byte*)data;
         uint timestamp = (uint)Environment.TickCount;
@@ -324,7 +357,9 @@ internal static unsafe class DirectInputKeyboardHook
         return hr;
     }
 
-    private static nint NewProxy(nint table, nint real, nint methodA, nint methodB)
+    /// <summary>Internal (not private): <see cref="DirectInputMouseHook"/> reuses this rather
+    /// than duplicating it — same technique, same reasons, see the class doc comment.</summary>
+    internal static nint NewProxy(nint table, nint real, nint methodA, nint methodB)
     {
         nint proxy = NativeMethods.VirtualAlloc(0, ProxySize, MemCommitReserve, NativeMethods.PageReadWrite);
         if (proxy == 0)
@@ -354,7 +389,9 @@ internal static unsafe class DirectInputKeyboardHook
     /// The slots named in <paramref name="detours"/> point at the plugin's own functions
     /// instead, which do the same re-targeting themselves.
     /// </summary>
-    private static nint BuildProxyTable(int slots, params (int Slot, nint Detour)[] detours)
+    /// <summary>Internal (not private): <see cref="DirectInputMouseHook"/> reuses this rather
+    /// than duplicating it — same technique, same reasons, see the class doc comment.</summary>
+    internal static nint BuildProxyTable(int slots, params (int Slot, nint Detour)[] detours)
     {
         int tableBytes = slots * sizeof(nint);
         nint block = NativeMethods.VirtualAlloc(0, (nuint)(tableBytes + slots * ThunkStride), MemCommitReserve, PageExecuteReadWrite);

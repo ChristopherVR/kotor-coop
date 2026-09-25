@@ -62,7 +62,9 @@ internal static class InputInjectionController
             : "unavailable";
         string line = $"input: window 0x{window:X}, foreground {NativeMethods.IsForeground()}, "
             + $"engine input {(Odyssey.IsInputActive ? "active" : "inactive")}, cursor {cursor}, "
-            + $"DI keyboard {(DirectInputKeyboardHook.IsKeyboardWrapped ? "wrapped" : "not wrapped")}";
+            + $"DI keyboard {(DirectInputKeyboardHook.IsKeyboardWrapped ? "wrapped" : "not wrapped")}, "
+            + $"DI mouse {(DirectInputMouseHook.IsWrapped ? "wrapped" : "not wrapped")}, "
+            + $"isolate real input {(DirectInputKeyboardHook.IsolateRealInput ? "ON" : "off")}";
         PluginHost.Log(line);
         return line;
     }

@@ -54,10 +54,41 @@ $agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoo
 $movewin = Join-Path $PSScriptRoot 'movewin.ps1'
 $inputalive = Join-Path $PSScriptRoot 'inputalive.ps1'
 
+# Defined ABOVE the -Stop block (same reasoning as demo.ps1's own copy): -Stop restores
+# isolate_real_input on the way out, and a PowerShell function does not exist until its
+# definition line has executed.
+function Set-CoopIniKey {
+    param([string]$Directory, [string]$Key, [string]$Value)
+
+    $path = Join-Path $Directory 'coop.ini'
+    $lines = if (Test-Path $path) { @(Get-Content $path) } else { @('[coop]') }
+
+    $found = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^\s*$([regex]::Escape($Key))\s*=") {
+            $lines[$i] = "$Key = $Value"
+            $found = $true
+        }
+    }
+
+    if (-not $found) { $lines += "$Key = $Value" }
+    Set-Content -Path $path -Value $lines -Encoding ASCII
+}
+
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
     Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
-    'stopped agents and game instances'
+
+    # Undo -Isolated's real-input drop (docs/research/isolated-rig.md's "Input isolation"
+    # section) in all three installs - the rig must not leave a real player's install silently
+    # eating their own keyboard/mouse after the run ends.
+    foreach ($g in $Game1, $Game2, $Game3) {
+        if (Test-Path (Join-Path $g 'coop.ini')) {
+            Set-CoopIniKey -Directory $g -Key 'isolate_real_input' -Value '0'
+        }
+    }
+
+    'stopped agents and game instances; restored isolate_real_input = 0 in every install'
     return
 }
 
@@ -161,8 +192,15 @@ function Set-CoopName {
 for ($i = 0; $i -lt 3; $i++) {
     Set-AutoStartAgent -Directory $games[$i] -Value '0'
     Set-CoopName -Directory $games[$i] -PlayerName $names[$i]
+    if ($Isolated) { Set-CoopIniKey -Directory $games[$i] -Key 'isolate_real_input' -Value '1' }
 }
 'auto_start_agent = 0 written to all three coop.ini files (this script owns the agents)'
+if ($Isolated) {
+    # Same "Input isolation" switch as demo.ps1 -Isolated (docs/research/isolated-rig.md):
+    # drops real keyboard/mouse input to every instance while it runs invisibly. Restored to 0
+    # on -Stop above.
+    'isolate_real_input = 1 written to all three coop.ini files for this run'
+}
 
 # ------------------------------------------------------------------ launching ----
 #

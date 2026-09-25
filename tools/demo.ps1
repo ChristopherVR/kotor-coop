@@ -123,6 +123,13 @@ if ($Stop) {
     Set-CoopIniKey -Directory $Game2 -Key 'join_mode' -Value 'save'
     "restored join_mode = save in the client install"
 
+    # Undo -Isolated's real-input drop (docs/research/isolated-rig.md's "Input isolation"
+    # section) - the rig must not leave a real player's install silently eating their own
+    # keyboard/mouse after the run ends.
+    Set-CoopIniKey -Directory $Game1 -Key 'isolate_real_input' -Value '0'
+    Set-CoopIniKey -Directory $Game2 -Key 'isolate_real_input' -Value '0'
+    "restored isolate_real_input = 0 in both installs"
+
     # The agent windows are launched with -NoExit, so killing the agent leaves an empty
     # console sitting there. Left alone they pile up one pair per run until the desktop is
     # full of dead terminals, and the next run's windows are indistinguishable from the
@@ -176,6 +183,19 @@ Remove-Item (Join-Path $WorkDir 'consoles.txt') -Force -ErrorAction SilentlyCont
 # (-Stop restores the flag to 1: the rig must not permanently reconfigure the product.)
 Set-AutoStartAgent -Directory $Game1 -Value '0'
 Set-AutoStartAgent -Directory $Game2 -Value '0'
+
+# -Isolated: also stop REAL keyboard/mouse input from reaching either game while it runs
+# invisibly on the user's own monitor (docs/research/isolated-rig.md's "Input isolation"
+# section). The DirectInput mouse device is polled once a frame for the camera look axes
+# regardless of the window's real OS focus, so a ghosted window can otherwise let the user's
+# real mouse spin the camera (or a stray keypress act) while they play something else.
+# Restored to 0 on -Stop, same as auto_start_agent above.
+if ($Isolated) {
+    Set-CoopIniKey -Directory $Game1 -Key 'isolate_real_input' -Value '1'
+    Set-CoopIniKey -Directory $Game2 -Key 'isolate_real_input' -Value '1'
+    "isolate_real_input = 1 written to both installs for this run (real keyboard/mouse input " +
+        "to either game is dropped; the plugin's own input/gamepad console verbs still work)"
+}
 
 # -ClientNewCharacter: the first-time-joiner rig. The client is left AT THE MAIN MENU with no
 # save loaded — that is the whole scenario, a player who has never played this game — and its
