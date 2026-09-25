@@ -275,6 +275,61 @@ public sealed class GffWriterTests
         Assert.Equal(SpawnWaypointBlueprint.Build(), File.ReadAllBytes(FindShipped(SpawnWaypointBlueprint.FileName)));
     }
 
+    [Fact]
+    public void ShippedJediClassDialogueMatchesTheGenerator()
+    {
+        // profiles/override/k_coop_jediclass.dlg is a committed asset (docs/research/
+        // class-and-power-grants.md's 2026-09-25 section); it must stay in lockstep with
+        // JediClassDialogueBlueprint.Build() or the installer ships a stale popup.
+        Assert.Equal(
+            JediClassDialogueBlueprint.Build(),
+            File.ReadAllBytes(FindShipped(JediClassDialogueBlueprint.FileName)));
+    }
+
+    [Fact]
+    public void TheJediClassDialogueHasNoScriptsAndTheRightShape()
+    {
+        Gff dlg = Gff.Parse(JediClassDialogueBlueprint.Build());
+
+        IReadOnlyList<GffStruct> entries = dlg.Root.GetList("EntryList");
+        Assert.Equal(4, entries.Count);
+
+        IReadOnlyList<GffStruct> replies = dlg.Root.GetList("ReplyList");
+        Assert.Equal(3, replies.Count);
+
+        // No NCS anywhere (docs/research/class-and-power-grants.md's "no compiler" note): the
+        // controller drives the class purely off which terminal ENTRY was reached.
+        foreach (GffStruct entry in entries)
+        {
+            Assert.True(entry.TryGetResRef("Script", out string script));
+            Assert.Equal(string.Empty, script);
+        }
+
+        foreach (GffStruct reply in replies)
+        {
+            Assert.True(reply.TryGetResRef("Script", out string script));
+            Assert.Equal(string.Empty, script);
+        }
+
+        // The prompt entry offers exactly the three choices, in order, and each one's single
+        // link lands on its own terminal entry with an EMPTY RepliesList (ends the conversation
+        // the same way the shipped sample's own terminal reply does).
+        IReadOnlyList<GffStruct> promptReplies = entries[0].GetList("RepliesList");
+        Assert.Equal(3, promptReplies.Count);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.True(promptReplies[i].TryGetDword("Index", out uint index));
+            Assert.Equal((uint)i, index);
+        }
+
+        for (int terminal = JediClassDialogueBlueprint.TerminalEntryGuardian;
+             terminal <= JediClassDialogueBlueprint.TerminalEntrySentinel;
+             terminal++)
+        {
+            Assert.Empty(entries[terminal].GetList("RepliesList"));
+        }
+    }
+
     /// <summary>Locates a committed profiles/override asset by walking up from the test binary.</summary>
     private static string FindShipped(string fileName)
     {

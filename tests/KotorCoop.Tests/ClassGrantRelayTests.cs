@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Plugin;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
@@ -229,11 +230,86 @@ public class ClassGrantRelayTests
     {
         Assert.Equal(ClassGrantReplayOutcome.Done, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusApplied, 1));
         Assert.Equal(ClassGrantReplayOutcome.Done, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusAlreadyHas, 1));
+        Assert.Equal(ClassGrantReplayOutcome.Done, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusPrompted, 1));
         Assert.Equal(ClassGrantReplayOutcome.GiveUp, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusBadClass, 1));
         Assert.Equal(ClassGrantReplayOutcome.GiveUp, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusSlotFull, 1));
         Assert.Equal(ClassGrantReplayOutcome.Retry, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusEngineRefused, 1));
         Assert.Equal(ClassGrantReplayOutcome.Retry, ClassGrantReplayRule.Settle(0, ClassGrantReplayRule.MaxAttempts - 1)); // silence
         Assert.Equal(ClassGrantReplayOutcome.GiveUp, ClassGrantReplayRule.Settle(ClassGrantReplayRule.StatusEngineRefused, ClassGrantReplayRule.MaxAttempts));
+    }
+
+    [Fact]
+    public void CombatAlsoMakesTheReceiverWait()
+    {
+        // 2026-09-25: the class-choice popup's own gating list is "not in a conversation, not
+        // loading, not in combat" - the third clause is new on this rule.
+        Assert.Equal(ClassGrantReplayPath.Wait, ClassGrantReplayRule.Decide("danm13", false, false, inCombat: true));
+        Assert.Equal(ClassGrantReplayPath.Apply, ClassGrantReplayRule.Decide("danm13", false, false, inCombat: false));
+    }
+
+    // ---- 2026-09-25: the class-choice popup never copies one player's class onto another ----
+
+    [Fact]
+    public void ACharacterWithNoJediClassNeedsThePrompt()
+    {
+        Assert.Equal(JediChoicePromptVerdict.NeedsPrompt, JediChoiceRule.Decide(true, 1, 0, -1)); // plain Soldier
+        Assert.Equal(JediChoicePromptVerdict.NeedsPrompt, JediChoiceRule.Decide(true, 0, -1, -1)); // no class read yet
+    }
+
+    [Fact]
+    public void AnyJediClassInEitherSlotMeansNeverRePrompt()
+    {
+        Assert.Equal(JediChoicePromptVerdict.AlreadyHasClass, JediChoiceRule.Decide(true, 2, 0, 3)); // Guardian in slot 1
+        Assert.Equal(JediChoicePromptVerdict.AlreadyHasClass, JediChoiceRule.Decide(true, 1, 4, -1)); // Consular alone
+        Assert.Equal(JediChoicePromptVerdict.AlreadyHasClass, JediChoiceRule.Decide(true, 2, 5, 0)); // Sentinel in slot 0
+    }
+
+    [Fact]
+    public void AnUnreadableClassListAsksAgainRatherThanGuess()
+    {
+        Assert.Equal(JediChoicePromptVerdict.NotReady, JediChoiceRule.Decide(false, 0, -1, -1));
+    }
+
+    [Fact]
+    public void TheThreeJediRowsAreExactlyGuardianConsularSentinel()
+    {
+        Assert.True(JediChoiceRule.IsJediClass(3));
+        Assert.True(JediChoiceRule.IsJediClass(4));
+        Assert.True(JediChoiceRule.IsJediClass(5));
+        Assert.False(JediChoiceRule.IsJediClass(0));
+        Assert.False(JediChoiceRule.IsJediClass(2));
+        Assert.False(JediChoiceRule.IsJediClass(6));
+    }
+
+    [Fact]
+    public void EachTerminalDialogueEntryMapsToItsOwnClass()
+    {
+        Assert.Equal(3, JediChoiceRule.ClassForTerminalEntry(JediChoiceRule.TerminalEntryGuardian));
+        Assert.Equal(4, JediChoiceRule.ClassForTerminalEntry(JediChoiceRule.TerminalEntryConsular));
+        Assert.Equal(5, JediChoiceRule.ClassForTerminalEntry(JediChoiceRule.TerminalEntrySentinel));
+        Assert.Null(JediChoiceRule.ClassForTerminalEntry(0)); // the prompt line itself
+        Assert.Null(JediChoiceRule.ClassForTerminalEntry(-1)); // no conversation
+    }
+
+    /// <summary>The plugin cannot reference KotorCoop.Memory (see <c>JediChoiceRule</c>'s own
+    /// remarks), so its dlg resref and terminal-entry indices are duplicated by hand from
+    /// <c>JediClassDialogueBlueprint</c>. This is the cross-check that a hand-copy never drifts.</summary>
+    [Fact]
+    public void TheDialogueConstantsMatchTheBlueprint()
+    {
+        Assert.Equal(JediClassDialogueBlueprint.ResRef, JediChoiceRule.DialogResRef);
+        Assert.Equal(JediClassDialogueBlueprint.TerminalEntryGuardian, JediChoiceRule.TerminalEntryGuardian);
+        Assert.Equal(JediClassDialogueBlueprint.TerminalEntryConsular, JediChoiceRule.TerminalEntryConsular);
+        Assert.Equal(JediClassDialogueBlueprint.TerminalEntrySentinel, JediChoiceRule.TerminalEntrySentinel);
+    }
+
+    // ---- the jedichoice verb --------------------------------------------------------------
+
+    [Fact]
+    public void JediChoiceParsesWithNoArguments()
+    {
+        Assert.Equal(CoopCommandKind.JediChoice, ConsoleCommand.Parse("jedichoice").Kind);
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse("jedichoice 3").Kind);
     }
 
     [Fact]

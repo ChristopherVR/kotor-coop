@@ -186,5 +186,9 @@ internal static class ConsoleVerbCatalog
         // retail ShowSWInGameGui/SetCharacter pair, so CompanionEquipSuppressionController's
         // own close can finally be exercised on a rig that cannot press a key or click an arrow.
         ("showgui", "showgui equip [partyIndex]  (dev-only: opens this instance's own Equipment screen via the retail ShowSWInGameGui/SetCharacter pair; 0 = your PC, 1-2 = active companions)"),
+
+        // jedichoice - docs/research/class-and-power-grants.md's 2026-09-25 section: forces the
+        // local class-choice popup check, exactly as a peer's real Jedi choice would trigger it.
+        ("jedichoice", "jedichoice  (dev-only: manufactures a local 'a peer's Jedi choice happened' request, so the class-choice popup can be exercised without a second player or the Dantooine conversation)"),
     ];
 }

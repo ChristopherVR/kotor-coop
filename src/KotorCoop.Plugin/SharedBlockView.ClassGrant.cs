@@ -21,11 +21,24 @@ internal sealed unsafe partial class SharedBlockView
     public uint ClassGrantSerial => *U32(SharedBlock.OffsetClassGrantSerial);
 
     /// <summary>Agent -&gt; plugin. A request is pending while this is ahead of
-    /// <see cref="ClassGrantApplied"/>.</summary>
-    public uint ClassGrantRequestSerial => *U32(SharedBlock.OffsetClassGrantRequestSerial);
+    /// <see cref="ClassGrantApplied"/>. Settable so the local <c>jedichoice</c> dev verb
+    /// (CheatController.JediChoice.cs) can manufacture a request without a network round trip,
+    /// exactly the shape a peer's real relay writes.</summary>
+    public uint ClassGrantRequestSerial
+    {
+        get => *U32(SharedBlock.OffsetClassGrantRequestSerial);
+        set => *U32(SharedBlock.OffsetClassGrantRequestSerial) = value;
+    }
 
-    /// <summary>Agent -&gt; plugin. The class the pending request asks this instance to add.</summary>
-    public int ClassGrantRequestClass => *I32(SharedBlock.OffsetClassGrantRequestClass);
+    /// <summary>Agent -&gt; plugin. Vestigial since 2026-09-25 (the receiving side no longer
+    /// forces this exact class onto the local player — see
+    /// <see cref="JediChoicePromptController"/>); kept only so the wire's field shape needs no
+    /// change and a stale peer sending it does nothing harmful.</summary>
+    public int ClassGrantRequestClass
+    {
+        get => *I32(SharedBlock.OffsetClassGrantRequestClass);
+        set => *I32(SharedBlock.OffsetClassGrantRequestClass) = value;
+    }
 
     /// <summary>Plugin -&gt; agent. Echoes <see cref="ClassGrantRequestSerial"/> once the request
     /// has been acted on. Set AFTER <see cref="ClassGrantStatus"/>.</summary>

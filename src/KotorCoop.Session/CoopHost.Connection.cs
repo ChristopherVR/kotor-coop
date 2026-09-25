@@ -236,6 +236,12 @@ public sealed partial class CoopHost
             // already fully retired before it came back is not resent.
             _dialogueGrantSender.ResetBackoff();
             _classGrantSender.ResetBackoff();
+
+            // A Jedi choice that already fully retired (every peer present at the time acked
+            // it) before this peer connected would otherwise never reach them — the same
+            // "announced once, never mentioned again" gap ResyncContainerLoot's own remarks
+            // describe. ResyncJediChoice re-announces it as a brand-new, unacked op.
+            ResyncJediChoice(now);
             _placedMineRosterSentMs = 0; // the (re)admitted peer needs the mine roster now
 
             // Same reasoning again, for the shared party item pool: a peer away long enough to

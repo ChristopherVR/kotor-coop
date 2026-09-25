@@ -249,6 +249,18 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// <summary>Publishes what the local player is saying and picking, for a peer to follow.</summary>
     private void PublishLocal()
     {
+        // The Jedi-choice popup (k_coop_jediclass.dlg) is a private, per-player prompt, never a
+        // shared world conversation — docs/research/class-and-power-grants.md's 2026-09-25
+        // section explicitly requires it never be mirrored to another player. Skipping the whole
+        // publish while it is up (rather than publishing it and filtering it on the OTHER side)
+        // means a peer's spectate/follow machinery sees nothing happen at all: no serial bump,
+        // no partner tag, nothing to adopt or follow. JediChoicePromptController owns the flag
+        // and clears it the same frame the popup closes.
+        if (JediChoicePromptController.IsPromptActive)
+        {
+            return;
+        }
+
         byte* speaker = block.LocalDialogueSpeaker;
         byte* line = block.LocalDialogueLine;
 

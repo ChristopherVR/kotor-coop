@@ -292,8 +292,17 @@ public static class ProtocolConstants
     /// ledger's new capacity — still comfortably one packet, so that channel needed no paging
     /// of its own. See docs/research/creature-liveness.md's cap-removal section and
     /// docs/review-seamless-2026-09-18.md's "Enemy census beyond 32 candidates" row.
+    /// Version 71: <see cref="ClassGrantPacket"/>'s BYTES are unchanged, but what a receiver
+    /// does with one is not — one player's exact class is never copied onto another any more
+    /// (docs/research/class-and-power-grants.md's 2026-09-25 section): the receiver now checks
+    /// whether IT already has a Jedi class and, if not, shows its OWN player a private
+    /// class-choice popup (<c>k_coop_jediclass.dlg</c>) instead of force-applying
+    /// <see cref="ClassGrantPacket.ClassId"/>. A pre-71 peer would still force-apply the
+    /// sender's class — a silent behaviour mismatch this gate would otherwise let two mismatched
+    /// builds share bytes right through, so the version is bumped even though nothing on the
+    /// wire itself changed.
     /// </summary>
-    public const byte Version = 70;
+    public const byte Version = 71;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

@@ -715,6 +715,15 @@ public enum CoopCommandKind
     AddClass,
 
     /// <summary>
+    /// <c>jedichoice</c> — DEV VERB / LIVE-TEST PRIMITIVE for the class-choice popup
+    /// (docs/research/class-and-power-grants.md's 2026-09-25 section): manufactures a local
+    /// "a peer's Jedi choice happened" request so <c>JediChoicePromptController</c>'s popup can
+    /// be exercised on one instance, without a second player or the Dantooine conversation. No
+    /// arguments. Local only.
+    /// </summary>
+    JediChoice,
+
+    /// <summary>
     /// <c>followkick &lt;slot&gt;</c> — DEV-ONLY LIVE-TEST PRIMITIVE
     /// (docs/research/party-reconciliation.md Round 96). Dumps NPC roster slot
     /// <see cref="CoopCommand.Amount"/> (0-8)'s follow-record fields (phase, attempts, target,
@@ -1216,6 +1225,7 @@ public static partial class ConsoleCommand
         new(["stats"], ParseStats),
         new(["attack"], ParseAttack),
         new(["showgui"], ParseShowGui),
+        new(["jedichoice"], ParseJediChoice),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the

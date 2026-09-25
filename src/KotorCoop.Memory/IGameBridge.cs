@@ -715,6 +715,14 @@ public static class CheatKinds
     public const uint Stats = 101;
 
     /// <summary>
+    /// <c>jedichoice</c> — DEV VERB / LIVE-TEST PRIMITIVE (docs/research/class-and-power-grants.md's
+    /// 2026-09-25 section): manufactures a local "a peer's Jedi choice happened" request without
+    /// a network round trip, so the class-choice popup can be exercised on one instance. No
+    /// arguments. See <c>SharedBlock.CheatKindJediChoice</c>.
+    /// </summary>
+    public const uint JediChoice = 102;
+
+    /// <summary>
     /// <c>mgkill &lt;all|n&gt;</c> — LIVE-TEST PRIMITIVE for a forced turret/gunnery minigame
     /// ambush (e.g. the Ebon Hawk Sith-fighter sequence, module <c>m12ab</c>) that the
     /// unattended rig cannot finish by actually shooting: kills up to <c>n</c> (or all)

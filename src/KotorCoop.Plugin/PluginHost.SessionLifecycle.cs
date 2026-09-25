@@ -218,6 +218,7 @@ internal static unsafe partial class PluginHost
         _movieRelay?.Invalidate();
         _galaxyDeparture?.Invalidate();
         _classGrant?.Invalidate();
+        _jediChoicePrompt?.Invalidate();
         _enemyEffects?.Invalidate();
         _placedMines?.Invalidate();
         PendingMoviePlay.Cancel();

@@ -118,6 +118,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.LevelUp] = "levelup 1 4",
         [CoopCommandKind.Stats] = "stats",
         [CoopCommandKind.ShowGuiEquip] = "showgui equip 1",
+        [CoopCommandKind.JediChoice] = "jedichoice",
     };
 
     /// <summary>Sentinel kinds that are outcomes of parsing (or its absence), not tied to one
