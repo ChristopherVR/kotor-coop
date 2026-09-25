@@ -60,11 +60,13 @@ What the join actually does: the host must have a save on disk (any manual save,
 game's own first autosave) -- that save is what the joining player receives. Their co-op
 character is separate from any single-player game on the same install: the mod keeps it in
 saves\kotorcoop-character.*, refreshes it whenever you save while connected, and drops it into
-the host's world at the area entrance. While connected the mod writes the game's autosave and
-quicksave slots (every 10 minutes and as you leave); both then hold the HOST's world, shared
-credits and shared items included, not your single-player game -- so does any save you make
-while connected. Your other saves are never touched. To start a
-brand-new game together, the host plays until the first autosave (or saves once), then hosts.
+the host's world at the area entrance. While connected the mod keeps its own dedicated save --
+"Co-op" in the Load Game list -- refreshed every 10 minutes and as you leave, holding the
+HOST's world, shared credits and shared items included. Your Quick Save is never touched by the
+mod. The game's own Auto Save slot is still used to bring the host's world in the instant you
+join or rejoin (an engine requirement), and keeps autosaving through it as you play, same as
+single player always did -- load "Co-op" for the save meant to be kept, not Auto Save. To start
+a brand-new game together, the host plays until the first autosave (or saves once), then hosts.
 
 Want a different co-op character? Set join_mode = newcharacter in coop.ini for one join and
 you go through character creation again (the old one is replaced). join_mode = save is the old

@@ -2405,3 +2405,171 @@ Adoption writes the host's files verbatim, so the same save still matches. A dif
 that enters the same module differs in its bytes, so the fallback cannot false-match. The
 fallback applies only when LASTMODULE is readable and the archive holds no member of that name;
 a stored-but-refused module still fails closed.
+
+## A dedicated co-op save slot: `000000 - QUICKSAVE` is never written by the mod again (2026-09-25)
+
+Roadmap follow-up to `docs/research/key-items-and-solo.md` §2/§4, and this document's own §4
+(the "proposed rule... not done here" paragraph) — this pass does it.
+
+### The engine facts, RE'd and reused (no new native surface added)
+
+* `CClientExoAppInternal::DoQuickSave 0x5F4B50` (`Odyssey.RequestQuickSave`) is hard-coded to
+  slot 0, name `"QUICKSAVE"` — verified by this document's own earlier disassembly (§"The save
+  primitive"). There is no parameter that could redirect it: every call to it, whoever makes it
+  (the player's own F4 key, the plugin's `save` verb, the agent's periodic/disconnect capture,
+  `NewCharacterCaptureController`'s chargen capture), lands in the identical directory.
+* The one native call that DOES take an arbitrary slot number and name,
+  `CServerExoAppInternal::SaveGame 0x4B58A0` (reachable through `Odyssey.ReissueServerSaveGame`,
+  added for `SaveFlushHook`'s ghost-sweep ­— docs/research/save-ghosts.md §4), only RE-ISSUES a
+  request `SaveFlushHook`'s splice already intercepted; it cannot originate a save on its own,
+  and `SaveFlushHook` itself is still marked NEEDS-LIVE by its own header. Tying a correctness
+  requirement ("the player's quicksave is never touched") to that flag would be the wrong trade.
+* `CSWGuiSaveLoad::LoadPCAutoSave` builds its load target from the literal string `"AUTOSAVE"` —
+  this document's own §"Key addresses" table already named this
+  (`PluginMenuLoader.AutosaveSlot`'s own doc comment: "Id 1, not 0... `LoadPCAutoSave` formats its
+  target as `Format("%06d - %s", 1, "AUTOSAVE")`"). `MenuLoadController`'s entire no-input-
+  injection load replay — the ONE mechanism this codebase has for driving a load with no mouse
+  click, load-verified across dozens of rounds in this very document — is built by replaying
+  THAT ONE native code path. There is no reverse-engineered "load an arbitrary numbered slot"
+  replay anywhere in this tree. **Consequence, stated plainly: the staged adoption world's
+  MECHANICAL landing pad has to stay `000001 - AUTOSAVE` — that part of the old design was never
+  a choice, it is what the one proven load mechanism requires.** Moving it would mean reverse-
+  engineering and live-verifying a second load code path, which this pass did not attempt.
+
+### The design that follows from those two facts
+
+Two separate problems, two separate fixes:
+
+1. **`000000 - QUICKSAVE` — genuinely reclaimable, and reclaimed.** `KotorCoop.Memory.
+   CoopSaveRedirect` (source-shared into the plugin exactly the way `WineDetection.cs` already
+   is — see the `.csproj` comment) does the swap ORDINARY DIRECTORY MOVES, no engine RE at all:
+   `BeginHoldback` renames `000000 - QUICKSAVE` aside (if it exists — that content is, by
+   construction, always the player's own from this point on) before a mod-driven save request is
+   sent; the caller's existing landed/stable poll is unchanged; once it confirms a fresh save has
+   arrived, `CompleteRedirect` renames THAT to the dedicated co-op slot and renames the holdback
+   back over `000000 - QUICKSAVE` — or, if nothing was held back, leaves the slot absent, exactly
+   as it was. A same-volume directory rename preserves file mtimes, so `000000 - QUICKSAVE`'s own
+   timestamp is bit-for-bit unchanged across the whole sequence (what the live recipe below
+   checks). Wired into every mod-driven trigger that matters for the bug this fixes:
+   `NewCharacterCaptureController`'s chargen capture (plugin-side — see its own `RequestSave`/
+   `WatchForSave`), `CoopCommandDispatcher.MaintainPeriodicCapture` (the every-10-minutes
+   capture), and `CaptureCharacterOnDisconnect` (the pre-disconnect capture) — the exact three
+   `docs/research/key-items-and-solo.md` §2 named as the culprits. **Deliberately NOT wired**:
+   the plain `save`/`save <name>` console verb (`SaveGameCommand`) — that is a deliberate,
+   human-invoked tester/rig action semantically equivalent to pressing F4, not a background
+   "session reason" capture, and several existing live recipes in this tree explicitly read
+   `000000 - QUICKSAVE` afterward; redirecting it would break them for no correctness gain. Also
+   not yet wired: `BeginSoloReturnCapture`/`MaintainSoloReturnCapture` (the solo-segment return
+   capture) and `BeginHostReturnFreshSave` (a HOST-side capture in the same solo-segment
+   machinery) — same class of automatic mod-driven save, smaller/rarer blast radius, flagged here
+   as a follow-up rather than silently left unmentioned.
+2. **`000001 - AUTOSAVE` — mechanically unavoidable, so mirrored instead of moved.**
+   `WorldAdoption.TryAdoptAsync` still stages the host's world into the autosave slot (unchanged
+   — `MenuLoadController` needs it there), but now ALSO calls `CoopSaveRedirect.MirrorIntoCoopSlot`
+   right after staging succeeds: a plain copy (not a move — the autosave copy must stay put) of
+   the same bytes into the dedicated co-op slot. The player therefore gets a normal, retail
+   Load-Game-menu-visible "Co-op" save that reflects the just-adopted world, distinct from the
+   autosave slot the engine's own ordinary module-transition autosaves keep churning through
+   during play (unchanged retail behaviour, not something this mod ever controlled or could
+   reasonably stop without patching the autosave code path itself — out of scope, and a much
+   larger risk for a much smaller gain than the quicksave fix above).
+
+**The slot itself** (`KotorCoop.Memory.CoopSaveSlot`, pure, unit-tested with no filesystem):
+looks for an existing folder whose name-part is exactly `"Co-op"` (case-insensitive, independent
+of its numeric prefix) and reuses it forever once one exists — an install's co-op slot keeps
+whatever number it was first created at, the same way `000001 - AUTOSAVE` keeps its number
+forever. Otherwise it allocates the next free number with the IDENTICAL rule `NamedSaveRule.
+NextIndex` already uses for a player's own `save <name>` — both draw from the same counter (every
+folder's leading digits, whatever it is named), so the co-op slot can never collide with an
+existing named save and vice versa. On a fresh install this lands at `000002 - Co-op`, right
+after `000001 - AUTOSAVE`, but nothing anywhere depends on that specific number — every consumer
+finds it by name.
+
+### Migration
+
+**No format changed for `000001 - AUTOSAVE` or its marker** (`saves\kotorcoop-staged.json`,
+`StagedSave`) — the staging target and the whole `StagedSave.IsStagedCopy` mechanism are
+untouched, because the mechanical landing pad did not move (see the engine-facts section above).
+An existing install upgrades with nothing to migrate on that side.
+
+**`000000 - QUICKSAVE` cannot be retroactively cleaned.** If an install's quicksave slot already
+holds a co-op capture from BEFORE this fix (exactly the bug being fixed), there is no reliable
+way to tell that apart from a genuine single-player quicksave — both are structurally identical
+`SAVEGAME.sav` directories. This pass does not attempt it: the first `BeginHoldback` after
+upgrading treats whatever is sitting there as "the player's own" and preserves it going forward,
+which is strictly better than the pre-fix behaviour (silently overwritten every ~10 minutes) even
+though it cannot undo a stale overwrite from an earlier session. Told plainly in the player docs
+(README.md, docs/limitations.md, tools/package-README.txt) rather than promised away.
+
+### What this does NOT do (consistent with the two engine facts above)
+
+* It does not move the staged-adoption LANDING PAD off `000001 - AUTOSAVE` — see "the engine
+  facts" above for why that would need new, unverified native-load RE.
+* It does not stop the engine's OWN ordinary autosave-through-transitions from writing
+  `000001 - AUTOSAVE` during play — that is retail behaviour, identical in single player, wholly
+  independent of this mod.
+* It does not add any new native call, hook or offset. Every move is a plain `Directory.Move`/
+  `File.Copy` — the same primitive class `PluginMenuLoader.TryStageSaveAsAutosaveFromDirectory`
+  and `CoopCommandDispatcher.CopyQuickSaveAs` already use.
+
+### Tests
+
+`tests/KotorCoop.Tests/CoopSaveSlotTests.cs` (naming/lookup: sanitisation, `IsCoopSlot`'s
+exact-match rule, `NextIndex`, and `ResolveFolderName`'s "find by name, else allocate — never
+collide with a player's own named save" contract, both directions) and
+`tests/KotorCoop.Tests/CoopSaveRedirectTests.cs` (real temp directories, no mocking: a no-op
+holdback when nothing exists, the full hold-back/redirect/restore sequence with a byte-for-byte
+and mtime-for-mtime check on the restored quicksave, the "nothing fresh landed" no-op path,
+repeated redirects reusing the same coop-slot directory, a pre-existing player-named save at the
+number the allocator would otherwise pick, and `MirrorIntoCoopSlot`'s copy-not-move semantics).
+
+### NEEDS-LIVE — nothing in this section has run against the game
+
+1. **The live recipe below has not been run.** Every claim here is reasoned from disassembly
+   already verified by earlier rounds in this document plus new pure/filesystem unit tests; none
+   of it has been watched happen against a real GOG install.
+2. **Whether `SaveDigestCache`'s periodic re-stat of `000000 - QUICKSAVE`/the save-identity poll
+   can observe the brief window where the holdback has the slot** (between `BeginHoldback` and
+   `CompleteRedirect` — normally well under a second, both are plain directory renames). If it
+   does, a digest poll mid-swap could read "absent" or a stale value for one tick; nothing in this
+   pass measured whether that produces a visible false edge in `SaveIdentityWatch`/
+   `SaveOrLoadClassifier`, though both are already edge-detectors with re-baselining, and a single
+   missed tick is bounded and self-corrects on the next poll.
+3. **Antivirus/indexer lock contention on a directory rename**, the same class of risk every
+   other atomic-rename primitive in this tree (`ClientCharacterPersistence.WriteAtomic`,
+   `StagedSave.TryRecord`) already carries and has shipped despite, unverified specifically for
+   THIS new call site.
+
+### Live recipe for the main session
+
+Two GOG installs, rebuilt plugin and agent on both (`build.ps1 -Install`), shipped defaults.
+
+1. **The dedicated slot appears and is loadable.** On the joiner install, delete any existing
+   `saves\000002 - Co-op` (or whatever name a prior test left), connect to a host, play a few
+   seconds, `disconnect`. Expect `saves\000002 - Co-op\SAVEGAME.sav` to exist. From the main
+   menu, open Load Game: "Co-op" should appear as an ordinary entry, sorted by its own mtime like
+   any other save, NOT pinned to the top the way Auto Save is. Load it: expect the host's last
+   co-op world, the joiner's own co-op character, hit points and inventory intact — judge on HP/
+   XP, not position, per `world-adoption.md`'s standing warning.
+2. **QUICKSAVE/AUTOSAVE mtimes are unchanged across a session.** Before connecting, note
+   `Get-Item 'saves\000000 - QUICKSAVE\SAVEGAME.sav'` and `'saves\000001 - AUTOSAVE\SAVEGAME.sav'`
+   mtimes (create a fresh manual quicksave first if the joiner has none). Connect, play past one
+   `character_capture_interval_min` window (default 10 min) so a periodic capture fires, then
+   `disconnect` (fires the pre-disconnect capture too). Expect `000000 - QUICKSAVE`'s mtime
+   BIT-FOR-BIT UNCHANGED from before connecting (`saveinspect.py`/hash it if in doubt); expect
+   `000002 - Co-op`'s mtime to have moved twice (periodic + disconnect) and its content to be the
+   host's world with the joiner's up-to-date character. `000001 - AUTOSAVE`'s mtime IS expected to
+   have changed (staging, and/or the engine's own transition autosaves) — that is the accepted,
+   documented exception.
+3. **Adoption/rejoin still work end to end.** Full join from a fresh main-menu state (no sidecar):
+   confirm the chargen capture (`newchar: ...`) logs a redirect line
+   (`character capture: redirected the fresh save to '...'` or the newchar-prefixed equivalent)
+   and the resulting sidecar/adoption proceed exactly as `world-adoption.md`'s existing live
+   passes describe. Disconnect and rejoin at least twice, confirming `000002 - Co-op` keeps the
+   SAME folder name both times (`ResolveFolderName`'s "keeps its number forever" contract) and
+   `000000 - QUICKSAVE` still never moves.
+4. **A genuine player quicksave survives a co-op session untouched.** Before connecting, make a
+   real F4 quicksave with recognisable state (a specific module, specific items). Connect, let a
+   periodic capture and a disconnect capture both fire. After disconnecting, load
+   `000000 - QUICKSAVE` from the main menu: expect EXACTLY the pre-connection single-player state,
+   not the host's world.

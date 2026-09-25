@@ -93,6 +93,14 @@
       project ever shares code at all. See WineDetection.cs's own doc comment.
     -->
     <Compile Include="..\KotorCoop.Memory\WineDetection.cs" Link="Shared\WineDetection.cs" />
+
+    <!--
+      Same reason: the dedicated co-op save slot (docs/research/session-save.md's 2026-09-25
+      entry) is used both here (NewCharacterCaptureController's chargen capture) and from
+      KotorCoop.Agent (via KotorCoop.Session -> KotorCoop.Memory). One rule, shared by source.
+    -->
+    <Compile Include="..\KotorCoop.Memory\CoopSaveSlot.cs" Link="Shared\CoopSaveSlot.cs" />
+    <Compile Include="..\KotorCoop.Memory\CoopSaveRedirect.cs" Link="Shared\CoopSaveRedirect.cs" />
   </ItemGroup>
 
 </Project>

@@ -355,6 +355,18 @@ public static class WorldAdoption
             log?.Invoke($"world adoption: {markerDiagnostic} - a later character capture may read the host's PC");
         }
 
+        // Mirror the same bytes into the dedicated, player-visible co-op slot (docs/research/
+        // session-save.md's 2026-09-25 entry). The AUTOSAVE copy above stays the mechanical
+        // load target (the one native path MenuLoadController replays); this copy is what the
+        // player sees in the retail Load Game screen as a normal, non-ephemeral "Co-op" save,
+        // and what later capture-source lookups prefer once it exists. Best-effort: a failed
+        // mirror never blocks an adoption that already succeeded.
+        if (!CoopSaveRedirect.MirrorIntoCoopSlot(
+                Path.GetDirectoryName(slot)!, slot, out _, out string mirrorDiagnostic))
+        {
+            log?.Invoke($"world adoption: {mirrorDiagnostic}");
+        }
+
         if (!PlayerIfo.TryWritePifo(gameDirectory, player, out string pifoDiagnostic))
         {
             log?.Invoke($"world adoption: {pifoDiagnostic}");

@@ -1,3 +1,5 @@
+using KotorCoop.Memory;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -257,6 +259,17 @@ internal sealed class NewCharacterCaptureController(
         _saveRequests++;
         _lastSaveRequestMs = nowMs;
 
+        // Hold the player's own quicksave aside BEFORE asking the engine to save: DoQuickSave
+        // is hard-coded to slot 0, "QUICKSAVE", so that is where this capture will land too.
+        // CoopSaveRedirect.CompleteRedirect (below, once the save is confirmed landed and
+        // stable) moves the fresh capture to the dedicated co-op slot and restores whatever was
+        // held back. See docs/research/session-save.md's 2026-09-25 entry.
+        string savesDirectory = Path.Combine(NativeMethods.GetGameDirectory(), "saves");
+        if (!CoopSaveRedirect.BeginHoldback(savesDirectory, out string holdbackDiagnostic))
+        {
+            PluginHost.Log($"newchar: {holdbackDiagnostic}");
+        }
+
         if (!Odyssey.RequestQuickSave())
         {
             PluginHost.Log($"newchar: save request {_saveRequests} refused - no world loaded");
@@ -315,6 +328,17 @@ internal sealed class NewCharacterCaptureController(
         }
 
         _armed = false;
+
+        // Relocate the fresh save to the dedicated co-op slot BEFORE reading anything back off
+        // it, and restore whatever quicksave was held back. Every downstream reader
+        // (PlayerIfo.TryExtractPlayer on this same directory, via the agent) works unchanged —
+        // it is handed the directory NAME below, whichever one that ends up being.
+        if (string.Equals(name, CoopSaveRedirect.QuickSaveFolder, StringComparison.OrdinalIgnoreCase)
+            && CoopSaveRedirect.CompleteRedirect(savesDirectory, out string redirected, out string redirectDiagnostic))
+        {
+            name = Path.GetFileName(redirected);
+            PluginHost.Log($"newchar: {redirectDiagnostic}");
+        }
 
         // Arm the post-adopt repair BEFORE publishing the capture — the agent (JoinFlow.cs's
         // CreateCharacterThenAdoptAsync) polls block.JoinChargenState and can request the
