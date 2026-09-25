@@ -1766,6 +1766,17 @@ half:
    tier, but worth reconfirming now that the body stays fully relevant/broadcast rather than
    hidden by the detection gate).
 
+### 12.12 Live result, 2026-09-25: the translucent lever runs but draws opaque
+
+Deployed with no `stealth_*` keys on the host (default translucent). Joiner `stealth on`
+logged the release plus `engine stealth mode ON (translucent, stealth_partner_visual)`. The
+client twin's `+0x194` read back set. The host's screenshot (plugin GL readback, stand-in 4
+units in front of the camera, enlarged 4x) showed the stand-in FULLY OPAQUE, the same as
+before stealth. `stealth off` cleared cleanly with no crash. So `CSWCCreature::SetStealthState`'s
+visual effect is not what makes a stealthed ally look translucent in retail. The render-time
+alpha path is being researched next. Until it lands, the default gives the right targeting
+behaviour but no visual cue.
+
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
 Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the
