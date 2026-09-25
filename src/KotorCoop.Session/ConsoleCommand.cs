@@ -212,6 +212,11 @@ public enum CoopCommandKind
     /// <summary>Move the local player to a peer, named in <see cref="CoopCommand.Address"/>.</summary>
     GoTo,
 
+    /// <summary>Keep walking the local player after a peer: <see cref="CoopCommand.Address"/>
+    /// names them (<c>#n</c>/name; null = the first peer, which on a joiner is the host), or
+    /// is <c>off</c>/<c>status</c>. Agent-side loop over the existing walk/teleport cheats.</summary>
+    AutoFollow,
+
     /// <summary>Put a blueprint on the floor at the local player's feet, where the item
     /// channel will replicate it to everyone.</summary>
     DropItem,
@@ -1200,6 +1205,7 @@ public static partial class ConsoleCommand
         new(["tp"], ParseTeleport),
         new(["walkto"], ParseWalkTo),
         new(["goto"], ParseGoTo),
+        new(["autofollow"], ParseAutoFollow),
         new(["dropitem"], ParseDropItem),
         new(["moviewarp"], ParseStageMovie),
         new(["usedoor"], ParseUseDoor),

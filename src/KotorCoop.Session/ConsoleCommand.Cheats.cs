@@ -615,6 +615,8 @@ public static partial class ConsoleCommand
         "  tp <x> <y> [z]      move yourself inside this area",
         "  walkto <x> <y> [z]  queue a real walk (not a snap) - crosses subarea triggers",
         "  goto <player>       move yourself to a peer (same module)",
+        "  autofollow [player|off|status]  keep walking after a peer (default: the host);",
+        "                      snaps back if left far behind; transitions ride follow_lead",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",
         "  dropitem 0x131      drop a copy of a LIVE item, carrying its real state",
         "  items [n]           list live items here: id, resref, holder, stack/charges/upgrades",

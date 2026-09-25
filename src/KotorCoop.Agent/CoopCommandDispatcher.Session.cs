@@ -144,28 +144,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
-        RemotePeer? found = null;
-
-        // "#n" picks the n-th of the `who` listing, for a name nobody wants to type.
-        if (name.StartsWith('#') && int.TryParse(name[1..], out int index)
-            && index >= 1 && index <= peers.Count)
-        {
-            found = peers[index - 1];
-        }
-        else
-        {
-            foreach (RemotePeer peer in peers)
-            {
-                if (peer.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                {
-                    found = peer;
-                    break;
-                }
-            }
-        }
-
-        if (found is not { } target)
+        if (FindPeer(session.GetRemotePeers(), name) is not { } target)
         {
             Reply($"no player called '{name}' - run `who` to see who is here");
             return;
@@ -187,6 +166,27 @@ public sealed partial class CoopCommandDispatcher
             X: target.State.Position.X,
             Y: target.State.Position.Y,
             Z: target.State.Position.Z));
+    }
+
+    /// <summary>A peer by name, or by "#n" — the n-th of the <c>who</c> listing, for a name
+    /// nobody wants to type. Shared by <c>goto</c> and <c>autofollow</c>.</summary>
+    private static RemotePeer? FindPeer(IReadOnlyList<RemotePeer> peers, string name)
+    {
+        if (name.StartsWith('#') && int.TryParse(name[1..], out int index)
+            && index >= 1 && index <= peers.Count)
+        {
+            return peers[index - 1];
+        }
+
+        foreach (RemotePeer peer in peers)
+        {
+            if (peer.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return peer;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Posts the session roster: the local player first, then each remote peer with

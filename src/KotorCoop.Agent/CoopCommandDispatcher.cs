@@ -186,6 +186,7 @@ public sealed partial class CoopCommandDispatcher(
                     DrainAutomaticPartyPoolV2();
                     DrainAutomaticStoreV2();
                     PumpPeerEffectLog();
+                    PumpAutoFollow();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -345,6 +346,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Teleport] = c => SendCheat(new CheatRequest(CheatKinds.Teleport, X: c.X, Y: c.Y, Z: c.Z)),
         [CoopCommandKind.WalkTo] = c => SendCheat(new CheatRequest(CheatKinds.WalkTo, X: c.X, Y: c.Y, Z: c.Z)),
         [CoopCommandKind.GoTo] = c => GoTo(c.Address ?? string.Empty),
+        [CoopCommandKind.AutoFollow] = c => AutoFollowCommand(c.Address),
         [CoopCommandKind.DropItem] = c => DropItem(c.Address ?? string.Empty),
         [CoopCommandKind.Items] = c => ListItems(c.Amount),
         [CoopCommandKind.InspectItem] = c => InspectItem(c.Address ?? string.Empty),

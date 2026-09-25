@@ -88,4 +88,9 @@ public static partial class ConsoleCommand
         rest.Length == 0
             ? new CoopCommand(CoopCommandKind.Invalid, Error: "goto needs a player, e.g. goto Malak (or `who` to list)")
             : new CoopCommand(CoopCommandKind.GoTo, Address: string.Join(' ', rest));
+
+    /// <summary><c>autofollow</c> (the first peer — the host, on a joiner), <c>autofollow
+    /// &lt;player|#n&gt;</c>, <c>autofollow off</c>, <c>autofollow status</c>.</summary>
+    private static CoopCommand ParseAutoFollow(string[] rest) =>
+        new(CoopCommandKind.AutoFollow, Address: rest.Length == 0 ? null : string.Join(' ', rest));
 }

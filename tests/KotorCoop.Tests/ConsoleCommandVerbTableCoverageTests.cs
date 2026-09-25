@@ -47,6 +47,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Slay] = "slay",
         [CoopCommandKind.Teleport] = "tp 1 2",
         [CoopCommandKind.GoTo] = "goto Malak",
+        [CoopCommandKind.AutoFollow] = "autofollow",
         [CoopCommandKind.DropItem] = "dropitem g_w_blstrpstl001",
         [CoopCommandKind.Cheats] = "cheats",
         [CoopCommandKind.StageMovie] = "moviewarp show",

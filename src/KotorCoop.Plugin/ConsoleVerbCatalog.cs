@@ -71,6 +71,7 @@ internal static class ConsoleVerbCatalog
         ("slay", "slay [tag|id]  (blank = nearest hostile)"),
         ("tp", "tp <x> <y> [z]"),
         ("goto", "goto <player|#n>"),
+        ("autofollow", "autofollow [player|#n|off|status]  (blank = the host)"),
         ("dropitem", "dropitem <resref|0x131>"),
         ("cheats", "cheats"),
 
