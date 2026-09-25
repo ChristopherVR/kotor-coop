@@ -1,71 +1,89 @@
+using System.Text;
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
+using Terminal.Gui.App;
+using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
+
+// TextView (used below for the transcript and the F1 details panel) is marked obsolete in
+// Terminal.Gui 2.5.0 in favour of a SEPARATE companion package (tui-cs/Editor's EditorView) -
+// a rope-backed, syntax-highlighting rich editor built for source code, not what a read-only
+// scrollable chat/log view needs. TextView itself is fully shipped and functional in 2.5.0,
+// not removed and not broken; pulling in an entire second editor package (and its own,
+// less-adopted API) for a simple log view would trade a well-understood, verified-against-
+// source API for a fresh unknown one, under exactly the time pressure that produced the
+// PREVIOUS hand-rolled renderer's bugs. Suppressed narrowly, not disabled solution-wide.
+#pragma warning disable CS0618 // TextView is obsolete
 
 namespace KotorCoop.Agent;
 
 /// <summary>
-/// The agent's own full-screen TUI — a compact status header, a scrolling transcript (chat,
-/// session events, command echoes/replies, and any stray console output captured on its way
-/// to corrupting the screen), and an always-visible command line, laid out the way Claude
-/// Code's own terminal UI is: everything owned, nothing left to the shell's scrollback.
+/// The agent's own console UI: a proven TUI library (Terminal.Gui v2) rather than the
+/// hand-rolled VT/alternate-screen renderer this replaces — a live pass found that renderer
+/// unusable (overlapping/flickering text, and keystrokes only read on the 200 ms status tick,
+/// so typing felt broken). Terminal.Gui owns the screen and the input loop: keys are
+/// event-driven (no polling), and its <c>TextView</c> is a proven scrollable, word-wrapped,
+/// mouse-wheel-and-scrollbar-capable view instead of a hand-rolled wrap/scroll offset.
 ///
-/// This class is the ORCHESTRATOR only — it owns no rendering or layout logic of its own.
-/// Layout/wrapping/scroll-state are pure, unit-tested classes it drives each tick:
-/// <see cref="KotorCoop.Agent.TranscriptBuffer"/> (the scrollback), <see cref="DashboardInputLine"/>
-/// (the command line's buffer/caret/history/completion), and <see cref="FrameComposer"/> (turns
-/// all of it into exactly <c>height</c> rows for the current window). <see cref="TerminalScreen"/>
-/// is the one piece that actually touches the OS: the alternate screen buffer, VT mode, and the
-/// <c>Console.Out</c>/<c>Console.Error</c> capture that keeps a stray <c>Console.WriteLine</c>
-/// from corrupting the paint.
+/// Layout, top to bottom, all inside one borderless full-screen <see cref="Window"/>:
+/// a STICKY status header (role/link/peers/rtt, this player, other players, memory/pump —
+/// never scrolls with the transcript), the transcript (chat/events/command echoes/replies and
+/// any captured stray console output), a one-line completion dropdown/hint, the command line
+/// (<see cref="DashboardInputLine"/> drives editing/history/completion; this class only
+/// mirrors its state into the <c>TextField</c>), and a footer with the key legend (which also
+/// carries the "N new lines below" marker while the transcript is scrolled up).
 ///
-/// Reads the live agent from the <see cref="SessionManager"/> each tick rather than holding a
-/// fixed one, so the view follows connect/disconnect/reconnect: between sessions there is no
-/// agent and the readout says so instead of rendering stale peers.
+/// While this TUI is running, <see cref="Console.Out"/>/<see cref="Console.Error"/> are
+/// redirected to a <see cref="ConsoleCaptureWriter"/> so a component that still calls
+/// <c>Console.WriteLine</c> (a coop.ini diagnostic, a census note, a background thread's
+/// catch-all) lands in the transcript instead of corrupting Terminal.Gui's own screen.
+///
+/// Threading: Terminal.Gui's own main loop owns the UI thread inside the blocking
+/// <c>IApplication.Run</c> call (run on a background <see cref="Task"/> here so this method
+/// can still await cancellation). Every touch of a view from another thread — a session event
+/// via <see cref="Note"/>, the periodic header refresh, the drop-file check — goes through
+/// <c>IApplication.Invoke</c>, never directly.
+///
+/// Redirected/non-interactive runs and log mode are untouched: <see cref="RunNonInteractiveAsync"/>
+/// never constructs a Terminal.Gui application at all.
 /// </summary>
 public sealed class AgentDashboard(
     SessionManager manager,
     IGameBridge bridge,
     string? dropFile = null,
     string? logFile = null,
-    CoopCommandDispatcher? dispatcher = null)
+    CoopCommandDispatcher? dispatcher = null,
+    Action? requestShutdown = null)
 {
-    /// <summary>The always-visible command line: buffer/caret/history/completion, all pure —
-    /// see <see cref="DashboardInputLine"/>'s own doc comment.</summary>
+    /// <summary>The always-visible command line's own editing/history/completion state — see
+    /// <see cref="DashboardInputLine"/>'s own doc comment. This class never edits a buffer of
+    /// its own; every keystroke is delegated here and the result mirrored into the TextField.</summary>
     private readonly DashboardInputLine _input = new();
 
-    /// <summary>The scrolling transcript — see <see cref="TranscriptBuffer"/>'s own doc
-    /// comment. Fed by <see cref="Note"/> (session events, command replies/echoes) and, once
-    /// the TUI is up, by <see cref="TerminalScreen"/>'s captured stray console output.</summary>
+    /// <summary>The scrolling transcript's storage and follow/"N new" bookkeeping — see
+    /// <see cref="TranscriptBuffer"/>'s own doc comment. Word-wrapping and the actual
+    /// scrolling are the TextView's job; this only remembers what to show.</summary>
     private readonly TranscriptBuffer _transcript = new();
-
-    /// <summary>Non-null only while the interactive TUI is running (<c>canPosition</c> in
-    /// <see cref="RunAsync"/>) — owns the alternate screen and the console capture. Painting
-    /// goes through <see cref="TerminalScreen.Screen"/>, never <c>Console.Out</c>, which this
-    /// class has redirected out from under itself for exactly that reason.</summary>
-    private TerminalScreen? _terminal;
 
     /// <summary>Whether this run can show and drive the command line at all: false when input
     /// is redirected (<c>Console.IsInputRedirected</c>), set once at the top of
     /// <see cref="RunAsync"/>.</summary>
     private bool _showInputLine;
 
-    /// <summary>F1: swaps the transcript for the full details panel (the old NETWORK/GAME
-    /// MEMORY/THIS PLAYER/SHARED WORLD readout) in the middle region.</summary>
-    private bool _detailsOpen;
+    /// <summary>Set for the lifetime of the interactive TUI — the handle every thread-marshalled
+    /// update (<see cref="Note"/>, the periodic tick) needs to reach the UI thread via
+    /// <c>Invoke</c>. Null outside <see cref="RunTuiAsync"/> (never constructed, or already torn
+    /// down), in which case those callers fall back to their non-interactive behaviour.</summary>
+    private IApplication? _app;
 
-    /// <summary>The content width and transcript viewport height <see cref="RenderInteractive"/>
-    /// last computed — what a PageUp/PageDown/Ctrl+Home/Ctrl+End key clamps a scroll against,
-    /// since <see cref="TranscriptBuffer"/> needs both to answer "how far can this scroll".</summary>
-    private int _lastContentWidth = 1;
-    private int _lastTranscriptViewportHeight = 1;
-
-    /// <summary>The previous frame's signature (see <see cref="ComputeSignature"/>) — a paint
-    /// is skipped entirely when nothing about the composed frame changed since last tick, so
-    /// an idle, disconnected dashboard is not rewriting an identical screen five times a
-    /// second. Width/height are folded into the signature so a resize always repaints even if
-    /// every row's TEXT happens to be unchanged.</summary>
-    private string? _lastSignature;
+    private Label? _headerLabel;
+    private TextView? _transcriptView;
+    private Label? _dropdownLabel;
+    private TextField? _inputField;
+    private Label? _footerLabel;
 
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
@@ -138,9 +156,7 @@ public sealed class AgentDashboard(
     /// missing here until 2026-09-18: rotation ran only at construction, so one long session
     /// that outlived the cap grew unbounded until the NEXT agent start
     /// (docs/review-seamless-2026-09-18.md §2 "long-session growth"). Every write comes
-    /// through here first; a single stat every 30 s is the whole cost. The size check and the
-    /// shift are under one gate because Note (pump thread) and WriteLogLine (dashboard thread)
-    /// both write, and a shift racing an append would lose the line.
+    /// through here first; a single stat every 30 s is the whole cost.
     /// </summary>
     private void RotateLogMidSessionIfDue(string path)
     {
@@ -183,11 +199,11 @@ public sealed class AgentDashboard(
 
     /// <summary>
     /// The outcome of the last drop or pick-up. A property rather than a field because every
-    /// assignment must ALSO reach the log file: this note is where a drop says why it refused
-    /// ("not a readable item here", "ground full"), and it belongs in the transcript exactly
-    /// like any other event. An unattended run — which is how this project tests — could
-    /// therefore not tell a refusal from nothing having happened at all, which is exactly
-    /// what blocked verifying the item-identity apply path live on 2026-08-15.
+    /// assignment must ALSO reach the log file and transcript: this note is where a drop says
+    /// why it refused ("not a readable item here", "ground full"). An unattended run — which
+    /// is how this project tests — could therefore not tell a refusal from nothing having
+    /// happened at all, which is exactly what blocked verifying the item-identity apply path
+    /// live on 2026-08-15.
     /// </summary>
     private string _lastDropNote
     {
@@ -219,56 +235,23 @@ public sealed class AgentDashboard(
         bool canReadKeys = !Console.IsInputRedirected;
         _showInputLine = canReadKeys;
 
-        // ⚠ TWO COMPLETELY DIFFERENT PATHS, because a real terminal and a redirected pipe want
-        // opposite things. Interactive gets the full TUI: alternate screen, captured stray
-        // output, the command line, all of it. Redirected gets exactly what it always has —
-        // one compact status line per change, straight to the pipe — because that is what
-        // tools/demo.ps1 and any log-scraping automation already parse; growing the TUI's own
-        // machinery into that path would change behaviour nothing asked to have changed.
+        // ⚠ TWO COMPLETELY DIFFERENT PATHS. Interactive gets the full Terminal.Gui TUI;
+        // redirected/piped gets exactly what it always has — one compact status line per
+        // change, straight to the pipe — since that is what tools/demo.ps1 and any
+        // log-scraping automation already parse. RunNonInteractiveAsync never touches
+        // Terminal.Gui at all.
         if (!canPosition)
         {
             await RunNonInteractiveAsync(canReadKeys, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        _terminal = new TerminalScreen(Note);
-        _terminal.Enter();
-
-        try
-        {
-            using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(200));
-
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                if (canReadKeys)
-                {
-                    while (Console.KeyAvailable)
-                    {
-                        HandleKey(Console.ReadKey(intercept: true));
-                    }
-                }
-
-                CheckDropFile();
-                RenderInteractive();
-
-                if (logFile is not null)
-                {
-                    WriteLogLine();
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        finally
-        {
-            _terminal.Exit();
-        }
+        await RunTuiAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>The pre-TUI behaviour, byte for byte: a compact log line per change (plus a
-    /// heartbeat), no screen, no console capture — see <see cref="RunAsync"/>'s own remark on
-    /// why this stays separate rather than reusing any TUI machinery.</summary>
+    /// heartbeat), no screen. F2/F3 still work (checked directly, without the full
+    /// DashboardInputLine machinery — there is no visible command line to reflect typing into).</summary>
     private async Task RunNonInteractiveAsync(bool canReadKeys, CancellationToken cancellationToken)
     {
         try
@@ -281,7 +264,15 @@ public sealed class AgentDashboard(
                 {
                     while (Console.KeyAvailable)
                     {
-                        HandleKey(Console.ReadKey(intercept: true));
+                        ConsoleKey key = Console.ReadKey(intercept: true).Key;
+                        if (key == ConsoleKey.F2)
+                        {
+                            Drop(null);
+                        }
+                        else if (key == ConsoleKey.F3)
+                        {
+                            PickUpNearest();
+                        }
                     }
                 }
 
@@ -292,6 +283,93 @@ public sealed class AgentDashboard(
         catch (OperationCanceledException)
         {
         }
+    }
+
+    /// <summary>
+    /// The interactive TUI's whole lifecycle: redirect Console.Out/Error to a capture writer,
+    /// build the Terminal.Gui application and window, run it (blocking, so on a background
+    /// task), and restore everything in <c>finally</c> regardless of how it ends — cancellation,
+    /// Ctrl+C (handled inside the TUI itself; see <see cref="OnGlobalKeyDown"/>), or a crash.
+    /// </summary>
+    private async Task RunTuiAsync(CancellationToken cancellationToken)
+    {
+        TextWriter realOut = Console.Out;
+        TextWriter realError = Console.Error;
+        ConsoleCaptureWriter outCapture = new(Note);
+        ConsoleCaptureWriter errorCapture = new(line => Note($"[stderr] {line}"));
+
+        // Redirected BEFORE Init: Terminal.Gui's own driver renders through the console
+        // handle directly, never through System.Console, so this has no effect on the TUI's
+        // own painting — it only ever catches OTHER code's stray Console.WriteLine, and
+        // catching it from the very first moment is the whole point (see this class's own
+        // doc comment and ConsoleCaptureWriter's).
+        Console.SetOut(outCapture);
+        Console.SetError(errorCapture);
+
+        IApplication app = Application.Create().Init();
+        _app = app;
+
+        using System.Threading.Timer tickTimer = new(
+            _ =>
+            {
+                try
+                {
+                    app.Invoke(() =>
+                    {
+                        CheckDropFile();
+                        RefreshHeaderAndFooter();
+                    });
+                }
+                catch
+                {
+                    // Best-effort: the app may be mid-shutdown between the timer firing and
+                    // the Invoke call reaching a main loop that is no longer pumping.
+                }
+            },
+            null,
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(200));
+
+        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                app.Invoke(() => RequestQuit(app));
+            }
+            catch
+            {
+                // Best-effort, same reasoning as the timer callback above.
+            }
+        });
+
+        try
+        {
+            Window window = BuildWindow(app);
+            await Task.Run(() => app.Run(window)).ConfigureAwait(false);
+        }
+        finally
+        {
+            _app = null;
+
+            outCapture.FlushPending();
+            errorCapture.FlushPending();
+            Console.SetOut(realOut);
+            Console.SetError(realError);
+
+            app.Dispose();
+        }
+    }
+
+    /// <summary>Ctrl+C's whole job: tear down the REST of the agent (dispatcher, session,
+    /// sockets — <paramref name="requestShutdown"/>Action wired by AgentComposition to the
+    /// SAME CancellationTokenSource RunCommand's own Ctrl+C handler used before this TUI
+    /// existed) and stop the Terminal.Gui loop. Both are needed: Terminal.Gui puts the
+    /// console in raw input mode, so the OS-level Console.CancelKeyPress that used to drive
+    /// this never fires while the TUI is up — this is now the ONLY path to a clean exit.</summary>
+    private void RequestQuit(IApplication app)
+    {
+        requestShutdown?.Invoke();
+        app.RequestStop();
     }
 
     /// <summary>
@@ -326,149 +404,6 @@ public sealed class AgentDashboard(
         }
 
         Drop(requested.Length > 0 ? requested : null);
-    }
-
-    /// <summary>
-    /// Routes one key press. F1/F2/F3 are handled first and unconditionally: function keys
-    /// are never something a player would be typing into a command, so there is no ambiguity
-    /// in always treating them as hotkeys regardless of what is in the buffer. Everything else
-    /// edits <see cref="_input"/> or scrolls <see cref="_transcript"/> — a no-op when
-    /// <see cref="_showInputLine"/> is false, since <see cref="RunAsync"/> only ever calls
-    /// this from inside its own <c>canReadKeys</c> guard, but the field is checked anyway so
-    /// this method stays correct if that ever changes.
-    /// </summary>
-    private void HandleKey(ConsoleKeyInfo keyInfo)
-    {
-        switch (keyInfo.Key)
-        {
-            case ConsoleKey.F1:
-                _detailsOpen = !_detailsOpen;
-                return;
-
-            case ConsoleKey.F2:
-                Drop(null);
-                return;
-
-            case ConsoleKey.F3:
-                PickUpNearest();
-                return;
-        }
-
-        if (!_showInputLine)
-        {
-            return;
-        }
-
-        switch (keyInfo.Key)
-        {
-            case ConsoleKey.Enter:
-                SubmitInput();
-                return;
-
-            case ConsoleKey.Backspace:
-                _input.Backspace();
-                return;
-
-            case ConsoleKey.Delete:
-                _input.Delete();
-                return;
-
-            case ConsoleKey.LeftArrow:
-                _input.MoveLeft();
-                return;
-
-            case ConsoleKey.RightArrow:
-                _input.MoveRight();
-                return;
-
-            case ConsoleKey.Home:
-                if ((keyInfo.Modifiers & ConsoleModifiers.Control) != 0)
-                {
-                    _transcript.ScrollToTop(_lastContentWidth, _lastTranscriptViewportHeight);
-                }
-                else
-                {
-                    _input.MoveHome();
-                }
-
-                return;
-
-            case ConsoleKey.End:
-                if ((keyInfo.Modifiers & ConsoleModifiers.Control) != 0)
-                {
-                    _transcript.ScrollToBottom();
-                }
-                else
-                {
-                    _input.MoveEnd();
-                }
-
-                return;
-
-            case ConsoleKey.PageUp:
-                _transcript.ScrollUp(TranscriptPage(), _lastContentWidth, _lastTranscriptViewportHeight);
-                return;
-
-            case ConsoleKey.PageDown:
-                _transcript.ScrollDown(TranscriptPage(), _lastContentWidth, _lastTranscriptViewportHeight);
-                return;
-
-            case ConsoleKey.Escape:
-                _input.ClearLine();
-                return;
-
-            case ConsoleKey.UpArrow:
-                _input.HistoryUp();
-                return;
-
-            case ConsoleKey.DownArrow:
-                _input.HistoryDown();
-                return;
-
-            case ConsoleKey.Tab:
-                _input.Complete(reverse: (keyInfo.Modifiers & ConsoleModifiers.Shift) != 0);
-                return;
-        }
-
-        char typed = keyInfo.KeyChar;
-        if (!char.IsControl(typed))
-        {
-            _input.TypeChar(typed);
-        }
-    }
-
-    /// <summary>A page of transcript scroll: the viewport height minus one row of overlap, so
-    /// the line at the edge of the previous page is still visible as an anchor — the same
-    /// convention a terminal pager uses.</summary>
-    private int TranscriptPage() => Math.Max(_lastTranscriptViewportHeight - 1, 1);
-
-    /// <summary>
-    /// Enter: echoes the submitted line into the transcript and runs it through the SAME
-    /// dispatcher the ~ console feeds — <see cref="CoopCommandDispatcher.RunTypedLine"/> —
-    /// so the reply comes back through <see cref="Note"/> exactly as any other console reply
-    /// does. Snaps the view back to the bottom even if it had been scrolled up: submitting a
-    /// command is a strong signal the player wants to see what happens next. Blank lines
-    /// submit nothing (<see cref="DashboardInputLine.Submit"/> already returns empty for one),
-    /// matching the in-game console's own "Enter on nothing does nothing" behaviour.
-    /// </summary>
-    private void SubmitInput()
-    {
-        string line = _input.Submit();
-        if (line.Length == 0)
-        {
-            return;
-        }
-
-        _transcript.Append($"> {line}");
-        _transcript.ScrollToBottom();
-
-        if (dispatcher is null)
-        {
-            _transcript.Append("(no command dispatcher wired to this dashboard)");
-            return;
-        }
-
-        dispatcher.RunTypedLine(line);
     }
 
     /// <summary>
@@ -526,13 +461,12 @@ public sealed class AgentDashboard(
 
     /// <summary>
     /// An EVENT line from the session layer (a revive, a channel decision, a pump failure), a
-    /// command reply/chat, or a captured stray console line: pushed into the transcript,
-    /// written to the log file, and — only in the REDIRECTED/non-interactive case, where there
-    /// is no transcript being drawn at all — echoed to the (redirected) stdout. Distinct from
-    /// <see cref="WriteLogLine"/>'s periodic status line: events are never deduplicated, each
-    /// one happened. Thread-safe (<see cref="TranscriptBuffer"/> and <c>File.AppendAllText</c>
-    /// both are); callers include the pump thread and, once the TUI is up,
-    /// <see cref="TerminalScreen"/>'s own capture callback.
+    /// command reply/chat, or a captured stray console line: pushed into the transcript and
+    /// written to the log file. Marshalled onto the UI thread via <c>Invoke</c> when the TUI is
+    /// up; when it is not (the non-interactive path, or before the TUI has started), the
+    /// REDIRECTED stdout is the record instead, exactly as it always was. Thread-safe — callers
+    /// include the pump thread and, once the TUI is up, <see cref="ConsoleCaptureWriter"/>'s own
+    /// capture callback from whichever thread wrote to <c>Console</c>.
     /// </summary>
     public void Note(string line)
     {
@@ -555,13 +489,23 @@ public sealed class AgentDashboard(
             }
         }
 
-        // Console.IsOutputRedirected is the TRUE OS-level check (unaffected by
-        // TerminalScreen's Console.SetOut) and therefore stays false for the entire life of
-        // the interactive TUI, so this branch only ever fires in RunNonInteractiveAsync's own
-        // path — where there is no transcript to look at, so the (redirected) stdout IS the
-        // record, same as it always was.
-        if (Console.IsOutputRedirected)
+        if (_app is { } app)
         {
+            try
+            {
+                app.Invoke(RefreshTranscriptView);
+            }
+            catch
+            {
+                // Best-effort: a Note() that lands exactly as the TUI is tearing down must
+                // not throw into the pump thread or the ConsoleCaptureWriter callback that
+                // called this.
+            }
+        }
+        else if (Console.IsOutputRedirected)
+        {
+            // Only reachable from RunNonInteractiveAsync's own world (no _app was ever set),
+            // or a brief window before/after the TUI - the same fallback Note() always had.
             Console.Out.WriteLine(entry);
             Console.Out.Flush();
         }
@@ -627,117 +571,527 @@ public sealed class AgentDashboard(
         }
     }
 
-    // ---- the TUI: header / transcript-or-details / input / footer, composed then painted ---
+    // ===================================================================================
+    // Terminal.Gui wiring — everything below touches a View and must run on the UI thread.
+    // ===================================================================================
 
-    /// <summary>
-    /// One tick of the interactive TUI: builds the state <see cref="FrameComposer"/> needs,
-    /// composes it to the current window size, and paints it (skipping the actual write when
-    /// nothing changed — see <see cref="_lastSignature"/>).
-    /// </summary>
-    private void RenderInteractive()
+    private Window BuildWindow(IApplication app)
     {
-        int width = Math.Max(Console.WindowWidth, 1);
-        int height = Math.Max(Console.WindowHeight, 1);
-        int contentWidth = Math.Max(width - 1, 1);
-
-        DashboardFrameState partial = new()
+        Window window = new()
         {
-            Header = BuildHeaderLines(),
-            DetailsOpen = _detailsOpen,
-            ShowInput = _showInputLine,
-            DropdownCandidates = _showInputLine ? _input.Candidates : [],
-            Hint = _showInputLine ? _input.Hint : string.Empty,
-            InputBuffer = _input.Buffer,
-            InputCaret = _input.Caret,
-            Footer = BuildFooter(),
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+            BorderStyle = LineStyle.None,
+            CanFocus = false,
         };
 
-        int middleHeight = FrameComposer.MiddleHeight(partial, width, height);
-        _lastContentWidth = contentWidth;
-        _lastTranscriptViewportHeight = middleHeight;
+        _headerLabel = new Label
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = 4,
+            Text = string.Join('\n', BuildHeaderLines()),
+            CanFocus = false,
+        };
 
-        DashboardFrameState state = _detailsOpen
-            ? partial with { Details = BuildDetailsLines() }
-            : partial with { TranscriptRows = BuildTranscriptRows(contentWidth, middleHeight) };
+        _transcriptView = new TextView
+        {
+            X = 0,
+            Y = Pos.Bottom(_headerLabel),
+            Width = Dim.Fill(),
+            Height = Dim.Fill(2),
+            ReadOnly = true,
+            WordWrap = true,
+            ScrollBars = true,
 
-        ComposedFrame frame = FrameComposer.Compose(state, width, height);
-        Paint(frame, width, height);
+            // Keyboard focus stays on the input field below (Claude-Code-style: you are
+            // always composing); the transcript still scrolls by mouse wheel (Terminal.Gui
+            // routes wheel events by cursor position, not focus) and by PageUp/PageDown/
+            // Ctrl+Home/Ctrl+End, which OnGlobalKeyDown forwards here regardless of focus.
+            CanFocus = false,
+        };
+        _transcriptView.ViewportChanged += (_, _) => OnTranscriptViewportChanged();
+
+        _dropdownLabel = new Label
+        {
+            X = 0,
+            Y = Pos.Bottom(_transcriptView),
+            Width = Dim.Fill(),
+            Height = 1,
+            Visible = false,
+            CanFocus = false,
+        };
+
+        Label prompt = new()
+        {
+            X = 0,
+            Y = Pos.Bottom(_dropdownLabel),
+            Width = 2,
+            Height = 1,
+            Text = "> ",
+            CanFocus = false,
+        };
+
+        _inputField = new TextField
+        {
+            X = Pos.Right(prompt),
+            Y = Pos.Bottom(_dropdownLabel),
+            Width = Dim.Fill(),
+            Height = 1,
+            Text = string.Empty,
+        };
+        _inputField.KeyDown += OnInputFieldKeyDown;
+
+        _footerLabel = new Label
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(),
+            Height = 1,
+            Text = BuildFooter(),
+            CanFocus = false,
+        };
+
+        window.Add(_headerLabel, _transcriptView, _dropdownLabel, prompt, _inputField, _footerLabel);
+
+        app.Keyboard.KeyDown += (_, key) => OnGlobalKeyDown(app, key);
+
+        RefreshTranscriptView();
+        UpdateDropdown();
+
+        return window;
     }
 
     /// <summary>
-    /// The transcript's visible slice, tagged with meaning-based colouring, plus a trailing
-    /// "N new" marker (replacing the topmost row that would otherwise have shown) when the
-    /// view is scrolled up and something arrived below it.
+    /// Every key that reaches the command line: delegated straight to
+    /// <see cref="DashboardInputLine"/> (the single source of truth for the buffer/caret/
+    /// history/completion, shared with the pure test suite) and mirrored into the TextField
+    /// afterward — the TextField's OWN editing never runs, since every key handled here sets
+    /// <c>key.Handled = true</c>.
     /// </summary>
-    private List<FrameRow> BuildTranscriptRows(int contentWidth, int viewportHeight)
+    private void OnInputFieldKeyDown(object? sender, Key key)
     {
-        List<FrameRow> rows = [];
-        bool showMarker = !_transcript.IsFollowing && _transcript.NewSinceScrolled > 0 && viewportHeight > 0;
-        int rowsHeight = showMarker ? viewportHeight - 1 : viewportHeight;
-
-        foreach (string line in _transcript.VisibleRows(contentWidth, rowsHeight))
+        if (key == Key.Enter)
         {
-            rows.Add(new FrameRow(line, TranscriptKindFor(line)));
+            key.Handled = true;
+            SubmitInput();
+        }
+        else if (key == Key.Esc)
+        {
+            key.Handled = true;
+
+            // Esc clears the line; on an ALREADY-empty line it quits instead (the same
+            // "Esc-quit" backstop a Claude-Code-style composer gives you), so the key still
+            // does something the second time it is pressed rather than being a no-op.
+            if (_input.Buffer.Length > 0)
+            {
+                _input.ClearLine();
+            }
+            else if (_app is { } app)
+            {
+                RequestQuit(app);
+                return;
+            }
+        }
+        else if (key == Key.Backspace)
+        {
+            key.Handled = true;
+            _input.Backspace();
+        }
+        else if (key == Key.Delete)
+        {
+            key.Handled = true;
+            _input.Delete();
+        }
+        else if (key == Key.CursorLeft)
+        {
+            key.Handled = true;
+            _input.MoveLeft();
+        }
+        else if (key == Key.CursorRight)
+        {
+            key.Handled = true;
+            _input.MoveRight();
+        }
+        else if (key == Key.Home)
+        {
+            key.Handled = true;
+            _input.MoveHome();
+        }
+        else if (key == Key.End)
+        {
+            key.Handled = true;
+            _input.MoveEnd();
+
+            // "End ... jumps back and resumes follow": moving the caret to the end of what
+            // you are typing and resuming the transcript's own follow-the-bottom are two
+            // unrelated things happening to land on the same key by convention - do both.
+            ScrollTranscriptToBottom();
+        }
+        else if (key == Key.CursorUp)
+        {
+            key.Handled = true;
+            _input.HistoryUp();
+        }
+        else if (key == Key.CursorDown)
+        {
+            key.Handled = true;
+            _input.HistoryDown();
+        }
+        else if (key == Key.Tab)
+        {
+            key.Handled = true;
+            _input.Complete(reverse: false);
+        }
+        else if (key == Key.Tab.WithShift)
+        {
+            key.Handled = true;
+            _input.Complete(reverse: true);
+        }
+        else if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value is > 0 and < 0x110000)
+        {
+            // An ordinary typed character. Co-op verbs and their arguments are ASCII, so the
+            // Rune -> char narrowing below is safe for everything this console actually
+            // accepts; anything outside the BMP (extremely unlikely input here) is dropped
+            // rather than risking a corrupt surrogate half in the buffer.
+            Rune rune = key.AsRune;
+            if (rune.Value <= char.MaxValue)
+            {
+                key.Handled = true;
+                _input.TypeChar((char)rune.Value);
+            }
         }
 
-        if (showMarker)
-        {
-            rows.Add(new FrameRow(
-                $"── ↓ {_transcript.NewSinceScrolled} new line(s) below ─ Ctrl+End to jump down ──",
-                RowKind.Dim));
-        }
-
-        return rows;
+        SyncInputField();
     }
 
-    /// <summary>Colours a transcript line by MEANING, not by parsing — the same heuristic the
-    /// pre-TUI dashboard used: a line naming a failure is red, one naming a healthy state
-    /// green, an echoed command stands out, the rest is plain.</summary>
-    private static RowKind TranscriptKindFor(string text)
+    private void SyncInputField()
     {
-        if (text.StartsWith("> ", StringComparison.Ordinal))
+        if (_inputField is not { } field)
         {
-            return RowKind.Heading;
+            return;
         }
 
-        if (text.Contains("FAIL", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("not supported", StringComparison.Ordinal)
-            || text.Contains("disconnect", StringComparison.OrdinalIgnoreCase))
+        field.Text = _input.Buffer;
+        field.InsertionPoint = _input.Caret;
+        UpdateDropdown();
+    }
+
+    /// <summary>The completion candidates (top 6 + a count of the rest) or the single usage
+    /// hint, whichever <see cref="DashboardInputLine"/> currently has — one row above the
+    /// prompt, joined rather than drawn as a multi-row popup, so this layout never has to
+    /// resize around how many candidates matched.</summary>
+    private void UpdateDropdown()
+    {
+        if (_dropdownLabel is not { } label)
         {
-            return RowKind.Fail;
+            return;
         }
 
-        if (text.Contains(" ok", StringComparison.Ordinal)
-            || text.Contains("authoritative", StringComparison.Ordinal)
-            || text.Contains("mirroring", StringComparison.Ordinal))
+        if (!_showInputLine)
         {
-            return RowKind.Ok;
+            label.Visible = false;
+            return;
         }
 
-        return RowKind.Transcript;
+        IReadOnlyList<string> candidates = _input.Candidates;
+        if (candidates.Count > 1)
+        {
+            const int maxShown = 6;
+            string text = string.Join("  ", candidates.Take(maxShown));
+            if (candidates.Count > maxShown)
+            {
+                text += $"   ... {candidates.Count - maxShown} more";
+            }
+
+            label.Text = text;
+            label.Visible = true;
+            return;
+        }
+
+        string hint = _input.Hint;
+        if (hint.Length > 0)
+        {
+            label.Text = hint;
+            label.Visible = true;
+            return;
+        }
+
+        label.Visible = false;
     }
 
     /// <summary>
-    /// The compact status header: 2 lines disconnected, 4 connected (role/link/peers/rtt,
-    /// this player, other players, a one-line memory+pump summary). Everything this used to
-    /// spell out across NETWORK/GAME MEMORY/THIS PLAYER/SHARED WORLD sections is still there —
-    /// press F1 for the details panel; the header exists so the transcript is not crowded out
-    /// by a readout taller than the window, which is what made the previous dashboard
-    /// "impossible to scroll or see anything" in practice.
+    /// Enter: handles a local <c>clear</c>/<c>cls</c> (wipes THIS window's own transcript —
+    /// the dispatcher's own <c>clear</c> verb only ever clears the in-game overlay, so both
+    /// aliases do both here: local wipe, then still dispatched normally so the overlay clears
+    /// too), echoes the line, and runs it through the SAME dispatcher the ~ console feeds —
+    /// <see cref="CoopCommandDispatcher.RunTypedLine"/> — so the reply comes back through
+    /// <see cref="Note"/> exactly as any other console reply does. Snaps the view back to the
+    /// bottom even if it had been scrolled up. Blank lines submit nothing.
     /// </summary>
-    private List<FrameRow> BuildHeaderLines()
+    private void SubmitInput()
+    {
+        string line = _input.Submit();
+        if (line.Length == 0)
+        {
+            return;
+        }
+
+        string firstToken = line.Split(' ', 2)[0].TrimStart('/').ToLowerInvariant();
+        if (firstToken is "clear" or "cls")
+        {
+            ClearTranscriptLocally();
+        }
+
+        _transcript.Append($"> {line}");
+        _transcript.SetFollowing(true);
+        RefreshTranscriptView();
+
+        if (dispatcher is null)
+        {
+            _transcript.Append("(no command dispatcher wired to this dashboard)");
+            RefreshTranscriptView();
+            return;
+        }
+
+        dispatcher.RunTypedLine(line);
+    }
+
+    /// <summary>Ctrl+L, and the local half of typing <c>clear</c>/<c>cls</c> — wipes this
+    /// window's own transcript and resumes following the bottom.</summary>
+    private void ClearTranscriptLocally()
+    {
+        _transcript.Clear();
+        RefreshTranscriptView();
+    }
+
+    /// <summary>
+    /// Global key handling — reaches this regardless of which view has focus, so PageUp/
+    /// PageDown/Ctrl+Home/Ctrl+End keep working while the input field (the normal case) holds
+    /// focus. Plain Home/End stay local to the input field (see <see cref="OnInputFieldKeyDown"/>)
+    /// since they double as ordinary caret movement there.
+    /// </summary>
+    private void OnGlobalKeyDown(IApplication app, Key key)
+    {
+        if (key == Key.C.WithCtrl)
+        {
+            key.Handled = true;
+            RequestQuit(app);
+        }
+        else if (key == Key.L.WithCtrl)
+        {
+            key.Handled = true;
+            ClearTranscriptLocally();
+        }
+        else if (key == Key.PageUp)
+        {
+            key.Handled = true;
+            ScrollTranscript(-TranscriptPage());
+        }
+        else if (key == Key.PageDown)
+        {
+            key.Handled = true;
+            ScrollTranscript(TranscriptPage());
+        }
+        else if (key == Key.End.WithCtrl)
+        {
+            key.Handled = true;
+            ScrollTranscriptToBottom();
+        }
+        else if (key == Key.Home.WithCtrl)
+        {
+            key.Handled = true;
+            ScrollTranscriptToTop();
+        }
+        else if (key == Key.F1)
+        {
+            key.Handled = true;
+            ShowDetailsDialog(app);
+        }
+        else if (key == Key.F2)
+        {
+            key.Handled = true;
+            Drop(null);
+        }
+        else if (key == Key.F3)
+        {
+            key.Handled = true;
+            PickUpNearest();
+        }
+    }
+
+    private int TranscriptPage() =>
+        _transcriptView is { } view ? Math.Max(view.Viewport.Height - 1, 1) : 1;
+
+    private void ScrollTranscript(int rows)
+    {
+        if (_transcriptView is not { } view)
+        {
+            return;
+        }
+
+        int maxTop = Math.Max(view.Lines - view.Viewport.Height, 0);
+        int newTop = Math.Clamp(view.Viewport.Y + rows, 0, maxTop);
+        view.Viewport = view.Viewport with { Y = newTop };
+    }
+
+    private void ScrollTranscriptToBottom()
+    {
+        _transcriptView?.MoveEnd();
+    }
+
+    private void ScrollTranscriptToTop()
+    {
+        if (_transcriptView is not { } view)
+        {
+            return;
+        }
+
+        view.Viewport = view.Viewport with { Y = 0 };
+    }
+
+    /// <summary>Fires on every scroll of the transcript view, whichever caused it (mouse
+    /// wheel, PageUp/PageDown, End, or this class's own programmatic restore after appending
+    /// while not following) — the single place <see cref="TranscriptBuffer.SetFollowing"/> is
+    /// called, so the follow/"N new" state can never drift from what is actually on screen.</summary>
+    private void OnTranscriptViewportChanged()
+    {
+        if (_transcriptView is not { } view)
+        {
+            return;
+        }
+
+        bool atBottom = view.Viewport.Y + view.Viewport.Height >= view.Lines;
+        _transcript.SetFollowing(atBottom);
+        RefreshFooter();
+    }
+
+    /// <summary>
+    /// Resyncs the transcript TextView's text from <see cref="_transcript"/>. A full resync
+    /// rather than an incremental append: the transcript is capped at 2000 short lines and
+    /// this runs on discrete events (a handful of times a second at most, never a per-frame
+    /// path), so the simplicity of "the view always exactly mirrors the buffer" is worth more
+    /// here than the small saved cost of an incremental edit — and it sidesteps a real
+    /// correctness trap incremental editing would not: TextView's own cursor tracks wherever
+    /// the user last scrolled to (PageUp moves it, not just the viewport), so inserting new
+    /// text "at the cursor" while scrolled up would corrupt old lines instead of appending.
+    ///
+    /// Setting <c>Text</c> resets the view to the top, so this saves/restores the scroll
+    /// position explicitly: follows the bottom when the transcript was already being followed,
+    /// otherwise restores the exact row it was showing (clamped, since content may have grown
+    /// or — <c>Clear()</c> — shrunk to nothing).
+    /// </summary>
+    private void RefreshTranscriptView()
+    {
+        if (_transcriptView is not { } view)
+        {
+            return;
+        }
+
+        bool wasFollowing = _transcript.IsFollowing;
+        int savedTop = view.Viewport.Y;
+
+        view.Text = string.Join('\n', _transcript.Lines);
+
+        if (wasFollowing)
+        {
+            view.MoveEnd();
+        }
+        else
+        {
+            int maxTop = Math.Max(view.Lines - view.Viewport.Height, 0);
+            view.Viewport = view.Viewport with { Y = Math.Min(savedTop, maxTop) };
+        }
+
+        RefreshFooter();
+    }
+
+    private void RefreshHeaderAndFooter()
+    {
+        if (_headerLabel is { } header)
+        {
+            header.Text = string.Join('\n', BuildHeaderLines());
+        }
+
+        RefreshFooter();
+    }
+
+    private void RefreshFooter()
+    {
+        if (_footerLabel is { } footer)
+        {
+            footer.Text = BuildFooter();
+        }
+    }
+
+    /// <summary>
+    /// F1: the old long readout (NETWORK/GAME MEMORY/THIS PLAYER/OTHER PLAYERS/SHARED WORLD)
+    /// that the sticky header no longer has room for, in a modal dialog over the transcript.
+    /// <c>IApplication.Run</c> is reentrant by design for exactly this — a nested runnable
+    /// session pushed while the outer one is pumping — so this blocks (from inside the SAME
+    /// key-handler call that is itself running on the UI thread) until the dialog's own
+    /// F1/Esc handler requests it to stop, then returns control to the window underneath.
+    /// </summary>
+    private void ShowDetailsDialog(IApplication app)
+    {
+        TextView details = new()
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(1),
+            ReadOnly = true,
+            WordWrap = true,
+            ScrollBars = true,
+            Text = string.Join('\n', BuildDetailsLines()),
+        };
+
+        Label closeHint = new()
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(),
+            Height = 1,
+            Text = "F1 or Esc to close",
+            CanFocus = false,
+        };
+
+        Dialog dialog = new() { Title = "Details" };
+        dialog.Width = Dim.Percent(90);
+        dialog.Height = Dim.Percent(90);
+        dialog.Add(details, closeHint);
+
+        dialog.KeyDown += (_, key) =>
+        {
+            if (key == Key.F1 || key == Key.Esc)
+            {
+                key.Handled = true;
+                dialog.RequestStop();
+            }
+        };
+
+        app.Run(dialog);
+    }
+
+    /// <summary>
+    /// The sticky header: role/link/peers/rtt, this player, other players, and a one-line
+    /// memory/pump summary — never scrolls with the transcript. Everything the OLD readout
+    /// spelled out at length is still available; press F1 for the details dialog.
+    /// </summary>
+    private List<string> BuildHeaderLines()
     {
         CoopAgent? agent = manager.Agent;
-        List<FrameRow> lines = [];
+        List<string> lines = [];
 
         if (agent is null)
         {
-            lines.Add(new FrameRow(
-                $"KOTOR CO-OP — not connected — session {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}",
-                RowKind.Heading));
-            lines.Add(new FrameRow(
-                $"attached {bridge.Description}  —  type connect/host below, or press ~ in-game",
-                RowKind.Dim));
+            lines.Add($"KOTOR CO-OP — not connected — session {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
+            lines.Add($"attached {bridge.Description}  —  type connect/host below, or press ~ in-game");
+            lines.Add(string.Empty);
+            lines.Add(string.Empty);
             return lines;
         }
 
@@ -746,22 +1100,19 @@ public sealed class AgentDashboard(
         IReadOnlyList<RemotePeer> peers = agent.LastPeers;
 
         string role = agent.Session.IsEnemyAuthority ? "HOST" : "CLIENT";
-        lines.Add(new FrameRow(
+        lines.Add(
             $"KOTOR CO-OP — {role}  link {stats.Status}  peers {stats.PeerCount}  rtt {stats.RoundTripMs:F0}ms"
-            + (stats.PacketsDropped > 0 ? $"  {stats.PacketsDropped} MALFORMED" : string.Empty),
-            stats.PacketsDropped > 0 ? RowKind.Fail : RowKind.Heading));
+            + (stats.PacketsDropped > 0 ? $"  {stats.PacketsDropped} MALFORMED" : string.Empty));
 
-        lines.Add(new FrameRow(
+        lines.Add(
             $"you: {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
-            + $"  hp {DescribeHealth(local.Health, local.MaxHealth)}  {DescribeState(local)}",
-            RowKind.Plain));
+            + $"  hp {DescribeHealth(local.Health, local.MaxHealth)}  {DescribeState(local)}");
 
-        string peersLine = peers.Count == 0
+        lines.Add(peers.Count == 0
             ? "players: nobody else connected yet"
             : "players: " + string.Join(", ", peers.Select(peer =>
                 $"{peer.Name} ({(peer.IsInModule(local.Module) ? "here" : peer.State.Module)}, "
-                + $"{DescribeHealth(peer.State.Health, peer.State.MaxHealth)})"));
-        lines.Add(new FrameRow(peersLine, RowKind.Plain));
+                + $"{DescribeHealth(peer.State.Health, peer.State.MaxHealth)})")));
 
         string memory = agent.LastReadSucceeded
             ? agent.Bridge.CanWriteRemotes && !agent.LastWriteSucceeded ? "WRITE-FAILING" : "ok"
@@ -778,36 +1129,29 @@ public sealed class AgentDashboard(
             }
         }
 
-        lines.Add(new FrameRow(
-            $"memory {memory}  pump {agent.PumpAverageMs:F1}ms avg ({agent.PumpPeakMs:F1}ms peak){compatFlag}",
-            memory == "ok" ? RowKind.Ok : RowKind.Fail));
+        lines.Add($"memory {memory}  pump {agent.PumpAverageMs:F1}ms avg ({agent.PumpPeakMs:F1}ms peak){compatFlag}");
 
         return lines;
     }
 
-    /// <summary>
-    /// F1's details panel: the full readout the header no longer has room for — network
-    /// stats, content-compatibility verdict, game-memory read/write health, this player's
-    /// exact position, every other player with their state, the shared-world combat/enemy
-    /// census, and the ground-item/last-drop demo affordance. Replaces the transcript in the
-    /// middle region while open; the transcript itself keeps recording underneath.
-    /// </summary>
-    private List<FrameRow> BuildDetailsLines()
+    /// <summary>F1's details dialog content — the full readout the header no longer has room
+    /// for. Plain text (no per-line colouring): reliability over polish for this pass, after
+    /// a hand-rolled colour-by-meaning renderer was part of what made the PREVIOUS dashboard
+    /// unusable.</summary>
+    private List<string> BuildDetailsLines()
     {
-        List<FrameRow> rows = [];
-        void Row(string text, RowKind kind = RowKind.Plain) => rows.Add(new FrameRow(text, kind));
-
+        List<string> rows = [];
         CoopAgent? agent = manager.Agent;
-        Row("=== DETAILS (F1 to close) ============================================", RowKind.Heading);
-        Row($" attached   {bridge.Description}");
+
+        rows.Add($"attached   {bridge.Description}");
 
         if (agent is null)
         {
-            Row(string.Empty);
-            Row($" session    {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
-            Row(string.Empty);
-            Row(" not connected. In-game: press ~ and type  connect <ip> [password] | reconnect");
-            Row(" Or type it in the command line below - it reaches the same dispatcher.");
+            rows.Add(string.Empty);
+            rows.Add($"session    {manager.Phase.ToString().ToLowerInvariant()} - {manager.Detail}");
+            rows.Add(string.Empty);
+            rows.Add("not connected. In-game: press ~ and type  connect <ip> [password] | reconnect");
+            rows.Add("Or type it in the command line below - it reaches the same dispatcher.");
             return rows;
         }
 
@@ -819,14 +1163,13 @@ public sealed class AgentDashboard(
             ? "HOST - this game owns the enemies, doors and companions"
             : "CLIENT - this game mirrors the host's world";
 
-        Row(string.Empty);
-        Row(" NETWORK", RowKind.Heading);
-        Row($" role       {role}");
-        Row($" link       {stats.Status}");
-        Row($" players    {stats.PeerCount} other connected      round trip {stats.RoundTripMs:F0} ms");
-        Row($" traffic    {stats.PacketsSent} sent / {stats.PacketsReceived} received      "
-            + (stats.PacketsDropped > 0 ? $"{stats.PacketsDropped} MALFORMED" : "none malformed"),
-            stats.PacketsDropped > 0 ? RowKind.Fail : RowKind.Plain);
+        rows.Add(string.Empty);
+        rows.Add("NETWORK");
+        rows.Add($" role       {role}");
+        rows.Add($" link       {stats.Status}");
+        rows.Add($" players    {stats.PeerCount} other connected      round trip {stats.RoundTripMs:F0} ms");
+        rows.Add($" traffic    {stats.PacketsSent} sent / {stats.PacketsReceived} received      "
+            + (stats.PacketsDropped > 0 ? $"{stats.PacketsDropped} MALFORMED" : "none malformed"));
 
         CompatibilityVerdict? verdict = agent.Session.Compatibility;
         if (verdict is not null)
@@ -834,18 +1177,17 @@ public sealed class AgentDashboard(
             SessionCapabilities off = SessionCapabilities.All & ~verdict.Allowed;
             if (off != SessionCapabilities.None || verdict.Warnings.Count > 0)
             {
-                Row(string.Empty);
-                Row($" content    {verdict.Summary}");
+                rows.Add(string.Empty);
+                rows.Add($"content    {verdict.Summary}");
 
                 if (off != SessionCapabilities.None)
                 {
-                    Row($"            OFF: {off.ToString().Replace(", ", " ")}  (a mod/save difference makes these unsafe)",
-                        RowKind.Fail);
+                    rows.Add($"           OFF: {off.ToString().Replace(", ", " ")}  (a mod/save difference makes these unsafe)");
                 }
 
                 for (int i = 0; i < verdict.Warnings.Count && i < 3; i++)
                 {
-                    Row($"            {verdict.Warnings[i]}", RowKind.Fail);
+                    rows.Add($"           {verdict.Warnings[i]}");
                 }
             }
         }
@@ -854,22 +1196,21 @@ public sealed class AgentDashboard(
         string writeStatus = agent.Bridge.CanWriteRemotes
             ? agent.LastWriteSucceeded ? "ok" : "FAILING"
             : "not supported by this profile (read-only)";
-        bool memoryOk = agent.LastReadSucceeded && (!agent.Bridge.CanWriteRemotes || agent.LastWriteSucceeded);
 
-        Row(string.Empty);
-        Row(" GAME MEMORY", RowKind.Heading);
-        Row($" reading    {readStatus}          writing    {writeStatus}", memoryOk ? RowKind.Ok : RowKind.Fail);
-        Row($" pump cost  {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak   (budget {agent.PumpBudgetMs:F0} ms)");
+        rows.Add(string.Empty);
+        rows.Add("GAME MEMORY");
+        rows.Add($" reading    {readStatus}          writing    {writeStatus}");
+        rows.Add($" pump cost  {agent.PumpAverageMs:F1} ms average, {agent.PumpPeakMs:F1} ms peak   (budget {agent.PumpBudgetMs:F0} ms)");
 
-        Row(string.Empty);
-        Row(" THIS PLAYER", RowKind.Heading);
-        Row($" area       {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
+        rows.Add(string.Empty);
+        rows.Add("THIS PLAYER");
+        rows.Add($" area       {(local.Module.Length > 0 ? local.Module : "(unknown)")}"
             + $"      at {local.Position}  facing {local.Facing:F2}");
-        Row($" health     {DescribeHealth(local.Health, local.MaxHealth)}");
-        Row($" state      {DescribeState(local)}");
+        rows.Add($" health     {DescribeHealth(local.Health, local.MaxHealth)}");
+        rows.Add($" state      {DescribeState(local)}");
 
-        Row(string.Empty);
-        Row($" OTHER PLAYERS ({peers.Count})", RowKind.Heading);
+        rows.Add(string.Empty);
+        rows.Add($"OTHER PLAYERS ({peers.Count})");
         for (int i = 0; i < Math.Max(peers.Count, 1); i++)
         {
             if (i < peers.Count)
@@ -878,11 +1219,6 @@ public sealed class AgentDashboard(
                 bool here = peer.IsInModule(local.Module);
                 string where = here ? "here with you" : $"in {peer.State.Module}";
 
-                // ⚠ A MIRRORING PEER NEVER SETS FlagPaused, so reading its state alone shows
-                // "exploring" while its game is visibly frozen — reported from play. The flag
-                // deliberately carries only a player's OWN pause, so the shared half has to be
-                // supplied here: if THIS player holds a pause, every peer standing in this
-                // module is frozen by it, whatever their flags say.
                 string state = DescribeState(peer.State);
                 if (here && local.IsPaused && !peer.State.IsPaused)
                 {
@@ -891,16 +1227,14 @@ public sealed class AgentDashboard(
                         : $"{state}, PAUSED (mirroring yours)";
                 }
 
-                Row($"   {peer.Name,-12} {where,-18} {DescribeHealth(peer.State.Health, peer.State.MaxHealth),-20}" + state);
+                rows.Add($"   {peer.Name,-12} {where,-18} {DescribeHealth(peer.State.Health, peer.State.MaxHealth),-20}" + state);
             }
             else
             {
-                Row("   (nobody else connected yet)");
+                rows.Add("   (nobody else connected yet)");
             }
         }
 
-        // Display only, so the census is read from this player's own vantage point (no peer
-        // positions) and the module gate is asked with the module we are actually in.
         IReadOnlyList<EnemyState> enemies = agent.Session.IsEnemyAuthority
             ? agent.Bridge.ReadEnemies([])
             : agent.Session.GetEnemies(agent.LastLocalState.Module);
@@ -919,108 +1253,49 @@ public sealed class AgentDashboard(
             }
         }
 
-        Row(string.Empty);
-        Row(" SHARED WORLD", RowKind.Heading);
-        Row($" combat     {DescribeSharedCombat(local, peers)}");
-        Row($" enemies    {enemies.Count} tracked - {alive} alive, {dead} dead"
+        rows.Add(string.Empty);
+        rows.Add("SHARED WORLD");
+        rows.Add($" combat     {DescribeSharedCombat(local, peers)}");
+        rows.Add($" enemies    {enemies.Count} tracked - {alive} alive, {dead} dead"
             + (agent.Session.IsEnemyAuthority ? "   (published by this game)" : "   (received from the host)"));
 
         DialogueState convo = agent.Session.GetDialogue();
         string convoWho = convo.OwnerPeerId == agent.Session.LocalPeerId
             ? "you are"
             : $"peer {convo.OwnerPeerId} is";
-        Row($" talking    {(convo.Active ? $"{convoWho} talking" + (convo.SpeakerName.Length > 0 ? $" to {convo.SpeakerName}" : string.Empty) : "nobody is talking")}");
+        rows.Add($" talking    {(convo.Active ? $"{convoWho} talking" + (convo.SpeakerName.Length > 0 ? $" to {convo.SpeakerName}" : string.Empty) : "nobody is talking")}");
 
         List<GroundItem> items = agent.Session.Items.Snapshot();
         string itemNames = items.Count == 0
             ? "none"
             : string.Join(", ", items.Take(3).Select(item => item.Resref)) + (items.Count > 3 ? ", ..." : string.Empty);
-        Row($" items      {items.Count} on the ground: {itemNames}");
+        rows.Add($" items      {items.Count} on the ground: {itemNames}");
 
         if (_lastDropNoteValue.Length > 0)
         {
-            Row($" last drop  {_lastDropNoteValue}");
+            rows.Add($" last drop  {_lastDropNoteValue}");
         }
 
         return rows;
     }
 
-    private string BuildFooter() => _showInputLine
-        ? "F1 details    F2 drop    F3 pick up    PgUp/PgDn scroll    Tab complete    Ctrl+C quit"
-        : "(no command line: input is redirected)    F1 details    F2 drop    F3 pick up    Ctrl+C to stop";
-
-    /// <summary>
-    /// Paints one composed frame in a SINGLE write to the real terminal (never
-    /// <c>Console.Out</c> — see <see cref="_terminal"/>'s own doc comment): cursor home, each
-    /// row's colour/text/reset/clear-to-end-of-line, then the real caret placed on the input
-    /// row. Skips the write entirely when <see cref="ComputeSignature"/> matches the previous
-    /// frame — an idle dashboard between the 200 ms ticks costs nothing extra.
-    /// </summary>
-    private void Paint(ComposedFrame frame, int width, int height)
+    /// <summary>The key legend, with the "N new lines below" marker folded in ahead of it
+    /// while the transcript is scrolled up and something new arrived — kept in the footer
+    /// rather than a dedicated row so the layout never has to resize around whether the
+    /// marker is showing.</summary>
+    private string BuildFooter()
     {
-        string signature = ComputeSignature(frame, width, height);
-        if (signature == _lastSignature)
+        string legend = _showInputLine
+            ? "F1 details  F2 drop  F3 pick up  PgUp/PgDn/wheel scroll  Ctrl+L/clear/cls clear  Tab complete  Ctrl+C quit"
+            : "(no command line: input is redirected)  F1 details  F2 drop  F3 pick up  Ctrl+C to stop";
+
+        if (!_transcript.IsFollowing && _transcript.NewSinceScrolled > 0)
         {
-            return;
+            return $"↓ {_transcript.NewSinceScrolled} new line(s) below (End to jump down)   {legend}";
         }
 
-        _lastSignature = signature;
-
-        System.Text.StringBuilder sb = new();
-        sb.Append("\x1b[H");
-
-        for (int i = 0; i < frame.Rows.Count; i++)
-        {
-            FrameRow row = frame.Rows[i];
-            sb.Append(SgrFor(row.Kind)).Append(row.Text).Append("\x1b[0m\x1b[K");
-            if (i < frame.Rows.Count - 1)
-            {
-                sb.Append("\r\n");
-            }
-        }
-
-        if (frame.CaretRow >= 0 && frame.CaretColumn >= 0)
-        {
-            sb.Append($"\x1b[{frame.CaretRow + 1};{frame.CaretColumn + 1}H\x1b[?25h");
-        }
-        else
-        {
-            sb.Append("\x1b[?25l");
-        }
-
-        // _terminal is always set by the time this runs — RenderInteractive is only ever
-        // called from inside RunAsync's canPosition branch, after TerminalScreen.Enter().
-        _terminal!.Screen.Write(sb.ToString());
-        _terminal.Screen.Flush();
+        return legend;
     }
-
-    private static string ComputeSignature(ComposedFrame frame, int width, int height)
-    {
-        System.Text.StringBuilder sb = new();
-        sb.Append(width).Append('x').Append(height).Append('|')
-          .Append(frame.CaretRow).Append(',').Append(frame.CaretColumn).Append('|');
-
-        foreach (FrameRow row in frame.Rows)
-        {
-            sb.Append((int)row.Kind).Append(':').Append(row.Text).Append('\u0001');
-        }
-
-        return sb.ToString();
-    }
-
-    private static string SgrFor(RowKind kind) => kind switch
-    {
-        RowKind.Heading => "\x1b[1;97m",
-        RowKind.Fail => "\x1b[91m",
-        RowKind.Ok => "\x1b[92m",
-        RowKind.Dim => "\x1b[90m",
-        RowKind.Dropdown => "\x1b[96m",
-        RowKind.Hint => "\x1b[90m",
-        RowKind.InputPrompt => "\x1b[97m",
-        RowKind.Footer => "\x1b[90m",
-        RowKind.Transcript => "\x1b[37m",
-        _ => "\x1b[0m",
-    };
 
     /// <summary>
     /// The player's situation in words: fighting, paused, talking, down. These are the

@@ -211,15 +211,16 @@ partner. Missed a message? Past chat is kept in the game's own Messages screen (
 Messages, Dialog tab). Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
 
 The agent window (the separate program that keeps the two games in sync) is its own full-screen
-console, laid out the way a chat app or Claude Code's own terminal is: a short status line up
-top, a scrolling transcript of chat/replies/events filling the middle, and a `>` prompt built in
-at the bottom you can type into any time — with Tab completion and a candidate dropdown as you
-type, Up/Down history — handy for typing a command without alt-tabbing into the game, or when
-nothing has loaded yet. PageUp/PageDown scroll the transcript back (a "N new" marker shows while
-scrolled up and something new arrives); **F1** opens a details panel with everything the old
-readout showed (network stats, this player, other players, the shared world). F2 drops a demo
-item and F3 picks one up (used to be the bare `D`/`P` keys, moved once letters became something
-you could type).
+console, laid out the way a chat app or Claude Code's own terminal is: a STICKY status line up
+top that never scrolls away, a scrolling transcript of chat/replies/events filling the middle,
+and a `>` prompt built in at the bottom you can type into any time — with Tab completion and a
+candidate list as you type, Up/Down history — handy for typing a command without alt-tabbing
+into the game, or when nothing has loaded yet. Scroll the transcript back with the mouse wheel,
+PageUp/PageDown, or the scrollbar (a "N new lines below" note shows while you're scrolled up and
+something new arrives; End jumps back down); type `clear` or `cls`, or press Ctrl+L, to wipe it.
+**F1** opens a details panel with everything the old readout showed (network stats, this player,
+other players, the shared world). F2 drops a demo item and F3 picks one up (used to be the bare
+`D`/`P` keys, moved once letters became something you could type).
 
 ## Troubleshooting
 

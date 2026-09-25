@@ -53,6 +53,45 @@
       docs/research/steam-support.md §§10-12.
     -->
     <ProjectReference Include="..\KotorCoop.Steam\KotorCoop.Steam.csproj" />
+
+    <!--
+      The dashboard's TUI (AgentDashboard.cs). Replaced a hand-rolled VT/alternate-screen
+      renderer (2026-09-25) that a live pass found unusable — flicker, overlap and typing
+      latency, all symptoms of hand-rolling terminal I/O instead of using a library that
+      already solved it. Pure managed, no native assets, and its own NuGet package directly
+      targets net10.0 (see the package's dependency list), so it carries cleanly through the
+      self-contained single-file publish above with nothing extra to worry about trimming or
+      extracting. 2.5.x is the current stable v2 line (gui-cs/tui-cs, MIT, ~11k stars,
+      actively released) - NOT a preview: earlier v2 alphas existed, but this release line is
+      what "prefer v2 if stable enough" resolves to as of this pass.
+    -->
+    <PackageReference Include="Terminal.Gui" Version="2.5.0" />
+
+    <!--
+      Terminal.Gui depends on TextMateSharp (TextMate-grammar syntax highlighting, an opt-in
+      feature no view this project uses ever turns on) for EVERY app that references it, not
+      just ones that use highlighting - and TextMateSharp.Grammars pulls in a NATIVE
+      Oniguruma regex wrapper (libonigwrap.dll) to do it. A native DLL cannot fold into the
+      self-contained single-file publish the way a managed assembly does; it publishes as a
+      loose file beside KotorCoop.Agent.exe, which trips tools/package.ps1's own "every file
+      in the publish output is KotorCoop.*" check (the uninstaller's whole "everything
+      KotorCoop.* is ours" rule depends on that being true). These two direct references pin
+      the SAME transitive versions Terminal.Gui 2.5.0 already resolves and exclude just their
+      native asset - the managed TextMateSharp API Terminal.Gui itself references still
+      resolves normally, so this only removes a regex engine nothing in this project's own
+      code path (no syntax highlighting is ever configured) can reach.
+    -->
+    <PackageReference Include="TextMateSharp" Version="2.0.4" />
+    <PackageReference Include="TextMateSharp.Grammars" Version="2.0.4" />
+
+    <!--
+      The actual owner of libonigwrap.dll: TextMateSharp depends on Onigwrap for its Oniguruma
+      regex wrapper. Pinning + excluding ITS native asset directly is what's needed - the two
+      references above only pin TextMateSharp/TextMateSharp.Grammars' own managed assets
+      (ExcludeAssets on THOSE packages does not reach a further transitive dependency's own
+      assets, which is why that alone left libonigwrap.dll in the publish output).
+    -->
+    <PackageReference Include="Onigwrap" Version="1.0.11" ExcludeAssets="native" />
   </ItemGroup>
 
   <!--

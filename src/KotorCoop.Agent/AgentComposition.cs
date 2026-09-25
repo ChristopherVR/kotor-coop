@@ -443,7 +443,12 @@ internal static class AgentComposition
         // dashboard's own command line can be wired straight to it: Enter on that line runs
         // <see cref="CoopCommandDispatcher.RunTypedLine"/>, the exact same entry point the
         // shared block's console channel uses for a line typed in-game.
-        AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile, dispatcher);
+        // ⚠ requestShutdown is what a Ctrl+C typed INSIDE the TUI uses to tear down the rest
+        // of the agent (dispatcher tick loop, session, sockets). Terminal.Gui puts the
+        // console in raw input mode, so the OS-level Console.CancelKeyPress RunCommand
+        // registers on `cts` never fires once the TUI is up — this closes that gap by giving
+        // the dashboard its own way to reach the SAME cts.
+        AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile, dispatcher, cts.Cancel);
 
         // ⚠ The agent's event voice. SessionManager.Log and CoopAgent.Log existed for the
         // life of the project with NOTHING assigned to them — every "X revived you",
