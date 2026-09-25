@@ -1051,3 +1051,20 @@ unexercised response to round 2's live findings. In rough order of what would in
    resref/mod mismatch between peers) would retry forever at a low rate rather than eventually
    giving up and telling the player. Judged acceptable (a quiet, cheap, infrequent retry) over a
    silent permanent give-up, but nothing here bounds it, unlike round 1's design.
+
+### 11.7 Live result (2026-09-25, after 2160115 + the relay filter)
+
+Joiner-led construction on `000041` (joiner Sentinel, host Guardian, `first_saber_color_sync=1`
+on both). The joiner stood by the workbench (`tp 86.2 44 5`), ran `setglobal DAN_SABER_DONE
+true`, `setglobal DAN_PATH_STATE 2`, `scriptgive dan13_goldcryst` and
+`startdialog 0x19 dan13_zhar`.
+* The construction ran on the joiner: nodes 100 -> 103, crystal consumed, the Upgrade Bench
+  opened, and the gold saber went into the joiner's backpack unequipped, exactly as retail does.
+* The joiner announced `this character now has a starter lightsaber`. The host logged
+  `first lightsaber: giving this character their own 'g_w_lghtsbr01'` and one `giveloot`. No
+  equip and no re-publish.
+* **Duplicate gone.** Before the relay filter, the joiner's gold saber also reached the host
+  twice through ScriptItemGrantPump. With the filter, the host received only its own blue
+  saber.
+* A level-0 Jedi cannot equip the saber until the first Jedi level grants Weapon Proficiency -
+  Lightsaber (retail's own rule). Delivering into the backpack sidesteps that.
