@@ -2525,9 +2525,8 @@ number the allocator would otherwise pick, and `MirrorIntoCoopSlot`'s copy-not-m
 
 ### NEEDS-LIVE — nothing in this section has run against the game
 
-1. **The live recipe below has not been run.** Every claim here is reasoned from disassembly
-   already verified by earlier rounds in this document plus new pure/filesystem unit tests; none
-   of it has been watched happen against a real GOG install.
+1. **The live recipe below passed on 2026-09-25** (two GOG installs, this build deployed to
+   both). Recorded under "Live run 2026-09-25" at the end of this section.
 2. **Whether `SaveDigestCache`'s periodic re-stat of `000000 - QUICKSAVE`/the save-identity poll
    can observe the brief window where the holdback has the slot** (between `BeginHoldback` and
    `CompleteRedirect` — normally well under a second, both are plain directory renames). If it
@@ -2573,3 +2572,25 @@ Two GOG installs, rebuilt plugin and agent on both (`build.ps1 -Install`), shipp
    periodic capture and a disconnect capture both fire. After disconnecting, load
    `000000 - QUICKSAVE` from the main menu: expect EXACTLY the pre-connection single-player state,
    not the host's world.
+
+### Live run 2026-09-25
+
+The joiner's `000000 - QUICKSAVE` hashed `af624836…` before connecting and after every step
+below, and its mtime never moved.
+- **Periodic capture** (`character_capture_interval_min = 1` for the run). Log: `character
+  capture: redirected the fresh save to '000052 - Co-op'`. The slot was created as the next free
+  number, and the capture read the character back from it.
+- **Disconnect capture.** It went to the same folder.
+- **Bare reconnect** (`connect 127.0.0.1`). It kept `000052 - Co-op`, and only one Co-op folder
+  exists.
+- **Full adoption** (`demo.ps1 -ClientAutoCharacter`, joiner starting at the main menu). Log:
+  `world adoption: adopted 'danm13' … carrying the character from your co-op character`. No
+  `W_SAVE` followed, and later periodic captures still landed in `000052 - Co-op`.
+- **Loading the slot.** `loadgame Co-op` found it at the top of the engine's own save list (slot
+  0, the list the Load Game menu draws) and loaded it: `world 'danm13' up (Load, load request
+  4)`.
+
+One rig note: a plain `demo.ps1` launch loads the host's top listed save and the joiner's own
+staged AUTOSAVE. After a session left the joiner staged in another module, the two did not
+match, and the joiner warned `W_SAVE` on join. That is the correct warning for different
+worlds, not a save-slot fault.
