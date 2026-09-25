@@ -121,6 +121,10 @@ internal static class InputInjectionController
         // The release goes out a few frames later (OnFrame). Posting both at once lands the down
         // and the up in the same engine frame; some panels (list rows, modal OK) then only
         // highlight instead of activating (live 2026-09-25).
+        // Hover first: KOTOR's buttons and list rows take focus from the mouse position and act
+        // on the press only once focused. Without the move, the first click on a new target only
+        // highlighted it and a second click was needed (live 2026-09-25, party-select OK).
+        NativeMethods.PostMessage(window, NativeMethods.WmMouseMove, 0, lParam);
         NativeMethods.PostMessage(window, down, heldFlag, lParam);
         _pendingUpMessage = up;
         _pendingUpLParam = lParam;
