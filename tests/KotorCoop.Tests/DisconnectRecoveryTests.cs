@@ -576,6 +576,23 @@ public class DisconnectRecoveryTests
     /// Thirty percent loss, in both directions, on both ends — a genuinely bad link that never
     /// fully drops. Nothing here should reconnect at all; everything reliable should simply
     /// take a few more attempts and arrive.
+    ///
+    /// ⚠ THE LOSS IS A PATTERN, NOT A COIN FLIP, AND THAT IS WHY THIS TEST IS IN CI AGAIN.
+    /// It ran for months excluded from the workflow as "known-flaky". Two things were wrong,
+    /// and only one of them was the test:
+    ///
+    /// 1. <b>The test.</b> <see cref="NetworkSim.SetLoss"/> is a per-datagram coin flip, so the
+    ///    number of retransmissions an op survives is geometric — unbounded. However long the
+    ///    budget, some runs lose every attempt inside it, and "some runs" times every push is a
+    ///    red build nobody reads. <see cref="NetworkSim.SetLossPattern"/> applies the same 30%
+    ///    as three datagrams in every ten, so no direction can ever eat more than three in a
+    ///    row and the attempts an op needs are bounded rather than merely likely.
+    /// 2. <b>The code.</b> The tail was not only long, it was being multiplied: a client would
+    ///    not ask the host for a flag or journal snapshot while it had an unacked op of its
+    ///    own, so learning what the HOST did waited on a round trip of what WE did. That gate
+    ///    is now scoped to the one channel whose snapshot genuinely replaces local state —
+    ///    see <see cref="WorldResyncRule"/> and
+    ///    <see cref="AClientWithOpsInFlightStillLearnsTheHostsWorld"/>.
     /// </summary>
     [Fact]
     public async Task HeavyPacketLossStillConverges()
@@ -595,8 +612,10 @@ public class DisconnectRecoveryTests
             client.PublishLocalState(Somewhere);
         }
 
-        host.Network.SetLoss(30);
-        client.Network.SetLoss(30);
+        // Three datagrams in every ten, each direction counted separately, on both ends: the
+        // same nominal 30% each way, with a worst case instead of a tail. See the ⚠ above.
+        host.Network.SetLossPattern(3, 10);
+        client.Network.SetLossPattern(3, 10);
 
         Assert.True(
             await WaitForAsync(() => client.IsConnected, Timeout, Publish),
@@ -615,7 +634,7 @@ public class DisconnectRecoveryTests
                     && client.Flags.TryGet(7002, out sbyte b) && b == 1
                     && client.Journal.Snapshot().Any(e => e.Key == "k_swg_dantooine" && e.Value == 30)
                     && client.ContainerLootRemovals.Any(r => r.ContainerId == 0x60),
-                TimeSpan.FromSeconds(40),
+                TimeSpan.FromSeconds(20),
                 Publish),
             "world state did not converge over a 30% loss link: "
             + $"hostFlag7001={host.Flags.TryGet(7001, out sbyte h1)}/{h1} "
@@ -626,6 +645,86 @@ public class DisconnectRecoveryTests
 
         // A bad link is not a disconnect: the session should never have dropped.
         Assert.True(client.IsConnected);
+        Assert.True(client.Network.DroppedOutbound > 0 && client.Network.DroppedInbound > 0);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>
+    /// A player who keeps changing the world must still find out what the OTHER player changed.
+    ///
+    /// ⚠ THIS IS A STARVATION BUG, NOT A SLOWNESS BUG. Every world channel used to refuse to
+    /// request a resync while this client held an unacked op of its own. An op is retired by an
+    /// ACK, so on a lossy link the condition "I have nothing pending" is a round trip away —
+    /// and a client that mints a new change faster than the link acks the last one never
+    /// reaches it at all. The client below is doing exactly what playing the game does: opening
+    /// doors, one after another, over a link eating three datagrams in ten. Under the old rule
+    /// its flag store never once asked the host for anything, so the host's own change (7002,
+    /// made while this client was busy) simply never arrived, and no counter, status line or
+    /// stat anywhere said so.
+    ///
+    /// The gate now belongs to the one channel whose snapshot replaces local state — see
+    /// <see cref="WorldResyncRule"/>, whose unit tests pin the per-channel policy; this test is
+    /// here to prove the rule is wired to the real client over a real socket.
+    /// </summary>
+    [Fact]
+    public async Task AClientWithOpsInFlightStillLearnsTheHostsWorld()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        using CoopClient client = new(
+            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(60));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        void Publish()
+        {
+            host.PublishLocalState(Somewhere);
+            client.PublishLocalState(Somewhere);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+
+        host.Network.SetLossPattern(3, 10);
+        client.Network.SetLossPattern(3, 10);
+
+        // What the host did while this client was busy. One flag and one journal entry, made
+        // once and never repeated: the only way they can reach the client is a snapshot the
+        // client asks for.
+        host.SetFlag(7002, 5);
+        host.SetJournalEntry("k_swg_dantooine", 30);
+
+        // ...and this client never stops changing its own world, so its reliable sender is
+        // never empty for long enough for the old rule to let a request through.
+        uint nextFlag = 9000;
+        bool everHadOpsInFlight = false;
+
+        void PublishAndKeepBusy()
+        {
+            Publish();
+            client.SetFlag(nextFlag++, 1);
+            everHadOpsInFlight |= client.GetStats().PendingFlagOps > 0;
+        }
+
+        Assert.True(
+            await WaitForAsync(
+                () => client.Flags.TryGet(7002, out sbyte v) && v == 5
+                    && client.Journal.Snapshot().Any(e => e.Key == "k_swg_dantooine" && e.Value == 30),
+                TimeSpan.FromSeconds(20),
+                PublishAndKeepBusy),
+            "a client with its own ops in flight never learned what the host changed: "
+            + $"pendingFlagOps={client.GetStats().PendingFlagOps} "
+            + $"clientFlags={client.Flags.Count} clientQuests={client.Journal.Snapshot().Count} "
+            + $"sim={client.Network.Describe()}");
+
+        // The premise really did hold: this was not a client that quietly went idle and got its
+        // resync through the front door.
+        Assert.True(everHadOpsInFlight, "the client never actually had an op in flight");
+
+        // And the traffic really was being eaten, in both directions.
         Assert.True(client.Network.DroppedOutbound > 0 && client.Network.DroppedInbound > 0);
 
         await cts.CancelAsync();

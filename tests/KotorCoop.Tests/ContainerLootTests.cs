@@ -43,6 +43,80 @@ public class ContainerLootTests
         Assert.Contains(new ContainerLootRemoval(0x60, 0xD0), store.Snapshot());
     }
 
+    // ---- past the re-declare window ----------------------------------------------
+    //
+    // ⚠ THE LONG-SESSION CASE, AND THE ONE THAT DOES NOT SHOW UP IN A SHORT TEST. The store
+    // keeps a bounded WINDOW of removals to re-declare to the game, ordered by arrival. Arrival
+    // order is not a shared fact — UDP reorders, retransmits and resyncs — so once a session
+    // passes the window size, the host and each client are holding different slices of the same
+    // set. The version and the digest must therefore describe the SET, not the slice, or the
+    // loot tripwire disagrees for the rest of the session and the client asks for a resync
+    // twice a second forever, each ask re-offering hundreds of reliable ops that nothing can
+    // settle.
+
+    private static ContainerLootStore FilledInOrder(IEnumerable<int> order)
+    {
+        ContainerLootStore store = new();
+        uint sequence = 1;
+
+        foreach (int i in order)
+        {
+            store.ApplyOp(new ContainerLootPacket(1, sequence++, (uint)(0x1000 + (i / 8)), (uint)(0x2000 + i)));
+        }
+
+        return store;
+    }
+
+    [Fact]
+    public void TwoStoresTaughtTheSameRemovalsInDifferentOrdersAgree()
+    {
+        // Comfortably past the window on both sides.
+        int[] forwards = [.. Enumerable.Range(0, 900)];
+        int[] backwards = [.. forwards.Reverse()];
+        int[] shuffled = [.. forwards.OrderBy(i => (i * 2654435761u) % 4099)];
+
+        ContainerLootStore host = FilledInOrder(forwards);
+        ContainerLootStore reversed = FilledInOrder(backwards);
+        ContainerLootStore jumbled = FilledInOrder(shuffled);
+
+        Assert.Equal(host.Digest, reversed.Digest);
+        Assert.Equal(host.Digest, jumbled.Digest);
+        Assert.Equal(host.Version, reversed.Version);
+        Assert.Equal(host.Version, jumbled.Version);
+    }
+
+    [Fact]
+    public void AnEvictedRemovalIsStillKnownAndIsNotCountedTwiceIfReAnnounced()
+    {
+        ContainerLootStore store = FilledInOrder(Enumerable.Range(0, 900));
+
+        ulong digest = store.Digest;
+        uint version = store.Version;
+
+        // The very first removal has long since left the re-declare window...
+        ContainerLootRemoval first = new(0x1000, 0x2000);
+        Assert.DoesNotContain(first, store.Snapshot());
+
+        // ...but the store still knows it happened, so a retransmit or a host resync offering
+        // it again is not news and must not move either tripwire field.
+        Assert.True(store.Contains(first));
+        Assert.False(store.ApplyOp(new ContainerLootPacket(1, 9999, first.ContainerId, first.ItemId)));
+        Assert.Equal(digest, store.Digest);
+        Assert.Equal(version, store.Version);
+    }
+
+    [Fact]
+    public void TheReDeclareWindowIsStillBoundedAndHoldsTheNEWESTRemovals()
+    {
+        ContainerLootStore store = FilledInOrder(Enumerable.Range(0, 900));
+
+        List<ContainerLootRemoval> window = store.Snapshot();
+
+        Assert.Equal(512, window.Count);
+        Assert.Equal(new ContainerLootRemoval(0x1000 + (899 / 8), 0x2000 + 899), window[^1]);
+        Assert.DoesNotContain(new ContainerLootRemoval(0x1000, 0x2000), window);
+    }
+
     // ---- version + digest -------------------------------------------------------
 
     /// <summary>

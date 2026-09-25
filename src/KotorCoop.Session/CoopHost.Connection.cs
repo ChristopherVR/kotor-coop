@@ -343,6 +343,34 @@ public sealed partial class CoopHost
     }
 
     /// <summary>
+    /// Drops one peer from the roster and from everything keyed on its id, retiring its
+    /// identity first so a return is a rejoin rather than a stranger arriving. Caller holds
+    /// <see cref="_gate"/>.
+    ///
+    /// One helper rather than two hand-written lists: the timeout path and the
+    /// stale-endpoint path in <see cref="HandleHello"/> must forget exactly the same set, and
+    /// a per-field teardown written twice is a per-field teardown that will eventually miss a
+    /// field.
+    /// </summary>
+    private void ForgetPeer(uint id, long nowMs)
+    {
+        // Retire before removing: the identity has to survive the connection, or the same
+        // player comes back as a stranger (see RetiredPeer).
+        if (_peers.TryGetValue(id, out PeerConnection? gone))
+        {
+            Retire(gone, nowMs);
+        }
+
+        _peers.Remove(id);
+        _buffer.Remove(id);
+        ReleaseDialogueIfOwnedBy(id);
+        ForgetPhantomDamageFor(id);
+        _encounterTriggers.Forget(id);
+        _triggerRelay.Forget(id);
+        _interactionLocks.Forget(id);
+    }
+
+    /// <summary>
     /// Remembers a departed peer's identity against its nonce. Caller holds <see cref="_gate"/>.
     ///
     /// The oldest is dropped once the table is full, which is the only way an identity is ever
@@ -370,23 +398,6 @@ public sealed partial class CoopHost
 
             _retired.Remove(oldest);
         }
-    }
-
-    /// <summary>Retires and removes one peer, including every table keyed by its id.</summary>
-    private void ForgetPeer(uint id, long nowMs)
-    {
-        if (_peers.TryGetValue(id, out PeerConnection? gone))
-        {
-            Retire(gone, nowMs);
-        }
-
-        _peers.Remove(id);
-        _buffer.Remove(id);
-        ReleaseDialogueIfOwnedBy(id);
-        ForgetPhantomDamageFor(id);
-        _encounterTriggers.Forget(id);
-        _triggerRelay.Forget(id);
-        _interactionLocks.Forget(id);
     }
 
     private void HandleBye(IPEndPoint from, ReadOnlySpan<byte> span, long now)

@@ -140,9 +140,10 @@ public sealed class UdpChannel : IDisposable
             Interlocked.Increment(ref _packetsSent);
             Interlocked.Add(ref _bytesSent, sent);
 
-            // A simulated duplicate is the same datagram sent a second time, after the
-            // original survived the loss decision. This exercises the session deduplication
-            // rules without turning a dropped datagram into a delivery.
+            // A simulated duplicate (NetworkSim.SetDuplication): the SAME bytes a second time,
+            // which is what a retransmitting middlebox produces and what every dedup rule in
+            // the session layer is built to absorb. Judged after the send above, so a
+            // duplicate of a datagram the simulated link ate is impossible.
             if (Sim.Armed && Sim.DuplicateOutbound())
             {
                 int again = _socket.SendTo(data, SocketFlags.None, destination);
@@ -169,7 +170,9 @@ public sealed class UdpChannel : IDisposable
         {
             await Task.Delay(delayMs).ConfigureAwait(false);
 
-            // A blackout also consumes packets that were already delayed in flight.
+            // A cable pull eats what is already in flight. Re-checked after the wait rather
+            // than only before it, because these tasks queue behind the thread pool and can be
+            // held far longer than the delay they asked for — see NetworkSim.BlackedOut.
             if (Sim.BlackedOut(SessionClock.NowMs, outbound: true))
             {
                 return;
@@ -211,20 +214,23 @@ public sealed class UdpChannel : IDisposable
                     await _socket.ReceiveFromAsync(buffer, SocketFlags.None, from, cancellationToken)
                         .ConfigureAwait(false);
 
-                if (Sim.Armed)
+                if (Sim.Armed && Sim.DropInbound(SessionClock.NowMs))
                 {
-                    long now = SessionClock.NowMs;
-                    if (Sim.DropInbound(now))
-                    {
-                        // Received by the socket, never seen by the session — a packet the
-                        // link ate on the way in.
-                        continue;
-                    }
-
-                    // Delay is applied on the sender side, where every datagram has its own
-                    // fire-and-forget timer and can genuinely reorder. Delaying this single
-                    // receive loop would head-of-line block all later packets and double-count
-                    // the one-way latency.
+                    // Received by the socket, never seen by the session — a packet the link ate
+                    // on the way in.
+                    //
+                    // ⚠ NO DELAY ON THIS SIDE, DELIBERATELY. Simulated latency is applied where
+                    // the datagram is SENT (see Send/SendLaterAsync), which already models the
+                    // whole one-way path; delaying again here would double-count it. Worse, it
+                    // would be the wrong SHAPE of delay: this is a single receive loop, so an
+                    // awaited delay holds up every datagram behind it. Measured — one end's
+                    // socket backlog took over a second to drain at 15-40 ms a packet, so a
+                    // peer went on "hearing" a host that had been cut off for a second and a
+                    // half, and an eight-second cable pull against a five-second peer timeout
+                    // produced barely any timeout at all. That is head-of-line blocking, which
+                    // a real link does not have; reordering comes from the outbound half, where
+                    // each datagram is held independently. See NetworkSim.SetLatency.
+                    continue;
                 }
 
                 // A STUN reply (see StunClient/SendStunRequestAsync) shares this socket with
