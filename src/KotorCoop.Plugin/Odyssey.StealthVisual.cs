@@ -2,8 +2,14 @@
 // = translucent), added 2026-09-25 alongside StealthVisualMode.cs after docs/research/
 // effect-sync.md §12.9's live screenshot showed the SERVER-side lever (Odyssey.Stealth.cs's
 // SetStealthMode, stealth_partner_visual = hidden) fully hides a peer's stand-in instead of
-// drawing the retail translucent shimmer. See effect-sync.md §12.10 for the full RE writeup
-// this rests on.
+// drawing the retail translucent shimmer. §12.10's first attempt (SetStealthState's own
+// AddVisualEffect(0x1F40/0x1F42) call) ran live and read back its own field correctly but drew
+// the stand-in FULLY OPAQUE (§12.12) - visualeffects.2da only has 144 rows, so 8000/8002 do not
+// resolve to a usable effect and AddVisualEffect's own Init silently fails (its return value is
+// never even checked by SetStealthState). §12.13 replaces the lever with a direct push to the
+// client model's own alpha field (CSWCAnimBase::SetAlpha, the SAME terminal call retail's own
+// vfx-alpha and door/area-fade systems both use), which live-testing then confirmed draws the
+// stand-in translucent. See effect-sync.md §12.10/§12.13 for the full RE writeup this rests on.
 
 namespace KotorCoop.Plugin;
 
@@ -62,8 +68,16 @@ internal static unsafe partial class Odyssey
     /// twin is never created/kept and nothing this function does could matter — full hide,
     /// exactly docs/research/effect-sync.md §12.9's screenshot. Calling THIS function directly,
     /// and leaving <c>+0x4D1</c> untouched, keeps the stand-in exactly as relevant/broadcast as
-    /// it always was (nothing about detection changes) while wearing the same translucency vfx
-    /// a real party member's own stealth draws.
+    /// it always was (nothing about detection changes).
+    ///
+    /// <b>NOT the source of the translucency, live 2026-09-25 (§12.12/§12.13).</b> This still
+    /// runs (kept for whatever other client bookkeeping <c>+0x194</c> feeds — the field name
+    /// alone, <c>stealth_state</c>, suggests other systems may read it) but its own
+    /// <c>AddVisualEffect(0x1F40/0x1F42, ...)</c> call draws NOTHING live: <c>visualeffects.2da</c>
+    /// has only 144 rows (<c>tools/kotorfiles.py 2da visualeffects.2da</c>), so 8000/8002/8001
+    /// do not resolve to a usable effect there, and <c>AddVisualEffect</c>'s own success/failure
+    /// (<c>eax</c>) is never even tested by this function — a failed add is silently swallowed.
+    /// The actual translucency lever is <see cref="SetAlphaFn"/> below.
     /// </summary>
     private static readonly delegate* unmanaged[Thiscall]<nint, int, int, void> SetStealthStateFn =
         (delegate* unmanaged[Thiscall]<nint, int, int, void>)0x00613930;
@@ -74,17 +88,83 @@ internal static unsafe partial class Odyssey
     private const int CreClientStealthState = 0x194;
 
     /// <summary>
+    /// <c>CSWCObject::SetAlpha(float alpha, byte channel)</c> — thiscall, <c>ret 8</c>, VERIFIED
+    /// by disassembly (2026-09-25, <c>0x0063CB50</c>):
+    ///
+    /// <code>
+    /// 0x0063CB50  mov ecx, [ecx+0x68]     ; ecx = this-&gt;anim_base (CSWCAnimBase*, TwinAnimBase
+    ///                                     ; in Odyssey.CreatureAnim.cs - CSWCObject::GetAnimBase
+    ///                                     ; 0x0063C070 is the same [ecx+0x68], cross-verified)
+    /// 0x0063CB53  test ecx, ecx
+    /// 0x0063CB55  jne 0x63cb5c
+    /// 0x0063CB57  xor eax, eax            ; no anim_base yet -&gt; return false, no write
+    /// 0x0063CB59  ret 8
+    /// 0x0063CB5C  mov eax, [ecx]
+    /// 0x0063CB5E  jmp [eax+0x94]          ; TAIL JMP into the anim_base's OWN vtable slot 0x94 -
+    ///                                     ; the adjustor-thunk pattern this project's vtable-
+    ///                                     ; slot-dispatch memory note describes. Args/return
+    ///                                     ; address are untouched by the jmp, so calling THIS
+    ///                                     ; address behaves like an ordinary thiscall from the
+    ///                                     ; caller's side.
+    /// </code>
+    ///
+    /// <c>CSWCAnimBase</c>'s own vtable (<c>0x00754F60</c>) slot <c>+0x94</c> (<c>0x00754FF4</c>,
+    /// one of <c>tools/xrefs.py 0x69EB20</c>'s ten address-literal hits) holds
+    /// <c>CSWCAnimBase::SetAlpha</c> (<c>0x0069EB20</c>) — the base-class default, not
+    /// overridden for a creature. Disassembled in full: when <c>channel == 0xFF</c> it stores
+    /// the raw float bits into <c>CSWCAnimBase+0xC0</c>, then walks up to 5 material-channel
+    /// pointers at <c>+0x90..+0xA3</c> and, for each non-null one, calls a per-material virtual
+    /// function (color white + this alpha + a flag) — an IMMEDIATE push to the rendered
+    /// materials, not a value merely stored for something else to pick up later. Returns 1 (in
+    /// <c>eax</c>) when it actually walked the channel-0xFF path, 0 on the early exits (no
+    /// anim_base, or a specific single-channel byte other than 0xFF — this codebase always
+    /// passes 0xFF).
+    ///
+    /// <c>tools/xrefs.py 0x63CB50</c> finds exactly six direct callers, ALL inside
+    /// <c>CSWCVisualEffectOnObject::ApplyAlpha</c>/<c>RemoveAlpha</c>/<c>UpdateAlpha</c>
+    /// (<c>0x006A3E80</c>/<c>0x006A4920</c>/<c>0x006A4C00</c>) and <c>CSWCObject::FadeObject</c>/
+    /// <c>SetFadeState</c> (the door/area-transition and vfx-alpha families,
+    /// <c>GetVisualEffectAlpha</c>/<c>GetFinalFadeAlpha</c> at <c>0x0063DE50</c>/<c>0x0063DEE0</c>)
+    /// — an EVENT-DRIVEN "recompute once, push once" system, never a per-frame poller, so a
+    /// direct call here is not fighting anything that re-derives and overwrites it every frame
+    /// (this project's per-frame-write rule is about the CALL SITE's discipline, not this
+    /// setter's own cost — it is cheap and idempotent either way, same as every other Odyssey
+    /// setter). LIVE-VERIFIED 2026-09-25 (§12.13): the stand-in renders translucent.
+    /// </summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, float, byte, int> SetAlphaFn =
+        (delegate* unmanaged[Thiscall]<nint, float, byte, int>)0x0063CB50;
+
+    /// <summary>CSWCAnimBase + this = the "all channels" alpha this setter stores when
+    /// <c>channel == 0xFF</c> — read back to confirm a call actually landed (distinct object
+    /// from <see cref="CreClientStealthState"/>, which is the CSWCCreature-level field the OTHER
+    /// setter above writes).</summary>
+    private const int AnimBaseAlpha = 0xC0;
+
+    /// <summary>The translucency level this project ships: roughly what the old vfx's
+    /// <c>0x7F000000</c> argument implied (~50%) before it turned out not to fire at all.</summary>
+    public const float TranslucentAlpha = 0.5f;
+
+    public const float OpaqueAlpha = 1.0f;
+
+    /// <summary>
     /// Puts a creature's CLIENT twin into (or takes it out of) the engine's own stealth
-    /// COSMETIC — the translucent shimmer, never the server's detection-relevant mode
-    /// (<see cref="SetStealthMode"/>). <paramref name="serverObjectId"/> is resolved to the
-    /// client-side object through <c>CClientExoApp::GetGameObject</c> (<c>ClientGetGameObjectFn</c>,
-    /// declared once in Odyssey.Dialogue.Bark.cs and reused here — private members of a partial
-    /// class are visible from every file that makes up the type) via the documented
+    /// COSMETIC, never the server's detection-relevant mode (<see cref="SetStealthMode"/>).
+    /// <paramref name="serverObjectId"/> is resolved to the client-side object through
+    /// <c>CClientExoApp::GetGameObject</c> (<c>ClientGetGameObjectFn</c>, declared once in
+    /// Odyssey.Dialogue.Bark.cs and reused here — private members of a partial class are
+    /// visible from every file that makes up the type) via the documented
     /// <c>id | 0x80000000</c> server-to-client id conversion (PlayBark's own notes), then
     /// guarded against a vtable that is not <c>CSWCCreature</c>'s (<see
     /// cref="AttackClientCreatureVtable"/>, the same constant Odyssey.Combat.AttackClient.cs
-    /// already verifies against) before the call — a body whose client twin has not
+    /// already verifies against) before either call — a body whose client twin has not
     /// materialised yet (or has torn down) answers false rather than dereferencing garbage.
+    ///
+    /// Calls <see cref="SetStealthStateFn"/> first (harmless bookkeeping; see its own doc
+    /// comment for why its visual effect does not fire), then pushes
+    /// <see cref="TranslucentAlpha"/>/<see cref="OpaqueAlpha"/> through <see cref="SetAlphaFn"/>
+    /// — THIS is the call that actually changes what gets drawn. Success requires the alpha
+    /// call to both return true AND read back the value it just wrote from
+    /// <c>anim_base+0xC0</c>.
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
@@ -116,12 +196,23 @@ internal static unsafe partial class Odyssey
         }
 
         int mode = on ? 1 : 0;
-        SetStealthStateFn(clientObj, mode, 0);
-        int after = *(int*)(clientObj + CreClientStealthState);
-        bool ok = on ? after != 0 : after == 0;
+        SetStealthStateFn(clientObj, mode, 0); // harmless; see its own doc comment
+
+        nint animBase = *(nint*)(clientObj + TwinAnimBase);
+        if (animBase == 0 || !NativeMethods.IsReadable(animBase, (nuint)(AnimBaseAlpha + 4)))
+        {
+            diagnostic = "client twin has no anim_base yet (model not built)";
+            return false;
+        }
+
+        float alpha = on ? TranslucentAlpha : OpaqueAlpha;
+        int applied = SetAlphaFn(clientObj, alpha, 0xFF);
+        float after = *(float*)(animBase + AnimBaseAlpha);
+        bool ok = applied != 0 && after == alpha;
         if (!ok)
         {
-            diagnostic = $"stealth_state field reads {after} after the call";
+            diagnostic = $"SetAlpha returned {applied}, anim_base+0xC0 reads {after} " +
+                $"(wanted {alpha})";
         }
 
         return ok;

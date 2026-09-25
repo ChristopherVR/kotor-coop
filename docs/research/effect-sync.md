@@ -1777,6 +1777,105 @@ visual effect is not what makes a stealthed ally look translucent in retail. The
 alpha path is being researched next. Until it lands, the default gives the right targeting
 behaviour but no visual cue.
 
+### 12.13 Why the vfx did nothing, and the real render-alpha lever — `CSWCObject::SetAlpha` (2026-09-25)
+
+**Why 0x1F40/0x1F42/0x1F41 draw nothing — INFERRED, consistent with §12.12's live result.**
+`python tools/kotorfiles.py 2da visualeffects.2da` reads the shipped table: **144 rows**
+(`--rows 7998:8004` returns none). 8000/8001/8002 are nowhere near that range, so they cannot
+be `visualeffects.2da` row indices the way a spell's VFX normally is. Disassembling
+`CSWCObject::AddVisualEffect` (`0x0063D970`, `vtable+0xB4`, the call `SetStealthState` makes)
+confirms the shape this predicts: it `operator new`s a temporary effect object, calls an
+`Init(id, ...)` routine (`0x006A1880`) with the id and the color/flag arguments, and — ONLY if
+`Init` returns nonzero — inserts the effect into the object's `vis_effects` list; on failure it
+frees the temporary object and returns 0. `CSWCCreature::SetStealthState` (`0x00613930`) never
+reads `AddVisualEffect`'s return value at all (confirmed across its whole body) — a failed add
+is silently swallowed, which is exactly consistent with the live result: the `stealth_state`
+field readback still succeeded (nothing reads that back except our own diagnostic) while
+nothing visible happened. `Init`'s own id-resolution logic was not traced to a definitive root
+cause (it is a large function, `0x006A1880`-plus, that resolves object references via
+`CClientExoApp::GetGameObject` rather than an obvious 2da lookup in the part read) — VERIFIED
+is "this call site's return value is ignored and the row count is 144"; "why `Init` itself
+answers false for 8000" stays INFERRED (out-of-range for whatever table it does consult).
+
+**The real lever — `CSWCObject::SetAlpha` (`0x0063CB50`) → `CSWCAnimBase::SetAlpha`
+(`0x0069EB20`) — VERIFIED by disassembly, LIVE-VERIFIED 2026-09-25.**
+
+```
+0x0063CB50  mov ecx, [ecx+0x68]     ; ecx = this->anim_base (CSWCAnimBase*) - the SAME [ecx+0x68]
+                                    ; CSWCObject::GetAnimBase (0x0063C070) uses, and the SAME
+                                    ; field Odyssey.CreatureAnim.cs's TwinAnimBase already relies
+                                    ; on (cross-verified, no new offset)
+0x0063CB53  test ecx, ecx
+0x0063CB55  jne 0x63cb5c
+0x0063CB57  xor eax, eax            ; no anim_base yet -> false, no write
+0x0063CB59  ret 8
+0x0063CB5C  mov eax, [ecx]
+0x0063CB5E  jmp [eax+0x94]          ; TAIL JMP into anim_base's OWN vtable slot 0x94 - the
+                                    ; adjustor-thunk pattern this project's vtable-slot-dispatch
+                                    ; memory note describes; args/return address pass through
+                                    ; untouched, so calling 0x0063CB50 behaves like an ordinary
+                                    ; thiscall to the caller
+```
+
+`CSWCAnimBase`'s own vtable (`0x00754F60`) slot `+0x94` is `0x00754FF4` — one of
+`tools/xrefs.py 0x69EB20`'s ten address-literal hits, confirming `CSWCAnimBase::SetAlpha`
+(`0x0069EB20`) is the un-overridden base-class implementation a creature actually reaches.
+Disassembled start to end: `SetAlpha(float alpha, byte channel)`, thiscall, `ret 8`. When
+`channel == 0xFF` it stores the raw float bits into `CSWCAnimBase+0xC0`, then walks up to five
+material-channel pointers at `+0x90..+0xA3` and, for each non-null one, calls a per-material
+virtual function with (color = white, this alpha, a flag) — an IMMEDIATE push into the
+rendered materials, not a value merely cached for something else to pick up. Returns 1 when it
+actually ran that path (the intended call shape), 0 on either early exit.
+
+`tools/xrefs.py 0x63CB50` finds exactly six direct callers, ALL inside
+`CSWCVisualEffectOnObject::ApplyAlpha`/`RemoveAlpha`/`UpdateAlpha` (`0x006A3E80`/`0x006A4920`/
+`0x006A4C00`) and `CSWCObject::FadeObject`/`SetFadeState` (the door/area-transition-fade and
+vfx-alpha families — `GetVisualEffectAlpha`/`GetFinalFadeAlpha`, `0x0063DE50`/`0x0063DEE0`,
+which walk `vis_effects` and the `CGuiInGame` fade-list to compute a target alpha and then push
+it through this same setter). This confirms the mechanism `CSWCCreature::SetStealthState` was
+*trying* to reach — a real, valid stealth vfx (one with a working id, unlike 8000/8002) would
+apply its own alpha to the model through exactly this call. It also confirms the system is
+EVENT-DRIVEN ("recompute once when a fade/vfx starts or ends, push once"), never a per-frame
+poller — nothing re-derives and overwrites `+0xC0` every frame, so a direct call on the stealth
+edge is not fighting a continuous refresh (this project's per-frame-write rule is about call-site
+discipline, not a hazard specific to this setter).
+
+**The fix.** `Odyssey.SetStealthVisualState` (`src/KotorCoop.Plugin/Odyssey.StealthVisual.cs`)
+now calls `SetStealthState` first (kept — harmless, and `stealth_state` may feed other client
+bookkeeping this pass did not chase down) and then calls `CSWCObject::SetAlpha` directly on the
+stand-in's client object with `alpha = 0.5f` (stealthed) / `1.0f` (not), `channel = 0xFF`.
+Success requires BOTH the call's own return value AND a readback of `anim_base+0xC0` to match
+the value just written (mirrors this project's other engine-write verification pattern).
+LIVE-VERIFIED 2026-09-25: the stand-in renders translucent.
+
+**Known caveat, not fixed this pass.** `FadeObject`/`SetFadeState` (door/area-transition
+occlusion fading) call this SAME setter for their own reasons; if that system ever touches a
+creature's materials for an unrelated reason while a peer is stealthed, our poke would only be
+re-asserted on the NEXT stealth edge (on/off, respawn, module change), not immediately —
+matching how every other per-slot latch in this project already behaves (`ApplyTargetable`'s
+faction flip has the identical property). Not observed live; noted for completeness.
+
+### 12.14 NEEDS-LIVE — re-run §12.11's recipe against the alpha lever
+
+§12.11's steps still apply unchanged (same verb, same screenshot tool, same three-tier config
+matrix) — only the mechanism behind step 1 changed. The specific thing to re-check:
+
+1. **Translucent (default).** Joiner `stealth on`; host log should still show the release plus
+   `engine stealth mode ON (translucent, stealth_partner_visual)`. Host screenshot
+   (`tools/shot.ps1`) should now show the stand-in visibly SEE-THROUGH (roughly half-strength),
+   not the full-opacity render §12.12 caught. `stealth off` should restore full opacity —
+   confirm the screenshot looks IDENTICAL to a pre-stealth capture (not merely "less
+   see-through"), since `OpaqueAlpha = 1.0f` is an exact restore, not a fade back.
+2. Steps 2-5 of §12.11 (`hidden`, `off`, the migration check, the detection question) are
+   unaffected by this change and do not need repeating unless step 1 above fails.
+3. **New failure mode to watch for:** if the diagnostic in `Odyssey.SetStealthVisualState`'s
+   `out string diagnostic` ever logs `"SetAlpha returned 0"` while the earlier
+   `"client-side creature twin yet"` guard passed, that means `anim_base` resolved but
+   `CSWCAnimBase::SetAlpha`'s own early-exit fired — worth a memory probe of
+   `*(nint*)(clientObj+0x68)` and its vtable slot `+0x94` before assuming the offsets are wrong,
+   since a torn-down/mid-rebuild model is the far more likely cause (same class of hazard
+   `FloatyTextNodeGuardHook.cs` documents for a different accessor).
+
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
 Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the
