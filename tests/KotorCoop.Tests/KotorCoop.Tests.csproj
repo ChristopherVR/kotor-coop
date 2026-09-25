@@ -9,6 +9,19 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
+
+    <!--
+      For AgentDashboardThreadingTests: a REAL Terminal.Gui IApplication is what makes that
+      test worth anything (it proves the actual library's Invoke/threading behaviour, not a
+      hand-written stand-in for it) - see that file's own doc comment for the 2026-09-26
+      regression it guards. Same version and native-asset exclusion as
+      src/KotorCoop.Agent/KotorCoop.Agent.csproj; tests do not publish single-file, so the
+      exclusion is not load-bearing here, just consistent.
+    -->
+    <PackageReference Include="Terminal.Gui" Version="2.5.0" />
+    <PackageReference Include="TextMateSharp" Version="2.0.4" />
+    <PackageReference Include="TextMateSharp.Grammars" Version="2.0.4" />
+    <PackageReference Include="Onigwrap" Version="1.0.11" ExcludeAssets="native" />
   </ItemGroup>
 
   <!--
