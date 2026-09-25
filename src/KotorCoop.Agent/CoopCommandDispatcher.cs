@@ -695,6 +695,25 @@ public sealed partial class CoopCommandDispatcher(
         _kotor?.PostChatLine(text);
     }
 
-    /// <summary>Alias kept for call sites that specifically mean a chat line.</summary>
-    private void Chat(string text) => Reply(text);
+    /// <summary>A player chat line: same console/overlay/log path as <see cref="Reply"/>, but
+    /// marked so the Messages-screen inbox keeps it (command replies and notices stay out).</summary>
+    private void Chat(string text)
+    {
+        if (Log is not { } log)
+        {
+            Console.WriteLine($"[coop] {text}");
+        }
+        else
+        {
+            if (!Console.IsOutputRedirected)
+            {
+                Console.WriteLine($"[coop] {text}");
+            }
+
+            log(text);
+        }
+
+        _kotor?.PostConsoleReply(text);
+        _kotor?.PostInboxChatLine(text);
+    }
 }

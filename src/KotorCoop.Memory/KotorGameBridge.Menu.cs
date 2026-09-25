@@ -641,6 +641,28 @@ public sealed partial class KotorGameBridge
         return ok;
     }
 
+    /// <summary>
+    /// Pushes one PLAYER CHAT line: the overlay shows it like any other, and the plugin's
+    /// Messages-screen inbox (chat_messages_screen) keeps it. The first byte is
+    /// <see cref="ChatInboxMarker"/>, which both plugin readers strip; unmarked lines (command
+    /// replies, notices) never reach the inbox.
+    /// </summary>
+    public bool PostInboxChatLine(string line)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockChatLine + 1, line, BlockChatLineLength - 1);
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatLine, ChatInboxMarker);
+        ok &= _memory.TryWrite(_pluginBlock + BlockChatSerial, ++_chatSerial);
+        return ok;
+    }
+
+    /// <summary>Leading byte of a chat line that belongs in the Messages-screen inbox.</summary>
+    public const byte ChatInboxMarker = 0x01;
+
     private uint _chatClearSerial;
 
     /// <summary>Wipes the in-game overlay log (the <c>clear</c> command).</summary>

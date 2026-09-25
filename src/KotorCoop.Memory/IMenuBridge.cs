@@ -38,6 +38,9 @@ public interface IMenuBridge
     /// dialogue). Default false when this bridge has no overlay.</summary>
     bool PostChatLine(string line) => false;
 
+    /// <summary>A player chat line: shown on the overlay and kept in the Messages-screen inbox.</summary>
+    bool PostInboxChatLine(string line) => PostChatLine(line);
+
     /// <summary>False when this bridge cannot mediate deaths (no plugin).</summary>
     bool SupportsDeathHandling => false;
 

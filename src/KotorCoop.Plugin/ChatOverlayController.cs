@@ -90,6 +90,11 @@ internal sealed unsafe class ChatOverlayController
         int slot = _count % Capacity;
         byte[] target = _lines[slot];
         byte* source = _block.ChatLine;
+        if (*source == ChatMessagesScreenController.InboxMarker)
+        {
+            source++; // inbox marker (a player chat line); not drawn
+        }
+
         for (int i = 0; i < target.Length; i++)
         {
             target[i] = source[i];

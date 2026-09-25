@@ -555,7 +555,7 @@ public sealed partial class CoopCommandDispatcher
                 _saveLineageAnnounced = client.SaveLineageAbsorbing;
                 if (_saveLineageAnnounced)
                 {
-                    Reply("save identity differs after a save on one side, with no load since the two last agreed - same world, not rejoining");
+                    Log?.Invoke("save identity differs after a save on one side, with no load since the two last agreed - same world, not rejoining");
                 }
             }
 
@@ -639,7 +639,8 @@ public sealed partial class CoopCommandDispatcher
                 digest, captureBlockedByOwnLoad ? null : currentSave, out _);
             if (captureOutcome is not null)
             {
-                Reply(captureOutcome);
+                // A diagnostic for the log, not the player's screen.
+                Log?.Invoke(captureOutcome);
             }
             WorldDigest hostDigest = client.RemoteWorldDigest;
             SaveOrLoadVerdict remoteVerdict = _sessionSaveWatch.ObserveRemoteVerdict(

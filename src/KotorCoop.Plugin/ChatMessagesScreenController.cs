@@ -25,6 +25,10 @@ internal sealed unsafe class ChatMessagesScreenController(SharedBlockView block)
 {
     private readonly bool _enabled = PluginConfig.ReadBool("chat_messages_screen", false);
 
+    /// <summary>Leading byte of a chat line meant for the inbox; mirrors
+    /// KotorGameBridge.ChatInboxMarker.</summary>
+    public const byte InboxMarker = 0x01;
+
     private uint _lastSerial;
 
     public void OnFrame()
@@ -45,8 +49,18 @@ internal sealed unsafe class ChatMessagesScreenController(SharedBlockView block)
         // ChatLine is a fixed SharedBlock.ChatLineLength (128) byte, null-terminated ASCII
         // buffer the agent already wrote; find the terminator rather than assume it is full.
         byte* source = block.ChatLine;
+
+        // Only player chat belongs in the inbox. The agent marks those lines with a leading
+        // InboxMarker byte (KotorGameBridge.PostInboxChatLine); command replies and notices
+        // are unmarked and stay on the overlay only.
+        if (*source != InboxMarker)
+        {
+            return;
+        }
+
+        source++;
         int length = 0;
-        while (length < SharedBlock.ChatLineLength - 1 && source[length] != 0)
+        while (length < SharedBlock.ChatLineLength - 2 && source[length] != 0)
         {
             length++;
         }
