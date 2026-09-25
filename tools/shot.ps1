@@ -206,6 +206,19 @@ if (-not $PrintWindow -and -not $ForceScreenCapture) {
             $pluginBmpPath = $plugin.Path
             $method = "plugin GL readback ($(if ($Front) { 'front' } else { 'back' }) buffer, kotorcoop-shots\$([System.IO.Path]::GetFileName($plugin.Path)))"
             $w = $bmp.Width; $h = $bmp.Height; $x = 0; $y = 0
+
+            # At the main menu the back buffer reads black from the menu hook (live
+            # 2026-09-25); the front buffer holds the presented frame. Retry once.
+            if (-not $Front -and (Test-LooksBlank $bmp)) {
+                $retry = Get-PluginScreenshot -Proc $proc -UseFront
+                if ($null -ne $retry -and $retry.Path) {
+                    $bmp.Dispose()
+                    $bmp = New-Object System.Drawing.Bitmap $retry.Path
+                    $pluginBmpPath = $retry.Path
+                    $method = "plugin GL readback (front buffer after a blank back buffer, kotorcoop-shots\$([System.IO.Path]::GetFileName($retry.Path)))"
+                    $w = $bmp.Width; $h = $bmp.Height
+                }
+            }
         }
         catch {
             Write-Warning "plugin screenshot file '$($plugin.Path)' could not be opened: $_"
