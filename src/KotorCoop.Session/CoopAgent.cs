@@ -1066,7 +1066,11 @@ public sealed partial class CoopAgent
                     localWorldReady: partyPoolLocalWorldReady,
                     clientLoadQuarantined: _partyPoolClientLoadQuarantined
                         || _partyPoolHostKnownUnavailable
-                        || (!_session.IsEnemyAuthority && !_partyPoolLoadGateState.HasInitialAlignedWorld));
+                        || (!_session.IsEnemyAuthority && !_partyPoolLoadGateState.HasInitialAlignedWorld),
+                    // coop.ini inventory_mode (host-authoritative — see SessionOverrides):
+                    // personal restricts this channel to quest items only. See
+                    // docs/research/personal-inventory.md.
+                    inventoryPersonalMode: _session.Overrides.InventoryPersonal ?? _settings.InventoryPersonal);
                 break;
         }
 

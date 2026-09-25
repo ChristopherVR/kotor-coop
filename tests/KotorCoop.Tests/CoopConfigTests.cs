@@ -675,6 +675,8 @@ public class CoopConfigTests
     [InlineData("gamepad_cursor_speed")]
     [InlineData("world_transfer_udp_fallback")]
     [InlineData("MENU_BUTTON")] // case-insensitive
+    [InlineData("inventory_mode")]
+    [InlineData("credits_mode")]
     public void PlayerFacingKeysAreRecognisedAsPlayerFacing(string key)
     {
         Assert.True(CoopConfig.IsPlayerFacingKey(key));
@@ -714,5 +716,125 @@ public class CoopConfigTests
         // they show up in neither list.
         Assert.Equal(["local_combat", "threat_retarget"], developer);
         Assert.Equal(["not_a_real_key"], unknown);
+    }
+
+    // ---- inventory_mode / credits_mode (docs/research/personal-inventory.md) --------------
+
+    [Fact]
+    public void InventoryAndCreditsDefaultToPersonalWithNoCoopIniAtAll()
+    {
+        CoopConfig c = new();
+        Assert.True(c.InventoryPersonal);
+        Assert.True(c.CreditsPersonal);
+    }
+
+    [Fact]
+    public void AbsentInventoryModeAndCreditsModeDefaultToPersonal()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.InventoryPersonal);
+            Assert.True(c.CreditsPersonal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ExplicitSharedInventoryModeTurnsOffPersonalInventoryAndCredits()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            inventory_mode = shared
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.InventoryPersonal);
+
+            // credits_mode, left unset, follows inventory_mode.
+            Assert.False(c.CreditsPersonal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CreditsModeCanBeSetIndependentlyOfInventoryMode()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            inventory_mode = shared
+            credits_mode = personal
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.InventoryPersonal);
+            Assert.True(c.CreditsPersonal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("personal")]
+    [InlineData("PERSONAL")]
+    [InlineData("garbage")] // tolerant, like JoinModeRule.Parse: an unrecognised value never
+                             // silently opts a player OUT of the new default.
+    [InlineData("")]
+    public void InventoryModeIsTolerantAndDefaultsToPersonal(string value)
+    {
+        string path = WriteTemp($"""
+            [coop]
+            mode = join
+            inventory_mode = {value}
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.True(c.InventoryPersonal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void InventoryModeSharedIsCaseInsensitive()
+    {
+        string path = WriteTemp("""
+            [coop]
+            mode = join
+            inventory_mode = SHARED
+            """);
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.False(c.InventoryPersonal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

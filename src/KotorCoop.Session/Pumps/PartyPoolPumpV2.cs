@@ -113,6 +113,17 @@ internal sealed class PartyPoolPumpV2(
 
     private bool _everPumped;
 
+    /// <summary>coop.ini <c>inventory_mode = personal</c> (host-authoritative — see
+    /// <see cref="SessionOverrides.InventoryPersonal"/>), latched from the caller's own
+    /// argument to <see cref="Pump"/> every tick. When true, this whole pump behaves as if a
+    /// non-quest-item key (<see cref="QuestItemCatalog.IsQuestItemTag"/> false) simply does not
+    /// exist: never published by the host, never detected/reconciled by a client. See
+    /// docs/research/personal-inventory.md — the design deliberately filters at this single
+    /// choke point rather than touching any of the detect/reconcile arithmetic above, which has
+    /// its own long, hard-won correctness history (shared-inventory-v2.md §§5-12) that this
+    /// change must not risk disturbing for the keys that DO still sync.</summary>
+    private bool _inventoryPersonalMode;
+
     private volatile bool _applyWorldReady = true;
     private uint? _currentPumpWorldLoadSerial;
 
@@ -224,8 +235,10 @@ internal sealed class PartyPoolPumpV2(
         SessionCapabilities caps,
         string localModule = "",
         bool localWorldReady = true,
-        bool clientLoadQuarantined = false)
+        bool clientLoadQuarantined = false,
+        bool inventoryPersonalMode = false)
     {
+        _inventoryPersonalMode = inventoryPersonalMode;
         _currentPumpWorldLoadSerial = null;
         if (!bridge.TryReadWorldLoadSerial(out uint scanWorldLoadSerial))
         {
@@ -359,7 +372,13 @@ internal sealed class PartyPoolPumpV2(
 
         if (!bridge.LastPartyPoolScanWasStale)
         {
-            session.PublishPartyPoolSnapshotV2(totals);
+            // inventory_mode = personal: a client must never even LEARN this engine holds a
+            // non-quest stack — publishing only the quest-item subset is what keeps each
+            // engine's ordinary backpack invisible to the other, not a filter applied after the
+            // fact on the client side (see docs/research/personal-inventory.md).
+            session.PublishPartyPoolSnapshotV2(_inventoryPersonalMode
+                ? FilterQuestOnly(totals)
+                : totals);
         }
 
         if (trace)
@@ -375,6 +394,20 @@ internal sealed class PartyPoolPumpV2(
         IReadOnlyDictionary<PartyPoolStackKey, int> absenceVerificationTotals = totals;
         foreach (PartyPoolIntentPacketV2 intent in session.DrainPartyPoolIntentsV2())
         {
+            // Defense in depth for a peer whose own inventory_mode somehow disagrees with this
+            // host's (negotiation is supposed to make that impossible — see
+            // docs/research/personal-inventory.md — but a well-behaved client never PUBLISHES a
+            // non-quest intent in personal mode in the first place, per PumpClient below):
+            // refuse rather than apply it.
+            if (_inventoryPersonalMode && !QuestItemCatalog.IsQuestItemTag(intent.Key.Resref))
+            {
+                session.CompletePartyPoolIntentV2(intent.PeerId, intent.IntentSerial, accepted: false);
+                log($"party pool v2: refused {intent.Kind.ToString().ToLowerInvariant()} of "
+                    + $"{intent.Count}x '{intent.Key.Resref}' — inventory_mode=personal and this "
+                    + "is not a quest item");
+                continue;
+            }
+
             // A REMOVE is already satisfied when the authoritative engine scan proves that key
             // is absent. In particular, module scripts can clear the party pool during capture
             // while clients are still reporting the corresponding local disappearance. Sending
@@ -433,6 +466,23 @@ internal sealed class PartyPoolPumpV2(
             // outstanding ledger drifts against it.
             bridge.InvalidatePartyPoolScanCache();
         }
+    }
+
+    /// <summary>inventory_mode = personal: the subset of a full engine scan worth ever
+    /// broadcasting to a peer — see <see cref="_inventoryPersonalMode"/>.</summary>
+    private static Dictionary<PartyPoolStackKey, int> FilterQuestOnly(
+        IReadOnlyDictionary<PartyPoolStackKey, int> totals)
+    {
+        Dictionary<PartyPoolStackKey, int> filtered = new(totals.Count);
+        foreach ((PartyPoolStackKey key, int value) in totals)
+        {
+            if (QuestItemCatalog.IsQuestItemTag(key.Resref))
+            {
+                filtered[key] = value;
+            }
+        }
+
+        return filtered;
     }
 
     /// <summary>Rig-only (<c>party_pool_trace</c>): the HOST's side of the same trace the client
@@ -554,6 +604,15 @@ internal sealed class PartyPoolPumpV2(
 
         foreach (PartyPoolStackKey key in keys)
         {
+            // inventory_mode = personal: a non-quest key never enters this pump's bookkeeping
+            // at all — never detected as a local change, never reconciled toward the host (the
+            // host never published it in the first place, per PumpHost above). This is the
+            // single choke point the design relies on; see _inventoryPersonalMode's own remarks.
+            if (_inventoryPersonalMode && !QuestItemCatalog.IsQuestItemTag(key.Resref))
+            {
+                continue;
+            }
+
             int snapshotValue = snapshot.GetValueOrDefault(key);
             int actual = scan.GetValueOrDefault(key);
 

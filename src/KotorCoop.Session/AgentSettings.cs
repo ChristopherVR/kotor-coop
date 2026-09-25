@@ -158,6 +158,26 @@ public sealed record AgentSettings
     public bool ScriptItemSync { get; init; } = true;
 
     /// <summary>
+    /// coop.ini <c>inventory_mode</c> (personal/shared). When true (the default, "personal"):
+    /// each engine's own party backpack stays its own — <see cref="Pumps.PartyPoolPumpV2"/>
+    /// mirrors only a quest item (<see cref="QuestItemCatalog"/>) between peers, so a pickup,
+    /// purchase, sale or drop of anything else is never mirrored. When false ("shared"): every
+    /// stack still mirrors, byte-for-byte today's behaviour. HOST-AUTHORITATIVE — see
+    /// <see cref="BehaviourDigest"/>'s <c>InventoryPersonal</c> flag and
+    /// docs/research/personal-inventory.md.
+    /// </summary>
+    public bool InventoryPersonal { get; init; } = true;
+
+    /// <summary>
+    /// coop.ini <c>credits_mode</c> (personal/shared). When true (default when
+    /// <see cref="InventoryPersonal"/> is also true — see <see cref="CoopConfig"/>'s parse):
+    /// each side's own gold stays its own; <c>Pumps.PartyPump.PumpProgression</c> never folds a
+    /// peer's earn/spend into a shared purse. When false: one merged purse, today's behaviour.
+    /// HOST-AUTHORITATIVE, same reasoning as <see cref="InventoryPersonal"/>.
+    /// </summary>
+    public bool CreditsPersonal { get; init; } = true;
+
+    /// <summary>
     /// Relay a class a script adds to one player's character (Dorak's Jedi path choice,
     /// <c>AddMultiClass</c>) to every other player's character through the same engine
     /// handler — docs/research/class-and-power-grants.md, coop.ini <c>class_grant_sync</c>.

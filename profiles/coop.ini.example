@@ -93,6 +93,20 @@ spectate_on_down = 1
 ; a companion beforehand). 0 disables it.
 control_return = 1
 
+; Whether your backpack is your own or shared with the other player.
+;   personal  the default - pickups, purchases, sales, drops and crafting stay in YOUR
+;             backpack only. Quest/plot items still appear for both players, so the story
+;             stays in sync; everything else does not.
+;   shared    the older behaviour - every item you pick up or buy also appears for your
+;             partner, and vice versa.
+inventory_mode = personal
+
+; Whether your credits are your own or one shared party purse. Left unset, this follows
+; inventory_mode above (so switching inventory_mode alone keeps credits consistent with it).
+;   personal  your own credits, earned and spent locally.
+;   shared    one shared purse (the older behaviour).
+credits_mode = personal
+
 ; ------------------------------------------------------------------------------------------
 ; Screen
 ; ------------------------------------------------------------------------------------------

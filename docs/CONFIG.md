@@ -90,6 +90,8 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `spectate_on_down` | ON | hand your camera to the other player while you are downed | [spectate-camera.md](research/spectate-camera.md) |
 | `control_return` | ON | return control to your own character the moment you connect | [control-return.md](research/control-return.md) |
 | `control_return_diag_only` | OFF | rig-only: keep `control_return`'s detection/logging live but skip the actual hand-back, so a caught race stays latched instead of self-correcting | [dialogue-sync.md](research/dialogue-sync.md) |
+| `inventory_mode` | `personal` | `personal` (default): your backpack (pickups, purchases, sales, drops, crafting) is your own — only quest/plot items keep appearing for both players, so the story stays in sync. `shared`: today's older behaviour, every item mirrors to your partner. Host-authoritative — a client adopts whichever the host is running | [personal-inventory.md](research/personal-inventory.md) |
+| `credits_mode` | `personal` | `personal` (default): your credits are your own to earn and spend; `shared`: one party purse, today's older behaviour. Left unset, follows `inventory_mode`. Host-authoritative | [personal-inventory.md](research/personal-inventory.md) |
 
 ### Screen
 
@@ -275,6 +277,11 @@ Two of these (`party_follow_stall_recovery` and its method) are ON by default an
 | `solo_segment_any_module` | OFF | drop the module gate on the script-agnostic solo-segment burst trigger | [star-forge-finale.md §11](research/star-forge-finale.md) |
 
 ### Shared inventory (party pool / stores)
+
+**`inventory_mode`/`credits_mode` (Player settings, "Your character" above) sit ON TOP of this
+channel, not beside it**: `party_pool_sync=2` is still what actually moves items between
+engines, but in `inventory_mode = personal` (the default) it only ever mirrors a quest item —
+see [personal-inventory.md](research/personal-inventory.md).
 
 | Key | Default (code) | Meaning | Doc |
 | --- | --- | --- | --- |

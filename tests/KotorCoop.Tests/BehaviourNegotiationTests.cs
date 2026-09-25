@@ -38,13 +38,15 @@ public class BehaviourNegotiationTests
     private static PlayerState Somewhere => new(new Vector3f(10f, 20f, 0f), 1f, "end_m01aa", 100, 0);
 
     private static BehaviourDigest Digest(
-        bool effectSync = true, bool localCombat = true, string followLead = "any") =>
+        bool effectSync = true, bool localCombat = true, string followLead = "any",
+        bool inventoryPersonal = true, bool creditsPersonal = true) =>
         BehaviourDigest.Compute(
             localCombat: localCombat, companionLocalCombat: false, partyFastPump: true, partySync: true,
             clientDoorRefusal: true, transitionAnnounce: false, clientLoadRejoin: true, hostLoadReadopt: true,
             effectSync: effectSync, triggerRelay: true, clientEncounters: true, dialogueItemSync: true,
             dialogueRecruitSync: false, scriptItemSync: false, movieRelay: true, livenessSync: false,
-            mapRevealSync: false, requireIdenticalSave: false, interpolationMs: 80, followLead: followLead);
+            mapRevealSync: false, requireIdenticalSave: false, interpolationMs: 80, followLead: followLead,
+            inventoryPersonal: inventoryPersonal, creditsPersonal: creditsPersonal);
 
     [Fact]
     public async Task ClientWarnsOnBothDifferencesAndAdoptsOnlyTheHostAuthoritativeOne()
@@ -161,6 +163,50 @@ public class BehaviourNegotiationTests
         // regardless of what its peers' Hellos disagree on. Overrides is a default interface
         // member (CoopHost never overrides it), so it is only reachable through the interface.
         Assert.Equal(SessionOverrides.None, ((ICoopSession)host).Overrides);
+
+        await cts.CancelAsync();
+        await Task.WhenAll(hostTask, clientTask);
+    }
+
+    /// <summary>docs/research/personal-inventory.md's negotiation: inventory_mode/credits_mode
+    /// are host-authoritative, exactly like enemy_health/effect_sync — a client running a
+    /// different mode than the host adopts the host's at runtime.</summary>
+    [Fact]
+    public async Task ClientAdoptsTheHostsInventoryAndCreditsMode()
+    {
+        using CoopHost host = new(new SessionSettings
+        {
+            PlayerName = "Revan", Port = 0,
+            Behaviour = Digest(inventoryPersonal: true, creditsPersonal: true),
+        });
+        using CoopClient client = new(
+            new SessionSettings
+            {
+                PlayerName = "Malak",
+                Behaviour = Digest(inventoryPersonal: false, creditsPersonal: false),
+            },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+
+        void Publish()
+        {
+            host.PublishLocalState(Somewhere);
+            client.PublishLocalState(Somewhere);
+        }
+
+        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+        Assert.True(
+            await WaitForAsync(() => client.BehaviourWarnings is not null, Timeout, Publish));
+
+        Assert.Contains(client.BehaviourWarnings!.Differences,
+            d => d.Key == "inventory_mode" && d.HostAuthoritative);
+        Assert.Contains(client.BehaviourWarnings!.Differences,
+            d => d.Key == "credits_mode" && d.HostAuthoritative);
+        Assert.True(client.Overrides.InventoryPersonal);
+        Assert.True(client.Overrides.CreditsPersonal);
 
         await cts.CancelAsync();
         await Task.WhenAll(hostTask, clientTask);

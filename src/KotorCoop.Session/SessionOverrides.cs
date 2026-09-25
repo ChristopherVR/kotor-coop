@@ -50,7 +50,9 @@ public sealed record SessionOverrides(
     int? EnemyDamage = null,
     int? XpRate = null,
     int? StoreStock = null,
-    int? StorePrices = null)
+    int? StorePrices = null,
+    bool? InventoryPersonal = null,
+    bool? CreditsPersonal = null)
 {
     // The five int? fields (2026-09-18/23) are the player-count scaling SETTINGS
     // (docs/research/player-count-scaling.md): the host's coop.ini value, adopted verbatim —
