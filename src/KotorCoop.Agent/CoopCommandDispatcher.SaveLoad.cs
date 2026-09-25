@@ -152,6 +152,17 @@ public sealed partial class CoopCommandDispatcher
                 return;
             }
 
+            // Whatever happened to the quicksave slot this request cycle (a fresh co-op
+            // capture landed there, or nothing did), this is the one place every exit below
+            // funnels through: relocate a fresh capture to the dedicated co-op slot and restore
+            // the player's own held-back quicksave now, rather than leaving it hidden in the
+            // holdback directory across a bail-out branch. A no-op when nothing was held back
+            // or nothing fresh landed. See docs/research/session-save.md's 2026-09-25 entry.
+            if (CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out string redirectDiagnostic))
+            {
+                Log?.Invoke($"character capture: {redirectDiagnostic}");
+            }
+
             if (_ownLoadCaptureRequiresConfirmedSave
                 && _captureRequestOwnLoadEpoch != _ownLoadCaptureEpoch)
             {
@@ -214,6 +225,10 @@ public sealed partial class CoopCommandDispatcher
         _captureRequestOwnLoadEpoch = _ownLoadCaptureEpoch;
 
         Log?.Invoke($"character capture: {CharacterCaptureIntervalMin} min elapsed - asking the engine for a quicksave");
+        if (!CoopSaveRedirect.BeginHoldback(savesDirectory, out string holdbackDiagnostic))
+        {
+            Log?.Invoke($"character capture: {holdbackDiagnostic}");
+        }
         SendCheat(new CheatRequest(CheatKinds.QuickSave), quiet: true);
     }
 
@@ -1824,6 +1839,16 @@ public sealed partial class CoopCommandDispatcher
         // drain a queue on. Bounded: CSWSPlayer::GetIsAllowedToSave refuses silently, so after
         // SaveWaitMs the newest existing save is captured exactly as before.
         DateTime stampBefore = SaveStamp(currentSave);
+        bool holdbackArmed = false;
+        if (bridge.SupportsCheats)
+        {
+            holdbackArmed = CoopSaveRedirect.BeginHoldback(savesDirectory, out string holdbackDiagnostic);
+            if (!holdbackArmed)
+            {
+                Log?.Invoke($"character capture: {holdbackDiagnostic}");
+            }
+        }
+
         if (bridge.SupportsCheats && bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
         {
             long requestedMs = SessionClock.NowMs;
@@ -1847,10 +1872,25 @@ public sealed partial class CoopCommandDispatcher
                 ? $"character capture: pre-disconnect quicksave landed after {SessionClock.NowMs - requestedMs} ms"
                 : "character capture: pre-disconnect quicksave did not land within the wait - capturing the newest save as before");
 
+            // Relocate a fresh capture to the dedicated co-op slot and restore the held-back
+            // player quicksave now, before resolving the capture source below - a no-op when
+            // nothing landed in 000000 - QUICKSAVE this cycle.
+            if (CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out string redirectDiagnostic))
+            {
+                Log?.Invoke($"character capture: {redirectDiagnostic}");
+            }
+
             // The loop can observe an intermediate write before the engine updates the
             // quicksave's SAVEGAME.sav timestamp. Re-resolve at the capture boundary so a
             // newly landed quicksave wins over the path selected before the request.
             currentSave = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, currentSave);
+        }
+        else if (holdbackArmed)
+        {
+            // The request itself was refused (or cheats stopped being supported between the
+            // two checks) - nothing will ever land, so restore the held-back quicksave now
+            // rather than leaving it hidden.
+            CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out _);
         }
 
         string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);

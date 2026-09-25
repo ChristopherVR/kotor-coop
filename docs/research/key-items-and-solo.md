@@ -137,6 +137,13 @@ and the host's module, `GLOBALVARS.res` and journal. Before this pass the player
 (`README.md`, `docs/limitations.md`, `tools/package-README.txt`) still promised "your own save
 files are never changed"; §5 corrects them.
 
+> **⚠ Superseded for the quicksave slot, 2026-09-25 — see §4.** Everything below in §2/§3 that
+> says the joiner's `000000 - QUICKSAVE` gets overwritten with the host's world was true when
+> written and is the bug §4 now records as fixed: the mod no longer writes that slot at all,
+> for any reason. What §2/§3 say about `000001 - AUTOSAVE` (the mechanical staging target) is
+> still current — see §4's own "what this does NOT do." Left unedited below rather than rewritten,
+> the same way this tree layers a correction on top of a still-useful trace rather than erasing it.
+
 ---
 
 ## 3. Scenario tracing
@@ -222,15 +229,27 @@ of "keeps a host plot item that makes its solo story inconsistent": not one item
 whole save of the host's world sitting in a single-player slot. It also destroys whatever
 single-player quicksave was there.
 
-**Proposed rule** (a feature, not a small fix, so not done here): co-op must not write the
-joiner's single-player quicksave slot. The capture needs a save the engine writes and the
-extractor can read, not the quicksave slot specifically. `CServerExoAppInternal::SaveGame
-0x4B58A0` formats `SAVES:%06d - %s` from a number and a name (`world-adoption.md`, "The save
-primitive"), so a plugin call through `CClientExoApp::SendSaveGameRequest 0x5ED670` with a
-dedicated slot (a high number named `COOP`) instead of `DoQuickSave` would keep the capture and
-leave the player's quicksave alone. `FindCaptureSource` picks by mtime, so it would find the
-dedicated slot unchanged. NEEDS-RE for the slot number/name the save list tolerates, then a
-live pass. Until then the player docs say it plainly (§5).
+**FIXED, 2026-09-25** (`docs/research/session-save.md`'s "A dedicated co-op save slot" entry —
+read it for the full design and the engine facts it rests on). The mechanism that shipped is NOT
+the `SendSaveGameRequest`-with-a-redirected-number idea this paragraph originally proposed:
+`DoQuickSave` cannot be redirected at all (it is hard-coded to slot 0), and the one native call
+that DOES take an arbitrary slot only re-issues a request `SaveFlushHook` already intercepted, a
+mechanism still marked NEEDS-LIVE by its own header — tying a correctness requirement to it was
+the wrong trade. What shipped instead needs no new native call at all: `KotorCoop.Memory.
+CoopSaveRedirect` moves `000000 - QUICKSAVE` aside before a mod-driven save request, lets the
+engine write its fresh (unavoidably slot-0) capture exactly as before, then moves THAT to a
+dedicated `"Co-op"` save slot (`KotorCoop.Memory.CoopSaveSlot`) and restores what was held back —
+ordinary directory renames, the same primitive class `PluginMenuLoader.
+TryStageSaveAsAutosaveFromDirectory` already uses. Wired into `NewCharacterCaptureController`'s
+chargen capture, `MaintainPeriodicCapture` and `CaptureCharacterOnDisconnect` — the three
+mechanisms this section named above. `000000 - QUICKSAVE`'s own mtime is unchanged across a
+whole co-op session (a same-volume rename preserves file timestamps), which is now the live
+recipe's own check. `000001 - AUTOSAVE` still gets staged into (an engine requirement —
+`CSWGuiSaveLoad::LoadPCAutoSave` is hard-coded to that literal name and `MenuLoadController`'s
+whole load replay is built around it) but is now ALSO mirrored into the same dedicated slot right
+after staging, so the player has a normal, Load-Game-menu-visible "Co-op" save to return to
+instead of reading the ambient autosave slot. NEEDS-LIVE: the recipe at the foot of that
+session-save.md entry has not been run this pass.
 
 ---
 

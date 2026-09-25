@@ -97,13 +97,17 @@ own body. Your **co-op character** is separate from any single-player save on th
 install: the mod makes it with you the first time you join, keeps it
 (`saves\kotorcoop-character.*`), and carries it into the host's world on every join after
 that. `coop.ini`'s `join_mode` controls this (`auto`, the default; `newcharacter` makes a new
-one; `save` carries your own most recent save instead). While you are connected the mod
-writes two of the game's own slots: the autosave (the host's world you are playing in) and
-the quicksave (it quicksaves every 10 minutes and as you leave, to keep your co-op character
-current). Both then hold the host's world — its story, the shared credits and anything bought
-or found together — not your single-player game, and so does any save you make yourself while
-connected. Your other saves are never touched: keep single-player progress in a named save.
-Details: [docs/research/world-adoption.md](docs/research/world-adoption.md).
+one; `save` carries your own most recent save instead). While you are connected the mod keeps
+its own dedicated save — **"Co-op"** in the Load Game list — refreshed every 10 minutes and as
+you leave, so your co-op progress survives a crash. **Your Quick Save is never touched by the
+mod**: it stays exactly whatever you last made it yourself, pressing F4 or the Save menu. The
+game's own Auto Save slot is still used mechanically to bring the host's world in the instant
+you join or rejoin (a KOTOR engine requirement, not something this mod chose), and — same as
+any single-player game — the engine keeps autosaving through it as you walk through doors while
+connected; treat it as ambient scratch space the way you always did, and load "Co-op" for the
+save that is actually meant to be kept. Details:
+[docs/research/world-adoption.md](docs/research/world-adoption.md) and
+[docs/research/session-save.md](docs/research/session-save.md).
 
 **Playing over the internet.** The reliable way today is a free tunnel program on the host,
 such as [playit.gg](https://playit.gg). To join, pick **Connect to an address...** at the
