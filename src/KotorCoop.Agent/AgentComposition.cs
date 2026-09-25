@@ -471,7 +471,19 @@ internal static class AgentComposition
         // "disabled N local encounters" and pump-failure line was discarded, which made a
         // misfiring rescue undiagnosable from the logs. The manager forwards its agents'
         // lines; the dashboard writes them under the status line and into --log.
-        manager.Log = dashboard.Note;
+        // The perf_trace line (once a second) is log-file only: in the transcript it buried
+        // every real event and made each redraw heavier (live 2026-09-26).
+        manager.Log = line =>
+        {
+            if (line.StartsWith("perf: ", StringComparison.Ordinal))
+            {
+                dashboard.LogOnly(line);
+            }
+            else
+            {
+                dashboard.Note(line);
+            }
+        };
 
         // ⚠ And so does every CONSOLE REPLY, for exactly the same reason. The dispatcher's
         // answers — `items` rows, a drop's refusal, a cheat's verdict — went only to

@@ -68,6 +68,9 @@ public sealed class AgentDashboard(
     /// scrolling are the TextView's job; this only remembers what to show.</summary>
     private readonly TranscriptBuffer _transcript = new();
 
+    /// <summary>The <see cref="TranscriptBuffer.Version"/> the view last showed; UI thread only.</summary>
+    private long _renderedTranscriptVersion = -1;
+
     /// <summary>Whether this run can show and drive the command line at all: false when input
     /// is redirected (<c>Console.IsInputRedirected</c>), set once at the top of
     /// <see cref="RunAsync"/>.</summary>
@@ -448,6 +451,11 @@ public sealed class AgentDashboard(
                 {
                     footer.Text = footerText;
                 }
+
+                if (_transcript.Version != _renderedTranscriptVersion)
+                {
+                    RefreshTranscriptView();
+                }
             });
         }
         catch
@@ -599,25 +607,42 @@ public sealed class AgentDashboard(
             }
         }
 
-        if (_app is { } app)
-        {
-            try
-            {
-                app.Invoke(RefreshTranscriptView);
-            }
-            catch
-            {
-                // Best-effort: a Note() that lands exactly as the TUI is tearing down must
-                // not throw into the pump thread or the ConsoleCaptureWriter callback that
-                // called this.
-            }
-        }
-        else if (Console.IsOutputRedirected)
+        // ⚠ No app.Invoke here. Invoke takes Terminal.Gui's timer lock, which the UI thread
+        // holds while a RefreshTranscriptView runs — and a full resync of a 2000-line
+        // transcript takes seconds once lines are long. One Invoke per line parked the PUMP
+        // thread on that lock (live 2026-09-26: 30 -> 0.3 ticks/s after ~12 min, the session
+        // visibly lagging) and queued redraws faster than the UI could run them (the dashboard
+        // froze as a blank, unscrollable block). TickOnTimerThread redraws on its own 200 ms
+        // cadence when _transcript.Version moved; Note only appends.
+        if (_app is null && Console.IsOutputRedirected)
         {
             // Only reachable from RunNonInteractiveAsync's own world (no _app was ever set),
             // or a brief window before/after the TUI - the same fallback Note() always had.
             Console.Out.WriteLine(entry);
             Console.Out.Flush();
+        }
+    }
+
+    /// <summary>A line for the <c>--log</c> file only, in <see cref="Note"/>'s exact format (tools
+    /// grep it), kept out of the transcript: the once-a-second <c>perf:</c> line would
+    /// otherwise be most of what the player sees.</summary>
+    public void LogOnly(string line)
+    {
+        if (logFile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            RotateLogMidSessionIfDue(logFile);
+            File.AppendAllText(logFile, $"[{DateTime.Now:HH:mm:ss}] * {line}" + Environment.NewLine);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -1101,6 +1126,7 @@ public sealed class AgentDashboard(
             return;
         }
 
+        _renderedTranscriptVersion = _transcript.Version;
         bool wasFollowing = _transcript.IsFollowing;
         int savedTop = view.Viewport.Y;
 

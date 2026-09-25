@@ -25,6 +25,14 @@ public sealed class TranscriptBuffer(int capacity = 2000)
     private readonly List<string> _lines = [];
     private bool _isFollowing = true;
     private int _newSinceScrolled;
+    private long _version;
+
+    /// <summary>Bumped by every <see cref="Append"/>/<see cref="Clear"/>, so the UI glue can
+    /// redraw only when something changed rather than once per line.</summary>
+    public long Version
+    {
+        get { lock (_gate) { return _version; } }
+    }
 
     public int Count
     {
@@ -58,6 +66,7 @@ public sealed class TranscriptBuffer(int capacity = 2000)
     {
         lock (_gate)
         {
+            _version++;
             _lines.Add(line);
             while (_lines.Count > capacity)
             {
@@ -78,6 +87,7 @@ public sealed class TranscriptBuffer(int capacity = 2000)
     {
         lock (_gate)
         {
+            _version++;
             _lines.Clear();
             _isFollowing = true;
             _newSinceScrolled = 0;
