@@ -210,6 +210,13 @@ without a restart; Tab-completes, Up/Down recalls history) and **Enter** to chat
 partner. Missed a message? Past chat is kept in the game's own Messages screen (pause menu,
 Messages, Dialog tab). Full reference: [docs/CONSOLE.md](docs/CONSOLE.md).
 
+The agent window (the separate program that keeps the two games in sync) has the same command
+line built in: a `>` prompt at the bottom you can type into any time, with Tab completion, a
+candidate dropdown as you type, Up/Down history and a small scrollback of the last few
+replies — handy for typing a command without alt-tabbing into the game, or when nothing has
+loaded yet. F2 drops a demo item and F3 picks one up (used to be the bare `D`/`P` keys, moved
+once letters became something you could type).
+
 ## Troubleshooting
 
 Common problems and their actual causes — a missing Co-op button, nothing happening at all,

@@ -241,6 +241,19 @@ public sealed partial class CoopCommandDispatcher(
     }
 
     /// <summary>
+    /// Runs one typed line exactly as if it had come from the in-game <c>~</c> console: parsed
+    /// the same way (<see cref="ConsoleCommand.Parse"/>, the same call <see cref="DrainInputs"/>
+    /// makes for a console line out of the shared block) and dispatched through the same
+    /// <see cref="DispatchFromGame"/> path — so a <c>connect</c>/<c>host</c> typed here still
+    /// arms the menu auto-load exactly as a real console line would. The answer comes back
+    /// through the ordinary <see cref="Reply"/>/<see cref="Chat"/> sink, same as every other
+    /// verb. The dashboard's own command line (<see cref="DashboardInputLine"/>, driven by
+    /// <see cref="AgentDashboard"/>) is a second front door onto this identical pipe, never a
+    /// parallel one that could answer a command differently.
+    /// </summary>
+    public void RunTypedLine(string line) => DispatchFromGame(ConsoleCommand.Parse(line));
+
+    /// <summary>
     /// Applies a parsed command to the session manager. Public so the initial CLI/menu
     /// connection can go through exactly the same path as an in-game command.
     ///

@@ -11,8 +11,44 @@ namespace KotorCoop.Agent;
 /// says so instead of rendering stale peers.
 /// </summary>
 public sealed class AgentDashboard(
-    SessionManager manager, IGameBridge bridge, string? dropFile = null, string? logFile = null)
+    SessionManager manager,
+    IGameBridge bridge,
+    string? dropFile = null,
+    string? logFile = null,
+    CoopCommandDispatcher? dispatcher = null)
 {
+    /// <summary>The always-visible command line: buffer/caret/history/completion, all pure —
+    /// see <see cref="DashboardInputLine"/>'s own doc comment. Constructed unconditionally
+    /// (it is cheap and holds no console handle); whether it is ever drawn or fed a key
+    /// depends on <see cref="_showInputLine"/>, decided once in <see cref="RunAsync"/>.</summary>
+    private readonly DashboardInputLine _input = new();
+
+    /// <summary>Whether this run can show and drive the input line at all: false when input
+    /// is redirected (<c>Console.IsInputRedirected</c>), set once at the top of
+    /// <see cref="RunAsync"/>. Output being redirected already skips <see cref="Render"/>
+    /// entirely (see the two-outputs remark on <see cref="RunAsync"/>), so this is the one
+    /// remaining case — a real console window fed piped/redirected stdin — that needs its own
+    /// guard: keys are never read there, so there is nothing for a drawn prompt to reflect.</summary>
+    private bool _showInputLine;
+
+    /// <summary>The frame row the prompt line ("&gt; buffer") landed on this Render() pass, or
+    /// -1 when none was drawn — how <see cref="PositionInputCaret"/> finds where to put the
+    /// real OS caret after <see cref="FlushFrame"/> repaints the screen.</summary>
+    private int _promptFrameRow = -1;
+
+    /// <summary>How many of the last replies/chat/event lines (from <see cref="Note"/>) and
+    /// echoed commands are kept above the prompt.</summary>
+    private const int ScrollbackCapacity = 8;
+
+    /// <summary>How many ranked completion candidates the dropdown shows at once.</summary>
+    private const int MaxDropdownRows = 6;
+
+    /// <summary>Guards <see cref="_scrollback"/>: <see cref="Note"/> can be called from the
+    /// pump thread (session events) as well as from this dashboard's own command submit, and
+    /// <see cref="Render"/> reads it every 200 ms tick.</summary>
+    private readonly Lock _scrollbackGate = new();
+    private readonly List<string> _scrollback = [];
+
     /// <summary>
     /// What the D key drops, cycling. KOTOR 1 has no native drop-item UI, so the demo
     /// conjures well-known blueprints at the player's feet instead.
@@ -163,6 +199,7 @@ public sealed class AgentDashboard(
     {
         bool canPosition = !Console.IsOutputRedirected;
         bool canReadKeys = !Console.IsInputRedirected;
+        _showInputLine = canReadKeys;
 
         if (canPosition)
         {
@@ -180,7 +217,7 @@ public sealed class AgentDashboard(
                 {
                     while (Console.KeyAvailable)
                     {
-                        HandleKey(Console.ReadKey(intercept: true).Key);
+                        HandleKey(Console.ReadKey(intercept: true));
                     }
                 }
 
@@ -197,6 +234,7 @@ public sealed class AgentDashboard(
                 {
                     Render();
                     FlushFrame();
+                    PositionInputCaret();
                 }
 
                 // The log is written whenever one was asked for, and also when there is no
@@ -254,18 +292,114 @@ public sealed class AgentDashboard(
         Drop(requested.Length > 0 ? requested : null);
     }
 
-    private void HandleKey(ConsoleKey key)
+    /// <summary>
+    /// Routes one key press. F2/F3 (the drop/pick-up demo hotkeys — moved off the bare D/P
+    /// letters once those became ordinary typed characters for the command line below) are
+    /// handled first and unconditionally: they are function keys, never something a player
+    /// would be typing into a command, so there is no ambiguity in always treating them as
+    /// hotkeys regardless of what is in the buffer. Everything else edits
+    /// <see cref="_input"/> — a no-op when <see cref="_showInputLine"/> is false, since
+    /// <see cref="RunAsync"/> only ever calls this from inside its own
+    /// <c>canReadKeys</c> guard, but the field is checked anyway so this method stays correct
+    /// if that ever changes.
+    /// </summary>
+    private void HandleKey(ConsoleKeyInfo keyInfo)
     {
-        switch (key)
+        switch (keyInfo.Key)
         {
-            case ConsoleKey.D:
+            case ConsoleKey.F2:
                 Drop(null);
-                break;
+                return;
 
-            case ConsoleKey.P:
+            case ConsoleKey.F3:
                 PickUpNearest();
-                break;
+                return;
         }
+
+        if (!_showInputLine)
+        {
+            return;
+        }
+
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Enter:
+                SubmitInput();
+                return;
+
+            case ConsoleKey.Backspace:
+                _input.Backspace();
+                return;
+
+            case ConsoleKey.Delete:
+                _input.Delete();
+                return;
+
+            case ConsoleKey.LeftArrow:
+                _input.MoveLeft();
+                return;
+
+            case ConsoleKey.RightArrow:
+                _input.MoveRight();
+                return;
+
+            case ConsoleKey.Home:
+                _input.MoveHome();
+                return;
+
+            case ConsoleKey.End:
+                _input.MoveEnd();
+                return;
+
+            case ConsoleKey.Escape:
+                _input.ClearLine();
+                return;
+
+            case ConsoleKey.UpArrow:
+                _input.HistoryUp();
+                return;
+
+            case ConsoleKey.DownArrow:
+                _input.HistoryDown();
+                return;
+
+            case ConsoleKey.Tab:
+                _input.Complete(reverse: (keyInfo.Modifiers & ConsoleModifiers.Shift) != 0);
+                return;
+        }
+
+        char typed = keyInfo.KeyChar;
+        if (!char.IsControl(typed))
+        {
+            _input.TypeChar(typed);
+        }
+    }
+
+    /// <summary>
+    /// Enter: echoes the submitted line into the scrollback and runs it through the SAME
+    /// dispatcher the ~ console feeds — <see cref="CoopCommandDispatcher.RunTypedLine"/> —
+    /// so the reply comes back through <see cref="Note"/> exactly as any other console reply
+    /// does. Blank lines submit nothing (<see cref="DashboardInputLine.Submit"/> already
+    /// returns empty for one), matching the in-game console's own "Enter on nothing does
+    /// nothing" behaviour.
+    /// </summary>
+    private void SubmitInput()
+    {
+        string line = _input.Submit();
+        if (line.Length == 0)
+        {
+            return;
+        }
+
+        PushScrollback($"> {line}");
+
+        if (dispatcher is null)
+        {
+            PushScrollback("(no command dispatcher wired to this dashboard)");
+            return;
+        }
+
+        dispatcher.RunTypedLine(line);
     }
 
     /// <summary>
@@ -339,6 +473,7 @@ public sealed class AgentDashboard(
     public void Note(string line)
     {
         string entry = $"[{DateTime.Now:HH:mm:ss}] * {line}";
+        PushScrollback(line);
 
         if (logFile is not null)
         {
@@ -360,6 +495,29 @@ public sealed class AgentDashboard(
         {
             Console.Out.WriteLine(entry);
             Console.Out.Flush();
+        }
+    }
+
+    /// <summary>Appends one line to the small scrollback shown above the prompt, dropping the
+    /// oldest once past <see cref="ScrollbackCapacity"/>. Thread-safe — see
+    /// <see cref="_scrollbackGate"/>'s own doc comment.</summary>
+    private void PushScrollback(string line)
+    {
+        lock (_scrollbackGate)
+        {
+            _scrollback.Add(line);
+            while (_scrollback.Count > ScrollbackCapacity)
+            {
+                _scrollback.RemoveAt(0);
+            }
+        }
+    }
+
+    private List<string> ScrollbackSnapshot()
+    {
+        lock (_scrollbackGate)
+        {
+            return [.. _scrollback];
         }
     }
 
@@ -555,8 +713,7 @@ public sealed class AgentDashboard(
             WriteLine($" last drop  {_lastDropNote}");
         }
 
-        WriteLine(string.Empty);
-        WriteLine(" [D] drop an item    [P] pick one up    Ctrl+C to stop");
+        RenderInputArea();
     }
 
     /// <summary>Steady-state readout while no session is live (between connects).</summary>
@@ -567,14 +724,117 @@ public sealed class AgentDashboard(
         WriteLine("not connected.");
         WriteLine(string.Empty);
         WriteLine("In-game: press ~ and type  connect <ip> [password] | reconnect | help");
+        WriteLine("Or type it below - this window's own command line reaches the same dispatcher.");
 
-        // Keep the frame height stable so the previous, taller frame is fully overwritten.
-        for (int i = 0; i < 18; i++)
+        // A little padding so this shorter screen still fills roughly the same vertical
+        // space the connected readout does - not load-bearing for correctness (FlushFrame
+        // blanks every row up to the window height on every call regardless of how many
+        // lines were actually written), just cosmetic stability. Cut down from the 18 this
+        // used before RenderInputArea existed, which would otherwise push the prompt row
+        // below a normal-height terminal window and off the visible, clamped frame.
+        for (int i = 0; i < 6; i++)
         {
             WriteLine(string.Empty);
         }
 
-        WriteLine("Ctrl+C to stop.");
+        RenderInputArea();
+    }
+
+    /// <summary>
+    /// The bottom of every frame, connected or not: the scrollback (last few replies, chat
+    /// and session-event lines, plus every command this window itself submitted), the
+    /// completion hint or dropdown for whatever is typed right now, the prompt line itself,
+    /// and the key legend. Shared by <see cref="Render"/> and <see cref="RenderDisconnected"/>
+    /// because the dispatcher answers `connect`/`host`/`help` just as well before a session
+    /// exists as during one — see <see cref="CoopCommandDispatcher.RunTypedLine"/>.
+    /// </summary>
+    private void RenderInputArea()
+    {
+        _promptFrameRow = -1;
+        WriteLine(string.Empty);
+
+        if (!_showInputLine)
+        {
+            WriteLine(" (no command line: input is redirected)    F2 drop    F3 pick up    Ctrl+C to stop");
+            return;
+        }
+
+        foreach (string line in ScrollbackSnapshot())
+        {
+            WriteLine(" " + line);
+        }
+
+        // The dropdown (one candidate per row) replaces the hint line while the first token
+        // is still ambiguous - the hint would otherwise just be the same candidates joined
+        // onto one capped line, which is redundant with rows already showing them in full.
+        IReadOnlyList<string> candidates = _input.Candidates;
+        if (candidates.Count > 1)
+        {
+            foreach (string candidate in candidates.Take(MaxDropdownRows))
+            {
+                WriteLine($"   {candidate}");
+            }
+
+            if (candidates.Count > MaxDropdownRows)
+            {
+                WriteLine($"   ... {candidates.Count - MaxDropdownRows} more");
+            }
+        }
+        else
+        {
+            string hint = _input.Hint;
+            if (hint.Length > 0)
+            {
+                WriteLine($" {hint}");
+            }
+        }
+
+        // Row captured BEFORE the prompt line is appended, so it is exactly the row the
+        // prompt lands on once FlushFrame paints _frame - see PositionInputCaret.
+        _promptFrameRow = _frame.Count;
+        WriteLine($"> {_input.Buffer}");
+        WriteLine(" F2 drop    F3 pick up    Tab complete (Shift+Tab back)    Up/Down history    "
+            + "Esc clear    Ctrl+C to stop");
+    }
+
+    /// <summary>
+    /// Puts the real OS caret on the prompt row/column <see cref="RenderInputArea"/> just
+    /// drew, once <see cref="FlushFrame"/> has repainted the screen. Cheap (one Win32 call)
+    /// and run every tick, so it costs nothing toward the "no flicker" requirement the rest
+    /// of this class already meets by redrawing in place — this only ever repositions a
+    /// caret, never touches a character cell. Off (and the caret hidden) whenever there is no
+    /// prompt to point at: redirected input, or a window too short to show the prompt row at
+    /// all.
+    /// </summary>
+    private void PositionInputCaret()
+    {
+        if (_promptFrameRow < 0)
+        {
+            Console.CursorVisible = false;
+            return;
+        }
+
+        int height = Math.Max(Console.WindowHeight - 1, 1);
+        if (_promptFrameRow >= height)
+        {
+            Console.CursorVisible = false;
+            return;
+        }
+
+        int width = Math.Max(Console.WindowWidth - 1, 1);
+        int column = Math.Min(2 + _input.Caret, width - 1);
+
+        try
+        {
+            Console.SetCursorPosition(column, _promptFrameRow);
+            Console.CursorVisible = true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // A resize landed between computing height/width and setting the position.
+            // Missing one frame's caret is harmless; the next tick recomputes both.
+            Console.CursorVisible = false;
+        }
     }
 
     /// <summary>

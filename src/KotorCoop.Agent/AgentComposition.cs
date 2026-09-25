@@ -438,7 +438,12 @@ internal static class AgentComposition
         }
 
         Task dispatchTask = dispatcher.RunAsync(cts.Token);
-        AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile);
+
+        // The dispatcher already exists by construction order (built above), so the
+        // dashboard's own command line can be wired straight to it: Enter on that line runs
+        // <see cref="CoopCommandDispatcher.RunTypedLine"/>, the exact same entry point the
+        // shared block's console channel uses for a line typed in-game.
+        AgentDashboard dashboard = new(manager, bridge, options.DropFile, options.LogFile, dispatcher);
 
         // ⚠ The agent's event voice. SessionManager.Log and CoopAgent.Log existed for the
         // life of the project with NOTHING assigned to them — every "X revived you",
