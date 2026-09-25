@@ -67,4 +67,24 @@ public class WorldPlausibilityTests
         Assert.False(Vec3.IsOrigin(new Vec3 { X = 29.0f, Y = 143.5f, Z = 0f }));
         Assert.False(Vec3.IsOrigin(new Vec3 { X = -0.5f, Y = 0f, Z = 0f }));
     }
+
+    /// <summary>
+    /// The wire-side twin of <see cref="OnlyTheExactZeroVectorIsTheOrigin"/> —
+    /// <see cref="Vector3f.IsOrigin"/> added 2026-09-25 (docs/research/walkmesh-guard.md §3)
+    /// for the publish/receive-side gates (KotorGameBridge.Player.cs, SnapshotBuffer.Push) that
+    /// stop a joiner's phantom being driven at the exact origin during a host's own module load.
+    /// </summary>
+    [Fact]
+    public void VectorAndVec3AgreeOnWhatCountsAsTheOrigin()
+    {
+        Assert.True(new Vector3f(0f, 0f, 0f).IsOrigin);
+        Assert.False(new Vector3f(0.001f, 0f, 0f).IsOrigin);
+        Assert.False(new Vector3f(29.0f, 143.5f, 0f).IsOrigin);
+        Assert.False(new Vector3f(-0.5f, 0f, 0f).IsOrigin);
+
+        // IsWorldPlausible deliberately still ACCEPTS the exact origin on both sides — IsOrigin
+        // is a narrower, separate question a caller opts into, not a change to that screen.
+        Assert.True(new Vector3f(0f, 0f, 0f).IsWorldPlausible);
+        Assert.True(Vec3.IsWorldPlausible(new Vec3 { X = 0f, Y = 0f, Z = 0f }));
+    }
 }

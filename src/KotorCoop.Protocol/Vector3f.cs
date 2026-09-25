@@ -50,6 +50,22 @@ public readonly record struct Vector3f(float X, float Y, float Z)
         && MathF.Abs(Y) < MaxWorldCoordinate
         && MathF.Abs(Z) < MaxWorldCoordinate;
 
+    /// <summary>
+    /// True only for the exact float-zero vector. Mirrors the plugin's <c>Vec3.IsOrigin</c> —
+    /// deliberately NARROWER and separate from <see cref="IsWorldPlausible"/>, which accepts
+    /// (0,0,0) as a real, if rare, in-world point. Live 2026-09-25
+    /// (docs/research/walkmesh-guard.md §3): a joiner's phantom of the host crashed on
+    /// danm14aa shortly after arriving there because the HOST's own agent read (0,0,0) off a
+    /// player creature that existed but had not been placed yet during the host's own module
+    /// load, and — since <see cref="IsWorldPlausible"/> alone does not catch it — republished
+    /// it as a truthful-looking position. A creature genuinely at the area origin is possible
+    /// in principle but indistinguishable from "never placed"; every consumer in this codebase
+    /// that has had to make that call (PartyPresenceController, EnemyPresenceController,
+    /// PhantomController's own spawn gate) already resolves the ambiguity the same way — treat
+    /// exact origin as suspect and hold the last known state instead.
+    /// </summary>
+    public bool IsOrigin => X == 0f && Y == 0f && Z == 0f;
+
     public override string ToString() => $"({X:F2}, {Y:F2}, {Z:F2})";
 }
 

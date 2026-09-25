@@ -177,10 +177,47 @@ internal static unsafe partial class Odyssey
     /// Snaps a creature to a position through SetPosition (raises the dirty bit so the
     /// render side follows). Correction for a phantom that has fallen hopelessly behind
     /// its player — a peer teleport, a load, or a pathfinder dead end.
-    /// MAIN THREAD ONLY.
+    ///
+    /// Walkmesh-guarded (docs/research/walkmesh-guard.md): a raw SetPosition write does NOT
+    /// itself call TestDirectLine (VERIFIED by disassembly — this is a bare thiscall to
+    /// 0x004CD1A0, no pathing), so this cannot crash the way <c>walkto</c> did. But a body
+    /// left standing off-mesh is exactly the shape of the OTHER live fault this write-up
+    /// covers (a joiner's phantom crashed on danm14aa shortly after being snapped to a
+    /// (0,0,0) read during the host's own module load) — some LATER engine tick's own
+    /// pathing/room check is what actually calls TestDirectLine against the corrupted
+    /// position. Refusing here holds the creature at its last good position instead ("hold
+    /// the stand-in where it is") and returns false so a caller that wants to report a
+    /// refusal (<c>tp</c>) can. MAIN THREAD ONLY.
     /// </summary>
-    public static void SnapTo(nint creature, Vec3 position)
+    public static bool SnapTo(nint creature, Vec3 position)
     {
+        if (!TryValidateMoveDestination(creature, position, out MoveRejectReason reason))
+        {
+            LogMoveRefusalOnce(creature, 0, position, reason);
+            return false;
+        }
+
+        ClearAllActionsFn(creature, 1);
+        SetPositionFn(creature, &position, 1, 0, 0);
+        return true;
+    }
+
+    /// <summary>
+    /// Clears a creature's action queue and reasserts EXACTLY the position the engine already
+    /// has it at — the "nuclear option" <see cref="Odyssey.ClearLocalPlayerStuckDialogueAction"/>
+    /// uses to break a stuck <c>AIActionDialogObject</c> loop no UI-level close could touch.
+    ///
+    /// Deliberately bypasses <see cref="SnapTo"/>'s walkmesh guard: this never asks the engine
+    /// to go anywhere new, only to re-commit where it already is (by definition already "the
+    /// truth", walkable or not, since the engine itself put the creature there), and the one
+    /// caller exists specifically because the more careful approaches already failed — refusing
+    /// this one too on a borderline PositionWalkable read would remove the only recovery this
+    /// stuck-dialogue case has. See docs/research/walkmesh-guard.md §2 for why this needed to
+    /// be its own function rather than SnapTo(creature, GetPosition(creature)).
+    /// </summary>
+    public static void ClearActionsAndHoldPosition(nint creature)
+    {
+        Vec3 position = GetPosition(creature);
         ClearAllActionsFn(creature, 1);
         SetPositionFn(creature, &position, 1, 0, 0);
     }

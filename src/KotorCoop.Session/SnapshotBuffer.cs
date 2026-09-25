@@ -73,6 +73,15 @@ public sealed class SnapshotBuffer(
 
     public void Push(uint peerId, string name, in PlayerState state, long receivedAtMs)
     {
+        // NOTE: deliberately NOT also gated on state.Position.IsOrigin here. This buffer is
+        // exercised directly by a very large share of the test suite with Vector3f.Zero as a
+        // "don't-care" placeholder position for tests about entirely different concerns (death,
+        // dialogue, combat flags, ...), so adding that check at this generic a choke point would
+        // silently break dozens of unrelated tests rather than catch a real bug — the real fix
+        // is at the true SOURCE (KotorGameBridge.Player.cs / ProfileGameBridge.cs, which a fake
+        // test bridge bypasses entirely) plus the plugin-side consumption guard
+        // (PhantomController.Drive.cs) closer to where a body actually gets driven. See
+        // docs/research/walkmesh-guard.md §3.
         if (!state.IsPlausible)
         {
             return;

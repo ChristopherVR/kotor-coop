@@ -64,12 +64,24 @@ internal sealed unsafe partial class CheatController
         }
 
         Vec3 destination = MoveNearDestinationRule.Resolve(Odyssey.GetPosition(player), block.CheatPosition, out bool isExplicit);
-        Odyssey.SnapTo(creature, destination);
+        string how = isExplicit ? "explicit" : "near the player";
+
+        // Walkmesh-guarded (docs/research/walkmesh-guard.md): an explicit hand-typed
+        // destination is exactly as likely to be off-mesh as tp's, and this verb's own history
+        // (docs/research/shared-state-audit.md §2 round 36) is a live crash from an unvalidated
+        // one.
+        if (!Odyssey.SnapTo(creature, destination))
+        {
+            Answer(
+                SharedBlock.CheatStatusRefused,
+                $"0x{objectId:X}: refused - ({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}) "
+                + $"({how}) is not on the walkmesh");
+            return;
+        }
 
         // Read the position straight back again rather than trust the write blind -
         // creatures.ps1's raw scan is known-unreliable for fresh state.
         Vec3 readBack = *(Vec3*)(creature + 0x090);
-        string how = isExplicit ? "explicit" : "near the player";
         PluginHost.Log(
             $"movenear: snapped 0x{objectId:X} from ({before.X:F1}, {before.Y:F1}, {before.Z:F1}) to "
             + $"({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1}) ({how}), "

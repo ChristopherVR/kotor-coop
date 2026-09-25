@@ -166,7 +166,10 @@ public sealed class ProfileGameBridge : IGameBridge
 
         state = new PlayerState(position, facing, module, health, animation);
 
-        if (!state.IsPlausible)
+        // Walkmesh guard, source side (docs/research/walkmesh-guard.md §3, mirrors the same
+        // fix in KotorGameBridge.Player.cs): exact origin is treated as a failed read too, not
+        // published as a real position — see Vector3f.IsOrigin's own doc comment.
+        if (!state.IsPlausible || state.Position.IsOrigin)
         {
             // NaN or infinity means the offsets are wrong, not that the player teleported.
             OnReadFailure();

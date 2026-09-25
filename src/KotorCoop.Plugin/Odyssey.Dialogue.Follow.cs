@@ -352,7 +352,10 @@ internal static unsafe partial class Odyssey
         nint player = GetPlayerCreaturePointer();
         if (player != 0)
         {
-            SnapTo(player, GetPosition(player));
+            // Not SnapTo(player, GetPosition(player)): this re-commits the CURRENT position for
+            // its ClearAllActions side effect only, and must not be refusable by the walkmesh
+            // guard — see ClearActionsAndHoldPosition's own doc comment.
+            ClearActionsAndHoldPosition(player);
         }
     }
 
