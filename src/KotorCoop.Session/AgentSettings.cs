@@ -197,11 +197,11 @@ public sealed record AgentSettings
     /// is <c>Pumps.FirstLightsaberBuildPump</c>'s own automatic <c>equip</c> cheat, run locally
     /// on each OTHER player's own engine from their OWN class — never a copy of the builder's
     /// colour. Purely local otherwise: no plugin/native change, no wire format change beyond
-    /// one new flag id in the existing flag store. Coop.ini <c>first_saber_color_sync</c>. OFF
-    /// by default (NEEDS-LIVE) — with it off, behaviour is exactly what it was before this
-    /// setting existed.
+    /// one new flag id in the existing flag store. Coop.ini <c>first_saber_color_sync</c>. ON
+    /// by default since a live two-player pass on 2026-09-25; with it off, behaviour is exactly
+    /// what it was before this setting existed.
     /// </summary>
-    public bool FirstSaberColorSync { get; init; }
+    public bool FirstSaberColorSync { get; init; } = true;
 
     /// <summary>
     /// Relay a non-damage effect a client casts on a mirrored enemy to the host, which replays
