@@ -578,15 +578,19 @@ internal sealed unsafe partial class PhantomController
     /// no second default to keep in step. See docs/research/partner-buffs.md.</summary>
     private readonly bool _partnerBuffs = PluginConfig.ReadBool("partner_buffs", true);
 
-    /// <summary>coop.ini <c>stealth_visual_sync</c> (default OFF, NEEDS-LIVE): additionally
-    /// put the stand-in into the engine's own stealth mode through
-    /// <see cref="Odyssey.SetStealthMode"/> — the setter the stealth button itself reaches —
-    /// so the peer's body renders the stealth shader and is skipped by
-    /// <c>DoStealthDetection</c> the way their real one is. A NEW engine call on a body this
-    /// codebase has never put into that mode, so it stays off until a rig pass has watched it
-    /// (effect-sync.md §12.5's checklist). Latched per slot: the setter is called on the EDGE
-    /// only, never per frame.</summary>
-    private readonly bool _stealthVisualSync = PluginConfig.ReadBool("stealth_visual_sync", false);
+    /// <summary>coop.ini <c>stealth_partner_visual</c> (<c>translucent</c> default since
+    /// 2026-09-25; <c>hidden</c>; <c>off</c>) — how a stealthed peer's stand-in renders on THIS
+    /// screen. Replaces the old boolean <c>stealth_visual_sync</c> (default OFF, always meaning
+    /// "hidden" when on); <see cref="StealthVisualMode.Resolve"/> handles the migration so an
+    /// existing coop.ini that set the old key keeps behaving identically. See
+    /// docs/research/effect-sync.md §12.9/§12.10 for why the two tiers differ: <c>Hidden</c>
+    /// uses the SERVER field (<see cref="Odyssey.SetStealthMode"/>), which pushes the stand-in
+    /// through the detection-relevance broadcast gate a real stealthed enemy uses (full hide);
+    /// <c>Translucent</c> uses the CLIENT-only cosmetic (<see cref="Odyssey.SetStealthVisualState"/>)
+    /// instead, which never touches that gate. Latched per slot: called on the EDGE only, never
+    /// per frame — read once at construction, so the configured tier cannot change mid-session.</summary>
+    private readonly StealthVisualMode.Kind _stealthPartnerVisual = StealthVisualMode.Resolve(
+        PluginConfig.Read(StealthVisualMode.KeyName), PluginConfig.Read(StealthVisualMode.LegacyKeyName));
 
     /// <summary>Per slot: is the body currently in the PLAYER faction. Tri-state via the
     /// separate _factionKnown so the first pass always writes.</summary>
@@ -602,18 +606,18 @@ internal sealed unsafe partial class PhantomController
     private int _stealthLogged;
 
     /// <summary>
-    /// The engine's stealth mode on the stand-in — <c>stealth_visual_sync</c> only. On the edge,
-    /// per body: the same "latch what you wrote, act on the change" discipline
-    /// <see cref="ApplyTargetable"/> follows, because <see cref="Odyssey.SetStealthMode"/>
-    /// itself is cheap and idempotent (it compares before writing) but a per-frame engine call
-    /// on a possibly-torn-down body is exactly the pattern this project's per-frame-write rule
-    /// forbids. A body that was never put into stealth is never taken out of it either — the
-    /// first write happens only when the peer's bit is actually SET, so with the peer never
-    /// stealthing this method makes no engine call at all.
+    /// The engine's stealth VISUAL on the stand-in — <c>stealth_partner_visual</c> only (never
+    /// when it resolves to <see cref="StealthVisualMode.Kind.Off"/>). On the edge, per body: the
+    /// same "latch what you wrote, act on the change" discipline <see cref="ApplyTargetable"/>
+    /// follows — both underlying setters are cheap and idempotent (each compares before
+    /// writing) but a per-frame engine call on a possibly-torn-down body is exactly the pattern
+    /// this project's per-frame-write rule forbids. A body that was never put into stealth is
+    /// never taken out of it either — the first write happens only when the peer's bit is
+    /// actually SET, so with the peer never stealthing this method makes no engine call at all.
     /// </summary>
     private void ApplyStealthVisual(int slot, nint phantom, bool stealthed)
     {
-        if (!_stealthVisualSync || phantom == 0)
+        if (_stealthPartnerVisual == StealthVisualMode.Kind.Off || phantom == 0)
         {
             return;
         }
@@ -625,7 +629,12 @@ internal sealed unsafe partial class PhantomController
             return;
         }
 
-        if (!Odyssey.SetStealthMode(phantom, want))
+        bool hidden = _stealthPartnerVisual == StealthVisualMode.Kind.Hidden;
+        bool ok = hidden
+            ? Odyssey.SetStealthMode(phantom, want)
+            : Odyssey.SetStealthVisualState(_phantomIds[slot], want, out _);
+
+        if (!ok)
         {
             return; // try again next pass rather than latching a state we did not achieve
         }
@@ -636,9 +645,10 @@ internal sealed unsafe partial class PhantomController
         if (_stealthLogged < 20)
         {
             _stealthLogged++;
+            string kindLabel = hidden ? "hidden" : "translucent";
             PluginHost.Log(want
-                ? $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode ON (stealth_visual_sync, NEEDS-LIVE)"
-                : $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode OFF (stealth_visual_sync)");
+                ? $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode ON ({kindLabel}, stealth_partner_visual)"
+                : $"phantom 0x{_phantomIds[slot]:X}: engine stealth mode OFF ({kindLabel}, stealth_partner_visual)");
         }
     }
 

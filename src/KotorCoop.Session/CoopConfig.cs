@@ -932,7 +932,7 @@ public sealed record CoopConfig
         "placed_mine_sync",
         "poison_sync", "removeparty_hook", "save_flush", "script_item_sync",
         "session_save_host_refusal", "smooth_ms", "solo_segment_any_module", "solo_segment_modules",
-        "solo_segment_spectate", "stealth_sync", "stealth_visual_sync", "store_sync",
+        "solo_segment_spectate", "stealth_partner_visual", "stealth_sync", "stealth_visual_sync", "store_sync",
         "threat_retarget", "tick_rate", "transition_announce",
         "transition_announce_fade", "transition_announce_scripted",
         "transition_close_client_world", "trigger_relay", "trigger_relay_patterns",
