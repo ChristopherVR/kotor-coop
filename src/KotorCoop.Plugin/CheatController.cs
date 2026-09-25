@@ -136,6 +136,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             return;
         }
 
+        if (kind == SharedBlock.CheatKindFireTrigger)
+        {
+            string result = OdysseyTriggers.FireTriggerForLocalPlayer(ReadCheatText().Trim(), playerId);
+            PluginHost.Log(result);
+            Answer(result.Contains("fired ") ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusNoTarget, result);
+            return;
+        }
+
         if (kind == SharedBlock.CheatKindStealth)
         {
             bool on = ReadCheatText().Trim().Equals("on", StringComparison.OrdinalIgnoreCase);

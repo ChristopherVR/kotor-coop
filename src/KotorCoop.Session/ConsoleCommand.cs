@@ -1009,6 +1009,10 @@ public enum CoopCommandKind
     /// primitive for stealth targeting and <c>stealth_visual_sync</c>). Local only.</summary>
     Stealth,
 
+    /// <summary><c>firetrigger &lt;tag|0xid&gt;</c> - fire a trigger's OnEnter for the local
+    /// player (dev live-test primitive). Local only.</summary>
+    FireTrigger,
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — a plugin-side
     /// screenshot for the isolated rig (docs/research/isolated-rig.md), because
@@ -1254,6 +1258,7 @@ public static partial class ConsoleCommand
         new(["gamepad"], ParseGamepad),
         new(["input"], ParseInput),
         new(["stealth"], ParseStealth),
+        new(["firetrigger"], ParseFireTrigger),
         new(["screenshot"], ParseScreenshot),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),

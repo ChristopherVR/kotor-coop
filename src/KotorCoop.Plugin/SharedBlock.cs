@@ -1535,4 +1535,8 @@ internal partial struct SharedBlock
     /// <see cref="CheatKindInput"/>. <c>IGameBridge.CheatKinds.Screenshot</c>.
     /// </summary>
     public const uint CheatKindScreenshot = 105;
+
+    /// <summary>`firetrigger <tag|0xid>`: fire a trigger's OnEnter for the local player (dev).
+    /// <c>IGameBridge.CheatKinds.FireTrigger</c>.</summary>
+    public const uint CheatKindFireTrigger = 106;
 }

@@ -325,6 +325,61 @@ internal static unsafe class OdysseyTriggers
     }
 
     /// <summary>
+    /// DEV-ONLY (`firetrigger` verb): fires a trigger's OnEnter for the local player as if they
+    /// walked in, found by tag or object id, WITHOUT the relay allowlist - so a live test can
+    /// take an exit trigger (e.g. ebn12_ebonexit) that a rig walk cannot reach. MAIN THREAD ONLY.
+    /// </summary>
+    public static string FireTriggerForLocalPlayer(string tagOrId, uint playerId)
+    {
+        Span<uint> ids = stackalloc uint[256];
+        int count = ListAreaTriggers(ids);
+        bool byId = tagOrId.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            && uint.TryParse(tagOrId.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out uint wantedId);
+        uint id = byId ? uint.Parse(tagOrId.AsSpan(2), System.Globalization.NumberStyles.HexNumber) : 0;
+        byte* tag = stackalloc byte[64];
+        for (int i = 0; i < count; i++)
+        {
+            nint trigger = ResolveTrigger(ids[i]);
+            if (trigger == 0)
+            {
+                continue;
+            }
+
+            bool match = byId && ids[i] == id;
+            if (!byId)
+            {
+                Odyssey.ReadObjectTag(trigger, tag, 64);
+                int n = 0;
+                while (n < 64 && tag[n] != 0)
+                {
+                    n++;
+                }
+
+                match = System.Text.Encoding.ASCII.GetString(tag, n).Equals(tagOrId, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (!match)
+            {
+                continue;
+            }
+
+            nint vm = Deref(VirtualMachinePtr);
+            if (vm == 0)
+            {
+                return "firetrigger: no script VM";
+            }
+
+            *(uint*)(trigger + TriggerLastEntered) = playerId;
+            uint triggerObjectId = *(uint*)(trigger + ObjectIdOffset);
+            string script = PeekScriptOnEnter(trigger);
+            RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
+            return $"firetrigger: fired 0x{ids[i]:X} OnEnter '{script}' for the local player";
+        }
+
+        return $"firetrigger: no trigger '{tagOrId}' in this area ({count} listed)";
+    }
+
+    /// <summary>
     /// Minimal <c>*</c>-only glob, duplicated on purpose from
     /// <c>KotorCoop.Session.TriggerScriptPatterns</c> (see that class's header for why the
     /// plugin cannot reference it — zero project references, NativeAOT publish). Keep the two

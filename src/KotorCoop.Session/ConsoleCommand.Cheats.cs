@@ -392,6 +392,11 @@ public static partial class ConsoleCommand
     // see CoopCommandKind.Input. Same shape as ParseGamepad above: the plugin's
     // InputInjectionController.HandleConsole owns the subcommand grammar, this just carries
     // the text across the same 31-byte cheat-text slot.
+    private static CoopCommand ParseFireTrigger(string[] rest) =>
+        rest.Length == 1 && rest[0].Length is > 0 and <= 30
+            ? new CoopCommand(CoopCommandKind.FireTrigger, Address: rest[0])
+            : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: firetrigger <tag|0xid>  e.g. firetrigger ebn12_ebonexit");
+
     private static CoopCommand ParseStealth(string[] rest) =>
         rest.Length == 1 && (rest[0].Equals("on", StringComparison.OrdinalIgnoreCase) || rest[0].Equals("off", StringComparison.OrdinalIgnoreCase))
             ? new CoopCommand(CoopCommandKind.Stealth, Address: rest[0].ToLowerInvariant())

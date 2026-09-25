@@ -48,6 +48,7 @@ internal static unsafe class FuncInterpHook
         // retail verb.
         "input",
         "stealth",
+        "firetrigger",
 
         // The isolated rig's plugin-side screenshot (docs/research/isolated-rig.md):
         // PrintWindow is unreliable for this OpenGL game. Not a retail verb.

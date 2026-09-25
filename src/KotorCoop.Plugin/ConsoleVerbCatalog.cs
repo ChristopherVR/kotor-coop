@@ -158,6 +158,7 @@ internal static class ConsoleVerbCatalog
         ("newgame", "newgame  (opens the game's own character-creation screens from the main menu)"),
         ("chargen", "chargen quick [class 0-5] | chargen accept  (picks a class + Quick template, or presses Play)"),
         ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
+        ("firetrigger", "firetrigger <tag|0xid>  (fire a trigger's OnEnter for you, as if you walked in; dev)"),
         ("stealth", "stealth on|off  (the local player's engine stealth mode; a live-test primitive)"),
         ("input", "input click <x> <y> [left|right] | input move <x> <y> | input key <dik hex/dec> [down|up|tap] | input status  (isolated-rig synthetic mouse/keyboard, no real cursor movement)"),
         ("screenshot", "screenshot <name> [front] | screenshot status  (plugin-side GL screenshot for the isolated rig; writes <gamedir>\\kotorcoop-shots\\<name>.bmp - PrintWindow is unreliable for this OpenGL game)"),

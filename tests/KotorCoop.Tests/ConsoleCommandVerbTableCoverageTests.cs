@@ -121,6 +121,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.JediChoice] = "jedichoice",
         [CoopCommandKind.Input] = "input click 485 322",
         [CoopCommandKind.Stealth] = "stealth on",
+        [CoopCommandKind.FireTrigger] = "firetrigger ebn12_ebonexit",
         [CoopCommandKind.Screenshot] = "screenshot main",
     };
 
