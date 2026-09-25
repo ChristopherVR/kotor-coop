@@ -72,6 +72,14 @@ internal static class AdoptCommand
 
         Console.WriteLine($"carrying the character from '{which}' unless a newer session-saved one applies");
 
+        // A bare `agent adopt` never negotiates with the host first (no Hello/Welcome runs
+        // before this), so the only signal available is this install's own coop.ini — the
+        // same "unknown -> local default" fallback SessionManager's own call sites use when
+        // nothing was ever negotiated. docs/research/personal-inventory.md.
+        CoopConfig? config = CoopConfig.TryLoad(CoopConfig.PathFor(gameDirectory));
+        bool inventoryPersonal = config?.InventoryPersonal ?? true;
+        bool creditsPersonal = config?.CreditsPersonal ?? true;
+
         AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
             gameDirectory,
             ownSave,
@@ -80,7 +88,11 @@ internal static class AdoptCommand
             SessionPassword.Hash(options.Password),
             expectedSaveIdentity: 0,
             Console.WriteLine,
-            CancellationToken.None).ConfigureAwait(false);
+            CancellationToken.None,
+            udpFallback: false,
+            onNoWorldAvailable: null,
+            inventoryPersonal,
+            creditsPersonal).ConfigureAwait(false);
 
         if (adopted is null)
         {

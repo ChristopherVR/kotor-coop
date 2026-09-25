@@ -171,6 +171,57 @@ public sealed class WorldAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task PersonalModeGraftsTheJoinersOwnGoldAndBackpackNotTheHosts()
+    {
+        // The live-observed bug (docs/research/personal-inventory.md): host purse 5000,
+        // joiner's own last capture 777; a plain adoption used to leave the joiner holding a
+        // copy of the HOST's purse and backpack. inventoryPersonal/creditsPersonal true is
+        // what the negotiated inventory_mode/credits_mode = personal resolves to at the real
+        // call sites (SessionManager, AdoptCommand).
+        string hostSave = BuildSave(
+            "tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")],
+            gold: 5000, items: [("g_w_ionblstr01", false), ("rakghoulserum", false)]);
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+        string joinerGame = BuildGameDirectory();
+
+        // The joiner's own dedicated Co-op-slot capture from a PREVIOUS session — exactly what
+        // CoopSaveRedirect's periodic/disconnect capture leaves behind.
+        string ownCapture = BuildSave(
+            "end_m01aa", 0x1, "Yasuko Kaar", [], gold: 777, items: [("g_i_medeqpmnt01", false)]);
+        string coopSlot = Path.Combine(joinerGame, "saves", "000005 - Co-op");
+        Directory.Move(ownCapture, coopSlot);
+
+        int port = await ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave));
+
+        List<string> log = [];
+        AdoptedWorld? adopted = await WorldAdoption.TryAdoptAsync(
+            joinerGame, joinerSave, Local(port), SessionPassword.None, expectedSaveIdentity: 0,
+            log.Add, _cts.Token, inventoryPersonal: true, creditsPersonal: true);
+
+        Assert.NotNull(adopted);
+
+        string staged = Path.Combine(joinerGame, "saves", PluginMenuLoader.AutosaveSlot);
+        GffStruct table = Gff.Parse(File.ReadAllBytes(Path.Combine(staged, "PARTYTABLE.res"))).Root;
+        Assert.True(table.TryGetDword("PT_GOLD", out uint gold));
+        Assert.Equal(777u, gold); // the joiner's own, never the host's 5000
+
+        byte[] erf = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
+        Assert.True(ErfArchive.TryFindMember(erf, 0, "INVENTORY", out byte[] inventoryData));
+        List<string> tags = [.. Gff.Parse(inventoryData).Root.GetList("ItemList")
+            .Select(item => { item.TryGetString("Tag", out string t); return t; })];
+        Assert.Contains("g_i_medeqpmnt01", tags); // the joiner's own item
+        Assert.Contains("rakghoulserum", tags); // the host's quest item
+        Assert.DoesNotContain("g_w_ionblstr01", tags); // the host's OWN ordinary item never appears
+
+        // The mirror into the SAME Co-op slot (which runs AFTER the graft) reflects the
+        // transformed content, not a fresh copy of the host's un-grafted world — ordering
+        // proof, not just the staged AUTOSAVE copy above.
+        GffStruct mirroredTable = Gff.Parse(File.ReadAllBytes(Path.Combine(coopSlot, "PARTYTABLE.res"))).Root;
+        Assert.True(mirroredTable.TryGetDword("PT_GOLD", out uint mirroredGold));
+        Assert.Equal(777u, mirroredGold);
+    }
+
+    [Fact]
     public async Task ANewerSessionSavedCharacterBeatsTheOwnSaveAtAdoption()
     {
         // Roadmap item 14 phase 1: a character captured at the end of a PREVIOUS session
@@ -568,7 +619,9 @@ public sealed class WorldAdoptionTests : IDisposable
         string? name,
         (uint Id, string Resref)[] creatures,
         int? pazaakCount = null,
-        int? sideCard = null)
+        int? sideCard = null,
+        uint? gold = null,
+        (string Tag, bool Plot)[]? items = null)
     {
         string directory = TempDirectory();
 
@@ -600,13 +653,35 @@ public sealed class WorldAdoptionTests : IDisposable
             ("Module", 2014 /* ifo */, ifo.ToBytes()),
             (module, 2023 /* git */, git.ToBytes()));
 
+        // INVENTORY.res is a TOP-LEVEL member of the OUTER SAVEGAME.sav ERF, a sibling of the
+        // nested module .sav — measured directly off a real GOG save,
+        // docs/research/personal-inventory.md's PersonalInventoryGraftTests companion. Only
+        // added when a caller actually supplies items, so every pre-existing call site (no
+        // INVENTORY.res member at all) is unaffected.
+        List<(string, int, byte[])> outerMembers = [(module, 2057 /* module .sav */, inner)];
+        if (items is not null)
+        {
+            GffWriter inventory = new("INV ");
+            GffWriterList itemList = inventory.Root.AddList("ItemList");
+            foreach ((string tag, bool plot) in items)
+            {
+                itemList.Add(0)
+                    .SetInt("BaseItem", 1)
+                    .SetString("Tag", tag)
+                    .SetWord("StackSize", 1)
+                    .SetByte("Plot", (byte)(plot ? 1 : 0));
+            }
+
+            outerMembers.Add(("INVENTORY", 0 /* res */, inventory.ToBytes()));
+        }
+
         File.WriteAllBytes(
             Path.Combine(directory, "SAVEGAME.sav"),
-            BuildErf("SAV ", (module, 2057 /* module .sav */, inner)));
+            BuildErf("SAV ", [.. outerMembers]));
 
         File.WriteAllBytes(Path.Combine(directory, "GLOBALVARS.res"), [1, 2, 3, 4]);
         GffWriter party = new("PT");
-        party.Root.SetInt("PT_GOLD", (int)nextObjId);
+        party.Root.SetInt("PT_GOLD", gold.HasValue ? unchecked((int)gold.Value) : (int)nextObjId);
         party.Root.AddList("PT_PAZAAKCARDS").Add(0).SetInt("PT_PAZAAKCOUNT", pazaakCount ?? (int)nextObjId);
         party.Root.AddList("PT_PAZSIDELIST").Add(0).SetInt("PT_PAZSIDECARD", sideCard ?? -1);
         File.WriteAllBytes(Path.Combine(directory, "PARTYTABLE.res"), party.ToBytes());

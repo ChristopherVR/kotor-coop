@@ -70,10 +70,12 @@ public static class WorldAdoption
         Action<string>? log,
         CancellationToken cancellationToken,
         bool udpFallback = false,
-        Action? onNoWorldAvailable = null) =>
+        Action? onNoWorldAvailable = null,
+        bool inventoryPersonal = false,
+        bool creditsPersonal = false) =>
         TryAdoptAsync(
             gameDirectory, ownSaveDirectory, sidecar: null, host, passwordHash, expectedSaveIdentity, log,
-            cancellationToken, udpFallback, onNoWorldAvailable);
+            cancellationToken, udpFallback, onNoWorldAvailable, inventoryPersonal, creditsPersonal);
 
     /// <summary>
     /// Roadmap item 14 phase 1 overload: also considers a "resume tomorrow" sidecar
@@ -88,6 +90,13 @@ public static class WorldAdoption
     /// </summary>
     /// <param name="sidecar">A previously captured character to consider preferring, or null
     /// to behave exactly as the simpler overload (no sidecar in play at all).</param>
+    /// <param name="inventoryPersonal">coop.ini <c>inventory_mode = personal</c> (negotiated —
+    /// the caller passes <c>session.Overrides.InventoryPersonal ?? settings.InventoryPersonal</c>
+    /// or the best equivalent it has). Default false (today's/`shared` behaviour) so every
+    /// pre-existing caller and test is unaffected. When true,
+    /// <see cref="PersonalInventoryGraft"/> replaces the staged world's party gold/backpack
+    /// with the joiner's own — see that class for why (docs/research/personal-inventory.md).</param>
+    /// <param name="creditsPersonal">coop.ini <c>credits_mode = personal</c>, same idiom.</param>
     public static async Task<AdoptedWorld?> TryAdoptAsync(
         string gameDirectory,
         string ownSaveDirectory,
@@ -98,7 +107,9 @@ public static class WorldAdoption
         Action<string>? log,
         CancellationToken cancellationToken,
         bool udpFallback = false,
-        Action? onNoWorldAvailable = null)
+        Action? onNoWorldAvailable = null,
+        bool inventoryPersonal = false,
+        bool creditsPersonal = false)
     {
         // 1. Our own character, before anything is touched. Always extracted, whether or not
         //    a sidecar is in play: it is the fallback the moment the sidecar turns out not to
@@ -157,7 +168,8 @@ public static class WorldAdoption
                 log?.Invoke($"world adoption: session-saved character not used — {reason}");
                 return (ownPlayer, ownSource);
             },
-            cancellationToken, udpFallback, onNoWorldAvailable).ConfigureAwait(false);
+            cancellationToken, udpFallback, onNoWorldAvailable, inventoryPersonal, creditsPersonal)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -197,13 +209,16 @@ public static class WorldAdoption
         Action<string>? log,
         CancellationToken cancellationToken,
         bool udpFallback = false,
-        Action? onNoWorldAvailable = null)
+        Action? onNoWorldAvailable = null,
+        bool inventoryPersonal = false,
+        bool creditsPersonal = false)
     {
         ArgumentNullException.ThrowIfNull(carriedPlayer);
 
         return FetchStageAndVerifyAsync(
             gameDirectory, host, passwordHash, expectedSaveIdentity, log,
-            _ => (carriedPlayer, characterSource), cancellationToken, udpFallback, onNoWorldAvailable);
+            _ => (carriedPlayer, characterSource), cancellationToken, udpFallback, onNoWorldAvailable,
+            inventoryPersonal, creditsPersonal);
     }
 
     /// <summary>How long <see cref="ProbeTcpReachableAsync"/> waits for a bare connect before
@@ -270,7 +285,9 @@ public static class WorldAdoption
         Func<uint, (GffStruct Player, string Source)> chooseCharacter,
         CancellationToken cancellationToken,
         bool udpFallback = false,
-        Action? onNoWorldAvailable = null)
+        Action? onNoWorldAvailable = null,
+        bool inventoryPersonal = false,
+        bool creditsPersonal = false)
     {
         // 2. The host's world. A bare connect probe first when the UDP fallback is enabled, so
         //    a genuinely unreachable TCP listener (found live 2026-09-10: a UDP-only tunnel/NAT
@@ -338,6 +355,14 @@ public static class WorldAdoption
         {
             WorldTransfer.WriteSaveDirectory(slot, world);
             PersonalPazaak.Restore(player, slot);
+
+            // docs/research/personal-inventory.md's rejoin-duplication fix. Must run BEFORE
+            // CoopSaveRedirect.MirrorIntoCoopSlot below: that call overwrites the dedicated
+            // Co-op slot with a copy of the world just staged here, so the joiner's own
+            // PREVIOUS capture (gold/backpack) has to be read out of that slot before this
+            // adoption's own mirror clobbers it. A no-op in both directions when both modes
+            // are `shared` — see PersonalInventoryGraft's own doc comment.
+            PersonalInventoryGraft.Apply(gameDirectory, slot, inventoryPersonal, creditsPersonal, log);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
