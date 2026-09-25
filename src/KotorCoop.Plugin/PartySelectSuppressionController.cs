@@ -20,14 +20,32 @@ namespace KotorCoop.Plugin;
 ///
 /// §2.4's own open question — whether suppressing via the sweep skips something the panel's
 /// own <c>exit_script</c> field would otherwise run (e.g. the Taris swoop-taxi's own dispatch,
-/// the only positively-confirmed trigger for this screen) — is NOT resolved here; this ships
-/// the doc's own RECOMMENDED design (suppress outright, let the roster poll converge) and
-/// leaves the fallback (§2.4 item 4, replaying the host's picks through a synthesized Accept
-/// click) for a later pass if a live test shows the gap actually matters. NEEDS-LIVE for
-/// exactly that reason, and for the panel/vtable offsets themselves — see the field comments
-/// below for which are independently re-verified this pass and which are INFERRED from the
-/// base <c>CSWGuiPanel</c> layout <c>native-browser-panel.md</c> verified for a DIFFERENT
-/// panel class (<c>CSWGuiSaveLoad</c>).
+/// the only positively-confirmed trigger for this screen) — is answered by NOT relying on the
+/// sweep alone any more: 2026-09-25's relay (SharedBlock.PartySelect.cs) captures
+/// <c>exit_script</c> and the forced NPCs off the panel BEFORE sweeping it and asks the host to
+/// run the SAME screen, through the SAME native call, so whatever the exit script would have
+/// done runs on the host's own copy exactly as retail intends. The sweep-only design (host
+/// picks silently, the roster poll converges) remains the fallback when
+/// <c>party_select_relay</c> is off.
+///
+/// ⚠ 2026-09-25 CRASH FIX: a live joiner-suppress-then-host-led-exit sequence produced a
+/// 100%-reproducible <c>CGuiInGame::ShutDown 0x0062C310</c> access violation on the CLIENT at
+/// the next module unload (AV at 0x0062C41E, <c>mov edx, [ecx]</c> where <c>ecx</c> is the
+/// party-select panel this controller had already freed). Root cause, confirmed by fresh
+/// disassembly of both ends: <c>ShowPartySelection 0x0062DD20</c> allocates
+/// <c>CGuiInGame+0x78</c> exactly ONCE per module and reuses that same object for the rest of
+/// the module's life (see <c>Odyssey.PartySelectRelay.cs</c>); the suppression sweep's
+/// <c>panel+0x44 = (…&amp;~0x300)|0x400</c> state is <c>native-browser-panel.md</c>'s own
+/// "0x400 set, 0x200 clear" case — RemovePanel THEN <c>call [panel_vtbl+0]( 1)</c>, the scalar
+/// DELETING destructor — but nothing had ever nulled <c>CGuiInGame+0x78</c> back to 0
+/// afterward, exactly matching the 2026-08-28 "never goes null again" finding below. On the
+/// NEXT module unload, <c>ShutDown</c> walks every panel field it owns (including +0x78) and,
+/// for each non-null one, dereferences its vtable to call that SAME deleting destructor a
+/// second time — a use-after-free on an already-decommitted heap block (module unload churns
+/// the heap hard). <see cref="OnFrame"/> now nulls <c>CGuiInGame+0x78</c> itself, in the same
+/// call that arms the sweep, so a later <c>ShowPartySelection</c> reallocates instead of
+/// writing into freed memory and <c>ShutDown</c>'s own null check skips the dead field —
+/// exactly the idiom <c>ShutDown</c> already applies to its other 15 panel fields.
 /// </summary>
 internal sealed unsafe class PartySelectSuppressionController(SharedBlockView block)
 {
@@ -71,6 +89,11 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
 
     private readonly bool _enabled = PluginConfig.ReadBool("party_select_host_only", true);
 
+    /// <summary>coop.ini <c>party_select_relay</c> (default ON, plugin key): whether a captured
+    /// panel is also relayed to the host as a request, rather than just silently suppressed.
+    /// See <see cref="PartySelectSuppressionRule.ShouldRelay"/>.</summary>
+    private readonly bool _relayEnabled = PluginConfig.ReadBool("party_select_relay", true);
+
     /// <summary>The panel this controller has already marked for the sweep, or 0. Never
     /// dereferenced again once set — see the class comment.</summary>
     private nint _panel;
@@ -105,21 +128,22 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return;
         }
 
-        if (!TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager))
+        if (!TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager, out nint gui))
         {
             return;
         }
 
         if (PartySelectSuppressionRule.IsAlreadyHandled(panel, _lastHandledPanel))
         {
-            // The identical address we already tore down this module/session — CGuiInGame+0x78
-            // was never observed to clear afterward (see the rule's own doc comment), so this is
-            // near-certainly a dangling re-read of already-freed (or never-really-reopened)
-            // memory, not a fresh screen opening. Do not write through it again.
+            // The identical address we already tore down this module/session — belt and
+            // suspenders: the crash fix below now nulls CGuiInGame+0x78 itself right after
+            // arming the sweep, so a genuinely stale re-read of this exact address should no
+            // longer happen by construction, but this guard costs nothing to keep.
             return;
         }
 
-        if (!PartySelectSuppressionRule.ShouldSuppress(_enabled, block.TryGetHostPartyRoster(out _, out _)))
+        bool isClientInLiveSession = block.TryGetHostPartyRoster(out _, out _);
+        if (!PartySelectSuppressionRule.ShouldSuppress(_enabled, isClientInLiveSession))
         {
             // Either the feature is off, or this instance is the host (or not in a live
             // session at all) — leave the unmodified retail screen alone; the host is the one
@@ -127,16 +151,38 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return;
         }
 
+        // Capture BEFORE sweeping: once the sweep runs, the object is on its way to being
+        // freed, and exit_script/party_data are no longer safe to read.
+        bool haveExitScript = Odyssey.TryReadPartySelectExitScript(panel, out string exitScript);
+        Odyssey.ReadPartySelectForcedNpcs(panel, out int forceNpc1, out int forceNpc2);
+
         uint* state = (uint*)(panel + PanelStateBits);
         *state = (*state & ~0x300u) | 0x400u;
+
+        // 2026-09-25 crash fix: null the engine's own cached pointer right here, in the same
+        // call that just armed the manager's next-frame delete. See the class header's "CRASH
+        // FIX" note — without this, CGuiInGame+0x78 keeps pointing at freed memory for the
+        // rest of the module's life and CGuiInGame::ShutDown dereferences it at the next
+        // module unload.
+        *(nint*)(gui + GuiPartySelectionPanel) = 0;
 
         _panel = panel;
         _guiManager = guiManager;
         _lastHandledPanel = panel;
 
-        block.PostLocalChatLine("party is chosen by the host");
-        PluginHost.Log("party-select: client copy suppressed - the host is picking "
-            + "(PartyRosterController's poll converges the roster)");
+        if (PartySelectSuppressionRule.ShouldRelay(_enabled, _relayEnabled, isClientInLiveSession) && haveExitScript)
+        {
+            block.PublishPartySelectClientCapture(exitScript, forceNpc1, forceNpc2);
+            block.PostLocalChatLine("asked the host to choose the party");
+            PluginHost.Log($"party-select: client copy captured and relayed to the host "
+                + $"(exit_script='{exitScript}', forceNpc1={forceNpc1}, forceNpc2={forceNpc2})");
+        }
+        else
+        {
+            block.PostLocalChatLine("party is chosen by the host");
+            PluginHost.Log("party-select: client copy suppressed - the host is picking "
+                + "(PartyRosterController's poll converges the roster)");
+        }
     }
 
     /// <summary>Forgets any in-flight teardown bookkeeping without touching engine memory — a
@@ -159,10 +205,11 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
     /// <c>CSWGuiManager::PanelExists</c> only compares the candidate against its registered
     /// panel array and does not dereference the candidate. This ordering is the native
     /// <c>ShowPartySelection</c> ordering too (0x62DDC6..0x62DDD4).</summary>
-    private static bool TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager)
+    private static bool TryGetRegisteredPartySelectionPanel(out nint panel, out nint guiManager, out nint gui)
     {
         panel = 0;
         guiManager = 0;
+        gui = 0;
 
         nint appManager = Deref(AppManagerPtr);
         if (appManager == 0)
@@ -182,9 +229,10 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
             return false;
         }
 
-        nint gui = Deref(clientInternal + ClientInternalGui);
+        gui = Deref(clientInternal + ClientInternalGui);
         if (!LooksLikeHeapPointer(gui))
         {
+            gui = 0;
             return false;
         }
 
@@ -194,6 +242,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         {
             panel = 0;
             guiManager = 0;
+            gui = 0;
             return false;
         }
 
@@ -204,6 +253,7 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         {
             panel = 0;
             guiManager = 0;
+            gui = 0;
             return false;
         }
 
@@ -212,11 +262,26 @@ internal sealed unsafe class PartySelectSuppressionController(SharedBlockView bl
         {
             panel = 0;
             guiManager = 0;
+            gui = 0;
             return false;
         }
 
         return true;
     }
+
+    /// <summary>
+    /// Public entry for <see cref="PartySelectHostRequestController"/>: resolves the same
+    /// registered, vtable-checked party-selection panel this controller uses, without exposing
+    /// the <c>gui</c> pointer or any of the suppression-specific state above.
+    /// </summary>
+    internal static bool TryGetOpenPartySelectionPanel(out nint panel, out nint guiManager) =>
+        TryGetRegisteredPartySelectionPanel(out panel, out guiManager, out _);
+
+    /// <summary>Public entry for <see cref="PartySelectHostRequestController"/>'s own close
+    /// watch: the same liveness check <see cref="OnFrame"/> uses mid-teardown, exposed so that
+    /// controller never has to dereference a panel it did not itself resolve.</summary>
+    internal static bool PanelIsRegistered(nint guiManager, nint panel) =>
+        guiManager != 0 && panel != 0 && PanelExistsFn(guiManager, panel) != 0;
 
     private static nint Deref(nint p) => p == 0 ? 0 : *(nint*)p;
 

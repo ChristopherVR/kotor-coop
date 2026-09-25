@@ -765,4 +765,22 @@ public enum PacketType : byte
     /// <summary>Acknowledges one <see cref="CreditGrant"/> op — <see cref="CreditGrantAckPacket"/>,
     /// keyed by (origin, sequence), same shape as <see cref="DialogueGrantAck"/>.</summary>
     CreditGrantAck = 104,
+
+    /// <summary>
+    /// client -&gt; host, one-shot (no wire-level retry — the sender's own pump timeout covers
+    /// a lost datagram, same convention as <see cref="InteractionClaim"/>'s explicit-arbitration
+    /// variant): "my own suppressed CSWGuiPartySelection carried these exact
+    /// ShowPartySelectionGUI(string,int,int) parameters — please open the same screen" —
+    /// <see cref="PartySelectRequestPacket"/>. See
+    /// docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section.
+    /// </summary>
+    PartySelectRequest = 105,
+
+    /// <summary>
+    /// host -&gt; client, unicast: answers a <see cref="PartySelectRequest"/> —
+    /// <see cref="PartySelectResponsePacket"/>. Sent more than once per request: first once the
+    /// host's own screen opens (or is refused), then again once it closes with an outcome
+    /// (confirmed or cancelled).
+    /// </summary>
+    PartySelectResponse = 106,
 }

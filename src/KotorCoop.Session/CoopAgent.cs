@@ -800,6 +800,11 @@ public sealed partial class CoopAgent
         // replay must beat the slow path's reading of the leader's mid-leg STUNT_* module.
         _transitionPump.PumpGalaxyDeparture(local, peers, _changedModule, _moduleSettledAtMs);
 
+        // A client's own suppressed party-select screen to relay, or (host only) a peer's
+        // request to open here. Independent of the travel/announce timing above — no ordering
+        // rule needed against PumpTravel.
+        _transitionPump.PumpPartySelect(local, peers);
+
         // Pause and travel are cheap flag checks and must feel immediate.
         _transitionPump.PumpTravel(local, peers, _changedModule, _moduleSettledAtMs);
         _pausePump.PumpPause(local, visible);

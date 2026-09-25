@@ -296,6 +296,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.StoreIntentAckV2] = HandleStoreIntentAckV2,
             [PacketType.Pong] = HandlePong,
             [PacketType.HostBye] = HandleHostBye,
+            [PacketType.PartySelectResponse] = HandlePartySelectResponse,
             [PacketType.None] = HandleNone,
         };
     }

@@ -921,6 +921,27 @@ public sealed partial class KotorGameBridge
     private const int BlockGalaxyDepartApplied = 0x4C10;
     private const int BlockGalaxyDepartStatus = 0x4C14;
 
+    // Party-select relay (shared block version 81, region 0x5C00..0x5C48, no TotalSize growth
+    // — the same "0x5C00..0x6000 reserved" gap SharedBlock.cs's own comment names). Mirrors
+    // SharedBlock.OffsetPartySelectClient*/OffsetPartySelectHost*. Plugin -> agent: this
+    // instance's own client copy of the party-select screen was just captured, before being
+    // swept. Agent -> plugin (HOST only): open party-select with a peer's parameters, acked by
+    // applied + status, and the eventual confirmed/cancelled outcome. See
+    // docs/research/galaxy-map-and-party-select.md's 2026-09-25 relay section.
+    private const int BlockPartySelectClientSerial = 0x5C00;
+    private const int BlockPartySelectClientExitScript = 0x5C04;
+    private const int BlockPartySelectClientForceNpc1 = 0x5C14;
+    private const int BlockPartySelectClientForceNpc2 = 0x5C18;
+    private const int BlockPartySelectHostRequestSerial = 0x5C1C;
+    private const int BlockPartySelectHostExitScript = 0x5C20;
+    private const int BlockPartySelectHostForceNpc1 = 0x5C30;
+    private const int BlockPartySelectHostForceNpc2 = 0x5C34;
+    private const int BlockPartySelectHostApplied = 0x5C38;
+    private const int BlockPartySelectHostStatus = 0x5C3C;
+    private const int BlockPartySelectHostOutcomeSerial = 0x5C40;
+    private const int BlockPartySelectHostOutcome = 0x5C44;
+    private const int BlockPartySelectScriptLength = 16;
+
     // Class-grant relay (shared block version 68, region 0x4C20..0x4C38, inside the galaxy
     // region's free tail — TotalSize stays 0x4D00). Mirrors SharedBlock.OffsetClassGrant*.
     // Plugin -> agent: a script added a class to my player (serial + class). Agent -> plugin:

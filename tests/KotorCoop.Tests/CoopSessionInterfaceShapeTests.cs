@@ -134,6 +134,8 @@ public class CoopSessionInterfaceShapeTests
         Assert.Empty(session.DrainTransitionAnnounce());
         Assert.Empty(session.DrainMidModuleMovies());
         Assert.Empty(session.DrainGalaxyDepartures());
+        Assert.Empty(session.DrainPartySelectResponses());
+        Assert.Empty(session.DrainPartySelectRequests());
         Assert.False(session.TryGetPartyRoster(out _));
         Assert.Empty(session.GetProgressionReports());
         Assert.Empty(session.GetInteractionLocks());

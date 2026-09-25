@@ -2139,3 +2139,297 @@ dispatch on a client with `K_CURRENT_PLANET` unset.
 with `K_CURRENT_PLANET` set; then reach the polygon with a human at the controls or with short waypoint hops from the deck spawn
 (52.8, 75.7). Never one long `walkto` across the ship (crash above). Read the `StartNewModule` / `client 2 set course` lines
 in both logs.
+
+## 2026-09-25 — client-raised party-select becomes a REQUEST to the host, plus a real crash fix
+
+### Motivation: a live pass showed a joiner can never leave the Hawk alone
+
+Task: the JOINER fired the exit trigger `ebn12_ebonexit` (new dev verb `firetrigger ebn12_ebonexit`,
+which runs the trigger's `OnEnter` for the LOCAL player rather than the phantom the 2026-09-19 pass
+above could only fire for). Joiner log: `party-select: client copy suppressed - the host is picking`
+then `swept away` 3 ms later; the joiner's screen showed "party is chosen by the host". **The HOST got
+nothing at all** — no party-select screen, no notice, nothing. A joiner therefore has no way to leave
+the Ebon Hawk (or any other party-select-gated exit) by itself, and the host has no way to know it was
+even asked. This is not what "the host picks" was supposed to mean; it meant the host picks INSTEAD OF
+the joiner, not that nobody picks.
+
+Whether `ebn12_ebonexit`'s own script genuinely raises party-select is still not settled either way —
+the 2026-09-19 pass above read `k_pebn_leavhawk.ncs` in full and found no `ShowPartySelectionGUI` call
+in it or in `k_pebn_exithawk` (the `StartNewModule` dispatch lives there instead) — so the panel this
+pass observed on the joiner may be the already-documented post-load leftover-panel artifact (§2.4,
+2026-08-28) rather than something the trigger itself raised. It does not matter for this design: the
+fix below reacts to ANY opening of the client's `CSWGuiPartySelection` copy, from any cause, exactly
+the way suppression already does — it does not need to know which script (if any) opened it.
+
+### 1. RE: `ShowPartySelectionGUI`'s full native ABI, and where the parameters actually go
+
+§2.1 already names `exit_script` at `CSWGuiPartySelection+0x074` (VERIFIED) and the ABI of the native
+call wrapper `ExecuteCommandShowPartySelectionGUI 0x005438B0` in outline. This pass disassembled BOTH
+that wrapper and its callee, `CGuiInGame::ShowPartySelection 0x0062DD20`, in full
+(`tools/disasm.py`/`tools/q.py` against the GOG `swkotor.exe`), to answer two questions the relay
+design needs and the earlier pass did not: what is `ShowPartySelection`'s exact calling convention
+(so the host can call it directly, the same way `Odyssey.DepartToPlanet` calls native GUI functions),
+and where do `nForceNPC1`/`nForceNPC2` end up (so a client can read them back off an already-open
+panel before sweeping it)?
+
+**`CGuiInGame::ShowPartySelection` 0x0062DD20 — VERIFIED this pass, full disassembly 0x62DD20..0x62DEC0
+(`ret 0x10`):**
+
+```
+CGuiInGame::ShowPartySelection(
+    this,                    // CGuiInGame*
+    CExoString* exitScript,  // [esp+0x18] in the callee; copied into panel+0x074 via
+                              // CExoString::operator=_2 0x005E5C50 (symbol-DB-named) at 0x62DE61
+    int isForced,             // [esp+0x1c]; stored raw at panel+0x070 (0x62DE72)
+    int nForceNPC1,           // [esp+0x20]; forwarded to SetForcedNPC's first argument (0x62DE79)
+    int nForceNPC2)           // [esp+0x24]; forwarded to SetForcedNPC's second argument
+```
+
+Traced end to end from the caller side too: `ExecuteCommandShowPartySelectionGUI 0x005438B0` pops the
+VM string first, then — only when the VM call carries all 3 params — two VM ints, and lands them at
+exactly the stack slots `ShowPartySelection` reads as arg1/arg3/arg4 (`isForced` is computed by the
+wrapper itself, not popped from the VM). This is an independent confirmation of §2.1's own reading of
+the wrapper, now with the full chain down to the native function proven, not inferred from the pop
+shape alone.
+
+**The lazy-construct-once design — the root cause behind TWO separate findings.** `ShowPartySelection`
+only allocates `CGuiInGame+0x78` (`operator_new_2 0x006FA7E6`, size `0x3A80`, then
+`CSWGuiPartySelection::Constructor 0x006BFA40` — both symbol-DB-named, both seen live in this
+disassembly) the FIRST time it is ever called in a module (0x62DE18: `if ([esi+0x78] == 0) allocate;
+else reuse`), and REUSES that same object on every subsequent call for the rest of the module's life.
+This single fact explains:
+
+* §2's own 2026-08-28 postmortem ("`CGuiInGame+0x78` reads as a live panel pointer on every single
+  frame ... and NEVER goes null again") — the retail engine's own design never nulls it either; it is
+  meant to persist.
+* The NEW crash this pass found and fixed (§4 below): the suppression sweep FREES that same
+  persistently-reused object, but nothing had ever nulled `CGuiInGame+0x78` back afterward.
+
+**`SetForcedNPC` 0x006BE310 — VERIFIED this pass, full disassembly:** for each of its two int
+arguments in range `[0, 9)`, computes `party_data[arg] = this + arg*0x454 + 0x4C4` and ORs bit 2 into
+the dword there; `party_data`'s own base (`0x07C`, §2.1 VERIFIED) and stride (`0x454`, corroborated
+this pass by `SetForcedNPC`'s own `imul eax, eax, 0x454` at 0x6BE322 — matches the already-independently-derived
+stride from `party_data(0x07C)`..`count_label(0x2770)` = `9 * 0x454` exactly) place this write at
+`party_data[i] + 0x448` — inside `character_label`'s own byte range (`0x308`..`0x450`), i.e. a retail
+widget-internal flags dword, **not** a symbol-database-named field. Two consequences:
+
+1. **`nForceNPC1`/`nForceNPC2` are NOT stored anywhere as plain integers a reader can recover.** They
+   are immediately folded into per-slot flag bits. `Odyssey.ReadPartySelectForcedNpcs` (new,
+   `Odyssey.PartySelectRelay.cs`) recovers WHICH slot(s) were forced by scanning all 9 slots for the
+   bit, which is sufficient for the relay (it only needs to reproduce the same forced SET on the
+   host's own call, not the exact original argument order — order is unrecoverable and does not
+   matter: `ShowPartySelection` processes `nForceNPC1`/`nForceNPC2` identically, each independently
+   OR-ing the same bit).
+2. **This offset (`party_data[i] + 0x448`, i.e. `panel + 0x4C4 + i*0x454`) is DERIVED, not a
+   documented member** — it is read here purely by its OBSERVED write behaviour, the same posture
+   this whole feature ships under. NEEDS-LIVE.
+
+Every currently-confirmed real trigger for this screen (the Taris swoop-taxi, `k_pebn_swoop`) calls
+`ShowPartySelectionGUI` with only the string argument — `nForceNPC1`/`nForceNPC2` default to `-1`, so
+the forced-NPC path is UNTESTED by any live trigger seen so far; it ships anyway because the relay
+must not silently drop a forced NPC on some future/unconfirmed trigger that does use it.
+
+### 2. The client half: capture before sweeping, then relay instead of just suppressing
+
+`PartySelectSuppressionController.OnFrame` (`src/KotorCoop.Plugin/PartySelectSuppressionController.cs`)
+now reads `exit_script` (`Odyssey.TryReadPartySelectExitScript`, reusing the already-VERIFIED `+0x074`
+CExoString field and the existing `Odyssey.TryReadExoString` helper — cut at the first NUL, the
+CExoString length trap) and the forced NPCs (`Odyssey.ReadPartySelectForcedNpcs`) off the panel
+BEFORE arming the teardown sweep — the object is on its way to being freed the instant the sweep bits
+are written, so this is the last safe moment to read it.
+
+If `party_select_relay` is on (alongside `party_select_host_only`, its prerequisite —
+`PartySelectSuppressionRule.ShouldRelay`), the capture is published to a new SharedBlock region
+(`SharedBlock.PartySelect.cs`, `0x5C00`..`0x5C48`, inside the `0x5C00..0x6000` gap `SharedBlock.cs`'s
+own comment already reserved — no `TotalSize` growth needed) and the client posts "asked the host to
+choose the party" locally. If relay is off, the old behaviour (silent suppress, roster-poll converge,
+"party is chosen by the host") is unchanged.
+
+### 3. The wire: `PartySelectRequestPacket` / `PartySelectResponsePacket` (protocol version 73)
+
+Two new packet types, `PartySelectRequest = 105` (client → host, one-shot — no wire-level retry; the
+sender's own pump timeout covers a lost datagram, the same convention
+`InteractionClaimPacket`'s explicit-arbitration variant already uses) and
+`PartySelectResponse = 106` (host → client, unicast, sent MORE THAN ONCE per request: first once the
+host's own screen opens or is refused, then again once it closes with an outcome). `ProtocolConstants.Version`
+bumped `72` → `73` — a pre-73 peer has no handler registered for either type at all (the dispatch table
+silently ignores an unknown `PacketType`, per Version 72's own precedent comment), so an OLDER host
+would never learn a NEWER client wanted to leave; worth a version gate the same way every other new
+wire surface in this family gets one. Both peers in a session always run the same build (mismatched
+`ProtocolConstants.Version` is rejected outright at Hello), so there is no partial-compatibility case
+to design for beyond the bump itself.
+
+`IPartySelectSession` (new, `src/KotorCoop.Session/IPartySelectSession.cs`, added to `ICoopSession`'s
+composition) carries `RequestPartySelect`/`DrainPartySelectResponses` (client-facing) and
+`DrainPartySelectRequests`/`SendPartySelectResponse` (host-facing) — mirroring
+`IInteractionLockSession`'s "explicit arbitration" shape, except the host CANNOT answer synchronously
+in-process the way `InteractionLockStore`'s pure arbitration can: opening a real native GUI needs a
+frame on the plugin's own main thread, so `CoopHost` just QUEUES a received request
+(`_pendingPartySelectRequests`) for its pump to drive through the SAME `SharedBlock` round trip a
+peer's packet would use.
+
+### 4. The host half: open the SAME screen through `ShowPartySelection`, then watch for confirm/cancel
+
+`Odyssey.ShowPartySelectionGui` (new, `src/KotorCoop.Plugin/Odyssey.PartySelectRelay.cs` — a SEPARATE
+file from the existing `Odyssey.PartySelect.cs`, which already owns the CONFIRM half of this panel
+via the 2026-08-28 `partyselect ok` verb; the two share no member names and build together cleanly)
+calls the native `ShowPartySelection` directly — MAIN THREAD ONLY, no VM, no hook, the same
+direct-native-call pattern `Odyssey.DepartToPlanet` already uses live for the galaxy map. It refuses
+(never half-opens) while a conversation is active, the host is in combat, the HUD is not ready, or a
+full-screen GUI is already open — the same busy preconditions `DepartToPlanet` checks, except it does
+NOT force-close whatever the host was doing first (that call is being interrupted for someone ELSE's
+choice, so a plain refusal is less surprising than dismissing the host's own screen).
+
+`PartySelectHostRequestController` (new) drives this from `SharedBlock`'s agent→plugin request fields,
+acks `Opened`/`Refused` through `applied`/`status`, then — while the screen it opened is still
+registered — watches for it to close. **Confirm vs cancel is decided by `PartySelectOutcomeRule`
+(new, pure, 5 tests): does `Odyssey.TryReadPartyRoster`'s `partyMask` differ from the snapshot taken
+at open?** This is not a new offset or a new hook — it reuses the exact poll `PartyRosterController`
+already runs live every ~30 frames with, per §2.4, "no dependency on GUI/panel state at all". Chosen
+over trying to RE a Back-vs-Accept distinguishing flag on the panel itself: cheaper, reuses
+already-proven machinery, at the cost of one documented false positive (re-confirming the IDENTICAL
+party reads as a cancel — acceptable, and matches this codebase's own risk posture of shipping the
+option that "cannot make the feature worse").
+
+Eligibility (`PartySelectHostRequestRule`, new, pure, `KotorCoop.Session`, 5 tests): same module only
+(a request from a module the host has since left is a race, not a real ask — silently ignored, no
+notice, matching the task's own "ignore cross-world/stale" wording), one at a time (a second request
+while one is pending gets an explicit `AlreadyPending` response rather than silence), host only.
+
+**Scope choice: refuse rather than queue.** The task allowed either. A bounded queue that survives
+across the host's own module transitions, conversations ending, etc. is real additional state machine
+complexity for a case ("the host happens to be mid-conversation the instant a joiner asks") that a
+`RefusedBusy`-shaped notice already covers acceptably — the joiner can just ask again. Documented here
+rather than silently narrowed, the same discipline `galaxy-map-and-party-select.md`'s own "why no
+plugin wiring shipped this pass" sections already use elsewhere in this file.
+
+### 5. Crash fix: `CGuiInGame::ShutDown` was double-freeing the suppressed panel
+
+**Found live, 2026-09-25, NOT by this pass's own design work — by a control run testing the relay's
+premise.** Sequence: joiner `firetrigger ebn12_ebonexit` → suppression fires (`suppressed` /
+`swept away`, 3 ms apart) → separately, the HOST later ran a real host-led Hawk exit (`setglobal
+K_CURRENT_PLANET 15`, `firetrigger ebn12_ebonexit`, a real click on party-select OK via
+`tools/click.ps1`) → host landed cleanly on `danm13` → the JOINER crashed 200 ms into following:
+`flush, before the module is stored: destroyed phantom 0x7B` → `travel: moving to module 'danm13' on
+the session's authority` → `EXITPROCESS(3221225477)`. `crash.bin`: access violation at **0x62C41E**,
+stack `CClientExoAppInternal::UnloadModule 0x5F8290` / `CClientExoApp::UnloadModule 0x5ED430`
+(symbol-DB-named, matching the crash stack exactly).
+
+**Root cause, confirmed by fresh disassembly of the crash site.** `CGuiInGame::ShutDown 0x0062C310`
+(symbol-DB-named) walks every panel pointer field it owns — `+0x4c, +0x50, +0x54, +0x58, +0x70, +0x74,
++0x5c, +0x08, +0x60, +0x64, +0x68, +0x40, +0x44, +0x48, +0x6c, +0x78, +0x7c` — and for each non-null
+one, calls `[ptr] -> vtable[0](1)` (the scalar DELETING destructor, matching
+`native-browser-panel.md`'s own naming for the identical idiom) then zeroes the field. The
+party-select entry is at `0x62C417`..`0x62C424`:
+
+```
+0x0062C417  mov ecx, [esi + 0x78]     ; ecx = CGuiInGame+0x78 (the party-select panel)
+0x0062C41A  test ecx, ecx
+0x0062C41C  je   0x62c427              ; skip if already null
+0x0062C41E  mov edx, [ecx]             ; <-- CRASH: dereference the panel's vtable pointer
+0x0062C420  push 1
+0x0062C422  call [edx]                 ; scalar deleting destructor
+0x0062C424  mov [esi + 0x78], edi      ; edi = 0 here
+```
+
+`PartySelectSuppressionController`'s teardown writes `panel+0x44 = (state & ~0x300) | 0x400` —
+`native-browser-panel.md` §2's own state-machine trace already documents this EXACT bit pattern
+("0x400 set, 0x200 clear") as `RemovePanel 0x40C830(panel)` then `call [panel_vtbl+0x00](1)` — **the
+panel is deleted and freed**, the identical scalar-deleting-destructor idiom `ShutDown` itself uses.
+Combined with §1's finding above (the engine NEVER nulls `CGuiInGame+0x78` on its own — it expects to
+own that object for the module's whole life), the suppression sweep was leaving `CGuiInGame+0x78`
+pointing at FREED memory for the rest of the module's life. At the NEXT module unload, `ShutDown`'s
+own field walk sees the still-non-null pointer, dereferences it to fetch a vtable, and calls the
+SAME deleting destructor a second time — a double-free / use-after-free on a heap block a module
+transition (churning the heap harder than almost anything else, per this doc's own 2026-08-28 STUNT_00
+postmortem) has likely already reused or decommitted by then.
+
+**Fix.** `PartySelectSuppressionController.OnFrame` now nulls `CGuiInGame+0x78` itself, in the SAME
+call that arms the sweep — the exact null-after-delete idiom `ShutDown` already applies to its other
+15 panel fields, just applied by us instead of by the engine (which never gets the chance to, since
+the object is gone before the module ever unloads). This also means a LATER `ShowPartySelection` call
+correctly reallocates a fresh panel (reads `+0x78 == 0`) instead of writing into freed memory — a
+second, previously-latent bug the relay's own host-open path would otherwise have hit on its very
+first live use.
+
+**Control run, live-CONFIRMED 2026-09-25.** Identical rig and host-led Hawk exit
+(`setglobal K_CURRENT_PLANET 15`, host `firetrigger ebn12_ebonexit`, real OK click), but the joiner
+never raised/swept a party-select panel first: both landed on `danm13`, joiner did NOT crash. This
+isolates the cause to the suppression sweep specifically, not the host-led exit path in general —
+independent confirmation of the root cause above, from outside this pass's own analysis.
+
+### 6. VERIFIED vs INFERRED vs NEEDS-LIVE, this pass
+
+| Claim | Status |
+| --- | --- |
+| `ShowPartySelection 0x0062DD20`'s full ABI (`this, CExoString* exitScript, int isForced, int nForceNPC1, int nForceNPC2`, `ret 0x10`) | VERIFIED, fresh full disassembly both ends (wrapper + callee) |
+| Lazy-construct-once: `CGuiInGame+0x78` allocated on first call, reused forever after | VERIFIED, fresh disassembly (0x62DE18 branch) |
+| `SetForcedNPC 0x006BE310`'s per-slot write at `party_data[i]+0x448` (i.e. `panel+0x4C4+i*0x454`) | VERIFIED the WRITE by disassembly; the exact retail MEANING of that dword (a `character_label`-internal flags field) is INFERRED from behaviour, not a named symbol-DB member — NEEDS-LIVE |
+| `ReadPartySelectForcedNpcs` recovering forced slots by re-scanning that bit | Logically sound given the above, but the forced-NPC path itself has no confirmed live trigger to test against — NEEDS-LIVE |
+| `CGuiInGame::ShutDown 0x0062C310`'s field walk and the exact crash site (0x62C41E) | VERIFIED, fresh disassembly, matches the live crash stack exactly |
+| The crash's root cause (suppression sweep frees a persistently-reused object; nothing nulled `+0x78`) | Live-CONFIRMED via the control run (2026-09-25) |
+| The null-after-sweep fix stops the crash | NOT yet independently re-run live after the fix landed — the control run predates the code fix in this exact form; NEEDS-LIVE (see recipe below, which now folds this in) |
+| `Odyssey.ShowPartySelectionGui`'s busy-refusal checks, the host-open call itself, the request/response wire round trip, `PartySelectOutcomeRule`'s confirm/cancel read against a REAL screen | NEEDS-LIVE — nothing in this section has been exercised against a running game yet |
+
+### 7. What shipped
+
+* `src/KotorCoop.Plugin/Odyssey.PartySelectRelay.cs` (new) — `ShowPartySelectionGui`,
+  `TryReadPartySelectExitScript`, `ReadPartySelectForcedNpcs`. Does NOT touch
+  `Odyssey.PartySelect.cs` (the existing `partyselect ok` confirm primitive).
+* `src/KotorCoop.Plugin/PartySelectSuppressionController.cs` — capture-before-sweep, the
+  `CGuiInGame+0x78` null-after-sweep crash fix, the relay publish.
+* `src/KotorCoop.Plugin/PartySelectHostRequestController.cs` (new) — the host's open/ack/outcome
+  half.
+* `src/KotorCoop.Plugin/PartySelectOutcomeRule.cs` (new, pure) — confirm-vs-cancel by roster diff.
+* `src/KotorCoop.Plugin/SharedBlock.PartySelect.cs` / `SharedBlockView.PartySelect.cs` (new) — the
+  `0x5C00..0x5C48` region.
+* `src/KotorCoop.Session/IPartySelectSession.cs`, `PartySelectHostRequestRule.cs` (new, pure) — the
+  session-facing interface and host eligibility rule.
+* `src/KotorCoop.Session/CoopHost.PartySelect.cs`, `CoopClient.PartySelect.cs` (new) — the wire
+  send/receive halves.
+* `src/KotorCoop.Session/Pumps/TransitionPump.PartySelect.cs` (new) — both pump halves.
+* `src/KotorCoop.Protocol/Packets/PartySelectPackets.cs`, `PacketCodec.PartySelect.cs` (new),
+  `PacketType.cs` (+105/106), `ProtocolConstants.cs` (Version 72→73).
+* `src/KotorCoop.Memory/ITravelBridge.cs`, `KotorGameBridge.Travel.cs`, `KotorGameBridge.PluginBlock.cs`
+  — the bridge methods and offset mirror.
+* Config: `party_select_relay` (plugin key, default ON) — `PluginConfig.cs`, `CoopConfig.cs`,
+  `tools/CoopIniDefaults.ps1`, `docs/CONFIG.md`.
+* Tests: `PartySelectSuppressionRuleTests.cs` (+4, `ShouldRelay`), `PartySelectHostRequestRuleTests.cs`
+  (new, 5), `PartySelectOutcomeRuleTests.cs` (new, 5), `PacketCodecTests.cs` (+8 round-trip/refusal
+  cases), `PartySelectRelayPumpTests.cs` (new, 12, both pump halves end to end through a fake
+  bridge/session).
+
+### 8. NEEDS-LIVE recipe for the next session with the rig
+
+Prerequisite: a save that has left the Endar Spire (`K_CURRENT_PLANET` set — the 2026-09-19 pass
+above found a fresh Endar Spire save makes the Hawk exit script do nothing at all), or
+`setglobal K_CURRENT_PLANET 15` on both instances first (Dantooine — matches the crash-fix control
+run above).
+
+1. `demo.ps1 -ClientAutoCharacter -Isolated`, both land in `ebo_m12aa`.
+2. Host: `warp danm14aa from13` then `warp ebo_m12aa` (re-enter the Hawk fresh, so the host's own
+   `CGuiInGame+0x78` is unconstructed for this module — matches the fix's own "first call allocates"
+   path being exercised, not a leftover from an earlier test).
+3. Joiner: `firetrigger ebn12_ebonexit`. Expect the joiner's log to show
+   `party-select: client copy captured and relayed to the host` (not the old
+   `client copy suppressed`/`swept away`-only pair) and the joiner's screen to show
+   `asked the host to choose the party`.
+4. Host: expect `party-select: opened request #N for the host` in its own log, the screen itself
+   on screen, and `<joiner> wants to leave - choose your party` in the host's chat. Capture with
+   `tools/shot.ps1`.
+5. Host: `partyselect ok` (the existing 2026-08-28 verb — confirms with the current selection
+   through the real `ConfirmPartySelection` handler, exactly as a real Done click would).
+6. Expect: the host's own `k_pebn_exithawk` dispatch runs normally (unchanged retail behaviour —
+   this relay never modifies what confirming does, only who gets asked), both land on the planet
+   through the EXISTING transition-announce/follow machinery (no new plumbing needed there), and
+   the host's log shows `party-select: the host confirmed a party` /
+   `party-select: request #N finished (Confirmed)`.
+7. **Crash-fix re-check, folded into the same session**: after step 6, from the fresh planet module,
+   have the joiner's suppression fire AT LEAST once more on a later screen (any party-select
+   opening, or repeat steps 2-3 in the new module if one exists), then run a normal module
+   transition and confirm the joiner does NOT crash at the next `CClientExoAppInternal::UnloadModule`
+   — the exact failure this pass fixed.
+8. Also worth a fast negative check: have the HOST refuse mid-conversation (start a dialogue on the
+   host, then have the joiner `firetrigger ebn12_ebonexit` again) — expect the joiner's chat to show
+   `the host could not open the party screen (a conversation is active)` and the host's own dialogue
+   to be undisturbed.

@@ -230,4 +230,71 @@ public sealed partial class KotorGameBridge
             && _memory.TryReadUInt32(_pluginBlock + BlockGalaxyDepartStatus, out status);
     }
 
+    // ---- party-select relay -------------------------------------------------------
+
+    /// <inheritdoc />
+    public bool TryReadPartySelectClientCapture(
+        out uint serial, out string exitScript, out int forceNpc1, out int forceNpc2)
+    {
+        serial = 0;
+        exitScript = string.Empty;
+        forceNpc1 = -1;
+        forceNpc2 = -1;
+
+        // Serial first, then the params — the reverse of the plugin's write order, so a torn
+        // read pairs a serial with params written before it, never a newer capture's.
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockPartySelectClientSerial, out serial)
+            || serial == 0)
+        {
+            return false;
+        }
+
+        return _memory.TryReadAsciiString(
+                _pluginBlock + BlockPartySelectClientExitScript, BlockPartySelectScriptLength, out exitScript)
+            && _memory.TryReadInt32(_pluginBlock + BlockPartySelectClientForceNpc1, out forceNpc1)
+            && _memory.TryReadInt32(_pluginBlock + BlockPartySelectClientForceNpc2, out forceNpc2);
+    }
+
+    /// <inheritdoc />
+    public bool TryRequestPartySelectHostOpen(string exitScript, int forceNpc1, int forceNpc2)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWriteAsciiString(
+            _pluginBlock + BlockPartySelectHostExitScript, exitScript ?? string.Empty, BlockPartySelectScriptLength);
+        ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostForceNpc1, forceNpc1);
+        ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostForceNpc2, forceNpc2);
+
+        // Serial last, so the plugin never observes a half-written request. Continue from
+        // whatever the block already holds, the same convention TryRequestGalaxyDepart uses.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostRequestSerial, out uint serial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockPartySelectHostRequestSerial, serial + 1);
+        return ok;
+    }
+
+    /// <inheritdoc />
+    public bool TryReadPartySelectHostStatus(out uint applied, out uint status)
+    {
+        applied = 0;
+        status = 0;
+
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostApplied, out applied)
+            && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostStatus, out status);
+    }
+
+    /// <inheritdoc />
+    public bool TryReadPartySelectHostOutcome(out uint serial, out uint outcome)
+    {
+        serial = 0;
+        outcome = 0;
+
+        return _pluginBlock != 0
+            && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostOutcomeSerial, out serial)
+            && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostOutcome, out outcome);
+    }
 }
