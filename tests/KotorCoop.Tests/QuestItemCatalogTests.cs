@@ -72,4 +72,16 @@ public class QuestItemCatalogTests
     [InlineData("g_w_lghtsbr01")]
     public void AnOrdinaryItemIsNot(string resref) =>
         Assert.False(QuestItemCatalog.IsQuestItemTag(resref));
+
+    /// <summary>2026-09-25 census cross-check: found-only items a quest script tests with
+    /// GetItemPossessedBy that carry no Plot flag, so only the tag list can share them.</summary>
+    [Theory]
+    [InlineData("tar10_elevcard")]
+    [InlineData("tar10_accelerator")]
+    [InlineData("k37_itm_freedont")]
+    [InlineData("w_diary")]
+    [InlineData("tat20_gaffistick")]
+    [InlineData("punk_conch")]
+    public void AScriptCheckedNonPlotItemIsStillAQuestItem(string tag) =>
+        Assert.True(QuestItemCatalog.IsQuestItemTag(tag));
 }

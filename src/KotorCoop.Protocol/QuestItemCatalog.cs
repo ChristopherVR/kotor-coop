@@ -43,6 +43,15 @@ public static partial class QuestItemCatalog
         "rakghoulserum", "ptar_permacrete", "tat20_banthafod",
         "g_i_belt006", "g_i_belt007", "g_i_belt008", "g_i_belt010", "geno_stealth",
 
+        // 2026-09-25 GetItemPossessedBy census cross-check: tags a quest script tests for
+        // but whose UTI carries no Plot flag, so the generated resref table missed them.
+        // Each is found-only (no store sells it). Personal mode must share them, or one
+        // player's pickup leaves the other engine's check false.
+        "tar10_accelerator", "tar10_elevcard", "k37_itm_freednf1", "k37_itm_freednf2",
+        "k37_itm_freedont", "w_diary", "w_rdatapad", "w_sdatapadm", "w_tape",
+        "tat17_wraidplate", "tat18_dragonprl", "tat20_gaffistick", "kas24_hortberr",
+        "kas25_datapad1", "kas25_datapad2", "punk_conch", "ebo_spice", "dan14_nothing",
+
         // §7.3 — main quest / found-only plot items.
         "kor_starpad", "dan_map1", "dan_map2", "lev40_spacesuit", "tar09_icebreaker",
         "ptar_sitharmor", "ptar_sithpapers", "bast_temp_saber", "sta_temp_saber",
