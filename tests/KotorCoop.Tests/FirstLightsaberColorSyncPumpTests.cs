@@ -6,29 +6,27 @@ using Xunit;
 namespace KotorCoop.Tests;
 
 /// <summary>
-/// End-to-end (through a real <see cref="CoopAgent"/> tick, the same shape
-/// <see cref="DialogueGrantQueueTests"/> already uses) coverage of
-/// docs/research/class-and-power-grants.md §10's wiring: <c>LootPump</c> applying
-/// <see cref="FirstLightsaberColorRule"/> to an incoming Zhar saber-construction grant, behind
-/// <see cref="AgentSettings.FirstSaberColorSync"/>.
+/// End-to-end (through a real <see cref="CoopAgent"/> tick) coverage of
+/// docs/research/class-and-power-grants.md §11's wiring:
+/// <c>KotorCoop.Session.Pumps.FirstLightsaberBuildPump</c> detecting a local equip-slot edge,
+/// publishing the party-wide flag, and building this character's own colour once the flag is
+/// set — behind <see cref="AgentSettings.FirstSaberColorSync"/>.
 /// </summary>
 public class FirstLightsaberColorSyncPumpTests
 {
-    private const string ClientModule = "danm13";
-    private const uint LocalPlayerObjectId = 0x7FFFFFFF;
+    private const string Module = "danm13";
+    private const string Blue = "g_w_lghtsbr01";   // Guardian (3)
+    private const string Yellow = "g_w_lghtsbr04"; // Sentinel (5)
 
     private sealed class ClassAwareBridge : IGameBridge
     {
-        public PlayerState Local { get; set; } = new(Vector3f.Zero, 0f, ClientModule, 20, 0);
+        public PlayerState Local { get; set; } = new(Vector3f.Zero, 0f, Module, 20, 0);
 
-        /// <summary>What this player's own <c>classes.2da</c> rows currently are.</summary>
         public List<int> ClassIds { get; set; } = [];
 
-        /// <summary>What this player's own possessed items already look like (the "already
-        /// has a first saber" check reads this).</summary>
-        public List<(string Resref, ItemIdentity Identity)> Possessed { get; set; } = [];
+        public bool IsInDialogue { get; set; }
 
-        public string Description => "first-saber-color-test";
+        public string Description => "first-saber-build-test";
 
         public bool IsAttached => true;
 
@@ -44,10 +42,6 @@ public class FirstLightsaberColorSyncPumpTests
 
         public IReadOnlyList<int> ReadLocalClassIds() => ClassIds;
 
-        public IReadOnlyList<(uint Possessor, string Resref, ItemIdentity Identity)> ReadPersonalPossessedItems(
-            IReadOnlySet<uint> possessorIds) =>
-            [.. Possessed.Select(p => (LocalPlayerObjectId, p.Resref, p.Identity))];
-
         public void Dispose()
         {
         }
@@ -55,22 +49,15 @@ public class FirstLightsaberColorSyncPumpTests
 
     private sealed class StubSession : ICoopSession
     {
-        public List<DialogueGrantPacket> Incoming { get; } = [];
+        public EventFlagStore Flags { get; } = new();
 
-        public IReadOnlyList<DialogueGrantPacket> DrainDialogueGrants()
-        {
-            List<DialogueGrantPacket> ready = [.. Incoming];
-            Incoming.Clear();
-            return ready;
-        }
+        public void SetFlag(ulong flagId, sbyte value) => Flags.Set(flagId, value, LocalPeerId);
 
         public uint LocalPeerId => 2;
 
         public bool IsConnected => true;
 
         public string LocalName => "test";
-
-        public EventFlagStore Flags { get; } = new();
 
         public GroundItemStore Items { get; } = new();
 
@@ -81,10 +68,6 @@ public class FirstLightsaberColorSyncPumpTests
         public SessionStats GetStats() => new();
 
         public void PublishLocalState(in PlayerState state)
-        {
-        }
-
-        public void SetFlag(ulong flagId, sbyte value)
         {
         }
 
@@ -154,102 +137,113 @@ public class FirstLightsaberColorSyncPumpTests
         return (agent, bridge, session);
     }
 
-    private static DialogueGrantPacket SaberGrant(string resref) =>
-        new(OriginPeerId: 1, OpSequence: 1, "zhar",
-            [new MaterialisedLootItem(resref, new ItemIdentity(1, 0, 0, 0, 0))]);
-
     [Fact]
-    public void OffByDefaultLeavesTheGrantExactlyAsAnnounced()
+    public void OffByDefaultNeverPublishesOrBuildsAnything()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: false);
-        bridge.ClassIds = [5]; // Sentinel - would want yellow
-
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01")); // builder built blue
+        bridge.Local = bridge.Local with { EquippedRightWeapon = Blue }; // the builder's own equip
         agent.PumpOnce();
 
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
-        Assert.Equal("g_w_lghtsbr01", give.Item.Resref); // unchanged - the toggle is off
+        Assert.False(session.Flags.TryGet(FirstLightsaberColorRule.FirstSaberBuiltFlagId, out _));
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
     }
 
     [Fact]
-    public void SubstitutesTheReceiversOwnClassColourWhenItDiffersFromTheBuilders()
+    public void TheBuildersOwnEquipEdgePublishesTheFlagAndBuildsNothingForThemselves()
+    {
+        (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
+        bridge.ClassIds = [3]; // Guardian - matches what they equipped
+        bridge.Local = bridge.Local with { EquippedRightWeapon = Blue };
+
+        agent.PumpOnce();
+
+        Assert.True(session.Flags.TryGet(FirstLightsaberColorRule.FirstSaberBuiltFlagId, out sbyte value));
+        Assert.NotEqual(0, value);
+        // They already have one (it is equipped) - never queue a build for themselves.
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
+    }
+
+    [Fact]
+    public void AnotherPlayerWithNoSaberYetBuildsTheirOwnClassColourOnceTheFlagIsSet()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
         bridge.ClassIds = [5]; // Sentinel
+        // Nothing equipped yet - the flag arrives from a peer's build (simulated directly here,
+        // since a real peer relay is exercised by SessionIntegrationTests/EventFlagStore's own
+        // suite, not this file).
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
 
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01")); // builder built blue (Guardian)
         agent.PumpOnce();
 
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
-        Assert.Equal("g_w_lghtsbr04", give.Item.Resref); // Sentinel's own colour, not blue
+        Assert.True(agent.TryDequeuePendingFirstSaberBuild(out string resref));
+        Assert.Equal(Yellow, resref);
     }
 
     [Fact]
-    public void PassesThroughUnchangedWhenTheReceiversOwnClassAlreadyMatches()
+    public void APlayerWithNoJediClassYetBuildsNothingButKeepsWatching()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
+        bridge.ClassIds = [0]; // Soldier only, no Jedi class yet
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
+
+        agent.PumpOnce();
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
+
+        // A class grant lands later - the very next tick should now build it.
         bridge.ClassIds = [3]; // Guardian
-
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01")); // already the Guardian colour
         agent.PumpOnce();
-
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
-        Assert.Equal("g_w_lghtsbr01", give.Item.Resref);
+        Assert.True(agent.TryDequeuePendingFirstSaberBuild(out string resref));
+        Assert.Equal(Blue, resref);
     }
 
     [Fact]
-    public void DropsTheGiveEntirelyWhenTheReceiverAlreadyHasAFirstSaber()
+    public void APlayerWhoAlreadyHasAFirstSaberEquippedNeverBuildsASecondOne()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
-        bridge.ClassIds = [5];
-        bridge.Possessed = [("g_w_lghtsbr04", new ItemIdentity(1, 0, 0, 0, 0))];
+        bridge.ClassIds = [5]; // Sentinel
+        bridge.Local = bridge.Local with { EquippedRightWeapon = Yellow }; // built it themselves already
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
 
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01"));
         agent.PumpOnce();
 
-        Assert.False(agent.TryDequeuePendingLoot(out _));
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
     }
 
     [Fact]
-    public void AnUnrelatedItemInTheSameGrantIsNeverTouched()
+    public void NoBuildIsQueuedWhileInDialogueOrMidTransition()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
         bridge.ClassIds = [5];
+        bridge.IsInDialogue = true;
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
 
-        session.Incoming.Add(new DialogueGrantPacket(
-            OriginPeerId: 1, OpSequence: 1, "zhar",
-            [
-                new MaterialisedLootItem("g_w_lghtsbr01", new ItemIdentity(1, 0, 0, 0, 0)),
-                new MaterialisedLootItem("g_i_medeqpmnt01", new ItemIdentity(1, 0, 0, 0, 0)),
-            ]));
         agent.PumpOnce();
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
 
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive first));
-        Assert.Equal("g_w_lghtsbr04", first.Item.Resref);
-
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive second));
-        Assert.Equal("g_i_medeqpmnt01", second.Item.Resref);
+        bridge.IsInDialogue = false;
+        agent.PumpOnce();
+        Assert.True(agent.TryDequeuePendingFirstSaberBuild(out string resref));
+        Assert.Equal(Yellow, resref);
     }
 
     [Fact]
-    public void ARepeatedGrantAfterTheFirstAppliedOneIsSkippedNotDoubled()
+    public void ARepeatedFlagAfterTheFirstBuildLandedIsNotDoubled()
     {
         (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
         bridge.ClassIds = [5];
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
 
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01"));
         agent.PumpOnce();
-        Assert.True(agent.TryDequeuePendingLoot(out CoopAgent.PendingMaterialisedLootGive give));
-        Assert.Equal("g_w_lghtsbr04", give.Item.Resref);
+        Assert.True(agent.TryDequeuePendingFirstSaberBuild(out string resref));
+        Assert.Equal(Yellow, resref);
 
-        // Simulate the give having actually landed on this player's own engine (a real rejoin/
-        // resync would re-read this from the live inventory).
-        bridge.Possessed = [("g_w_lghtsbr04", new ItemIdentity(1, 0, 0, 0, 0))];
+        // Simulate the build having actually landed (a real rejoin/resync would re-read this
+        // from the live equip slot).
+        bridge.Local = bridge.Local with { EquippedRightWeapon = Yellow };
 
-        // A resend of the SAME grant (resync, retransmit, late join backlog).
-        session.Incoming.Add(SaberGrant("g_w_lghtsbr01"));
+        // The flag is already true and stays true (a resync would simply re-affirm it) - a
+        // second pump must not queue a second build.
         agent.PumpOnce();
-
-        Assert.False(agent.TryDequeuePendingLoot(out _));
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
     }
 }

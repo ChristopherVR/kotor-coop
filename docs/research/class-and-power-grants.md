@@ -729,176 +729,227 @@ by the interpreter alone, but the same string-table evidence applies to it direc
 three strings sit in the identical straight-line load sequence). Treated as a closed question for
 design purposes; see §11.6 for the residual risk this leaves.
 
-### 11.2 What "the shared party pool" the task named actually is here
+### 11.2 Live round (2026-09-25): the receiver-side substitution never ran, and a correction to §11.2's original claim about the party pool
 
-The task brief says the reward "lands in the shared party pool" and that "the party item pool is
-synced as one shared stash across players" (`docs/research/party-pool-sync.md`). That document's
-own channel — the `CItemRepository` behind `CSWPartyTable+0x118`, `party_pool_sync` — is a
-SEPARATE, currently-OFF, still-buggy feature (party-pool-sync.md §7-§10: a live double-apply bug
-still open) for the drag-into-stash shared stash panel. **It is not what mirrors Zhar's saber.**
-The channel actually responsible, confirmed by re-reading `docs/research/dialogue-consequences.md`
-§3's own live evidence (and matching the review doc's check31/host-led-Sentinel results exactly):
-`dialogue_item_sync`/`script_item_sync` (`DialoguePump`/`ScriptItemGrantPump`) — a generic "a new
-item just appeared in the granting player's OWN inventory outside a pickup" diff, publishing
-through `PublishDialogueGrant`/the give-loot cheat channel, applied on the peer via
-`Odyssey.GiveItemToInventory` into THAT player's own creature backpack. Both channels are ON by
-default. This is worth stating precisely because the fix below depends on it: each player's
-inventory is genuinely a SEPARATE `CSWInventory` on a SEPARATE engine process — "shared" here
-only ever meant "the generic mirror channel copies items 1:1 between them", never a literal
-single stash object. That is exactly the property the design in §11.3 exploits.
+Commit `59cb101` shipped the design in the original §11.2-§11.6 below (kept in git history, not
+here — this section replaces it after a live round on the main session found it dead). Staged
+exactly per the recipe: joiner Sentinel (class 5), host Guardian (class 3), `first_saber_color_sync=1`
+on both. On the joiner: `setglobal DAN_SABER_DONE true`, `setglobal DAN_PATH_STATE 2`,
+`scriptgive dan13_goldcryst`, `startdialog 0x19 dan13_zhar` — the chain auto-advanced 100→101→102→
+103→R133, `k_pdan_saber16` ran on the JOINER's own engine exactly as §11.1 decoded: the crystal was
+consumed (`party pool: local remove of dan13_goldcryst` logged on BOTH instances) and the joiner's
+own `g_w_lghtsbr04` (object `0x172`) was created and immediately equipped.
 
-### 11.3 Design — a receiver-side substitution, not a sender-side change
+**Result: no `DialogueGrantPacket` was ever published, no `first lightsaber:` line appeared
+anywhere, and the host received nothing at all.** The original §11.2-§11.3 design (a `LootPump`
+hook reacting to a `DialogueGrantPacket`) never had anything to react to.
 
-**Choice: intercept on the RECEIVING side's apply step, not the sending side's detection.**
-`DialoguePump`/`ScriptItemGrantPump` keep announcing exactly what their own engine created,
-unchanged, for every item they carry — that generic detector is correct and heavily tested for
-everything else it forwards, and touching it would risk every other reward/script grant in the
-game. Instead, `LootPump` (the shared receiving half both `CoopHost`'s and `CoopClient`'s agent
-already run — see its own doc comment, no host/client branch anywhere in it) is given one new,
-narrow decision to apply to ONE incoming `DialogueGrantPacket` item, immediately before it would
-otherwise be queued for a local give unchanged:
+**Root cause.** `k_pdan_saber16` equips the new saber (`AssignCommand`+`ActionEquipItem`) within
+the SAME script execution that creates it, while the Zhar conversation is still open. Both
+`DialoguePump`'s reward diff and `ScriptItemGrantPump`'s own sample compare the local player's
+BACKPACK/pool view (`IGameBridge.ReadPersonalPossessedItems`) between two sampled instants; an
+item that is created and equipped inside one uninterrupted script call never sits in that view at
+any instant either pump actually samples, so the net diff is zero — not a bug in either pump, a
+structural blind spot for THIS reward specifically (a corpse loot, a plain dialogue reward that
+stays in the backpack, and every other case those pumps were built for all still work). §11.1's
+crystal-consumption evidence confirms the same mechanism from the other side: the crystal WAS
+visible to both instances' pumps because it sat in the backpack/pool the whole time it existed.
 
-- Is the incoming resref one of the three canonical starter sabers
-  (`FirstLightsaberColorRule.IsCanonicalFirstSaber`)? If not, nothing changes — every other item
-  this channel ever carries is untouched, by construction (the check is the first line of the
-  rule).
-- Does the RECEIVING player already possess one of those three resrefs (read fresh, every call,
-  via the SAME `IGameBridge.ReadPersonalPossessedItems` sweep `ScriptItemGrantPump` already
-  uses)? If so: **Skip** — drop the give, log why, never touch the crystal (the receiver never
-  had one to begin with — see §11.4) and never re-arm anything, because the check is re-derived
-  from the live inventory every time, not a one-shot flag. This is what makes a resync, a
-  retransmit, a rejoin or a late join's backlog naturally idempotent.
-- Otherwise, read the RECEIVING player's own current class ids (`IPlayerBridge.ReadLocalClassIds`,
-  §11.5 — a NEW, purely local, `ReadProcessMemory`-only reader, no engine call, mirroring the
-  plugin's own already-verified `Odyssey.ClassGrant.cs::TryReadLocalClassList` offsets on the x64
-  agent side, duplicated because the x86 plugin and this x64 agent cannot share an assembly — the
-  same reasoning item-identity.md §14 already gives for its own stack-identity duplication) and
-  map through the SAME retail table §11.1 found (`FirstLightsaberColorRule.ResrefForClass`):
-  **Substitute** the resref if it disagrees with what the sender announced, **PassThrough**
-  unchanged if it already agrees, or (no resolvable Jedi class yet on this player — a timing gap
-  against whatever grants classes) **PassThrough** the builder's own colour rather than silently
-  dropping their first saber.
+**Correction to the original §11.2's claim about the party pool.** The original text said
+`party_pool_sync` was "currently-OFF" and not what mirrors this reward. Both halves were wrong, per
+`docs/research/key-items-and-solo.md` §1 and this round's own live log line
+(`party pool: local remove of dan13_goldcryst` on both instances, unprompted): **`party_pool_sync`
+is ON by default (mode 2, docs/CONFIG.md), and a live PC's own backpack IS the shared party pool**
+(`CSWSCreature::GetItemRepository(1)` on a party member resolves to the SAME `CItemRepository`
+`CSWPartyTable+0x118` names — there is no separate "personal inventory" repository object for a
+live PC to begin with). So an UNEQUIPPED item sitting in any connected player's own backpack is
+pool content and gets relayed by `PartyPoolPumpV2` to every OTHER connected player as pool content
+— which is exactly the mechanism that would turn a naive "just give the receiver their own saber
+into their backpack" fix into a NEW duplicate-visibility bug (the receiver's own colour showing up
+in the BUILDER's pool view too). This is the load-bearing fact behind §11.4's redesign: the fix
+must equip the created saber, never leave it in the backpack, on every engine it touches.
 
-This is deliberately the opposite direction from "the sender decides what to send each peer": the
-sender has no reason to know anything about anyone else's class, and never needs to — each
-receiver independently decides, from its OWN locally-read class, what an announced grant should
-become for itself. Two players with different classes each get their own correct colour
-regardless of which one led the construction, with zero host/client special-casing, because the
-SAME code runs the SAME decision on whichever side is receiving.
+### 11.3 Redesign — reliable detection, existing-channel delivery, local build on every OTHER engine
 
-**Crystal handling needs no new code at all.** The peer never had a plot-crystal copy to begin
-with — `k_pdan_saber12`/`13`/`14` only ever grants one to `GetFirstPC()` on whichever engine ran
-THAT specific Dorak-path dialogue choice, and `k_pdan_saber16`'s `DestroyObject` call only ever
-runs, locally, against the builder's own crystal item on the builder's own engine. This feature
-never creates, reads or destroys a crystal on the receiving side — "no duplicate plot crystal
-left behind" is true by construction, not by an added check.
+**Detect: an equip-slot edge, not an inventory diff.** `PlayerState.EquippedRightWeapon`/
+`EquippedLeftWeapon` (docs/research/animation-and-minimap.md's own "phantom body" fields) are
+resolved every tick straight from the creature's equip-slot pointers
+(`KotorGameBridge.ReadEquippedResref`, `CSWInventory+0x14`/`+0x18`) — NOT from a repository
+snapshot, so they cannot miss an equip the way a backpack diff can; they simply report whatever
+the engine's own slot holds, this tick. The first tick either slot reads one of the three canonical
+starter sabers (`FirstLightsaberColorRule.IsCanonicalFirstSaber`), THIS engine's own player has
+built one — no native hook, no shared-block change, nothing beyond a field this session was
+already reading every tick for a different reason.
 
-**Why this is isolated from the inventory model, and what it would take to change.** The
-substitution lives entirely inside "what resref does this ONE grant item become before it is
-applied" — it does not know or care whether the destination is a personal `CSWInventory` (today)
-or some future shared/marked-ownership stash. If the inventory model changes later so that an
-item can be tagged "belongs to player X" rather than mirrored wholesale, this rule's inputs
-(incoming resref, receiver's own class, receiver's own possession check) and its three-way
-decision stay exactly the same — only the code that ACTS on `Decision.Substitute`/`Skip` (today,
-`LootPump` deciding what to enqueue for a give) would need to change to write an ownership tag
-instead of a different item entirely. Nothing in `FirstLightsaberColorRule` itself references
-`LootPump`, `IGameBridge` or any wire type — it is a pure `(string, IReadOnlyList<int>, bool) ->
-Result` function in `KotorCoop.Protocol`, by design, so it survives that kind of change unchanged.
+**Deliver: no new packet.** The announcement is a single, session-wide, sticky fact — "the party
+has built a first saber" — with NO payload beyond that: every receiver (including the publisher's
+own next tick) decides ENTIRELY from its own locally-read class which colour, if any, it
+personally needs, so there is nothing else worth carrying. This fits the EXISTING world-progression
+flag channel (`EventFlagStore`/`FlagOpPacket`, `ICoopSession.SetFlag`/`Flags`) exactly: a new
+64-bit flag id (`FirstLightsaberColorRule.FirstSaberBuiltFlagId`, tag byte `'S'` in the same
+object-keyed address space `ObjectKeyedFlags` already documents for doors/placeables/mine
+triggers — see that class's own remark that "adding a tag needs no protocol bump: the key is
+opaque to the flag store and the wire"). This channel is already reliable (per-key Lamport clock,
+ack'd, retransmitted), already resynced WHOLE to a late joiner via the existing paged world
+snapshot, and needed ZERO protocol changes — a straight `session.SetFlag(id, 1)` call.
 
-### 11.4 What was built
+**Apply: build+equip locally, on every OTHER engine, from that engine's own class.** While the
+flag reads true and this player has not yet equipped a first saber (own weapon slots re-checked
+every tick — never a one-shot latch, so a resync/rejoin/late join is naturally idempotent) and
+this player's own class list (`IPlayerBridge.ReadLocalClassIds`, unchanged from the original
+design — the plugin's own already-verified `Odyssey.ClassGrant.cs` offsets, read externally) names
+a Jedi class, queue exactly one automatic `equip` cheat (`CheatKinds.Equip` →
+`Odyssey.EquipItemFromTemplate`: create THEN `ActionEquipItem` in one engine call, matching
+retail's own idiom byte-for-byte) for the colour that class implies
+(`FirstLightsaberColorRule.ResrefForClasses`). Gated the same way `ClassGrantPump`'s own apply is
+(`ClassGrantReplayRule.Decide` — not mid-load, not mid-dialogue, not mid-combat) and rate-limited
+to `ClassGrantReplayRule.MaxAttempts` tries `RetryMs` apart, reusing those constants directly
+rather than inventing new ones.
 
-**Protocol** (`KotorCoop.Protocol`): `FirstLightsaberColorRule.cs` — the pure decision above
-(`PassThrough`/`Substitute`/`Skip`), plus the retail `ResrefForClass` table and
-`IsCanonicalFirstSaber`. No wire types, no protocol version bump — this never crosses the network
-in a new shape, it only reinterprets an existing `DialogueGrantPacket`/`MaterialisedLootItem` on
-the receiving side.
+**Equipping, not just giving, is deliberate — see §11.2's own correction.** An unequipped item in
+a backpack is pool content and would relay right back onto every OTHER player; equipping removes
+it from that repository the same call, exactly the property that already (if inadvertently)
+protected the BUILDER's own saber from ever appearing as a pool addition in the live round above.
 
-**Memory** (`KotorCoop.Memory`): `IPlayerBridge.ReadLocalClassIds()` (new default-interface
-member, empty by default) and its `KotorGameBridge.Player.cs` implementation — four new private
-consts (`StatsClassCount 0x089`, `StatsClasses 0x08C`, `ClassInfoClassId 0x1B`,
-`ClassInfoStride 0x28`, matching `Odyssey.ClassGrant.cs`'s own already-verified offsets
-byte-for-byte) and a plain pointer-chain read off the cached `_player` the same way
-`TryReadFaction` already does. No plugin/native change of any kind — this reads the SAME field
-the plugin already reads, independently, from outside the process.
+**Symmetric, no host/client branch.** The SAME pump (`FirstLightsaberBuildPump`) runs on every
+connected engine and does both halves (publish-if-I-built-one, build-if-I-haven't) — whichever
+player leads the construction, every OTHER engine's own copy of this pump reacts to the SAME flag
+the same way. Two players with different classes each end up with their own colour regardless of
+who led, with zero special-casing for host vs. joiner.
 
-**Session** (`KotorCoop.Session`): `LootPump`'s `DialogueGrantPacket` receive loop (the same loop
-§3/the script-item-sync section already documents) now evaluates the rule per item, behind
-`AgentSettings.FirstSaberColorSync`; `CoopConfig.FirstSaberColorSync` (coop.ini
-`first_saber_color_sync`, OFF by default) and `AgentComposition`'s `?? false` fallback — all
-three agree at OFF (docs/CONFIG.md footnote ³'s own rule, checked by hand this pass since this
-key has no plugin half to cross-check against). `LootPump`'s constructor gained an `AgentSettings`
-parameter it did not have before (every other pump already takes one); its one call site
-(`CoopAgent.cs`) updated to match.
+**Crystal handling still needs no new code.** Unchanged from the original design: a receiver never
+had a plot-crystal copy to begin with, so nothing here creates, reads or destroys one.
 
-**Tests**: `FirstLightsaberColorRuleTests.cs` (9 cases — unrelated resref always passes through,
-each class produces its own retail colour even against a different builder colour, an
-already-matching class is a no-op PassThrough, an already-has-one receiver is always Skip
-regardless of class, the idempotency shape across two calls, a base class with no Jedi slot yet
-falls back to PassThrough, no class ids at all falls back to PassThrough, a multiclassed receiver
-is matched by whichever slot holds the Jedi class, `IsCanonicalFirstSaber` is case-insensitive and
-exact); `FirstLightsaberColorSyncPumpTests.cs` (6 cases, through a real `CoopAgent.PumpOnce()` the
-same shape `DialogueGrantQueueTests` already uses — off by default leaves the grant untouched,
-a differing class substitutes, a matching class passes through, an already-owned first saber
-drops the give entirely, an unrelated item in the SAME grant is never touched, a resend after the
-first grant landed is skipped not doubled).
+**Dead code removed, per this round's own instruction.** The original `LootPump.DrainDialogueGrants`
+hook (§11.2-§11.3 as they existed before this round) is reverted — it is not merely redundant, it
+is a live double-apply RISK: `k_pdan_saber16`'s equip timing is a script/engine-frame race, not a
+guarantee, so a future run where the item happens to linger in the backpack one sample longer could
+still trip the OLD path while the NEW one (below) also fires, granting a receiver two sabers. Only
+the new equip-slot-based detection is wired in now. `FirstLightsaberColorRule.Decision`/`Result`/
+`Evaluate` (the three-way substitute/skip/pass-through the old design needed for an INCOMING
+resref) are removed with it; `ResrefForClass`/`IsCanonicalFirstSaber` stay (still load-bearing) and
+a new `ResrefForClasses(classIds) -> string?` pure lookup replaces `Evaluate` for the new design's
+simpler question ("what colour, if any, does this class list want" — there is no longer an
+incoming resref to compare against).
+
+### 11.4 What was built (supersedes the original §11.4)
+
+**Protocol** (`KotorCoop.Protocol`): `FirstLightsaberColorRule.cs` reduced to `ResrefForClass`,
+`IsCanonicalFirstSaber`, the new `ResrefForClasses`, and the new `FirstSaberBuiltFlagId` constant.
+No packet types, no protocol version bump — the flag id lives inside the EXISTING `EventFlagStore`
+key space.
+
+**Memory** (`KotorCoop.Memory`): `IPlayerBridge.ReadLocalClassIds()` and its
+`KotorGameBridge.Player.cs` implementation are UNCHANGED from the original round (still correct,
+still needed) — see the original §11.4's description, kept here by reference rather than repeated.
+
+**Session** (`KotorCoop.Session`): new `Pumps/FirstLightsaberBuildPump.cs` (detect via
+`PlayerState` equip fields, publish via `session.SetFlag`, apply via a single-slot pending-build
+queue mirroring `LootPump`'s own `TryDequeuePendingLoot` shape exactly) — wired into
+`CoopAgent.PumpOnce` right after `_classGrantPump.Pump(...)`, and `CoopAgent.TryDequeuePendingFirstSaberBuild`
+added alongside `TryDequeuePendingLoot`. `LootPump.cs` reverted to its pre-59cb101 shape (the
+`AgentSettings` constructor parameter it gained for the old design is removed; its one call site in
+`CoopAgent.cs` updated to match). `AgentSettings.FirstSaberColorSync`/`CoopConfig.FirstSaberColorSync`/
+`AgentComposition`'s `?? false` fallback are UNCHANGED in shape (same coop.ini key, same OFF
+default) — only their doc comments were updated to describe what the key now gates.
+
+**Agent** (`KotorCoop.Agent`): `CoopCommandDispatcher.Items.cs`'s new `DrainAutomaticFirstSaberBuild()`
+— the SAME single-slot arbitrated cheat-channel drain `DrainAutomaticLoot` already established,
+submitting through `CheatKinds.Equip` (target 0 = local player, default slot = right weapon — the
+SAME defaults the manual `equip` console verb already relies on, docs/research/companion-state-sync.md
+§7/§5's own live-test primitive) rather than `CheatKinds.GiveLoot`. Wired into the command tick
+loop right after `DrainAutomaticLoot`.
+
+**Tests**: `FirstLightsaberColorRuleTests.cs` rewritten (9 cases — the three canonical resrefs
+recognised case-insensitively, `ResrefForClasses` per class / no-Jedi-class / no-classes-at-all /
+multiclass-slot-order, the flag id provably above `uint.MaxValue`).
+`FirstLightsaberColorSyncPumpTests.cs` rewritten (7 cases, through a real `CoopAgent.PumpOnce()` —
+off by default publishes and builds nothing; the builder's own equip edge publishes the flag and
+queues nothing for themselves; another player with no saber yet builds their own class's colour
+once the flag is set; a player with no Jedi class yet builds nothing but keeps watching, and
+builds the moment a class arrives; a player who already has one equipped never gets a second;
+no build is queued mid-dialogue, but the very next eligible tick catches it; a repeated/resynced
+flag after the first build landed is not doubled).
 
 ### 11.5 NEEDS-LIVE
 
-Nothing in this section has run against the real game. In rough order of what would invalidate
-the most:
+Nothing in this section has run against the real game — everything below is a fresh, unexercised
+design following a live round that disproved the PREVIOUS design. In rough order of what would
+invalidate the most:
 
-1. **`ReadLocalClassIds` reads the right bytes.** Compare its answer against the plugin's own
-   already-live-verified `addclass`/`stats` console replies (§7/§9.8) on the SAME character —
-   they read the identical offsets, so they must agree.
-2. **The end-to-end host-led case.** Two connected instances, DIFFERENT classes (e.g. host
-   Guardian, joiner Sentinel — `class_grant_sync` on, or each player runs their own Dorak path).
-   `first_saber_color_sync=1` on the RECEIVING instance (this setting is purely local — only the
-   side that would otherwise get the wrong colour needs it on). Host completes Zhar's
-   construction chain (§7a's exact recipe). Expect: host's own saber matches the host's own
-   colour (untouched, vanilla path); joiner's plugin log shows `first lightsaber: substituting
-   'g_w_lghtsbrNN' for 'g_w_lghtsbrMM'…`; joiner's inventory holds exactly the substituted
-   resref, never the host's.
-3. **The joiner-led case**, reversed roles — confirms `LootPump`'s own claim of being
-   host/client-symmetric actually holds against the real cheat-ack timing, not just in a fake
-   bridge.
-4. **The double-grant guard, live.** Repeat the SAME construction reward delivery (a resync,
-   or a second `scriptgive`-style redelivery) after the first one landed — confirm the SECOND
-   attempt is refused (`already has a first saber`) rather than producing a second saber in the
-   receiver's own inventory.
-5. **A rejoin/reload after the fact.** Disconnect the receiver after it holds its own correct
-   saber, reconnect, and confirm no second grant is queued (the "already has one" check reads
-   the LIVE inventory on the reconnecting instance, not a value carried over the wire).
-6. **§11.1's one open item**: `k_pdan_14a_area.ncs`'s interpreter-depth-budget timeout. If a rig
-   session ever reaches Dantooine part 2 with `first_saber_color_sync=1`, watch for an
-   unexpected `first lightsaber:` log line outside the Zhar construction chain — that would mean
-   this script's string table is not what §11.1 concluded it was.
+1. **The equip-slot detection actually fires.** On the BUILDER's own engine, after `k_pdan_saber16`
+   equips the new saber, the plugin/agent log should show
+   `first lightsaber: this character is wielding a starter lightsaber - announcing it to the
+   party` — confirms `PlayerState.EquippedRightWeapon` really does carry the new resref the SAME
+   tick (or very shortly after) the equip happens, unlike the diff-based channels that missed it.
+2. **The flag actually reaches the other engine.** The OTHER player's log should show the flag
+   becoming true (or simply proceed straight to the build log below) within one round trip of the
+   announcement above — confirms `EventFlagStore`/`FlagOpPacket` genuinely carries a
+   non-KOTOR-global synthetic key end to end, which nothing in this codebase has exercised before
+   (every existing flag is a real global variable or a real door/placeable/trigger).
+3. **The build+equip actually lands.** The OTHER player's log should show
+   `first lightsaber: building this character's own '<resref>' from the party's construction`,
+   then the `equip` cheat's own answer (`equipped '<resref>' on 0x... slot 4`), and their in-game
+   character should be visibly wielding it. Confirm the resref matches THEIR OWN class, not the
+   builder's.
+4. **The exact recipe, host-led.** Both instances in `danm13`, `first_saber_color_sync=1` on BOTH
+   (the setting is symmetric now — every engine needs it to both announce its own build and build
+   its own colour). On the HOST: give it a Jedi class different from the joiner's (`class_grant_sync`
+   or the parallel per-player-class work), then stage and run the construction exactly as this
+   round did on the joiner:
+   ```
+   setglobal DAN_SABER_DONE true
+   setglobal DAN_PATH_STATE <1|2|3, matching the host's own intended colour per §11.1's table>
+   scriptgive dan13_<blue|gold|grn>cryst
+   startdialog 0x19 dan13_zhar
+   ```
+   The chain auto-advances 100→101→102→103→R133 exactly as this round observed; no manual reply
+   selection needed once the crystal and globals are staged. Expect the host's OWN saber (vanilla,
+   unaffected) plus the joiner ending up with THEIR OWN class's colour, never the host's.
+5. **The exact recipe, joiner-led** — this round's own staging, reversed to run on the HOST from
+   the joiner's perspective, or simply re-run verbatim (joiner Sentinel, host Guardian) now that
+   the fix is in: `setglobal DAN_SABER_DONE true`, `setglobal DAN_PATH_STATE 2`,
+   `scriptgive dan13_goldcryst`, `startdialog 0x19 dan13_zhar` on the JOINER. Expect this time: the
+   HOST'S log shows the build/equip lines and the host ends up wielding `g_w_lghtsbr01` (Guardian),
+   never `g_w_lghtsbr04`.
+6. **The double-grant guard, live.** After a receiver's own build has landed, force the flag to be
+   re-observed (a reconnect, or a host resync) and confirm NO second `equip` cheat is queued —
+   the "already has one" check re-reads the LIVE equip slots every time, not a value carried over
+   the wire.
+7. **A late joiner.** Connect a THIRD player after the flag is already true and confirm their very
+   first full flag-store sync already carries it (the paged snapshot, untested for a synthetic key
+   before this feature) and that they build their own colour on schedule, same as anyone already
+   connected.
+8. **§11.1's one open item**: `k_pdan_14a_area.ncs`'s interpreter-depth-budget timeout — unchanged
+   by this round. If a rig session ever reaches Dantooine part 2 with `first_saber_color_sync=1`,
+   watch for an unexpected `first lightsaber:` announcement outside the Zhar construction chain.
 
 ### 11.6 Open risks
 
-1. **Dependency on the parallel per-player-class work.** This feature only produces the RIGHT
-   colour once the receiving player already has their own resolved Jedi class at the moment the
-   grant arrives — if the per-player class assignment (a separate, concurrent effort per this
-   task's own brief) has not reached that player yet, `FirstLightsaberColorRule` falls back to
-   PassThrough (today's exact behaviour: the builder's own colour), never a crash and never a
-   dropped saber, but not yet the fully-correct outcome either. No live timing data exists yet
-   for how large this gap typically is.
-2. **`k_pdan_14a_area.ncs`'s unresolved script (§11.1).** Static evidence (the string-table shape)
-   argues it is not a real second grant source, but the interpreter itself could not independently
-   confirm it by reachability. Bounded risk: even in the worst case, the item it would trigger
-   this rule on is only ever one of the three canonical resrefs, its effect at worst substitutes
-   or skips a saber the game intended the player to have anyway — never fabricates a WRONG item
-   for an unrelated grant.
-3. **Only `dialogue_item_sync`/`script_item_sync` were checked as delivery paths.** If a future
-   channel ever also relays a `g_w_lghtsbr0{1,3,4}` grant by some other route (a container/corpse
-   loot pickup, for instance — deliberately NOT covered, since a picked-up saber someone else
-   actually left on the ground is not "your own first saber" and should never be recoloured),
-   this rule is not consulted there, on purpose. If that assumption turns out wrong for a real
-   quest item elsewhere in the game, it needs its own review, not an automatic extension of this
-   one.
-4. **`first_saber_color_sync` is asymmetric on purpose** — only the RECEIVING side needs it on
-   for that side's own colour to come out right; the setting name and doc say so, but a rig
-   session should confirm the console/log output makes this obvious enough that a live tester
-   does not spend time toggling it on the wrong machine.
+1. **The flag channel has never carried a synthetic (non-KOTOR-global, non-object) key before.**
+   `EventFlagStore`'s own doc calls itself "key-agnostic" and `ObjectKeyedFlags` explicitly says a
+   new tag byte needs no protocol bump, but every PRODUCTION consumer of the channel today carries
+   a real global variable or a real door/placeable/trigger id — this is the first flag this
+   codebase mints that names neither. Bounded: the store's own merge/dedup/resync logic does not
+   inspect the key's meaning at all (VERIFIED by reading `EventFlagStore.cs`), so there is no
+   reason to expect different behaviour, but it is untested in exactly this shape.
+2. **Dependency on the parallel per-player-class work**, unchanged from the original design: this
+   feature only builds the RIGHT colour once the receiving player already has their own resolved
+   Jedi class — if that has not happened yet, the pump keeps checking every tick (never gives up
+   on "no class yet", only on repeated ENGINE REFUSALS after a class IS found) and builds the
+   moment one arrives, per `APlayerWithNoJediClassYetBuildsNothingButKeepsWatching`.
+3. **`k_pdan_14a_area.ncs`'s unresolved script (§11.1)**, unchanged — see item 8 above.
+4. **Only an equip-slot edge is watched, not the backpack.** A hypothetical future path that puts
+   one of the three canonical resrefs into a player's backpack WITHOUT equipping it (no such path
+   is known to exist in the shipped game per §11.1's whole-game scan) would not be detected. Judged
+   an acceptable, documented gap rather than defence-in-depth worth the complexity, given §11.2's
+   own finding that an unequipped copy is pool content anyway and would need different handling
+   regardless.
+5. **`first_saber_color_sync` is now SYMMETRIC, not asymmetric** (a correction from the original
+   design's own open risk #4) — every connected engine needs it on, since the SAME pump both
+   announces its own build and builds its own colour on every instance. A mixed on/off pair means
+   whichever side has it off neither announces its own build nor builds anyone else's — a rig
+   session should confirm the log output makes an accidental mixed pair obvious quickly.
 
 ### 10.8 Live result (2026-09-25)
 

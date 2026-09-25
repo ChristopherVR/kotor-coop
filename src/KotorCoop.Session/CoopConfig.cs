@@ -334,11 +334,11 @@ public sealed record CoopConfig
     /// false)</c> fallback. docs/research/class-and-power-grants.md.</summary>
     public bool ClassGrantSync { get; init; } = true;
 
-    /// <summary>coop.ini <c>first_saber_color_sync</c> — on the receiving side of a dialogue/
-    /// script item grant, give each player their OWN class's colour for Zhar's saber-
-    /// construction reward instead of mirroring the builder's colour. OFF by default,
-    /// NEEDS-LIVE. Purely local (no plugin key to keep in sync with — this never touches the
-    /// native side). docs/research/class-and-power-grants.md §10.</summary>
+    /// <summary>coop.ini <c>first_saber_color_sync</c> — give every OTHER player their OWN
+    /// class's colour when any one player finishes Zhar's saber-construction reward (which
+    /// otherwise reaches nobody else at all — see docs/research/class-and-power-grants.md §11).
+    /// OFF by default, NEEDS-LIVE. Purely local (no plugin key to keep in sync with — this never
+    /// touches the native side).</summary>
     public bool FirstSaberColorSync { get; init; }
 
     /// <summary>coop.ini <c>enemy_effect_sync</c> — relay a non-damage effect a CLIENT casts on a

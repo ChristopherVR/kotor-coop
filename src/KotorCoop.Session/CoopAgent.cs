@@ -92,6 +92,7 @@ public sealed partial class CoopAgent
     private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
     private readonly ClassGrantPump _classGrantPump;
+    private readonly FirstLightsaberBuildPump _firstLightsaberBuildPump;
     private readonly PlacedMinePump _placedMinePump;
     private readonly EnemyEffectPump _enemyEffectPump;
     private readonly PartyPoolPump _partyPoolPump;
@@ -162,7 +163,7 @@ public sealed partial class CoopAgent
 
         _barkPump = new BarkPump(bridge, session);
         _transitionPump = new TransitionPump(bridge, session, settings, _log);
-        _lootPump = new LootPump(bridge, session, _recentlySyncedItems, settings, _log);
+        _lootPump = new LootPump(bridge, session, _recentlySyncedItems, _log);
         _dialoguePump = new DialoguePump(bridge, session, settings, _log);
         // Player-count scaling (docs/research/player-count-scaling.md): one resolved set of
         // percents per agent, recomputed every tick from the effective settings and the live
@@ -192,6 +193,7 @@ public sealed partial class CoopAgent
         _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
         _classGrantPump = new ClassGrantPump(bridge, session, settings, _log);
+        _firstLightsaberBuildPump = new FirstLightsaberBuildPump(bridge, session, settings, _log);
         _placedMinePump = new PlacedMinePump(bridge, session, settings, _log);
         _enemyEffectPump = new EnemyEffectPump(bridge, session, settings, _log);
     }
@@ -779,6 +781,13 @@ public sealed partial class CoopAgent
         // nothing is pending, and nothing at all when class_grant_sync is off.
         _classGrantPump.Pump(local, peers, _changedModule, _moduleSettledAtMs);
 
+        // The first-lightsaber-colour relay (docs/research/class-and-power-grants.md §11):
+        // announce this character's own Zhar-built saber (an equip-slot edge, not an inventory
+        // diff — see the pump's own doc for why), and build this character's own colour once
+        // any party member's build is announced. Nothing at all when first_saber_color_sync is
+        // off.
+        _firstLightsaberBuildPump.Pump(local, _changedModule, _moduleSettledAtMs);
+
         // Party-placed floor mines (docs/research/mines.md §14): publish a local placement or a
         // local removal, hand the plugin the host's canonical set, one spawn request at a time.
         // Nothing at all when placed_mine_sync is off.
@@ -1196,6 +1205,16 @@ public sealed partial class CoopAgent
     public bool TryDequeuePendingLoot(out PendingMaterialisedLootGive next)
     {
         return _lootPump.TryDequeuePendingLoot(out next);
+    }
+
+    /// <summary>One automatic <c>equip</c> request this instance's own character still owes
+    /// itself — its own colour of the first lightsaber, once the party has announced a build —
+    /// queued for the automatic apply path to submit through the same arbitrated cheat channel a
+    /// human's own <c>equip</c> console verb would use. Mirrors <see cref="TryDequeuePendingLoot"/>
+    /// exactly; see <see cref="FirstLightsaberBuildPump"/> for the decision.</summary>
+    public bool TryDequeuePendingFirstSaberBuild(out string resref)
+    {
+        return _firstLightsaberBuildPump.TryDequeuePendingBuild(out resref);
     }
 
     /// <summary>One party-pool add/remove this instance's own engine still owes, queued for the
