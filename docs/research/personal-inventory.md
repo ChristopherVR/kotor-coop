@@ -394,9 +394,9 @@ the same expression `CoopAgent.cs`'s own call site uses (§5).
    non-flagged quest item would simply stop mirroring in personal mode, which is the SAME failure
    shape a story would have shown before `party_pool_sync` existed at all (a per-engine-siloed
    item), not a new crash or corruption class.
-2. **The credits-reward relay (§4.2) has one live pass (Zuulan, §11 step 6)**. The
-   host-led path is proven. A joiner-led payout and a forced resend (§10 step 10) have not been
-   run on a rig; they are covered by tests against fakes.
+2. **The credits-reward relay (§4.2) is live-proven host-led and joiner-led** (Zuulan, §11
+   step 6). The forced resend (§10 step 10) has not been run on a rig. It is covered by tests
+   against fakes.
 3. **The joiner's personal backpack/credits do not survive a disconnect/rejoin, by product
    decision** (§6) — not a gap to close, a deliberate scope boundary: the joiner's own game
    owns that state, the same as any other single-player progress.
@@ -485,7 +485,9 @@ heap on.
    R6 `k_pdan_zuul01`, which pays 200. Host agent:
    `credit grant: local conversation handed +200 credits - requesting the peer's own purse
    receive the same amount`. Joiner agent: `credit grant: received +200 from peer 1, purse 1 ->
-   201`. Both purses read 1 -> 201 afterwards, so each was paid once with no double pay.
+   201`. Both purses read 1 -> 201 afterwards, so each was paid once with no double pay. The same run with the JOINER leading
+   (`startdialog` on the joiner) also passed. Joiner agent: `local conversation handed +200`.
+   Host agent: `received +200 from peer 2, purse 2851 -> 3051`. Joiner purse: 201 -> 401.
 7. **Store purchases (PASS, 2026-09-25).** On `tar_m02ac` the host bought three things from
    Kebla (`xxkeblastore`) with `openstore`/`buy`. First the post-load Status Summary had to go
    (`popmodal`, then `closegui`). Results:
