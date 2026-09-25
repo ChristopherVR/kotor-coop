@@ -1876,6 +1876,15 @@ matrix) — only the mechanism behind step 1 changed. The specific thing to re-c
    since a torn-down/mid-rebuild model is the far more likely cause (same class of hazard
    `FloatyTextNodeGuardHook.cs` documents for a different accessor).
 
+### 12.15 Live pass, 2026-09-25: translucent works (`CSWCObject::SetAlpha`)
+
+With §12.13's `SetAlpha(0.5)` lever deployed and no `stealth_*` keys set (default
+translucent), the joiner ran `stealth on` 4 units in front of the host. The host's capture
+(plugin GL readback, enlarged 4x) showed the stand-in see-through: the ground and wall
+texture read through its torso and legs, like single-player's view of a stealthed ally.
+Targeting was released as before. `stealth off` logged OFF, and no crash occurred. The
+`hidden` and `off` modes were not re-run after this change.
+
 ## 13. Menu guard (2026-09-24) — the Pausing-row parity fix; `FlagMenuGuard`, protocol 69
 
 Closes docs/limitations.md's "Pausing" row catch: single-player KOTOR freezes combat the
