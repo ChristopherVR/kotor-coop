@@ -87,6 +87,35 @@ public sealed class AgentDashboard(
     private ColorTextView? _dropdownLabel;
     private TextField? _inputField;
     private Label? _promptLabel;
+    private Label? _statusRule;
+
+    /// <summary>The dialog currently shown (details or a picker), if any.</summary>
+    private Dialog? _openDialog;
+
+    /// <summary>Runs <paramref name="dialog"/> modally, recording it as the open one.</summary>
+    private void RunDialog(IApplication app, Dialog dialog)
+    {
+        _openDialog = dialog;
+        try
+        {
+            app.Run(dialog);
+        }
+        finally
+        {
+            _openDialog = null;
+
+            // The terminal title follows the dialog ("Details") and is not put back when it
+            // closes; re-set ours (cleared first, since an unchanged value is not re-sent).
+            if (_window is { } window)
+            {
+                window.Title = string.Empty;
+                window.Title = BuildTitle();
+            }
+        }
+    }
+
+    /// <summary>F5: show the engineering chatter (traces, census, perf). Off by default.</summary>
+    private bool _showDebug;
 
     /// <summary>Ctrl+F: the input line edits a transcript filter instead of a command.</summary>
     private bool _searchMode;
@@ -463,6 +492,7 @@ public sealed class AgentDashboard(
             }
 
             string titleText = BuildTitle();
+            string statusText = BuildStatusRule();
             string headerText = string.Join('\n', BuildHeaderLines());
             string footerText = BuildFooter();
 
@@ -473,9 +503,15 @@ public sealed class AgentDashboard(
                     window.Title = titleText;
                 }
 
-                if (_headerLabel is { } header)
+                if (_flashText.Length > 0 && Environment.TickCount64 >= _flashUntilMs)
                 {
-                    header.Text = headerText;
+                    _flashText = string.Empty;
+                    UpdateDropdown();
+                }
+
+                if (_statusRule is { } status && status.Text != statusText)
+                {
+                    status.Text = statusText;
                 }
 
                 if (_footerLabel is { } footer)
@@ -620,7 +656,7 @@ public sealed class AgentDashboard(
     public void Note(string line)
     {
         string entry = $"[{DateTime.Now:HH:mm:ss}] * {line}";
-        _transcript.Append(line);
+        _transcript.Append(WithPlaceNames(line));
 
         if (logFile is not null)
         {
@@ -768,6 +804,39 @@ public sealed class AgentDashboard(
     private static readonly Terminal.Gui.Drawing.Attribute ToneHelpful = new(Color.BrightCyan, Color.Black);
     private static readonly Terminal.Gui.Drawing.Attribute ToneDiagnostic = new(Color.DarkGray, Color.Black);
 
+    /// <summary>A two-cell level marker in front of every line, so good/warning/error read at
+    /// a glance even without colour (a copied log keeps them).</summary>
+    private static string MarkerFor(Tone tone) => tone switch
+    {
+        Tone.Good => "✓ ",
+        Tone.Warning => "! ",
+        Tone.Bad => "✗ ",
+        Tone.Helpful => "i ",
+        Tone.Diagnostic => "· ",
+        _ => "  ",
+    };
+
+    /// <summary>A short-lived notice shown in the hint rows (Claude-Code-style), not the log.</summary>
+    private string _flashText = string.Empty;
+    private Terminal.Gui.Drawing.Attribute _flashColour;
+    private long _flashUntilMs;
+    private const long FlashMs = 2500;
+
+    private void Flash(string text, Terminal.Gui.Drawing.Attribute colour)
+    {
+        _flashText = text;
+        _flashColour = colour;
+        _flashUntilMs = Environment.TickCount64 + FlashMs;
+        UpdateDropdown();
+    }
+
+    private bool _reloadingTranscript;
+    private int _renderedRows = -1;
+    private string _renderedSignature = string.Empty;
+
+    /// <summary>How many debug lines the last render left out (for the footer).</summary>
+    private int _hiddenDebugLines;
+
     private static Terminal.Gui.Drawing.Attribute AttributeFor(Tone tone) => tone switch
     {
         Tone.Command => ToneCommand,
@@ -828,7 +897,7 @@ public sealed class AgentDashboard(
         _transcriptView = new ColorTextView
         {
             X = 0,
-            Y = Pos.Bottom(_headerLabel),
+            Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(ComposerRows),
             ReadOnly = true,
@@ -843,6 +912,7 @@ public sealed class AgentDashboard(
         };
         _transcriptView.SetScheme(TextScheme);
         _transcriptView.ViewportChanged += (_, _) => OnTranscriptViewportChanged();
+        _transcriptView.MouseEvent += (_, mouse) => OnTranscriptMouse(mouse);
 
         // The composer: a fixed block anchored to the bottom, Claude-Code-style, so typing
         // never shares a row with the log or the footer (it used to: the input sat on the
@@ -854,7 +924,7 @@ public sealed class AgentDashboard(
         //   ─────────────   rule
         //   completions with their usage, or a tip (rows always reserved)
         //   F1 details ...  footer
-        Label topRule = new()
+        Label topRule = _statusRule = new()
         {
             X = 0,
             Y = Pos.AnchorEnd(4 + SuggestionRows),
@@ -921,7 +991,9 @@ public sealed class AgentDashboard(
         };
         _footerLabel.SetScheme(RuleScheme);
 
-        window.Add(_headerLabel, _transcriptView, topRule, prompt, _inputField, bottomRule, _dropdownLabel, _footerLabel);
+        // The old four-line sticky header is gone: F1 has everything it showed, and the one
+        // live line worth keeping (who/where/health) rides the composer's top rule.
+        window.Add(_transcriptView, topRule, prompt, _inputField, bottomRule, _dropdownLabel, _footerLabel);
 
         app.Keyboard.KeyDown += (_, key) => OnGlobalKeyDown(app, key);
 
@@ -964,18 +1036,9 @@ public sealed class AgentDashboard(
         {
             key.Handled = true;
 
-            // Esc clears the line; on an ALREADY-empty line it quits instead (the same
-            // "Esc-quit" backstop a Claude-Code-style composer gives you), so the key still
-            // does something the second time it is pressed rather than being a no-op.
-            if (_input.Buffer.Length > 0)
-            {
-                _input.ClearLine();
-            }
-            else if (_app is { } app)
-            {
-                RequestQuit(app);
-                return;
-            }
+            // Esc clears the line and nothing more. It used to quit on an empty line, which
+            // ended the co-op session for anyone pressing it twice; Ctrl+Q quits now.
+            _input.ClearLine();
         }
         else if (key == Key.Backspace)
         {
@@ -1105,14 +1168,18 @@ public sealed class AgentDashboard(
         IReadOnlyList<string> candidates = _input.Candidates;
         string hint = _input.Hint;
 
-        if (_searchMode)
+        if (_flashText.Length > 0 && Environment.TickCount64 < _flashUntilMs)
+        {
+            rows.Add(Cell.ToCellList(_flashText, _flashColour));
+        }
+        else if (_searchMode)
         {
             rows.Add(Cell.ToCellList("searching the log - type to filter, Enter keeps the filter, Esc cancels", ToneHelpful));
         }
         else if (buffer.Length == 0)
         {
             rows.Add(Cell.ToCellList("type a command - Tab completes, Up/Down recalls, `help` lists them all", ToneDiagnostic));
-            rows.Add(Cell.ToCellList("Ctrl+F searches the log   F2 drops one of your items   F3 picks one up   F1 details", ToneDiagnostic));
+            rows.Add(Cell.ToCellList("Ctrl+F searches the log   Ctrl+C copies what is shown   F2 drops one of your items   F3 picks one up", ToneDiagnostic));
         }
         else if (candidates.Count > 1)
         {
@@ -1176,12 +1243,18 @@ public sealed class AgentDashboard(
         }
 
         string firstToken = line.Split(' ', 2)[0].TrimStart('/').ToLowerInvariant();
-        if (firstToken is "clear" or "cls")
+        bool clearing = firstToken is "clear" or "cls";
+        if (clearing)
         {
+            // A clear leaves an empty log, not a log whose only line is "> clear".
             ClearTranscriptLocally();
+            Flash("✓ log cleared (the --log file keeps everything; Ctrl+O opens it)", ToneGood);
+        }
+        else
+        {
+            _transcript.Append($"> {line}");
         }
 
-        _transcript.Append($"> {line}");
         _transcript.SetFollowing(true);
         RefreshTranscriptView();
         ScrollTranscriptToBottom();
@@ -1212,10 +1285,29 @@ public sealed class AgentDashboard(
     /// </summary>
     private void OnGlobalKeyDown(IApplication app, Key key)
     {
-        if (key == Key.C.WithCtrl)
+        if (key == Key.Q.WithCtrl)
         {
             key.Handled = true;
             RequestQuit(app);
+        }
+        else if (key == Key.C.WithCtrl)
+        {
+            // Copy, never quit: Ctrl+C used to end the agent — and with it the co-op session —
+            // for anyone reaching for the usual copy shortcut.
+            key.Handled = true;
+            CopyVisibleLog(app);
+        }
+        else if (key == Key.O.WithCtrl)
+        {
+            key.Handled = true;
+            OpenFile(logFile, "the agent log");
+        }
+        else if (key == Key.F5)
+        {
+            key.Handled = true;
+            _showDebug = !_showDebug;
+            RefreshTranscriptView();
+            RefreshFooter();
         }
         else if (key == Key.L.WithCtrl)
         {
@@ -1241,6 +1333,13 @@ public sealed class AgentDashboard(
         {
             key.Handled = true;
             ScrollTranscriptToTop();
+        }
+        else if (_openDialog is { } open && (key == Key.F1 || key == Key.F2 || key == Key.F3 || key == Key.Esc))
+        {
+            // A dialog is up: these keys reach this app-level handler too, and used to open a
+            // SECOND dialog on top (live: "F1 twice doesn't always close"). Close the open one.
+            key.Handled = true;
+            open.RequestStop();
         }
         else if (key == Key.F1)
         {
@@ -1300,7 +1399,10 @@ public sealed class AgentDashboard(
     /// called, so the follow/"N new" state can never drift from what is actually on screen.</summary>
     private void OnTranscriptViewportChanged()
     {
-        if (_transcriptView is not { } view)
+        // Our own reload fires this too (the empty load that resets the cursor reads as "at
+        // the bottom"), which switched following back on and yanked a reader who had
+        // scrolled up down to the end on every refresh (live 2026-09-26).
+        if (_transcriptView is not { } view || _reloadingTranscript)
         {
             return;
         }
@@ -1357,12 +1459,57 @@ public sealed class AgentDashboard(
         }
 
         List<List<Cell>> rows = new(lines.Count);
+        int hidden = 0;
+        string firstVisible = string.Empty;
+        string lastVisible = string.Empty;
         foreach (string line in lines)
         {
-            rows.Add(Cell.ToCellList(line, AttributeFor(TranscriptTone.Classify(line))));
+            Tone tone = TranscriptTone.Classify(line);
+            if (tone == Tone.Diagnostic && !_showDebug)
+            {
+                hidden++;
+                continue;
+            }
+
+            Terminal.Gui.Drawing.Attribute colour = AttributeFor(tone);
+
+            // An indented row continues or lists under the line above it: colour it, but one
+            // marker per block is enough (the `cheats` table had an "i" on every row).
+            string marker = line.StartsWith("  ", StringComparison.Ordinal) ? "  " : MarkerFor(tone);
+            if (firstVisible.Length == 0)
+            {
+                firstVisible = line;
+            }
+
+            lastVisible = line;
+            List<Cell> row = Cell.ToCellList(marker, colour);
+            row.AddRange(Cell.ToCellList(line, colour));
+            rows.Add(row);
         }
 
-        view.LoadRows(rows);
+        _hiddenDebugLines = hidden;
+
+        // Nothing visible changed (only hidden debug lines arrived — perf alone is one a
+        // second): leave the view alone, so a selection or a scrolled-up reading position is
+        // not disturbed by a redraw that would show the same thing.
+        string signature = $"{rows.Count}|{_showDebug}|{_searchFilter}|{firstVisible}|{lastVisible}";
+        if (rows.Count == _renderedRows && signature == _renderedSignature)
+        {
+            return;
+        }
+
+        _renderedRows = rows.Count;
+        _renderedSignature = signature;
+
+        _reloadingTranscript = true;
+        try
+        {
+            view.LoadRows(rows);
+        }
+        finally
+        {
+            _reloadingTranscript = false;
+        }
 
         if (wasFollowing)
         {
@@ -1394,6 +1541,181 @@ public sealed class AgentDashboard(
     /// F1/Esc handler requests it to stop, then returns control to the window underneath.
     /// </summary>
     /// <summary>Ctrl+F: the input line becomes a live transcript filter (prompt "/ ").</summary>
+    /// <summary>
+    /// One details line in colour: a heading ("...:" on its own) in white, a "label   value"
+    /// row with the label in cyan and the value coloured by what it says (a failing read in
+    /// red, a warning in yellow), anything else by the same rules as the log.
+    /// </summary>
+    private static List<Cell> DetailsRow(string line)
+    {
+        if (line.Length > 0 && line.TrimEnd().EndsWith(':') && !line.StartsWith(' '))
+        {
+            return Cell.ToCellList(line, ToneCommand);
+        }
+
+        System.Text.RegularExpressions.Match m = DetailsLabel.Match(line);
+        if (m.Success)
+        {
+            string value = m.Groups[2].Value;
+            Tone tone = TranscriptTone.Classify(value);
+            List<Cell> row = Cell.ToCellList(m.Groups[1].Value, ToneHelpful);
+            row.AddRange(Cell.ToCellList(value, tone is Tone.Bad or Tone.Warning or Tone.Good ? AttributeFor(tone) : TonePlain));
+            return row;
+        }
+
+        return Cell.ToCellList(line, AttributeFor(TranscriptTone.Classify(line)));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex DetailsLabel = new(
+        @"^(\s*[A-Za-z][\w /()-]{0,24}?\s{2,})(\S.*)$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex LogFileMention = new(
+        @"(?:[A-Za-z]:\\[^\s""']+?\.log|kotorcoop-[a-z]+\.log|agent\d*\.log)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>A click on a log line that names a log file opens that file (the log lines
+    /// say "see kotorcoop-agent.log for why" — now that is one click, not a hunt).</summary>
+    private void OnTranscriptMouse(Terminal.Gui.Input.Mouse mouse)
+    {
+        if (!mouse.IsSingleClicked || mouse.Position is not { } at || _transcriptView is not { } view)
+        {
+            return;
+        }
+
+        int row = view.Viewport.Y + at.Y;
+        if (row < 0 || row >= view.Lines)
+        {
+            return;
+        }
+
+        string text = Cell.ToString(view.GetLine(row));
+        System.Text.RegularExpressions.Match m = LogFileMention.Match(text);
+        if (!m.Success)
+        {
+            return;
+        }
+
+        mouse.Handled = true;
+        OpenFile(ResolveLogMention(m.Value), m.Value);
+    }
+
+    /// <summary>A mentioned log name to a real path: a full path as-is; the agent's own log
+    /// names (whatever --log is called here) to this agent's log; the plugin log in the game
+    /// folder.</summary>
+    private string? ResolveLogMention(string mention)
+    {
+        if (Path.IsPathRooted(mention))
+        {
+            return mention;
+        }
+
+        if (mention.Contains("plugin", StringComparison.OrdinalIgnoreCase)
+            && dispatcher?.GameDirectoryPath is { Length: > 0 } game)
+        {
+            return Path.Combine(game, "kotorcoop-plugin.log");
+        }
+
+        return logFile;
+    }
+
+    /// <summary>Opens a file with its default program (Notepad for a .log, typically).</summary>
+    private void OpenFile(string? path, string what)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            Flash($"✗ {what} is not on disk here{(string.IsNullOrEmpty(path) ? string.Empty : $" ({path})")}", ToneBad);
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            Flash($"✓ opened {Path.GetFileName(path)}", ToneGood);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Flash($"✗ could not open {path}: {ex.Message}", ToneBad);
+        }
+    }
+
+    /// <summary>The composer's top rule: the one live status line (who, where, health, link).</summary>
+    private string BuildStatusRule()
+    {
+        CoopAgent? agent = manager.Agent;
+        string status;
+        if (agent is null)
+        {
+            status = $"── not connected ({manager.Phase.ToString().ToLowerInvariant()}) - type connect or host ";
+        }
+        else
+        {
+            PlayerState local = agent.LastLocalState;
+            SessionStats stats = agent.Session.GetStats();
+            string place = local.Module.Length == 0
+                ? "loading"
+                : dispatcher?.ModuleName(local.Module) is { Length: > 0 } named && named != local.Module
+                    ? named
+                    : local.Module;
+            int partners = agent.LastPeers.Count;
+            status = $"── {BuildTitle()["KOTOR co-op - ".Length..]} · {place} · hp {DescribeHealth(local.Health, local.MaxHealth)}"
+                + $" · {partners} partner{(partners == 1 ? string.Empty : "s")} · {stats.RoundTripMs:F0} ms ";
+        }
+
+        return status + Rule;
+    }
+
+    /// <summary>Ctrl+C: the log as it is shown (search filter and debug toggle applied), with
+    /// its level markers, onto the clipboard.</summary>
+    private void CopyVisibleLog(IApplication app)
+    {
+        List<string> lines = [];
+        foreach (string line in _transcript.Lines)
+        {
+            Tone tone = TranscriptTone.Classify(line);
+            if ((tone == Tone.Diagnostic && !_showDebug)
+                || (_searchFilter.Length > 0 && !line.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            lines.Add(MarkerFor(tone) + line);
+        }
+
+        bool copied = app.Clipboard?.TrySetClipboardData(string.Join(Environment.NewLine, lines)) ?? false;
+
+        // A passing notice under the input, not a log line: the copy is feedback about the
+        // window, not an event in the session.
+        Flash(copied
+            ? $"✓ copied {lines.Count} line(s) to the clipboard{(_searchFilter.Length > 0 ? $" (filter '{_searchFilter}')" : string.Empty)}"
+            : "✗ could not reach the clipboard - the full log is in the --log file",
+            copied ? ToneGood : ToneBad);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ModuleToken = new(
+        @"\b(?:[a-z]{3,4}_?m\d{2}[a-z]{0,2}|stunt_\d{2})\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>"danm14aa" -> "danm14aa (Dantooine - Jedi Enclave Courtyard)" wherever a
+    /// module code appears in a line, so the log says where things happened in words.</summary>
+    private string WithPlaceNames(string line)
+    {
+        if (dispatcher is not { } commands || line.Length == 0)
+        {
+            return line;
+        }
+
+        HashSet<string>? done = null;
+        return ModuleToken.Replace(line, m =>
+        {
+            done ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string name = commands.ModuleName(m.Value);
+            return done.Add(m.Value) && name.Length > 0 && !name.Equals(m.Value, StringComparison.OrdinalIgnoreCase)
+                && !line.Contains(name, StringComparison.OrdinalIgnoreCase)
+                ? $"{m.Value} ({name})"
+                : m.Value;
+        });
+    }
+
     /// <summary>The terminal window's title: who this agent is for, so two agent windows on
     /// one machine can be told apart at a glance (both used to read just "pwsh.exe").</summary>
     private string BuildTitle()
@@ -1628,7 +1950,7 @@ public sealed class AgentDashboard(
         };
 
         search.SetFocus();
-        app.Run(dialog);
+        RunDialog(app, dialog);
 
         if (!accepted || list.SelectedItem is not int index || index < 0 || index >= shown.Count)
         {
@@ -1743,18 +2065,28 @@ public sealed class AgentDashboard(
 
     private void ShowDetailsDialog(IApplication app)
     {
-        TextView details = new()
+        ColorTextView details = new()
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(1),
             ReadOnly = true,
-            WordWrap = true,
+
+            // No word wrap, and the rows load once the view has a size: loading coloured rows
+            // into a wrapping view before layout left the dialog empty and its loop spinning a
+            // core, deaf to F1/Esc (live 2026-09-26). Details lines are short anyway.
+            WordWrap = false,
             ScrollBars = true,
-            Text = string.Join('\n', BuildDetailsLines()),
+
+            // Focusable, so the dialog owns the keyboard while open: with nothing focusable
+            // in it, keys fell through to the input line behind it ("od" typed there) and a
+            // second F1 did not reach the dialog.
+            CanFocus = true,
         };
         details.SetScheme(TextScheme);
+        List<List<Cell>> detailRows = BuildDetailsLines().Select(DetailsRow).ToList();
+        details.Initialized += (_, _) => details.LoadRows(detailRows);
 
         Label closeHint = new()
         {
@@ -1762,9 +2094,10 @@ public sealed class AgentDashboard(
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(),
             Height = 1,
-            Text = "F1 or Esc to close",
+            Text = "F1 or Esc to close   PgUp/PgDn scroll",
             CanFocus = false,
         };
+        closeHint.SetScheme(RuleScheme);
 
         Dialog dialog = new() { Title = "Details" };
         dialog.Width = Dim.Percent(90);
@@ -1778,9 +2111,17 @@ public sealed class AgentDashboard(
                 key.Handled = true;
                 dialog.RequestStop();
             }
+            else if (key == Key.PageDown || key == Key.PageUp)
+            {
+                key.Handled = true;
+                int page = Math.Max(details.Viewport.Height - 1, 1) * (key == Key.PageDown ? 1 : -1);
+                int maxTop = Math.Max(details.Lines - details.Viewport.Height, 0);
+                details.Viewport = details.Viewport with { Y = Math.Clamp(details.Viewport.Y + page, 0, maxTop) };
+            }
         };
 
-        app.Run(dialog);
+        details.SetFocus();
+        RunDialog(app, dialog);
     }
 
     /// <summary>
@@ -1847,7 +2188,8 @@ public sealed class AgentDashboard(
     /// unusable.</summary>
     private List<string> BuildDetailsLines()
     {
-        List<string> rows = [];
+        // What the sticky header used to show sits at the top of the details now.
+        List<string> rows = [.. BuildHeaderLines().Where(l => l.Length > 0), string.Empty];
         CoopAgent? agent = manager.Agent;
 
         rows.Add($"attached   {bridge.Description}");
@@ -1983,6 +2325,14 @@ public sealed class AgentDashboard(
             rows.Add($" last drop  {_lastDropNoteValue}");
         }
 
+
+        IReadOnlyList<string> switches = CoopConfig.DeveloperSwitches;
+        if (switches.Count > 0)
+        {
+            rows.Add(string.Empty);
+            rows.Add($"coop.ini developer switches ({switches.Count}) - testing options, not player settings:");
+            rows.AddRange(switches.Select(sw => "  " + sw));
+        }
         return rows;
     }
 
@@ -1993,7 +2343,7 @@ public sealed class AgentDashboard(
     private string BuildFooter()
     {
         string legend = _showInputLine
-            ? "F1 details  F2 drop an item  F3 pick up  Ctrl+F find  PgUp/PgDn scroll  Ctrl+L clear  Tab complete  Ctrl+C quit"
+            ? $"F1 details  F2 drop  F3 pick up  Ctrl+F find  Ctrl+C copy  Ctrl+O open log  F5 debug {(_showDebug ? "on" : $"off ({_hiddenDebugLines} hidden)")}  Ctrl+Q quit"
             : "(no command line: input is redirected)  F1 details  F2 drop  F3 pick up  Ctrl+C to stop";
 
         if (_searchMode)

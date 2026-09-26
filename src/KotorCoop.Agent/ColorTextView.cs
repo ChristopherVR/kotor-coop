@@ -13,6 +13,58 @@ namespace KotorCoop.Agent;
 #pragma warning disable CS0618 // TextView is marked superseded in 2.5; it is what this project ships on.
 internal sealed class ColorTextView : TextView
 {
+    /// <summary>Selected text: white on blue, like a terminal selection, so it is obvious.</summary>
+    private static readonly Terminal.Gui.Drawing.Attribute SelectionColour = new(Color.White, Color.Blue);
+
+    public ColorTextView()
+    {
+        DrawComplete += (_, _) => FillSelectedLineEnds();
+    }
+
+    protected override void OnDrawSelectionColor(List<Cell> line, int idxCol, int idxRow) =>
+        SetAttribute(SelectionColour);
+
+    /// <summary>
+    /// The stock view colours only the selected CHARACTERS, so a multi-line selection read as
+    /// ragged fragments. Every line the selection runs past the end of is filled blue to the
+    /// right edge, so a selected line is one clear bar.
+    /// </summary>
+    private void FillSelectedLineEnds()
+    {
+        if (!IsSelecting || SelectedLength == 0)
+        {
+            return;
+        }
+
+        (int startRow, int startCol) = (SelectionStartRow, SelectionStartColumn);
+        (int endRow, int endCol) = (CurrentRow, CurrentColumn);
+        if (endRow < startRow || (endRow == startRow && endCol < startCol))
+        {
+            (startRow, startCol, endRow, endCol) = (endRow, endCol, startRow, startCol);
+        }
+
+        int width = Viewport.Width;
+        SetAttribute(SelectionColour);
+
+        // Rows before the last one continue onto the next line, so their ends are selected.
+        for (int row = startRow; row < endRow; row++)
+        {
+            int y = row - Viewport.Y;
+            if (y < 0 || y >= Viewport.Height || row >= Lines)
+            {
+                continue;
+            }
+
+            int from = Math.Max(GetLine(row).Count, row == startRow ? startCol : 0) - Viewport.X;
+            from = Math.Max(from, 0);
+            if (from < width)
+            {
+                Move(from, y);
+                AddStr(new string(' ', width - from));
+            }
+        }
+    }
+
     /// <summary>
     /// <see cref="TextView.Load(List{List{Cell}})"/>, made safe to call with FEWER lines than
     /// before. Load keeps the old cursor row, so shrinking a scrolled-to-the-bottom log (a

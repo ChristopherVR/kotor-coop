@@ -302,7 +302,8 @@ public sealed partial class CoopCommandDispatcher(
         // Invalid case, kept as three explicit entries so the table has a row for every kind
         // Dispatch ever handled, sentinels included.
         [CoopCommandKind.None] = _ => { },
-        [CoopCommandKind.Unknown] = _ => Reply("unknown command. " + ConsoleCommand.HelpText),
+        // One line, not the whole help text: a typo used to dump every verb as a wall of red.
+        [CoopCommandKind.Unknown] = _ => Reply("unknown command - type `help` to list them, or press Tab to complete"),
         [CoopCommandKind.Invalid] = c => Reply(c.Error),
 
         [CoopCommandKind.Connect] = c => Join(c.Address, c.Password),

@@ -22,6 +22,12 @@ public sealed class TranscriptToneTests
     [InlineData("  Lanik  danm14aa", Tone.Helpful)]
     [InlineData("Lanik joined the game", Tone.Good)]
     [InlineData("hello there", Tone.Plain)]
+    [InlineData("saving and loading:", Tone.Helpful)]
+    [InlineData("  effects                     the last 8 effects captured, forwarded and applied", Tone.Helpful)]
+    [InlineData("unknown command - type `help` to list them, or press Tab to complete", Tone.Warning)]
+    [InlineData("steam: not active - see kotorcoop-agent.log for why (no steam_api64.dll, Steam not running)", Tone.Warning)]
+    [InlineData("coop.ini: 62 developer switch(es) set - testing options, not player settings (F1 lists them)", Tone.Diagnostic)]
+    [InlineData("coop.ini: ignoring 1 setting(s) this version does not know: combat_state_sync", Tone.Warning)]
     public void ClassifiesByMeaning(string line, Tone expected)
     {
         Assert.Equal(expected, TranscriptTone.Classify(line));

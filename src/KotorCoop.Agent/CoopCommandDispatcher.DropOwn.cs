@@ -69,9 +69,20 @@ public sealed partial class CoopCommandDispatcher
         return result;
     }
 
+    /// <summary>The game folder this dispatcher serves (for the agent window's log links).</summary>
+    public string GameDirectoryPath => gameDirectory;
+
     /// <summary>An item's in-game name from this install, or the resref when it has none.</summary>
     public string ItemName(string resref) =>
         ItemNames.TryRead(gameDirectory, resref, out string name) ? name : resref;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _moduleNames =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A module's in-game place name ("Dantooine - Jedi Enclave Courtyard"), or the
+    /// code itself when this install has none. Cached: each lookup opens the module archive.</summary>
+    public string ModuleName(string module) =>
+        _moduleNames.GetOrAdd(module, m => ModuleNames.TryRead(gameDirectory, m, out string name) ? name : m);
 
     private void DropOwnItem(string token, int count)
     {

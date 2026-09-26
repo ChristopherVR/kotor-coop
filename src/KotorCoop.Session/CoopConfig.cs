@@ -1211,23 +1211,46 @@ public sealed record CoopConfig
     /// Called from <see cref="TryLoad"/> so it fires wherever coop.ini is actually parsed for
     /// real use, through <see cref="Console.WriteLine"/>, the same sink every other agent
     /// startup diagnostic in this codebase already uses.</summary>
+    private static readonly object ReportGate = new();
+    private static string _lastDeveloperLine = string.Empty;
+    private static string _lastUnknownLine = string.Empty;
+
+    /// <summary>The developer switches the last parsed coop.ini sets, as "key=value" — shown
+    /// in the agent window's F1 details instead of inline in the log.</summary>
+    public static IReadOnlyList<string> DeveloperSwitches { get; private set; } = [];
+
     private static void LogNonPlayerKeys(IReadOnlyDictionary<string, string> kv)
     {
         (List<string> developer, List<string> unknown) = ClassifyNonPlayerKeys(kv.Keys);
 
-        // One line per category, not per key: a coop.ini written from the pre-2026-09-03
-        // template carries a hundred developer keys, and a hundred startup lines reads like a
-        // hundred problems. install.ps1 -UpdateDefaults offers to strip them.
-        if (developer.Count > 0)
+        // One SHORT line per category, and each only once per process: coop.ini is parsed
+        // several times at startup, and the old line listed every key=value inline — a
+        // hundred-key wall of text printed three times into the agent window (live
+        // 2026-09-26). The full list lives in DeveloperSwitches for the F1 details view.
+        // install.ps1 -UpdateDefaults offers to strip them.
+        lock (ReportGate)
         {
-            Console.WriteLine(
-                $"coop.ini: {developer.Count} developer switch(es) set - not player settings, see docs/CONFIG.md: "
-                + string.Join(", ", developer.Select(key => $"{key}={kv[key]}")));
-        }
+            DeveloperSwitches = developer.Select(key => $"{key}={kv[key]}").ToList();
 
-        if (unknown.Count > 0)
-        {
-            Console.WriteLine($"coop.ini: {unknown.Count} unknown key(s) ignored: {string.Join(", ", unknown)}");
+            string developerLine = developer.Count == 0
+                ? string.Empty
+                : $"coop.ini: {developer.Count} developer switch(es) set - testing options, not player settings (F1 lists them)";
+            if (developerLine.Length > 0 && developerLine != _lastDeveloperLine)
+            {
+                Console.WriteLine(developerLine);
+            }
+
+            _lastDeveloperLine = developerLine;
+
+            string unknownLine = unknown.Count == 0
+                ? string.Empty
+                : $"coop.ini: ignoring {unknown.Count} setting(s) this version does not know: {string.Join(", ", unknown)}";
+            if (unknownLine.Length > 0 && unknownLine != _lastUnknownLine)
+            {
+                Console.WriteLine(unknownLine);
+            }
+
+            _lastUnknownLine = unknownLine;
         }
     }
 

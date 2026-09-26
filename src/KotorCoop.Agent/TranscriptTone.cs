@@ -36,7 +36,7 @@ public static class TranscriptTone
     private static readonly string[] DiagnosticPrefixes =
     [
         "perf:", "party pool trace", "census", "enemy-baseline", "dialogue-wire", "dialogue-gate",
-        "dialogue-node", "[resolve]", "[census]", "coop.ini:", "cheat (automatic)", "session-save:",
+        "dialogue-node", "[resolve]", "[census]", "cheat (automatic)", "session-save:",
         "firing ", "scaling:", "first lightsaber", "character capture", "session-saved character",
         "items: ", "  0x",
     ];
@@ -44,13 +44,14 @@ public static class TranscriptTone
     private static readonly string[] BadWords =
     [
         "failed", "error", "refused", "could not", "couldn't", "cannot", "can't", "crash", "gave up",
-        "unknown command", "not connected", "disconnected", "lost", "not readable", "[e_", "rejected",
+        "not connected", "disconnected", "lost", "not readable", "[e_", "rejected",
     ];
 
     private static readonly string[] WarningWords =
     [
         "[w_", "warning", "differs", "mismatch", "holding", "degraded", "stale", "retrying",
-        "waiting", "ignored", "not yet", "still ", "are off", "is off", "turned off",
+        "waiting", "ignored", "ignoring", "not yet", "still ", "are off", "is off", "turned off",
+        "unknown command", "not active", "not found", "unavailable",
     ];
 
     private static readonly string[] GoodWords =
@@ -79,12 +80,40 @@ public static class TranscriptTone
         }
 
         string lower = line.ToLowerInvariant();
+
+        // coop.ini: the developer-switch count is testing detail; an ignored (unknown)
+        // setting is something the player may have mistyped, so it stays visible below.
+        if (lower.StartsWith("coop.ini:", StringComparison.Ordinal) && lower.Contains("developer switch", StringComparison.Ordinal))
+        {
+            return Tone.Diagnostic;
+        }
+
+        // A section heading in a listing ("items:", "moving around:"): short, unindented,
+        // ends with a colon.
+        if (line.Length < 60 && !line.StartsWith(' ') && line.EndsWith(':'))
+        {
+            return Tone.Helpful;
+        }
+
         foreach (string prefix in DiagnosticPrefixes)
         {
             if (lower.StartsWith(prefix, StringComparison.Ordinal))
             {
                 return Tone.Diagnostic;
             }
+        }
+
+        // A row of a listing (a reply's indented rows: `cheats`, `who`, `items`) is guidance
+        // as a whole; a word like "applied" inside one row's description must not recolour it.
+        if (line.StartsWith("  ", StringComparison.Ordinal))
+        {
+            return Tone.Helpful;
+        }
+
+        if (lower.StartsWith("unknown command", StringComparison.Ordinal)
+            || lower.StartsWith("steam: not active", StringComparison.Ordinal))
+        {
+            return Tone.Warning;
         }
 
         if (ContainsAny(lower, BadWords))
