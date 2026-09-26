@@ -100,6 +100,7 @@ public sealed partial class CoopHost
     private CompatibilityVerdict EffectiveVerdict(PeerConnection peer)
     {
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, peer.World);
+        mismatch = peer.GitLineage.Apply(mismatch, _localWorld, peer.World, _servedSaveIdentities.Contains);
         mismatch = peer.SaveLineage.Apply(mismatch, _localWorld, peer.World);
         mismatch = peer.SaveSettle.Apply(mismatch, SessionClock.NowMs);
 
@@ -129,6 +130,24 @@ public sealed partial class CoopHost
     }
 
     public CompatibilityVerdict? Compatibility => _compatibility;
+
+    /// <summary>Save identities this host has served through world transfer — the worlds a
+    /// joiner may have adopted, see <see cref="ModuleGitLineage"/>. Small and session-scoped.</summary>
+    private readonly HashSet<uint> _servedSaveIdentities = [];
+
+    /// <summary>Records a save this host just served to a joiner.</summary>
+    public void NoteServedWorld(uint saveIdentity)
+    {
+        if (saveIdentity == 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _servedSaveIdentities.Add(saveIdentity);
+        }
+    }
 
     /// <summary>
     /// Sends the host's in-world digest so each client can judge the world-time match

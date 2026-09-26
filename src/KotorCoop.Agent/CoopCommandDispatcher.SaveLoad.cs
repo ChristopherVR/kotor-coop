@@ -366,6 +366,17 @@ public sealed partial class CoopCommandDispatcher
     private DateTime _hostReturnSaveStampBefore;
     private bool _hostReturnSaveReady = true;
 
+    /// <summary>Set on the world-transfer thread when a joiner's request found no save of the
+    /// live world to serve; the dispatcher tick answers it with a fresh host save.</summary>
+    private volatile bool _hostFreshSaveWanted;
+
+    /// <summary>Edge detector for a joiner's save-mismatch note on the host's verdict.</summary>
+    private bool _hostSawPeerSaveMismatch;
+    private long _hostPeerMismatchSaveAtMs;
+
+    /// <summary>What the next <see cref="BeginHostReturnFreshSave"/> log line says it is for.</summary>
+    private string _hostFreshSaveReason = "for a joiner's world request";
+
     /// <summary>The in-flight <c>loadgame</c> poll, if any — see <see cref="TriggerMidSessionLoad"/>.
     /// Held only so the fire-and-forget <c>Task.Run</c> is not flagged as unobserved; nothing
     /// reads it back (a second <c>loadgame</c> before the first settles just starts a second
@@ -521,6 +532,38 @@ public sealed partial class CoopCommandDispatcher
                 _hostLastModule = hostModule;
             }
 
+            // A joiner whose world differs will re-adopt this host's world after its settle
+            // grace (PersistentSaveMismatchRule.UnprovenMismatchGraceMs). Save NOW, on the edge,
+            // so what it fetches is this live world and not the last save on disk — live
+            // 2026-09-26 a re-adopt served a five-minute-old save and the joiner lost an item
+            // the host had dropped since.
+            bool peerSaveMismatch = session.Compatibility?.Notes
+                .Any(n => n.Code == CompatibilityCode.Save) ?? false;
+            // Once per minute at most: every host save moves the host's own identity, which
+            // flickers this note and would re-fire the edge (live: a save every 8 s, and each
+            // new host identity restarted the joiner's settle grace — two minutes, not 15 s).
+            if (peerSaveMismatch && !_hostSawPeerSaveMismatch
+                && (_hostPeerMismatchSaveAtMs == 0 || nowMs - _hostPeerMismatchSaveAtMs >= 60_000))
+            {
+                _hostPeerMismatchSaveAtMs = nowMs;
+                Log?.Invoke("session-save: a joiner's world differs - saving so its re-adopt gets the live world");
+                _hostFreshSaveWanted = true;
+                _hostFreshSaveReason = "for a joiner's re-adopt";
+            }
+
+            _hostSawPeerSaveMismatch = peerSaveMismatch;
+
+            // A joiner asked for the world and the newest save is not this live world (nothing
+            // saved since the last module change, live 2026-09-26: every re-adopt after an
+            // agent restart failed "host has no save to share yet"). Save now, through the
+            // same fresh-save path a solo return uses, so the joiner's retry finds it.
+            if (_hostFreshSaveWanted && !_hostReturnSavePending)
+            {
+                _hostFreshSaveWanted = false;
+                BeginHostReturnFreshSave(nowMs, _hostFreshSaveReason);
+                _hostFreshSaveReason = "for a joiner's world request";
+            }
+
             MaintainHostReturnFreshSave(nowMs);
             if (verdict == SaveOrLoadVerdict.Load)
             {
@@ -655,7 +698,11 @@ public sealed partial class CoopCommandDispatcher
                 hostDigest.Module,
                 hostDigest.ModuleGit,
                 manager.LifecycleGeneration,
-                nowMs))
+                nowMs)
+                // The raw digests can differ after a clean adoption when the two sides took
+                // their GIT baselines from different saves (ModuleGitLineage absorbs exactly
+                // that); only speak when the verdict itself still drops the module's channels.
+                && (client.Compatibility?.Notes.Any(n => n.Code == CompatibilityCode.ModuleGit) ?? false))
             {
                 Reply("module data still differs after rejoining. Check matching game data. If the host has not loaded the intended save, have them load it, then rejoin.");
             }
@@ -735,7 +782,8 @@ public sealed partial class CoopCommandDispatcher
                     _rejoinState.Phase == RejoinPhase.InFlight,
                     nowMs,
                     hostWorldKey: client.RemoteWorldDigest.SaveIdentity,
-                    loadEdge: ownLoadEdge || hostLoadEdge);
+                    loadEdge: ownLoadEdge || hostLoadEdge,
+                    worldsProvenSame: client.SaveLineageAgreed);
                 _mismatchRejoinState = mismatchStateForTick;
             }
 
@@ -822,9 +870,10 @@ public sealed partial class CoopCommandDispatcher
             }
             else
             {
-                // No higher-priority recovery owns this tick. The mismatch rule only permits
-                // adoption after a raw load edge was correlated with this mismatch; a plain
-                // save-identity divergence remains visible without replacing the loaded world.
+                // No higher-priority recovery owns this tick. The mismatch rule permits adoption
+                // after a raw load edge was correlated with this mismatch, or once a mismatch
+                // this connection never proved harmless outlives its settle grace; a plain
+                // save-identity drift inside an agreed lineage never gets here (absorbed).
                 if (mismatchShouldTrigger)
                 {
                     Reply(
@@ -1058,7 +1107,7 @@ public sealed partial class CoopCommandDispatcher
         state is { IsInCombat: false, IsInDialogue: false, IsInMinigame: false,
             IsDowned: false, IsPartyWiped: false };
 
-    private void BeginHostReturnFreshSave(long nowMs)
+    private void BeginHostReturnFreshSave(long nowMs, string reason = "host returned from a solo section")
     {
         _hostReturnSaveReady = false;
         _hostReturnSavePending = false;
@@ -1086,7 +1135,7 @@ public sealed partial class CoopCommandDispatcher
             _hostReturnSaveLastBlockedLogMs = 0;
             _hostReturnSavePending = true;
             _hostReturnSaveRequestedMs = nowMs;
-            Log?.Invoke("session-save: host returned from a solo section - requesting a fresh return save");
+            Log?.Invoke($"session-save: {reason} - requesting a fresh return save");
         }
         else
         {
@@ -1180,7 +1229,9 @@ public sealed partial class CoopCommandDispatcher
             || !bridge.TryReadCurrentModule(out string liveModule)
             || !string.Equals(savedModule, liveModule, StringComparison.OrdinalIgnoreCase))
         {
-            Log?.Invoke("session-save: refusing world snapshot whose saved module is not the live return module");
+            Log?.Invoke("session-save: refusing world snapshot whose saved module is not the live return module"
+                + " - requesting a fresh host save");
+            _hostFreshSaveWanted = true;
             return ([], 0);
         }
 
@@ -1192,11 +1243,13 @@ public sealed partial class CoopCommandDispatcher
         if (liveIdentity != 0 && liveIdentity != identity)
         {
             Log?.Invoke($"session-save: refusing stale world snapshot identity 0x{identity:X8}; "
-                + $"live world is 0x{liveIdentity:X8}");
+                + $"live world is 0x{liveIdentity:X8} - requesting a fresh host save");
+            _hostFreshSaveWanted = true;
             return ([], 0);
         }
 
         IReadOnlyList<WorldFile> world = WorldTransfer.ReadSaveDirectory(currentSave);
+        (manager.Current as CoopHost)?.NoteServedWorld(identity);
         return (world, identity);
     }
 
@@ -1302,13 +1355,14 @@ public sealed partial class CoopCommandDispatcher
                 int maxAttempts = trigger switch
                 {
                     RejoinTrigger.SoloReturn => SoloReturnRejoinMaxAttempts,
-                    RejoinTrigger.HostReload => HostReloadRejoinMaxAttempts,
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch => HostReloadRejoinMaxAttempts,
                     _ => 1,
                 };
                 TimeSpan retryDelay = trigger switch
                 {
                     RejoinTrigger.SoloReturn => TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
-                    RejoinTrigger.HostReload => TimeSpan.FromMilliseconds(HostReloadRejoinRetryDelayMs),
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
+                        => TimeSpan.FromMilliseconds(HostReloadRejoinRetryDelayMs),
                     _ => TimeSpan.Zero,
                 };
                 bool hostWorldUnavailable = false;
@@ -1327,17 +1381,21 @@ public sealed partial class CoopCommandDispatcher
                             carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
-                            onHostWorldUnavailable: trigger == RejoinTrigger.HostReload
+                            onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
                                 ? () => hostWorldUnavailable = true
                                 : null)
                         .ConfigureAwait(false);
                         if (adoption is null && attempt < maxAttempts
                             && (trigger == RejoinTrigger.SoloReturn
-                                || trigger == RejoinTrigger.HostReload && hostWorldUnavailable))
+                                || trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
+                                    && hostWorldUnavailable))
                         {
-                            string reason = trigger == RejoinTrigger.HostReload
-                                ? "the host has not finished making the reloaded world available"
-                                : "SoloReturn adoption failed";
+                            string reason = trigger switch
+                            {
+                                RejoinTrigger.HostReload => "the host has not finished making the reloaded world available",
+                                RejoinTrigger.SaveMismatch => "the host is still saving its current world",
+                                _ => "SoloReturn adoption failed",
+                            };
                             Log?.Invoke($"session-save: {reason} on attempt {attempt}; "
                                 + $"retrying in {retryDelay.TotalSeconds:0}s");
                             if (trigger == RejoinTrigger.HostReload && !hostWorldWaitNoticeSent)
@@ -1353,7 +1411,8 @@ public sealed partial class CoopCommandDispatcher
                         && manager.LifecycleGeneration == managerGeneration
                         && _rejoinState.Phase == RejoinPhase.InFlight,
                     rejoinCts.Token,
-                    shouldRetryFailedAttempt: () => trigger != RejoinTrigger.HostReload || hostWorldUnavailable)
+                    shouldRetryFailedAttempt: () =>
+                        trigger is not (RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch) || hostWorldUnavailable)
                     .ConfigureAwait(false);
 
                 if (!adoptedSuccessfully || adoption is null)
@@ -1365,8 +1424,12 @@ public sealed partial class CoopCommandDispatcher
                         return;
                     }
 
-                    Reply($"rejoin failed after {attemptsMade} attempt(s) - "
-                        + "see the log; reconnect manually if it does not recover");
+                    // The rejoin disconnected to fetch the world; a failed fetch must not leave the
+                    // joiner out of the session (live 2026-09-26: stranded "disconnected" until a
+                    // manual reconnect). Reconnect as-is — degraded if the worlds still differ —
+                    // and the mismatch rule's own backoff tries the adoption again.
+                    Reply($"rejoin failed after {attemptsMade} attempt(s) - reconnecting as-is and trying again later");
+                    manager.Reconnect();
                     return;
                 }
 

@@ -58,6 +58,11 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// </summary>
     private LineageSeed? _lineageSeed;
 
+    /// <summary>The identity of the world this install last adopted from a host — handed to
+    /// the next <see cref="CoopClient"/> for <see cref="ModuleGitLineage"/>. Process-lifetime,
+    /// like <see cref="_lineageSeed"/>.</summary>
+    private uint _adoptedSaveIdentity;
+
     /// <summary>The current lineage seed, for the dashboard/tests — see <see cref="_lineageSeed"/>.</summary>
     public LineageSeed? LineageSeed
     {
@@ -243,7 +248,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         ICoopSession session;
         try
         {
-            session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!, _lineageSeed);
+            session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!, _lineageSeed, _adoptedSaveIdentity);
         }
         catch (PortInUseException ex)
         {
@@ -567,6 +572,7 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         // The mid-session replay itself is the path join_mode=newcharacter live-verified
         // 2026-08-29 (docs/research/world-adoption.md).
         Log?.Invoke($"rejoin: {diagnostic}");
+        _adoptedSaveIdentity = adopted.Value.SaveIdentity;
         return new RejoinAdoption(adopted.Value, generation);
     }
 
@@ -737,6 +743,8 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         {
             return null;
         }
+
+        _adoptedSaveIdentity = adopted.Value.SaveIdentity;
 
         if (!bridge.TryRequestAdoptedWorldLoad(inSession: true, out string diagnostic))
         {

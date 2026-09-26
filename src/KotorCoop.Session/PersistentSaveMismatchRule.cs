@@ -9,7 +9,7 @@ namespace KotorCoop.Session;
 /// count over).</summary>
 public readonly record struct MismatchRejoinWatchState(
     bool WasMismatched, long? LastAttemptAtMs, int Attempts = 0, uint HostWorldKey = 0,
-    long? RecentLoadEdgeAtMs = null, bool LoadAuthorizedEpisode = false)
+    long? RecentLoadEdgeAtMs = null, bool LoadAuthorizedEpisode = false, long? MismatchSinceMs = null)
 {
     public static MismatchRejoinWatchState Initial => new(false, null);
 
@@ -56,6 +56,13 @@ public static class PersistentSaveMismatchRule
     /// <summary>The wait before attempt number <paramref name="attemptsSoFar"/> + 1:
     /// <see cref="RetryIntervalMs"/> doubled per attempt already made (20 s, 40 s, 80 s, 160 s),
     /// never less than the base interval.</summary>
+    /// <summary>How long a mismatch must persist, in a connection that has NEVER proven the two
+    /// worlds are the same, before it is adopted away without a load edge. The host is the
+    /// authority: a joiner can never legitimately be on a different save, so leaving the
+    /// id-keyed channels off is the wrong answer when nothing vouches for the joiner's world.
+    /// Long enough that a connect or a module crossing settles first.</summary>
+    public const long UnprovenMismatchGraceMs = 15_000;
+
     public static long RetryDelayMs(int attemptsSoFar) =>
         RetryIntervalMs << Math.Clamp(attemptsSoFar - 1, 0, MaxAttemptsPerWorld);
 
@@ -65,7 +72,7 @@ public static class PersistentSaveMismatchRule
     /// attempts made against the old world say nothing about the new one.</param>
     public static (bool ShouldTrigger, MismatchRejoinWatchState Next) Observe(
         MismatchRejoinWatchState current, bool mismatchedNow, bool rejoinInFlight, long nowMs,
-        uint hostWorldKey = 0, bool loadEdge = false)
+        uint hostWorldKey = 0, bool loadEdge = false, bool worldsProvenSame = true)
     {
         long? recentLoadEdgeAtMs = loadEdge ? nowMs : current.RecentLoadEdgeAtMs;
         bool recentLoadEdge = recentLoadEdgeAtMs is { } edgeAt
@@ -125,7 +132,23 @@ public static class PersistentSaveMismatchRule
         // A save-identity mismatch by itself is not evidence that either loaded world changed.
         // In particular, two ordinary saves can diverge while both players remain in the
         // same in-memory world. Keep observing the level, but only a nearby raw load edge may
-        // make this mismatch episode eligible for automatic adoption.
+        // make this mismatch episode eligible for automatic adoption...
+        long mismatchSince = current.MismatchSinceMs ?? nowMs;
+        current = current with { MismatchSinceMs = mismatchSince };
+
+        // ...unless nothing in this connection ever proved the worlds were the same (an agent
+        // restart, a reconnect whose lineage could not be carried over, a join on a legacy
+        // own-save). Then there is no ordinary-save explanation to protect, and a mismatch that
+        // outlives the settle grace is re-adopted from the host rather than left degrading the
+        // session (docs/limitations.md "Disconnecting and reconnecting", live 2026-09-26: every
+        // agent restart came back W_SAVE and stayed that way).
+        if (!loadAuthorizedEpisode && !worldsProvenSame
+            && nowMs - mismatchSince >= UnprovenMismatchGraceMs)
+        {
+            loadAuthorizedEpisode = true;
+            current = current with { LoadAuthorizedEpisode = true };
+        }
+
         if (!loadAuthorizedEpisode)
         {
             return (false, current with { WasMismatched = true });
@@ -145,7 +168,7 @@ public static class PersistentSaveMismatchRule
             uint effectiveHostWorldKey = hostWorldKey != 0 ? hostWorldKey : current.HostWorldKey;
             return (true, new MismatchRejoinWatchState(
                 true, nowMs, current.Attempts + 1, effectiveHostWorldKey,
-                RecentLoadEdgeAtMs: null, LoadAuthorizedEpisode: true));
+                RecentLoadEdgeAtMs: null, LoadAuthorizedEpisode: true, MismatchSinceMs: current.MismatchSinceMs));
         }
 
         return (false, current with { WasMismatched = true });

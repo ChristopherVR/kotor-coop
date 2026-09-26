@@ -172,4 +172,74 @@ public sealed class PersistentSaveMismatchRuleTests
         Assert.True(shouldTrigger);
         Assert.Equal(1200, next.LastAttemptAtMs);
     }
+
+    // ---- a connection that never proved the worlds were the same (2026-09-26) ----------
+
+    private static (bool, MismatchRejoinWatchState) Unproven(MismatchRejoinWatchState s, long now, bool mismatched = true) =>
+        PersistentSaveMismatchRule.Observe(s, mismatched, rejoinInFlight: false, nowMs: now, worldsProvenSame: false);
+
+    [Fact]
+    public void AnUnprovenMismatchWaitsOutTheSettleGrace()
+    {
+        (bool first, MismatchRejoinWatchState s) = Unproven(MismatchRejoinWatchState.Initial, 1000);
+        (bool early, s) = Unproven(s, 1000 + PersistentSaveMismatchRule.UnprovenMismatchGraceMs - 1);
+
+        Assert.False(first);
+        Assert.False(early);
+        Assert.Equal(1000, s.MismatchSinceMs);
+    }
+
+    [Fact]
+    public void AnUnprovenMismatchThatPersistsIsAdoptedWithoutALoadEdge()
+    {
+        (_, MismatchRejoinWatchState s) = Unproven(MismatchRejoinWatchState.Initial, 1000);
+        (bool trigger, MismatchRejoinWatchState next) = Unproven(s, 1000 + PersistentSaveMismatchRule.UnprovenMismatchGraceMs);
+
+        Assert.True(trigger);
+        Assert.Equal(1, next.Attempts);
+        Assert.True(next.LoadAuthorizedEpisode);
+    }
+
+    [Fact]
+    public void AProvenLineageStillNeverAdoptsAnOrdinarySaveDrift()
+    {
+        (_, MismatchRejoinWatchState s) = PersistentSaveMismatchRule.Observe(
+            MismatchRejoinWatchState.Initial, true, false, 1000, worldsProvenSame: true);
+        (bool trigger, _) = PersistentSaveMismatchRule.Observe(
+            s, true, false, 1000 + (10 * PersistentSaveMismatchRule.UnprovenMismatchGraceMs), worldsProvenSame: true);
+
+        Assert.False(trigger);
+    }
+
+    [Fact]
+    public void AHealBeforeTheGraceRestartsTheClock()
+    {
+        (_, MismatchRejoinWatchState s) = Unproven(MismatchRejoinWatchState.Initial, 1000);
+        (_, s) = Unproven(s, 9000, mismatched: false);
+        (_, s) = Unproven(s, 12_000);
+        (bool trigger, _) = Unproven(s, 1000 + PersistentSaveMismatchRule.UnprovenMismatchGraceMs);
+
+        Assert.False(trigger);
+        Assert.Equal(12_000, s.MismatchSinceMs);
+    }
+
+    [Fact]
+    public void UnprovenRetriesStillBackOffAndCap()
+    {
+        long now = 0;
+        (_, MismatchRejoinWatchState s) = Unproven(MismatchRejoinWatchState.Initial, now);
+        int attempts = 0;
+        for (int tick = 0; tick < 2000; tick++)
+        {
+            now += 1000;
+            (bool trigger, s) = Unproven(s, now);
+            if (trigger)
+            {
+                attempts++;
+            }
+        }
+
+        Assert.Equal(PersistentSaveMismatchRule.MaxAttemptsPerWorld, attempts);
+        Assert.True(s.GaveUp);
+    }
 }

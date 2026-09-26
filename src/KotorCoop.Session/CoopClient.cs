@@ -212,6 +212,10 @@ public sealed partial class CoopClient : ICoopSession
     /// host process, applied to <see cref="_saveLineage"/> immediately.</summary>
     private readonly LineageSeed? _lineageSeed;
 
+    /// <summary>The save identity this install last adopted from a host (0 = none) — the only
+    /// identity <see cref="ModuleGitLineage"/> may treat as "built from the host's own GIT".</summary>
+    private readonly uint _adoptedSaveIdentity;
+
     /// <summary>The host's <c>WelcomePacket.SessionId</c>, once known — 0 before the first
     /// Welcome. Read by <see cref="LineageCheckpoint"/> so <see cref="SessionManager"/> can
     /// persist a fresh seed naming the CORRECT host process, and by <see cref="HandleWelcome"/>
@@ -229,11 +233,13 @@ public sealed partial class CoopClient : ICoopSession
         ? new LineageSeed(_hostSessionId, _saveLineage.RemoteLoadAtAgreement, _saveLineage.LocalLoadAtAgreement)
         : null;
 
-    public CoopClient(SessionSettings settings, IPEndPoint hostEndPoint, LineageSeed? lineageSeed = null)
+    public CoopClient(
+        SessionSettings settings, IPEndPoint hostEndPoint, LineageSeed? lineageSeed = null, uint adoptedSaveIdentity = 0)
     {
         _settings = settings;
         _hostEndPoint = hostEndPoint;
         _lineageSeed = lineageSeed;
+        _adoptedSaveIdentity = adoptedSaveIdentity;
         _effectiveTickRate = settings.TickRate;
 
         // Bind an ephemeral port: two clients on one machine must not fight over 27015.

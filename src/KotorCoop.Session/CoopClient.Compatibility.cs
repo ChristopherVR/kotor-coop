@@ -40,11 +40,19 @@ public sealed partial class CoopClient
     /// connection, so a rejoin is judged from "never agreed" again.</summary>
     private readonly SaveLineage _saveLineage = new();
 
+    /// <summary>The GIT counterpart — see <see cref="ModuleGitLineage"/>.</summary>
+    private readonly ModuleGitLineage _gitLineage = new();
+
     /// <summary>True from a raw save-identity disagreement <see cref="SaveLineage"/> read as a
     /// same-world save until the identities next agree — the dispatcher puts one line on
     /// screen per episode, so a crossing that used to cost a rejoin is still visible in the
     /// log as the case it now handles.</summary>
     public bool SaveLineageAbsorbing => _saveLineage.Absorbing;
+
+    /// <summary>True once this connection has seen the two save identities agree (or started
+    /// from a carried-over lineage seed) — the only proof that a later save-identity drift is
+    /// the same world. <see cref="PersistentSaveMismatchRule"/> re-adopts an unproven one.</summary>
+    public bool SaveLineageAgreed => _saveLineage.HasAgreed;
 
     public SessionCapabilities Capabilities => _compatibility?.Allowed ?? SessionCapabilities.All;
 
@@ -88,6 +96,8 @@ public sealed partial class CoopClient
         }
 
         WorldDigestComparison mismatch = WorldDigest.Compare(_localWorld, _hostWorld);
+        mismatch = _gitLineage.Apply(
+            mismatch, _localWorld, _hostWorld, identity => identity == _adoptedSaveIdentity);
         mismatch = _saveLineage.Apply(mismatch, _localWorld, _hostWorld);
         mismatch = _saveSettle.Apply(mismatch, SessionClock.NowMs);
 

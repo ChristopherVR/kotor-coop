@@ -24,8 +24,17 @@ a world they did not come from. Afterwards both installs' save-identity digests 
 measures was made true rather than merely checked.
 
 **The trade, stated plainly:** the joiner gives up the world they were playing, not their
-character. Party, inventory, companions, globals and journal come from the host's save,
-because in co-op those are shared state. Their own save on disk is never written — only the
+character. Party, companions, globals and journal come from the host's save, because in
+co-op those are shared state. **Inventory and credits do not, by default** (superseded
+2026-09, see [personal-inventory.md](personal-inventory.md) §12): under
+`inventory_mode = personal` (the shipped default) adoption sets the backpack to the joiner's
+OWN items from their own install plus the host's shared quest items, and the host's own
+items do not carry over; `credits_mode = personal` does the same for party gold. Only
+`inventory_mode = shared` takes the backpack from the host's save. Verified live 2026-09-26
+on a mid-session re-adopt: the agent logged "backpack set to your own 3 item(s) plus 3
+shared quest item(s) from the host (the host's own 2 item(s) do not carry over)", and a
+heavy blaster only the joiner held was still in its inventory, and absent from the host's,
+after three re-adopts. Their own save on disk is never written — only the
 autosave slot and `Temp\` — so leaving the session and loading their own game costs nothing.
 This is the trade Seamless Co-op makes: you bring your character, the host brings the world.
 

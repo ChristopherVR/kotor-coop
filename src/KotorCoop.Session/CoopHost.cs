@@ -50,6 +50,10 @@ public sealed partial class CoopHost : ICoopSession
         /// apart from a genuinely different save — see <see cref="Protocol.SaveLineage"/>.
         /// One per peer for the same reason as <see cref="SaveSettle"/>.</summary>
         public readonly SaveLineage SaveLineage = new();
+
+        /// <summary>Absorbs a GIT baseline artifact once this peer's save identity has agreed
+        /// with the host's — see <see cref="ModuleGitLineage"/>.</summary>
+        public readonly ModuleGitLineage GitLineage = new();
     }
 
     /// <summary>
