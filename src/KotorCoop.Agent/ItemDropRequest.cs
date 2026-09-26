@@ -98,6 +98,37 @@ public static class ItemDropRequest
             resref = liveResref;
         }
 
+        return PlaceInFront(agent, local, resref, identity);
+    }
+
+    /// <summary>
+    /// The fast path for an item whose resref and identity the caller already read (the F2
+    /// picker's own listing): no second memory sweep, so picking an item no longer freezes the
+    /// agent window for seconds. <paramref name="stackSize"/> drops part of a stack.
+    /// </summary>
+    public static Outcome DropKnown(SessionManager manager, string resref, ItemIdentity identity, ushort stackSize)
+    {
+        if (manager.Agent is not { } agent)
+        {
+            return new Outcome(0, "drop: not connected", NoSession: true);
+        }
+
+        PlayerState local = agent.LastLocalState;
+        if (!local.IsPlausible || !agent.LastReadSucceeded)
+        {
+            return Refused("drop refused: local player not readable");
+        }
+
+        if (identity.IsKnown && stackSize > 0 && stackSize < identity.StackSize)
+        {
+            identity = identity with { StackSize = stackSize };
+        }
+
+        return PlaceInFront(agent, local, resref, identity);
+    }
+
+    private static Outcome PlaceInFront(CoopAgent agent, PlayerState local, string resref, ItemIdentity identity)
+    {
         // In front of the player, along their facing, rather than at a fixed world offset:
         // the camera sits behind the character, so a world-axis offset drops the item
         // off-screen as often as not. Facing is the angle of the orientation vector, so

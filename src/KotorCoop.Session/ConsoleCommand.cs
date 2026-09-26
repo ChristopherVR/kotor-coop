@@ -217,6 +217,12 @@ public enum CoopCommandKind
     /// is <c>off</c>/<c>status</c>. Agent-side loop over the existing walk/teleport cheats.</summary>
     AutoFollow,
 
+    /// <summary>Drop one of YOUR OWN backpack items on the floor for your partner — the real
+    /// item, taken out of your inventory, stack/charges/upgrades intact.
+    /// <see cref="CoopCommand.Address"/> is <c>0x&lt;id&gt;</c> (as <c>items</c>/the F2 picker
+    /// show it) or a resref (the first matching stack). Quest items stay shared and refuse.</summary>
+    DropOwn,
+
     /// <summary>Put a blueprint on the floor at the local player's feet, where the item
     /// channel will replicate it to everyone.</summary>
     DropItem,
@@ -1206,6 +1212,7 @@ public static partial class ConsoleCommand
         new(["walkto"], ParseWalkTo),
         new(["goto"], ParseGoTo),
         new(["autofollow"], ParseAutoFollow),
+        new(["drop"], ParseDropOwn),
         new(["dropitem"], ParseDropItem),
         new(["moviewarp"], ParseStageMovie),
         new(["usedoor"], ParseUseDoor),

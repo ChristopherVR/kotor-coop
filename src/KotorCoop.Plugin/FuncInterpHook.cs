@@ -66,7 +66,7 @@ internal static unsafe class FuncInterpHook
         // Staging cheats. None of these shadows a retail console verb — checked against the
         // engine's own registered names (docs/research/console-cheats.md) — so intercepting
         // them takes nothing away from the player.
-        "god", "topup", "standup", "getup", "slay", "tp", "goto", "autofollow", "dropitem", "cheats",
+        "god", "topup", "standup", "getup", "slay", "tp", "goto", "autofollow", "drop", "dropitem", "cheats",
 
         // The cinematic staging instrument. Full spelling only, for the same reason "netsim"
         // has no "net" alias here: a verb that arranges a multi-second window in which this

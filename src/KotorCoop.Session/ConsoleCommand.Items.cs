@@ -521,4 +521,15 @@ public static partial class ConsoleCommand
 
         return new CoopCommand(kind, Address: rest[0], Password: rest[1], Amount: count);
     }
+
+    // drop <0xid|resref> [count] - a real item out of your own backpack (dropitem spawns a
+    // copy); count drops part of a stack, omitted = the whole stack.
+    private static CoopCommand ParseDropOwn(string[] rest) =>
+        rest.Length == 0
+            ? new CoopCommand(CoopCommandKind.Invalid,
+                Error: "drop needs one of your items, e.g. drop 0x113 or drop g_w_hvyblstr01 (F2 in the agent window lists them)")
+            : rest.Length > 1 && (!int.TryParse(rest[1], out int count) || count <= 0)
+                ? new CoopCommand(CoopCommandKind.Invalid, Error: $"drop: '{rest[1]}' is not a positive count")
+                : new CoopCommand(CoopCommandKind.DropOwn, Address: rest[0],
+                    Amount: rest.Length > 1 ? int.Parse(rest[1]) : 0);
 }

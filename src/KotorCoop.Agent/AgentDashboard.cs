@@ -83,9 +83,19 @@ public sealed class AgentDashboard(
     private IApplication? _app;
 
     private Label? _headerLabel;
-    private TextView? _transcriptView;
-    private Label? _dropdownLabel;
+    private ColorTextView? _transcriptView;
+    private ColorTextView? _dropdownLabel;
     private TextField? _inputField;
+    private Label? _promptLabel;
+
+    /// <summary>Ctrl+F: the input line edits a transcript filter instead of a command.</summary>
+    private bool _searchMode;
+
+    /// <summary>The live transcript filter (case-insensitive substring); empty = show all.</summary>
+    private string _searchFilter = string.Empty;
+
+    /// <summary>The command being typed when Ctrl+F was pressed, put back afterwards.</summary>
+    private string _stashedCommand = string.Empty;
     private Label? _footerLabel;
 
     /// <summary>
@@ -198,6 +208,14 @@ public sealed class AgentDashboard(
     }
 
     private int _dropIndex;
+
+    /// <summary>The F2 picker's list, refreshed on the timer thread from the throttled item
+    /// cache so opening the picker never waits on a memory sweep. Null until the first fill.</summary>
+    private volatile IReadOnlyList<DroppableItem>? _droppableCache;
+    private long _droppableCacheAtMs;
+    private const long DroppableCacheRefreshMs = 3000;
+
+    private Window? _window;
     private string _lastDropNoteValue = string.Empty;
 
     /// <summary>
@@ -437,11 +455,24 @@ public sealed class AgentDashboard(
         try
         {
             CheckDropFile();
+            long now = Environment.TickCount64;
+            if (dispatcher is not null && now - _droppableCacheAtMs >= DroppableCacheRefreshMs)
+            {
+                _droppableCacheAtMs = now;
+                _droppableCache = dispatcher.ListDroppableItems(fresh: false);
+            }
+
+            string titleText = BuildTitle();
             string headerText = string.Join('\n', BuildHeaderLines());
             string footerText = BuildFooter();
 
             app.Invoke(() =>
             {
+                if (_window is { } window && window.Title != titleText)
+                {
+                    window.Title = titleText;
+                }
+
                 if (_headerLabel is { } header)
                 {
                     header.Text = headerText;
@@ -723,16 +754,65 @@ public sealed class AgentDashboard(
         Focus = new Terminal.Gui.Drawing.Attribute(Color.White, Color.Black),
     };
 
+    /// <summary>Rows the composer block takes under the log: rule, input, rule, hint, footer.</summary>
+    private const int ComposerRows = 4 + SuggestionRows;
+
+    /// <summary>Rows reserved under the input for completions (verb + what it takes) or a tip.</summary>
+    private const int SuggestionRows = 3;
+
+    private static readonly Terminal.Gui.Drawing.Attribute ToneCommand = new(Color.White, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute TonePlain = new(Color.Gray, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute ToneGood = new(Color.BrightGreen, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute ToneWarning = new(Color.BrightYellow, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute ToneBad = new(Color.BrightRed, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute ToneHelpful = new(Color.BrightCyan, Color.Black);
+    private static readonly Terminal.Gui.Drawing.Attribute ToneDiagnostic = new(Color.DarkGray, Color.Black);
+
+    private static Terminal.Gui.Drawing.Attribute AttributeFor(Tone tone) => tone switch
+    {
+        Tone.Command => ToneCommand,
+        Tone.Good => ToneGood,
+        Tone.Warning => ToneWarning,
+        Tone.Bad => ToneBad,
+        Tone.Helpful => ToneHelpful,
+        Tone.Diagnostic => ToneDiagnostic,
+        _ => TonePlain,
+    };
+
+    /// <summary>Wide enough for any terminal; a Label clips to its own width.</summary>
+    private static readonly string Rule = new('─', 400);
+
+    /// <summary>Dim grey for rules, the hint row and the footer: chrome, not content.</summary>
+    private static readonly Scheme RuleScheme = new(new Terminal.Gui.Drawing.Attribute(Color.DarkGray, Color.Black));
+
+    /// <summary>List rows light grey, the selected row black on cyan so it is obvious.</summary>
+    private static readonly Scheme PickerScheme = new(new Terminal.Gui.Drawing.Attribute(Color.Gray, Color.Black))
+    {
+        Focus = new Terminal.Gui.Drawing.Attribute(Color.Black, Color.BrightCyan),
+        Active = new Terminal.Gui.Drawing.Attribute(Color.Black, Color.BrightCyan),
+        Highlight = new Terminal.Gui.Drawing.Attribute(Color.Black, Color.BrightCyan),
+    };
+
+    /// <summary>The "> " prompt stands out from what is typed after it.</summary>
+    private static readonly Scheme PromptScheme = new(new Terminal.Gui.Drawing.Attribute(Color.BrightCyan, Color.Black));
+
     private Window BuildWindow(IApplication app)
     {
-        Window window = new()
+        Window window = _window = new()
         {
+            Title = BuildTitle(),
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             BorderStyle = LineStyle.None,
-            CanFocus = false,
+
+            // ⚠ Must be focusable. In Terminal.Gui v2 a view that cannot take focus cannot
+            // pass it to a subview either, so with this false the input field never had focus
+            // and typed keys went nowhere; only the app-level F-keys worked (reproduced in
+            // isolation 2026-09-26). The other children stay unfocusable, so focus lands on
+            // the input field.
+            CanFocus = true,
         };
 
         _headerLabel = new Label
@@ -745,12 +825,12 @@ public sealed class AgentDashboard(
             CanFocus = false,
         };
 
-        _transcriptView = new TextView
+        _transcriptView = new ColorTextView
         {
             X = 0,
             Y = Pos.Bottom(_headerLabel),
             Width = Dim.Fill(),
-            Height = Dim.Fill(2),
+            Height = Dim.Fill(ComposerRows),
             ReadOnly = true,
             WordWrap = true,
             ScrollBars = true,
@@ -764,36 +844,71 @@ public sealed class AgentDashboard(
         _transcriptView.SetScheme(TextScheme);
         _transcriptView.ViewportChanged += (_, _) => OnTranscriptViewportChanged();
 
-        _dropdownLabel = new Label
+        // The composer: a fixed block anchored to the bottom, Claude-Code-style, so typing
+        // never shares a row with the log or the footer (it used to: the input sat on the
+        // footer's row and the completion line popped up over the last log line).
+        //
+        //   ...log...
+        //   ─────────────   rule
+        //   > command|      input
+        //   ─────────────   rule
+        //   completions with their usage, or a tip (rows always reserved)
+        //   F1 details ...  footer
+        Label topRule = new()
         {
             X = 0,
-            Y = Pos.Bottom(_transcriptView),
+            Y = Pos.AnchorEnd(4 + SuggestionRows),
             Width = Dim.Fill(),
             Height = 1,
-            Visible = false,
+            Text = Rule,
             CanFocus = false,
         };
+        topRule.SetScheme(RuleScheme);
 
-        Label prompt = new()
+        Label prompt = _promptLabel = new()
         {
             X = 0,
-            Y = Pos.Bottom(_dropdownLabel),
+            Y = Pos.AnchorEnd(3 + SuggestionRows),
             Width = 2,
             Height = 1,
             Text = "> ",
             CanFocus = false,
         };
+        prompt.SetScheme(PromptScheme);
 
         _inputField = new TextField
         {
             X = Pos.Right(prompt),
-            Y = Pos.Bottom(_dropdownLabel),
+            Y = Pos.AnchorEnd(3 + SuggestionRows),
             Width = Dim.Fill(),
             Height = 1,
             Text = string.Empty,
         };
         _inputField.SetScheme(TextScheme);
         _inputField.KeyDown += OnInputFieldKeyDown;
+
+        Label bottomRule = new()
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(2 + SuggestionRows),
+            Width = Dim.Fill(),
+            Height = 1,
+            Text = Rule,
+            CanFocus = false,
+        };
+        bottomRule.SetScheme(RuleScheme);
+
+        _dropdownLabel = new ColorTextView
+        {
+            X = 2,
+            Y = Pos.AnchorEnd(1 + SuggestionRows),
+            Width = Dim.Fill(),
+            Height = SuggestionRows,
+            ReadOnly = true,
+            WordWrap = false,
+            CanFocus = false,
+        };
+        _dropdownLabel.SetScheme(RuleScheme);
 
         _footerLabel = new Label
         {
@@ -804,8 +919,9 @@ public sealed class AgentDashboard(
             Text = BuildFooter(),
             CanFocus = false,
         };
+        _footerLabel.SetScheme(RuleScheme);
 
-        window.Add(_headerLabel, _transcriptView, _dropdownLabel, prompt, _inputField, _footerLabel);
+        window.Add(_headerLabel, _transcriptView, topRule, prompt, _inputField, bottomRule, _dropdownLabel, _footerLabel);
 
         app.Keyboard.KeyDown += (_, key) => OnGlobalKeyDown(app, key);
 
@@ -824,6 +940,21 @@ public sealed class AgentDashboard(
     /// </summary>
     private void OnInputFieldKeyDown(object? sender, Key key)
     {
+        if (_searchMode)
+        {
+            OnSearchKeyDown(key);
+            return;
+        }
+
+        if (key == Key.Esc && _searchFilter.Length > 0 && _input.Buffer.Length == 0)
+        {
+            // An applied filter is the first thing Esc undoes, never a surprise quit while
+            // the transcript is showing a filtered view.
+            key.Handled = true;
+            SetSearchFilter(string.Empty);
+            return;
+        }
+
         if (key == Key.Enter)
         {
             key.Handled = true;
@@ -903,6 +1034,14 @@ public sealed class AgentDashboard(
         }
         else if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value is > 0 and < 0x110000)
         {
+            // Typing means you are about to act on what is newest: bring the log back to the
+            // bottom if it had been scrolled up.
+            if (!_transcript.IsFollowing)
+            {
+                _transcript.SetFollowing(true);
+                ScrollTranscriptToBottom();
+            }
+
             // An ordinary typed character. Co-op verbs and their arguments are ASCII, so the
             // Rune -> char narrowing below is safe for everything this console actually
             // accepts; anything outside the BMP (extremely unlikely input here) is dropped
@@ -936,41 +1075,87 @@ public sealed class AgentDashboard(
     /// resize around how many candidates matched.</summary>
     private void UpdateDropdown()
     {
-        if (_dropdownLabel is not { } label)
+        // A drawing bug in this window must never end the co-op session with it (live
+        // 2026-09-26: a TextView index error in here took the host's agent down).
+        try
+        {
+            UpdateDropdownCore();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IndexOutOfRangeException)
+        {
+            LogOnly($"dashboard: UpdateDropdown failed - {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void UpdateDropdownCore()
+    {
+        if (_dropdownLabel is not { } view)
         {
             return;
         }
 
+        List<List<Cell>> rows = [];
         if (!_showInputLine)
         {
-            label.Visible = false;
+            view.LoadRows(rows);
             return;
         }
 
+        string buffer = _input.Buffer;
         IReadOnlyList<string> candidates = _input.Candidates;
-        if (candidates.Count > 1)
+        string hint = _input.Hint;
+
+        if (_searchMode)
         {
-            const int maxShown = 6;
-            string text = string.Join("  ", candidates.Take(maxShown));
-            if (candidates.Count > maxShown)
+            rows.Add(Cell.ToCellList("searching the log - type to filter, Enter keeps the filter, Esc cancels", ToneHelpful));
+        }
+        else if (buffer.Length == 0)
+        {
+            rows.Add(Cell.ToCellList("type a command - Tab completes, Up/Down recalls, `help` lists them all", ToneDiagnostic));
+            rows.Add(Cell.ToCellList("Ctrl+F searches the log   F2 drops one of your items   F3 picks one up   F1 details", ToneDiagnostic));
+        }
+        else if (candidates.Count > 1)
+        {
+            // One row per candidate, the command in cyan and what it takes after it, so the
+            // list says what each one does rather than being a bare row of names.
+            int shown = Math.Min(candidates.Count, SuggestionRows - (candidates.Count > SuggestionRows ? 1 : 0));
+            for (int i = 0; i < shown; i++)
             {
-                text += $"   ... {candidates.Count - maxShown} more";
+                string verb = candidates[i];
+                string usage = UsageFor(verb);
+                List<Cell> row = Cell.ToCellList(verb.PadRight(16), ToneHelpful);
+                row.AddRange(Cell.ToCellList(usage, TonePlain));
+                rows.Add(row);
             }
 
-            label.Text = text;
-            label.Visible = true;
-            return;
+            if (candidates.Count > shown)
+            {
+                rows.Add(Cell.ToCellList($"... {candidates.Count - shown} more - keep typing, or Tab to cycle", ToneDiagnostic));
+            }
         }
-
-        string hint = _input.Hint;
-        if (hint.Length > 0)
+        else if (hint.Length > 0)
         {
-            label.Text = hint;
-            label.Visible = true;
-            return;
+            rows.Add(Cell.ToCellList(hint, ToneHelpful));
+        }
+        else if (!buffer.Contains(' '))
+        {
+            rows.Add(Cell.ToCellList($"no co-op command starts with '{buffer}' - `help` lists them", ToneWarning));
         }
 
-        label.Visible = false;
+        view.LoadRows(rows);
+    }
+
+    private static string UsageFor(string verb)
+    {
+        foreach ((string v, string usage) in DashboardInputLine.Catalog)
+        {
+            if (v.Equals(verb, StringComparison.OrdinalIgnoreCase))
+            {
+                return usage.StartsWith(v, StringComparison.OrdinalIgnoreCase) ? usage[v.Length..].TrimStart() : usage;
+            }
+        }
+
+        return string.Empty;
     }
 
     /// <summary>
@@ -999,6 +1184,7 @@ public sealed class AgentDashboard(
         _transcript.Append($"> {line}");
         _transcript.SetFollowing(true);
         RefreshTranscriptView();
+        ScrollTranscriptToBottom();
 
         if (dispatcher is null)
         {
@@ -1007,7 +1193,7 @@ public sealed class AgentDashboard(
             return;
         }
 
-        dispatcher.RunTypedLine(line);
+        dispatcher.PostTypedLine(line);
     }
 
     /// <summary>Ctrl+L, and the local half of typing <c>clear</c>/<c>cls</c> — wipes this
@@ -1061,15 +1247,20 @@ public sealed class AgentDashboard(
             key.Handled = true;
             ShowDetailsDialog(app);
         }
+        else if (key == Key.F.WithCtrl)
+        {
+            key.Handled = true;
+            BeginSearch();
+        }
         else if (key == Key.F2)
         {
             key.Handled = true;
-            Drop(null);
+            ShowDropPicker(app);
         }
         else if (key == Key.F3)
         {
             key.Handled = true;
-            PickUpNearest();
+            ShowPickupPicker(app);
         }
     }
 
@@ -1136,6 +1327,20 @@ public sealed class AgentDashboard(
     /// </summary>
     private void RefreshTranscriptView()
     {
+        // A drawing bug in this window must never end the co-op session with it (live
+        // 2026-09-26: a TextView index error in here took the host's agent down).
+        try
+        {
+            RefreshTranscriptViewCore();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IndexOutOfRangeException)
+        {
+            LogOnly($"dashboard: RefreshTranscriptView failed - {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void RefreshTranscriptViewCore()
+    {
         if (_transcriptView is not { } view)
         {
             return;
@@ -1145,7 +1350,19 @@ public sealed class AgentDashboard(
         bool wasFollowing = _transcript.IsFollowing;
         int savedTop = view.Viewport.Y;
 
-        view.Text = string.Join('\n', _transcript.Lines);
+        IReadOnlyList<string> lines = _transcript.Lines;
+        if (_searchFilter.Length > 0)
+        {
+            lines = lines.Where(l => l.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        List<List<Cell>> rows = new(lines.Count);
+        foreach (string line in lines)
+        {
+            rows.Add(Cell.ToCellList(line, AttributeFor(TranscriptTone.Classify(line))));
+        }
+
+        view.LoadRows(rows);
 
         if (wasFollowing)
         {
@@ -1176,6 +1393,354 @@ public sealed class AgentDashboard(
     /// key-handler call that is itself running on the UI thread) until the dialog's own
     /// F1/Esc handler requests it to stop, then returns control to the window underneath.
     /// </summary>
+    /// <summary>Ctrl+F: the input line becomes a live transcript filter (prompt "/ ").</summary>
+    /// <summary>The terminal window's title: who this agent is for, so two agent windows on
+    /// one machine can be told apart at a glance (both used to read just "pwsh.exe").</summary>
+    private string BuildTitle()
+    {
+        string name = manager.CurrentSettings?.PlayerName is { Length: > 0 } n ? n : "co-op";
+        string role = manager.Agent is { } agent
+            ? agent.Session.IsEnemyAuthority ? "host" : "joiner"
+            : "not connected";
+        return $"KOTOR co-op - {name} ({role})";
+    }
+
+    private void BeginSearch()
+    {
+        if (!_searchMode)
+        {
+            _stashedCommand = _input.Buffer;
+            _searchMode = true;
+        }
+
+        ReplaceInputLine(_searchFilter);
+        if (_promptLabel is { } prompt)
+        {
+            prompt.Text = "/ ";
+        }
+
+        RefreshFooter();
+    }
+
+    /// <summary>Keys while searching: edit the filter live; Enter keeps it, Esc drops it.</summary>
+    private void OnSearchKeyDown(Key key)
+    {
+        key.Handled = true;
+        if (key == Key.Enter || key == Key.Esc)
+        {
+            if (key == Key.Esc)
+            {
+                SetSearchFilter(string.Empty);
+            }
+
+            _searchMode = false;
+            ReplaceInputLine(_stashedCommand);
+            _stashedCommand = string.Empty;
+            if (_promptLabel is { } prompt)
+            {
+                prompt.Text = "> ";
+            }
+
+            RefreshFooter();
+            return;
+        }
+
+        if (key == Key.Backspace)
+        {
+            _input.Backspace();
+        }
+        else if (key == Key.Delete)
+        {
+            _input.Delete();
+        }
+        else if (key == Key.CursorLeft)
+        {
+            _input.MoveLeft();
+        }
+        else if (key == Key.CursorRight)
+        {
+            _input.MoveRight();
+        }
+        else if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value is > 0 and <= char.MaxValue)
+        {
+            _input.TypeChar((char)key.AsRune.Value);
+        }
+        else
+        {
+            key.Handled = false;
+            return;
+        }
+
+        SyncInputField();
+        SetSearchFilter(_input.Buffer);
+    }
+
+    private void ReplaceInputLine(string text)
+    {
+        _input.ClearLine();
+        foreach (char c in text)
+        {
+            _input.TypeChar(c);
+        }
+
+        SyncInputField();
+    }
+
+    private void SetSearchFilter(string filter)
+    {
+        _searchFilter = filter;
+        _transcript.SetFollowing(true);
+        RefreshTranscriptView();
+    }
+
+    private int CountMatches() =>
+        _searchFilter.Length == 0
+            ? _transcript.Count
+            : _transcript.Lines.Count(l => l.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>One row of <see cref="ShowItemPicker{T}"/>: what is shown, and the item behind it.</summary>
+    private readonly record struct PickerRow<T>(string Label, T Item, int MaxQuantity);
+
+    /// <summary>
+    /// The shared F2/F3 picker: a search box on top (focused; typing filters the list live,
+    /// Up/Down move the selection, Enter picks), the matching rows, and — when
+    /// <paramref name="withQuantity"/> — a quantity box (blank = the whole stack). Only a
+    /// positive accept (Enter, or the list's own Accept) acts; Esc/closing does nothing.
+    /// The chosen action runs OFF the UI thread so the window never freezes on it.
+    /// </summary>
+    private void ShowItemPicker<T>(
+        IApplication app, string title, IReadOnlyList<PickerRow<T>> rows, bool withQuantity, Action<T, int> onChoose)
+    {
+        List<PickerRow<T>> shown = [.. rows];
+
+        Label searchLabel = new() { X = 0, Y = 0, Width = 8, Height = 1, Text = "Search: ", CanFocus = false };
+        searchLabel.SetScheme(PromptScheme);
+        TextField search = new() { X = 8, Y = 0, Width = Dim.Fill(), Height = 1, Text = string.Empty };
+        search.SetScheme(TextScheme);
+
+        ListView list = new()
+        {
+            X = 0,
+            Y = 1,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(withQuantity ? 2 : 1),
+            CanFocus = true,
+        };
+        list.SetScheme(PickerScheme);
+
+        void Reload()
+        {
+            string filter = search.Text ?? string.Empty;
+            shown = rows.Where(r => filter.Length == 0 || r.Label.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+            list.SetSource(new System.Collections.ObjectModel.ObservableCollection<string>(
+                shown.Count == 0 ? ["(nothing matches)"] : shown.Select(r => r.Label)));
+            list.SelectedItem = 0;
+        }
+
+        Reload();
+        search.TextChanged += (_, _) => Reload();
+
+        TextField? quantity = null;
+        Label? quantityLabel = null;
+        if (withQuantity)
+        {
+            quantityLabel = new() { X = 0, Y = Pos.AnchorEnd(2), Width = 10, Height = 1, Text = "Quantity: ", CanFocus = false };
+            quantityLabel.SetScheme(PromptScheme);
+            quantity = new() { X = 10, Y = Pos.AnchorEnd(2), Width = 8, Height = 1, Text = string.Empty };
+            quantity.SetScheme(TextScheme);
+        }
+
+        Label hint = new()
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(),
+            Height = 1,
+            Text = withQuantity
+                ? "type to search   Up/Down choose   Tab to quantity (blank = whole stack)   Enter confirm   Esc cancel"
+                : "type to search   Up/Down choose   Enter confirm   Esc cancel",
+            CanFocus = false,
+        };
+        hint.SetScheme(RuleScheme);
+
+        Dialog dialog = new() { Title = title };
+        dialog.Width = Dim.Percent(80);
+        dialog.Height = Dim.Percent(80);
+        dialog.Add(searchLabel, search, list, hint);
+        if (quantity is not null && quantityLabel is not null)
+        {
+            dialog.Add(quantityLabel, quantity);
+        }
+
+        bool accepted = false;
+        void Accept()
+        {
+            accepted = true;
+            dialog.RequestStop();
+        }
+
+        void MoveSelection(int delta)
+        {
+            if (shown.Count == 0)
+            {
+                return;
+            }
+
+            int current = list.SelectedItem ?? 0;
+            list.SelectedItem = Math.Clamp(current + delta, 0, shown.Count - 1);
+        }
+
+        search.KeyDown += (_, key) =>
+        {
+            if (key == Key.CursorDown) { key.Handled = true; MoveSelection(1); }
+            else if (key == Key.CursorUp) { key.Handled = true; MoveSelection(-1); }
+            else if (key == Key.PageDown) { key.Handled = true; MoveSelection(10); }
+            else if (key == Key.PageUp) { key.Handled = true; MoveSelection(-10); }
+            else if (key == Key.Enter) { key.Handled = true; Accept(); }
+            else if (key == Key.Tab && quantity is not null)
+            {
+                // Straight to the quantity box: default focus order would land on the list,
+                // where typed digits went nowhere (live 2026-09-26: "2" was ignored, the
+                // whole stack of 5 dropped).
+                key.Handled = true;
+                quantity.SetFocus();
+            }
+        };
+        if (quantity is not null)
+        {
+            quantity.KeyDown += (_, key) =>
+            {
+                if (key == Key.Enter) { key.Handled = true; Accept(); }
+                else if (key == Key.Tab || key == Key.Tab.WithShift) { key.Handled = true; search.SetFocus(); }
+                else if (key == Key.CursorDown) { key.Handled = true; MoveSelection(1); }
+                else if (key == Key.CursorUp) { key.Handled = true; MoveSelection(-1); }
+            };
+        }
+
+        list.Accepting += (_, _) => Accept();
+        dialog.KeyDown += (_, key) =>
+        {
+            if (key == Key.Esc || key == Key.F2 || key == Key.F3)
+            {
+                key.Handled = true;
+                dialog.RequestStop();
+            }
+        };
+
+        search.SetFocus();
+        app.Run(dialog);
+
+        if (!accepted || list.SelectedItem is not int index || index < 0 || index >= shown.Count)
+        {
+            return;
+        }
+
+        PickerRow<T> chosen = shown[index];
+        int count = 0;
+        if (quantity is not null && int.TryParse((quantity.Text ?? string.Empty).Trim(), out int typed) && typed > 0)
+        {
+            count = Math.Min(typed, Math.Max(1, chosen.MaxQuantity));
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                onChoose(chosen.Item, count);
+            }
+            catch (Exception ex)
+            {
+                Note($"picker: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// F2: pick one of YOUR OWN backpack items (or part of a stack) and drop it for your
+    /// partner. It used to cycle three hardcoded test blueprints (a fresh lightsaber, pistol or
+    /// medpac each press, never anything the player owned, hence "no identity"). Opens from
+    /// <see cref="_droppableCache"/>, refreshed in the background, so it is instant.
+    /// </summary>
+    private void ShowDropPicker(IApplication app)
+    {
+        if (dispatcher is null)
+        {
+            _lastDropNote = "drop: no command dispatcher wired to this dashboard";
+            return;
+        }
+
+        IReadOnlyList<DroppableItem> items = _droppableCache ?? dispatcher.ListDroppableItems(fresh: false);
+        if (items.Count == 0)
+        {
+            _lastDropNote = "drop: nothing in your backpack you can drop (equipped gear and quest items stay put)";
+            return;
+        }
+
+        List<PickerRow<DroppableItem>> rows = items
+            .Select(i => new PickerRow<DroppableItem>($"{i.Label,-40} {i.Resref}", i, i.Identity.StackSize))
+            .ToList();
+
+        CoopCommandDispatcher commands = dispatcher;
+        ShowItemPicker(app, "Drop one of your items for your partner", rows, withQuantity: true, (item, count) =>
+        {
+            Note($"> drop 0x{item.ObjectId:X}{(count > 0 ? $" {count}" : string.Empty)}   ({item.Label})");
+            commands.Post(() => commands.DropOwn(item, count));
+            _droppableCacheAtMs = 0; // refresh on the next tick: the backpack just changed
+        });
+    }
+
+    /// <summary>
+    /// F3: pick one of the shared items on the ground in your module, nearest first. It used
+    /// to take whichever ground item happened to be first in the list, wherever it was.
+    /// </summary>
+    private void ShowPickupPicker(IApplication app)
+    {
+        CoopAgent? agent = manager.Agent;
+        if (agent is null)
+        {
+            _lastDropNote = "pickup: not connected";
+            return;
+        }
+
+        if (agent.Bridge is not KotorGameBridge kotor)
+        {
+            _lastDropNote = "pickup needs --kotor";
+            return;
+        }
+
+        PlayerState local = agent.LastLocalState;
+        List<GroundItem> ground = agent.Session.Items.Snapshot()
+            .Where(g => local.Module.Length == 0 || g.Module.Equals(local.Module, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(g => g.Position.DistanceTo(local.Position))
+            .ToList();
+        if (ground.Count == 0)
+        {
+            _lastDropNote = "pickup: nothing on the ground here";
+            return;
+        }
+
+        List<PickerRow<GroundItem>> rows = ground.Select(g =>
+        {
+            string name = dispatcher?.ItemName(g.Resref) ?? g.Resref;
+            string stack = g.Identity.IsKnown && g.Identity.StackSize > 1 ? $" x{g.Identity.StackSize}" : string.Empty;
+            return new PickerRow<GroundItem>(
+                $"{name + stack,-40} {g.Position.DistanceTo(local.Position),5:F1} m   {g.Resref}", g, 1);
+        }).ToList();
+
+        ShowItemPicker(app, "Pick up an item from the ground", rows, withQuantity: false, (item, _) =>
+        {
+            bool requested;
+            lock (kotor.Sync)
+            {
+                requested = kotor.TryRequestPickUp(item.ItemId);
+            }
+
+            _lastDropNote = requested
+                ? $"picking up {dispatcher?.ItemName(item.Resref) ?? item.Resref}"
+                : $"pickup refused: 0x{item.ItemId:X} is not on this instance's floor";
+        });
+    }
+
     private void ShowDetailsDialog(IApplication app)
     {
         TextView details = new()
@@ -1428,8 +1993,18 @@ public sealed class AgentDashboard(
     private string BuildFooter()
     {
         string legend = _showInputLine
-            ? "F1 details  F2 drop  F3 pick up  PgUp/PgDn/wheel scroll  Ctrl+L/clear/cls clear  Tab complete  Ctrl+C quit"
+            ? "F1 details  F2 drop an item  F3 pick up  Ctrl+F find  PgUp/PgDn scroll  Ctrl+L clear  Tab complete  Ctrl+C quit"
             : "(no command line: input is redirected)  F1 details  F2 drop  F3 pick up  Ctrl+C to stop";
+
+        if (_searchMode)
+        {
+            return $"find: type to filter the transcript ({CountMatches()} matching line(s))  Enter keep filter  Esc cancel";
+        }
+
+        if (_searchFilter.Length > 0)
+        {
+            return $"filter '{_searchFilter}': {CountMatches()} line(s)  Ctrl+F change  Esc (on an empty line) clear   F2 drop  F3 pick up";
+        }
 
         if (!_transcript.IsFollowing && _transcript.NewSinceScrolled > 0)
         {

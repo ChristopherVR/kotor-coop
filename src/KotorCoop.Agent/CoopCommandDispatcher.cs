@@ -160,6 +160,7 @@ public sealed partial class CoopCommandDispatcher(
 
                     manager.Poll();
                     DrainInputs();
+                    DrainPosted();
                     PublishBrowserList();
                     ReflectPhase();
                     AnnouncePeerChanges();
@@ -253,6 +254,25 @@ public sealed partial class CoopCommandDispatcher(
     /// parallel one that could answer a command differently.
     /// </summary>
     public void RunTypedLine(string line) => DispatchFromGame(ConsoleCommand.Parse(line));
+
+    /// <summary>Work handed over from another thread (the agent window's UI thread, a picker's
+    /// background task), run on this dispatcher's own tick so it never races the cheat slot
+    /// or the other per-tick state — and never blocks the window while it runs.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _posted = new();
+
+    /// <summary>Queues <paramref name="work"/> for the next dispatcher tick (150 ms at most).</summary>
+    public void Post(Action work) => _posted.Enqueue(work);
+
+    /// <summary><see cref="RunTypedLine"/>, run on the dispatcher's own thread.</summary>
+    public void PostTypedLine(string line) => Post(() => RunTypedLine(line));
+
+    private void DrainPosted()
+    {
+        while (_posted.TryDequeue(out Action? work))
+        {
+            work();
+        }
+    }
 
     /// <summary>
     /// Applies a parsed command to the session manager. Public so the initial CLI/menu
@@ -348,6 +368,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.GoTo] = c => GoTo(c.Address ?? string.Empty),
         [CoopCommandKind.AutoFollow] = c => AutoFollowCommand(c.Address),
         [CoopCommandKind.DropItem] = c => DropItem(c.Address ?? string.Empty),
+        [CoopCommandKind.DropOwn] = c => DropOwnItem(c.Address ?? string.Empty, c.Amount),
         [CoopCommandKind.Items] = c => ListItems(c.Amount),
         [CoopCommandKind.InspectItem] = c => InspectItem(c.Address ?? string.Empty),
         [CoopCommandKind.SetItem] = c => SetItem(c.Address ?? string.Empty, c.Item),

@@ -72,6 +72,7 @@ internal static class ConsoleVerbCatalog
         ("tp", "tp <x> <y> [z]"),
         ("goto", "goto <player|#n>"),
         ("autofollow", "autofollow [player|#n|off|status]  (blank = the host)"),
+        ("drop", "drop <0xid|resref> [count]  (one of YOUR backpack items, for your partner)"),
         ("dropitem", "dropitem <resref|0x131>"),
         ("cheats", "cheats"),
 

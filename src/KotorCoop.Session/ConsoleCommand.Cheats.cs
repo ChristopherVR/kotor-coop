@@ -617,6 +617,8 @@ public static partial class ConsoleCommand
         "  goto <player>       move yourself to a peer (same module)",
         "  autofollow [player|off|status]  keep walking after a peer (default: the host);",
         "                      snaps back if left far behind; transitions ride follow_lead",
+        "  drop <0xid|resref> [n]  drop one of YOUR items (or n of a stack) for your partner (out of your",
+        "                      backpack, stack/upgrades intact; quest items stay shared)",
         "  dropitem <resref>   drop a blueprint; the item channel shares it",
         "  dropitem 0x131      drop a copy of a LIVE item, carrying its real state",
         "  items [n]           list live items here: id, resref, holder, stack/charges/upgrades",

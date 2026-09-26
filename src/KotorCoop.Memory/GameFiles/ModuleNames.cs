@@ -106,7 +106,7 @@ public static class ModuleNames
 
     /// <summary>This install's dialog.tlk, parsed once. Null (cached as null) when it cannot
     /// be read, so a broken install costs one attempt rather than one per lookup.</summary>
-    private static Tlk? TalkTable(string gameDirectory)
+    internal static Tlk? TalkTable(string gameDirectory)
     {
         lock (TalkTables)
         {
