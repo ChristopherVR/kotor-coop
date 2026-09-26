@@ -31,6 +31,12 @@ public sealed partial class CoopCommandDispatcher
     /// order aims at the leader's own feet, which are on it by definition.</summary>
     private bool _followAimAtLeader;
 
+    /// <summary>Whether the leader's current conversation has been seen, when it was first
+    /// seen, and the last join sent for it — see <see cref="AutoFollowRule.ShouldJoinConversation"/>.</summary>
+    private bool _followLeaderTalking;
+    private DateTime _followTalkSeen;
+    private DateTime _followLastJoin = DateTime.MinValue;
+
     private void AutoFollowCommand(string? argument)
     {
         string arg = argument?.Trim() ?? string.Empty;
@@ -123,12 +129,39 @@ public sealed partial class CoopCommandDispatcher
         }
 
         DateTime now = DateTime.UtcNow;
+
+        // The leader's talk token, not their state flag: both ride the wire, but the token is
+        // what the join targets, and holding walks on it closes the window where a walk order
+        // could land on top of the plugin's own auto-join.
+        DialogueState talk = session.GetDialogue();
+        bool leaderTalking = AutoFollowRule.IsLeaderTalking(talk, leader.PeerId);
+        if (!leaderTalking)
+        {
+            _followLeaderTalking = false;
+        }
+        else if (!_followLeaderTalking)
+        {
+            _followLeaderTalking = true;
+            _followTalkSeen = now;
+            _followLastJoin = DateTime.MinValue;
+        }
+
+        if (AutoFollowRule.ShouldJoinConversation(
+            talk, leader.PeerId, local, leader.State, now - _followTalkSeen, now - _followLastJoin))
+        {
+            _followLastJoin = now;
+            Log?.Invoke($"autofollow: joining {leader.Name}'s conversation with '{talk.PartnerTag}'");
+            SendCheat(new CheatRequest(CheatKinds.StartDialog, Text: talk.PartnerTag), quiet: true);
+            return;
+        }
+
         AutoFollowDecision decision = AutoFollowRule.Decide(
             local,
             leader.State,
             _followLastDestination,
             now - _followLastOrder,
-            now - _followLastSnap);
+            now - _followLastSnap,
+            leaderTalking);
 
         switch (decision.Action)
         {

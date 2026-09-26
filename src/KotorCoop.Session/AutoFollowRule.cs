@@ -51,12 +51,59 @@ public static class AutoFollowRule
     /// <summary>A snap is a big hammer; never two inside this window.</summary>
     public static readonly TimeSpan SnapCooldown = TimeSpan.FromSeconds(5);
 
+    /// <summary>Lets the plugin's own auto-join (a forced conversation, or dialogue_auto_join
+    /// near/always) go first, so the two never queue competing opens.</summary>
+    public static readonly TimeSpan JoinGrace = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>Between join attempts on the same conversation (a refused one, a load).</summary>
+    public static readonly TimeSpan JoinRetry = TimeSpan.FromSeconds(4);
+
+    /// <summary>
+    /// Whether a follower should join the conversation its leader holds. Auto-join ships off
+    /// (<c>dialogue_auto_join=off</c>), so without this a follower waited outside every
+    /// ordinary conversation — the leader's talk token is what the join targets, via the same
+    /// request a click on that NPC sends (the dialogue gate adopts it as a follow; live: joined
+    /// from 21 m, on the owner's node 28 ms after the request landed). A forced conversation is
+    /// left to the plugin, which already joins those unconditionally.
+    /// </summary>
+    public static bool ShouldJoinConversation(
+        DialogueState talk,
+        uint leaderPeerId,
+        PlayerState local,
+        PlayerState leader,
+        TimeSpan sinceTokenSeen,
+        TimeSpan sinceLastJoin)
+    {
+        if (!IsLeaderTalking(talk, leaderPeerId) || talk.Forced || talk.PartnerTag.Length == 0)
+        {
+            return false;
+        }
+
+        if (local.IsInDialogue || local.IsDowned || local.IsInMinigame || local.IsInCombat)
+        {
+            return false;
+        }
+
+        if (local.Module.Length == 0
+            || !string.Equals(local.Module, leader.Module, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return sinceTokenSeen >= JoinGrace && sinceLastJoin >= JoinRetry;
+    }
+
+    /// <summary>The session's talk token says the leader owns a conversation right now.</summary>
+    public static bool IsLeaderTalking(DialogueState talk, uint leaderPeerId) =>
+        talk.Active && talk.OwnerPeerId == leaderPeerId;
+
     public static AutoFollowDecision Decide(
         PlayerState local,
         PlayerState leader,
         Vector3f? lastDestination,
         TimeSpan sinceLastOrder,
-        TimeSpan sinceLastSnap)
+        TimeSpan sinceLastSnap,
+        bool leaderTalking = false)
     {
         if (local.Module.Length == 0 || leader.Module.Length == 0)
         {
@@ -73,7 +120,7 @@ public static class AutoFollowRule
             return Hold("position not readable yet");
         }
 
-        if (local.IsInDialogue || leader.IsInDialogue)
+        if (local.IsInDialogue || leader.IsInDialogue || leaderTalking)
         {
             return Hold("in a conversation");
         }

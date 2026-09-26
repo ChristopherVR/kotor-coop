@@ -82,4 +82,44 @@ public class AutoFollowRuleTests
         Assert.Equal("off", ConsoleCommand.Parse("autofollow off").Address);
         Assert.Equal("#1", ConsoleCommand.Parse("autofollow #1").Address);
     }
+
+    private static DialogueState Talk(uint owner = 1, string tag = "dan14_nemo", bool forced = false) =>
+        new(true, owner, 7, "Nemo", "", PartnerTag: tag, Forced: forced);
+
+    private static readonly TimeSpan Seen = TimeSpan.FromSeconds(2);
+
+    [Fact]
+    public void JoinsTheLeadersConversationAfterTheGrace()
+    {
+        Assert.True(AutoFollowRule.ShouldJoinConversation(Talk(), 1, At(0, 0), At(20, 0), Seen, Long));
+        Assert.False(AutoFollowRule.ShouldJoinConversation(Talk(), 1, At(0, 0), At(20, 0), TimeSpan.FromMilliseconds(100), Long));
+    }
+
+    [Fact]
+    public void DoesNotRetryInsideTheRetryWindow()
+    {
+        Assert.False(AutoFollowRule.ShouldJoinConversation(Talk(), 1, At(0, 0), At(20, 0), Seen, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void LeavesForcedConversationsToThePlugin()
+    {
+        Assert.False(AutoFollowRule.ShouldJoinConversation(Talk(forced: true), 1, At(0, 0), At(20, 0), Seen, Long));
+    }
+
+    [Fact]
+    public void IgnoresSomebodyElsesConversationAndOneAlreadyJoined()
+    {
+        Assert.False(AutoFollowRule.ShouldJoinConversation(Talk(owner: 3), 1, At(0, 0), At(20, 0), Seen, Long));
+        Assert.False(AutoFollowRule.ShouldJoinConversation(
+            Talk(), 1, At(0, 0, flags: PlayerState.FlagInDialogue), At(20, 0), Seen, Long));
+        Assert.False(AutoFollowRule.ShouldJoinConversation(Talk(), 1, At(0, 0), At(20, 0, "danm13"), Seen, Long));
+    }
+
+    [Fact]
+    public void ALeaderTalkTokenHoldsWalksBeforeTheirFlagArrives()
+    {
+        AutoFollowDecision d = AutoFollowRule.Decide(At(0, 0), At(10, 0), null, Long, Long, leaderTalking: true);
+        Assert.Equal(AutoFollowAction.Hold, d.Action);
+    }
 }
