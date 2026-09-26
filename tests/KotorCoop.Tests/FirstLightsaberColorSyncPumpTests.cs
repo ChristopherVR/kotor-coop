@@ -150,7 +150,8 @@ public class FirstLightsaberColorSyncPumpTests
         }
     }
 
-    private static (CoopAgent Agent, ClassAwareBridge Bridge, StubSession Session) Build(bool firstSaberColorSync)
+    private static (CoopAgent Agent, ClassAwareBridge Bridge, StubSession Session) Build(
+        bool firstSaberColorSync, string? gameDirectory = null)
     {
         ClassAwareBridge bridge = new();
         StubSession session = new();
@@ -162,6 +163,7 @@ public class FirstLightsaberColorSyncPumpTests
                 CombatPumpIntervalMs = 0,
                 FirstSaberColorSync = firstSaberColorSync,
                 ScriptItemGrantSampleIntervalMs = 0,
+                GameDirectory = gameDirectory,
             });
 
         return (agent, bridge, session);
@@ -334,6 +336,68 @@ public class FirstLightsaberColorSyncPumpTests
         // The flag is already true and stays true (a resync would simply re-affirm it) - a
         // second pump must not queue a second give.
         agent.PumpOnce();
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
+    }
+
+    // ---- one starter saber per character, ever (2026-09-26 live duplicates) ------------
+
+    [Fact]
+    public void DroppingTheGivenSaberDoesNotEarnANewOne()
+    {
+        (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
+        bridge.ClassIds = [5];
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
+
+        agent.PumpOnce();
+        Assert.True(agent.TryDequeuePendingFirstSaberBuild(out _));
+
+        // It landed, then the player dropped it: nothing possessed again.
+        bridge.Possessed = [];
+        for (int i = 0; i < 5; i++)
+        {
+            agent.PumpOnce();
+        }
+
+        Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
+    }
+
+    [Fact]
+    public void ARestartedAgentOnTheSameInstallDoesNotGrantAgain()
+    {
+        string game = Path.Combine(Path.GetTempPath(), "kcoop-saber-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            (CoopAgent first, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true, game);
+            bridge.ClassIds = [5];
+            session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
+            first.PumpOnce();
+            Assert.True(first.TryDequeuePendingFirstSaberBuild(out _));
+
+            (CoopAgent second, ClassAwareBridge bridge2, StubSession session2) = Build(firstSaberColorSync: true, game);
+            bridge2.ClassIds = [5];
+            session2.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
+            second.PumpOnce();
+
+            Assert.False(second.TryDequeuePendingFirstSaberBuild(out _));
+        }
+        finally
+        {
+            try { Directory.Delete(game, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ACharacterThatHadItsOwnSaberIsNeverGivenOneAfterLosingIt()
+    {
+        (CoopAgent agent, ClassAwareBridge bridge, StubSession session) = Build(firstSaberColorSync: true);
+        bridge.ClassIds = [5];
+        bridge.Possessed = [(Yellow, new ItemIdentity(1, 0, 0, 0, 0))];
+        session.Flags.Set(FirstLightsaberColorRule.FirstSaberBuiltFlagId, 1, originPeerId: 1);
+        agent.PumpOnce();
+
+        bridge.Possessed = []; // sold it
+        agent.PumpOnce();
+
         Assert.False(agent.TryDequeuePendingFirstSaberBuild(out _));
     }
 }

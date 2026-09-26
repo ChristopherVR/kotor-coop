@@ -45,8 +45,25 @@ namespace KotorCoop.Session.Pumps;
 /// prerequisite check then applies normally, because nothing here bypasses it.
 /// </summary>
 internal sealed class FirstLightsaberBuildPump(
-    IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log)
+    IGameBridge bridge, ICoopSession session, AgentSettings settings, Action<string> log, KeyedMarkerFile? grants = null)
 {
+    /// <summary>
+    /// ONE starter saber per co-op character, ever (2026-09-26). The Apply half used to
+    /// re-check possession live with no memory beyond the process, so a player who DROPPED or
+    /// SOLD their saber was handed a new one, and every agent restart re-granted it; with the
+    /// 3 s retry racing the 1 s possession cache it was handed two (live: 12:42:43 and
+    /// 12:42:46). The character is marked here the moment it is seen with a saber or a give is
+    /// queued, persisted under saves\, and only a give the game refused clears the mark.
+    /// </summary>
+    private readonly KeyedMarkerFile _grants = grants ?? new KeyedMarkerFile(
+        settings.GameDirectory is { Length: > 0 } game ? Path.Combine(game, "saves") : null,
+        GrantFileName,
+        "co-op characters that already received their first lightsaber (kotor-coop); delete a line to allow one more");
+
+    public const string GrantFileName = "kotorcoop-firstsaber.txt";
+
+    private string CharacterKey => session.LocalName;
+
     private static readonly HashSet<uint> LocalPlayerIdSet = [AgentWellKnownIds.LocalPlayerObjectId];
 
     /// <summary>Minimum gap between the (comparatively expensive) possessed-items sweep this
@@ -90,6 +107,7 @@ internal sealed class FirstLightsaberBuildPump(
         if (locallyHasOne)
         {
             _hasFirstSaber = true;
+            _grants.Mark(CharacterKey); // has had one: never re-grant after a drop or a sale
         }
 
         PublishIfJustBuilt(locallyHasOne);
@@ -150,6 +168,11 @@ internal sealed class FirstLightsaberBuildPump(
             return; // nobody in the party has built one yet
         }
 
+        if (_grants.Contains(CharacterKey))
+        {
+            return; // this character already had its one starter saber
+        }
+
         string? resref = FirstLightsaberColorRule.ResrefForClasses(bridge.ReadLocalClassIds());
         if (resref is null)
         {
@@ -166,6 +189,11 @@ internal sealed class FirstLightsaberBuildPump(
             }
 
             _nextGiveAttemptMs = now + GiveRetryIntervalMs;
+            if (!_grants.Mark(CharacterKey))
+            {
+                return; // marked meanwhile (another tick saw it land)
+            }
+
             log($"first lightsaber: giving this character their own '{resref}' from the party's "
                 + "construction");
             _pendingBuildResref = resref;
@@ -177,6 +205,9 @@ internal sealed class FirstLightsaberBuildPump(
     /// dispatcher's pending-cheat-serial check), at most once per ITS tick — the same discipline
     /// <c>LootPump.TryDequeuePendingLoot</c> already follows for its own automatic give.
     /// </summary>
+    /// <summary>The queued give was refused by the game: allow a later attempt.</summary>
+    public void NoteGiveRefused() => _grants.Unmark(CharacterKey);
+
     public bool TryDequeuePendingGive(out string resref)
     {
         lock (_pendingGate)

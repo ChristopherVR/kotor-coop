@@ -375,6 +375,7 @@ public sealed partial class CoopCommandDispatcher
         agent.NoteLocalItemGiven(CheatKinds.LocalPlayerTarget, resref);
         SendCheat(new CheatRequest(
             CheatKinds.GiveLoot, Target: CheatKinds.LocalPlayerTarget, Text: resref, Amount: 1),
+            onRefused: agent.NoteFirstSaberGiveRefused,
             quiet: true);
     }
 }

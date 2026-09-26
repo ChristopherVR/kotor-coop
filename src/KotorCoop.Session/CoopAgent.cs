@@ -1306,6 +1306,10 @@ public sealed partial class CoopAgent
         return _firstLightsaberBuildPump.TryDequeuePendingGive(out resref);
     }
 
+    /// <summary>The automatic first-saber give was refused by the game - see
+    /// <see cref="FirstLightsaberBuildPump.NoteGiveRefused"/>.</summary>
+    public void NoteFirstSaberGiveRefused() => _firstLightsaberBuildPump.NoteGiveRefused();
+
     /// <summary>One party-pool add/remove this instance's own engine still owes, queued for the
     /// automatic apply path to submit through the same arbitrated cheat channel a human's own
     /// party-pool console verb would use — see <see cref="TryDequeuePendingPartyPoolApply"/>.
