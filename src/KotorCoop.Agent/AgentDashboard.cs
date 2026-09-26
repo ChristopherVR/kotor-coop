@@ -710,6 +710,19 @@ public sealed class AgentDashboard(
     // Terminal.Gui wiring — everything below touches a View and must run on the UI thread.
     // ===================================================================================
 
+    /// <summary>
+    /// Terminal.Gui 2.5's default theme draws a READ-ONLY TextView's text in the same light
+    /// grey as its background — the transcript and F1 details were a blank grey block with a
+    /// scrollbar and nothing legible (reproduced in isolation 2026-09-26), and the input line
+    /// sat in the same grey. Plain light-on-black for every text surface, like the header.
+    /// </summary>
+    private static readonly Scheme TextScheme = new(new Terminal.Gui.Drawing.Attribute(Color.Gray, Color.Black))
+    {
+        ReadOnly = new Terminal.Gui.Drawing.Attribute(Color.Gray, Color.Black),
+        Editable = new Terminal.Gui.Drawing.Attribute(Color.White, Color.Black),
+        Focus = new Terminal.Gui.Drawing.Attribute(Color.White, Color.Black),
+    };
+
     private Window BuildWindow(IApplication app)
     {
         Window window = new()
@@ -748,6 +761,7 @@ public sealed class AgentDashboard(
             // Ctrl+Home/Ctrl+End, which OnGlobalKeyDown forwards here regardless of focus.
             CanFocus = false,
         };
+        _transcriptView.SetScheme(TextScheme);
         _transcriptView.ViewportChanged += (_, _) => OnTranscriptViewportChanged();
 
         _dropdownLabel = new Label
@@ -778,6 +792,7 @@ public sealed class AgentDashboard(
             Height = 1,
             Text = string.Empty,
         };
+        _inputField.SetScheme(TextScheme);
         _inputField.KeyDown += OnInputFieldKeyDown;
 
         _footerLabel = new Label
@@ -1174,6 +1189,7 @@ public sealed class AgentDashboard(
             ScrollBars = true,
             Text = string.Join('\n', BuildDetailsLines()),
         };
+        details.SetScheme(TextScheme);
 
         Label closeHint = new()
         {
