@@ -774,6 +774,9 @@ public static class CheatKinds
     /// <summary>`firetrigger <tag|0xid>` - see <c>SharedBlock.CheatKindFireTrigger</c>.</summary>
     public const uint FireTrigger = 106;
 
+    /// <summary>`runscript <resref> [0xid]` - see <c>SharedBlock.CheatKindRunScript</c>.</summary>
+    public const uint RunScript = 107;
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side GL
     /// screenshot for the isolated rig (docs/research/isolated-rig.md): PrintWindow is

@@ -53,6 +53,7 @@ internal static class ConsoleVerbCatalog
         ("census", "census [id]  (what my enemy census holds, and what my engine says of it)"),
         ("resolve", "resolve <id|party>  (what the engine knows about one id, or the CSWParty member array; chain in the plugin log)"),
         ("firescript", "firescript <id> [fire]  (peek or fire the +0x260 event script)"),
+        ("runscript", "runscript <resref> [0xid]  (dev: run a named script with that object as its caller)"),
         ("netsim", "netsim <off|status|loss <pct>|latency <ms> [jitter]|blackout <secs> [in|out|both]>"),
 
         // ---- staging cheats ------------------------------------------------------

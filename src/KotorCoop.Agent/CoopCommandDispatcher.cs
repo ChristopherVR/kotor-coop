@@ -415,6 +415,10 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Input] = c => SendCheat(new CheatRequest(CheatKinds.Input, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.Stealth] = c => SendCheat(new CheatRequest(CheatKinds.Stealth, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.FireTrigger] = c => SendCheat(new CheatRequest(CheatKinds.FireTrigger, Text: c.Address ?? string.Empty)),
+        [CoopCommandKind.RunScript] = c => SendCheat(new CheatRequest(
+            CheatKinds.RunScript,
+            Target: c.Password is { } id && ConsoleCommand.TryParseItemId(id, out uint objectId) ? objectId : 0,
+            Text: c.Address ?? string.Empty)),
         [CoopCommandKind.Screenshot] = c => SendCheat(new CheatRequest(CheatKinds.Screenshot, Text: c.Address ?? string.Empty)),
         [CoopCommandKind.QuitToMenu] = _ => SendCheat(new CheatRequest(CheatKinds.QuitToMenu)),
         [CoopCommandKind.MineAction] = c => QueueMineAction(c),

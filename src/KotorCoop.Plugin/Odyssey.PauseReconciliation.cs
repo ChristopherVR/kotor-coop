@@ -300,7 +300,19 @@ internal static unsafe partial class Odyssey
         }
 
         var dispatch = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedDestroyObject;
-        int status = dispatch(implementer, _routineDestroyObject, 4);
+
+        // This plugin's own destroy is a removal the session decided (a host-side death or
+        // pickup relayed here): ScriptDestroyGuardHook must let it through.
+        ScriptDestroyGuardHook.Bypass = true;
+        int status;
+        try
+        {
+            status = dispatch(implementer, _routineDestroyObject, 4);
+        }
+        finally
+        {
+            ScriptDestroyGuardHook.Bypass = false;
+        }
         if (status != 0)
         {
             failure = 6;

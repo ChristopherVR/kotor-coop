@@ -182,6 +182,19 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             return;
         }
 
+        if (kind == SharedBlock.CheatKindRunScript)
+        {
+            string script = ReadCheatText().Trim();
+            uint self = block.CheatTarget != 0 ? block.CheatTarget : playerId;
+            bool ran = Odyssey.RunNamedScript(script, self);
+            string note = ran
+                ? $"ran '{script}' with 0x{self:X} as OBJECT_SELF"
+                : $"could not run '{script}' (no VM, or not a loadable script name)";
+            PluginHost.Log($"cheat: runscript - {note}");
+            Answer(ran ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused, note);
+            return;
+        }
+
         if (kind == SharedBlock.CheatKindStealth)
         {
             bool on = ReadCheatText().Trim().Equals("on", StringComparison.OrdinalIgnoreCase);

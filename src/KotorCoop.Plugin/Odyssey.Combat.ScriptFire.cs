@@ -309,3 +309,36 @@ internal static unsafe partial class Odyssey
     }
 
 }
+
+internal static unsafe partial class Odyssey
+{
+    /// <summary>
+    /// Runs the named NWScript with <paramref name="objectId"/> as OBJECT_SELF, through the
+    /// engine's own <c>CVirtualMachine::RunScript</c> (the same call the door OnOpen and creature
+    /// event dispatchers make — see <see cref="RunScriptFn"/>). The script name is built with the
+    /// engine's own <c>CExoString(char const*)</c> and deliberately never freed: RunScript is
+    /// queue-based, and a dev-only command can afford a few leaked bytes more than a dangling
+    /// name. Dev test primitive (<c>runscript</c>). MAIN THREAD ONLY.
+    /// </summary>
+    public static bool RunNamedScript(string resref, uint objectId)
+    {
+        if (string.IsNullOrEmpty(resref) || resref.Length > 16 || objectId == 0)
+        {
+            return false;
+        }
+
+        nint vm = *(nint*)VirtualMachinePtr;
+        if (vm == 0)
+        {
+            return false;
+        }
+
+        byte[] ascii = System.Text.Encoding.ASCII.GetBytes(resref.ToLowerInvariant());
+        nint text = (nint)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(ascii.Length + 1));
+        nint exo = (nint)System.Runtime.InteropServices.NativeMemory.AllocZeroed(16);
+        ascii.CopyTo(new Span<byte>((void*)text, ascii.Length));
+        PlacedMineStringCtorFn(exo, text);
+        RunScriptFn(vm, exo, objectId, 1);
+        return true;
+    }
+}

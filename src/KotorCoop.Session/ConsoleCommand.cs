@@ -1024,6 +1024,11 @@ public enum CoopCommandKind
     /// player (dev live-test primitive). Local only.</summary>
     FireTrigger,
 
+    /// <summary><c>runscript &lt;resref&gt; [0xid]</c> — dev-only: run a named script with that object
+    /// (or yourself) as OBJECT_SELF. <see cref="CoopCommand.Address"/> is the resref,
+    /// <see cref="CoopCommand.Password"/> the optional object id.</summary>
+    RunScript,
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — a plugin-side
     /// screenshot for the isolated rig (docs/research/isolated-rig.md), because
@@ -1272,6 +1277,7 @@ public static partial class ConsoleCommand
         new(["input"], ParseInput),
         new(["stealth"], ParseStealth),
         new(["firetrigger"], ParseFireTrigger),
+        new(["runscript"], ParseRunScript),
         new(["screenshot"], ParseScreenshot),
         new(["cast"], ParseCast),
         new(["grantpower"], ParseGrantPower),

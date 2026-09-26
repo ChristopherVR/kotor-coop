@@ -581,6 +581,15 @@ internal static unsafe partial class PluginHost
         // every save reaches (CServerExoAppInternal::SaveGame) while the plugin's own spawns
         // are destroyed, then re-issued unchanged. Verify-bytes-or-refuse; coop.ini
         // save_flush=0 opts out. NEEDS-LIVE — the recipe is in the hook's header.
+        // A joiner's own scripts may not destroy a creature the host owns and has alive
+        // (Rilka, 2026-09-26). Verify-bytes-or-refuse; coop.ini script_destroy_guard=0 opts out.
+        EnemyPresenceController.ScriptDestroyGuardEnabled = PluginConfig.ReadBool("script_destroy_guard", true);
+        if (EnemyPresenceController.ScriptDestroyGuardEnabled)
+        {
+            bool guarded = ScriptDestroyGuardHook.Install(out string destroyGuardDiagnostic);
+            Log($"script destroy guard {(guarded ? "ready" : "NOT installed")}: {destroyGuardDiagnostic}");
+        }
+
         bool moveObserverInstalled = ModuleMoveRequestHook.Install(out string moveObserverDiagnostic);
         Log($"module move observer {(moveObserverInstalled ? "ready" : "NOT installed")}: {moveObserverDiagnostic}");
 

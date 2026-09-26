@@ -29,6 +29,13 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe partial class EnemyPresenceController(SharedBlockView block)
 {
+    /// <summary>The host's census ids seen alive this pass — handed to
+    /// <see cref="ScriptDestroyGuardHook"/>.</summary>
+    private readonly HashSet<uint> _aliveOwnerIds = [];
+
+    /// <summary><c>script_destroy_guard</c> (default ON), set once at startup.</summary>
+    public static bool ScriptDestroyGuardEnabled = true;
+
     /// <summary>CSWSObject + this = object type; a creature is 5 (verified, the AI
     /// master's own gate at 0x004B0C20 tests it).
     ///
@@ -652,10 +659,15 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         SelectImmediateCandidate(count, player);
 
         int driven = 0;
+        _aliveOwnerIds.Clear();
 
         for (int i = 0; i < count; i++)
         {
             EnemyPresenceView enemy = block.GetEnemyPresence(i);
+            if (!enemy.Dead)
+            {
+                _aliveOwnerIds.Add(enemy.ObjectId);
+            }
 
             bool alreadyRetained = MaterialisedEnemies.IsRetainedOwner(enemy.ObjectId);
             if (_retainedCandidateThisPass[i] && !alreadyRetained)
@@ -737,6 +749,12 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
 
         MaterialisedEnemies.Sweep(now);
         PublishMaterialisedOwnerIds();
+
+        // The host keeps these alive: a local script may not destroy them (Rilka, 2026-09-26).
+        if (ScriptDestroyGuardEnabled)
+        {
+            ScriptDestroyGuardHook.SetProtected(_aliveOwnerIds);
+        }
 
         // ⚠ STAMPED ONLY HERE, at the bottom of a pass that actually ran. Every early return
         // above -- no session, drive disabled, a local conversation, an empty census -- leaves

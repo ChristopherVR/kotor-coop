@@ -610,6 +610,16 @@ internal static unsafe partial class PluginHost
                 // has spawned anything for this epoch, so whatever carries the stand-in tag is a
                 // ghost by construction; the sweep itself runs from the tick below.
                 _ghostSweep?.Arm();
+
+                // A joiner's local scripts may not destroy the host's creatures; everything in
+                // an adopted/joined world is the host's from its first frame (Rilka, 2026-09-26).
+                if (EnemyPresenceController.ScriptDestroyGuardEnabled && _view is { } guardView)
+                {
+                    bool client = guardView.TryGetLocalSessionRole(out bool isHost) && !isHost;
+                    bool adopted = guardView.AdoptWorldApplied == SharedBlock.AdoptLoginCarriedCharacter;
+                    ScriptDestroyGuardHook.OnWorldUp(client || adopted);
+                }
+
                 _transitionPending = false;
                 _doorTransitionAnnouncedThisEpoch = false;
                 _moveToModulePendingSeen = false;

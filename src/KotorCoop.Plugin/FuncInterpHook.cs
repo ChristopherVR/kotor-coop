@@ -48,6 +48,7 @@ internal static unsafe class FuncInterpHook
         // retail verb.
         "input",
         "stealth",
+        "runscript",
         "firetrigger",
 
         // The isolated rig's plugin-side screenshot (docs/research/isolated-rig.md):

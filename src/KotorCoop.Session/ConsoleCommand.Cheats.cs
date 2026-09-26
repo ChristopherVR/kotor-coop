@@ -397,6 +397,12 @@ public static partial class ConsoleCommand
             ? new CoopCommand(CoopCommandKind.FireTrigger, Address: rest[0])
             : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: firetrigger <tag|0xid>  e.g. firetrigger ebn12_ebonexit");
 
+    private static CoopCommand ParseRunScript(string[] rest) =>
+        rest.Length is 1 or 2 && rest[0].Length is > 0 and <= 16
+            && (rest.Length == 1 || TryParseItemId(rest[1], out _))
+            ? new CoopCommand(CoopCommandKind.RunScript, Address: rest[0], Password: rest.Length == 2 ? rest[1] : null)
+            : new CoopCommand(CoopCommandKind.Invalid, Error: "usage: runscript <resref> [0xid]  e.g. runscript k_pdan_elise_06 0x2");
+
     private static CoopCommand ParseStealth(string[] rest) =>
         rest.Length == 1 && (rest[0].Equals("on", StringComparison.OrdinalIgnoreCase) || rest[0].Equals("off", StringComparison.OrdinalIgnoreCase))
             ? new CoopCommand(CoopCommandKind.Stealth, Address: rest[0].ToLowerInvariant())
@@ -660,6 +666,7 @@ public static partial class ConsoleCommand
         "  effects                     the last 8 effects captured, forwarded and applied",
         "  census [id]                 what the enemy census holds, and what the game says of each",
         "  resolve <id>                what the game knows about one object id",
+        "  runscript <resref> [0xid]   run a named script with that object (or you) as its caller",
         "  netsim <off|status|loss <pct>|latency <ms> <jitter>|blackout <s> [in|out|both]>",
         "                              simulate a bad network",
         "  moviewarp <module> <movie...>   warp with a cinematic (the plugin pauses for it)",

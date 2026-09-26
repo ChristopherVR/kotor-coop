@@ -1539,4 +1539,9 @@ internal partial struct SharedBlock
     /// <summary>`firetrigger <tag|0xid>`: fire a trigger's OnEnter for the local player (dev).
     /// <c>IGameBridge.CheatKinds.FireTrigger</c>.</summary>
     public const uint CheatKindFireTrigger = 106;
+
+    /// <summary><c>runscript &lt;resref&gt; [0xid]</c>: run a named NWScript with that object (or the
+    /// local player) as OBJECT_SELF, through the engine's own RunScript. Dev-only test primitive
+    /// (built to exercise ScriptDestroyGuardHook live).</summary>
+    public const uint CheatKindRunScript = 107;
 }
