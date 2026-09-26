@@ -219,6 +219,13 @@ internal sealed unsafe partial class PhantomController
             // phantom. The phantom is min-1-hp, so it never reads dead and an attacker
             // would otherwise hold the lock forever (the aggro-sink failure of 7.4).
             bool peerInCombat = remote.InCombat;
+            // Reconcile while fighting, and release once on exit. Do not keep
+            // forcing idle outside combat: that would cancel a voluntary flourish.
+            if (peerInCombat || _peerInCombat[i])
+            {
+                Odyssey.MirrorWeaponCombatVisual(phantom, peerInCombat);
+            }
+
             if (_peerInCombat[i] && !peerInCombat)
             {
                 Odyssey.PacifyPhantom(phantom);
