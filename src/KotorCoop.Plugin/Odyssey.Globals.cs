@@ -125,6 +125,32 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    // A profile must distinguish an absent identifier from a real zero. The engine getter
+    // above cannot do that. Read the same sparse catalogue/value layout used by the agent's
+    // GlobalVariableTable: 1775 entries, 22-byte name + packed type/index, signed-byte numbers.
+    // MAIN THREAD ONLY; called during rare roster recovery, never every frame.
+    private static int? ReadRecruitmentNumber(string name)
+    {
+        nint table = GetGlobalVariableTable();
+        if (table == 0) return null;
+        for (int slot = 0; slot < 1775; slot++)
+        {
+            byte* entry = (byte*)table + slot * 0x18;
+            if (entry[0] == 0) continue;
+            int length = 0;
+            while (length < 22 && entry[length] != 0) length++;
+            if (length != name.Length) continue;
+            bool match = true;
+            for (int i = 0; i < length; i++)
+                if (char.ToUpperInvariant((char)entry[i]) != char.ToUpperInvariant(name[i])) { match = false; break; }
+            if (!match) continue;
+            ushort packed = *(ushort*)(entry + 22);
+            int index = packed & 0x3FFF;
+            return (packed >> 14) == 1 && index < 500 ? *(sbyte*)((byte*)table + 0xA6D9 + index) : null;
+        }
+        return null;
+    }
+
     /// <summary>
     /// Writes a boolean or number script global by NAME through the engine's own type-checked
     /// setter (never a raw table poke — see the file header). <paramref name="asBoolean"/>

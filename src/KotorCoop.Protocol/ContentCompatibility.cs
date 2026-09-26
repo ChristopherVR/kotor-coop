@@ -58,6 +58,7 @@ public enum CompatibilityCode
 
     /// <summary>The live GUI difficulty differs, so PC/party damage scaling can differ.</summary>
     Difficulty,
+    Gameplay,
 }
 
 /// <summary>
@@ -90,6 +91,7 @@ public readonly record struct CompatibilityNote(
         CompatibilityCode.TwoDa => "W_2DA",
         CompatibilityCode.Modules => "W_MODULES",
         CompatibilityCode.Difficulty => "W_DIFFICULTY",
+        CompatibilityCode.Gameplay => "W_GAMEPLAY",
         _ => "W_NONE",
     };
 
@@ -188,6 +190,16 @@ public static class ContentCompatibility
     {
         List<CompatibilityNote> notes = [];
         SessionCapabilities caps = SessionCapabilities.All;
+
+        if (BothKnow(local, remote, ContentDigest.Field.Gameplay)
+            && local.GameplayDigest != remote.GameplayDigest)
+        {
+            SessionCapabilities dropped = SessionCapabilities.All
+                & ~(SessionCapabilities.Phantoms | SessionCapabilities.Appearance);
+            caps &= ~dropped;
+            notes.Add(new CompatibilityNote(CompatibilityCode.Gameplay, dropped,
+                "gameplay mod files or recruitment profiles differ; shared world, dialogue, combat, party and item channels are off — install matching NPC and campaign content"));
+        }
 
         // A peer that could fingerprint nothing (no game-file access) cannot be checked.
         // Admit it — refusing on absent information would block plenty of working setups —

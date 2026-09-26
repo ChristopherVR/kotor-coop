@@ -82,6 +82,24 @@ public sealed class PackageInstallerTests : IDisposable
     private static void WriteForeignDinput(string gameDir, byte[] content) =>
         File.WriteAllBytes(Path.Combine(gameDir, PackageInstaller.PluginFileName), content);
 
+    [Fact]
+    public void PerModProfilesInstallAndUpgradeWithoutReplacingThePersonalProfile()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        string source = Path.Combine(package, "coop-mods");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "campaign.json"), "version one");
+        File.WriteAllText(Path.Combine(game, "coop-mods.json"), "personal rules");
+        Assert.True(PackageInstaller.Install(new(package, game), Log));
+        Assert.Equal("version one", File.ReadAllText(Path.Combine(game, "coop-mods", "campaign.json")));
+        File.WriteAllText(Path.Combine(source, "campaign.json"), "version two");
+        Assert.True(PackageInstaller.Install(new(package, game), Log));
+        Assert.Equal("version two", File.ReadAllText(Path.Combine(game, "coop-mods", "campaign.json")));
+        Assert.Equal("personal rules", File.ReadAllText(Path.Combine(game, "coop-mods.json")));
+    }
+
     // --- fake foreign dinput8.dll content, matching the strings ForeignDinputIdentity looks for ---
 
     private static byte[] ReShadeDll() => Encoding.ASCII.GetBytes("junk ReShadeVersion junk ReShade junk binary content");

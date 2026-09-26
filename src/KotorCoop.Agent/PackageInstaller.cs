@@ -358,6 +358,20 @@ public static partial class PackageInstaller
 
         log($"installed agent -> {game} ({agentFiles} files)");
 
+        string modProfilesSource = Path.Combine(package, "coop-mods");
+        if (Directory.Exists(modProfilesSource))
+        {
+            string modProfilesTarget = Path.Combine(game, "coop-mods");
+            Directory.CreateDirectory(modProfilesTarget);
+            int profiles = 0;
+            foreach (string profile in Directory.GetFiles(modProfilesSource, "*.json"))
+            {
+                File.Copy(profile, Path.Combine(modProfilesTarget, Path.GetFileName(profile)), overwrite: true);
+                profiles++;
+            }
+            log($"installed mod compatibility profiles -> {modProfilesTarget} ({profiles} files)");
+        }
+
         // Override assets: every one is a k_coop_ resref, so this can never collide with a
         // mod and only ever adds to the folder.
         string overrideSource = Path.Combine(package, "Override");

@@ -177,21 +177,31 @@ internal sealed unsafe partial class CheatController
 
             string tag = Encoding.ASCII.GetString(text, tagLength);
             ReadOnlySpan<byte> tagSpan = new(text, tagLength);
-            nint npc = CreatureFinder.FindByTag(tagSpan);
+            // Auto-follow joins through the same range assistance as plugin auto-join.
+            // Re-check on the game thread: the agent's queued request may be stale now.
+            if (pipe < 0 && block.RemoteDialogueActive
+                && string.Equals(tag, Encoding.ASCII.GetString(block.RemoteDialoguePartnerTag,
+                    AsciiLength(block.RemoteDialoguePartnerTag, SharedBlock.InteractionLockTagLength)),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (Odyssey.IsConversationActive)
+                {
+                    Answer(SharedBlock.CheatStatusApplied, "already joined the peer's conversation");
+                    return;
+                }
+                int resrefLength = AsciiLength(block.RemoteDialogueResref, SharedBlock.DialogueResrefLength);
+                string resref = Encoding.ASCII.GetString(block.RemoteDialogueResref, resrefLength);
+                bool joined = Odyssey.StartDialogueWith(tagSpan, resref, block.RemoteDialogueForced);
+                Answer(joined ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+                    joined ? $"joining the peer's conversation with '{tag}'" : "peer conversation join deferred");
+                return;
+            }
+            nint npc = Odyssey.FindDialoguePartnerByTag(tagSpan);
 
             // 2026-09-19: a conversation can also live on a DOOR or a PLACEABLE (Manaan's airlocks are
             // three locked doors carrying man28_airlock.dlg — docs/research/manaan-hrakert-rift.md), which the
             // creature sweep never finds. ActionStartConversation takes any object id, so fall back to the
             // door and placeable sweeps (all three share the object id at +0x04).
-            if (npc == 0)
-            {
-                npc = CreatureFinder.FindDoorByTag(tagSpan);
-            }
-
-            if (npc == 0)
-            {
-                npc = CreatureFinder.FindPlaceableByTag(tagSpan);
-            }
 
             if (npc == 0)
             {
@@ -216,5 +226,12 @@ internal sealed unsafe partial class CheatController
         string resrefNote = dialogResref.Length > 0 ? $" (dlg '{dialogResref}')" : " (npc's own default dlg)";
         PluginHost.Log($"startdialog: ActionStartConversation queued on the player, targeting {what}{resrefNote}");
         Answer(SharedBlock.CheatStatusApplied, $"conversation with {what} queued{resrefNote}");
+    }
+
+    private static int AsciiLength(byte* text, int capacity)
+    {
+        int length = 0;
+        while (length < capacity - 1 && text[length] != 0) length++;
+        return length;
     }
 }

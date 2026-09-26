@@ -336,7 +336,9 @@ public static class ProtocolConstants
     /// compatibility to preserve — the gate exists purely to refuse the stale-build pairing
     /// cleanly instead of silently misreading bytes.
     /// </summary>
-    public const byte Version = 74;
+    // v75 carries the actual DLG override: scripted scenes need not use an NPC's default.
+    // v76 adds the gameplay-content fingerprint to both handshake digests (scheme 2).
+    public const byte Version = 76;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

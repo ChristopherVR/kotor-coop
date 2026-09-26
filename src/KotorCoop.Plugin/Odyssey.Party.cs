@@ -283,9 +283,23 @@ internal static unsafe partial class Odyssey
     /// </summary>
     public static bool AddAvailableNpcByTemplate(int slot)
     {
+        RecruitmentFailureReason = "the engine refused the template";
         nint table = GetPartyTable();
-        if (table == 0 || !PartyRosterTemplateTable.TryGetTemplate(slot, out string resref))
+        byte* moduleName = stackalloc byte[32];
+        int moduleLength = ReadCurrentModuleName(moduleName, 32);
+        string module = moduleLength > 0
+            ? System.Text.Encoding.ASCII.GetString(moduleName, moduleLength) : string.Empty;
+        if (table == 0 || !RecruitmentProfileValid
+            || (RecruitmentProfile.Id.Length > 0 && moduleLength <= 0))
         {
+            RecruitmentFailureReason = table == 0 ? "the party table is unavailable"
+                : !RecruitmentProfileValid ? "the mod compatibility profile is invalid"
+                : "the module identity is unavailable";
+            return false;
+        }
+        if (!PartyRosterTemplateTable.TryGetTemplate(slot, module, RecruitmentProfile, out string resref, RecruitmentNumberReader))
+        {
+            RecruitmentFailureReason = "the mod profile holds recovery until the companion identity is known";
             return false;
         }
 
@@ -308,6 +322,23 @@ internal static unsafe partial class Odyssey
         uint recruited = AddNpcByTemplateFn(table, slot, exoString);
         CExoStringDtorFn(exoString);
         return recruited != 0;
+    }
+
+    public static string RecruitmentFailureReason { get; private set; } = string.Empty;
+
+    private static KotorCoop.Protocol.ModSupportProfile RecruitmentProfile =
+        KotorCoop.Protocol.ModSupportProfile.Empty;
+    private static bool RecruitmentProfileValid = true;
+    private static readonly Func<string, int?> RecruitmentNumberReader = ReadRecruitmentNumber;
+
+    public static void LoadRecruitmentProfile(string directory)
+    {
+        RecruitmentProfileValid = KotorCoop.Protocol.ModSupportProfile.TryLoad(
+            directory, out RecruitmentProfile, out string error);
+        if (!RecruitmentProfileValid)
+            PluginHost.Log($"mod support: {error}; automatic template recruitment held");
+        else if (RecruitmentProfile.Id.Length > 0)
+            PluginHost.Log($"mod support: recruitment profile '{RecruitmentProfile.Id}' loaded");
     }
 
     /// <summary>This instance's spawned object id for an NPC slot, or 0 / OBJECT_INVALID when

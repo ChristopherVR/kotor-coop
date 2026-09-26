@@ -274,6 +274,10 @@ internal static unsafe partial class Odyssey
         }
 
         *(int*)(owner + ObjDlgSendScratch) = 0;
+        // Discard a locally queued entry. Otherwise UpdateDialog sends it on the
+        // next frame and undoes the acknowledged owner node (live: 28 -> 0).
+        *(int*)(owner + ObjDlgPendingFlag) = 0;
+        *(int*)(owner + ObjDlgPendingEntry) = -1;
 
         int status = 0;
         SendDialogEntryFn(dialog, owner, -1, entryIndex, &status);

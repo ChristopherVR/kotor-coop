@@ -32,6 +32,7 @@ internal static class Program
                 AgentCommand.Profiles => ProfilesCommand.Run(),
                 AgentCommand.InstallDataMods => InstallDataModsCommand.Run(options),
                 AgentCommand.Info => InfoCommand.Run(options),
+                AgentCommand.Mods => ModsCommand.Run(options),
                 AgentCommand.Scan => ScanCommand.Run(options),
                 AgentCommand.Track => TrackCommand.Run(options),
                 AgentCommand.AutoTrack => AutoTrackCommand.Run(options),

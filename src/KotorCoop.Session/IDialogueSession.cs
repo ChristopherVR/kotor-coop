@@ -19,6 +19,14 @@ public interface IDialogueSession
     /// <summary>The authoritative conversation token — who, if anyone, is mid-dialogue.</summary>
     DialogueState GetDialogue();
 
+    /// <summary>Publishes the actual scripted DLG override as well as its partner.</summary>
+    void PublishDialogueWithResref(
+        bool active, string speakerName, string line, string partnerTag,
+        uint replySerial, int replyIndex, byte[]? pickLog, int nodeIndex,
+        uint nodeSerial, bool forced, string dialogResref) =>
+        PublishDialogue(active, speakerName, line, partnerTag, replySerial, replyIndex,
+            pickLog, nodeIndex, nodeSerial, forced);
+
     /// <summary>
     /// Announces that THIS peer's own conversation just placed <paramref name="items"/> into
     /// the local speaker's inventory (docs/research/dialogue-consequences.md §3), delivered

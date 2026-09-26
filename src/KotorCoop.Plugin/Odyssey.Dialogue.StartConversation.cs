@@ -68,7 +68,8 @@ internal static unsafe partial class Odyssey
     /// MAIN THREAD ONLY.
     /// </summary>
     public static bool StartConversation(
-        uint playerObjectId, uint npcObjectId, string dialogResref, out int failure)
+        uint playerObjectId, uint npcObjectId, string dialogResref, out int failure,
+        bool ignoreStartRange = false)
     {
         failure = 0;
 
@@ -107,7 +108,7 @@ internal static unsafe partial class Odyssey
         {
             int argCount;
 
-            if (dialogResref.Length == 0)
+            if (dialogResref.Length == 0 && !ignoreStartRange)
             {
                 // ActionStartConversation(object oObject) - the one mandatory argument.
                 if (StackPushObject(vm, npcObjectId) == 0)
@@ -137,13 +138,18 @@ internal static unsafe partial class Odyssey
 
                 // ActionStartConversation(object oObject, string sDialogResRef) - pushed in
                 // reverse declaration order: sDialogResRef (2nd declared) first, oObject last.
-                if (StackPushString(vm, &resref) == 0 || StackPushObject(vm, npcObjectId) == 0)
+                // nwscript.nss: object, resref, private, cinematic type, ignore range.
+                // Reverse order, as with all VM routine dispatches. Forced scenes must
+                // bypass the engine's walk/range gate, just as the owner's script does.
+                if ((ignoreStartRange && (StackPushInteger(vm, 1) == 0
+                        || StackPushInteger(vm, 0) == 0 || StackPushInteger(vm, 0) == 0))
+                    || StackPushString(vm, &resref) == 0 || StackPushObject(vm, npcObjectId) == 0)
                 {
                     failure = 5;
                     return false;
                 }
 
-                argCount = 2;
+                argCount = ignoreStartRange ? 5 : 2;
             }
 
             var dispatch = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedActionStartConversation;

@@ -219,7 +219,7 @@ public class MidModuleMovieRelayTests
         // 0x8600 for v80's "no cap really" pass (the enemy census/presence/materialised-owner/
         // damage-ledger tables relocated to a new 0x6000 region, past v79's reserved
         // 0x5C00..0x6000 gap) — see SharedBlock.TotalSize.
-        Assert.Equal(0x8600, SharedBlock.TotalSize);
+        Assert.Equal(0x8700, SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

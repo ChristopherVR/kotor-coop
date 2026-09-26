@@ -192,6 +192,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\KotorCoop.Protocol\KotorCoop.Protocol.csproj" />
+    <Content Include="..\..\profiles\mods\*.json" Link="ModProfiles\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\KotorCoop.Memory\KotorCoop.Memory.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.Session\KotorCoop.Session.csproj" />
     <ProjectReference Include="..\..\src\KotorCoop.MockGame\KotorCoop.MockGame.csproj" />

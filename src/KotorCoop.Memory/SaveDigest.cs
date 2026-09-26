@@ -551,7 +551,7 @@ public static class SaveDigest
         List<GameArchive> archives = [];
 
         foreach ((string suffix, bool isRim) in
-            ((string, bool)[])[(".rim", true), ("_s.rim", true), (".mod", false), ("_dlg.erf", false)])
+            ((string, bool)[])[(".mod", false), (".rim", true), ("_s.rim", true), ("_dlg.erf", false)])
         {
             string path = Path.Combine(modulesDirectory, module + suffix);
             if (!File.Exists(path))

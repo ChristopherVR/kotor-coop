@@ -13,6 +13,9 @@ public interface IDialogueBridge
     /// </summary>
     bool IsInDialogue => false;
 
+    /// <summary>The actual DLG override captured at the engine's conversation start.</summary>
+    string LocalDialogueResref => string.Empty;
+
     /// <summary>
     /// True while the local player is inside the engine's own minigame mode (a swoop race
     /// or a forced turret sequence — <c>CSWCModule::GetMiniGame</c>, see
@@ -65,6 +68,12 @@ public interface IDialogueBridge
     bool WriteRemoteDialogue(
         bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
         int nodeIndex, uint nodeSerial, bool forced) => false;
+
+    bool WriteRemoteDialogueWithResref(
+        bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
+        int nodeIndex, uint nodeSerial, bool forced, string dialogResref) =>
+        WriteRemoteDialogue(active, partnerTag, replySerial, replyIndex, pickLog,
+            nodeIndex, nodeSerial, forced);
 
     /// <summary>The object the local player is interacting with, so the session can claim it
     /// on their behalf. Default is "nothing claimed". <paramref name="targetId"/> is the

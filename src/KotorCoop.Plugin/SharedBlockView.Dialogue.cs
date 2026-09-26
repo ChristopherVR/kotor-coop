@@ -4,6 +4,8 @@ namespace KotorCoop.Plugin;
 // SharedBlockView.cs for the class declaration and shared helpers.
 internal sealed unsafe partial class SharedBlockView
 {
+    public byte* LocalDialogueResref => baseAddress + SharedBlock.OffsetLocalDialogueResref;
+    public byte* RemoteDialogueResref => baseAddress + SharedBlock.OffsetRemoteDialogueResref;
     // ---- dialogue spectate ------------------------------------------------------
 
     /// <summary>Pointer to the current dialogue speaker (40 bytes), plugin-written.</summary>

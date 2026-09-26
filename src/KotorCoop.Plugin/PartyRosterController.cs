@@ -128,6 +128,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     /// pass, for a companion whose body was standing in the module the whole time (see
     /// <see cref="TryReuseGitPlacedBody"/>). Reset with <see cref="_unavailableLogged"/>.</summary>
     private uint _spawnRefusedLogged;
+    private uint _recruitRefusedLogged;
 
     /// <summary>Host-confirmed availability falling edges awaiting local application. An initial
     /// host zero is never enough to populate this mask; the previous host level must have carried
@@ -149,6 +150,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     {
         _unavailableLogged = 0;
         _spawnRefusedLogged = 0;
+        _recruitRefusedLogged = 0;
         _hostAvailabilityRemovalEdges = 0;
         _availabilityRemovalFailedLogged = 0;
         _lastLocalParty = uint.MaxValue;
@@ -356,6 +358,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 _lastHostValid = false;
                 _unavailableLogged = 0;
                 _spawnRefusedLogged = 0;
+                _recruitRefusedLogged = 0;
                 PluginHost.Log("party roster: no peer roster to reconcile against");
             }
 
@@ -419,6 +422,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         {
             _unavailableLogged = 0;
             _spawnRefusedLogged = 0;
+            _recruitRefusedLogged = 0;
             _availabilityRemovalFailedLogged = 0;
             return;
         }
@@ -559,11 +563,16 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 if (!Odyssey.AddAvailableNpcByTemplate(addSlot))
                 {
                     block.PartyRosterStatus = 200;
-                    PluginHost.Log($"party roster: could not recruit NPC slot {addSlot} from its own "
-                        + $"template (peer recruited 0x{hostAvailable:X3}, here 0x{localAvailable:X3}) "
-                        + "- dialogue_recruit_sync's engine call refused; retrying next pass");
+                    if ((_recruitRefusedLogged & (1u << addSlot)) == 0)
+                    {
+                        _recruitRefusedLogged |= 1u << addSlot;
+                        PluginHost.Log($"party roster: recovery waiting for NPC slot {addSlot}: "
+                            + $"{Odyssey.RecruitmentFailureReason}; retrying (logged once)");
+                    }
                     return;
                 }
+
+                _recruitRefusedLogged &= ~(1u << addSlot);
 
                 objectId = 0;
                 origin = PartyRosterBodyOrigin.RecruitedOffStage;

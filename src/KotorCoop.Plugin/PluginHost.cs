@@ -152,6 +152,7 @@ internal static unsafe partial class PluginHost
             // Before any controller is constructed: several read their settings from coop.ini
             // in their field initialisers.
             PluginConfig.UseDirectory(directory);
+            Odyssey.LoadRecruitmentProfile(directory);
 
             // Before the first Log() call, so a session that rotates does not write its own
             // banner and then immediately move it. See LogRotation for why: AppendAllText
@@ -430,7 +431,7 @@ internal static unsafe partial class PluginHost
         //      damage-owed ledgers) move into a new region at 0x6000..0x8600, past the reserved
         //      gap. See SharedBlock.Combat.cs, SharedBlock.TotalSize's own remarks and
         //      docs/research/creature-liveness.md.
-        _block->Version = 80;
+        _block->Version = 81;
 
         // A guard dword after the version. Magic plus version alone was not selective
         // enough: a scan once matched something else at a lower address and the agent

@@ -33,6 +33,7 @@ public static class InstallDigest
         uint exe = 0, overrideCensus = 0, twoDa = 0, appearance = 0, tlk = 0, journal = 0, modules = 0;
         ushort overrideCount = 0, appearanceRows = 0;
         uint tlkEntryCount = 0;
+        uint gameplay = 0;
 
         // ⚠ THE EXE FIELD IS THE RUNNING IMAGE, NOT THE FILE — and there is deliberately no
         // fallback to the file hash. Steam ships the same link as the DRM-free build wrapped
@@ -60,14 +61,16 @@ public static class InstallDigest
             // false match. Better to know nothing than to claim an empty install.
             if (files.IsUsable)
             {
-                if (TryHashCensus(files.OverrideCensus(), out overrideCensus, out overrideCount))
+                ModContentManifest manifest = ModContentManifest.Compute(gameDirectory);
+                if (manifest.Complete)
                 {
+                    overrideCensus = manifest.Digest(file => file.Path.StartsWith("override/", StringComparison.Ordinal));
+                    overrideCount = (ushort)Math.Min(files.OverrideCensus().Count, ushort.MaxValue);
                     known |= ContentDigest.Field.Override;
-                }
-
-                if (TryHashCensus(files.ModulesCensus(), out modules, out _))
-                {
+                    modules = manifest.Digest(file => file.Path.StartsWith("modules/", StringComparison.Ordinal));
                     known |= ContentDigest.Field.Modules;
+                    gameplay = manifest.Digest(file => file.Gameplay);
+                    known |= ContentDigest.Field.Gameplay;
                 }
 
                 if (TryHashOverride2das(gameDirectory, files, out twoDa))
@@ -105,7 +108,7 @@ public static class InstallDigest
 
         return new ContentDigest(
             (ushort)known, exe, overrideCensus, overrideCount, twoDa, appearance, appearanceRows,
-            tlk, tlkEntryCount, journal, modules);
+            tlk, tlkEntryCount, journal, modules, gameplay);
     }
 
     /// <summary>
@@ -145,21 +148,6 @@ public static class InstallDigest
         {
             return false;
         }
-    }
-
-    private static bool TryHashCensus(
-        IReadOnlyList<(string Name, long Size)> census, out uint digest, out ushort count)
-    {
-        uint h = FnvOffset;
-        foreach ((string name, long size) in census)
-        {
-            h = FnvString(h, name);
-            h = FnvUInt(h, (uint)size);
-        }
-
-        digest = h;
-        count = (ushort)Math.Min(census.Count, ushort.MaxValue);
-        return true;
     }
 
     /// <summary>

@@ -84,6 +84,16 @@ internal static class PartyRosterTemplateTable
     /// the native-facing classes, only on itself.</summary>
     public const int SlotCount = 9;
 
+    public static bool TryGetTemplate(int slot, string module,
+        KotorCoop.Protocol.ModSupportProfile profile, out string resref,
+        Func<string, int?>? readNumber = null)
+    {
+        var resolution = profile.Resolve(slot, module, out resref, readNumber);
+        return resolution == KotorCoop.Protocol.ModSupportProfile.Resolution.Template
+            || (resolution == KotorCoop.Protocol.ModSupportProfile.Resolution.Unclaimed
+                && TryGetTemplate(slot, out resref));
+    }
+
     /// <summary>The story blueprint resref for one party-roster slot, or <c>false</c> if the
     /// slot is out of K1's fixed 0-8 range.</summary>
     public static bool TryGetTemplate(int slot, out string resref)

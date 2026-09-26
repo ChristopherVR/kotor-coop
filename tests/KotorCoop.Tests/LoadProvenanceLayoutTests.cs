@@ -13,7 +13,7 @@ public sealed class LoadProvenanceLayoutTests
         // pass, which relocated the enemy tables into a brand-new region well past the
         // load-provenance mailbox below) — this assertion tracks the CURRENT edge, same as
         // every other test in this file's family that pins SharedBlock.TotalSize.
-        Assert.Equal(0x8600, SharedBlock.TotalSize);
+        Assert.Equal(0x8700, SharedBlock.TotalSize);
         Assert.Equal(0x4E50, SharedBlock.OffsetLoadProvenanceGeneration);
         Assert.Equal(0x4E54, SharedBlock.OffsetLoadProvenanceSlot);
         Assert.Equal(0x4E58, SharedBlock.OffsetLoadProvenanceSource);

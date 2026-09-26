@@ -15,9 +15,8 @@ namespace KotorCoop.Plugin;
 /// <see cref="Odyssey.PauseReasonUnfocused"/> is touched: a real pause the player asked
 /// for, or one a script imposed, uses different bits and is left alone.
 ///
-/// Input is deliberately NOT re-enabled. `DeactivateRenderWindow` also calls
-/// `SetInputActive(0)`, and that part is correct — an unfocused instance should keep
-/// simulating but must not consume keystrokes meant for the other window.
+/// Input is re-enabled only for the foreground game when its activation latch was missed.
+/// Unfocused instances keep simulating without consuming the other window's keystrokes.
 /// </summary>
 internal sealed class FocusKeeper(SharedBlockView block)
 {
@@ -46,6 +45,12 @@ internal sealed class FocusKeeper(SharedBlockView block)
         }
 
         _countdown = CheckIntervalFrames;
+
+        // Recover input only for the foreground game. Rapid switches can leave the
+        // render window active while the raw-input latch is still deactivated.
+        if (NativeMethods.IsForeground() && Odyssey.GetPlayerCreaturePointer() != 0
+            && Odyssey.EnsureInputActive())
+            PluginHost.Log("focus: restored input for the foreground game");
 
         // Before the KeepAliveUnfocused opt-in, because this is not about staying alive
         // while unfocused — it is about ever drawing at all. A launched instance comes up

@@ -105,11 +105,13 @@ internal static class RunCommand
         }
 
         using CancellationTokenSource cts = new();
-        Console.CancelKeyPress += (_, eventArgs) =>
+        string stopReason = "console closed by the user";
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
             cts.Cancel();
         };
+        Console.CancelKeyPress += cancelHandler;
 
         // ⚠ THE AGENT DIES WITH ITS GAME. Without this, closing the game leaves a hidden
         // zombie agent still connected to the session: the host keeps a live "peer" whose
@@ -125,6 +127,7 @@ internal static class RunCommand
             {
                 using Process game = Process.GetProcessById(memory.ProcessId);
                 await game.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                Interlocked.Exchange(ref stopReason, "the game exited");
                 Console.WriteLine("the game exited; the agent shuts down with it.");
                 cts.Cancel();
 
@@ -147,11 +150,46 @@ internal static class RunCommand
         AgentComposition.Result? composed = AgentComposition.Compose(options, bridge, memory, cts);
         if (composed is not { } session)
         {
+            cts.Cancel();
+            Console.CancelKeyPress -= cancelHandler;
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Co-op agent closed: session setup failed.");
             return 1;
         }
 
-        await session.Dashboard.RunAsync(cts.Token).ConfigureAwait(false);
-        await session.DispatchTask.ConfigureAwait(false);
+        try
+        {
+            await session.Dashboard.RunAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Exchange(ref stopReason, $"an error occurred: {ex.Message}");
+            throw;
+        }
+        finally
+        {
+            cts.Cancel();
+            Console.CancelKeyPress -= cancelHandler;
+            await session.DispatchTask.ConfigureAwait(false);
+            // The TUI restores the console's original screen on exit. Write the final
+            // lifecycle line AFTER that restore, so startup text is not the last word.
+            if (Volatile.Read(ref stopReason) == "the game exited")
+            {
+                session.Manager.OnDisconnecting = null; // no character state left to capture
+            }
+            try
+            {
+                session.Manager.Dispose();
+            }
+            finally
+            {
+                string closed = $"Co-op agent closed: {Volatile.Read(ref stopReason)}.";
+                session.Dashboard.LogOnly(closed);
+                Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {closed}");
+            }
+        }
 
         return 0;
     }

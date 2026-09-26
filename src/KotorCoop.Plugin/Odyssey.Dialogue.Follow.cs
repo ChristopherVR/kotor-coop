@@ -182,7 +182,8 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool StartDialogueWith(ReadOnlySpan<byte> tag)
+    public static bool StartDialogueWith(ReadOnlySpan<byte> tag, string dialogResref = "",
+        bool forced = false, nint partner = 0)
     {
         nint gui = GetInGameGui();
         if (gui == 0 || ConversationLive(gui))
@@ -190,7 +191,7 @@ internal static unsafe partial class Odyssey
             return false; // no HUD, or we are already talking
         }
 
-        nint creature = CreatureFinder.FindByTag(tag);
+        nint creature = partner != 0 ? partner : FindDialoguePartnerByTag(tag);
         if (creature == 0)
         {
             return false;
@@ -223,6 +224,16 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // Forced scenes often use an invisible/off-mesh actor with NO default DLG.
+        // Replay the actual override and the owner's ignore-range flag; a click would
+        // instead wait forever for a walk to that actor or start the wrong conversation.
+        if (forced)
+        {
+            ClearLocalPlayerStuckDialogueAction();
+            return StartConversation(GetPlayerObjectId(), objectId, dialogResref,
+                out _, ignoreStartRange: true);
+        }
+
         // dialogue_join_teleport (default ON) — see docs/research/dialogue-join-latency.md
         // "Far-join live pass". This is what an automatic join (force_dialogue_party, or the
         // test hook) has that a real mouse click does not: nobody is driving the PC toward the
@@ -234,8 +245,12 @@ internal static unsafe partial class Odyssey
         // silently, until this instance's own 15 s local-open grace gives up on it.
         if (DialogueJoinTeleportEnabled)
         {
-            TryTeleportForJoin(creature);
+            if (!TryTeleportForJoin(creature)) return false;
         }
+
+        ClearLocalPlayerStuckDialogueAction();
+        if (dialogResref.Length > 0)
+            return StartConversation(GetPlayerObjectId(), objectId, dialogResref, out _);
 
         SendDialogInputFn(message, objectId);
         return true;
@@ -277,12 +292,12 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    private static void TryTeleportForJoin(nint creature)
+    private static bool TryTeleportForJoin(nint creature)
     {
         nint player = GetPlayerCreaturePointer();
         if (player == 0)
         {
-            return;
+            return false;
         }
 
         Vec3 origin = GetPosition(player);
@@ -293,7 +308,7 @@ internal static unsafe partial class Odyssey
         float dz = target.Z - origin.Z;
         if (dx * dx + dy * dy + dz * dz <= DialogueStartRange * DialogueStartRange)
         {
-            return; // already close enough; the engine's own check will pass unaided
+            return true; // already close enough; the engine's own check will pass unaided
         }
 
         // A couple of units short of the NPC, not on top of it — SnapTo's own action clear is
@@ -302,9 +317,10 @@ internal static unsafe partial class Odyssey
         // NPC's collision.
         Vec3 destination = new() { X = target.X + 1.5f, Y = target.Y, Z = target.Z };
 
+        if (!SnapTo(player, destination) && !SnapTo(player, target)) return false;
         _joinTeleportOrigin = origin;
         _joinTeleportPending = true;
-        SnapTo(player, destination);
+        return true;
     }
 
     /// <summary>

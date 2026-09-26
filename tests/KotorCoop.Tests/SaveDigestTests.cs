@@ -962,6 +962,23 @@ public sealed class SaveDigestTests : IDisposable
         return directory;
     }
 
+    [Fact]
+    public void PackagedCampaignModuleWinsOverTheStockRimGit()
+    {
+        string module = "test_campaign";
+        byte[] stockGit = PristineGit([("stock_npc", 0)]);
+        byte[] campaignGit = PristineGit([("custom_npc", 0), ("other_npc", 0)]);
+        string mixed = BuildGameDirectory(module, stockGit);
+        string packagedOnly = TempDirectory();
+        Directory.CreateDirectory(Path.Combine(packagedOnly, "modules"));
+        byte[] package = BuildErf("MOD ", (module, 2023, campaignGit));
+        File.WriteAllBytes(Path.Combine(mixed, "modules", module + ".mod"), package);
+        File.WriteAllBytes(Path.Combine(packagedOnly, "modules", module + ".mod"), package);
+        Assert.True(SaveDigest.TryComputePristineModuleGit(mixed, module, out uint actual));
+        Assert.True(SaveDigest.TryComputePristineModuleGit(packagedOnly, module, out uint expected));
+        Assert.Equal(expected, actual);
+    }
+
     /// <summary>Lays out an ERF exactly as <see cref="ErfArchive"/> decodes it: 160-byte
     /// header, 24-byte key entries, 8-byte resource entries, then the member bytes.</summary>
     private static byte[] BuildErf(string fileType, params (string Resref, int Type, byte[] Data)[] members)

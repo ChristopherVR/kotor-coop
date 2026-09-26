@@ -57,6 +57,7 @@ public static partial class PacketCodec
         // docs/research/dialogue-sync.md's Item 1: appended after every existing field, same
         // convention as every prior version bump on this packet.
         w.WriteBool(s.Forced);
+        w.WriteString(s.DialogResref, 16);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -82,6 +83,7 @@ public static partial class PacketCodec
         int nodeIndex = r.ReadInt32();
         uint nodeSerial = r.ReadUInt32();
         bool forced = r.ReadBool();
+        string dialogResref = r.ReadString(16);
 
         // Anything other than a real entry index or the explicit "unknown" is treated as
         // unknown. A negative index that is not -1, or one past any conceivable .dlg, can only
@@ -98,7 +100,7 @@ public static partial class PacketCodec
                 serverTime,
                 new DialogueState(
                     active, owner, serial, speaker, line, partnerTag, replySerial, replyIndex,
-                    pickLog, nodeIndex, nodeSerial, forced));
+                    pickLog, nodeIndex, nodeSerial, forced, dialogResref));
     }
 
     public static int Write(Span<byte> buffer, DialogueRequestPacket packet)
@@ -116,6 +118,7 @@ public static partial class PacketCodec
         w.WriteInt32(packet.NodeIndex);
         w.WriteUInt32(packet.NodeSerial);
         w.WriteBool(packet.Forced);
+        w.WriteString(packet.DialogResref, 16);
 
         return w.Failed ? 0 : w.Position;
     }
@@ -139,6 +142,7 @@ public static partial class PacketCodec
         int nodeIndex = r.ReadInt32();
         uint nodeSerial = r.ReadUInt32();
         bool forced = r.ReadBool();
+        string dialogResref = r.ReadString(16);
 
         // Same clamp as the snapshot: an index that is neither real nor the explicit
         // "unknown" is treated as unknown, so a corrupt claim cannot drive a follower.
@@ -151,7 +155,7 @@ public static partial class PacketCodec
             ? null
             : new DialogueRequestPacket(
                 peerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog,
-                nodeIndex, nodeSerial, forced);
+                nodeIndex, nodeSerial, forced, dialogResref);
     }
 
     public static int Write(Span<byte> buffer, DialogueGrantPacket packet)

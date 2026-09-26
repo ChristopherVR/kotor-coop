@@ -12,6 +12,10 @@ public sealed partial class KotorGameBridge
 
     private const int InputClassDialog = 3;
 
+    public string LocalDialogueResref => _pluginBlock != 0
+        && _memory.TryReadAsciiString(_pluginBlock + BlockLocalDialogueResref,
+            BlockDialogueResrefLength, out string resref) ? resref : string.Empty;
+
     /// <summary>
     /// True while this player is in a conversation.
     ///
@@ -23,8 +27,10 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public bool IsInDialogue =>
         EngineGlobals.TryGetClientInternal(_memory, out nint clientInternal)
-        && _memory.TryReadInt32(clientInternal + ClientInputClass, out int inputClass)
-        && inputClass == InputClassDialog;
+        && ((_memory.TryReadInt32(clientInternal + ClientInputClass, out int inputClass)
+                && inputClass == InputClassDialog)
+            || (_memory.TryReadPointer(clientInternal + InGameGuiOffset, out nint gui)
+                && gui != 0 && _memory.TryReadInt32(gui + 0xB4, out int active) && active != 0));
 
     /// <summary>
     /// Gate for the Pazaak half of <see cref="IsInMinigame"/> — coop.ini <c>pazaak_detect</c>,
@@ -242,6 +248,12 @@ public sealed partial class KotorGameBridge
     public bool WriteRemoteDialogue(
         bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
         int nodeIndex, uint nodeSerial, bool forced)
+        => WriteRemoteDialogueWithResref(active, partnerTag, replySerial, replyIndex,
+            pickLog, nodeIndex, nodeSerial, forced, string.Empty);
+
+    public bool WriteRemoteDialogueWithResref(
+        bool active, string partnerTag, uint replySerial, int replyIndex, byte[]? pickLog,
+        int nodeIndex, uint nodeSerial, bool forced, string dialogResref)
     {
         if (_pluginBlock == 0)
         {
@@ -270,6 +282,8 @@ public sealed partial class KotorGameBridge
         // (InteractionLockController.TryForceOpen) reads this alongside RemoteDialogueActive,
         // so it must never see "active" before "forced" has landed for that same conversation.
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueForced, forced ? 1u : 0u);
+        ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockRemoteDialogueResref,
+            dialogResref ?? string.Empty, BlockDialogueResrefLength);
 
         ok &= _memory.TryWrite(_pluginBlock + BlockRemoteDialogueActive, active ? 1u : 0u);
         return ok;

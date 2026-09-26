@@ -36,6 +36,7 @@ public sealed partial class CoopCommandDispatcher
     private bool _followLeaderTalking;
     private DateTime _followTalkSeen;
     private DateTime _followLastJoin = DateTime.MinValue;
+    private bool _followJoinedConversation;
 
     private void AutoFollowCommand(string? argument)
     {
@@ -70,6 +71,13 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        if (!AutoFollowRule.MayFollowLink(session.IsConnected, session.HostLost,
+                session.GetStats().LastInboundAgeMs))
+        {
+            FollowHold("waiting for the host connection");
+            return;
+        }
+
         IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
         RemotePeer? leader = arg.Length == 0
             ? (peers.Count > 0 ? peers[0] : null)
@@ -89,6 +97,8 @@ public sealed partial class CoopCommandDispatcher
         _followLastOrder = DateTime.MinValue;
         _followHoldReason = string.Empty;
         _followAimAtLeader = false;
+        _followLeaderTalking = false;
+        _followJoinedConversation = false;
         Reply($"autofollow on - following {leader.Name} (`autofollow off` to stop)");
         Log?.Invoke($"autofollow: following {leader.Name}");
     }
@@ -106,6 +116,13 @@ public sealed partial class CoopCommandDispatcher
         if (manager.Current is not { } session)
         {
             FollowHold("not connected");
+            return;
+        }
+
+        if (!AutoFollowRule.MayFollowLink(session.IsConnected, session.HostLost,
+                session.GetStats().LastInboundAgeMs))
+        {
+            FollowHold("waiting for the host connection");
             return;
         }
 
@@ -138,6 +155,7 @@ public sealed partial class CoopCommandDispatcher
         if (!leaderTalking)
         {
             _followLeaderTalking = false;
+            _followJoinedConversation = false;
         }
         else if (!_followLeaderTalking)
         {
@@ -146,7 +164,8 @@ public sealed partial class CoopCommandDispatcher
             _followLastJoin = DateTime.MinValue;
         }
 
-        if (AutoFollowRule.ShouldJoinConversation(
+        _followJoinedConversation |= leaderTalking && (local.IsInDialogue || bridge.IsInDialogue);
+        if (!_followJoinedConversation && AutoFollowRule.ShouldJoinConversation(
             talk, leader.PeerId, local, leader.State, now - _followTalkSeen, now - _followLastJoin))
         {
             _followLastJoin = now;
@@ -161,7 +180,7 @@ public sealed partial class CoopCommandDispatcher
             _followLastDestination,
             now - _followLastOrder,
             now - _followLastSnap,
-            leaderTalking);
+            talk.Active);
 
         switch (decision.Action)
         {
@@ -181,6 +200,7 @@ public sealed partial class CoopCommandDispatcher
                 Log?.Invoke($"autofollow: snapping to {leader.Name} ({decision.Reason})");
                 SendCheat(new CheatRequest(
                     CheatKinds.Teleport,
+                    Amount: 1, // plugin rechecks automatic movement against dialogue state
                     X: decision.Destination.X,
                     Y: decision.Destination.Y,
                     Z: decision.Destination.Z), quiet: true);
@@ -192,7 +212,7 @@ public sealed partial class CoopCommandDispatcher
                 _followLastOrder = now;
                 _followLastDestination = decision.Destination;
                 SendCheat(
-                    new CheatRequest(CheatKinds.WalkTo, X: aim.X, Y: aim.Y, Z: aim.Z),
+                    new CheatRequest(CheatKinds.WalkTo, Amount: 1, X: aim.X, Y: aim.Y, Z: aim.Z),
                     onApplied: () => _followAimAtLeader = false,
                     onRefused: () => _followAimAtLeader = !_followAimAtLeader,
                     quiet: true);

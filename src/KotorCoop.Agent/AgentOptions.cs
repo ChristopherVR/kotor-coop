@@ -15,6 +15,7 @@ public enum AgentCommand
     Launch,
     Load,
     Info,
+    Mods,
     Profiles,
     InstallDataMods,
 
@@ -201,6 +202,7 @@ public sealed record AgentOptions
     /// <summary>Whether --game-path was given, for verbs that would rather detect the install
     /// than assume the default.</summary>
     public bool HasGamePath { get; init; }
+    public string? CompareGamePath { get; init; }
 
     /// <summary>install: the extracted package to copy from (default: the agent's own directory).</summary>
     public string? PackageDirectory { get; init; }
@@ -251,6 +253,7 @@ public sealed record AgentOptions
             "launch" => AgentCommand.Launch,
             "load" => AgentCommand.Load,
             "info" => AgentCommand.Info,
+            "mods" => AgentCommand.Mods,
             "profiles" => AgentCommand.Profiles,
             "install-datamods" => AgentCommand.InstallDataMods,
             "serve-world" => AgentCommand.ServeWorld,
@@ -281,6 +284,7 @@ public sealed record AgentOptions
         bool wait = false;
         string gamePath = DefaultGamePath;
         bool hasGamePath = false;
+        string? compareGamePath = null;
         string? packageDirectory = null;
         bool chain = false;
         List<string> chainLoad = [];
@@ -362,6 +366,10 @@ public sealed record AgentOptions
                 case "--game-path":
                     gamePath = Next() ?? gamePath;
                     hasGamePath = true;
+                    break;
+
+                case "--compare-with":
+                    compareGamePath = Next();
                     break;
 
                 case "--windowed":
@@ -581,6 +589,7 @@ public sealed record AgentOptions
             GamePath = gamePath,
             Windowed = windowed,
             HasGamePath = hasGamePath,
+            CompareGamePath = compareGamePath,
             PackageDirectory = packageDirectory,
             Chain = chain,
             ChainLoad = chainLoad,
@@ -689,6 +698,8 @@ public sealed record AgentOptions
           run       Attach and run the co-op loop against a completed profile.
           scan      Raw interactive memory scanner, for when track is not enough.
           info      Print modules and memory regions of a target process.
+          mods      Audit NPC/campaign content and coop-mods.json without running the game.
+                    Use --game-path <dir> and optionally --compare-with <other game dir>.
           profiles  List available offset profiles.
           install-datamods
                     Merge the co-op 2DA rows into the install's Override: a friendly

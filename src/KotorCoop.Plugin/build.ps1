@@ -78,9 +78,10 @@ if (-not (Test-Path $GameDir)) { throw "game directory not found: $GameDir" }
 # which is the worst kind of version skew: the plugin and agent meet over a
 # signature-checked shared block, so a stale agent either refuses the block or, worse,
 # drives it with last week's semantics. Installing the plugin without the agent it
-# launches is half an install. Debug configuration on purpose: it is the same build
-# tools/demo.ps1 launches by hand, so the rig and the auto-started agent never differ.
+# launches is half an install. Publish a self-contained Debug agent: copying only
+# KotorCoop.* from a plain build omits Terminal.Gui and its managed dependencies.
 $agentProject = Join-Path (Split-Path $projectDir -Parent) 'KotorCoop.Agent'
+$agentBin = Join-Path $agentProject 'bin\dev-install-agent'
 Push-Location $agentProject
 # devenv.ps1 (imported above for link.exe/vswhere.exe) sets $env:Platform = 'x86' as part of
 # vcvarsall's environment dump. dotnet/MSBuild treats a `Platform` env var as an implicit
@@ -90,17 +91,16 @@ Push-Location $agentProject
 $savedPlatform = $env:Platform
 Remove-Item Env:\Platform -ErrorAction SilentlyContinue
 try {
-    dotnet build -v q --nologo
-    if ($LASTEXITCODE -ne 0) { throw "agent build failed with exit code $LASTEXITCODE" }
+    dotnet publish -c Debug -r win-x64 -o $agentBin -v q --nologo
+    if ($LASTEXITCODE -ne 0) { throw "agent publish failed with exit code $LASTEXITCODE" }
 }
 finally {
     if ($null -ne $savedPlatform) { $env:Platform = $savedPlatform }
     Pop-Location
 }
 
-$agentBin = Join-Path $agentProject 'bin\Debug\net10.0-windows'
 if (-not (Test-Path (Join-Path $agentBin 'KotorCoop.Agent.exe'))) {
-    throw "agent build succeeded but KotorCoop.Agent.exe not found in $agentBin"
+    throw "agent publish succeeded but KotorCoop.Agent.exe not found in $agentBin"
 }
 
 # One code path for "put these files into a game directory": the agent's own installer
@@ -112,6 +112,9 @@ Copy-Item $built.FullName (Join-Path $staging 'dinput8.dll')
 Get-ChildItem $agentBin -File -Filter 'KotorCoop.*' | Copy-Item -Destination $staging
 Get-ChildItem (Join-Path $repo 'profiles\override') -File -Filter 'k_coop_*' | Copy-Item -Destination (Join-Path $staging 'Override')
 Copy-Item (Join-Path $repo 'profiles\coop.ini.example') (Join-Path $staging 'coop.ini')
+New-Item -ItemType Directory -Path (Join-Path $staging 'coop-mods') | Out-Null
+Get-ChildItem (Join-Path $repo 'profiles\mods') -File -Filter '*.json' |
+    Copy-Item -Destination (Join-Path $staging 'coop-mods')
 
 $loaderDll = Join-Path $repo 'src\KotorCoop.Loader\bin\dinput8.dll'
 if (Test-Path $loaderDll) {

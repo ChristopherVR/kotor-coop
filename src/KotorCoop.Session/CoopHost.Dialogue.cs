@@ -55,6 +55,13 @@ public sealed partial class CoopHost
         bool active, string speakerName, string line,
         string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
         int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0, bool forced = false)
+        => PublishDialogueWithResref(active, speakerName, line, partnerTag, replySerial,
+            replyIndex, pickLog, nodeIndex, nodeSerial, forced, string.Empty);
+
+    public void PublishDialogueWithResref(
+        bool active, string speakerName, string line, string partnerTag,
+        uint replySerial, int replyIndex, byte[]? pickLog, int nodeIndex,
+        uint nodeSerial, bool forced, string dialogResref)
     {
         lock (_gate)
         {
@@ -64,7 +71,7 @@ public sealed partial class CoopHost
                 _dialogue, HostPeerId, active, speakerName, line, partnerTag, replySerial, replyIndex, pickLog,
                 nodeIndex, nodeSerial,
                 _interactionLocks.HolderOf(_interactionModule, partnerTag ?? string.Empty, SessionClock.NowMs),
-                forced);
+                forced, dialogResref);
         }
     }
 
@@ -198,7 +205,7 @@ public sealed partial class CoopHost
                     request.NodeIndex, request.NodeSerial,
                     _interactionLocks.HolderOf(
                         _interactionModule, request.PartnerTag ?? string.Empty, SessionClock.NowMs),
-                    request.Forced);
+                    request.Forced, request.DialogResref);
             }
         }
     }

@@ -166,6 +166,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         *block.LocalDialogueSpeaker = 0;
         *block.LocalDialogueLine = 0;
         *block.LocalDialoguePartnerTag = 0;
+        *block.LocalDialogueResref = 0;
         block.LocalDialogueSerial++;
 
         _localForced = false;
@@ -305,6 +306,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
                 _localForced = false;
                 block.LocalDialogueForced = false;
+                *block.LocalDialogueResref = 0;
 
                 // The node is per conversation, like the pick log: a stale index surviving
                 // into the next one names an entry in a different .dlg entirely.
@@ -332,6 +334,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         if (!_hadDialogue)
         {
             _localForced = DialogueGateHook.LastStartForced;
+            DialogueGateHook.CopyLastStartResref(block.LocalDialogueResref);
             block.LocalDialogueForced = _localForced;
             PluginEvents.RaiseDialogueStarted();
         }
@@ -660,12 +663,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         int wantedNode = block.RemoteDialogueNode;
         uint wantedSerial = block.RemoteDialogueNodeSerial;
 
-        if (!_nodes.NeedsNode(wantedNode, wantedSerial, hasContent))
+        int before = Odyssey.GetDialogueNodeIndex();
+        if (!_nodes.NeedsNode(wantedNode, wantedSerial, hasContent, before))
         {
             return; // no position published, already sent there, or nothing on screen to drive
         }
-
-        int before = Odyssey.GetDialogueNodeIndex();
 
         // Already there — the common case, because entries auto-advance identically on both
         // instances through any stretch of a conversation without a choice in it.

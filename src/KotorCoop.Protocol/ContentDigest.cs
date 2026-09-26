@@ -29,11 +29,12 @@ public readonly record struct ContentDigest(
     uint TlkDigest,
     uint TlkEntryCount,
     uint JournalDigest,
-    uint ModulesCensus)
+    uint ModulesCensus,
+    uint GameplayDigest = 0)
 {
     /// <summary>Bumped only if the set/order of fields changes. Lets a future build reject
     /// a digest it cannot interpret rather than misreading it.</summary>
-    public const byte CurrentScheme = 1;
+    public const byte CurrentScheme = 2;
 
     /// <summary>Which fields were actually computable. A cleared bit means "unknown", which
     /// downgrades any disagreement on that field to a warning.</summary>
@@ -48,6 +49,7 @@ public readonly record struct ContentDigest(
         Tlk = 1 << 4,
         Journal = 1 << 5,
         Modules = 1 << 6,
+        Gameplay = 1 << 7,
     }
 
     /// <summary>Nothing was computed — an agent without game-file access. Every comparison

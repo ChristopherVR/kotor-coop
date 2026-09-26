@@ -168,8 +168,10 @@ internal partial struct SharedBlock
     /// Every old home (0x490..0x690, 0x1410..0x1910, 0x4B00..0x4B80, 0x1E60..0x1F60,
     /// 0x2018..0x2118) is now DEAD — documented rather than reused, the same discipline the old
     /// bark-ring hole already established, so a stale reader finds zeros there rather than half
-    /// a record. See SharedBlock.Combat.cs for the five moved regions' own remarks.</summary>
-    public const int TotalSize = 0x8600;
+    /// a record. See SharedBlock.Combat.cs for the five moved regions' own remarks.
+    /// v81 grows to 0x8700 for the local/remote dialogue resource names at 0x8600/0x8614.
+    /// </summary>
+    public const int TotalSize = 0x8700;
 
     public const int ProfileVisibleSize = 0x250;
 

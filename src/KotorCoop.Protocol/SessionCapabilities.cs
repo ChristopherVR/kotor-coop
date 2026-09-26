@@ -49,14 +49,13 @@ public enum SessionCapabilities
     /// copies. Keyed by NPC slot, so it needs the same save (dropped on a save mismatch).</summary>
     Party = 1 << 8,
 
-    /// <summary>The conversation ownership token (who is mid-dialogue). Content-independent —
-    /// it carries a peer id and a text line, not save-keyed ids — so it survives almost any
-    /// mod difference; only a total refusal (empty set) drops it.</summary>
+    /// <summary>Conversation ownership and native dialogue mirroring. Mirroring executes
+    /// local dialogue resources, so gameplay-content differences drop this channel.</summary>
     Dialogue = 1 << 9,
 
     /// <summary>Shared party gold and PC experience. Plain scalars, not save-keyed ids, so it
-    /// is content-independent and survives a save/mod mismatch — the point is that two players
-    /// progress together regardless of their exact installs.</summary>
+    /// survives a save mismatch. Gameplay-content differences drop shared progression,
+    /// since campaign scripts may use these scalars differently.</summary>
     Progression = 1 << 10,
 
     /// <summary>The shared party item pool (<c>CSWPartyTable+0x118</c>). Content-keyed

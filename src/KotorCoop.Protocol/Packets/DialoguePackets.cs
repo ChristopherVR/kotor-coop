@@ -50,4 +50,5 @@ public sealed record DialogueRequestPacket(
     byte[]? PickLog = null,
     int NodeIndex = DialogueState.NoNode,
     uint NodeSerial = 0,
-    bool Forced = false);
+    bool Forced = false,
+    string DialogResref = "");

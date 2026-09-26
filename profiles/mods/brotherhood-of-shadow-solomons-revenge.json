@@ -1,0 +1,32 @@
+{
+  "schema": 2,
+  "id": "brotherhood-of-shadow-solomons-revenge",
+  "name": "Brotherhood of Shadow: Solomon's Revenge",
+  "status": "experimental",
+  "package": "Deadly Stream 1.5 bundle (base plus 1.1 patch)",
+  "source": "https://deadlystream.com/files/file/761-brotherhood-of-shadow-solomons-revenge/",
+  "detect": {
+    "allFiles": ["modules/bos_orion.mod", "Override/p_channa.utc"]
+  },
+  "campaignModules": [
+    "bos_*", "ship", "ship2", "ship3", "ship4", "ship5", "ship6",
+    "vision1", "vision3", "vision4", "vision5"
+  ],
+  "holdUnmappedSlots": [0, 1, 2],
+  "companions": [
+    {
+      "slot": 0,
+      "template": "p_channa",
+      "when": { "global": "Tar_ZelkaRm", "min": 30, "max": 30 }
+    },
+    { "slot": 0, "module": "bos_*", "recovery": "hold" },
+    { "slot": 0, "module": "ship*", "recovery": "hold" },
+    { "slot": 0, "module": "vision*", "recovery": "hold" }
+  ],
+  "notes": [
+    "ship6/add.nss sets Tar_ZelkaRm=30 and recruits p_channa into slot 0.",
+    "Unmapped recovery for slots 0, 1 and 2 waits for native scripts, even in stock modules. This also protects the gap before a story-global update reaches the joiner.",
+    "Campaign areas hold slot 0 even at phase 30 because scene scripts can replace Shadow without changing that global. The phase-30 recovery mapping applies outside those areas.",
+    "Module-only rules cannot infer occupant changes within a scene. This profile does not certify a complete campaign playthrough."
+  ]
+}

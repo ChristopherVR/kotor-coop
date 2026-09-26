@@ -62,6 +62,7 @@ public sealed class DialogueFastJoinPumpTests
         }
 
         public bool Forced { get; set; }
+        public string LocalDialogueResref { get; set; } = string.Empty;
 
         public bool TryReadLocalDialogueFollow(
             out string partnerTag, out uint replySerial, out int replyIndex, out byte[] pickLog,
@@ -135,6 +136,17 @@ public sealed class DialogueFastJoinPumpTests
 
         /// <summary>Every call this stub session received, in order — what the test asserts on.</summary>
         public List<(bool Active, string Speaker, string Line, int NodeIndex, uint NodeSerial)> PublishCalls { get; } = [];
+        public string PublishedResref { get; private set; } = string.Empty;
+
+        public void PublishDialogueWithResref(
+            bool active, string speakerName, string line, string partnerTag,
+            uint replySerial, int replyIndex, byte[]? pickLog, int nodeIndex,
+            uint nodeSerial, bool forced, string dialogResref)
+        {
+            PublishedResref = dialogResref;
+            PublishDialogue(active, speakerName, line, partnerTag, replySerial, replyIndex,
+                pickLog, nodeIndex, nodeSerial, forced);
+        }
 
         public void PublishDialogue(
             bool active, string speakerName, string line,
@@ -182,6 +194,35 @@ public sealed class DialogueFastJoinPumpTests
     /// tight test loop, which is all the "still gated" assertions below need.
     /// </summary>
     private const int DefaultCombatPumpIntervalMs = 150;
+
+    [Fact]
+    public void ScriptedSceneNameSurvivesTheBetweenEntryDialogueGap()
+    {
+        var (agent, bridge, session) = Build(fastJoin: true);
+        bridge.LocalDialogueResref = "dan14_cut01";
+        bridge.Line = "Scene content";
+        agent.PumpOnce();
+        Assert.Equal("dan14_cut01", session.PublishedResref);
+
+        bridge.Local = bridge.Local with { Flags = 0 };
+        bridge.LocalDialogueResref = string.Empty;
+        bridge.Line = string.Empty;
+        agent.PumpOnce();
+        Assert.True(session.PublishCalls[^1].Active);
+        Assert.Equal("dan14_cut01", session.PublishedResref);
+    }
+
+    [Fact]
+    public void ASceneNameChangePublishesImmediatelyWithUnchangedContent()
+    {
+        var (agent, bridge, session) = Build(fastJoin: true);
+        bridge.Line = "Scene content";
+        agent.PumpOnce();
+        bridge.LocalDialogueResref = "dan14_cut01";
+        agent.PumpOnce();
+        Assert.Equal(2, session.PublishCalls.Count);
+        Assert.Equal("dan14_cut01", session.PublishedResref);
+    }
 
     private static (CoopAgent Agent, MinimalBridge Bridge, StubSession Session) Build(bool fastJoin)
     {

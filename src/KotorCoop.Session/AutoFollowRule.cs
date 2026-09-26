@@ -97,6 +97,11 @@ public static class AutoFollowRule
     public static bool IsLeaderTalking(DialogueState talk, uint leaderPeerId) =>
         talk.Active && talk.OwnerPeerId == leaderPeerId;
 
+    public const long MaxFollowSilenceMs = 1000;
+
+    public static bool MayFollowLink(bool connected, bool hostLost, long inboundAgeMs) =>
+        connected && !hostLost && inboundAgeMs <= MaxFollowSilenceMs;
+
     public static AutoFollowDecision Decide(
         PlayerState local,
         PlayerState leader,

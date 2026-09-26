@@ -59,6 +59,12 @@ public sealed class DialogueNodeFollower
     public bool NeedsNode(int peerNode, uint peerSerial, bool hasContent) =>
         peerNode >= 0 && hasContent && peerSerial != _appliedSerial;
 
+    /// <summary>A local pending entry may move the follower after it acknowledged the
+    /// owner's serial. The owner remains authoritative until a new serial arrives.</summary>
+    public bool NeedsNode(int peerNode, uint peerSerial, bool hasContent, int localNode) =>
+        peerNode >= 0 && peerSerial != 0 && hasContent
+        && (peerSerial != _appliedSerial || localNode != peerNode);
+
     /// <summary>
     /// Whether the engine is on the wanted node, banking the owner's serial if it is. Called
     /// twice per drive: once BEFORE, because entries auto-advance identically on both instances

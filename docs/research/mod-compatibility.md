@@ -950,3 +950,17 @@ through the identical `(mask, values)` wire pair and the identical per-controlle
 
 `dotnet build KotorCoop.slnx -warnaserror` and `src/KotorCoop.Plugin/build.ps1 -WarnAsError`:
 both clean (no source changed this round — a config-only live rig session).
+
+## NPC and campaign framework update (2026-09-27)
+
+See [mod-support-framework.md](mod-support-framework.md) for the protocol-76 implementation
+and campaign qualification plan. This supersedes older name/size-only census descriptions:
+Override and module comparisons now include full file-content hashes. Gameplay scripts,
+templates and recruitment profiles have a dedicated digest; differences disable shared
+gameplay with `W_GAMEPLAY`. Companion recovery supports checked-in per-mod schema-2
+JSON files with installed-content detection, module rules, numeric story-global
+conditions and explicit holds. Campaign `.mod` resources take precedence over stock
+`.rim` resources when computing pristine-module save identity. Brotherhood of Shadow
+has an experimental profile and passed isolated smoke checks; full campaign and
+temporary-character qualification remains open. See
+[the isolated test report](solomon-isolation-2026-09-27.md).

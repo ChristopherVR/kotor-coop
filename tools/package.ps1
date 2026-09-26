@@ -155,6 +155,11 @@ New-Item -ItemType Directory -Path (Join-Path $staging 'Override') | Out-Null
 foreach ($asset in $overrideFiles) { Copy-Item $asset.FullName (Join-Path $staging 'Override' $asset.Name) }
 "staged override assets: $($overrideFiles.Count) files"
 
+# Per-mod compatibility rules are co-op assets, not the mods themselves.
+New-Item -ItemType Directory -Path (Join-Path $staging 'coop-mods') | Out-Null
+Get-ChildItem (Join-Path $repo 'profiles\mods') -File -Filter '*.json' |
+    Copy-Item -Destination (Join-Path $staging 'coop-mods')
+
 # --- installer wrapper + README ------------------------------------------------------------
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
 # install.ps1 dot-sources this for the coop.ini drift check on a re-install; without it the

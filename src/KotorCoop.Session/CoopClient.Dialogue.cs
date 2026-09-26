@@ -24,11 +24,19 @@ public sealed partial class CoopClient
     private int _localDialogueNode = DialogueState.NoNode;
     private uint _localDialogueNodeSerial;
     private bool _localDialogueForced;
+    private string _localDialogueResref = string.Empty;
 
     public void PublishDialogue(
         bool active, string speakerName, string line,
         string partnerTag = "", uint replySerial = 0, int replyIndex = 0, byte[]? pickLog = null,
         int nodeIndex = DialogueState.NoNode, uint nodeSerial = 0, bool forced = false)
+        => PublishDialogueWithResref(active, speakerName, line, partnerTag, replySerial,
+            replyIndex, pickLog, nodeIndex, nodeSerial, forced, string.Empty);
+
+    public void PublishDialogueWithResref(
+        bool active, string speakerName, string line, string partnerTag,
+        uint replySerial, int replyIndex, byte[]? pickLog, int nodeIndex,
+        uint nodeSerial, bool forced, string dialogResref)
     {
         lock (_gate)
         {
@@ -42,6 +50,7 @@ public sealed partial class CoopClient
             _localDialogueNode = nodeIndex;
             _localDialogueNodeSerial = nodeSerial;
             _localDialogueForced = forced;
+            _localDialogueResref = dialogResref;
         }
     }
 
@@ -115,6 +124,7 @@ public sealed partial class CoopClient
         int nodeIndex;
         uint nodeSerial;
         bool forced;
+        string dialogResref;
         lock (_gate)
         {
             active = _localDialogueActive;
@@ -127,13 +137,14 @@ public sealed partial class CoopClient
             nodeIndex = _localDialogueNode;
             nodeSerial = _localDialogueNodeSerial;
             forced = _localDialogueForced;
+            dialogResref = _localDialogueResref;
         }
 
         int length = PacketCodec.Write(
             _sendBuffer,
             new DialogueRequestPacket(
                 _localPeerId, active, speaker, line, partnerTag, replySerial, replyIndex, pickLog,
-                nodeIndex, nodeSerial, forced));
+                nodeIndex, nodeSerial, forced, dialogResref));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));

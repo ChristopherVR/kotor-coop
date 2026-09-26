@@ -76,6 +76,9 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
     /// the id and the tag are re-verified before use — a pointer alone is a stale-memory
     /// hazard the creature finder has already been bitten by.</summary>
     private readonly nint[] _creature = new nint[SharedBlock.InteractionLockCapacity];
+    // Stored while the body is live. Never read an id through a cached pointer: a
+    // cutscene can destroy that body before this lock's next pass.
+    private readonly uint[] _creatureId = new uint[SharedBlock.InteractionLockCapacity];
     private readonly byte[][] _cachedTag = CreateTagCache();
 
     private static byte[][] CreateTagCache()
@@ -457,7 +460,8 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
                 continue;
             }
 
-            if (Odyssey.HoldCreatureStill(creature))
+            if (*(nint*)creature == CreatureFinder.CreatureVtable
+                && Odyssey.HoldCreatureStill(creature))
             {
                 held++;
             }
@@ -756,7 +760,14 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
 
         _nextForceOpenMs = now + ForceOpenRetryMs;
 
-        if (Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length)))
+        int resrefLength = 0;
+        while (resrefLength < 16 && block.RemoteDialogueResref[resrefLength] != 0) resrefLength++;
+        string resref = block.RemoteDialogueActive
+            && TagEquals(tag, length, block.RemoteDialoguePartnerTag)
+            ? System.Text.Encoding.ASCII.GetString(block.RemoteDialogueResref, resrefLength)
+            : string.Empty;
+        if (Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length), resref,
+                isForced, partnerCreature))
         {
             PluginHost.Log("interaction: auto-joining a peer's conversation with "
                 + $"'{System.Text.Encoding.ASCII.GetString(tag, length)}' "
@@ -818,10 +829,8 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
     }
 
     /// <summary>
-    /// The creature a lock names, cached across passes but re-verified every time: the tag
-    /// must still match the one we resolved, and the body must still be a creature carrying
-    /// that tag. A cached pointer whose memory has been reused is the failure mode the
-    /// creature finder has already paid for once.
+    /// The live object a lock names, cached across passes. Resolve its stored id before
+    /// dereferencing the cache, then recheck its tag; cutscenes may destroy the body.
     /// </summary>
     private nint Resolve(int slot, byte* tag)
     {
@@ -837,35 +846,24 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         if (sameTag && _creature[slot] != 0)
         {
             nint cached = _creature[slot];
-            if (*(int*)(cached + 0x08) == 5 && Odyssey.HasTag(cached, wanted))
+            if (Odyssey.ResolveServerObject(_creatureId[slot]) == cached
+                && Odyssey.HasTag(cached, wanted))
             {
                 return cached;
             }
         }
 
-        // ⚠ A FAILED LOOKUP MUST BE REMEMBERED, OR IT REPEATS FOREVER AT THE PASS RATE.
-        //
-        // CreatureFinder.FindByTag SWEEPS: it walks the whole user address space through
-        // VirtualQuery, copying every committed private region out in 256 KB chunks and
-        // testing every 4-byte-aligned dword. A sweep that SUCCEEDS returns at the first
-        // match; a sweep that FAILS does all of it, every time. Failure is therefore the
-        // expensive case by construction, which is the opposite of the intuition.
-        //
-        // And failure is the NORMAL case here: a lock names an object the peer is using, and
-        // the instance holding the lock is routinely one that has no local body for it. The
-        // first version stored the 0 and the cache test rejected it on the next pass, so it
-        // swept again — about thirty full address-space sweeps a second, on the frame thread.
-        //
-        // So the tag is recorded whether or not the body was found, and a miss is retried on
-        // a timer rather than immediately. Same remedy MaterialisedEnemies already needed for
-        // the same finder (its ProvenPresent list, after a measured sweep storm).
+        // Keep a short miss cache for objects still streaming in. This used to require a
+        // full heap sweep and a two-second backoff. Live object-table lookup is bounded
+        // and cheap enough to retry promptly without stalling the game thread.
         if (sameTag && _creature[slot] == 0 && Environment.TickCount64 < _nextRetryMs[slot])
         {
             return 0;
         }
 
-        nint found = CreatureFinder.FindByTag(wanted);
+        nint found = Odyssey.FindDialoguePartnerByTag(wanted);
         _creature[slot] = found;
+        _creatureId[slot] = found == 0 ? 0 : *(uint*)(found + 4);
         _nextRetryMs[slot] = found != 0 ? 0 : Environment.TickCount64 + MissRetryMs;
 
         for (int i = 0; i < length; i++)
@@ -877,10 +875,8 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         return found;
     }
 
-    /// <summary>How long a failed tag lookup is trusted before sweeping again. Long enough
-    /// that a miss costs nothing, short enough that a body which has since streamed in is
-    /// picked up well within a conversation.</summary>
-    private const long MissRetryMs = 2000;
+    /// <summary>Backoff for a partner that has not yet streamed into the object table.</summary>
+    private const long MissRetryMs = 250;
 
     private readonly long[] _nextRetryMs = new long[SharedBlock.InteractionLockCapacity];
 

@@ -2,6 +2,33 @@ namespace KotorCoop.Plugin;
 
 internal static unsafe partial class Odyssey
 {
+    /// <summary>Finds a live dialogue participant without scanning the private heap.
+    /// Missing participants are common during scripted scenes; a miss must remain cheap.</summary>
+    public static nint FindDialoguePartnerByTag(ReadOnlySpan<byte> tag)
+    {
+        if (tag.IsEmpty) return 0;
+        nint server = GetServer();
+        nint array = server == 0 ? 0 : GetObjectArrayFn(server);
+        nint tree = array == 0 ? 0 : *(nint*)array;
+        if (tree == 0) return 0;
+        for (int bucket = 0; bucket < CreatureObjectTableRule.BucketCount; bucket++)
+        {
+            nint entry = *(nint*)(tree + bucket * sizeof(nint));
+            for (int walked = 0; CreatureObjectTableRule.MayWalk(walked, entry); walked++)
+            {
+                nint obj = *(nint*)(entry + CreatureObjectTableRule.EntryObject);
+                uint key = *(uint*)(entry + CreatureObjectTableRule.EntryObjectId);
+                if (obj != 0 && (*(nint*)obj == CreatureFinder.CreatureVtable
+                        || *(nint*)obj == CreatureFinder.DoorVtable
+                        || *(nint*)obj == CreatureFinder.PlaceableVtable)
+                    && *(uint*)(obj + 4) == CreatureObjectTableRule.FullObjectId(bucket, key)
+                    && HasTag(obj, tag))
+                    return obj;
+                entry = *(nint*)(entry + CreatureObjectTableRule.EntryNext);
+            }
+        }
+        return 0;
+    }
     /// <summary>
     /// Collects creature bodies directly from the server's live <c>CGameObjectArray</c>.
     ///

@@ -58,7 +58,8 @@ public readonly record struct DialogueState(
     byte[]? PickLog = null,
     int NodeIndex = -1, // = NoNode; a record's own const is not in scope for its parameter list
     uint NodeSerial = 0,
-    bool Forced = false)
+    bool Forced = false,
+    string DialogResref = "")
 {
     /// <summary>The pick log's fixed wire size: 8 entries x (serial, slot, lineHash).</summary>
     public const int PickLogBytes = 96;

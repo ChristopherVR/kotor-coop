@@ -142,6 +142,13 @@ internal static unsafe class DialogueGateHook
     /// call that produced it — no other consumer exists.
     /// </summary>
     public static volatile bool LastStartForced;
+    private static readonly byte[] LastStartResref = new byte[SharedBlock.DialogueResrefLength];
+
+    public static void CopyLastStartResref(byte* into)
+    {
+        for (int i = 0; i < LastStartResref.Length; i++)
+            into[i] = LastStartResref[i];
+    }
 
     private static bool _installed;
 
@@ -176,17 +183,20 @@ internal static unsafe class DialogueGateHook
         int n = 0;
 
         s[n++] = 0x60;                                       // pushad
+        // Original second argument at ESP+8, plus pushad's 32 bytes. Copy the
+        // caller-owned CExoString while it is alive; never retain its pointer.
+        s[n++] = 0xFF; s[n++] = 0x74; s[n++] = 0x24; s[n++] = 0x28;
         s[n++] = 0x51;                                       // push ecx — the CSWSObject the
                                                              //  conversation is starting on,
                                                              //  so the gate can tell WHICH
                                                              //  NPC was clicked
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, int>)&OnStartDialog;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, nint, int>)&OnStartDialog;
         s[n++] = 0xE8;                                       // call OnStartDialog
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
-        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x04;         // add esp, 4 — cdecl, we clean up
+        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x08;         // add esp, 8 — cdecl
                                                              //  (before the test: it writes flags)
 
         s[n++] = 0x85; s[n++] = 0xC0;                        // test eax, eax  (before popad —
@@ -247,11 +257,25 @@ internal static unsafe class DialogueGateHook
     /// <summary>Runs at every conversation start, before the engine's own body. Returns
     /// non-zero to refuse. No engine calls, no allocation — a click on an NPC lands here.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int OnStartDialog(nint target)
+    private static int OnStartDialog(nint target, nint resrefString)
     {
         try
         {
             _startAttempts++;
+            Array.Clear(LastStartResref);
+            // StartDialog's second argument is a CExoString, verified by its
+            // BeginConversation caller. ReadProcessMemory avoids unsafe pointer faults.
+            byte* exo = stackalloc byte[8];
+            if (CreatureFinder.TryReadSelf(resrefString, exo, 8))
+            {
+                nint chars = *(nint*)exo;
+                uint length = *(uint*)(exo + 4);
+                if (length is > 0 and <= 17)
+                {
+                    fixed (byte* dest = LastStartResref)
+                        CreatureFinder.TryReadSelf(chars, dest, (int)length);
+                }
+            }
 
             // Recorded regardless of what happens below — a refused start is still worth
             // knowing was forced (diagnostically), and the spectate controller only ever reads

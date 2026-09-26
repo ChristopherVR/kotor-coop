@@ -755,6 +755,9 @@ public sealed partial class KotorGameBridge
     // docs/research/dialogue-sync.md's 2026-08-23 Item 1 and SharedBlock.cs's own remarks.
     private const int BlockLocalDialogueForced = 0x3F1C;
     private const int BlockRemoteDialogueForced = 0x3F20;
+    private const int BlockLocalDialogueResref = 0x8600;
+    private const int BlockRemoteDialogueResref = 0x8614;
+    private const int BlockDialogueResrefLength = 20;
 
     // Container-lock explicit arbitration (SharedBlock version 57, region 0x40D0..0x40E0) —
     // closes the container-loot race, docs/roadmap-seamless.md Tier 1 item 4. See

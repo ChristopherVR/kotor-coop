@@ -271,6 +271,7 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void Teleport(nint player)
     {
+        if (RefuseAutoFollowMovement()) return;
         Vec3 destination = block.CheatPosition;
         Vec3 here = Odyssey.GetPosition(player);
 
@@ -310,6 +311,7 @@ internal sealed unsafe partial class CheatController
     /// </summary>
     private void WalkTo(uint playerId)
     {
+        if (RefuseAutoFollowMovement()) return;
         Vec3 destination = block.CheatPosition;
 
         if (destination.X == 0f && destination.Y == 0f && destination.Z == 0f)
@@ -331,6 +333,14 @@ internal sealed unsafe partial class CheatController
             accepted
                 ? $"walking to {destination.X:F1},{destination.Y:F1}"
                 : refusalReason);
+    }
+
+    private bool RefuseAutoFollowMovement()
+    {
+        if (block.CheatAmount != 1 || (!Odyssey.IsConversationActive
+                && !block.RemoteDialogueActive && *block.LocalDialogueResref == 0)) return false;
+        Answer(SharedBlock.CheatStatusRefused, "autofollow held by a conversation");
+        return true;
     }
 
     /// <summary>

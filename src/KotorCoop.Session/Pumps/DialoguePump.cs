@@ -31,6 +31,7 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// <summary>The local conversation's forced-ness, held across the same flicker as the
     /// partner tag/node above.</summary>
     private bool _dialogueHeldForced;
+    private string _dialogueHeldResref = string.Empty;
 
     /// <summary>
     /// Governs PumpDialogue's work on the <see cref="AgentSettings.DialogueFastJoin"/> path:
@@ -228,6 +229,7 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             // edge), so it never needs a "only hold a real value" guard the way the tag/node
             // above do — it is simply carried the same way.
             _dialogueHeldForced = localForced;
+            _dialogueHeldResref = bridge.LocalDialogueResref;
         }
 
         bool active = rawInDialogue
@@ -280,7 +282,8 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
                 replySerial, replyIndex, active ? _dialogueHeldNode : DialogueState.NoNode);
             fingerprint = HashCode.Combine(
                 fingerprint, active ? _dialogueHeldNodeSerial : 0u, followingPeer,
-                token.Serial, token.NodeSerial, token.ReplySerial, active && _dialogueHeldForced);
+                token.Serial, token.NodeSerial, token.ReplySerial, active && _dialogueHeldForced,
+                active ? _dialogueHeldResref : string.Empty);
 
             willPump = _dialogueTickGate.ShouldPump(nowMs, fingerprint);
         }
@@ -297,12 +300,13 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             return;
         }
 
-        session.PublishDialogue(
+        session.PublishDialogueWithResref(
             active, speaker, line,
             active ? _dialogueHeldPartnerTag : string.Empty, replySerial, replyIndex, pickLog,
             active ? _dialogueHeldNode : DialogueState.NoNode,
             active ? _dialogueHeldNodeSerial : 0,
-            active && _dialogueHeldForced);
+            active && _dialogueHeldForced,
+            active ? _dialogueHeldResref : string.Empty);
 
         // The item-grant channel needs "do WE own an active conversation right now", which is
         // exactly what `active` already means (debounced across the engine's between-entries
@@ -317,7 +321,7 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
         // conversation in the game's own dialogue UI and follows it. Written every tick
         // rather than on the serial edge — the plugin is level-triggered on these fields and
         // a dropped edge would strand a spectator outside the conversation.
-        bridge.WriteRemoteDialogue(
+        bridge.WriteRemoteDialogueWithResref(
             followingPeer,
             followingPeer ? token.PartnerTag : string.Empty,
             followingPeer ? token.ReplySerial : 0,
@@ -325,7 +329,8 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
             followingPeer ? token.PickLog : null,
             followingPeer ? token.NodeIndex : DialogueState.NoNode,
             followingPeer ? token.NodeSerial : 0,
-            followingPeer && token.Forced);
+            followingPeer && token.Forced,
+            followingPeer ? token.DialogResref : string.Empty);
 
         _lastSpectateSerial = token.Serial;
     }

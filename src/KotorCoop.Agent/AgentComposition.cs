@@ -667,6 +667,11 @@ internal static class AgentComposition
             parts.Add($"{d.TlkEntryCount} tlk entries");
         }
 
+        if (d.Knows(ContentDigest.Field.Gameplay))
+        {
+            parts.Add($"gameplay {d.GameplayDigest:X8}");
+        }
+
         return string.Join(", ", parts);
     }
 

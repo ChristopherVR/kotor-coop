@@ -46,12 +46,13 @@ public sealed partial class KotorGameBridge : IGameBridge
     private int _consecutiveFailures;
     private nint _pluginBlock;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 80 + guard 0xC0FFEE01 (76: the exact
+    /// <summary>16-byte signature: "KOCOOP01" + version 81 + guard 0xC0FFEE01 (76: the exact
     /// enemy-health baseline channel 0x5400..0x5800; 77: the local_var_sync region
     /// 0x5800..0x5A00, KotorGameBridge.LocalVars.cs; 78: party-placed mine replication,
     /// 0x5A00..0x5C00; 79: another in-flight stream's own reservation; 80: the "no cap really"
     /// pass — EnemyCapacity 32 -> 128 and the five capacity-scaled enemy tables relocated to a
-    /// new 0x6000..0x8600 region, docs/research/creature-liveness.md). The version is
+    /// new 0x6000..0x8600 region, docs/research/creature-liveness.md; 81: dialogue resource
+    /// overrides at 0x8600/0x8614). The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
@@ -64,7 +65,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
     /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 50 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 51 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead

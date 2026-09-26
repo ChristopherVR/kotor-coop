@@ -5,6 +5,10 @@ namespace KotorCoop.Plugin;
 // for the struct header.
 internal partial struct SharedBlock
 {
+    // v81: actual DLG names, beyond the previous 0x8600 boundary. 16 bytes + NUL.
+    public const int DialogueResrefLength = 20;
+    public const int OffsetLocalDialogueResref = 0x8600;
+    public const int OffsetRemoteDialogueResref = 0x8614;
     // ---- NPC barks (version 27) --------------------------------------------------
     //
     // The one-liners an NPC throws into a bubble without ever opening the dialogue system
