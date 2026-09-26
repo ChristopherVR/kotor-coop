@@ -35,6 +35,7 @@ namespace KotorCoop.Tests;
 /// count-aware (compare against the expected delta a publish/queued-apply owes, not a blanket
 /// key exclusion) — see <c>PartyPoolPump.cs</c>'s own doc comment.
 /// </summary>
+[Trait("Category", "Slow")]
 public class PartyPoolLoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

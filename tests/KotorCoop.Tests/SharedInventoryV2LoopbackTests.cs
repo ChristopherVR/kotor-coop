@@ -19,6 +19,7 @@ namespace KotorCoop.Tests;
 /// requests, and reconciliation always targets an ABSOLUTE snapshot rather than an accumulated
 /// delta history.
 /// </summary>
+[Trait("Category", "Slow")]
 public class SharedInventoryV2LoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

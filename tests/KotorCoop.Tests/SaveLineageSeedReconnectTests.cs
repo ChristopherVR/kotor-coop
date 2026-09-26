@@ -18,6 +18,7 @@ namespace KotorCoop.Tests;
 /// <see cref="SessionManager"/> objects on loopback, the same style
 /// <c>SessionManagerTests</c>/<c>PeerIdentityByNonceTests</c> already use.
 /// </summary>
+[Trait("Category", "Slow")]
 public class SaveLineageSeedReconnectTests
 {
     private const string Module = "end_m01aa";

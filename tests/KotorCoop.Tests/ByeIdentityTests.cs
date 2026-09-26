@@ -39,6 +39,7 @@ namespace KotorCoop.Tests;
 /// reclaim at all, and that is precisely the one whose counters survived with it. That is the
 /// case these tests construct.
 /// </summary>
+[Trait("Category", "Slow")]
 public class ByeIdentityTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(25);

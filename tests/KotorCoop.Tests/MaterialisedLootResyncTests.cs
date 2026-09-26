@@ -20,6 +20,7 @@ namespace KotorCoop.Tests;
 /// <see cref="DisconnectRecoveryTests"/>'s style, because the actual resync only fires out of
 /// <c>HandleHello</c> on a genuine (re)admission.
 /// </summary>
+[Trait("Category", "Slow")]
 public class MaterialisedLootResyncTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(25);

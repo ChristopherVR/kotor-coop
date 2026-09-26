@@ -20,6 +20,7 @@ namespace KotorCoop.Tests;
 /// integration-level proof that combination genuinely releases both together, over the wire,
 /// rather than only in the two separate unit tests that already existed for each store alone.
 /// </summary>
+[Trait("Category", "Slow")]
 public class HostLossTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(25);

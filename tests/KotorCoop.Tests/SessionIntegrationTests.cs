@@ -9,6 +9,7 @@ namespace KotorCoop.Tests;
 /// Runs a real host and a real client over loopback UDP. No fakes: actual sockets, actual
 /// packets, actual tick loops.
 /// </summary>
+[Trait("Category", "Slow")]
 public class SessionIntegrationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

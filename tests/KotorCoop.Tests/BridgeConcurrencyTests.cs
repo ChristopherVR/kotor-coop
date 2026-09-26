@@ -33,6 +33,7 @@ namespace KotorCoop.Tests;
 /// process is fine and expected — the race is in the bookkeeping around the scan, not in what
 /// the scan finds).
 /// </summary>
+[Trait("Category", "Slow")]
 public class BridgeConcurrencyTests : IDisposable
 {
     private readonly ProcessMemory _memory = ProcessMemory.Attach(Environment.ProcessId);

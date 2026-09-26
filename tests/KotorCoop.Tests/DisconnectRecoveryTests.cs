@@ -17,6 +17,7 @@ namespace KotorCoop.Tests;
 /// all comes back. Every bug these tests cover lives in that second shape and none of them in
 /// the first.
 /// </summary>
+[Trait("Category", "Slow")]
 public class DisconnectRecoveryTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(25);

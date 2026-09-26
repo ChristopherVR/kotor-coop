@@ -9,3 +9,8 @@ using Xunit;
 //
 // Serialising the assembly costs a few seconds and makes the suite deterministic.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
+
+// Because the assembly is serial, the real-socket loopback/integration classes (party pool,
+// shared inventory, stores, disconnect/host loss...) are ~90% of its ten minutes. They carry
+// [Trait("Category", "Slow")]; tools/test-fast.ps1 skips them for the everyday loop (about a
+// minute) and CI still runs them (it only filters Category=Soak).

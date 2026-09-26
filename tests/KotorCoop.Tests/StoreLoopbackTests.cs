@@ -22,6 +22,7 @@ namespace KotorCoop.Tests;
 /// most direct reproduction: the old code drove both sides' stock to zero within a tick or two of
 /// opening, with no buy ever issued).
 /// </summary>
+[Trait("Category", "Slow")]
 public class StoreLoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
