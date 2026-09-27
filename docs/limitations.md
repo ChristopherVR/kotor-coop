@@ -1,21 +1,19 @@
-# What works, what doesn't — in plain language (updated 2026-09-25)
+# What works, what doesn't — in plain language (reviewed 2026-09-27)
 
 This page is for someone who wants to play KOTOR 1 from the Endar Spire to the Star Forge with a
 friend, and wants to know what to expect before starting. No engine internals here; the
 developer-facing version with the evidence behind every line is
 [status-engineering.md](status-engineering.md).
 
-**The short version:** two people can play together from the Endar Spire through Taris, and that
-part has been tested many times. You each control your own character, the host's game is the
-"real" world, and the mod keeps the two copies in step — where you are, who you're fighting, what's
-in the chests, which doors are open, how the story has progressed. Past Taris the same machinery
-should carry you through most of the game, but nobody has played it that far with two people yet,
-and a few story moments are known not to work for the second player: becoming a Jedi on
-Dantooine, the Leviathan prison break, Manaan's underwater section, and seeing the ending. Those
-are listed at the bottom of this page and tracked in
-[review-seamless-2026-09-18.md](review-seamless-2026-09-18.md). The other things that *don't* work
-are mostly the game's own single-player assumptions that the mod has chosen not to fight (one
-conversation at a time, one person drives the galaxy map).
+**Current scope:** co-op joining, exploration, combat and dialogue have been exercised in
+selected stock-game scenes. Three-player travel has a short stress test; a complete
+campaign and all eight-player scenarios are not verified. Recent fixes cover scripted
+Dantooine dialogue and remote lightsaber power state, but they do not certify every story
+trigger or animation. See the concise [player status guide](../site/works.html) and
+[September 27 dialogue checks](research/session-regressions-2026-09-27.md).
+
+These notes describe current development code, which may be newer than a packaged release.
+Historical dates below describe the scope of each check, not a guarantee for every scene.
 
 **How to read the status words**
 
@@ -45,7 +43,7 @@ conversation at a time, one person drives the galaxy map).
 | Your partner quits to the main menu | **Works** | Their character disappears and a line on screen says they're away. When they load back in, they reappear. |
 | The host's game crashes or drops off | **Works** | Within about six seconds you are released to keep playing solo, and the mod reconnects automatically when the host comes back. |
 | Three or more players | **Works** | Up to eight, same rules. Three players walking through many doors was stress-tested on 2026-09-17: twelve area changes in about half an hour, and every single time all three arrived in the same place and could see each other properly. Nothing crashed. |
-| Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it turned off because of it. A very different save asks you to rejoin. An item that has the same name but was changed by a mod on one side only is not detected. |
+| Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it turned off because of it. A very different save asks you to rejoin. Current development builds hash top-level Override files, module archives and active compatibility profiles, including same-size edits. Known gameplay differences disable shared gameplay channels. Patched base archives and external movie/audio directories remain outside the audit; matching inputs do not certify a campaign. See [mod support](research/mod-support-framework.md). |
 | Wrong version of the mod on one side | **Works** | Refused in about a second with a clear message, instead of a silent timeout. |
 
 ## Moving around the world

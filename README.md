@@ -13,18 +13,19 @@ No game file is changed. The plugin installs as a `dinput8.dll` the game already
 its own (or behind a tiny loader if another mod already uses that name); the agent attaches
 from outside, the same way a debugger would.
 
-**Players:** the plain-language download and install site is
-[christophervr.github.io/kotor-coop](https://christophervr.github.io/kotor-coop/) (source in
-[`site/`](site/)). This README is the same information for someone reading the repository —
+**Players:** the plain-language install and play guides are in [`site/`](site/).
+GitHub Pages publication is pending; the repository is currently private. For a local
+preview, run `npx http-server site -a 127.0.0.1 -p 8765 -c-1` and open
+[localhost:8765](http://127.0.0.1:8765/). This README is the same information for someone reading the repository —
 players and curious developers both.
 
 ## Status at a glance
 
-**You can play the whole game together.** Two people (up to eight) each run their own copy
+**Co-op play is available, with campaign gaps still being tested.** Two people (up to eight) each run their own copy
 of KOTOR, one hosts, the other connects from a **Co-op** button on the main menu, and from
 then on you are in one world: you see each other as real characters, walk through the same
 doors, fly to the same planets, fight the same enemies with one shared health bar per enemy,
-loot one shared inventory, and watch the same conversations play out. Saving, loading,
+keep personal backpacks by default, share quest items, and watch the same conversations play out. Saving, loading,
 quitting to the menu and even the host's game crashing are all handled — the other side
 rejoins on its own.
 
@@ -36,14 +37,14 @@ What you should know before starting:
   party before a departure. A companion recruited in a conversation reaches both players by
   default; a companion fighting *for the other player*, through their own copy of the game,
   is off by default (`companion_local_combat = 1` in `coop.ini` turns it on).
-- **Merchants and the shared stash are one pool** — what one of you buys or takes is gone for
-  the other. The host can set a buy/sell price multiplier (`store_prices` in `coop.ini`) and
-  the joiner automatically uses it.
+- **Backpacks and credits are personal by default.** Quest items and merchant stock
+  remain shared. The host can set `inventory_mode = shared` for a shared stash;
+  `credits_mode` follows that choice unless configured separately.
 - **Minigames are single-seat.** One of you plays Pazaak or races; the other waits.
 - **Enemies alternate between you** rather than sticking to whoever hurt them most — the
   game's own AI keeps pulling them back to the host.
-- **A controller plays the game, but can't type.** An Xbox-style pad walks, fights and works
-  every menu; the address/password box, chat and the console still need a keyboard.
+- **Controller text entry is implemented.** XInput movement has virtual-controller
+  coverage; the character grid is unit-tested. Physical-pad use still needs live checks.
 - **Internet play works** over a tunnel tool such as playit.gg. A router's own automatic
   port-opening (UPnP) is still unconfirmed, and there is no relay server for networks it
   can't reach.
@@ -52,9 +53,11 @@ What you should know before starting:
 - **A few things are off by default and still being proved live**: story flags reaching the
   other player (`local_var_sync`) and party-placed mines (`placed_mine_sync`) — each has a
   `coop.ini` key, described in [docs/limitations.md](docs/limitations.md).
-- **Known issue:** disconnecting and reconnecting without loading a save can occasionally
-  make the mod think you're on a different save and turn shared-world syncing off; loading
-  your game once and reconnecting clears it. A fix is in progress.
+- **Reconnect recovery can reload the host's world** when save identity cannot be
+  confirmed, retaining the joining player's character and personal progress.
+- **A complete campaign is not verified.** Scripted story sequences and custom campaigns
+  have outstanding checks; see the current [status guide](site/works.html).
+
 
 The full list, activity by activity, is [docs/limitations.md](docs/limitations.md); the
 dates, counts and research behind each line are in [docs/status-engineering.md](docs/status-engineering.md).
