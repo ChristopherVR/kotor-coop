@@ -259,6 +259,11 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        if (!NativeMethods.IsReadable(menu + MainMenuWarpButton, (nuint)sizeof(nint)))
+        {
+            return false;
+        }
+
         nint button = *(nint*)(menu + MainMenuWarpButton);
 
         // Sanity-guard the control pointer before calling into it: a plausible heap
@@ -322,8 +327,13 @@ internal static unsafe partial class Odyssey
 
         // The control is AT this address. Confirm by its vtable rather than a range check, so a
         // layout shift can never let us scribble somewhere arbitrary.
+        // The menu object is freed when character creation replaces it, and the client keeps
+        // returning its old address for a frame or more: a plausible-looking pointer is not a
+        // readable one (a joiner's first-join `newgame` crashed here every time).
         nint button = menu + MainMenuWarpButton;
-        return LooksLikeHeapPointer(button) && *(nint*)button == ButtonVtable ? button : 0;
+        return LooksLikeHeapPointer(button)
+            && NativeMethods.IsReadable(button, (nuint)sizeof(nint))
+            && *(nint*)button == ButtonVtable ? button : 0;
     }
 
     /// <summary>Un-hides a control: sets the visible/hittable bit and clears the lock bit. Must
