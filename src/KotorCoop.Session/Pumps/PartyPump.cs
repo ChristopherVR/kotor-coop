@@ -267,7 +267,7 @@ internal sealed class PartyPump(
             // only experience still merges (max on both ends means neither instance can pull
             // the other backwards while a report is in flight).
             uint targetGold = mergeCredits ? hostGold : gold;
-            if (bridge.TryWriteProgression(targetGold, Math.Max(hostExperience, experience)))
+            if (bridge.TryWriteProgression(targetGold, ExperienceMerge.Signed(hostExperience) >= ExperienceMerge.Signed(experience) ? hostExperience : experience))
             {
                 // Re-baseline to what the engine will actually hold, not what was asked for:
                 // the write clamps at the engine ceiling, and a baseline above it would read

@@ -70,7 +70,7 @@ public sealed class ExperienceMerge
             return hostExperience;
         }
 
-        if (peerExperience < b.LastSeen)
+        if (Signed(peerExperience) < Signed(b.LastSeen))
         {
             b.DecreaseStreak++;
             if (b.DecreaseStreak < DecreasesBeforeRebaseline)
@@ -88,7 +88,7 @@ public sealed class ExperienceMerge
         b.DecreaseStreak = 0;
         b.LastSeen = peerExperience;
 
-        if (peerExperience <= hostExperience)
+        if (Signed(peerExperience) <= Signed(hostExperience))
         {
             // Behind or level with the host: nothing to carry, and whatever it earns from here
             // is measured against the host's CURRENT value, not a stale baseline.
@@ -98,10 +98,15 @@ public sealed class ExperienceMerge
 
         _peers[peerId] = b;
 
-        uint earned = peerExperience > b.PeerBase ? peerExperience - b.PeerBase : 0;
-        uint candidate = earned > uint.MaxValue - b.HostBase ? uint.MaxValue : b.HostBase + earned;
-        return Math.Max(hostExperience, candidate);
+        long earned = Math.Max(0, Signed(peerExperience) - Signed(b.PeerBase));
+        long candidate = Math.Min(int.MaxValue, Signed(b.HostBase) + earned);
+        return (uint)(int)Math.Max(Signed(hostExperience), candidate);
     }
+
+    /// <summary>The engine's experience field is a signed int: a fresh Endar Spire PC can read -20
+    /// (<c>0xFFFFFFEC</c>). Compared as unsigned that reads as a huge maximum and wins every merge
+    /// (live 2026-09-30: a client left at -10 pulled the host back to -10 after each load).</summary>
+    internal static long Signed(uint experience) => (int)experience;
 
     private static PeerBaseline Rebaselined(uint generation, uint peerExperience, uint hostExperience) => new()
     {

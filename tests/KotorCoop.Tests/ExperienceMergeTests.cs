@@ -147,8 +147,34 @@ public class ExperienceMergeTests
     public void ACandidateSaturatesRatherThanWrapping()
     {
         ExperienceMerge merge = new();
-        merge.Fold(uint.MaxValue - 10, 2, 7, 100);
+        // The engine field is a signed int, so the ceiling is int.MaxValue.
+        merge.Fold(int.MaxValue - 10, 2, 7, 100);
 
-        Assert.Equal(uint.MaxValue, merge.Fold(uint.MaxValue - 10, 2, 7, uint.MaxValue));
+        Assert.Equal((uint)int.MaxValue, merge.Fold(int.MaxValue - 10, 2, 7, (uint)int.MaxValue));
+    }
+
+    [Fact]
+    public void ANegativeExperienceIsBehindZeroNotAHugeMaximum()
+    {
+        // The engine's field is a signed int: -10 is 0xFFFFFFF6. Read as unsigned it beat every
+        // real total (live 2026-09-30: a client at -10 pulled the host back to -10 after each load).
+        ExperienceMerge merge = new();
+        uint minusTen = unchecked((uint)-10);
+
+        Assert.Equal(0u, merge.Fold(0, peerId: 2, generation: 7, peerExperience: minusTen));
+        Assert.Equal(0u, merge.Fold(0, 2, 7, minusTen));
+        // The peer earns 25 from -10 (now 15): that is +25 earned, so the host carries 25.
+        Assert.Equal(25u, merge.Fold(0, 2, 7, 15));
+    }
+
+    [Fact]
+    public void ANegativeHostIsRaisedByAPeerWithRealExperience()
+    {
+        ExperienceMerge merge = new();
+        uint minusTwenty = unchecked((uint)-20);
+
+        merge.Fold(minusTwenty, 2, 7, minusTwenty);
+        // Peer at +5 after being level with the host at -20: earned 25, host -20 + 25 = 5.
+        Assert.Equal(5u, merge.Fold(minusTwenty, 2, 7, 5));
     }
 }
