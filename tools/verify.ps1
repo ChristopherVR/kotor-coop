@@ -711,31 +711,47 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # So the old check — push the host's XP DOWN and wait for the client to follow — now
     # asserts exactly the bug that was fixed. It moves UP, and the downward case becomes its
     # own check: the client must REFUSE to be pulled backwards.
+    # Experience arithmetic is done as UNSIGNED 32-bit and written back through this: a fresh
+    # Endar Spire PC can read 0xFFFFFFEC (-20), and `[int]4294967281` throws instead of wrapping,
+    # which made every XP write below a silent no-op.
+    function AsI32([uint64]$v) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]($v -band 0xFFFFFFFF)), 0) }
     $goldTarget = $goldBefore + 137
     $xpTarget = $xpBefore + 5   # small: crossing a level threshold lights a modal prompt
 
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldTarget) | Out-Null
-    [VF]::W32($h1, $statsHost + 0x68, [int]$xpTarget) | Out-Null
+    [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpTarget)) | Out-Null
 
     # One heavy pump a second on each side plus a wire hop; 25 s is many times over, and
     # both fields travel in the same snapshot so one wait covers them.
     WaitFor2 {
-        ([VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldTarget) -and
         ([VF]::U32($h2, $statsPeer + 0x68) -eq $xpTarget)
     } 25 | Out-Null
 
     $goldSeen = [VF]::U32($h2, $partyTable2 + 0xFC)
     $xpSeen = [VF]::U32($h2, $statsPeer + 0x68)
 
-    Check 'party gold reaches the other instance' ($goldSeen -eq $goldTarget) `
-        "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
+    # credits_mode defaults to PERSONAL (each player keeps their own purse, CoopConfig.CreditsPersonal),
+    # so on a stock install the honest expectation is that the client's gold does NOT follow. Read the
+    # mode from the client's coop.ini (credits_mode, else inventory_mode, else personal).
+    $clientIni = Join-Path (Split-Path (Get-Process -Id $Client2).Path -Parent) 'coop.ini'
+    $iniText = if (Test-Path $clientIni) { Get-Content $clientIni -Raw } else { '' }
+    $creditsShared = ($iniText -match '(?m)^\s*credits_mode\s*=\s*shared') -or
+        (($iniText -notmatch '(?m)^\s*credits_mode\s*=') -and ($iniText -match '(?m)^\s*inventory_mode\s*=\s*shared'))
+    if ($creditsShared) {
+        Check 'party gold reaches the other instance' ($goldSeen -eq $goldTarget) `
+            "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
+    }
+    else {
+        Check "party gold stays personal (credits_mode default)" ($goldSeen -ne $goldTarget) `
+            "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
+    }
     Check 'PC experience rises on the other instance' ($xpSeen -eq $xpTarget) `
         "host $xpBefore -> $xpTarget, client's engine reads $xpSeen"
 
     # The guard, and the whole reason the channel changed: a client that has earned XP the
     # host has not — plot XP from a conversation only it is having — must not have it stamped
     # back down. Drop the host well below and give it longer than a merge would need.
-    [VF]::W32($h1, $statsHost + 0x68, [int]($xpBefore - 20)) | Out-Null
+    [VF]::W32($h1, $statsHost + 0x68, (AsI32 ($xpBefore + 0xFFFFFFEC))) | Out-Null
     Start-Sleep -Seconds 6
     $xpAfterDrop = [VF]::U32($h2, $statsPeer + 0x68)
     $xpHostHealed = [VF]::U32($h1, $statsHost + 0x68)
@@ -752,8 +768,8 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # downward through the channel — writing only the host would have the client's higher
     # figure pull it straight back up, which is the behaviour two checks above just proved.
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldBefore) | Out-Null
-    [VF]::W32($h1, $statsHost + 0x68, [int]$xpBefore) | Out-Null
-    [VF]::W32($h2, $statsPeer + 0x68, [int]$xpBefore) | Out-Null
+    [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpBefore)) | Out-Null
+    [VF]::W32($h2, $statsPeer + 0x68, (AsI32 $xpBefore)) | Out-Null
     WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
 }
 else {

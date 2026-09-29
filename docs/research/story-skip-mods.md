@@ -198,3 +198,14 @@ enemy-related: the phantom Min1HP pin (tutorial), the LAN beacon checks (flaky, 
 `PumpProgression` writes `max(host, own)`; the host PC's experience reads `4294967276`, i.e. -20,
 in `verify.ps1` before any of its writes, so the XP half may be a sign artefact and the gold half a
 real gap). Not diagnosed further.
+
+**Update 2 (same day):** `verify.ps1` XP checks were silent no-ops on a PC whose experience reads
+`0xFFFFFFEC`: `[int]4294967281` throws in PowerShell instead of wrapping, so no XP write happened.
+They now wrap through `AsI32`. The gold check assumed a shared purse, but `credits_mode` defaults to
+personal, so it now reads the client's `coop.ini` and asserts "does not follow" on a stock install.
+Result against `es_baseline`: **42 PASS, 7 FAIL**. Remaining, none diagnosed to a code defect:
+the phantom "not a sink" attack-bit check and "targetable decoy" faction check (the plugin holds
+phantoms Neutral under `local_combat` + damage-dealt and re-permits the attack bit for the
+combat-mirror visual, so both readings depend on the parked enemies putting the peer in combat;
+the checks predate that design), three LAN-beacon checks (environment-flaky, one run passed),
+the 4 engine call signatures, and the per-frame `threat:` log line (6 in one second).
