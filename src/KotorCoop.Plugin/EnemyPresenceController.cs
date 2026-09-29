@@ -1800,7 +1800,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     private nint Resolve(int slot, uint objectId)
     {
         nint cached = _creature[slot];
+        // The cached pointer outlives a world reload (a client `loadgame` frees every object
+        // while the slot still holds its address): prove the memory readable before the id and
+        // vtable are read out of it — live 2026-09-29, an access violation right here.
         if (cached != 0 && _trackedId[slot] == objectId
+            && NativeMethods.IsReadable(cached, (nuint)(ObjId + sizeof(uint)))
             && *(uint*)(cached + ObjId) == objectId
             && *(nint*)cached == CreatureVtable)
         {

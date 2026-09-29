@@ -946,6 +946,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // original hand-written check used (cached != 0, trackedId == objectId) — this rule
         // adds a NAMED, tested decision on top of those reads, not a new dereference.
         bool vtableAndIdMatch = cached != 0 && trackedId == objectId
+            && NativeMethods.IsReadable(cached, 8)
             && PartyCreatureIdentity.IsLiveMatch(*(nint*)cached, *(uint*)(cached + 0x04), objectId);
         if (PartyPresenceResolveCacheRule.CanTrustCachedCreature(cached, trackedId, objectId, vtableAndIdMatch))
         {
