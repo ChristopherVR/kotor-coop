@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -121,6 +121,14 @@ switch ($Command) {
         "  pause:   desired {0}  applied {1}" -f (U32 0x96C), (U32 0x970)
         "  journal: serial {0}  applied {1}  status {2}  tag '{3}' state {4}" -f `
             (U32 0x974), (U32 0x99C), (U32 0x9A0), (Ascii 0x978 32), (U32 0x998)
+    }
+    'menuload' {
+        if ($Arg1 -ne 'read') {
+            WU32 0x3F24 1
+            WU32 0x9A4 ((U32 0x9A4) + 1)
+            "mid-session load request filed: serial $(U32 0x9A4)"
+        }
+        "  menuload: serial {0}  applied {1}  status {2}" -f (U32 0x9A4), (U32 0x9A8), (U32 0x9AC)
     }
     'travel' {
         if ($Arg1.Length -eq 0) { Write-Error 'travel needs a module name'; exit 1 }

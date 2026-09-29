@@ -155,3 +155,22 @@ cause.** What the run showed instead:
 
 Next: symbolise the `0x6FB0C7` crash with the matching DLL/PDB, find what blocked the joiner for two
 minutes at rig start, and re-run the new-game case on a rig where the joiner is not blocked.
+
+### Crash symbolised and a stale-request guard added (2026-09-30, later)
+
+`kotorcoop-crash.bin` for the joiner crash: access violation at `0x64C20D`, `mov ebp,[eax+0x48]` on
+the result of `CClientExoApp::GetModule` (`0x5ED530`) inside `HandleServerToPlayerCreatureUpdate_Add`
+- the same null-`GetModule` fault `transition-crashes.md` already records. `0x6FB0C7` in the earlier
+line is only the engine's top-level exception handler, so it names every crash. The trigger was a
+rejoin load request filed before a 120 s main-thread stall, run after it against a world the host had
+since replaced, and the agent had stopped polling it at 90 s.
+
+Fix: `MenuLoadController` refuses (status 9, `StatusStaleAfterStall`) a request it first sees after a
+stall longer than 45 s, and logs `request #N was pending across a N s stall - refused as stale`. The
+agent re-requests against the current world. Verified live with a new `blockpoke menuload` verb: the
+joiner process suspended 50 s with a request filed gave `applied 2 status 9`; an ordinary
+`loadgame 1` afterwards ran normally ("the world is up and on screen"). The host's new-game
+sequence then ran three times on the rig with the joiner connected and the host stayed in its new
+game each time. Not a clean repro of the original hijack: no run produced a joiner door announce
+that reached a host in the movie (the agent log files append across days, so timestamps in them
+must be matched against the run's own start).

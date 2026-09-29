@@ -99,8 +99,26 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
     private bool _loginRerouted;
 
 
+    /// <summary>A request first seen after the main thread was gone this long is refused. The
+    /// agent stops polling a load after 90 s, and the world it staged for the request was fetched
+    /// before the stall, so running it afterwards loads a world the host has already replaced
+    /// (live 2026-09-30: a rejoin queued behind a 120 s stall ran after the host quit to the menu
+    /// and the client died in HandleServerToPlayerCreatureUpdate_Add).</summary>
+    private const long StaleAfterStallMs = 45_000;
+
+    /// <summary>Failure status for a request refused as stale.</summary>
+    public const int StatusStaleAfterStall = 9;
+
+    private long _lastFrameMs;
+
+    private uint _staleCheckedSerial;
+
     public void OnFrame()
     {
+        long nowMs = Environment.TickCount64;
+        long gapMs = _lastFrameMs == 0 ? 0 : nowMs - _lastFrameMs;
+        _lastFrameMs = nowMs;
+
         // While the native browser panel is up, the main-menu object is freed (see
         // docs/research/native-browser-panel.md §2) and a load staged now would resolve
         // dangling GUI. The browser hands its connect to the agent only after its panel is
@@ -114,6 +132,19 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
         if (serial == block.MenuLoadApplied)
         {
             return;
+        }
+
+        if (serial != _staleCheckedSerial)
+        {
+            _staleCheckedSerial = serial;
+            if (gapMs > StaleAfterStallMs && !_pumping && _panel == 0 && _firedSerial != serial)
+            {
+                PluginHost.Log($"menu: request #{serial} was pending across a {gapMs / 1000.0:F0} s stall - "
+                    + "refused as stale (the agent re-requests against the current world)");
+                block.MenuLoadStatus = StatusStaleAfterStall;
+                block.MenuLoadApplied = serial;
+                return;
+            }
         }
 
         // Phase 3: the load is in flight. Once ExecuteLoadModule has armed the app
