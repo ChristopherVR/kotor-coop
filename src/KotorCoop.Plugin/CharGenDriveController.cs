@@ -226,6 +226,16 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
             return 2;
         }
 
+        // The menu object is freed once character creation replaces it, and the client keeps
+        // returning its old address (a re-join while creation is already open crashed here,
+        // live 2026-09-29). Unreadable means the menu is gone: creation is under way.
+        if (!NativeMethods.IsReadable(menu + MenuStateBits, sizeof(uint))
+            || !NativeMethods.IsReadable(menu + MenuGuiManager, (nuint)sizeof(nint)))
+        {
+            PluginHost.Log("chargen: newgame refused - the main menu object is gone (character creation is probably already open)");
+            return 3;
+        }
+
         // The same bit pattern OnNewGamePicked's own first check rejects on: already marked for
         // teardown means a game is starting and the object is about to be deleted.
         if ((*(uint*)(menu + MenuStateBits) & 0x600) == 0x400)
