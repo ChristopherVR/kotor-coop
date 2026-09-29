@@ -233,7 +233,10 @@ $c1 = if ($ph1) { [VF]::FindCreature($h1, $ph1) } else { 0 }
 if ($c1) {
     $plot = [VF]::U32($h1, $c1 + 0xF8); $min1 = [VF]::U32($h1, $c1 + 0x200)
     $move = [VF]::U32($h1, $c1 + 0x9F0); $appr = [VF]::U32($h1, $c1 + 0xA60)
-    Check 'phantom damageable, not a sink' (($plot -eq 0) -and ($min1 -eq 1) -and (($move -band 4) -eq 0)) `
+    # The attack bit (mask 4) is cleared at spawn (MarkAsRemotePlayer) but re-permitted for the
+    # combat-mirror swing visual while the peer is fighting (Odyssey.Combat PermitAttacking), so it
+    # is reported, not required: it reads set whenever the baseline has the peer in combat.
+    Check 'phantom damageable, not a sink' (($plot -eq 0) -and ($min1 -eq 1)) `
         ("plot=$plot min1hp=$min1 movebits=0x{0:X} appearance=$appr" -f $move)
 } else { Check 'phantom damageable, not a sink' $false 'phantom creature not found' }
 
@@ -409,8 +412,11 @@ Check 'enemy presence mirrored on the client' (($e2 -ge 5) -and ($enemyCount2 -g
 if ($c1) {
     $stats = [VF]::U32($h1, $c1 + 0xA74)
     $faction = if ($stats) { [VF]::U32($h1, $stats + 0x78) } else { 999 }
-    Check 'phantom is a targetable decoy' (($faction -eq 0) -and ([VF]::U32($h1, $c1 + 0x200) -eq 1)) `
-        "faction $faction, min1hp 1"
+    # PLAYER (0) while it is a live target; a non-PLAYER faction is the deliberate Neutral hold
+    # (local_combat + damage-dealt, stealth, menu guard - PhantomController.ApplyTargetable), which
+    # the stock config runs, so any of them is the designed state; unkillable (min1hp) is the invariant.
+    Check 'phantom is a targetable decoy' (($faction -in 0, 2, 5) -and ([VF]::U32($h1, $c1 + 0x200) -eq 1)) `
+        "faction $faction (0 player, 2/5 neutral hold), min1hp 1"
 }
 
 # A real engine damage effect on the phantom must arrive as damage on the peer's own PC.
@@ -716,7 +722,7 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # which made every XP write below a silent no-op.
     function AsI32([uint64]$v) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]($v -band 0xFFFFFFFF)), 0) }
     $goldTarget = $goldBefore + 137
-    $xpTarget = $xpBefore + 5   # small: crossing a level threshold lights a modal prompt
+    $xpTarget = ([uint64]$xpBefore + 5) -band 0xFFFFFFFF   # small: crossing a level threshold lights a modal prompt
 
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldTarget) | Out-Null
     [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpTarget)) | Out-Null
@@ -1307,8 +1313,15 @@ else {
 # by design (see PartyRosterController's own "A LEVEL, NOT EDGES" comment). Scoped to the whole
 # session log, same as check 6's crash scan: this is a standing-quality check, not tied to one
 # action this run triggers.
-$worst1 = WorstSpam $Log1 0
-$worst2 = WorstSpam $Log2 0
+# The plugin log appends across sessions, so scope to the CURRENT process: from its last
+# "plugin loaded into pid" banner, not every burst any earlier run ever logged.
+function LastSessionStart($path) {
+    $n = 0; $at = 0
+    foreach ($l in [IO.File]::ReadLines($path)) { if ($l -like '*=== KotorCoop plugin loaded into pid*') { $at = $n }; $n++ }
+    return $at
+}
+$worst1 = WorstSpam $Log1 (LastSessionStart $Log1)
+$worst2 = WorstSpam $Log2 (LastSessionStart $Log2)
 $spamOk1 = ($null -eq $worst1) -or ($worst1.Value -le 10)
 $spamOk2 = ($null -eq $worst2) -or ($worst2.Value -le 10)
 Check 'no per-frame spam' ($spamOk1 -and $spamOk2) `

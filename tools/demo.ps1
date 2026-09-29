@@ -339,6 +339,9 @@ function Start-AgentConsole {
     # log file is produced by the agent itself, which emits one compact timestamped line per
     # change when its output is redirected. Here that redirection is the tee'd copy started
     # separately below, so both forms exist without either spoiling the other.
+    # A fresh log per launch (the previous one is kept as .prev): the agent appends, and
+    # verify.ps1's whole-log checks (per-frame spam, crash scan) otherwise read lines from earlier days.
+    if ($LogPath -and (Test-Path $LogPath)) { Move-Item -Path $LogPath -Destination "$LogPath.prev" -Force }
     $quoted = ($AgentArgs | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
     $command = "`$Host.UI.RawUI.WindowTitle = '$Title'; & '$agent' $quoted"
 

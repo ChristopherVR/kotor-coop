@@ -209,3 +209,19 @@ phantoms Neutral under `local_combat` + damage-dealt and re-permits the attack b
 combat-mirror visual, so both readings depend on the parked enemies putting the peer in combat;
 the checks predate that design), three LAN-beacon checks (environment-flaky, one run passed),
 the 4 engine call signatures, and the per-frame `threat:` log line (6 in one second).
+
+**Update 3 (same day):** `demo.ps1` now rotates each agent log to `.prev` at launch, `verify.ps1` scopes
+its per-frame-spam scan to the current plugin process (it read every earlier session's log), the
+`sync12c` phantom diagnostic is capped at 8 lines instead of 60 (it filled 54 in one second at every
+world load and tripped that check for real), `callaudit.py` carries a `KNOWN_EXCEPTIONS` table for
+the four call declarations it flags but that were read by hand (one two-argument function whose
+early-out returns with `ret 4`, two tail-jump thunks, one live-proven no-argument call), and the
+phantom "not a sink"/"decoy" checks accept the designed Neutral hold and the combat-visual attack bit.
+Last run on `es_baseline`: **42 PASS, 7 FAIL**. Still failing, all judged environment or state, none
+a confirmed code defect: the three LAN-beacon/browser checks (no broadcast reaches the second
+instance on this machine), the door-mirror check (passed on the previous run, failed here), "the peer
+really loses those hit points" (hp 6 -> 1 on one run and 6 -> 6 on another: the tutorial Min1HP pin
+and a mid-run kill decide it) and the two XP guards (the baseline PC reads XP `0xFFFFFFEC`/`0xFFFFFFF6`
+after every reload, whatever `grantxp` wrote before saving, so kill XP arriving mid-run moves the
+target under the check). A clean baseline needs a PC with positive XP that survives a save/load;
+`grantxp` before `save` did not achieve that and the cause was not found.

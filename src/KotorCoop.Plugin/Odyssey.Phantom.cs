@@ -230,7 +230,7 @@ internal static unsafe partial class Odyssey
                     // sticks even briefly, or is reverted before the next sample can see it —
                     // see docs/research/phantom-locomotion.md §9.3. Only reachable on a gait
                     // edge, so the cap fills slowly.
-                    bool diag = moving && _syncPositionDiagLogged < 60;
+                    bool diag = moving && _syncPositionDiagLogged < 8;
                     ushort before = diag ? *(ushort*)(twin + TwinCurrentAnimation) : (ushort)0;
 
                     syncPosition(twin, &position, (uint)want, TwinPositionSyncBudget);

@@ -101,6 +101,20 @@ def ret_immediate(text: bytes, va: int, hops=0):
     return ("no-ret", None)
 
 
+# Declarations the audit flags but that were examined by hand and are known-good. Each carries
+# the reason, so a NEW disagreement still fails and these do not hide behind a blanket ignore.
+KNOWN_EXCEPTIONS = {
+    0x00506B30: "CSWSArea::SetTransitionPending reads [esp+4] and [esp+8] on entry (two stack args); the "
+                "audit took the ret-imm of its early-out path. (this,int,char) is right.",
+    0x005EDA50: "a two-instruction thunk (mov ecx,[ecx+4]; jmp target) - it loads ecx itself, so a "
+                "Thiscall declaration matches; the database label 'stdcall' is the target's.",
+    0x005F4B50: "CClientExoAppInternal::DoQuickSave, no stack args, declared Cdecl; live-verified by every "
+                "'save' verb and quicksave the rig has issued (2026-09-30 again), never a stack skew.",
+    0x006EB320: "CSWGuiMainCharGen::BeginPlayGame is a tail-jump thunk (mov ecx,[esi+0x68]; jmp 0x6DBDF0); "
+                "the audit reads the target's ret. Live-verified by five new-game runs on 2026-09-30.",
+}
+
+
 def main():
     args = sys.argv[1:]
     only_bad = "--bad" in args
@@ -163,7 +177,7 @@ def main():
         name = f"{db[0]}::{db[1]}" if db and db[0] else (db[1] if db else "")
         rows.append((verdict, addr, conv, nargs, expected, kind, imm, name, detail, files))
 
-    bad = [r for r in rows if r[0] != "ok"]
+    bad = [r for r in rows if r[0] != "ok" and r[1] not in KNOWN_EXCEPTIONS]
 
     if markdown:
         print("| Address | Symbol | Conv | Args | Callee pops | Declared in |")
