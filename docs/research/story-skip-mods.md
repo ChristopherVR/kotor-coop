@@ -67,3 +67,63 @@ files or our code), **INFERRED** (reasoned, not run), **NEEDS-LIVE**.
    `[super-skip-taris]`/`[jedi-from-the-start]` line instead of a generic `W_MODULES`, and hash
    the replaced module files' content for these profiles (1).
 4. Document both mods in `docs/limitations.md` under mod compatibility once (1)-(2) are done.
+
+## Live results (2026-09-29, two-instance rig, mods installed with HoloPatcher CLI)
+
+Both game copies had byte-identical mod files. The host started a real new game through
+`newgame` / `chargen quick 0` / `chargen accept` while a joiner was connected. Both installs were
+restored from a full backup afterwards.
+
+### Two joiner crashes found first, both fixed (`Odyssey.Menu.cs`, `CharGenDriveController.cs`)
+
+Every joiner first-join (`join_mode` auto/newcharacter) crashed the joiner's game at character
+creation. Two stale-pointer reads of the main menu object, which the engine frees when character
+creation replaces it: `GetCoopMenuButton` (`mainMenu + 0x1248`) and `FindPanel`'s fallback walk
+(`menu + MenuGuiManager`). A "looks like a heap pointer" test passed on the stale address. Both now
+require `NativeMethods.IsReadable` first. Verified: first-join chargen, then the joiner pulled into
+the host's world, repeatedly. Symbolizing needs the DLL and PDB from the same build (a stale
+installed pair named the wrong function once; `demo.ps1` does not deploy the plugin).
+
+### Super Skip Taris (host drives the Trask conversation, "Light Side skip Taris")
+
+| Check | Result |
+|---|---|
+| Mod options appear in Trask's conversation (node 55, options 3-5) | Yes, after the m01aa_c01 cutscene and Trask's first lines |
+| Script effects on the host | XP pool 35,320, credits +3,284, available-NPC mask `0x1C7` (exactly the six recruits), journal `tar_escape`/`tar_planetinfo`, about 120 globals set |
+| Cutscene chain | STUNT_06 (conversation), movies `06a`+`05_1C`, STUNT_07, then the turret ambush `m12ab`, then `ebo_m12aa`. The joiner followed every hop |
+| Joiner globals | 1,185 globals compared between host and joiner saves: 3 differences (`k_vis_Dantooine`, `K_CURRENT_PLANET` 15 vs 5, `K_LAST_LOCATION`). The 120-global burst carried over |
+| Joiner journal | Identical |
+| Joiner credits | The peer's purse received the same +3,284 (`credit grant: ... requesting the peer's own purse receive the same amount`) |
+| Joiner party availability / XP pool | Not carried: the joiner's party table showed none of the six NPCs available and its own XP pool. Companions reach a joiner as mirrors of the host's active party, and that party was empty at that point; not judged a defect |
+| Turret ambush | An unattended gunner loses after about 66 s and the game drops to the main menu (vanilla). `mgkill all` clears it. A real run needs shooting |
+
+Not tested: a joiner present in the Endar Spire when the skip is chosen. The host cannot save
+during the opening dialogue, so a joiner cannot adopt that world until after it; a joiner in
+limbo at that moment followed the whole chain from a different world without trouble.
+
+### Jedi From The Start (host drives the class selector)
+
+- **The HoloPatcher CLI silently skipped the `m01aa_c01.dlg` replacement** (`!ReplaceFile=1` into
+  `end_m01aa.mod`); it reported 0 errors. The class selector therefore never appeared until the
+  file was placed by hand. This is an installer-automation problem, not a co-op one. Players using
+  the mod's own installer are not affected. The other `!ReplaceFile` targets
+  (`jfts_bench01.dlg`, `dan13_practice*.uti`) were not checked.
+- With the selector in place: the host chose Jedi Consular; `AddMultiClass` was captured
+  (`a script added class 4 to the local player - published as grant #1`), the level-up screen
+  opened on the host.
+- The joiner received the grant, and **its own popup "The Force is strong in you. Choose the
+  training you will pursue" appeared** (first time anyone has watched it). Choosing Guardian
+  produced `cls 2:[2@1,3@0]` on the joiner, a different path from the host's. It stood in the same
+  Endar Spire world beside the host.
+- **Timing risk found:** the joiner was playing the host's relayed opening movie (`01A`, about two
+  minutes, blocking the game thread) and could not answer the plugin's check. The Jedi-choice
+  request retries 10 times at about 12 s intervals and succeeded on attempt 8. A slightly longer
+  blocking movie or load would exhaust the attempts and the choice would be dropped.
+
+### Follow-ups
+
+1. Make the Jedi-choice check outlast a blocking movie (retry on world-up rather than a fixed count).
+2. Confirm `jfts_a_starteq` (locker refill on a 1 s delay) and the Trask corpse objects on a joiner.
+3. A joiner present in the Endar Spire during the skip is unreachable without a save; decide whether
+   the host should be allowed to save inside the opening dialogue or the joiner told to wait.
+4. Add `profiles/mods/` entries for both mods.
