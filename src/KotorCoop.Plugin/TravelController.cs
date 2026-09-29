@@ -67,6 +67,13 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     /// </summary>
     private uint _fadedForSerial;
 
+    /// <summary>See <see cref="OnFrame"/>: the stall after which a first-seen request is refused.</summary>
+    private const long StaleAfterStallMs = 45_000;
+
+    private long _lastFrameMs;
+
+    private uint _staleCheckedSerial;
+
     /// <summary>
     /// Gated OFF by default (coop.ini <c>transition_announce_fade</c>) — see
     /// <c>EngineHandles.TryFadeToBlack</c>'s own doc for why: the fade DIRECTION is INFERRED,
@@ -121,6 +128,36 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         if (StagedMovies.Forget("the world changed under them", out string note))
         {
             PluginHost.Log($"cinematic: {note}");
+        }
+    }
+
+    /// <summary>
+    /// Runs EVERY frame (not only while a request is pending), from PluginHost's frame prelude.
+    /// A request first seen after the main thread was gone this long was filed against a world that
+    /// has moved on (a relayed movie, a long load). Running it would warp this player back into a
+    /// stale module and ANNOUNCE it, and the peer would follow that announce: live 2026-09-29/30, a
+    /// queued travel replayed after the host's opening movie dragged the host out of its new game.
+    /// Refused, the agent re-asks against the current state.
+    /// </summary>
+    public void OnFrame()
+    {
+        long nowMs = Environment.TickCount64;
+        long gapMs = _lastFrameMs == 0 ? 0 : nowMs - _lastFrameMs;
+        _lastFrameMs = nowMs;
+
+        uint serial = block.TravelSerial;
+        if (serial == block.TravelApplied || serial == _staleCheckedSerial)
+        {
+            return;
+        }
+
+        _staleCheckedSerial = serial;
+        if (gapMs > StaleAfterStallMs)
+        {
+            PluginHost.Log($"travel: request #{serial} was pending across a {gapMs / 1000.0:F0} s stall - "
+                + "refused as stale (the agent re-requests against the current world)");
+            block.TravelStatus = MenuLoadController.StatusStaleAfterStall;
+            block.TravelApplied = serial;
         }
     }
 

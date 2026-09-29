@@ -281,6 +281,7 @@ internal static unsafe partial class PluginHost
         // stays 0 at a settled menu), so a load request serviced from OnFrame sat forever.
         // MainLoop fires at the menu and in-world alike, on the same game thread.
         _menuLoad?.OnFrame();
+        _travel?.OnFrame();
 
         // The post-adopt starting-gear repair, right after: it watches block.MenuLoadApplied for
         // the adopted-world load's own "world is up" ack, which _menuLoad.OnFrame() just wrote
