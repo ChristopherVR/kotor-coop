@@ -227,6 +227,31 @@ public sealed class ModSupportTests : IDisposable
         Assert.Equal("p_zaalbar", template);
     }
 
+    [Theory]
+    [InlineData("super-skip-taris", "skip_spire.ncs", "ls_skip_taris.ncs", "ds_skip_taris.ncs")]
+    [InlineData("jedi-from-the-start", "jfts_a_cjedic.ncs", "jfts_a_cjedig.ncs", "jfts_a_cjedis.ncs")]
+    public void CheckedInStorySkipProfilesAreNamedOnlyWhenAllTheirScriptsArePresent(
+        string id, string first, string second, string third)
+    {
+        string catalog = Path.Combine(_directory, ModSupportProfile.CatalogDirectory);
+        Directory.CreateDirectory(catalog);
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "ModProfiles", id + ".json"),
+            Path.Combine(catalog, id + ".json"));
+        Directory.CreateDirectory(Path.Combine(_directory, "Override"));
+        File.WriteAllText(Path.Combine(_directory, "Override", first), "marker");
+        Assert.True(ModSupportProfile.TryLoad(_directory, out var profile, out string error), error);
+        Assert.False(Assert.Single(profile.Mods).Active);
+        File.WriteAllText(Path.Combine(_directory, "Override", second), "marker");
+        File.WriteAllText(Path.Combine(_directory, "Override", third), "marker");
+        Assert.True(ModSupportProfile.TryLoad(_directory, out profile, out error), error);
+        Assert.Equal(id, Assert.Single(profile.Mods).Id);
+        Assert.True(profile.Mods[0].Active);
+        Assert.Equal(id, profile.Id);
+        // No companion or campaign-module rule: a stock slot stays unclaimed.
+        Assert.Equal(ModSupportProfile.Resolution.Unclaimed,
+            profile.Resolve(0, "end_m01aa", out _));
+    }
+
     [Fact]
     public void MisspelledCompatibilityFixFieldsAreReported()
     {

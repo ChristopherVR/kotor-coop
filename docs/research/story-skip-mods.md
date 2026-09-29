@@ -122,8 +122,15 @@ limbo at that moment followed the whole chain from a different world without tro
 
 ### Follow-ups
 
-1. Make the Jedi-choice check outlast a blocking movie (retry on world-up rather than a fixed count).
-2. Confirm `jfts_a_starteq` (locker refill on a 1 s delay) and the Trask corpse objects on a joiner.
-3. A joiner present in the Endar Spire during the skip is unreachable without a save; decide whether
-   the host should be allowed to save inside the opening dialogue or the joiner told to wait.
-4. Add `profiles/mods/` entries for both mods.
+1. **Done** (`44df090`): the Jedi-choice check no longer spends an attempt when the plugin is silent, so a blocking movie or load cannot exhaust it.
+2. Confirm `jfts_a_starteq` (locker refill on a 1 s delay) and the Trask corpse objects on a joiner. Still needs a live run.
+3. A joiner present in the Endar Spire during the skip is unreachable without a save. Decision: the host cannot save inside the opening dialogue, so this stays a documented limit (`docs/limitations.md`); a joiner in another world followed the whole chain without trouble.
+4. **Done:** `profiles/mods/super-skip-taris.json` and `jedi-from-the-start.json` name each mod when its scripts are present (`agent mods` lists them). They carry no companion rules; content hashing of the replaced files was already done by the digest. Marker names come from the mods' source scripts; confirm the compiled `.ncs` names on a real install.
+
+### New-game hijack (found 2026-09-29, fixed)
+
+While the host sat through the two-minute opening movie of a new game, a joiner's door crossing (its
+own announce, `follow_lead = any`) was kept for the host because the host was "busy". When the movie
+ended the host replayed it and was pulled out of the new game into the joiner's module. A client's
+announce now expires after 20 s of waiting (`LeadFollowRule.HostAnnounceExpiryMs`); the stunt-leg
+path already had a 60 s expiry, the ordinary path had none. Unit-tested; not re-run live.

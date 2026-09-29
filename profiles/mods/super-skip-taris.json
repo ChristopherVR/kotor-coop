@@ -1,0 +1,16 @@
+{
+  "schema": 2,
+  "id": "super-skip-taris",
+  "name": "Super Skip Taris & Endar Spire",
+  "status": "experimental",
+  "package": "Lit Ridl, Super Skip Taris (TSLPatcher)",
+  "detect": {
+    "allFiles": ["Override/skip_spire.ncs", "Override/ls_skip_taris.ncs", "Override/ds_skip_taris.ncs"]
+  },
+  "notes": [
+    "Adds three reply options to Trask's Endar Spire conversation; each runs one script that sets about 120 globals, recruits six companions, grants XP and credits, then starts the STUNT_06 cutscene chain.",
+    "It edits Override files only, so the game's shipped modules are unchanged and no campaign-module or companion rule is needed.",
+    "Every player must install it identically. The content digest covers its Override files, so a pair that differs gets the usual mod-mismatch warning.",
+    "Live-run 2026-09-29 (docs/research/story-skip-mods.md): the host's skip carried its globals, journal, credits and cutscene chain to a joiner."
+  ]
+}

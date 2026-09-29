@@ -1,0 +1,16 @@
+{
+  "schema": 2,
+  "id": "jedi-from-the-start",
+  "name": "Jedi From The Start",
+  "status": "experimental",
+  "package": "Jedi from the Start v4.0.0.7 (HoloPatcher)",
+  "detect": {
+    "allFiles": ["Override/jfts_a_cjedic.ncs", "Override/jfts_a_cjedig.ncs", "Override/jfts_a_cjedis.ncs"]
+  },
+  "notes": [
+    "Replaces eighteen module files and adds a class selector to the Endar Spire opening; the chosen class is granted with AddMultiClass, which the co-op class-grant relay publishes.",
+    "Every module it replaces is covered by the content digest (name, size and SHA-256 of each modules file), so two different versions of the mod are caught even at equal file size.",
+    "Live-run 2026-09-29: a connected joiner got its own Jedi-choice prompt after the host picked a class.",
+    "No campaign-module or companion rule: it adds no companions."
+  ]
+}
