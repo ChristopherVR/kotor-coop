@@ -185,6 +185,11 @@ internal sealed class ClassGrantPump(
 
             log($"the plugin did not answer the class-grant request within {ClassGrantReplayRule.AckTimeoutMs} ms - treating it as refused");
             status = 0;
+
+            // Silence is not a refusal to count: a blocked game thread (a relayed movie or a
+            // long load, live 2026-09-29: ~2 minutes) answers nothing, and a grant never
+            // expires. Only genuine engine refusals spend the attempts.
+            _attempts = Math.Max(0, _attempts - 1);
         }
 
         _inFlight = false;
