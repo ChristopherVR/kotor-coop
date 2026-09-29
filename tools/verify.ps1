@@ -451,7 +451,10 @@ $owedAfter = [VF]::U32($h2, $b2 + 0x1D50)
 $pcAfter = [VF]::I16($h2, ([VF]::FindCreature($h2, 0x7FFFFFFF)) + 0xDC)
 Check 'a hit on a phantom reaches the peer' (($owedAfter - $owedBefore) -eq 3) `
     "owed $owedBefore -> $owedAfter"
-Check 'the peer really loses those hit points' (($pcBefore - $pcAfter) -eq 3) `
+# At LEAST the forwarded 3: enemy damage is scaled by player count (115% for two) and the same
+# fight can land other hits in the wait, and the tutorial Min1HP pin floors the PC at 1, so an
+# exact -eq 3 flaked between 3, 5 and 0 lost. The exact forwarded amount is asserted one check up.
+Check 'the peer really loses those hit points' ((($pcBefore - $pcAfter) -ge 3) -or ($pcAfter -le 1)) `
     "hp $pcBefore -> $pcAfter"
 
 # Put the health back so the session is left as it was found.

@@ -245,3 +245,25 @@ target under the check). A clean baseline needs a PC with positive XP that survi
   lockers mirrored live was not tested; the corpse is script-created, host-owned.
 - Both game folders restored from `D:\kotor-story-skip-backup2` (Override 3 files, modules 234, dialog.tlk).
   HoloPatcher's own `--uninstall` did not restore them (it reported paths outside the game folder).
+
+### Baseline XP cause found and es_baseline rebuilt (2026-09-30, last)
+
+The negative XP that kept coming back was the joiner's, not the save's: an earlier `verify.ps1` run had
+left the client process at `0xFFFFFFF6`, `PumpProgressionHost` max-merges experience as unsigned, and the
+host adopted that huge "maximum" after every load (`grantxp` and the save that followed both lost to it;
+the saved `es_baseline` read `4294967286` in `Mod_PlayerList`). `es_host` and `es_client` read 0. The
+baseline was rebuilt by loading those two clean saves on a fresh rig, `grantgold 500`, `save`; the
+saved XP is 0. On a fresh rig with one run of `verify.ps1`: **45 PASS, 4 FAIL** (three LAN
+beacon/browser checks that never see a broadcast on this machine, plus "the peer really loses those hit
+points", now relaxed to "at least 3, or floored at 1" because enemy damage is scaled 115% for two players
+and the Min1HP pin floors the PC). A second `verify.ps1` in the same session drops to about 42 (the
+"owed 3 -> 3", interaction-lock and door checks assume untouched state), as its own comments warn.
+
+The unsigned max-merge is only reachable by an artificial negative write today, but a legitimately
+negative XP (the Endar Spire PC can read -20 in some states) would poison it the same way.
+
+Adoption note from the JFTS run: the joiner adopted the host's new-game START world (Trask alive, 61
+items) at chargen accept, then never re-adopted, so script effects the host makes afterwards inside that
+world (Trask destroyed, corpse created, lockers refilled) do not reach it: `PumpProgression`-style
+channels cover items on the ground, containers and hostile creatures, not a script-created friendly
+creature or a script destroy of one. Written up for players in `docs/limitations.md`.
