@@ -455,12 +455,21 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
         nint client = appManager == 0 ? 0 : *(nint*)(appManager + AppClientOffset);
         nint clientInternal = client == 0 ? 0 : *(nint*)(client + InternalOffset);
         nint menu = clientInternal == 0 ? 0 : *(nint*)(clientInternal + ClientInternalMainMenu);
-        return menu == 0 ? 0 : FindPanelIn(*(nint*)(menu + MenuGuiManager), vtable);
+        // The menu object is freed once character creation replaces it, and the client keeps
+        // returning the old address: readable-or-nothing, never a raw dereference.
+        return menu == 0 || !NativeMethods.IsReadable(menu + MenuGuiManager, (nuint)sizeof(nint))
+            ? 0
+            : FindPanelIn(*(nint*)(menu + MenuGuiManager), vtable);
     }
 
     private static nint FindPanelIn(nint guiManager, nint vtable)
     {
         if (guiManager == 0)
+        {
+            return 0;
+        }
+
+        if (!NativeMethods.IsReadable(guiManager + GuiManagerPanels, 8))
         {
             return 0;
         }
@@ -475,10 +484,15 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
             return 0;
         }
 
+        if (!NativeMethods.IsReadable(data, (nuint)(count * 4)))
+        {
+            return 0;
+        }
+
         for (int i = 0; i < count; i++)
         {
             nint panel = *(nint*)(data + (i * 4));
-            if (panel != 0 && *(nint*)panel == vtable)
+            if (panel != 0 && NativeMethods.IsReadable(panel, 4) && *(nint*)panel == vtable)
             {
                 return panel;
             }
