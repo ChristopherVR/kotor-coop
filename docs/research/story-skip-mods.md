@@ -186,3 +186,15 @@ merge checks (the tutorial PC sits at -20 XP, `4294967276` unsigned, and the `gr
 saving did not survive the reload), the tutorial Min1HP pin against the phantom/revive checks, and 4
 engine call signatures. Next: read why the enemy-target loop finds no id (presence slot layout vs
 `verify.ps1` line 470), and give the save a positive XP by a real kill rather than `grantxp`.
+
+**Update, same day:** `verify.ps1` read the enemy presence slots from their old home (`0x1410`); the
+plugin moved them to `0x6800` (`SharedBlock.OffsetEnemyPresenceSlots`), so both swing/damage checks
+reported "no enemy published to attack" on every save. Fixed in `tools/verify.ps1`; with the fix and
+`es_baseline` rebuilt from the clean `es_host` start (XP zeroed with `grantxp me 20`, 500 credits, two
+enemies parked beside the PC) the run is 38-40 PASS, 9-11 FAIL. The failures that remain are not
+enemy-related: the phantom Min1HP pin (tutorial), the LAN beacon checks (flaky, one run passed), the
+4 engine call signatures, the per-frame-spam line, and gold + PC experience reaching the client
+(host 500 -> 637 and host XP +5 both read back unchanged on the client's engine even though
+`PumpProgression` writes `max(host, own)`; the host PC's experience reads `4294967276`, i.e. -20,
+in `verify.ps1` before any of its writes, so the XP half may be a sign artefact and the gold half a
+real gap). Not diagnosed further.

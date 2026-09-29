@@ -468,7 +468,7 @@ $enemyId = 0
 $bestDist = [double]::MaxValue
 $presenceCount = [VF]::U32($h2, $b2 + 0x1400)
 for ($i = 0; $i -lt [Math]::Min($presenceCount, 32); $i++) {
-    $slot = $b2 + 0x1410 + ($i * 0x28)
+    $slot = $b2 + 0x6800 + ($i * 0x28)
     $id = [VF]::U32($h2, $slot)
     if ($id -eq 0) { continue }
     $ex = [VF]::F32($h2, $slot + 4)
@@ -612,7 +612,7 @@ $dmgId = 0
 $dmgDist = [double]::MaxValue
 $presence2 = [VF]::U32($h2, $b2 + 0x1400)
 for ($i = 0; $i -lt [Math]::Min($presence2, 32); $i++) {
-    $slot = $b2 + 0x1410 + ($i * 0x28)
+    $slot = $b2 + 0x6800 + ($i * 0x28)
     $id = [VF]::U32($h2, $slot)
     if ($id -eq 0) { continue }
     # ⚠ SKIP AN ENEMY THAT IS ALREADY DOWN TO 1. The check asks whether a client's hit costs
