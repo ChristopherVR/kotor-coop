@@ -134,3 +134,24 @@ own announce, `follow_lead = any`) was kept for the host because the host was "b
 ended the host replayed it and was pulled out of the new game into the joiner's module. A client's
 announce now expires after 20 s of waiting (`LeadFollowRule.HostAnnounceExpiryMs`); the stunt-leg
 path already had a 60 s expiry, the ordinary path had none. Unit-tested; not re-run live.
+
+### Live attempt 2026-09-30 (did not confirm the fix)
+
+Tried to re-run the hijack on the rig: both instances in END_M01AA, host `quittomenu` + `newgame`,
+joiner `warp end_m01ab` during the wait. **The 20 s announce expiry is a hypothesis, not a proven
+cause.** What the run showed instead:
+
+- The joiner's main thread was gone for 120 s (`cinematic: the main thread was gone for 120516 ms`,
+  0 movies queued going in) starting right after the rig came up, so a console `warp` sent at
+  05:49:16 sat queued and ran at 05:50:10 as a plain `travel: moving to module 'end_m01ab'`. That is
+  the "queued reload replayed after a blocked main thread" shape, on the joiner.
+- By then the host had quit to the menu. The queued travel became a mid-session load teardown
+  (`menu: tearing down the existing server for a mid-session load`) and the joiner died 0.2 s later:
+  `EXITPROCESS(0xC0000005) called from 0x6FB0C7`, thread 1. Not symbolised.
+- A door crossing while the host is in dialogue or combat is refused on the joiner
+  (`ClientDoorRefusalRule`), so the "host busy" announce hold only matters for states that rule does
+  not cover, such as the new-game movie. The remaining doubt: a joiner load is not obviously
+  announced as a transition, so the exact replay path that moved the host is still unproven.
+
+Next: symbolise the `0x6FB0C7` crash with the matching DLL/PDB, find what blocked the joiner for two
+minutes at rig start, and re-run the new-game case on a rig where the joiner is not blocked.
