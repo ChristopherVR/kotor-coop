@@ -229,7 +229,7 @@ public sealed class ModSupportTests : IDisposable
 
     [Theory]
     [InlineData("super-skip-taris", "skip_spire.ncs", "ls_skip_taris.ncs", "ds_skip_taris.ncs")]
-    [InlineData("jedi-from-the-start", "jfts_a_cjedic.ncs", "jfts_a_cjedig.ncs", "jfts_a_cjedis.ncs")]
+    [InlineData("jedi-from-the-start", "jfts_c_jedi.ncs", "jfts_c_jfts.ncs", "jfts_ins.ncs")]
     public void CheckedInStorySkipProfilesAreNamedOnlyWhenAllTheirScriptsArePresent(
         string id, string first, string second, string third)
     {

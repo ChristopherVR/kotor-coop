@@ -5,7 +5,7 @@
   "status": "experimental",
   "package": "Jedi from the Start v4.0.0.7 (HoloPatcher)",
   "detect": {
-    "allFiles": ["Override/jfts_a_cjedic.ncs", "Override/jfts_a_cjedig.ncs", "Override/jfts_a_cjedis.ncs"]
+    "allFiles": ["Override/jfts_c_jedi.ncs", "Override/jfts_c_jfts.ncs", "Override/jfts_ins.ncs"]
   },
   "notes": [
     "Replaces eighteen module files and adds a class selector to the Endar Spire opening; the chosen class is granted with AddMultiClass, which the co-op class-grant relay publishes.",
