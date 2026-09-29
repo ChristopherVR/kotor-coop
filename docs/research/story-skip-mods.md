@@ -267,3 +267,17 @@ items) at chargen accept, then never re-adopted, so script effects the host make
 world (Trask destroyed, corpse created, lockers refilled) do not reach it: `PumpProgression`-style
 channels cover items on the ground, containers and hostile creatures, not a script-created friendly
 creature or a script destroy of one. Written up for players in `docs/limitations.md`.
+
+### New-game hijack: the likelier path, fixed (2026-09-30, last)
+
+`TravelController.Execute` **announces** every plugin-run travel (`PublishTransitionAnnounce`) just before
+warping. A joiner whose plugin was blocked (the relayed 2-minute opening movie, or any long stall) and
+that had a travel request queued (a follow, a `warp`) ran it the moment the thread came back, in a module
+the world had already left, and announced it as a FRESH transition. The host, under `follow_lead = any`
+and no longer busy, followed it: out of the new game into the joiner's old module. The 20 s announce
+expiry (earlier) cannot catch that, because the announce is fresh on arrival. The stale request itself
+is now refused: `TravelController.OnFrame` (every frame) refuses, with status 9, a travel request first
+seen after the main thread was gone more than 45 s (`travel: request #N was pending across a N s stall -
+refused as stale`); the agent re-asks against the current world. Verified live: joiner suspended 61 s
+with `blockpoke travel end_m01ab` filed gave `applied 1 status 9` and it stayed in END_M01AA; a normal
+`warp end_m01ab` afterwards ran. The full host-new-game-with-blocked-joiner sequence was not re-run.
