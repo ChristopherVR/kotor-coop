@@ -123,9 +123,9 @@ limbo at that moment followed the whole chain from a different world without tro
 ### Follow-ups
 
 1. **Done** (`44df090`): the Jedi-choice check no longer spends an attempt when the plugin is silent, so a blocking movie or load cannot exhaust it.
-2. Confirm `jfts_a_starteq` (locker refill on a 1 s delay) and the Trask corpse objects on a joiner. Still needs a live run.
+2. **Done 2026-09-30 (see "JFTS live check" below):** locker refill and Trask corpse reach a joiner that loads the host's post-choice save.
 3. A joiner present in the Endar Spire during the skip is unreachable without a save. Decision: the host cannot save inside the opening dialogue, so this stays a documented limit (`docs/limitations.md`); a joiner in another world followed the whole chain without trouble.
-4. **Done:** `profiles/mods/super-skip-taris.json` and `jedi-from-the-start.json` name each mod when its scripts are present (`agent mods` lists them). They carry no companion rules; content hashing of the replaced files was already done by the digest. Marker names come from the mods' source scripts; confirm the compiled `.ncs` names on a real install.
+4. **Done:** `profiles/mods/super-skip-taris.json` and `jedi-from-the-start.json` name each mod when its scripts are present (`agent mods` lists them). They carry no companion rules; content hashing of the replaced files was already done by the digest. Super Skip's markers match the compiled scripts in the parked backup; JFTS's `jfts_a_*` scripts live inside `end_m01aa.mod` (not Override), so its markers are `jfts_c_jedi.ncs`, `jfts_c_jfts.ncs`, `jfts_ins.ncs`, checked against a real HoloPatcher install.
 
 ### New-game hijack (found 2026-09-29, fixed)
 
@@ -225,3 +225,23 @@ and a mid-run kill decide it) and the two XP guards (the baseline PC reads XP `0
 after every reload, whatever `grantxp` wrote before saving, so kill XP arriving mid-run moves the
 target under the check). A clean baseline needs a PC with positive XP that survives a save/load;
 `grantxp` before `save` did not achieve that and the cause was not found.
+
+### JFTS live check (2026-09-30, HoloPatcher CLI install on both game folders, restored afterwards)
+
+- The CLI install (3,910 patches) put the modded `m01aa_c01.dlg` inside `end_m01aa.mod` this time (52,815
+  bytes, identical to the shipped file), so the earlier "silently skipped" note does not reproduce with
+  this archive (`Jedi from the Start-1-4-0-0`). The class selector appeared after the opening movie and
+  Trask's lines; picking Guardian opened the Level Up screen (`you are now a Jedi Guardian`).
+- Host afterwards: `jfts_trask_corpse` creature at (42, 112) and 79 items, 12 not stock (the refilled
+  lockers). A joiner that then loaded the host's saved world (`loadgame` of the same save) showed the same
+  corpse and the same 79/12, so `jfts_a_starteq` output and the corpse objects are in the saved world.
+- Jedi-choice relay: the joiner's request went out on attempt 1 four times while its plugin was blocked
+  (`attempt 1/10` each time, no attempts spent) and then the joiner got its own popup ("being asked to
+  choose a Jedi class of their own"). This is the first live confirmation of the silent-plugin fix.
+- Gap seen: a joiner that was already connected in an OLDER world of its own did not adopt the host's world
+  after the choice (`save identity differs after a save on one side ... same world, not rejoining`,
+  logged twice; `reconnect` did not change that), so it kept the real Trask and 61 items until it loaded
+  the host's save by hand. Whether a joiner standing in the SAME world would have the corpse and
+  lockers mirrored live was not tested; the corpse is script-created, host-owned.
+- Both game folders restored from `D:\kotor-story-skip-backup2` (Override 3 files, modules 234, dialog.tlk).
+  HoloPatcher's own `--uninstall` did not restore them (it reported paths outside the game folder).
