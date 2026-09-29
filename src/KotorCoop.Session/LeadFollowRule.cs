@@ -64,6 +64,17 @@ public static class LeadFollowRule
         !hostMidTransition && !hostInDialogue && !hostInCombat;
 
     /// <summary>
+    /// How long a client's announce may wait for the host to free up. A door crossing is only
+    /// worth following while it is news: the host's own new game (a two-minute opening movie that
+    /// blocks its main thread) or load outlives this by far, and replaying the announce after it
+    /// dragged the host out of the new game into the client's old module (live 2026-09-29).
+    /// </summary>
+    public const int HostAnnounceExpiryMs = 20_000;
+
+    /// <summary>Whether a client's announce has waited too long for the host to act on it.</summary>
+    public static bool IsHostAnnounceExpired(long ageMs) => ageMs > HostAnnounceExpiryMs;
+
+    /// <summary>
     /// Combines both gates into the same three-way answer <see cref="TransitionAnnounceRule.Decide"/>
     /// gives a client, for the host's own use. Deliberately does not distinguish WHY it fell
     /// back (ineligible/stale vs. merely unsafe right now) — <c>CoopAgent.TryFollowAnnouncedTransition</c>

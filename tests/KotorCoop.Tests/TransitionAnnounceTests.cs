@@ -278,6 +278,16 @@ public class TransitionAnnounceTests
             hostMidTransition: false, hostInDialogue: false, hostInCombat: true));
     }
 
+    /// <summary>A client's lead held past the host's new-game movie must not replay afterwards.</summary>
+    [Fact]
+    public void AClientAnnounceExpiresAfterTheHostWasBusyTooLong()
+    {
+        Assert.False(LeadFollowRule.IsHostAnnounceExpired(0));
+        Assert.False(LeadFollowRule.IsHostAnnounceExpired(LeadFollowRule.HostAnnounceExpiryMs));
+        Assert.True(LeadFollowRule.IsHostAnnounceExpired(LeadFollowRule.HostAnnounceExpiryMs + 1));
+        Assert.True(LeadFollowRule.IsHostAnnounceExpired(120_000));
+    }
+
     /// <summary>"announce lost -&gt; fallback": no pending announce is Fallback regardless of
     /// mode or how safe the host is right now — there is nothing to follow.</summary>
     [Fact]

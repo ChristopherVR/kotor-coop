@@ -354,6 +354,18 @@ internal sealed partial class TransitionPump
                 return false;
             }
 
+            // A client's lead is kept only while it is news. Busy through a new game's opening
+            // movie or a load, the announce would otherwise replay afterwards and drag the host
+            // out of the world it just started.
+            if (announce.PeerId != CoopHost.HostPeerId
+                && LeadFollowRule.IsHostAnnounceExpired(SessionClock.NowMs - announce.SeenAtMs))
+            {
+                log($"dropping a client's announce to '{announce.Module}': the host was busy for "
+                    + $"{SessionClock.NowMs - announce.SeenAtMs} ms, so it is no longer current");
+                _pendingAnnounce = null;
+                return false;
+            }
+
             // "Mid our own transition" needs more than IsFallbackModuleName: that only catches
             // the LOAD itself, not the ~0.5 s fade window before the module name blanks, during
             // which our own outbound announce/movie may already be under way — see
