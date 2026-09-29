@@ -174,3 +174,15 @@ sequence then ran three times on the rig with the joiner connected and the host 
 game each time. Not a clean repro of the original hijack: no run produced a joiner door announce
 that reached a host in the movie (the agent log files append across days, so timestamps in them
 must be matched against the run's own start).
+
+### Endar Spire baseline for verify.ps1 (2026-09-30, partial)
+
+Made `000059 - es_baseline` on the host (same folder copied into the client's saves, both newest so
+`demo.ps1 -Save 1` loads it): Endar Spire start, 500 credits, `end_sith2` and `end_soldier2` parked 2
+units from the PC. `verify.ps1` against it: 36 PASS, 13 FAIL, versus 11 FAIL on the old "Co-op" save
+the same day, so it is **not yet a clean baseline**. The failures are the same families on both
+saves: no enemy picked as the swing/damage target although 26 are in the presence list, XP and gold
+merge checks (the tutorial PC sits at -20 XP, `4294967276` unsigned, and the `grantxp` written before
+saving did not survive the reload), the tutorial Min1HP pin against the phantom/revive checks, and 4
+engine call signatures. Next: read why the enemy-target loop finds no id (presence slot layout vs
+`verify.ps1` line 470), and give the save a positive XP by a real kill rather than `grantxp`.
