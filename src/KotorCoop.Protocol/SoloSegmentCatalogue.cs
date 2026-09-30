@@ -56,8 +56,11 @@ public sealed class SoloSegmentCatalogue
     /// Leviathan brig, where the rescuer is played while the real PC sits in a cell
     /// (<c>k_plev_transform</c> / <c>k_plev_freeparty</c>, both in <c>lev_m40aa</c> —
     /// docs/research/leviathan.md §3.3-3.4, §5.3 #1). The trigger is the +0xF0 edge, NOT the
-    /// roster count, so it is a separate list from <see cref="BaseModules"/>.</summary>
-    public static readonly IReadOnlyList<string> ControlledNpcBaseModules = ["lev_m40aa"];
+    /// roster count, so it is a separate list from <see cref="BaseModules"/>. BoS Solomon's
+    /// <c>bos_ebovis</c> vision also uses this field: an actual load observed slot0 under
+    /// script control with the current player exactly matching that cached NPC body.
+    /// See docs/research/bos-occupant-replacement-live-2026-10-01.md.</summary>
+    public static readonly IReadOnlyList<string> ControlledNpcBaseModules = ["lev_m40aa", "bos_ebovis"];
 
     private readonly HashSet<string> _modules;
 

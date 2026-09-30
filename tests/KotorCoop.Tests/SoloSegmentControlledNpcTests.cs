@@ -16,6 +16,22 @@ public class SoloSegmentControlledNpcTests
     private static SoloSegmentInputs Roster(string module, int companions) => new(module, companions, true, false);
 
     [Fact]
+    public void BosVisionUsesScriptControlWithNoCompanionsAndSurvivesRosterRefill()
+    {
+        SoloSegmentMachine machine = new();
+        Assert.Equal(SoloSegmentEvent.None, machine.NoteControlledNpc("bos_ebovis", controlled: false));
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Roster("bos_ebovis", 0)));
+        Assert.False(machine.Active);
+        Assert.Equal(SoloSegmentEvent.Began, machine.NoteControlledNpc("bos_ebovis", controlled: true));
+        Assert.Equal(SoloSegmentEvent.None, machine.Step(Catalogue, Roster("bos_ebovis", 2)));
+        Assert.True(machine.Active);
+        Assert.Equal(SoloSegmentEvent.Ended, machine.NoteControlledNpc("bos_ebovis", controlled: false));
+        Assert.False(machine.Active);
+        Assert.Equal(SoloSegmentEvent.None, machine.NoteControlledNpc("bos_orion", controlled: true));
+        Assert.False(machine.Active);
+    }
+
+    [Fact]
     public void TheEdgeIntoControlInTheBrigBeginsAndTheEdgeOutEnds()
     {
         SoloSegmentMachine machine = new();
