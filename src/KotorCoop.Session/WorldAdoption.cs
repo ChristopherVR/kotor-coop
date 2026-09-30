@@ -18,7 +18,7 @@ namespace KotorCoop.Session;
 /// <param name="CharacterSource">A one-line description of where <see cref="CarriedPlayer"/>
 /// came from, for the on-screen line and the log.</param>
 public readonly record struct AdoptedWorld(
-    string Module, uint SaveIdentity, long Bytes, GffStruct CarriedPlayer, string CharacterSource, string[]? CompanionCacheFingerprints = null);
+    string Module, uint SaveIdentity, long Bytes, GffStruct CarriedPlayer, string CharacterSource, string[]? CompanionCacheFingerprints = null, string? StagedSaveDirectory = null);
 
 /// <summary>
 /// A joining player adopts the host's world and carries their own character into it.
@@ -428,7 +428,7 @@ public static class WorldAdoption
             $"world adoption: adopted '{module}' ({bytes:N0} bytes, identity 0x{identity:X8}), "
                 + $"carrying the character from {characterSource}");
 
-        return new AdoptedWorld(module, identity, bytes, player, characterSource, PartyCacheFingerprint.ReadSave(slot));
+        return new AdoptedWorld(module, identity, bytes, player, characterSource, PartyCacheFingerprint.ReadSave(slot), slot);
     }
 
     /// <summary>

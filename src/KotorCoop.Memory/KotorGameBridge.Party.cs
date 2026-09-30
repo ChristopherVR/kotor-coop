@@ -23,6 +23,8 @@ public sealed partial class KotorGameBridge
         roster = PartyRoster.Empty;
 
         if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyOccupants, out uint startingSequence)
+            || startingSequence == 0 || (startingSequence & 1) != 0
             || !_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyRoster, out uint packed)
             || (packed & BlockPartyRosterValid) == 0)
         {
@@ -40,7 +42,8 @@ public sealed partial class KotorGameBridge
             _memory.TryReadUInt32(_pluginBlock + BlockLocalPartyRosterObjectIds + (slot * 4), out objectIds[slot]);
         }
 
-        if (!TryReadPartyOccupants(packed, out PartyOccupantIdentity[] occupants, out uint occupantSerial, out uint occupantEpoch)) return false;
+        if (!TryReadPartyOccupants(packed, out PartyOccupantIdentity[] occupants, out uint occupantSerial, out uint occupantEpoch)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyOccupants, out uint afterSequence) || afterSequence != startingSequence) return false;
         roster = new PartyRoster(
             (ushort)((packed >> BlockPartyRosterAvailableShift) & BlockPartyRosterSlotMask),
             (ushort)((packed >> BlockPartyRosterPartyShift) & BlockPartyRosterSlotMask),

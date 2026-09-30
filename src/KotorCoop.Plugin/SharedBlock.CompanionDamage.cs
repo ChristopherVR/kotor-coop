@@ -29,6 +29,9 @@ internal partial struct SharedBlock
     public const int OffsetCompanionTakenMetadata = 0xBE00;
     public const int OffsetCompanionOwedMetadata = 0xBE40;
     public const int OffsetPartyAdoptedLocalGenerations = 0xBE80;
+    public const int OffsetPartyRestore = 0xBEB0;
+    public const int PartyRestoreRows = 16;
+    public const int PartyRestoreStride = 24;
     /// <summary>Companion presence slots this instance can watch at once — matches
     /// <see cref="PartyPresenceCapacity"/>, since a slot can only ever be released while it is
     /// also a tracked presence slot.</summary>

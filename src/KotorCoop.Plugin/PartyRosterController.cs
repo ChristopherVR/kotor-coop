@@ -338,9 +338,9 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             if ((available & (1u << slot)) != 0 && !Odyssey.LegacyPartySlotSafe(slot, occupantModule))
                 PartyOccupantHook.Captured.HoldUnprovenLoadedSlot(slot);
         }
+        block.ApplyVerifiedPartyRestore(available, party);
+        block.BeginLocalPartyPublication();
         block.SetLocalPartyRoster(available, party);
-        block.PublishLocalPartyOccupants(SharedBlock.PartyRosterValid
-            | (available << SharedBlock.PartyRosterAvailableShift) | (party << SharedBlock.PartyRosterPartyShift));
 
         // Publish the party table's body identity for every slot, including dismissed or benched
         // members. AddMember writes +0x0C and RemovePartyMember/RemoveAvailableNPC leave the
@@ -352,6 +352,9 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             block.SetLocalPartyRosterObjectId(
                 slot, PartyCensusRule.IsRosterId(objectId) ? objectId : 0);
         }
+        block.PublishLocalPartyOccupants(SharedBlock.PartyRosterValid
+            | (available << SharedBlock.PartyRosterAvailableShift) | (party << SharedBlock.PartyRosterPartyShift));
+
 
         if (party != _lastLocalParty)
         {

@@ -6,7 +6,7 @@ namespace KotorCoop.Memory;
 /// <summary>Identity of the engine's serialized companion, never inferred from its tag.</summary>
 public static class PartyCacheFingerprint
 {
-    public static bool IsValid(string hash) => hash.Length == 64
+    public static bool IsValid(string? hash) => hash is { Length: 64 }
         && hash.All(c => c is >= '0' and <= '9' or >= 'A' and <= 'F');
     public static string[] ReadSave(string saveDirectory)
     {

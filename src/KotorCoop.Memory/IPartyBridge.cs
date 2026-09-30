@@ -8,6 +8,7 @@ public interface IPartyBridge
     /// <summary>Called only after the adopted native load has acknowledged and settled.</summary>
     void RecordPartyAdoptionProof(PartyRoster host, IReadOnlyList<string> transferred, uint adoptedSaveIdentity) { }
     void RecordHostPartyRefreshProof(PartyRoster host) { }
+    bool TryRestoreSavedPartyOccupants(IReadOnlyList<PartyOccupantIdentity> verified, PartyRoster captured) => false;
     /// <summary>
     /// This instance's companion roster, straight off its own party table: which of the nine
     /// NPC slots are recruited, and which are in the active party. Default is "cannot read

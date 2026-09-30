@@ -1553,6 +1553,11 @@ public sealed partial class CoopCommandDispatcher
 
                         bridge.ForgetWorldShadows();
                         bridge.RecordPartyAdoptionProof(adoptedParty, adoption.World.CompanionCacheFingerprints ?? [], adoption.World.SaveIdentity);
+                        if (adoption.World.StagedSaveDirectory is { } adoptedSource
+                            && adoptedParty.RefreshSaveIdentity == adoption.World.SaveIdentity && adoptedParty.RefreshRevision != 0
+                            && PartySaveProvenance.TryWriteVerified(adoptedSource, adoptedParty,
+                                adoption.World.CompanionCacheFingerprints ?? [], out string partyOutcome))
+                            Log?.Invoke(partyOutcome);
                         onCompleted?.Invoke();
                     }))
                 {
@@ -1757,6 +1762,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        PartySaveProvenance.TryRead(selectedSave, out PartySaveProvenance.Snapshot? partyProvenance);
         if (!_kotor.TryStageMidSessionLoadFromDirectory(selectedSave, out string staging, out string stagedSave))
         {
             Reply($"loadgame: {staging}");
@@ -1777,12 +1783,19 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        if (!bridge.TryReadLivenessEpoch(out uint startingPartyEpoch) || startingPartyEpoch == 0)
+        { Reply("loadgame: native world epoch unavailable; request was not sent"); return; }
+
         if (!_kotor.TryRequestStagedMidSessionLoad(out string request, out uint requestId, manualIntent: true))
         {
             Reply($"loadgame: {request}");
             return;
         }
 
+        _partyReload = partyProvenance is null || partyProvenance.SaveLength != selectedLength
+            || !partyProvenance.SaveSha256.Equals(selectedHash, StringComparison.Ordinal) ? null
+            : new(selectedSave, stagedSave, partyProvenance, requestId,
+            startingWorldLoadSerial, startingPartyEpoch, SessionClock.NowMs);
         _pendingCommandOwnLoadCharacterSource = new OwnLoadCharacterSource(
             ProvenanceGeneration: 0,
             WorldLoadSerialAtRequest: startingWorldLoadSerial,

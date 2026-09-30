@@ -4,6 +4,7 @@ namespace KotorCoop.Plugin;
 
 internal sealed unsafe partial class SharedBlockView
 {
+    public void BeginLocalPartyPublication() => *U32(SharedBlock.OffsetLocalPartyOccupants) |= 1u;
     public void PublishLocalPartyOccupants(uint packedRoster)
     {
         int bank = SharedBlock.OffsetLocalPartyOccupants;

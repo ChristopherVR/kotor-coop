@@ -9,6 +9,22 @@ internal sealed class PartyOccupantTable
     private readonly bool[] _replaced = new bool[9];
     private readonly uint[] _cachedBody = new uint[9], _retiredBody = new uint[9];
     private readonly bool[] _cachedBodyKnown = new bool[9], _retiredBodyKnown = new bool[9];
+    private readonly bool[] _loadRestoreEligible = new bool[9];
+    public bool RestoreVerifiedTemplate(int slot, uint expectedGeneration, ReadOnlySpan<byte> template, uint currentBody, bool replaced)
+    {
+        if ((uint)slot >= 9 || !_loadRestoreEligible[slot] || _generation[slot] != expectedGeneration
+            || !ValidTemplate(template)) return false;
+        if (_generation[slot] == 0) ObserveUnknown(slot);
+        _templates.AsSpan(slot * 16, 16).Clear();
+        template.CopyTo(_templates.AsSpan(slot * 16, 16));
+        _loadRestoreEligible[slot] = false;
+        _replaced[slot] |= replaced;
+        _cachedBody[slot] = currentBody; _cachedBodyKnown[slot] = true;
+        // This source was loaded into a fresh native world; there is no retained prior
+        // body's payload to relabel. A later native admission records its own retirement.
+        _retiredBody[slot] = 0x7F000000; _retiredBodyKnown[slot] = true;
+        return true;
+    }
     public void ObserveCachedBody(int slot, uint objectId)
     { if ((uint)slot < 9) { _cachedBody[slot] = objectId; _cachedBodyKnown[slot] = objectId != 0; } }
     public void ObserveSerialization(int slot, uint objectId)
@@ -45,7 +61,7 @@ internal sealed class PartyOccupantTable
         ObserveUnknown(slot);
     }
     public void HoldUnprovenLoadedSlot(int slot)
-    { if ((uint)slot < 9 && _generation[slot] == 0) { _replaced[slot] = true; ObserveUnknown(slot); } }
+    { if ((uint)slot < 9 && _generation[slot] == 0) { _replaced[slot] = true; ObserveUnknown(slot); _loadRestoreEligible[slot] = true; } }
 
     public uint Generation(int slot) => (uint)slot < 9 ? _generation[slot] : 0;
     public void CopyTemplate(int slot, Span<byte> destination)
@@ -56,6 +72,7 @@ internal sealed class PartyOccupantTable
     public void ObserveUnknown(int slot)
     {
         if ((uint)slot >= 9) return;
+        _loadRestoreEligible[slot] = false;
         _templates.AsSpan(slot * 16, 16).Clear();
         if (++_sequence == 0) ++_sequence;
         _generation[slot] = _sequence;
@@ -78,6 +95,7 @@ internal sealed class PartyOccupantTable
     }
     public void InvalidateWorld()
     {
+        Array.Clear(_loadRestoreEligible);
         Array.Clear(_cachedBody); Array.Clear(_retiredBody); Array.Clear(_cachedBodyKnown); Array.Clear(_retiredBodyKnown);
         for (int slot = 0; slot < 9; slot++)
         {
@@ -89,7 +107,7 @@ internal sealed class PartyOccupantTable
             bool fixedStock = !_replaced[slot] && PartyRosterTemplateTable.TryGetTemplate(slot, out string stock)
                 && System.Text.Encoding.ASCII.GetString(bytes[..length]).Equals(stock, StringComparison.OrdinalIgnoreCase);
             if (fixedStock) { _generation[slot] = 0; _templates.AsSpan(slot * 16,16).Clear(); }
-            else ObserveUnknown(slot);
+            else { ObserveUnknown(slot); _loadRestoreEligible[slot] = true; }
         }
     }
 }

@@ -14,7 +14,7 @@ internal static unsafe class PartyOccupantHook
         if (PublicationBank != 0) *(uint*)PublicationBank |= 1u;
         PartyOccupantReconcileState.Invalidate();
     }
-    private static bool _savedGuardInstalled;
+    internal static bool Installed => _installed;
     public static bool Install(out string diagnostic)
     {
         if (_installed) { diagnostic = "already installed"; return true; }
@@ -31,7 +31,6 @@ internal static unsafe class PartyOccupantHook
         bool saved = Patch(0x563EC9, [0x52,0xE8,0xA7,0xA8,0xF4,0xFF],
             [0x8B,0xF8,0x85,0xFF,0x0F,0x84,0x44,0x01,0,0], 3,
             (nint)(delegate* unmanaged[Cdecl]<int,nint,void>)&OnSaveBody);
-        _savedGuardInstalled = saved;
         _installed = unknown && known && removed && saved;
         diagnostic = $"recruit capture unknown={unknown} template={known} remove={removed} saved-body={saved}";
         return _installed;
@@ -92,7 +91,7 @@ internal static unsafe class PartyOccupantHook
     {
         try
         {
-            if (!_savedGuardInstalled || success == 0 || !NativeMethods.IsReadable(exoString, 8)) return;
+            if (!_installed || success == 0 || !NativeMethods.IsReadable(exoString, 8)) return;
             byte* text = *(byte**)exoString;
             uint length = *(uint*)(exoString + 4);
             // Some CExoStrings include their terminal NUL in the length; trim exactly one.

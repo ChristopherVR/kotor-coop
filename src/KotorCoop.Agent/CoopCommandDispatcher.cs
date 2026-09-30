@@ -175,6 +175,7 @@ public sealed partial class CoopCommandDispatcher(
                     // at which that is freshest.
                     MaintainSteamPresence();
                     PumpSteamJoinRequests();
+                    MaintainPartyProvenanceReload();
                     MaintainScriptWorldRefresh();
                     MaintainSessionSave();
                     PumpEnemyScalingPersistence();
