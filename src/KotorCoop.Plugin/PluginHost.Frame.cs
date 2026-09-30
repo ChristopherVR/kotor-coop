@@ -432,6 +432,9 @@ internal static unsafe partial class PluginHost
             if (ShowInGameGuiProbeHook.IsInstalled)
             {
                 ShowInGameGuiProbeHook.Drain();
+            }
+            if (ShowInGameGuiProbeHook.IsInstalled || FieldWriteWatch.WatchStatusSummary)
+            {
                 FieldWriteWatch.KeepArmedOnGuiBusy();
             }
 

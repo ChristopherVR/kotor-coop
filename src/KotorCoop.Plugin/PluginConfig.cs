@@ -116,7 +116,7 @@ internal static class PluginConfig
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport", "script_destroy_guard",
         "dialogue_recruit_sync", "disguise_sync", "effect_sync", "enemy_drive",
         "enemy_effect_sync", "enemy_materialise",
-        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
+        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "gui_summary_watch", "host_load_readopt",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
         "isolate_real_input",
         "leviathan_action_script_gate",

@@ -504,6 +504,11 @@ internal static unsafe partial class PluginHost
         // plus, from the frame hook, a hardware watchpoint on CGuiInGame+0x30 (FieldWriteWatch).
         // Answered the galaxy-map relay's "who writes +0x30" question on 2026-09-03; kept for
         // the next one. See ShowInGameGuiProbeHook.
+        FieldWriteWatch.WatchStatusSummary = PluginConfig.ReadBool("gui_summary_watch", false);
+        if (FieldWriteWatch.WatchStatusSummary)
+        {
+            Log("gui-summary-watch: enabled read-only writes/backtrace probe on typed StatusSummary+0x64");
+        }
         if (PluginConfig.ReadBool("gui_probe", false))
         {
             if (ShowInGameGuiProbeHook.Install(out string guiProbeDiagnostic))

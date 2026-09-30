@@ -55,6 +55,11 @@ internal static unsafe class FieldWriteWatch
     private static int _armInFlight;
     private static string? _lastArmResult;
 
+    // Separate default-OFF investigation target. Summary notifications are written
+    // through CGuiInGame::UpdateStatusSummary, not through the busy-field setter.
+    // This changes only the diagnostic address; no game flags are cleared or set.
+    public static bool WatchStatusSummary { get; set; }
+
     // ---- Win32 ---------------------------------------------------------------------------
 
     private const uint ContextDebugRegisters = 0x00010010;
@@ -110,7 +115,24 @@ internal static unsafe class FieldWriteWatch
 
         nint gui = EngineHandles.GetInGameGui();
         nint target = gui == 0 ? 0 : gui + 0x30;
-        if (target != 0 && target != _armedOn && Volatile.Read(ref _armInFlight) == 0)
+        if (WatchStatusSummary)
+        {
+            target = 0;
+            if (gui != 0 && NativeMethods.IsReadable(gui + 0xA8, 4))
+            {
+                nint panel = *(nint*)(gui + 0xA8);
+                if (panel != 0 && NativeMethods.IsReadable(panel, 0x80)
+                    && *(nint*)panel == 0x0074FF68)
+                {
+                    target = panel + 0x64;
+                }
+            }
+        }
+
+        // A missing/rebuilt summary must withdraw the old diagnostic watchpoint.
+        // DR7 is disabled below for address zero; normal GUI-busy probing keeps
+        // its existing target-selection behavior.
+        if ((target != 0 || WatchStatusSummary) && target != _armedOn && Volatile.Read(ref _armInFlight) == 0)
         {
             Arm(target);
         }
@@ -140,7 +162,6 @@ internal static unsafe class FieldWriteWatch
             }
         }
 
-        _watched = address;
         _armedOn = address;
         Volatile.Write(ref _armInFlight, 1);
         uint mainThread = _mainThreadId;
@@ -175,10 +196,20 @@ internal static unsafe class FieldWriteWatch
                 {
                     *(uint*)(context + ContextDr0) = (uint)address;
                     *(uint*)(context + ContextDr6) = 0;
-                    *(uint*)(context + ContextDr7) = Dr7WriteDword;
-                    result = SetThreadContext(thread, context) == 0
+                    *(uint*)(context + ContextDr7) = address == 0 ? 0 : Dr7WriteDword;
+                    bool installed = SetThreadContext(thread, context) != 0;
+                    // Publish the matching read target while the game thread is
+                    // suspended. In particular, never publish zero while its old
+                    // DR0 watchpoint is still capable of trapping a game write.
+                    if (installed)
+                    {
+                        _watched = address;
+                    }
+                    result = !installed
                         ? $"SetThreadContext failed ({Marshal.GetLastWin32Error()})"
-                        : $"DR0 armed on 0x{address:X} (4-byte write) for thread {threadId}";
+                        : address == 0
+                            ? $"DR0 diagnostic watch disabled for thread {threadId}"
+                            : $"DR0 armed on 0x{address:X} (4-byte write) for thread {threadId}";
                 }
 
                 ResumeThread(thread);
