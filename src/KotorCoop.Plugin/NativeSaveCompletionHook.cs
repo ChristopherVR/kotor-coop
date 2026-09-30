@@ -9,7 +9,7 @@ namespace KotorCoop.Plugin;
 internal static unsafe class NativeSaveCompletionHook
 {
     internal static nint Block = 0;
-    internal static Action? BeforeSerialization;
+    internal static Action? BeforeSerialization = null;
     private static bool _installed;
     private static readonly NativeSaveIoWatch Io = new();
     private static readonly byte[] Rows = new byte[9 * 24];
