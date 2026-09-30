@@ -533,3 +533,26 @@ admitted first-join retries currently stall inside class-preview rendering befor
 accepted intent is published. Stopping the Agent after the stall did not release it.
 The first-join exemption therefore remains unproven end to end on Native95; the
 rendering issue is under investigation, without attribution to the intent fence.
+
+
+## Dedicated periodic capture — committed validation
+
+Commit `ce56590` replaces the remaining periodic QuickSave relocation with a dedicated
+Co-op save. The dispatcher requires the exact command acknowledgement, a new native
+completion for the same directory/load serial/epoch, four complete outputs stable
+for 750ms, and the same source proof immediately before sidecar commit. Competing
+rejoin/solo/script captures defer the request; refused or changed sources retain the
+previous verified checkpoint. A confirmed same-epoch periodic capture can release a
+settled own-load capture hold. No newest-save fallback or QuickSave movement remains
+in this path.
+
+The change passes 69 focused cases and the full fast tier: 5,503 passed, zero failed,
+1m39s, using `Category!=Slow&Category!=Soak`. Immutable source and output are in
+`artifacts/companion-v95-periodic-full`. Real one-minute cadence and busy-screen
+checks remain pending separately. Native ABI95 and wire84 are unchanged.
+
+The subsequent managed bridge patch `e69d7bc` reuses a fully signature-validated plugin
+allocation and avoids full creature scans when coherent native state reports no
+player and no running module. External mode and unreadable/mismatched native state
+retain discovery fallback. It passes 22 focused worldless, known-load and concurrency
+checks; live uninterrupted first join and the updated full fast tier are pending.
