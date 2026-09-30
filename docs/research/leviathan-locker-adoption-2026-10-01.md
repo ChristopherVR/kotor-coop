@@ -33,3 +33,19 @@ of locker contents from an earlier module or the original full capture/rescue ro
 container, empty-own and first-join behavior, and the shared-mode byte-for-byte
 regression. A warning-clean standard win-x64 Agent is published at
 `artifacts/live-agent-v95-locker-x64`; all 5,519 fast tests pass, zero failures, 1m38s. Live replay remains pending.
+
+
+The follow-up `0f45162` binds locker reads to the unchanged save bytes recorded
+alongside the selected own-character sidecar: exact source directory, compound
+SHA256 and length. It selects that recorded source rather than assuming the first
+folder named Co-op is current. The graft checks the proof before and after reading
+items. Missing, changed or ambiguous proof holds staging and preserves the own
+source. Old sidecars need a fresh own capture before this private-locker recovery.
+Follow-up `0e60de6` records the same proof on ordinary own-save captures, with a
+content check before and after character extraction; direct unbound sidecars do not
+prove inventory ownership. No native block or network layout changes were needed.
+
+The combined controlled-host-load recovery and provenance changes pass 92 focused
+tests and all 5,539 fast tests, zero failures, 1m43s (`0f45162`). The ordinary-capture
+follow-up passes 32 focused persistence tests. Final full-tier validation and the
+actual combined live replay remain in progress.
