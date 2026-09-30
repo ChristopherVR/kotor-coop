@@ -18,6 +18,19 @@ with a real, stated gap), **Not supported** (missing or refused by design), **Un
 
 ## Joining, hosting, saves and rejoins
 
+Current development follow-up (2026-10-01): Native95 / wire84 plus Agent e69d7bc
+passes 5,515 fast tests. Full uninterrupted join_mode=newcharacter completed native
+capture and host-world adoption while keeping the joiner's class1/HP9 distinct from
+the host's class2/HP6. The bridge reuses a fully validated plugin allocation and
+refuses full creature scans in coherent no-world state. Dedicated disconnect and
+periodic capture preserve existing QuickSave files. Three real one-minute periodic
+cycles completed, with a busy-menu deferral keeping the earlier checkpoint intact.
+The healthy three-player travel/save replay passed, but did not naturally exercise
+the stale-party serialization guard. See [current live evidence](research/limitations-live-2026-09-30.md),
+[periodic and GUI evidence](research/bos-gui-udp-live-2026-10-01.md),
+[first-join evidence](research/newgame-intent-live-2026-10-01.md), and
+[save replay qualification](research/final95-saveguard-live.md).
+
 | Item | Status | What you'll see | Source |
 | --- | --- | --- | --- |
 | Host/join from the in-game Co-op menu button | Works | Host presses Host, joiner picks the server and presses Connect; the agent starts itself | README Quick start |
