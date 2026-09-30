@@ -466,6 +466,8 @@ public sealed partial class CoopCommandDispatcher
             _ownLoadCaptureWaitNoticed = false;
             _ownLoadVerdictDeadlineMs = 0;
             _skipNextDisconnectCapture = false;
+            _automaticRejoinCapture = null;
+            _controlledSceneReturnPending = false;
             _ownLoadCaptureRequiresConfirmedSave = false;
             _verifiedOwnLoadAwaitingRejoin = false;
             _ownLoadCaptureEpoch = 0;
@@ -475,6 +477,7 @@ public sealed partial class CoopCommandDispatcher
 
         uint digest = bridge.SaveIdentityDigest;
         long nowMs = SessionClock.NowMs;
+        if (MaintainAutomaticRejoinCapture(nowMs)) return;
 
         // ⚠ null, not 0, while the bridge has no plugin block to read it from — see
         // SessionSaveWatch.ObserveOwnVerdict(uint, uint?, long) for the four-rejoin loop a 0
@@ -822,6 +825,7 @@ public sealed partial class CoopCommandDispatcher
             }
             else if (ControlledSceneTravelRule.HoldAdoption(hostState))
             {
+                _controlledSceneReturnPending = true;
                 // Keep the selected own character and connected world while the host plays
                 // a private controlled actor. Its save cannot be safely produced until return.
             }
@@ -1317,7 +1321,8 @@ public sealed partial class CoopCommandDispatcher
     /// currently holds as the character to bring in — <see cref="SessionSaveWatch.ObserveClient"/>
     /// already wrote it fresh this same tick for an own-load trigger.
     /// </summary>
-    private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession, Action? onCompleted = null)
+    private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession, Action? onCompleted = null,
+        bool dedicatedCaptureReady = false)
     {
         if (!OwnLoadCaptureSafetyRule.MayAutomaticallyAdopt(
                 _ownLoadCaptureRequiresConfirmedSave,
@@ -1348,6 +1353,28 @@ public sealed partial class CoopCommandDispatcher
             RejoinTrigger.ScriptWorldRefresh => AutoAdoptWorldEnabled,
             _ => false,
         };
+
+        if (gateEnabled && !dedicatedCaptureReady
+            && trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.WipeRecovery)
+        {
+            bool incapacitated = trigger == RejoinTrigger.WipeRecovery
+                || bridge.TryReadLocalState(out PlayerState recoveryLocal) && (recoveryLocal.IsDowned || recoveryLocal.IsPartyWiped);
+            if (incapacitated)
+            {
+                if (!TryUseAutomaticRecoveryCheckpoint())
+                {
+                    Reply("recovery held: no verified living character checkpoint is available; your connection and saves were retained");
+                    return;
+                }
+                dedicatedCaptureReady = true; // Verified pre-wipe sidecar; the dead actor cannot save safely.
+            }
+            else
+            {
+                if (_controlledSceneReturnPending) trigger = RejoinTrigger.SoloReturn;
+                _automaticRejoinCapture ??= new(expectedSession, managerGeneration, trigger, onCompleted, SessionClock.NowMs);
+                return;
+            }
+        }
 
         (GffStruct Player, SidecarMetadata Metadata)? ownLoadCharacter = null;
         if (trigger == RejoinTrigger.OwnLoad && gateEnabled
@@ -1380,6 +1407,8 @@ public sealed partial class CoopCommandDispatcher
         }
 
         PartyRoster adoptedParty = expectedSession.TryGetPartyRoster(out PartyRoster requestedParty) ? requestedParty : PartyRoster.Empty;
+        _skipNextDisconnectCapture = true;
+        _controlledSceneReturnPending = false;
         Log?.Invoke($"session-save: starting rejoin ({trigger})");
 
         // A queued worker carries the manager epoch captured synchronously with this trigger,
@@ -1435,7 +1464,7 @@ public sealed partial class CoopCommandDispatcher
                         adoption = await manager
                         .RejoinAfterLoadAsync(
                             bridge, gameDirectory, carried, managerGeneration, cancellationToken,
-                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
+                            carriedIsAuthoritative: dedicatedCaptureReady || trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
                             onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh

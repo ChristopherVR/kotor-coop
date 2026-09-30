@@ -101,12 +101,12 @@ public static class WorldTransfer
     private static readonly string[] Excluded = ["Screen.tga"];
 
     // Bounds. A receiver must never let a hostile or broken sender allocate freely, and
-    // these are all an order of magnitude past what a real save needs (measured: 4 files,
-    // 584 KB largest, 654 KB total without the screenshot).
+    // A real BoS return archive exceeded16MiB. Retain finite allocation bounds for both
+    // TCP and UDP, including the aggregate checked before each individual allocation.
     private const int MaxFiles = 16;
     private const int MaxNameLength = 64;
-    private const int MaxFileBytes = 16 * 1024 * 1024;
-    private const int MaxTotalBytes = 48 * 1024 * 1024;
+    private const int MaxFileBytes = 64 * 1024 * 1024;
+    private const int MaxTotalBytes = 128 * 1024 * 1024;
 
     /// <summary>How long either side waits on a stalled socket. Generous: a save crossing a
     /// slow link is legitimate, and the joiner is sitting at a menu, not in a world.</summary>

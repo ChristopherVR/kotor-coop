@@ -20,6 +20,35 @@ public class WorldTransferUdpTests
     ];
 
     [Fact]
+    public void SharedPayloadDecoderAcceptsSeventeenMiBModArchive()
+    {
+        byte[] archive = new byte[17 * 1024 * 1024];
+        archive[^1] = 71;
+        var parsed = WorldTransfer.ParsePayload(WorldTransfer.SerializePayload([new("SAVEGAME.sav", archive)]));
+        Assert.Equal(archive, Assert.Single(parsed).Data);
+    }
+
+    [Fact]
+    public void SharedPayloadDecoderRejectsOversizedFileBeforeAllocation()
+    {
+        byte[] header = new byte[8];
+        header[0] = 1; header[2] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), 64u * 1024 * 1024 + 1);
+        Assert.Throws<InvalidDataException>(() => WorldTransfer.ParsePayload(header));
+    }
+
+    [Fact]
+    public void SharedPayloadAggregateStillRejectsThirdFileBeyond128MiB()
+    {
+        byte[] payload = WorldTransfer.SerializePayload([
+            new("SAVEGAME.sav", new byte[64 * 1024 * 1024]),
+            new("PARTYTABLE.res", new byte[64 * 1024 * 1024]),
+            new("GLOBALVARS.res", [1])]);
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() => WorldTransfer.ParsePayload(payload));
+        Assert.Contains("total exceeds", error.Message);
+    }
+
+    [Fact]
     public void SerializePayloadThenParsePayloadRoundTrips()
     {
         WorldFile[] world = SampleWorld();

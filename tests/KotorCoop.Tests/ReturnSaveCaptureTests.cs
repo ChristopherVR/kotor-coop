@@ -33,6 +33,50 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         Directory.Delete(_game, true);
     }
 
+    [Theory]
+    [InlineData(RejoinTrigger.HostReload)]
+    [InlineData(RejoinTrigger.SaveMismatch)]
+    public void AutomaticAdoptionWaitsForFreshDedicatedCaptureWithoutQuickSave(RejoinTrigger trigger)
+    {
+        WriteSave(Path.Combine(_game, "saves", "000000 - QUICKSAVE"));
+        string quick = Path.Combine(_game, "saves", "000000 - QUICKSAVE", "SAVEGAME.sav");
+        byte[] hash = SHA256.HashData(File.ReadAllBytes(quick));
+        DateTime stamp = File.GetLastWriteTimeUtc(quick);
+        Call("TriggerRejoin", trigger, _manager.Current!, new Action(() => { }), false);
+        Assert.Empty(_bridge.Requests);
+        Assert.True((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+        Assert.Equal(CheatKinds.CoopSave, Assert.Single(_bridge.Requests).Kind);
+        Assert.Equal(hash, SHA256.HashData(File.ReadAllBytes(quick)));
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(quick));
+        Assert.Equal(RejoinPhase.Idle, Field<RejoinDecisionState>("_rejoinState").Phase);
+        Assert.True((bool)Call("MaintainAutomaticRejoinCapture", 2000L)!);
+        Assert.Equal(RejoinPhase.Idle, Field<RejoinDecisionState>("_rejoinState").Phase);
+    }
+
+    [Fact]
+    public void ActualDownedWipeWithoutLivingCheckpointDoesNotStartImpossibleSaveLoop()
+    {
+        _bridge.Flags = PlayerState.FlagDowned | PlayerState.FlagPartyWiped;
+        Call("TriggerRejoin", RejoinTrigger.WipeRecovery, _manager.Current!, new Action(() => { }), false);
+        Assert.Empty(_bridge.Requests);
+        Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+        Assert.Equal(RejoinPhase.Idle, Field<RejoinDecisionState>("_rejoinState").Phase);
+    }
+
+    [Fact]
+    public void ActualDownedWipeHasUsableVerifiedPreWipeCharacterWithoutSavingDeadActor()
+    {
+        string checkpoint = Path.Combine(_game, "saves", "000002 - Co-op");
+        WriteSave(checkpoint);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+            Path.Combine(_game, "saves"), checkpoint, 1, out _));
+        _bridge.Flags = PlayerState.FlagDowned | PlayerState.FlagPartyWiped;
+        Assert.True((bool)Call("TryUseAutomaticRecoveryCheckpoint")!);
+        Call("TriggerRejoin", RejoinTrigger.WipeRecovery, _manager.Current!, new Action(() => { }), false);
+        Assert.Empty(_bridge.Requests);
+        Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+    }
+
     private object? Call(string name, params object[] args) => typeof(CoopCommandDispatcher)
         .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(_dispatcher, args);
     private T Field<T>(string name) => (T)typeof(CoopCommandDispatcher)

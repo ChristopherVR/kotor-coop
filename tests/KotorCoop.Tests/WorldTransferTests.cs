@@ -44,6 +44,22 @@ public sealed class WorldTransferTests : IDisposable
     // ---- the round trip --------------------------------------------------------
 
     [Fact]
+    public async Task LegitimateModArchiveAboveOldSixteenMiBLimitTransfersOverTcp()
+    {
+        byte[] archive = Bytes(17 * 1024 * 1024, seed: 17);
+        int port = await ServeAsync([new("SAVEGAME.sav", archive)], SessionPassword.None);
+        var received = await WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token);
+        Assert.Equal(archive, Assert.Single(received.Files).Data);
+    }
+
+    [Fact]
+    public async Task AboveSixtyFourMiBFileRefusesBeforePayloadAllocation()
+    {
+        int port = await ServeHostileAsync("SAVEGAME.sav", 64u * 1024 * 1024 + 1, []);
+        await Assert.ThrowsAsync<InvalidDataException>(() => WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token));
+    }
+
+    [Fact]
     public async Task AJoinerFetchesTheHostsWorld()
     {
         IReadOnlyList<WorldFile> world =
