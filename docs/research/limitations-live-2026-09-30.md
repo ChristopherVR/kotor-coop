@@ -264,3 +264,24 @@ This is not established as a co-op defect or an effect-expiry event. Repeat veri
 uses a clearly staged stock Sith UTC clone with500 base/max/current HP, preserving its
 hostile faction and scripts, before measurement. Evidence and any remaining failures
 are retained separately from successful runs.
+
+## Three-player target and down follow-up
+
+The atomic81 three-player Taris run staged genuine temporary HP on the current GIT enemy
+in all three games, retained native commandability, and used real stock blaster weapons.
+Actual native targets switched between the two mapped living peer phantoms. This does not
+isolate whether the plugin's retarget command or ordinary enemy AI caused each switch.
+A later attempt observed actual LocalDowned1 and host peer flag8, with the victim separated
+from proximity rescue. The post-down window was only about3.3seconds, shorter than the
+four-second retarget cooldown, so it does not establish living-target fallback failure or
+success. A later sample initially suspected of targeting a downed peer was after revival;
+it is expressly excluded from a bug claim.
+
+Independent source review found that threat eligibility used only native down/HP checks
+on stand-ins, whose native HP is deliberately pinned positive. Commit59846f4 also checks
+current remote health/down flags, activity and away/minigame state before selecting and
+ordering a target. Phantom targetability and down pose honor the same explicit down bit.
+A regression selects the remaining contributor when the leading peer has1HP plus flag8,
+then covers zeroHP, inactive, away, minigame and genuine revival. All61 focused threat and
+phantom-target tests passed, and Plugin Release built with warnings treated as errors.
+The longer live fallback rerun remains outstanding.
