@@ -71,6 +71,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
     private readonly bool _companionGearSyncEnabled = PluginConfig.ReadBool("companion_gear_sync", true);
 
+    private readonly PartyPresenceGearBindingCache _gearBindings = new(SharedBlock.PartyPresenceCapacity);
     private readonly uint[,] _appliedEquip = new uint[SharedBlock.PartyPresenceCapacity, SharedBlock.EquipCount];
 
     /// <summary>Consecutive equip failures per (companion slot, equip slot) — the same bound
@@ -544,9 +545,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         }
 
         int rosterSlot = (int)member.RosterSlotPlusOne - 1;
-        if (!block.CanMirrorPartyOccupant(rosterSlot, member.OccupantGeneration))
+        if (!block.TryGetPartyOccupantMirrorProof(rosterSlot, member.OccupantGeneration, out uint occupantSession))
         {
-            Forget(slot);
+            // A busy or unavailable publication stops writes without losing successful equips.
             return false;
         }
         uint retainedBodyId = Odyssey.GetPartyRosterObjectId(rosterSlot);
@@ -597,6 +598,11 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         if (creature == 0 || creature == player)
         {
             return false;
+        }
+
+        if (_gearBindings.Observe(slot, occupantSession, member.OccupantGeneration, objectId))
+        {
+            ClearEquipmentCache(slot);
         }
 
         // Gear first, unconditionally — the companion has to already be wearing the right
@@ -953,7 +959,8 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         bool vtableAndIdMatch = cached != 0 && trackedId == objectId
             && NativeMethods.IsReadable(cached, 8)
             && PartyCreatureIdentity.IsLiveMatch(*(nint*)cached, *(uint*)(cached + 0x04), objectId);
-        if (PartyPresenceResolveCacheRule.CanTrustCachedCreature(cached, trackedId, objectId, vtableAndIdMatch))
+        if (PartyPresenceResolveCacheRule.CanTrustCurrentCreature(cached, Odyssey.ResolveServerObject(objectId),
+            trackedId, objectId, vtableAndIdMatch))
         {
             return cached;
         }
@@ -961,7 +968,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         Forget(slot);
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0
+        if (creature == 0 || !NativeMethods.IsReadable(creature, 8)
             || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), objectId))
         {
             return 0;
@@ -992,6 +999,12 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _smoother.Reset(slot);
         _facingSmoother.Reset(slot);
 
+        _gearBindings.Forget(slot);
+        ClearEquipmentCache(slot);
+    }
+
+    private void ClearEquipmentCache(int slot)
+    {
         // A different companion (or the same one, freshly re-resolved) may now occupy this
         // presence slot; forget what gear this controller last believed it applied so a real
         // change is never mistaken for one already handled.
@@ -1183,7 +1196,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             && _factionKnown[presenceSlot]
             && _heldNeutral[presenceSlot];
         nint creature = Odyssey.ResolveServerObject(localId);
-        if (creature == 0
+        if (creature == 0 || !NativeMethods.IsReadable(creature, 8)
             || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 0x04), localId))
         {
             return;

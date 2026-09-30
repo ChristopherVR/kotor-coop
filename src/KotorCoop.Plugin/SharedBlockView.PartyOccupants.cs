@@ -55,14 +55,24 @@ internal sealed unsafe partial class SharedBlockView
     public uint HostPartyOccupantGeneration(int slot) => (uint)slot < 9 && HostPartyOccupantsCurrent()
         ? *U32(SharedBlock.OffsetHostPartyOccupants + SharedBlock.PartyOccupantRowsOffset + slot * SharedBlock.PartyOccupantStride) : 0;
     public bool CanMirrorPartyOccupant(int slot, uint publishedGeneration = uint.MaxValue)
+        => TryGetPartyOccupantMirrorProof(slot, publishedGeneration, out _);
+
+    public bool TryGetPartyOccupantMirrorProof(int slot, uint publishedGeneration, out uint session)
     {
+        session = 0;
         if ((uint)slot >= 9 || !HostPartyOccupantsCurrent()) return false;
         int bank = SharedBlock.OffsetHostPartyOccupants;
         int row = bank + SharedBlock.PartyOccupantRowsOffset + slot * SharedBlock.PartyOccupantStride;
-        uint sequence = *U32(bank), generation = *U32(row), snapshotGeneration = publishedGeneration == uint.MaxValue ? *U32(row + 4) : publishedGeneration;
+        uint sequence = *U32(bank);
+        if ((sequence & 1) != 0 || sequence == 0) return false;
+        uint acceptedSession = *U32(bank + 12);
+        uint generation = *U32(row), snapshotGeneration = publishedGeneration == uint.MaxValue ? *U32(row + 4) : publishedGeneration;
         bool valid = *U32(bank + 20) == *U32(bank + 4) && (!HostPartyOccupantRequiresBinding(slot) || HostPartyOccupantAdopted(slot)) && generation == snapshotGeneration && ((generation == 0 && PartyOccupantHook.Captured.FixedStockIdentity(slot))
-            || (baseAddress[row + 8] != 0 && PartyOccupantReconcileState.IsApplied(slot, HostPartyOccupantSession, generation)));
-        return valid && sequence == *U32(bank);
+            || (baseAddress[row + 8] != 0 && PartyOccupantReconcileState.IsApplied(slot, acceptedSession, generation)));
+        System.Threading.Thread.MemoryBarrier();
+        if (!valid || sequence != *U32(bank) || !HostPartyOccupantsCurrent()) return false;
+        session = acceptedSession;
+        return true;
     }
     public bool TryCopyCompanionEquipment(int index, in PartyPresenceView expected, Span<byte> destination)
     {

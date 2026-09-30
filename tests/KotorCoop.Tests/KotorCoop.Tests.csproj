@@ -194,6 +194,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowStallRule.cs" Link="Plugin\FollowStallRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FollowStepTimingRule.cs" Link="Plugin\FollowStepTimingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceReleaseOrderRule.cs" Link="Plugin\PartyPresenceReleaseOrderRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceGearBindingCache.cs" Link="Plugin\PartyPresenceGearBindingCache.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyPresenceResolveCacheRule.cs" Link="Plugin\PartyPresenceResolveCacheRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyBodyMap.cs" Link="Plugin\RetainedEnemyBodyMap.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PluginEvents.cs" Link="Plugin\PluginEvents.cs" />

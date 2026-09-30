@@ -47,4 +47,8 @@ internal static class PartyPresenceResolveCacheRule
         && trackedId != 0
         && trackedId == objectId
         && vtableAndIdStillMatch;
+    public static bool CanTrustCurrentCreature(
+        nint cachedCreature, nint currentCreature, uint trackedId, uint objectId, bool vtableAndIdStillMatch) =>
+        cachedCreature == currentCreature
+        && CanTrustCachedCreature(cachedCreature, trackedId, objectId, vtableAndIdStillMatch);
 }
