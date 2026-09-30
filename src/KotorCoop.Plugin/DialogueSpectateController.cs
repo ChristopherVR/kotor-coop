@@ -58,6 +58,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     private const int NoNode = -1;
 
     private bool _hadDialogue;
+    private bool _privatePromptSuspended;
 
     /// <summary>Latched at the moment a NEW local conversation is detected (the
     /// <c>_hadDialogue</c> false-&gt;true edge) from <see cref="DialogueGateHook.LastStartForced"/>,
@@ -151,6 +152,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         _nodes.Reset();
 
         _hadDialogue = false;
+        _privatePromptSuspended = false;
         _lastLiveMs = 0;
         _lastLineHash = 0;
         _reportedContentMs = false;
@@ -195,6 +197,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         // release them explicitly anyway: the frame after a module change should not spend
         // even one lease's worth refusing the player's first click in the new area.
         DialogueReplyHook.AllowReplies();
+        DialogueSkipHook.AllowSkips();
         DialogueGateHook.ReleaseForPeer();
         DialogueGateHook.PeerPartnerTag = 0;
     }
@@ -220,6 +223,30 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             LogFew("dialogue: the world went away; dropping all conversation state");
             Invalidate();
         }
+
+        // IsPromptActive includes the successfully queued start before a GUI exists.
+        // Yield the entire controller, not only its publication: private self-dialogues
+        // have invalid GUI participants and otherwise resemble an empty shared shell.
+        if (JediChoicePromptController.IsPromptActive)
+        {
+            if (!_privatePromptSuspended)
+            {
+                Invalidate(); // discard previous shared publication and follow clocks
+                _epoch = epoch;
+                _privatePromptSuspended = true;
+            }
+            _machine.Step(new DialogueFollowInputs(Environment.TickCount64,
+                false, false, false, false, false, false, false, PrivatePrompt: true));
+            DialogueReplyHook.AllowReplies();
+            DialogueSkipHook.AllowSkips();
+            DialogueGateHook.ReleaseForPeer();
+            DialogueGateHook.PeerPartnerTag = 0;
+            block.LocalDialogueReplySerial = DialogueReplyHook.Sequence;
+            return;
+        }
+        if (_privatePromptSuspended)
+            block.LocalDialogueReplySerial = DialogueReplyHook.Sequence; // discard final private pick
+        _privatePromptSuspended = false;
 
         PublishLocal();
         ReportCounters();

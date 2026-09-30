@@ -124,7 +124,8 @@ public readonly record struct DialogueFollowInputs(
     bool LocalPartnerKnown,
     bool LocalPartnerIsPeers,
     bool EngineConversationOpen,
-    bool EngineHasContent);
+    bool EngineHasContent,
+    bool PrivatePrompt = false);
 
 /// <summary>
 /// The deadlines and rate limits, every one of them a past defect's fix. Grouped so a test can
@@ -274,6 +275,14 @@ public sealed class DialogueFollowMachine(DialogueFollowTimings timings)
     /// <summary>One frame. The single place a transition is decided.</summary>
     public DialogueFollowDecision Step(in DialogueFollowInputs input)
     {
+        // A private class choice owns its queued start and GUI independently of the
+        // shared token. In particular, invalid GUI participants do not make it a shell.
+        if (input.PrivatePrompt)
+        {
+            Reset();
+            return new(State, DialogueFollowAction.None, DialogueFollowNote.None);
+        }
+
         // ── Idle ──────────────────────────────────────────────────────────────────────
         // No peer conversation, so there is nothing to follow, nothing to yield to and
         // nothing to suppress. A follow that was live ends here, with ONE close: Reset puts

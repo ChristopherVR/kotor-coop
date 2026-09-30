@@ -9,6 +9,15 @@ namespace KotorCoop.Tests;
 public sealed class PlaceableLocalChangeTests
 {
     [Theory]
+    [InlineData(2, 1, 0, 0)] // real close, then a genuine newer re-lock
+    [InlineData(0, 0, 0, 2)] // real close, then a genuine newer unlock
+    [InlineData(7, 1, 0, 1)] // real open, then newer lock/disarm
+    [InlineData(3, 0, 1, 7)] // trap state also remains independent of the open edge
+    public void RetainedOpenCloseCannotOverwriteNewerLockOrTrapState(byte recorded, byte locked, byte trapped, byte expected)
+    {
+        Assert.Equal(expected, PlaceableLocalChangeRule.MergeOpenWithCurrentState(recorded, locked, trapped));
+    }
+    [Theory]
     [InlineData(false, 0, true, 0, false)] // physically closed but not published yet
     [InlineData(true, 0, false, 0, false)] // stale canonical open still queued
     [InlineData(true, 1, true, 0, false)] // stale mirror has physically reopened it

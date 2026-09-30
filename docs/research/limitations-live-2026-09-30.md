@@ -144,3 +144,11 @@ The popup uses invalid GUI participant IDs while its own player still owns a
 valid dialog; its old watcher timed out while the prompt was visibly open and
 never applied the player's selection. Rebuilt live checks are underway.
 
+
+### Latest combined slow suite and private-prompt failure
+
+The ABI86/wire78 build passed all 116 slow tests in 9 minutes 18 seconds. The earlier 114 count belongs to a previous build. The three-player JFTS live run revealed that the dialogue follower's empty-shell cleanup still tears down private class prompts: peer2 logged StartDialog at 20:50:01 and shell cleanup at 20:50:04, followed by a closed-without-pick result. The narrow private-dialogue reader observes the prompt, but publishing suppression alone does not protect it from following logic. Class preservation and automatic refresh remain unproven until this fault is fixed and the real choices complete.
+
+### ABI86 real turret win and movement lock
+
+The clean sixth controller attempt killed all six original native fighters by real keyboard aiming and repeated fire presses in 11,513 ms. The host retained 2700/3000 HP. No health or native aim writes, forced kills, or explicit return warp were used. The stock script/movie returned both games to ebo_m12aa. A two-second joiner W hold at lock=1 left the same native character and position unchanged; after lock=0 the same input moved 1.04041 units. The host also moved 2.120 units afterwards. Evidence is artifacts/turret-live-v86/shoot6-proof.json and host-positive6.json. These checks cover the stock fight and parked keyboard path, not a full story-skip campaign or swoop/Star Forge duel locks.

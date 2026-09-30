@@ -58,15 +58,15 @@ public sealed class TurretHarnessMemory : IDisposable {
  }
  Model FollowerModel(uint body){if(U(body+0x6C)==0)return null;uint models=U(body+0x68);return models==0?null:ModelAt(U(models));}
  public sealed class Fighter {public int Slot,Hp,MaxHp;public bool Dead;public uint Address;public float TrackSpeed;public Model Model;}
- public sealed class Sample {public long ElapsedMs;public int PlayerHp,PlayerMaxHp;public int[] MouseAxes;public float MovementPerSecond;public float[] AxisVelocity,RawControlTransform;public Model PlayerModel;public Model[] GunModels;public Fighter[] Fighters;}
+ public sealed class Sample {public long ElapsedMs;public int PlayerHp,PlayerMaxHp;public float BulletSpeed;public int[] MouseAxes;public float MovementPerSecond;public float[] AxisVelocity,RawControlTransform;public Model PlayerModel;public Model[] GunModels;public Fighter[] Fighters;}
  public Sample Snapshot(){
   Validate();uint app=U(0x7A39FC),client=U(app+4),ci=U(client+4),module=U(ci+0x18),area=U(module+0x48),mini=U(area+0x264);
   if(U(mini)!=0x752914||U(mini+0x80)!=2)throw new Exception("Expected native turret minigame type2");
   uint player=U(mini+0x24);if(U(player)!=0x7525F0||U(player+0x60)!=mini)throw new Exception("Invalid native turret player");
-  var guns=new List<Model>();uint banks=U(player+0x74),count=U(player+0x78);if(count>16)throw new Exception("Invalid gun count");
-  for(int i=0;i<count;i++){uint bank=U(banks+i*4);uint vt=U(bank);if(vt!=0x752AE4&&vt!=0x752AF0)continue;uint models=U(bank+0x34),nc=U(bank+0x38);if(nc>16)throw new Exception("Invalid gun model count");for(int j=0;j<nc;j++){Model model=ModelAt(U(models+j*4));if(model!=null)guns.Add(model);}}
+  var guns=new List<Model>();float bulletSpeed=0;uint banks=U(player+0x74),count=U(player+0x78);if(count>16)throw new Exception("Invalid gun count");
+  for(int i=0;i<count;i++){uint bank=U(banks+i*4);uint vt=U(bank);if(vt!=0x752AE4&&vt!=0x752AF0)continue;if(bulletSpeed==0)bulletSpeed=F(bank+0x44);uint models=U(bank+0x34),nc=U(bank+0x38);if(nc>16)throw new Exception("Invalid gun model count");for(int j=0;j<nc;j++){Model model=ModelAt(U(models+j*4));if(model!=null)guns.Add(model);}}
   var fighters=new List<Fighter>();uint array=U(ci);for(int i=0;i<255;i++){uint body=U(array+4+i*4);if(body==0||U(body)!=0x7528A8||U(body+0x60)!=mini)continue;fighters.Add(new Fighter{Slot=i,Address=body,Hp=unchecked((int)U(body+0x8C)),MaxHp=unchecked((int)U(body+0x90)),Dead=(U(body+0x88)&2)!=0,TrackSpeed=F(body+0x98),Model=FollowerModel(body)});}
-  var sample=new Sample{ElapsedMs=lifetime.ElapsedMilliseconds,PlayerHp=unchecked((int)U(player+0x8C)),PlayerMaxHp=unchecked((int)U(player+0x90)),PlayerModel=FollowerModel(player),GunModels=guns.ToArray(),Fighters=fighters.ToArray(),MouseAxes=new[]{unchecked((int)U(mini+0x84)),unchecked((int)U(mini+0x88))},MovementPerSecond=F(mini+0x74),AxisVelocity=V(mini+0xE4,3),RawControlTransform=V(mini+0xC0,6)};
+  var sample=new Sample{BulletSpeed=bulletSpeed,ElapsedMs=lifetime.ElapsedMilliseconds,PlayerHp=unchecked((int)U(player+0x8C)),PlayerMaxHp=unchecked((int)U(player+0x90)),PlayerModel=FollowerModel(player),GunModels=guns.ToArray(),Fighters=fighters.ToArray(),MouseAxes=new[]{unchecked((int)U(mini+0x84)),unchecked((int)U(mini+0x88))},MovementPerSecond=F(mini+0x74),AxisVelocity=V(mini+0xE4,3),RawControlTransform=V(mini+0xC0,6)};
   if(U(area+0x264)!=mini)throw new Exception("Minigame ended while sampling");if(sample.PlayerMaxHp<=0||sample.PlayerHp<sample.PlayerMaxHp/4)throw new Exception("Player below25% HP; stopping");return sample;
  }
  public sealed class WorldSample {public string Module;public uint Player,Id,MinigameLock;public float[] Position;}
@@ -90,21 +90,27 @@ try {
         try {$state=$memory.Snapshot()} catch { $samples.Add([pscustomobject]@{End=$_.Exception.Message;ElapsedMs=$watch.ElapsedMilliseconds});break }
         if($watch.ElapsedMilliseconds-$lastFire -ge 150){$null=$memory.Input('key 0x39 up');$null=$memory.Input('key 0x39 down');$lastFire=$watch.ElapsedMilliseconds}
         if($parked -and !$parkedReleased -and $watch.ElapsedMilliseconds -ge 2000){$null=$parked.Input('key 0x11 up');$samples.Add([pscustomobject]@{ParkedBefore=$parkedBefore;ParkedAfter=$parked.World()});$parkedReleased=$true}
-        if(!$initialFighters.Count){$initialFighters=@($state.Fighters.Address);if(!$initialFighters.Count){throw 'Initial native fighter census is empty; refusing victory claim'}}
+        if(!$initialFighters.Count){$initialFighters=@($state.Fighters | ForEach-Object { $_.Address });if(!$initialFighters.Count){throw 'Initial native fighter census is empty; refusing victory claim'}}
         foreach($fighter in $state.Fighters){if($fighter.Dead -or $fighter.Hp -le 0){$null=$deadFighters.Add($fighter.Address)}}
         $gun=$state.GunModels[0];$live=@($state.Fighters|Where-Object { !$_.Dead -and $_.Hp -gt 0 -and $_.Model })
         if(!$live.Count){if(@($initialFighters|Where-Object {!$deadFighters.Contains([uint32]$_)}).Count){throw 'A native fighter disappeared without a sampled death; victory unproven'};$samples.Add([pscustomobject]@{Won=$true;InitialFighterAddresses=$initialFighters;DeadFighterAddresses=@($deadFighters);State=$state});break}
         $target=$live|Where-Object Slot -eq $targetSlot|Select-Object -First 1
-        if(!$target){$target=$live|Sort-Object { $dx=$_.Model.Position[0]-$gun.Position[0];$dy=$_.Model.Position[1]-$gun.Position[1];$dz=$_.Model.Position[2]-$gun.Position[2];$d=[Math]::Sqrt($dx*$dx+$dy*$dy+$dz*$dz); -($dx*$gun.YDirection[0]+$dy*$gun.YDirection[1]+$dz*$gun.YDirection[2])/$d }|Select-Object -First 1;$targetSlot=$target.Slot}
-        $position=@($target.Model.Position);$now=$watch.ElapsedMilliseconds
-        if($previous.ContainsKey($targetSlot)) { $prev=$previous[$targetSlot];$dt=($now-$prev.Time)/1000.0;if($dt -gt 0 -and $dt -lt 0.5){for($axis=0;$axis -lt 3;$axis++){$position[$axis]+=($target.Model.Position[$axis]-$prev.Position[$axis])/$dt*0.08}} }
+        if(!$target){$target=$live|Sort-Object { $dx=$_.Model.Position[0]-$gun.Position[0];$dy=$_.Model.Position[1]-$gun.Position[1];$dz=$_.Model.Position[2]-$gun.Position[2];$d=[Math]::Sqrt($dx*$dx+$dy*$dy+$dz*$dz); [Math]::Acos([Math]::Clamp(($dx*$gun.YDirection[0]+$dy*$gun.YDirection[1]+$dz*$gun.YDirection[2])/$d,-1.0,1.0))+($d/300.0) }|Select-Object -First 1;$targetSlot=$target.Slot}
+        $position=@($target.Model.Position);$now=$watch.ElapsedMilliseconds; $distance=[Math]::Sqrt([Math]::Pow($position[0]-$gun.Position[0],2)+[Math]::Pow($position[1]-$gun.Position[1],2)+[Math]::Pow($position[2]-$gun.Position[2],2));$lead=if($state.BulletSpeed -gt 1 -and $state.BulletSpeed -lt 100000){[Math]::Min(2.0,$distance/$state.BulletSpeed)}else{0.08}
+        if($previous.ContainsKey($targetSlot)) { $prev=$previous[$targetSlot];$dt=($now-$prev.Time)/1000.0;if($dt -gt 0 -and $dt -lt 0.5){
+          $velocity=@(0.0,0.0,0.0);$r=@(0.0,0.0,0.0);$aa=-$state.BulletSpeed*$state.BulletSpeed;$bb=0.0;$cc=0.0
+          for($axis=0;$axis -lt 3;$axis++){$velocity[$axis]=($target.Model.Position[$axis]-$prev.Position[$axis])/$dt;$r[$axis]=$position[$axis]-$gun.Position[$axis];$aa+=$velocity[$axis]*$velocity[$axis];$bb+=2*$r[$axis]*$velocity[$axis];$cc+=$r[$axis]*$r[$axis]}
+          $disc=$bb*$bb-4*$aa*$cc
+          if($disc -ge 0 -and [Math]::Abs($aa) -gt 0.001){$t1=(-$bb+[Math]::Sqrt($disc))/(2*$aa);$t2=(-$bb-[Math]::Sqrt($disc))/(2*$aa);$times=@(@($t1,$t2)|Where-Object {$_ -gt 0});if($times.Count){$lead=[Math]::Min(2.0,($times|Measure-Object -Minimum).Minimum)}}
+          for($axis=0;$axis -lt 3;$axis++){$position[$axis]+=$velocity[$axis]*$lead}
+        } }
         $previous[$targetSlot]=@{Time=$now;Position=@($target.Model.Position)}
         $dx=$position[0]-$gun.Position[0];$dy=$position[1]-$gun.Position[1];$dz=$position[2]-$gun.Position[2]
         $yaw=[Math]::Atan2($dx,$dy)-[Math]::Atan2($gun.YDirection[0],$gun.YDirection[1]);while($yaw -gt [Math]::PI){$yaw-=2*[Math]::PI};while($yaw -lt -[Math]::PI){$yaw+=2*[Math]::PI}
         $pitch=[Math]::Atan2($dz,[Math]::Sqrt($dx*$dx+$dy*$dy))-[Math]::Asin($gun.YDirection[2])
         $wanted=@{'0x1E'=($yaw -lt -0.015);'0x20'=($yaw -gt 0.015);'0x11'=($pitch -gt 0.015);'0x1F'=($pitch -lt -0.015)}
         foreach($key in $wanted.Keys){if([bool]$held[$key] -ne $wanted[$key]){$null=$memory.Input("key $key $(if($wanted[$key]){'down'}else{'up'})");$held[$key]=$wanted[$key]}}
-        if($now-$lastLog -ge 100){$samples.Add([pscustomobject]@{ElapsedMs=$now;Target=$targetSlot;Yaw=$yaw;Pitch=$pitch;PlayerHp=$state.PlayerHp;Fighters=@($state.Fighters|Select-Object Slot,Hp,Dead)});$lastLog=$now}
+        if($now-$lastLog -ge 100){$samples.Add([pscustomobject]@{ElapsedMs=$now;Target=$targetSlot;BulletSpeed=$state.BulletSpeed;LeadSeconds=$lead;Yaw=$yaw;Pitch=$pitch;PlayerHp=$state.PlayerHp;Fighters=@($state.Fighters|Select-Object Slot,Hp,Dead)});$lastLog=$now}
         Start-Sleep -Milliseconds 20
       }
       foreach($key in @('0x39','0x11','0x1E','0x1F','0x20','0xC8','0xCB','0xD0','0xCD')){try{$null=$memory.Input("key $key up")}catch{Write-Warning $_}}

@@ -17,6 +17,35 @@ public sealed class DialogueFollowMachineTests
 {
     private static readonly DialogueFollowTimings Timings = DialogueFollowTimings.Default;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PrivatePromptNeverClosesAnEmptyGuiOrSuppressesItsChoice(bool wasFollowing)
+    {
+        DialogueFollowMachine machine = new(Timings);
+        machine.Step(wasFollowing ? SameConversation(0) : CompetingConversation(0));
+        if (wasFollowing) machine.Step(SameConversation(1));
+        // The queued start has no GUI; once open its participant IDs and shared text
+        // remain empty. Both phases must override an outstanding peer's token.
+        foreach (long now in new long[] { 2, 3002, 16002, 30002 })
+        {
+            var input = PeerTalking(now) with
+            {
+                PrivatePrompt = true,
+                EngineConversationOpen = now >= 3002,
+                EngineHasContent = false,
+            };
+            var decision = machine.Step(input);
+            Assert.Equal(DialogueFollowAction.None, decision.Action);
+            Assert.Equal(DialogueFollowState.Idle, decision.State);
+            Assert.False(machine.SuppressReplies);
+            Assert.False(DialogueSkipAuthorityRule.ShouldSwallowSkip(machine.State));
+        }
+        // Closing the private prompt must not revive a prior follow's close/timeout.
+        Assert.Equal(DialogueFollowAction.None, machine.Step(Quiet(30003)).Action);
+        Assert.Equal(DialogueFollowState.Standby, machine.Step(PeerTalking(30004)).State);
+    }
+
     /// <summary>Nothing happening anywhere: no peer, no local conversation.</summary>
     private static DialogueFollowInputs Quiet(long nowMs) => new(
         NowMs: nowMs,
