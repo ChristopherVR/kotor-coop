@@ -105,6 +105,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightEngageFallbackRule.cs" Link="Plugin\LocalFightEngageFallbackRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightActivityRule.cs" Link="Plugin\LocalFightActivityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightBodyRule.cs" Link="Plugin\LocalFightBodyRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PlayerCombatStopRule.cs" Link="Plugin\PlayerCombatStopRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipApplyDecision.cs" Link="Plugin\EquipApplyDecision.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipSlotMap.cs" Link="Plugin\EquipSlotMap.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StartingGearSlotRule.cs" Link="Plugin\StartingGearSlotRule.cs" />

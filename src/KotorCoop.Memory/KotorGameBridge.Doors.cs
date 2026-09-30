@@ -30,6 +30,7 @@ public sealed partial class KotorGameBridge
 
     private string _doorModule = string.Empty;
     private uint _doorModuleHash;
+    private uint _doorNativeEpoch;
     private bool _doorBaselined;
     private long _nextDoorScanTicks;
 
@@ -52,15 +53,8 @@ public sealed partial class KotorGameBridge
             return changed;
         }
 
-        if (!string.Equals(module, _doorModule, StringComparison.OrdinalIgnoreCase))
-        {
-            _doorModule = module;
-            _doorModuleHash = DoorFlags.HashModule(module);
-            _doorShadow.Clear();
-            _doorApplyAcknowledgements.Clear();
-            _doorBaselined = false;
-            _nextDoorScanTicks = 0;
-        }
+        if (!TryReadLivenessEpoch(out uint nativeEpoch)) return changed;
+        EnsureDoorWorld(module, nativeEpoch);
 
         long now = Environment.TickCount64;
         if (now < _nextDoorScanTicks)
@@ -76,7 +70,6 @@ public sealed partial class KotorGameBridge
         {
             return changed;
         }
-
         foreach (nint address in CachedScan(DoorVtable, 256, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
@@ -116,6 +109,19 @@ public sealed partial class KotorGameBridge
 
         _doorBaselined = true;
         return changed;
+    }
+
+    private void EnsureDoorWorld(string module, uint nativeEpoch)
+    {
+        if (nativeEpoch == _doorNativeEpoch
+            && string.Equals(module, _doorModule, StringComparison.OrdinalIgnoreCase)) return;
+        _doorModule = module;
+        _doorNativeEpoch = nativeEpoch;
+        _doorModuleHash = DoorFlags.HashModule(module);
+        _doorShadow.Clear();
+        _doorApplyAcknowledgements.Clear();
+        _doorBaselined = false;
+        _nextDoorScanTicks = 0;
     }
 
     private void ConsumeDoorApplyAcknowledgements()

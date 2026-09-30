@@ -55,6 +55,21 @@ public sealed class DoorApplyAcknowledgementTests : IDisposable
     }
 
     [Fact]
+    public void SameModuleReloadForgetsOldShadowAndAllowsFreshAcknowledgement()
+    {
+        var ensure = typeof(KotorGameBridge).GetMethod("EnsureDoorWorld", Private)!;
+        ensure.Invoke(_bridge, ["END_M01AA", 1u]);
+        Consume(value: 1, sequence: 1);
+        Shadow[0x47] = (0, 0);
+        ensure.Invoke(_bridge, ["END_M01AA", 1u]);
+        Assert.Equal(((byte)0, (byte)0), Shadow[0x47]);
+        ensure.Invoke(_bridge, ["END_M01AA", 2u]);
+        Assert.Empty(Shadow);
+        Consume(value: 1, sequence: 1);
+        Assert.Equal(((byte)1, (byte)1), Shadow[0x47]);
+    }
+
+    [Fact]
     public void InvalidAcknowledgementDoesNotInventAnApply()
     {
         Consume(value: 1, sequence: 0);

@@ -39,6 +39,7 @@ public sealed partial class KotorGameBridge
     private readonly Dictionary<uint, byte> _placeableBaselineTrapped = [];
     private string _placeableModule = string.Empty;
     private uint _placeableModuleHash;
+    private uint _placeableNativeEpoch;
     private bool _placeableBaselined;
     private long _nextPlaceableScanTicks;
     private int _placeableSlotCursor;
@@ -60,19 +61,8 @@ public sealed partial class KotorGameBridge
             return changed;
         }
 
-        if (!string.Equals(module, _placeableModule, StringComparison.OrdinalIgnoreCase))
-        {
-            _placeableModule = module;
-            _placeableModuleHash = PlaceableFlags.HashModule(module);
-            _placeableShadow.Clear();
-            _placeableApplyAcknowledgements.Clear();
-            _placeableLocalChangeGenerations.Clear();
-            _placeablePendingLocalChanges.Clear();
-            _placeableBaselineTrapped.Clear();
-            _placeableBaselined = false;
-            _nextPlaceableScanTicks = 0;
-            _placeableSlotCursor = 0;
-        }
+        if (!TryReadLivenessEpoch(out uint nativeEpoch)) return changed;
+        EnsurePlaceableWorld(module, nativeEpoch);
 
         long now = Environment.TickCount64;
         if (now < _nextPlaceableScanTicks)
@@ -166,6 +156,23 @@ public sealed partial class KotorGameBridge
 
         _placeableBaselined = true;
         return changed;
+    }
+
+    private void EnsurePlaceableWorld(string module, uint nativeEpoch)
+    {
+        if (nativeEpoch == _placeableNativeEpoch
+            && string.Equals(module, _placeableModule, StringComparison.OrdinalIgnoreCase)) return;
+        _placeableModule = module;
+        _placeableNativeEpoch = nativeEpoch;
+        _placeableModuleHash = PlaceableFlags.HashModule(module);
+        _placeableShadow.Clear();
+        _placeableApplyAcknowledgements.Clear();
+        _placeableLocalChangeGenerations.Clear();
+        _placeablePendingLocalChanges.Clear();
+        _placeableBaselineTrapped.Clear();
+        _placeableBaselined = false;
+        _nextPlaceableScanTicks = 0;
+        _placeableSlotCursor = 0;
     }
 
     private void ConsumePlaceableApplyAcknowledgements()

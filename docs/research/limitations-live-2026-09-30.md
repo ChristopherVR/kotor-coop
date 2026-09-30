@@ -181,3 +181,16 @@ Configuration qualification: all three JFTS installs had local_combat=1. The thr
 
 Commit6eff86c plus e58b038 was built as native87/wire79 with warnings treated as errors; 5306 fast tests passed. The three private JFTS games restarted from their dedicated Co-op saves. After automatic startup recovery settled, host and both joiners saved Co-op again. Both joiner background captures completed before the manual command. At21:59:16 both accepted reconnect world, re-extracted their exact fresh archive, and rejoined END_M01AA at21:59:20/22. Consular class4@0 and Sentinel class5@0 remained distinct; their own medeqpmnt02 stack4 and secspike01 stack6 survived the actual reload. All17 QuickSave files across the three installs retained both SHA256 and modification ticks. Evidence: artifacts/jfts-live/live-three-v87/agent2.log,agent3.log, peer2-after.json,peer3-after.json and quicksave-before/after.json. An earlier command during startup adoption was safely refused because the joiners were already loading, and was retried after connection settled.
 
+
+The exact-comparison restoration helper was then exercised on all three real private mod installs: 259 selected stock files verified per install, with 46/47/47 added test files removed. Saves were explicitly restored too. The current native co-op binary was retained. This provides a reproducible recovery path where HoloPatcher uninstall previously failed; it does not change HoloPatcher itself.
+
+
+## Eight real combat contributors
+
+Eight private stock games on native87/wire79 each resolved seven peer creatures. Host local_combat=1, all seven joiners local_combat=0, damage_creator_attribution=1, and host DamageDealtEnabled=0. One actual spawned Sith soldier was staged with temporary HP and paralysis before the baseline. All seven distinct joiners then landed real engine attack rolls on verified local mirrors. Accepted totals for peers2..8 were7,6,20,7,13,18,46. Their sum117 exactly matched native base-plus-temporary health falling1001 to884; global application calls advanced112 (bundled damage is possible). The offline checker passed. Evidence: artifacts/eight-combat-v87/settled-before.json, all-seven-after.json and all-seven-proof.json. Some contributors overlapped; this proves independent contributors and exact aggregate damage, not ordered windows or a complete eight-player campaign.
+
+The attempted quiet phase exposed a dev attack-stop bug: its queue clear left the engine's active combat round intact and some players continued landing real attacks. No quiet/reconnect claim is made from this attempt. The native cancel-combat fix and a fresh bounded rerun are in progress.
+
+
+Native87 automatic host return saves also completed after three actual Ebon Hawk/Manaan solo cycles, with confirmed dedicated-save ACKs and exact-slot archive stability after 1623/1310/1656 ms. All six QuickSave files on each of the two private installs kept hashes, lengths and UTC modification times. The joining player's dedicated automatic solo capture did not trigger because its adopted origin map stayed identical; this remains a live coverage gap, despite passing integration coverage. Evidence: artifacts/return-save-proof-v87/result.json and associated ACK/return/hash files.
+

@@ -46,6 +46,24 @@ public sealed class PlaceableApplyAcknowledgementTests : IDisposable
         Assert.Equal(((byte)1, (byte)1, (byte)0), Shadow[0xC6]);
     }
     [Fact]
+    public void SameModuleReloadForgetsCloseIntentAndFreshApplyIsNotDeduplicated()
+    {
+        var ensure = typeof(KotorGameBridge).GetMethod("EnsurePlaceableWorld", Private)!;
+        ensure.Invoke(_bridge, ["END_M01AA", 1u]);
+        Consume(3, 1);
+        var pending = (Dictionary<uint, (byte Value, bool Published)>)typeof(KotorGameBridge)
+            .GetField("_placeablePendingLocalChanges", Private)!.GetValue(_bridge)!;
+        pending[0xC6] = (0, true);
+        ensure.Invoke(_bridge, ["END_M01AA", 1u]);
+        Assert.Single(pending);
+        ensure.Invoke(_bridge, ["END_M01AA", 2u]);
+        Assert.Empty(pending);
+        Assert.Empty(Shadow);
+        Consume(3, 1);
+        Assert.Equal(((byte)1, (byte)0, (byte)0), Shadow[0xC6]);
+    }
+
+    [Fact]
     public void InvalidOrIncompleteAcknowledgementCannotInventAppliedState()
     {
         Consume(7, 0);

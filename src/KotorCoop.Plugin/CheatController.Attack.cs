@@ -27,16 +27,16 @@ internal sealed unsafe partial class CheatController
         uint targetId = block.CheatTarget;
 
         // CheatTarget == 0 is "stop" (ConsoleCommand.Attack.cs's `attack stop`) - the
-        // counterpart to the order below, using the same clear helper the TEST BATTERY's own
-        // attack primitive already relies on (Odyssey.Faction.cs) rather than a raw queue wipe.
+        // counterpart to the order below. Clearing queued actions leaves an active round
+        // running; use the engine's real CancelCombat route and prove its target was cleared.
         if (targetId == 0)
         {
-            bool cleared = Odyssey.ClearQueuedCombatActions(playerId);
+            bool cleared = Odyssey.StopLocalPlayerCombat(playerId, out string stopDiagnostic);
             Answer(
                 cleared ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
                 cleared
-                    ? $"attack: cleared 0x{playerId:X}'s queued combat actions"
-                    : $"attack: could not clear 0x{playerId:X}'s queued combat actions");
+                    ? $"attack: stopped 0x{playerId:X}'s combat ({stopDiagnostic})"
+                    : $"attack: could not stop 0x{playerId:X}'s combat ({stopDiagnostic})");
             return;
         }
 
