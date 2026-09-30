@@ -63,6 +63,9 @@ public static class SaveIdentityWatch
 /// attributes — see <see cref="GameProfile"/> for the precedent in this tree.</summary>
 public sealed record SidecarMetadata(uint HostSaveIdentity, DateTime CapturedAtUtc)
 {
+    public string? SourceSaveDirectory { get; init; }
+    public string? SourceSaveSha256 { get; init; }
+    public long SourceSaveLength { get; init; }
     /// <summary>The all-zero, "nothing captured yet" answer a corrupt or absent sidecar
     /// resolves to — never null, so a caller need not juggle a second kind of absence on
     /// top of the bool <see cref="ClientCharacterPersistence.TryReadSidecar"/> already returns.</summary>
@@ -216,7 +219,30 @@ public static class ClientCharacterPersistence
             diagnostic = "the verified source changed before capture commit - kept the existing character";
             return false;
         }
-        return TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic);
+        return TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic,
+            source, expectedSha256, expectedLength);
+    }
+
+    /// <summary>Proves an own inventory source still matches the confirmed character capture.</summary>
+    public static bool IsVerifiedCaptureSource(string sourceDirectory)
+    {
+        string? saves = Path.GetDirectoryName(Path.GetFullPath(sourceDirectory));
+        return saves is not null
+            && TryReadSidecar(saves, out _, out SidecarMetadata metadata, out _)
+            && metadata.SourceSaveDirectory is not null
+            && string.Equals(Path.GetFullPath(sourceDirectory), metadata.SourceSaveDirectory,
+                StringComparison.OrdinalIgnoreCase)
+            && TryHashSave(sourceDirectory, out string hash, out long length)
+            && hash == metadata.SourceSaveSha256 && length == metadata.SourceSaveLength;
+    }
+
+    public static string? FindVerifiedCaptureSource(string savesDirectory)
+    {
+        if (!TryReadSidecar(savesDirectory, out _, out SidecarMetadata metadata, out _)
+            || metadata.SourceSaveDirectory is not { } source) return null;
+        string root = Path.GetFullPath(savesDirectory);
+        if (!string.Equals(Path.GetDirectoryName(source), root, StringComparison.OrdinalIgnoreCase)) return null;
+        return IsVerifiedCaptureSource(source) ? source : null;
     }
 
     /// <summary>Stable content fingerprint for the archive a confirmed load request names.</summary>
@@ -428,7 +454,10 @@ public static class ClientCharacterPersistence
         GffStruct player,
         uint hostSaveIdentity,
         DateTime capturedAtUtc,
-        out string diagnostic)
+        out string diagnostic,
+        string? sourceDirectory = null,
+        string? sourceSha256 = null,
+        long sourceLength = 0)
     {
         ArgumentNullException.ThrowIfNull(player);
 
@@ -437,7 +466,12 @@ public static class ClientCharacterPersistence
             Directory.CreateDirectory(savesDirectory);
 
             byte[] pifo = PlayerIfo.BuildPifo(player);
-            string json = JsonSerializer.Serialize(new SidecarMetadata(hostSaveIdentity, capturedAtUtc), JsonOptions);
+            string json = JsonSerializer.Serialize(new SidecarMetadata(hostSaveIdentity, capturedAtUtc)
+            {
+                SourceSaveDirectory = sourceDirectory,
+                SourceSaveSha256 = sourceSha256,
+                SourceSaveLength = sourceLength,
+            }, JsonOptions);
 
             string pifoPath = Path.Combine(savesDirectory, PifoFileName);
             string metaPath = Path.Combine(savesDirectory, MetaFileName);

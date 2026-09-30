@@ -146,7 +146,7 @@ public sealed class PersonalInventoryGraftTests : IDisposable
         AddLocker(staged, [], includeOther: true);
         AddLocker(own, [Item("own_rifle", false), Item("man28_envirosuit", true)]);
 
-        PersonalInventoryGraft.Apply(game, staged, true, false, null);
+        PersonalInventoryGraft.Apply(game, staged, true, false, null, _ => true);
 
         IReadOnlyList<GffStruct> items = ReadLocker(staged);
         GffStruct item = Assert.Single(items);
@@ -170,7 +170,7 @@ public sealed class PersonalInventoryGraftTests : IDisposable
         string own = BuildCoopSlot(game, 0, []);
         AddLocker(staged, [Item("host_rifle", false)]);
         AddLocker(own, []);
-        PersonalInventoryGraft.Apply(game, staged, true, false, null);
+        PersonalInventoryGraft.Apply(game, staged, true, false, null, _ => true);
         Assert.Empty(ReadLocker(staged));
     }
 
@@ -194,6 +194,37 @@ public sealed class PersonalInventoryGraftTests : IDisposable
         AddLocker(staged, [Item("host_rifle", false)]);
         byte[] before = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
         PersonalInventoryGraft.Apply(game, staged, false, true, null);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
+    }
+
+    [Fact]
+    public void UnverifiedPrivateLockerHoldsAdoptionWithoutChangingEitherArchive()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        string own = BuildCoopSlot(game, 0, []);
+        AddLocker(staged, []);
+        AddLocker(own, [Item("own_rifle", false)]);
+        byte[] before = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
+        byte[] ownBefore = File.ReadAllBytes(Path.Combine(own, "SAVEGAME.sav"));
+        Assert.Throws<InvalidDataException>(() => PersonalInventoryGraft.Apply(game, staged, true, false, null, _ => false));
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
+        Assert.Equal(ownBefore, File.ReadAllBytes(Path.Combine(own, "SAVEGAME.sav")));
+    }
+
+    [Fact]
+    public void PrivateLockerSourceChangingDuringReadHoldsAdoption()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        string own = BuildCoopSlot(game, 0, []);
+        AddLocker(staged, []);
+        AddLocker(own, [Item("own_rifle", false)]);
+        byte[] before = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
+        int checks = 0;
+        Assert.Throws<InvalidDataException>(() => PersonalInventoryGraft.Apply(game, staged, true, false, null,
+            _ => ++checks == 1));
+        Assert.Equal(2, checks);
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
     }
 

@@ -362,7 +362,9 @@ public static class WorldAdoption
             // PREVIOUS capture (gold/backpack) has to be read out of that slot before this
             // adoption's own mirror clobbers it. A no-op in both directions when both modes
             // are `shared` — see PersonalInventoryGraft's own doc comment.
-            PersonalInventoryGraft.Apply(gameDirectory, slot, inventoryPersonal, creditsPersonal, log);
+            PersonalInventoryGraft.Apply(gameDirectory, slot, inventoryPersonal, creditsPersonal, log,
+                ClientCharacterPersistence.IsVerifiedCaptureSource,
+                ClientCharacterPersistence.FindVerifiedCaptureSource(Path.Combine(gameDirectory, "saves")));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {

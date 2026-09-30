@@ -71,14 +71,16 @@ public static partial class PersonalInventoryGraft
         string stagedSaveDirectory,
         bool inventoryPersonal,
         bool creditsPersonal,
-        Action<string>? log)
+        Action<string>? log,
+        Func<string, bool>? verifiedOwnCapture = null,
+        string? ownCaptureDirectory = null)
     {
         if (!inventoryPersonal && !creditsPersonal)
         {
             return;
         }
 
-        string? ownCapture = FindOwnCaptureDirectory(gameDirectory, stagedSaveDirectory);
+        string? ownCapture = ownCaptureDirectory ?? FindOwnCaptureDirectory(gameDirectory, stagedSaveDirectory);
 
         if (creditsPersonal)
         {
@@ -87,7 +89,7 @@ public static partial class PersonalInventoryGraft
 
         if (inventoryPersonal)
         {
-            ApplyInventory(stagedSaveDirectory, ownCapture, log);
+            ApplyInventory(stagedSaveDirectory, ownCapture, log, verifiedOwnCapture);
         }
     }
 
@@ -137,7 +139,8 @@ public static partial class PersonalInventoryGraft
 
     // -- backpack --------------------------------------------------------------------
 
-    private static void ApplyInventory(string stagedSaveDirectory, string? ownCapture, Action<string>? log)
+    private static void ApplyInventory(string stagedSaveDirectory, string? ownCapture, Action<string>? log,
+        Func<string, bool>? verifiedOwnCapture)
     {
         string savegamePath = Path.Combine(stagedSaveDirectory, "SAVEGAME.sav");
         if (!File.Exists(savegamePath))
@@ -186,7 +189,7 @@ public static partial class PersonalInventoryGraft
         }
 
         byte[] updated = ErfWriter.ReplaceMember(erf, "INVENTORY", ResType, inventory.ToBytes());
-        updated = PreservePrivateLocker(stagedSaveDirectory, ownCapture, updated, questItems, log);
+        updated = PreservePrivateLocker(stagedSaveDirectory, ownCapture, updated, questItems, log, verifiedOwnCapture);
         WriteAtomic(savegamePath, updated);
 
         log?.Invoke(

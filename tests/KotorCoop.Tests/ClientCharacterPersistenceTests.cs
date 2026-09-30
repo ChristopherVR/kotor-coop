@@ -632,6 +632,35 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         return directory;
     }
 
+    [Theory]
+    [InlineData("SAVEGAME.sav")]
+    [InlineData("PARTYTABLE.res")]
+    [InlineData("savenfo.res")]
+    public void VerifiedInventorySourceRejectsChangedCaptureBytes(string changedFile)
+    {
+        string saves = TempDirectory();
+        string source = BuildSaveIn(saves, "000005 - Co-op", "end_m01aa", 0x99, "Own Player");
+        Assert.True(ClientCharacterPersistence.TryHashSave(source, out string hash, out long length));
+        Assert.True(ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            saves, source, hash, length, 42, false, out _));
+        Assert.True(ClientCharacterPersistence.IsVerifiedCaptureSource(source));
+        Assert.Equal(source, ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
+        File.AppendAllText(Path.Combine(source, changedFile), "changed");
+        Assert.False(ClientCharacterPersistence.IsVerifiedCaptureSource(source));
+        Assert.Null(ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
+    }
+
+    [Fact]
+    public void UnboundSidecarCannotProvePrivateInventorySource()
+    {
+        string saves = TempDirectory();
+        string source = BuildSaveIn(saves, "000005 - Co-op", "end_m01aa", 0x99, "Own Player");
+        Assert.True(PlayerIfo.TryExtractPlayer(source, out GffStruct player, out _));
+        Assert.True(ClientCharacterPersistence.TryWriteSidecar(saves, player, 42, DateTime.UtcNow, out _));
+        Assert.False(ClientCharacterPersistence.IsVerifiedCaptureSource(source));
+        Assert.Null(ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
+    }
+
     private string TempDirectory()
     {
         string directory = Path.Combine(Path.GetTempPath(), "kotorcoop-charpersist-" + Guid.NewGuid().ToString("N"));

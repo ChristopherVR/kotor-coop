@@ -11,7 +11,8 @@ public static partial class PersonalInventoryGraft
     // ownership: the host can have emptied theirs while our stripped gear is still inside.
     private static byte[] PreservePrivateLocker(
         string stagedDirectory, string? ownCapture, byte[] stagedErf,
-        IReadOnlyList<GffStruct> sharedQuestItems, Action<string>? log)
+        IReadOnlyList<GffStruct> sharedQuestItems, Action<string>? log,
+        Func<string, bool>? verifiedOwnCapture)
     {
         ErfArchive staged = ErfArchive.Open(Path.Combine(stagedDirectory, "SAVEGAME.sav"));
         if (!SavedModuleSelection.TrySelect(stagedDirectory, staged, out ArchiveResource module)
@@ -41,6 +42,8 @@ public static partial class PersonalInventoryGraft
                 && ownModule.Resref.Equals(module.Resref, StringComparison.OrdinalIgnoreCase)
                 && own.TryRead(ownModule.Resref, ownModule.Extension, out byte[] ownInner))
             {
+                if (verifiedOwnCapture is null || !verifiedOwnCapture(ownCapture))
+                    throw new InvalidDataException("private locker: own save no longer matches a verified character capture; save your own character before reconnecting");
                 string ownGitName = UniqueGitName(ownInner);
                 if (!ErfArchive.TryFindMember(ownInner, 2023, ownGitName, out byte[] ownGitBytes))
                     throw new InvalidDataException("private locker: own module has no readable GIT");
@@ -76,6 +79,8 @@ public static partial class PersonalInventoryGraft
             foreach (GffStruct item in kept) GffCopy.CopyInto(item, items.Add(item.StructId));
         }
         byte[] updatedInner = ErfWriter.ReplaceMember(inner, gitName, 2023, rewritten.ToBytes());
+        if (ownLocker is not null && (verifiedOwnCapture is null || !verifiedOwnCapture(ownCapture!)))
+            throw new InvalidDataException("private locker: own save changed while its items were read; adoption held");
         log?.Invoke($"world adoption: private locker retained {kept.Length} item(s) from "
             + $"{(ownLocker is null ? "shared quest state" : "your own capture")}; shared backpack quest copies excluded");
         return ErfWriter.ReplaceMember(stagedErf, module.Resref, module.ResourceType, updatedInner);
