@@ -444,7 +444,7 @@ waiting for an impossible fresh save. Live checks of these paths are in progress
 Commit `2395d79` was archived into `artifacts/companion-v93/source` before validation.
 Both the NativeAOT x86 plugin and matching x64 Agent published with warnings treated as
 errors. The complete fast suite passed **5,468 tests, zero failures** in 1m41s; the separate
-slow suite and final live checks are in progress.
+slow suite also passed **117 tests, zero failures** in 9m34s. Final live checks continue.
 
 The preceding native92 three-player wipe found a regression: game-over teardown advanced
 the world-load serial despite no selected-save request. That activated the own-load
@@ -461,3 +461,22 @@ then validates the completed load before restoring saved companion provenance. W
 uses bounded 32-bit UDP chunk indexes and paged acknowledgements for large world saves.
 These builds require matching versions on every participant; successful builds and
 automated transport tests alone do not prove a natural mod campaign.
+
+
+The native93 three-player wipe replay completed actual game-over teardown, followed by
+the host's real load and both clients' automatic WipeRecovery adoption. Both logs selected
+the verified living character checkpoint. All three returned with native HP206 and
+distinct original classes: Scout/Guardian, Scout/Consular and Scout/Sentinel.
+Equipment is not certified by that replay: the host's own reload and both client recoveries
+moved the test pistol into the party inventory. Ordinary GUI equipment and a no-wipe reload
+control are being checked separately. Evidence is preserved in `artifacts/final92-wipe`.
+
+Commit `47be001` adds a native accepted-New-Game witness after the stock menu's rejection
+branches and after successful console character-screen construction. A client selecting
+New Game leaves co-op before any recovery classifier runs, preserving character creation
+and its existing co-op checkpoint. The host's new game retains the existing session flow.
+The generic character-capture digest watch is also rebased after an adopted load; otherwise
+its first post-load edge could capture the host's staged archive over the client's own
+durable character even while the correct client PC remained live. A filesystem regression
+test preserves the own character through adoption and confirms a later genuine save can
+still refresh it. Matching Native94/Agent builds passed with warnings treated as errors.
