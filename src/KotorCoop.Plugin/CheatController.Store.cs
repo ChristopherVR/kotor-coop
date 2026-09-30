@@ -209,7 +209,7 @@ internal sealed unsafe partial class CheatController
     private void CloseGui()
     {
         bool closed = Odyssey.IsTopRegisteredStatusSummary()
-            ? Odyssey.CloseFullScreenGuiForcibly(out string detail)
+            ? Odyssey.DismissStatusSummary(out string detail)
             : Odyssey.CloseFullScreenGui(out detail);
         PluginHost.Log($"closegui: {detail}");
 
