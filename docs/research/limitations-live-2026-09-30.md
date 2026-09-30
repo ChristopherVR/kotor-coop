@@ -437,3 +437,27 @@ The UDP network transport's separate acknowledgement limit remains under repair.
 Automatic adoption captures a fresh dedicated Co-op save without replacing Quick
 Save; a wiped or downed player uses its verified living checkpoint instead of
 waiting for an impossible fresh save. Live checks of these paths are in progress.
+
+
+## Native93 / wire84 immutable build and wipe regression
+
+Commit `2395d79` was archived into `artifacts/companion-v93/source` before validation.
+Both the NativeAOT x86 plugin and matching x64 Agent published with warnings treated as
+errors. The complete fast suite passed **5,468 tests, zero failures** in 1m41s; the separate
+slow suite and final live checks are in progress.
+
+The preceding native92 three-player wipe found a regression: game-over teardown advanced
+the world-load serial despite no selected-save request. That activated the own-load
+character safety hold, leaving both clients connected at the menu after the host recovered.
+The native93 Agent distinguishes only a witnessed session wipe with no local world,
+unchanged readable native request generation, no explicit load request, and no pre-existing
+protected own load. Fresh selected requests and missing provenance remain protected.
+The wipe latch survives higher-priority holds until an adoption completes; a concurrent
+host-load verdict uses the verified living recovery checkpoint. Eight new cases cover
+this classification, alongside the existing wipe and own-load safety tests.
+
+Native93 also captures exact selected-save fingerprints before the engine loads them,
+then validates the completed load before restoring saved companion provenance. Wire84
+uses bounded 32-bit UDP chunk indexes and paged acknowledgements for large world saves.
+These builds require matching versions on every participant; successful builds and
+automated transport tests alone do not prove a natural mod campaign.
