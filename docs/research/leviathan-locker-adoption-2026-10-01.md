@@ -53,7 +53,7 @@ actual combined live replay remain in progress.
 
 Final immutable `0e60de6` passes all 5,540 fast tests, zero failures, 1m39s;
 its standard win-x64 Agent publish is warning-clean. Logs and source are under
-`artifacts/companion-v95-recovery-final`. The final slow tier is running. The first
+`artifacts/companion-v95-recovery-final`. The final slow tier passes all 117 tests, zero failures, 9m30s. The first
 combined live setup on `0f45162` reproduced the ordinary-save metadata gap directly
 (null source fingerprint), confirming that replay must use the follow-up or a
 confirmed dedicated capture before the interruption. It is not a recovery pass.
