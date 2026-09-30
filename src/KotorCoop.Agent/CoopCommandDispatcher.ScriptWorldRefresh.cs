@@ -127,7 +127,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
         if (nowMs < _scriptRetryAtMs || _captureRequestedMs != 0 || _hostReturnSavePending
-            || _soloCapturePending || _soloCaptureWaiting || _ownLoadVerdictPending
+            || _soloCapturePending || _soloCaptureWaiting || _automaticRejoinCapture is not null || _ownLoadVerdictPending
             || _ownLoadCaptureRequiresConfirmedSave || _verifiedOwnLoadAwaitingRejoin
             || _rejoinState.Phase == RejoinPhase.InFlight
             || bridge.TryGetNewCharacterCapture(out uint chargen, out _, out _)
