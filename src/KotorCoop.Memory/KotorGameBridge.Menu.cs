@@ -333,10 +333,18 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        // Hit points before the serial: the plugin reads the serial last, so it can never
-        // see a bumped serial paired with a stale amount.
+        // Another requester can have advanced this mailbox since bridge attachment.
+        // Never overwrite its request with a cached older serial (or repeat one already applied).
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockReviveSerial, out uint requested)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockReviveApplied, out uint applied)) return false;
+        uint newest = requested;
+        if (unchecked((int)(applied - newest)) > 0) newest = applied;
+        if (unchecked((int)(_reviveSerial - newest)) > 0) newest = _reviveSerial;
+        _reviveSerial = unchecked(newest + 1);
+        if (_reviveSerial == 0) _reviveSerial = 1;
+        // Hit points before the serial: the plugin reads the serial last.
         bool ok = _memory.TryWrite(_pluginBlock + BlockReviveHitPoints, (uint)Math.Max(hitPoints, 0));
-        ok &= _memory.TryWrite(_pluginBlock + BlockReviveSerial, ++_reviveSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockReviveSerial, _reviveSerial);
         return ok;
     }
 

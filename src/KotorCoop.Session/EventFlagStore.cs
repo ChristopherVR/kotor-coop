@@ -55,8 +55,8 @@ public sealed class EventFlagStore
     private readonly record struct Entry(sbyte Value, uint Serial, uint OriginPeerId);
 
     private readonly Dictionary<ulong, Entry> _flags = [];
-    private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
-    private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
+    private readonly HashSet<(uint Host, uint Load, uint Revision, uint Origin, uint Sequence, ulong Flag, uint Serial)> _appliedOps = [];
+    private readonly Queue<(uint Host, uint Load, uint Revision, uint Origin, uint Sequence, ulong Flag, uint Serial)> _opHistory = new();
     private readonly Lock _gate = new();
     private ulong _digest = EntryDigest.Empty;
 
@@ -209,7 +209,7 @@ public sealed class EventFlagStore
 
     /// <summary>
     /// Applies a remote op. UDP means the same op can arrive several times through
-    /// retransmission; the (OriginPeerId, OpSequence) set catches an EXACT duplicate
+    /// retransmission; the authenticated world namespace plus (OriginPeerId, OpSequence) catches an EXACT duplicate
     /// cheaply, but it is not the correctness guarantee — a stale value replayed under a
     /// FRESH sequence (a reconnecting peer re-announcing what it knew before it dropped)
     /// must also be refused, and that is what the (Serial, OriginPeerId) comparison
@@ -220,7 +220,7 @@ public sealed class EventFlagStore
     {
         lock (_gate)
         {
-            (uint, uint) key = (op.OriginPeerId, op.OpSequence);
+            var key = (op.HostSessionId, op.HostLoadSerial, op.WorldRevision, op.OriginPeerId, op.OpSequence, op.FlagId, op.Serial);
 
             if (!_appliedOps.Add(key))
             {
