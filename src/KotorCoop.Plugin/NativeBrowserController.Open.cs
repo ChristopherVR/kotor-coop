@@ -41,6 +41,10 @@ internal sealed unsafe partial class NativeBrowserController
             return;
         }
 
+        bool constructed = false;
+        bool registered = false;
+        try
+        {
         PanelCtor(panel, guiManager, 0, 1);
 
         if (*(nint*)panel != PanelVtable)
@@ -49,11 +53,13 @@ internal sealed unsafe partial class NativeBrowserController
             return; // unregistered; abandoning leaks one panel, once, on a latched-off path
         }
 
+        constructed = true;
         if ((*(uint*)(panel + PanelStateBits) & 0x600) == 0x400)
         {
             // Born dead (the zero-saves case slipped through). It was never registered, so
             // the sweep will not free it — call its own deleting destructor.
             var destroy = (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(*(nint*)panel));
+            constructed = false;
             destroy(panel, 1);
             Log("native browser: panel born closed (no saves?); not showing");
             return;
@@ -84,11 +90,15 @@ internal sealed unsafe partial class NativeBrowserController
         _shownListSerial = _block.BrowserListSerial;
         _selectedAddress = null;
         PopulateRows(panel, restoreAddress: null);
+        if (_broken) return;
 
         // Show, then mark the menu for the sweep — retail order. From here until the close
         // path rebuilds it, the main menu pointer is poison. Re-read the state bits: the
         // panel constructor ran since the guard captured them.
         AddPanel(guiManager, panel, 2, 1);
+        registered = true;
+        _panel = panel;
+        _guiManager = guiManager;
         *(uint*)(menu + MenuStateBits) = (*(uint*)(menu + MenuStateBits) & ~0x300u) | 0x400u;
 
         _panel = panel;
@@ -97,6 +107,23 @@ internal sealed unsafe partial class NativeBrowserController
         _connectPending = false;
         _block.BrowserOpen = 1;
         Log("native browser: open");
+        }
+        catch (Exception ex)
+        {
+            // An unexpected managed failure must not retry the allocation each frame.
+            // Once registered, the engine owns teardown; an unregistered, fully
+            // constructed panel can safely use its own deleting destructor.
+            Break($"open failed: {ex.GetType().Name}");
+            _block.BrowserOpen = 0;
+        }
+        finally
+        {
+            if (constructed && !registered)
+            {
+                var destroy = (delegate* unmanaged[Thiscall]<nint, int, void>)(*(nint*)(*(nint*)panel));
+                destroy(panel, 1);
+            }
+        }
     }
 
     /// <summary>
@@ -242,6 +269,7 @@ internal sealed unsafe partial class NativeBrowserController
         string loadScreen = string.Empty;
         bool locked = false;
         string[] faces = new string[SharedBlock.BrowserDetailPortraitCount];
+        Array.Fill(faces, string.Empty);
 
         if (index >= 0 && index < MaxRows)
         {

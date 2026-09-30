@@ -623,18 +623,10 @@ internal sealed unsafe partial class NativeBrowserController
     /// blank white fill. The blanking calls that came before had the same defect and hid it
     /// perfectly, because garbage blanks just as well as an empty name does.
     /// </summary>
-    private static void WithResRef(string ascii, Action<nint> use)
+    private static void WithResRef(string? ascii, Action<nint> use)
     {
         byte* storage = stackalloc byte[16];
-        new Span<byte>(storage, 16).Clear();
-
-        int count = Math.Min(ascii.Length, 16);
-        for (int i = 0; i < count; i++)
-        {
-            char c = ascii[i];
-            storage[i] = (byte)(c < 0x20 || c > 0x7E ? (byte)0 : (byte)c);
-        }
-
+        NativeResRefEncoding.Encode(ascii, new Span<byte>(storage, 16));
         use((nint)storage);
     }
 

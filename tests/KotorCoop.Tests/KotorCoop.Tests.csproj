@@ -59,6 +59,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFacingSmoother.cs" Link="Plugin\PartyFacingSmoother.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GaitRule.cs" Link="Plugin\GaitRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PasswordAnswer.cs" Link="Plugin\PasswordAnswer.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\NativeResRefEncoding.cs" Link="Plugin\NativeResRefEncoding.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConnectAddressRule.cs" Link="Plugin\ConnectAddressRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleHistoryRing.cs" Link="Plugin\ConsoleHistoryRing.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
