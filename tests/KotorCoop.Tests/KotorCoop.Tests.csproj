@@ -89,6 +89,12 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterRecruitRule.cs" Link="Plugin\PartyRosterRecruitRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterAvailabilityRule.cs" Link="Plugin\PartyRosterAvailabilityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterBodyReuseRule.cs" Link="Plugin\PartyRosterBodyReuseRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantTable.cs" Link="Plugin\PartyOccupantTable.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantHook.cs" Link="Plugin\PartyOccupantHook.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantRule.cs" Link="Plugin\PartyOccupantRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantReconcileState.cs" Link="Plugin\PartyOccupantReconcileState.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.PartyOccupants.cs" Link="Plugin\SharedBlock.PartyOccupants.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.PartyOccupants.cs" Link="Plugin\SharedBlockView.PartyOccupants.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterTemplateTable.cs" Link="Plugin\PartyRosterTemplateTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantCaptureRule.cs" Link="Plugin\ClassGrantCaptureRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantApplyRule.cs" Link="Plugin\ClassGrantApplyRule.cs" />

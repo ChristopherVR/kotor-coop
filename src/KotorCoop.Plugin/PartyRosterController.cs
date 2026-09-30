@@ -116,6 +116,8 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
     private const int IntervalFrames = 30;
 
     private int _countdown;
+    private string _occupantWorldModule = "";
+    private uint _occupantWorldSerial, _occupantWorldEpoch;
 
     /// <summary>Bit per slot: this instance has already reported that it cannot honour an add
     /// there because the companion was never recruited here. Reset when the situation changes,
@@ -158,6 +160,9 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         _lastHostAvailable = PartyRosterAvailabilityRule.UnknownMask;
         _lastHostValid = false;
         _countdown = 0;
+        // Native teardown does not yet distinguish travel from save replacement.
+        // Captured identities are classified against the next resolved world below.
+        PartyOccupantReconcileState.Invalidate();
         block.ClearLocalPartyRoster();
 
         // A module change reassigns every object id (docs/research/dialogue-consequences.md's
@@ -316,8 +321,20 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 _lastLocalAvailable, available);
         }
 
+        byte* currentModuleBytes = stackalloc byte[32];
+        int currentModuleLength = Odyssey.ReadCurrentModuleName(currentModuleBytes, 32);
+        if (currentModuleLength == 0) return;
+        string occupantModule = System.Text.Encoding.ASCII.GetString(currentModuleBytes, currentModuleLength);
+        uint occupantSerial = block.WorldLoadSerial, occupantEpoch = block.LivenessNativeEpoch;
+        if (_occupantWorldModule.Length > 0 && (_occupantWorldSerial != occupantSerial
+            || (_occupantWorldEpoch != occupantEpoch && _occupantWorldModule.Equals(occupantModule, StringComparison.OrdinalIgnoreCase))))
+            PartyOccupantHook.Captured.InvalidateWorld();
+        _occupantWorldModule = occupantModule; _occupantWorldSerial = occupantSerial; _occupantWorldEpoch = occupantEpoch;
+
         _lastLocalAvailable = available;
         block.SetLocalPartyRoster(available, party);
+        block.PublishLocalPartyOccupants(SharedBlock.PartyRosterValid
+            | (available << SharedBlock.PartyRosterAvailableShift) | (party << SharedBlock.PartyRosterPartyShift));
 
         // Publish the party table's body identity for every slot, including dismissed or benched
         // members. AddMember writes +0x0C and RemovePartyMember/RemoveAvailableNPC leave the
@@ -404,7 +421,36 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
             return;
         }
 
-        uint toRemove = localParty & ~hostParty;
+        if (!block.HostPartyOccupantsCurrent()) return;
+        uint heldOccupants = 0;
+        for (int slot = 0; slot < 9; slot++)
+        {
+            uint bit = 1u << slot;
+            if ((hostAvailable & bit) == 0 || !block.TryGetHostPartyOccupant(slot, out uint generation, out string template)) continue;
+            if (generation != 0 && !block.HostPartyOccupantReplaced(slot))
+            {
+                Span<byte> localTemplate = stackalloc byte[16];
+                PartyOccupantHook.Captured.CopyTemplate(slot, localTemplate);
+                int localLength = localTemplate.IndexOf((byte)0); if (localLength < 0) localLength = 16;
+                if (template.Length > 0 && template.Equals(System.Text.Encoding.ASCII.GetString(localTemplate[..localLength]), StringComparison.OrdinalIgnoreCase))
+                    PartyOccupantReconcileState.Commit(slot, block.HostPartyOccupantSession, generation);
+            }
+            if (block.HostPartyOccupantReplaced(slot) && ((localParty | hostParty) & bit) != 0)
+            { heldOccupants |= bit; continue; }
+            PartyOccupantAction action = PartyOccupantRule.Decide(generation, template.Length > 0,
+                PartyOccupantReconcileState.IsApplied(slot, block.HostPartyOccupantSession, generation),
+                (localParty & bit) != 0 || ((hostParty & bit) != 0 && (localAvailable & bit) != 0), _pokeAvailability.Resolve(block));
+            if (action == PartyOccupantAction.Hold) { heldOccupants |= bit; continue; }
+            if (action != PartyOccupantAction.RecruitInactive) continue;
+            // Remove availability cache only, never destroy or repurpose a placed script actor.
+            if ((localAvailable & bit) != 0 && !Odyssey.RemoveAvailableNpc(slot, out _)) return;
+            if (!Odyssey.AddAvailableNpcByVerifiedTemplate(slot, template)) return;
+            PartyOccupantReconcileState.Commit(slot, block.HostPartyOccupantSession, generation);
+            PluginHost.Log($"party occupant: slot {slot} generation {generation} recruited exact '{template}' (inactive cache)");
+            return; // Read native masks again next pass; spawning is separate.
+        }
+
+        uint toRemove = localParty & ~hostParty & ~heldOccupants;
         // The feature gate covers both directions. In particular, an opt-out must preserve a
         // locally recruited companion even when the host's older roster has not caught up yet.
         bool availabilitySync = _pokeAvailability.Resolve(block);
@@ -416,7 +462,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         // then published it cleared. A first host snapshot of zero is intentionally not a
         // destructive command, and a client-led 0->1 edge cancels an older falling edge above.
         toRemoveAvailability &= _hostAvailabilityRemovalEdges;
-        uint toAdd = hostParty & ~localParty;
+        uint toAdd = hostParty & ~localParty & ~heldOccupants;
 
         if (toRemove == 0 && toRemoveAvailability == 0 && toAdd == 0)
         {

@@ -431,7 +431,8 @@ internal static unsafe partial class PluginHost
         //      damage-owed ledgers) move into a new region at 0x6000..0x8600, past the reserved
         //      gap. See SharedBlock.Combat.cs, SharedBlock.TotalSize's own remarks and
         //      docs/research/creature-liveness.md.
-        _block->Version = 88;
+        // 89: verified companion occupant banks BC00/BD00, allocation BE00.
+        _block->Version = 89;
         *(uint*)((byte*)_block + SharedBlock.OffsetDamageDealtIncarnation) = PhantomHitHook.Dealt.Incarnation;
 
         // A guard dword after the version. Magic plus version alone was not selective

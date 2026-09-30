@@ -211,6 +211,9 @@ internal static unsafe partial class PluginHost
             Log("RemovePartyMember hook NOT installed: disabled by coop.ini removeparty_hook=0");
         }
 
+        PartyOccupantHook.Install(out string occupantDiagnostic);
+        Log($"party occupant: {occupantDiagnostic}");
+
         // Which dialogue reply the player picks is dispatched and gone between frames,
         // so it is captured by hooking the engine's own reply entry rather than sampled.
         if (DialogueReplyHook.Install(out string replyDiagnostic))

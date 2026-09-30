@@ -88,7 +88,7 @@ internal readonly record struct EnemyPresenceView(
 /// plugin resolves it against its own party table.</summary>
 internal readonly record struct PartyPresenceView(
     uint RosterSlotPlusOne, Vec3 Position, float Facing, uint Animation, int Health,
-    uint OneShotSerial, uint OneShotAnimation);
+    uint OneShotSerial, uint OneShotAnimation, uint OccupantGeneration = 0);
 
 /// <summary>One creature-liveness entry as the agent last wrote it: an id (GIT-identical —
 /// translated by the reconcile controller through <c>MaterialisedEnemies.ToLocal</c> before

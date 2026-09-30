@@ -25,14 +25,16 @@ namespace KotorCoop.Protocol;
 public readonly record struct PartyMemberState(
     byte SlotIndex, Vector3f Position, float Facing, uint Animation, int Health,
     uint OneShotSerial = 0, ushort OneShotAnimation = 0,
-    string EquippedBody = "", string EquippedRightWeapon = "", string EquippedLeftWeapon = "");
+    string EquippedBody = "", string EquippedRightWeapon = "", string EquippedLeftWeapon = "",
+    uint OccupantGeneration = 0);
 
 /// <summary>
 /// The host's authoritative party. In co-op the host owns the companions (its own engine
 /// AI drives them); every client freezes its own copies (solo mode) and mirrors these, so
 /// Trask and Carth do not drift into two uncoordinated versions.
 /// </summary>
-public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyMemberState> Members);
+public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyMemberState> Members,
+    uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0);
 
 /// <summary>
 /// One instance's whole companion roster, as two nine-bit masks over the engine's NPC slots.
@@ -66,7 +68,10 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// as "the id is 0" the way <see cref="ObjectIdFor"/> reports it; 0 either way means "do not
 /// reuse", so no separate check is needed in practice.
 /// </summary>
-public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask, uint[]? ObjectIds = null)
+public readonly record struct PartyOccupantIdentity(uint Generation, string Template, bool Replaced = false);
+
+public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask, uint[]? ObjectIds = null,
+    PartyOccupantIdentity[]? Occupants = null, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0)
 {
     /// <summary>Nothing recruited, nobody in the party. What a peer's roster reads as before
     /// the first level has arrived, and what must never be applied as if it were real.</summary>
@@ -96,9 +101,14 @@ public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask
     /// broke <c>PartyRosterRoundTrips</c>/<c>EmptyPartyRosterRoundTrips</c> the moment this
     /// field was added; <c>null</c> and "all zero" are the same roster.
     /// </summary>
+    public PartyOccupantIdentity OccupantFor(int slot) =>
+        Occupants is not null && (uint)slot < (uint)Occupants.Length
+            ? Occupants[slot] with { Template = Occupants[slot].Template ?? "" } : new(0, "");
+
     public bool Equals(PartyRoster other) =>
         AvailableMask == other.AvailableMask
         && PartyMask == other.PartyMask
+        && HostSessionId == other.HostSessionId && HostLoadSerial == other.HostLoadSerial && HostNativeEpoch == other.HostNativeEpoch
         && ObjectIdsEqual(other);
 
     public override int GetHashCode() => HashCode.Combine(AvailableMask, PartyMask);
@@ -107,7 +117,7 @@ public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask
     {
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
-            if (ObjectIdFor(slot) != other.ObjectIdFor(slot))
+            if (ObjectIdFor(slot) != other.ObjectIdFor(slot) || OccupantFor(slot) != other.OccupantFor(slot))
             {
                 return false;
             }

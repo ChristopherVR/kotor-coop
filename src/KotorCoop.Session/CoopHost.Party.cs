@@ -10,12 +10,20 @@ namespace KotorCoop.Session;
 public sealed partial class CoopHost
 {
     private IReadOnlyList<PartyMemberState> _party = [];
+    private uint _partyLoadSerial, _partyNativeEpoch;
 
     public void PublishParty(IReadOnlyList<PartyMemberState> members)
     {
+        lock (_gate) PublishParty(members, _localWorld.LoadSerial, _localWorld.NativeWorldEpoch);
+    }
+
+    public void PublishParty(IReadOnlyList<PartyMemberState> members, uint capturedLoadSerial, uint capturedNativeEpoch)
+    {
         lock (_gate)
         {
+            if (capturedLoadSerial != _localWorld.LoadSerial || capturedNativeEpoch != _localWorld.NativeWorldEpoch) return;
             _party = members;
+            _partyLoadSerial = capturedLoadSerial; _partyNativeEpoch = capturedNativeEpoch;
         }
     }
 
@@ -32,7 +40,10 @@ public sealed partial class CoopHost
     {
         lock (_gate)
         {
-            _partyRoster = roster;
+            if (roster.HostNativeEpoch != 0 && (roster.HostNativeEpoch != _localWorld.NativeWorldEpoch
+                || roster.HostLoadSerial != _localWorld.LoadSerial)) return;
+            _partyRoster = roster with { HostSessionId = _sessionId,
+                HostLoadSerial = _localWorld.LoadSerial, HostNativeEpoch = _localWorld.NativeWorldEpoch };
             _hasPartyRoster = true;
         }
     }
@@ -52,8 +63,11 @@ public sealed partial class CoopHost
     private void BroadcastParty(long now, List<PeerConnection> recipients)
     {
         IReadOnlyList<PartyMemberState> party;
+        uint serial, epoch;
         lock (_gate)
         {
+            if (_partyLoadSerial != _localWorld.LoadSerial || _partyNativeEpoch != _localWorld.NativeWorldEpoch) return;
+            serial = _partyLoadSerial; epoch = _partyNativeEpoch;
             party = _party;
         }
 
@@ -62,7 +76,7 @@ public sealed partial class CoopHost
             return;
         }
 
-        int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party));
+        int length = PacketCodec.Write(_sendBuffer, new PartySnapshotPacket(now, party, _sessionId, serial, epoch));
         if (length == 0)
         {
             return;
@@ -97,6 +111,7 @@ public sealed partial class CoopHost
             }
 
             roster = _partyRoster;
+            if (roster.HostLoadSerial != _localWorld.LoadSerial || roster.HostNativeEpoch != _localWorld.NativeWorldEpoch) return;
         }
 
         if (recipients.Count == 0)

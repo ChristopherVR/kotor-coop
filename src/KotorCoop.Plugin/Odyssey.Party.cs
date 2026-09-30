@@ -303,6 +303,15 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        return AddAvailableNpcByVerifiedTemplate(slot, resref);
+    }
+
+    /// <summary>Uses an exact observed successful recruitment template, never a guessed tag.</summary>
+    public static bool AddAvailableNpcByVerifiedTemplate(int slot, string resref)
+    {
+        nint table = GetPartyTable();
+        if (table == 0 || slot is < 0 or >= 9 || resref.Length is < 1 or > 16
+            || !PartyOccupantTable.ValidTemplate(System.Text.Encoding.ASCII.GetBytes(resref))) return false;
         byte* exoString = stackalloc byte[16];
         for (int i = 0; i < 16; i++)
         {

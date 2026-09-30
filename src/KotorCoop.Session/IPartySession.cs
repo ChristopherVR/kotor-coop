@@ -7,6 +7,8 @@ public interface IPartySession
 {
     /// <summary>Host only: publish the authoritative party companions. Ignored on a client.</summary>
     void PublishParty(IReadOnlyList<PartyMemberState> members);
+    void PublishParty(IReadOnlyList<PartyMemberState> members, uint capturedLoadSerial, uint capturedNativeEpoch)
+        => PublishParty(members);
 
     /// <summary>Client only: the host's latest party companions. Empty on the host.</summary>
     IReadOnlyList<PartyMemberState> GetPartyMembers();

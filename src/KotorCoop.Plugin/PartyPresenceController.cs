@@ -544,6 +544,11 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         }
 
         int rosterSlot = (int)member.RosterSlotPlusOne - 1;
+        if (!block.CanMirrorPartyOccupant(rosterSlot, member.OccupantGeneration))
+        {
+            Forget(slot);
+            return false;
+        }
         uint retainedBodyId = Odyssey.GetPartyRosterObjectId(rosterSlot);
         if (rosterSlot is 4 or 5 && TryGetCurrentHostileProof(retainedBodyId, out uint currentOwner))
         {
@@ -600,7 +605,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // CompanionLocalFightAction.StayReleased's own remarks).
         if (_companionGearSyncEnabled)
         {
-            ApplyCompanionEquipment(slot, objectId);
+            ApplyCompanionEquipment(slot, objectId, member);
         }
 
         // ---- roadmap item 4: companion local combat release gate. See
@@ -1264,7 +1269,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
     /// never got a second attempt for the rest of the module. This channel shares the identical
     /// engine call and was never fixed alongside it. See EquipRetryRule's own doc comment.
     /// </summary>
-    private void ApplyCompanionEquipment(int slot, uint objectId)
+    private void ApplyCompanionEquipment(int slot, uint objectId, in PartyPresenceView member)
     {
         if (_equipCooldownFrames > 0)
         {
@@ -1272,9 +1277,13 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             return;
         }
 
+        Span<byte> equipment = stackalloc byte[48];
+        if (!block.TryCopyCompanionEquipment(slot, member, equipment)) return;
+        byte* resref = stackalloc byte[17];
+        resref[16] = 0;
         for (int j = 0; j < SharedBlock.EquipCount; j++)
         {
-            byte* resref = block.GetCompanionEquipResref(slot, j);
+            equipment.Slice(j * 16,16).CopyTo(new Span<byte>(resref,16));
 
             int length = 0;
             uint hash = 2166136261;

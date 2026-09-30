@@ -339,7 +339,8 @@ public static class ProtocolConstants
     // v75 carries the actual DLG override: scripted scenes need not use an NPC's default.
     // v76 adds the gameplay-content fingerprint to both handshake digests (scheme 2).
     /// <summary>Version 77 appends durable saved-script-world refresh fields to WorldDigest.</summary>
-    public const byte Version = 81;
+    // 82: companion occupant generations/templates plus host-world namespaces.
+    public const byte Version = 82;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

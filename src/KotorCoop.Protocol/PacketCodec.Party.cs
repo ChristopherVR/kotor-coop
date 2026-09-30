@@ -10,6 +10,7 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.PartySnapshot);
         w.WriteInt64(packet.ServerTimeMs);
+        w.WriteUInt32(packet.HostSessionId); w.WriteUInt32(packet.HostLoadSerial); w.WriteUInt32(packet.HostNativeEpoch);
 
         int count = Math.Min(packet.Members.Count, ProtocolConstants.MaxPartyMembers);
         w.WriteUInt8((byte)count);
@@ -18,6 +19,7 @@ public static partial class PacketCodec
         {
             PartyMemberState m = packet.Members[i];
             w.WriteUInt8(m.SlotIndex);
+            w.WriteUInt32(m.OccupantGeneration);
             w.WriteVector3(m.Position);
             w.WriteSingle(m.Facing);
             w.WriteUInt32(m.Animation);
@@ -45,6 +47,7 @@ public static partial class PacketCodec
         }
 
         long serverTime = r.ReadInt64();
+        uint hostSession = r.ReadUInt32(), hostSerial = r.ReadUInt32(), hostEpoch = r.ReadUInt32();
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxPartyMembers)
@@ -56,6 +59,7 @@ public static partial class PacketCodec
         for (int i = 0; i < count; i++)
         {
             byte slot = r.ReadUInt8();
+            uint occupantGeneration = r.ReadUInt32();
             Vector3f position = r.ReadVector3();
             float facing = r.ReadSingle();
             uint animation = r.ReadUInt32();
@@ -66,17 +70,17 @@ public static partial class PacketCodec
             string equippedRightWeapon = r.ReadString(ProtocolConstants.MaxResrefLength);
             string equippedLeftWeapon = r.ReadString(ProtocolConstants.MaxResrefLength);
 
-            if (r.Failed)
+            if (r.Failed || slot >= ProtocolConstants.PartyRosterSlots || members.Any(member => member.SlotIndex == slot))
             {
                 return null;
             }
 
             members.Add(new PartyMemberState(
                 slot, position, facing, animation, health, oneShotSerial, oneShotAnimation,
-                equippedBody, equippedRightWeapon, equippedLeftWeapon));
+                equippedBody, equippedRightWeapon, equippedLeftWeapon, occupantGeneration));
         }
 
-        return new PartySnapshotPacket(serverTime, members);
+        return new PartySnapshotPacket(serverTime, members, hostSession, hostSerial, hostEpoch);
     }
 
     public static int Write(Span<byte> buffer, PartyRosterPacket packet)
@@ -84,6 +88,7 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.PartyRoster);
         w.WriteInt64(packet.ServerTimeMs);
+        w.WriteUInt32(packet.Roster.HostSessionId); w.WriteUInt32(packet.Roster.HostLoadSerial); w.WriteUInt32(packet.Roster.HostNativeEpoch);
         w.WriteUInt16(packet.Roster.AvailableMask);
         w.WriteUInt16(packet.Roster.PartyMask);
 
@@ -94,6 +99,10 @@ public static partial class PacketCodec
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             w.WriteUInt32(packet.Roster.ObjectIdFor(slot));
+            PartyOccupantIdentity occupant = packet.Roster.OccupantFor(slot);
+            w.WriteUInt32(occupant.Generation);
+            w.WriteUInt8(occupant.Replaced ? (byte)1 : (byte)0);
+            w.WriteString(occupant.Template, ProtocolConstants.MaxResrefLength);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -108,13 +117,21 @@ public static partial class PacketCodec
         }
 
         long serverTimeMs = r.ReadInt64();
+        uint hostSession = r.ReadUInt32(), hostSerial = r.ReadUInt32(), hostEpoch = r.ReadUInt32();
         ushort available = r.ReadUInt16();
         ushort party = r.ReadUInt16();
 
         uint[] objectIds = new uint[ProtocolConstants.PartyRosterSlots];
+        PartyOccupantIdentity[] occupants = new PartyOccupantIdentity[ProtocolConstants.PartyRosterSlots];
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             objectIds[slot] = r.ReadUInt32();
+            uint occupantGeneration = r.ReadUInt32();
+            byte replaced = r.ReadUInt8();
+            string template = r.ReadString(ProtocolConstants.MaxResrefLength);
+            if (replaced > 1 || (template.Length > 0 && !ModSupportProfile.IsResref(template))
+                || (occupantGeneration == 0 && (replaced != 0 || template.Length != 0))) return null;
+            occupants[slot] = new(occupantGeneration, template, replaced != 0);
         }
 
         if (r.Failed)
@@ -143,6 +160,6 @@ public static partial class PacketCodec
             return null;
         }
 
-        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party, objectIds));
+        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party, objectIds, occupants, hostSession, hostSerial, hostEpoch));
     }
 }

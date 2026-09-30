@@ -61,7 +61,11 @@ internal sealed class PartyPump(
             // docs/research/companion-state-sync.md) additionally reads each companion's real
             // equipped gear onto the same snapshot — off by default, so ordinary sessions pay
             // nothing extra here.
-            session.PublishParty(bridge.ReadPartyMembers(settings.SyncCompanionGear));
+            if (!bridge.TryReadWorldLoadSerial(out uint serial) || !bridge.TryReadLivenessEpoch(out uint epoch)) return;
+            var members = bridge.ReadPartyMembers(settings.SyncCompanionGear);
+            if (!bridge.TryReadWorldLoadSerial(out uint afterSerial) || afterSerial != serial
+                || !bridge.TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != epoch) return;
+            session.PublishParty(members, serial, epoch);
             return;
         }
 

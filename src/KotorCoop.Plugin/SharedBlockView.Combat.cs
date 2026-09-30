@@ -204,7 +204,10 @@ internal sealed unsafe partial class SharedBlockView
                 *(uint*)(slot + 0x14),
                 *(int*)(slot + 0x18),
                 *(uint*)(slot + 0x1C),
-                *(uint*)(slot + 0x20));
+                *(uint*)(slot + 0x20),
+                *(uint*)(slot + 0x00) is > 0 and <= 9
+                    ? *U32(SharedBlock.OffsetHostPartyOccupants + SharedBlock.PartyOccupantRowsOffset
+                        + ((int)*(uint*)(slot + 0x00) - 1) * SharedBlock.PartyOccupantStride + 4) : 0);
 
             // The payload reads must finish before checking whether the writer changed it.
             System.Threading.Thread.MemoryBarrier();

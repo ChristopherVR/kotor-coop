@@ -111,7 +111,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
             SampleHeal(i, rosterSlotPlusOne, objectId, serial);
 
-            if (rosterSlotPlusOne == 0 || cumulative == 0)
+            if (rosterSlotPlusOne == 0 || cumulative == 0
+                || !block.CanMirrorPartyOccupant((int)rosterSlotPlusOne - 1))
             {
                 continue;
             }
@@ -124,7 +125,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
         for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity && published < SharedBlock.CompanionDamageSlotCapacity; i++)
         {
             PhantomHitHook.ReadCompanionSlot(i, out uint rosterSlotPlusOne, out _, out _);
-            if (rosterSlotPlusOne == 0 || _healCumulative[rosterSlotPlusOne] == 0)
+            if (rosterSlotPlusOne == 0 || _healCumulative[rosterSlotPlusOne] == 0
+                || !block.CanMirrorPartyOccupant((int)rosterSlotPlusOne - 1))
             {
                 continue;
             }
@@ -239,7 +241,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
             // other — a heal is spent as a heal, a hit as a hit, each exactly once.
             bool isHeal = CompanionDamageSlots.IsHeal(slotField);
             uint rosterSlotPlusOne = CompanionDamageSlots.RosterSlotPlusOne(slotField);
-            if (rosterSlotPlusOne == 0 || rosterSlotPlusOne > SharedBlock.PartyRosterSlots)
+            if (rosterSlotPlusOne == 0 || rosterSlotPlusOne > SharedBlock.PartyRosterSlots
+                || !PartyOccupantHook.Captured.LegacySideChannelAllowed((int)rosterSlotPlusOne - 1))
             {
                 continue;
             }

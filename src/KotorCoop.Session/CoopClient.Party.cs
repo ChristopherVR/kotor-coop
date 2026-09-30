@@ -10,6 +10,8 @@ namespace KotorCoop.Session;
 public sealed partial class CoopClient
 {
     private IReadOnlyList<PartyMemberState> _party = [];
+    private long _lastPartySnapshotTime = long.MinValue, _lastPartyRosterTime = long.MinValue;
+    private uint _partySnapshotLoadSerial, _partySnapshotEpoch;
 
     public void PublishParty(IReadOnlyList<PartyMemberState> members)
     {
@@ -20,7 +22,9 @@ public sealed partial class CoopClient
     {
         lock (_gate)
         {
-            return _party;
+            if (!PartyNamespaceMatches(_hostSessionId, _partySnapshotLoadSerial, _partySnapshotEpoch)) return [];
+            return _party.Where(member => member.OccupantGeneration == _partyRoster.OccupantFor(member.SlotIndex).Generation
+                && (member.OccupantGeneration == 0 || _partyRoster.OccupantFor(member.SlotIndex).Template.Length > 0)).ToArray();
         }
     }
 
@@ -53,7 +57,7 @@ public sealed partial class CoopClient
         lock (_gate)
         {
             roster = _partyRoster;
-            return _hasPartyRoster;
+            return _hasPartyRoster && PartyNamespaceMatches(roster.HostSessionId, roster.HostLoadSerial, roster.HostNativeEpoch);
         }
     }
 
@@ -63,6 +67,9 @@ public sealed partial class CoopClient
         {
             lock (_gate)
             {
+                if (party.ServerTimeMs < _lastPartySnapshotTime || !PartyNamespaceMatches(party.HostSessionId, party.HostLoadSerial, party.HostNativeEpoch)) return;
+                _lastPartySnapshotTime = party.ServerTimeMs;
+                _partySnapshotLoadSerial = party.HostLoadSerial; _partySnapshotEpoch = party.HostNativeEpoch;
                 _party = party.Members;
             }
         }
@@ -74,6 +81,9 @@ public sealed partial class CoopClient
         {
             lock (_gate)
             {
+                if (rosterSnapshot.ServerTimeMs < _lastPartyRosterTime || !PartyNamespaceMatches(rosterSnapshot.Roster.HostSessionId,
+                    rosterSnapshot.Roster.HostLoadSerial, rosterSnapshot.Roster.HostNativeEpoch)) return;
+                _lastPartyRosterTime = rosterSnapshot.ServerTimeMs;
                 // A LEVEL, replaced wholesale — the host sends the complete roster
                 // every tick, so there is no "companion left the party" edge to miss.
                 _partyRoster = rosterSnapshot.Roster;
@@ -81,4 +91,7 @@ public sealed partial class CoopClient
             }
         }
     }
+    private bool PartyNamespaceMatches(uint session, uint serial, uint epoch)
+        => session == _hostSessionId && serial == _hostWorld.LoadSerial
+            && epoch == _hostWorld.NativeWorldEpoch;
 }

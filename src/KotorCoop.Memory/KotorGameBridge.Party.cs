@@ -40,10 +40,11 @@ public sealed partial class KotorGameBridge
             _memory.TryReadUInt32(_pluginBlock + BlockLocalPartyRosterObjectIds + (slot * 4), out objectIds[slot]);
         }
 
+        if (!TryReadPartyOccupants(packed, out PartyOccupantIdentity[] occupants, out uint occupantSerial, out uint occupantEpoch)) return false;
         roster = new PartyRoster(
             (ushort)((packed >> BlockPartyRosterAvailableShift) & BlockPartyRosterSlotMask),
             (ushort)((packed >> BlockPartyRosterPartyShift) & BlockPartyRosterSlotMask),
-            objectIds);
+            objectIds, occupants, HostLoadSerial: occupantSerial, HostNativeEpoch: occupantEpoch);
         return true;
     }
 
@@ -73,15 +74,30 @@ public sealed partial class KotorGameBridge
                 | ((roster.PartyMask & BlockPartyRosterSlotMask) << BlockPartyRosterPartyShift)
             : 0u;
 
-        bool ok = _memory.TryWrite(_pluginBlock + BlockHostPartyRoster, packed);
+        if (!TryReadLivenessEpoch(out uint targetEpoch) || !TryReadWorldLoadSerial(out uint targetSerial)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockHostPartyOccupants, out uint sequence)) return false;
+        uint odd = (sequence + 1) | 1u;
+        if (!_memory.TryWrite(_pluginBlock + BlockHostPartyOccupants, odd)) return false;
+        bool ok = _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 4, targetEpoch);
+        ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 8, targetSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 12, valid ? roster.HostSessionId : 0);
+        ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 16, packed);
+        ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyRoster, packed);
 
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             uint objectId = valid ? roster.ObjectIdFor(slot) : 0;
             ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyRosterObjectIds + (slot * 4), objectId);
+            PartyOccupantIdentity occupant = valid ? roster.OccupantFor(slot) : new(0, "");
+            nint identityRow = _pluginBlock + BlockHostPartyOccupants + PartyOccupantRows + slot * PartyOccupantStride;
+            ok &= _memory.TryWrite(identityRow, occupant.Generation);
+            ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 240 + slot, occupant.Replaced ? (byte)1 : (byte)0);
+            ok &= _memory.TryWriteAsciiString(identityRow + 8, occupant.Template, 16);
         }
 
-        return ok;
+        if (!ok || !TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != targetEpoch
+            || !TryReadWorldLoadSerial(out uint afterSerial) || afterSerial != targetSerial) return false;
+        return _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants, (sequence + 2) & ~1u);
     }
     // ---- party companions ------------------------------------------------------
     //
@@ -362,7 +378,7 @@ public sealed partial class KotorGameBridge
 
         for (int slot = 0; slot < PartyNpcSlots && slot < xpBySlot.Count; slot++)
         {
-            if ((presentMask & (1 << slot)) == 0)
+            if ((presentMask & (1 << slot)) == 0 || PartySlotSideChannelHeld(slot))
             {
                 continue;
             }
@@ -550,6 +566,8 @@ public sealed partial class KotorGameBridge
     public List<PartyMemberState> ReadPartyMembers(bool includeEquipment = false)
     {
         List<PartyMemberState> members = [];
+        PartyRoster occupantRoster = PartyRoster.Empty;
+        if (_pluginBlock != 0 && !TryReadLocalPartyRoster(out occupantRoster)) return members;
 
         if (!TryGetPartyTable(out nint partyTable)
             || !_memory.TryReadInt32(partyTable + PartyCount, out int count)
@@ -622,9 +640,10 @@ public sealed partial class KotorGameBridge
 
             members.Add(new PartyMemberState(
                 (byte)slot, position, facing, animation, health, oneShotSerial, oneShotAnim,
-                body, rightWeapon, leftWeapon));
+                body, rightWeapon, leftWeapon, occupantRoster.OccupantFor(slot).Generation));
         }
 
+        if (_pluginBlock != 0 && (!TryReadLocalPartyRoster(out PartyRoster afterRoster) || afterRoster != occupantRoster)) return [];
         return members;
     }
 
@@ -689,7 +708,9 @@ public sealed partial class KotorGameBridge
             // folded into the content comparison, and for why the cache also needs an explicit
             // Reset() (see ClearCoopState) that a module-changed check alone cannot provide.
             bool moduleReadFailed = !TryReadCurrentModule(out string module);
-            bool moduleChanged = _partyPresenceCache.NoteModule(module) || moduleReadFailed;
+            if (!TryReadLivenessEpoch(out uint presenceEpoch)) return 0;
+            bool moduleChanged = _partyPresenceCache.NoteModule(module) || moduleReadFailed || _partyPresenceWorldEpoch != presenceEpoch;
+            _partyPresenceWorldEpoch = presenceEpoch;
 
             int written = 0;
             bool allPresenceSlotsPublished = true;
@@ -710,7 +731,7 @@ public sealed partial class KotorGameBridge
                 }
 
                 nint slot = _pluginBlock + BlockPartyPresenceSlots + (i * BlockPartyPresenceStride);
-                bool published = TryPublishPartyPresenceSlot(slot, candidate);
+                bool published = TryPublishPartyPresenceSlot(slot, candidate, applyEquipment);
                 if (published)
                 {
                     _partyPresenceCache.RecordSlot(i, candidate);
@@ -725,26 +746,6 @@ public sealed partial class KotorGameBridge
                     allPresenceSlotsPublished = false;
                 }
 
-                // Companion gear (2026-08-27, docs/research/companion-state-sync.md): written
-                // every pass this instance opted into applying it, independent of the position
-                // dirty-check above — an unchanged position with a freshly re-equipped
-                // companion must still update the block. Not gated on the module-changed reset
-                // that region uses: empty strings are always a safe "leave it alone" and there
-                // is no stale-across-transition hazard a companion's gear can create the way a
-                // stale door/placeable id can.
-                if (applyEquipment)
-                {
-                    nint equipSlot = _pluginBlock + BlockCompanionEquipSlots + (i * BlockCompanionEquipStride);
-                    string body = candidate?.EquippedBody ?? string.Empty;
-                    string rightWeapon = candidate?.EquippedRightWeapon ?? string.Empty;
-                    string leftWeapon = candidate?.EquippedLeftWeapon ?? string.Empty;
-
-                    _memory.TryWriteAsciiString(equipSlot, body, BlockCompanionEquipResrefLength);
-                    _memory.TryWriteAsciiString(
-                        equipSlot + BlockCompanionEquipResrefLength, rightWeapon, BlockCompanionEquipResrefLength);
-                    _memory.TryWriteAsciiString(
-                        equipSlot + (2 * BlockCompanionEquipResrefLength), leftWeapon, BlockCompanionEquipResrefLength);
-                }
             }
 
             if (allPresenceSlotsPublished
@@ -756,6 +757,8 @@ public sealed partial class KotorGameBridge
                 }
             }
 
+            if (allPresenceSlotsPublished && TryReadLivenessEpoch(out uint afterPresenceEpoch) && afterPresenceEpoch == presenceEpoch)
+                _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 20, presenceEpoch);
             return written;
         }
 
@@ -801,7 +804,7 @@ public sealed partial class KotorGameBridge
         return placed;
     }
 
-    private bool TryPublishPartyPresenceSlot(nint slot, PartyMemberState? candidate)
+    private bool TryPublishPartyPresenceSlot(nint slot, PartyMemberState? candidate, bool applyEquipment)
     {
         // Read the current stable marker from the block itself. A bridge can reconnect to a
         // block written by an earlier bridge instance; falling back to a process-local zero on
@@ -818,8 +821,20 @@ public sealed partial class KotorGameBridge
         }
 
         bool ok = true;
+        {
+            int presenceIndex = (int)((slot - (_pluginBlock + BlockPartyPresenceSlots)) / BlockPartyPresenceStride);
+            nint equip = _pluginBlock + BlockCompanionEquipSlots + presenceIndex * BlockCompanionEquipStride;
+            ok &= _memory.TryWriteAsciiString(equip, applyEquipment ? candidate?.EquippedBody ?? "" : "", 16);
+            ok &= _memory.TryWriteAsciiString(equip + 16, applyEquipment ? candidate?.EquippedRightWeapon ?? "" : "", 16);
+            ok &= _memory.TryWriteAsciiString(equip + 32, applyEquipment ? candidate?.EquippedLeftWeapon ?? "" : "", 16);
+        }
+
         if (candidate is { } m)
         {
+            // Generation belongs to the same publication as position/HP/gear. Writing it
+            // before the slot goes odd would let old HP briefly authorize a new occupant.
+            ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + PartyOccupantRows
+                + m.SlotIndex * PartyOccupantStride + 4, m.OccupantGeneration);
             ok &= _memory.TryWrite(slot + 0x04, m.Position.X);
             ok &= _memory.TryWrite(slot + 0x08, m.Position.Y);
             ok &= _memory.TryWrite(slot + 0x0C, m.Position.Z);
