@@ -10,3 +10,11 @@ Read-only parsing of all 127 save directories in the original GOG, P2 and P3 sav
 The independently progressing natural Endar/Taris route remains the best route to genuine first swoop admission and its later Jedi-training prerequisites. Star Forge fight coverage still requires a verified natural or explicitly staged prerequisite state; this census does not create it.
 
 The separate Manaan census is under `artifacts/manaan-route-v95`: four available station/seafloor fixtures have incomplete story/puzzle globals, so a full original-script underwater walk starting there must be described as staged save entry. Stock resources identify suit OnUsed, airlock conversations, the second-station survivor/pressure dialogue, Rift harvester choices and original door return scripts. No Manaan live run is claimed by this census.
+
+## Manaan saved-player health interpretation
+
+The raw `CurrentHitPoints` field alone is not a death oracle. Verified GOG `SaveStats` instructions at `0x5B1FE2..0x5B2026` serialize CurrentHitPoints as stored maximum minus virtual derived maximum plus virtual current HP; MaxHitPoints is the derived maximum and HitPoints the stored maximum. For this verified encoding, effective saved HP is **CurrentHitPoints - HitPoints + MaxHitPoints**. Earlier preparation incorrectly treated raw zero as a dead player; that interpretation is withdrawn.
+
+All nine original active Manaan save payloads have stored HitPoints 0 and MaxHitPoints 12. Eight have CurrentHitPoints 0 and therefore effective saved HP 12: `manaan station`, `campaign_seafloor`, `campaign_manaan_aligned`, `campaign_manaan_return_ready`, `campaign_return_restored`, `campaign_return_peer_save`, `campaign_return_peer_flush`, and `campaign_sep23_return_host`. `campaign_return_fixed_host` has CurrentHitPoints -11 and effective saved HP 1. The complete three-field oracle and exact fixture paths are recorded in `artifacts/manaan-route-v95/player-health-census.txt`.
+
+This is a serializer-qualified offline result, not an observation of their current native loaded health. The upcoming private preflight must still read the actual loaded player and engine readiness. In particular, the closest station fixture `campaign_manaan_return_ready` must not be rejected solely for its raw zero field.
