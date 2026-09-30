@@ -313,3 +313,11 @@ an immediate local relock before its collector could publish it. Commit ff90207 
 that conflicting snapshot until the local lock edge has been published. Actual close,
 immediate relock, unlock and reopen passed in both batteries, alongside repeated item
 pickup/removal, damage, down and revive checks.
+
+After both batteries, an actual host dedicated save/load moved both native epochs from1
+to2. The same saved enemy retained680HP with no temporary HP after ten settled seconds,
+so earlier damage did not replay. A fresh real client attack then reduced host HP680 to677.
+Both Quick Save trees retained their SHA256 fingerprints. The first checkpoint probe
+incorrectly expected a new directory rather than an overwritten dedicated slot; its
+timeout is preserved, and the corrected probe checks the actual SAVEGAME timestamp.
+Evidence: `artifacts/stock-live-v89-relockfix/checkpoint-debt-evidence.txt`.
