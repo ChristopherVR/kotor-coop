@@ -19,6 +19,8 @@ public class TravelPumpTests
     private sealed class TravelBridge : IGameBridge
     {
         public List<(string Module, string Waypoint)> Requests { get; } = [];
+        public bool Locked { get; private set; }
+        public bool TryWriteMinigameLock(bool locked, string ownerName) { Locked = locked; return true; }
 
         public bool InDialogue { get; set; }
 
@@ -215,13 +217,14 @@ public class TravelPumpTests
     private static (CoopAgent Agent, TravelBridge Bridge, StubSession Session) Build(
         bool follow = true, int retryMs = 15_000, int settleMs = 0, int combatPumpMs = 150,
         bool transitionAnnounce = false, bool clientDoorRefusal = false,
-        FollowLeadMode followLeadMode = FollowLeadMode.Host, bool followStunt = false)
+        FollowLeadMode followLeadMode = FollowLeadMode.Host, bool followStunt = false, bool controlledScenes = false)
     {
         TravelBridge bridge = new();
         StubSession session = new();
         CoopAgent agent = new(bridge, session, new AgentSettings
         {
             FollowHostModule = follow,
+            SoloSegmentSpectateEnabled = controlledScenes,
             FollowRetryMs = retryMs,
 
             // The cinematic pump shares the combat cadence. Tests that need it to run on
@@ -645,6 +648,51 @@ public class TravelPumpTests
 
     private static TransitionAnnouncePacket Announce(uint serial, string module, string waypoint = "") =>
         new(CoopHost.HostPeerId, module, waypoint, serial);
+
+    [Fact]
+    public void PrivateVisionAnnounceCannotWarpJoinerBeforeTheSoloFlagArrives()
+    {
+        var (agent, bridge, session) = Build(transitionAnnounce: true, combatPumpMs: 0, controlledScenes: true);
+        session.IncomingAnnounces.Add(Announce(1, "bos_ebovis"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests);
+        session.Peers.Add(HostPeer("bos_ebovis"));
+        agent.PumpOnce();
+        Assert.Empty(bridge.Requests);
+    }
+
+    [Fact]
+    public void CrossWorldControlledOwnerLocksJoinerAndReleasesWhenOriginalPlayerReturns()
+    {
+        var (agent, bridge, session) = Build(controlledScenes: true);
+        RemotePeer host = HostPeer("bos_ebovis");
+        session.Peers.Add(host with { State = host.State with { Flags = PlayerState.FlagSoloSegment } });
+        agent.PumpOnce();
+        Assert.True(bridge.Locked);
+        Assert.Empty(bridge.Requests);
+        session.Peers.Clear();
+        session.Peers.Add(host);
+        agent.PumpOnce();
+        Assert.False(bridge.Locked);
+        Assert.Empty(bridge.Requests); // A bare warp into the vision is still unsafe after return.
+        session.Peers.Clear();
+        session.Peers.Add(HostPeer(ClientModule));
+        agent.PumpOnce();
+        Assert.False(bridge.Locked);
+    }
+
+    [Fact]
+    public void ControlledOwnerDisconnectReleasesParkedInput()
+    {
+        var (agent, bridge, session) = Build(controlledScenes: true);
+        RemotePeer host = HostPeer("bos_ebovis");
+        session.Peers.Add(host with { State = host.State with { Flags = PlayerState.FlagSoloSegment } });
+        agent.PumpOnce();
+        Assert.True(bridge.Locked);
+        session.Peers.Clear();
+        agent.PumpOnce();
+        Assert.False(bridge.Locked);
+    }
 
     /// <summary>
     /// The whole point of the feature: an announce fires the follow immediately, even though

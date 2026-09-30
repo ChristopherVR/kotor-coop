@@ -26,6 +26,7 @@ public sealed partial class CoopAgent
     /// <summary>Scratch, reused every tick rather than allocated: the rule reads three fields
     /// per peer and a fresh list per tick at 30 Hz is pure garbage.</summary>
     private readonly List<MinigameLockPeer> _minigameLockPeers = [];
+    private bool _controlledSceneWaiting;
 
     /// <summary>
     /// True while this instance's own player is held for a peer's minigame — read by
@@ -44,6 +45,25 @@ public sealed partial class CoopAgent
     /// </summary>
     private void PumpMinigameLock(in PlayerState local, IReadOnlyList<RemotePeer> peers)
     {
+        PlayerState localSnapshot = local;
+        RemotePeer? controlledOwner = peers.FirstOrDefault(peer => peer.PeerId == CoopHost.HostPeerId
+            && ControlledSceneTravelRule.ParkPeer(_settings.SoloSegmentSpectateEnabled, localSnapshot, peer.State));
+        if (controlledOwner is not null)
+        {
+            _controlledSceneWaiting = true;
+            if (_minigameLockOwner != controlledOwner.PeerId)
+                _log($"controlled scene: waiting for {controlledOwner.Name} to return to their own character");
+            _minigameLockOwner = controlledOwner.PeerId;
+            MinigameLockOwnerName = controlledOwner.Name;
+            _bridge.TryWriteMinigameLock(true, MinigameLockOwnerName);
+            return;
+        }
+        if (_controlledSceneWaiting)
+        {
+            _controlledSceneWaiting = false;
+            ReleaseMinigameLock("the controlled scene ended or its owner is no longer present");
+        }
+
         if (!_settings.LockPeersDuringMinigame)
         {
             // Turned off mid-session (or never on): make sure nothing is left asserted, then

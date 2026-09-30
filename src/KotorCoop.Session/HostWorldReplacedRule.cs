@@ -77,7 +77,8 @@ public static class HostWorldReplacedRule
             || !string.Equals(hostState.Module, digestModule, StringComparison.OrdinalIgnoreCase)
             || hostState.IsAway
             || hostState.IsPartyWiped
-            || hostState.IsDowned)
+            || hostState.IsDowned
+            || ControlledSceneTravelRule.HoldAdoption(hostState))
         {
             return false;
         }

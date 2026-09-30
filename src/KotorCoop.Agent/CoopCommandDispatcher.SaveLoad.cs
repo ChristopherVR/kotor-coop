@@ -820,6 +820,11 @@ public sealed partial class CoopCommandDispatcher
             {
                 // The exact dedicated client save owns adoption until it settles.
             }
+            else if (ControlledSceneTravelRule.HoldAdoption(hostState))
+            {
+                // Keep the selected own character and connected world while the host plays
+                // a private controlled actor. Its save cannot be safely produced until return.
+            }
             else if (remoteVerdict == SaveOrLoadVerdict.Load
                 && HostWorldReplacedRule.IsHostReady(hostState, hostDigest.Module))
             {

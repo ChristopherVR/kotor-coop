@@ -226,6 +226,9 @@ internal sealed partial class TransitionPump
 
         _lastRefusedStuntModule = string.Empty;
 
+        if (ControlledSceneTravelRule.RefuseFollow(settings.SoloSegmentSpectateEnabled,
+                target, host!.State.IsInSoloSegment)) return;
+
         // ⚠ AND NEVER ONTO A MINIGAME TRACK, for the same reason a stunt module is refused
         // one line above and then some: a swoop/turret area is SINGLE-SEAT, and the
         // 2026-08-29 live round watched this exact follow (into tar_m03mg) be the last thing
@@ -405,6 +408,14 @@ internal sealed partial class TransitionPump
         // following instance did before it died. Same shape as the stunt gate above, same
         // "spent, not kept" treatment — the announce named somewhere we are never going.
         // See MinigameModuleRule and docs/research/minigames.md §24.
+        if (ControlledSceneTravelRule.RefuseFollow(settings.SoloSegmentSpectateEnabled,
+                announce.Module, peers.FirstOrDefault(p => p.PeerId == announce.PeerId)?.State.IsInSoloSegment ?? false))
+        {
+            log($"not following the announced transition to '{announce.Module}': waiting for the controlled scene to finish");
+            _pendingAnnounce = null;
+            return false;
+        }
+
         if (MinigameModuleRule.ShouldRefuseFollow(
                 settings.LockPeersDuringMinigame,
                 ownerInMinigame: false,

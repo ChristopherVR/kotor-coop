@@ -23,6 +23,21 @@ public sealed class HostWorldReplacedRuleTests
         new(Vector3f.Zero, 0f, "", 12, 0, MaxHealth: 12);
 
     [Fact]
+    public void HostLoadEdgeWaitsThroughoutControlledSceneThenTriggersAfterNativeReturn()
+    {
+        PlayerState controlled = Standing("bos_ebovis") with { Flags = PlayerState.FlagSoloSegment };
+        var (trigger, armed) = HostWorldReplacedRule.Observe(HostWorldReplacedState.Initial, true, controlled, controlled.Module);
+        Assert.False(trigger);
+        Assert.True(armed.Armed);
+        (trigger, armed) = HostWorldReplacedRule.Observe(armed, false, controlled, controlled.Module);
+        Assert.False(trigger);
+        Assert.True(armed.Armed);
+        (trigger, armed) = HostWorldReplacedRule.Observe(armed, false, controlled with { Flags = 0 }, controlled.Module);
+        Assert.True(trigger);
+        Assert.False(armed.Armed);
+    }
+
+    [Fact]
     public void NothingHappensWithoutAnEdge()
     {
         (bool trigger, HostWorldReplacedState next) =
