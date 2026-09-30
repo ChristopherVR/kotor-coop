@@ -328,3 +328,19 @@ corridor, with distinct host/joiner pins and a readable connection line. Both or
 game configurations were restored byte-for-byte with their original timestamps after
 the owned pair stopped. Images: `artifacts/stock-map-1024/map-client-before.png` and
 `map-client-after.png`.
+
+## Active companion snapshot90 validation
+
+Committed snapshot0e29d88 (native90/wire83) passed all5388 fast tests with a clean runner
+exit, plus all116 Slow tests in9m28s. Matching native x86 and managed agent publishes
+completed with warnings treated as errors. Native DLL SHA256:
+`9A78D8046725976EE82C90370325CF9C64FE69B9B11B0E28055A2A01DAAD939E`.
+
+The isolated BoS same-template removal/re-add then passed actual active saved adoption.
+Host replacement generation7 triggered a fresh saved-world refresh; the joiner loaded
+real Sera511, active count1, while preserving its own classes, inventory, equipment and
+all existing Quick Save hashes/timestamps. Native adoption authorization was bound to
+the joiner's actual local generation8. Thirteen verified native samples spanning10.644s
+remained stable. Evidence: `artifacts/bos-active-v90/active-proof/result.json` and its
+typed before/after snapshots. This controlled path does not certify the natural BoS
+campaign route or restart recovery without durable saved provenance.
