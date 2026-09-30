@@ -593,3 +593,16 @@ normal new saves and the intentionally selected fresh character were retained.
 Neither private install had a QuickSave directory before or after, so this run does
 not establish preservation of an existing QuickSave. The separate disconnect and
 three-player-save audits provide that evidence.
+
+
+### Real periodic cadence passed
+
+Agent `ce56590` and the final Native95 serialization-guard DLL completed three real
+one-minute periodic cycles, with no clock forcing. At 05:22:08 Brisbane the stock
+menu deferred saving and preserved the checkpoint bytes and timestamp. After it
+closed, capture completed at 05:23:36-38, then again at 05:24:37-39 and 05:25:39-40.
+Native completion sequence6 identified the exact `000903 - Co-op` source at epoch1 /
+loadserial0. All six QuickSave hashes and timestamps remained exact, no holdback
+folder appeared, and native class levels 1@4 + 5@14 and all fourteen equipment-slot
+semantics remained unchanged. Evidence: `artifacts/bos-periodic-v95`. This resolves
+the pending real-cadence and busy-screen checks above; defaults remain ten minutes.
