@@ -392,3 +392,24 @@ health writes or target writes formed this proof. Evidence:
 `artifacts/final91-arena/expiry-evidence.txt` and `expiry-samples.json`; the earlier
 unqualified attempt is preserved separately. This closes the real announcement
 expiry check left open by the earlier isolated test.
+
+## Qualified three-player downed-target fallback
+
+The same native91 rig then loaded an artifact-only arena with the real stock Vulkar
+combat callbacks restored. The earlier blank-callback variant left the NPC idle and
+did not qualify as a target-fallback test. The engine resolved enemy owner `0x38`
+at 700 HP and the saved player at 206 HP; no live health, target or threat writes
+were used.
+
+At 16:50:04.719 UTC the enemy's actual native target was victim phantom329, with
+qualifying threat19.46 and 36 accepted damage from that joiner. The victim then
+remained natively down, with host remote down flag8, for 21.2 seconds. The other
+joiner's real ranged hits contributed 55 accepted damage, matching native enemy
+health664 to609. The living joiner was6.44m from the downed one, and the host6.88m.
+The living joiner's threat remained at least15 for a continuous10.6s; the enemy's
+actual native target became living phantom327, with final threat20.57.
+
+Evidence: `artifacts/final91-arena/fallback-evidence.txt` and44 typed native snapshots
+in `fallback-samples.json`. This closes the persistent-down fallback check that
+earlier short or idle-NPC attempts could not qualify. The fixture is explicitly
+crafted; this does not certify every campaign encounter.
