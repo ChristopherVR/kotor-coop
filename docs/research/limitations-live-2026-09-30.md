@@ -606,3 +606,11 @@ loadserial0. All six QuickSave hashes and timestamps remained exact, no holdback
 folder appeared, and native class levels 1@4 + 5@14 and all fourteen equipment-slot
 semantics remained unchanged. Evidence: `artifacts/bos-periodic-v95`. This resolves
 the pending real-cadence and busy-screen checks above; defaults remain ten minutes.
+
+
+### Physical controller availability
+
+A read-only XInput1_4 query on 2026-10-01 reports error1167 (device not connected)
+for all four slots. Evidence: `artifacts/xinput-readonly-2026-10-01.json`. No virtual
+pad was substituted and no physical-pad success is claimed. Human hardware
+availability has been requested while independent story checks continue.
