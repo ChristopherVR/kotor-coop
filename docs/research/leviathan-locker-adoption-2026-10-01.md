@@ -119,3 +119,17 @@ a persistent black-world result. All 5,568 fast tests pass, zero failures, 1m50s
 the immutable x86 native build is warning-clean. Evidence:
 `artifacts/companion-v95-isolated-equipment-final` and the live recovery report.
 Cross-area unclaimed-locker testing remains in progress.
+
+
+The separate cross-area unclaimed-locker replay also passes. The verified own source
+was a native Ebon Hawk save containing six still-unclaimed private locker records
+in the inactive `lev_m40aa` archive and only the two quest items in the backpack.
+The host's Ebon Hawk save retained an empty prison locker. After actual reconnect,
+world adoption and native load, a fresh native save preserved the full locker item
+list exactly, including all fields, with both quest items still present once.
+The earlier collected eight-item backpack was not used as this locker source.
+Evidence: `isolated-cross-area-proof.json` and exact before/after native saves under
+`artifacts/leviathan-recovery-v95`; see the linked live recovery report. Both private
+installs were stopped and all 56 protected originals restored with exact hashes and
+modification times. This closes the archive/save/reconnect mapping checks. A full
+natural capture, rescue and escape route remains unverified.
