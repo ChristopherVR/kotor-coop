@@ -8,7 +8,7 @@ run for this pass; see "What a live pass must check" at the bottom.
 
 ## VERIFIED
 
-**`CSWSAreaMap::SetWorldPointExplored(float x, float y, float z, int explored)` — thiscall,
+**`CSWSAreaMap::SetWorldPointExplored(float x, float y, float z, int radius)` — thiscall,
 `ecx` = `CSWSAreaMap*`, address `0x005792D0`.**
 
 - The symbol database (`functions` table) has this exact row:
@@ -60,8 +60,10 @@ features.
 
 ## INFERRED (not independently confirmed this pass)
 
-- The `1` flag is almost certainly a boolean "explored" (vs. `0` to re-fog a point) — both
-  real call sites always pass `1`, so the `0` path is untested by any caller found.
+- The earlier boolean interpretation was incorrect. Reinspection on 2026-09-30 established
+  that the fourth argument is a radius: `0` reveals one grid point and `1` reveals a diamond
+  neighbourhood. Neither value re-fogs an explored point. The co-op call matches the
+  stock party update's radius of `1`.
 - `UpdateMapData`'s cadence (how often per second the engine itself calls this for the
   local party) was not measured; the design below does not need it, since the throttle is
   independent of the engine's own cadence.
@@ -88,8 +90,7 @@ this call leaves nothing behind for `StoreCurrentModule` to serialise.
 2. **No crash/hang calling it from the main frame hook** at the reveal cadence (this pass
    never ran the game; `GetAreaMap()`'s gate gives a logged no-op instead of a null-deref if
    the assumption is wrong, but the call itself has never executed).
-3. **The `0` (un-reveal) path is unused by this design** — confirm nothing needs it before
-   ever wiring it in.
+3. **Radius `0` is unused by this design** — co-op uses the stock party radius of `1`.
 4. **Area edges / instance transitions**: reveal calls right after a module change land on
    the correct new area map (not a stale one from `GetAreaMap()` returning 0 during the
    transition window, which the guard already declines cleanly).
@@ -144,5 +145,16 @@ surviving a transition, at negligible cost) is now proven; only the pixels thems
 
 **Verdict: default flipped ON.** `PluginConfig.ReadBool("map_reveal_sync", true)` in
 `MapRevealController.cs` and `profiles/coop.ini.example`'s `map_reveal_sync=1`, matching
-`docs/CONFIG.md`. The `0` (un-reveal) path remains untested and unused by this design, as
-expected.
+`docs/CONFIG.md`. Radius `0` remains unused by this design.
+
+## Visible shared fog check (2026-09-30)
+
+Native88/Agent81 host PID48440 and joiner PID53456 used the stock Endar Spire fixture.
+The joiner stayed at `(15.4, 20.1, -1.3)` while the host moved to `(35, 22.2, -1.3)`.
+The joiner's M-screen changed from the small starting room to a revealed vertical corridor
+ending at the host's cyan pin. Both before and after captures were visually inspected:
+`artifacts/stock-live-v88/map-client-before.png` and `map-client-after.png`.
+
+The earlier movement from x15.4 to x25 stayed inside the same exploration cell on this
+15-by-8 native map. That fixture could not demonstrate new fog and was not evidence of a
+rendering defect. Moving to x35 crossed a cell boundary and completed the visible check.

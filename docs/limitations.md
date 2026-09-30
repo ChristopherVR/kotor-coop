@@ -58,7 +58,7 @@ Historical dates below describe the scope of each check, not a guarantee for eve
 | Choosing your two companions before leaving the ship | **Works** | The host picks. When the joining player reaches the departure screen, the request goes to the host, who sees "<name> wants to leave — choose your party" and picks normally. Watched on 2026-09-26: the joiner triggered the Ebon Hawk exit, the host picked on the real party screen, and both arrived on Dantooine. This checks that departure path; other story departures still need a playthrough. See [campaign evidence](review-seamless-2026-09-18.md). |
 | Seeing each other | **Works** | Your partner is a real in-game character with their real face, armour and weapons, walking on the real floor, visible on the minimap and the map screen. |
 | Companions following the party | **Works, with a catch** | Companions follow the host's game. A companion that got stuck behind (an old game bug) is now gathered back to the party automatically rather than left standing. A companion controlled by the *other* player doesn't move around on its own on your screen — it just moves exactly the way the other player's game says it does. |
-| Fog-of-war map reveal | **Works, with a catch** | The map reveals for both. Whether the M-key map *draws* the shared reveal has never been checked on screen — only confirmed behind the scenes, not by watching it happen. |
+| Fog-of-war map reveal | **Works (checked 2026-09-30)** | The map reveals around your partner. A stationary joiner's M-screen visibly revealed a new corridor as the host moved into a different exploration cell. See [map evidence](research/map-reveal.md). |
 | Chests, doors, and "who opened it first" | **Works** | Two players clicking the same chest at once: exactly one opens it. Loot goes to one of you, never both. |
 | A door locked or closed *again* by the story | **Works, with a catch** | Opening, closing, unlocking and relocking reached the other player through the native door engine in two consecutive live verification runs (2026-09-30). These were controlled interactions; a natural story script re-lock, such as the Sith base, still needs a playthrough check. See [live checks](research/limitations-live-2026-09-30.md) and [story routes](research/door-relock.md). |
 | A chest or container locked or closed *again* by the story | **Works, with a catch** | Native opening, closing, unlocking and relocking reached the other player in two consecutive live verification runs (2026-09-30). The controlled checks caught and fixed container close/lock publication errors; a natural story script re-lock remains a separate route check. See [live checks](research/limitations-live-2026-09-30.md) and [story routes](research/door-relock.md). |
@@ -215,7 +215,9 @@ Built and automatically tested, but nobody has watched them on the running game 
   zero distance on the real Swoop track and during a controlled Star Forge solo segment.
   Movement resumed after explicit host returns. Those checks establish the locks, not the
   natural story sequences. See [keyboard lock evidence](research/solo-keyboard-lock-live-2026-09-30.md).
-- The connection line outside the measured 800x600 layout, and seeing shared map fog clear in the map GUI. Native reveal calls following peer movement and resuming after a module transition were checked on 2026-08-27; the map pixels were not captured in that pass. See [map evidence](research/map-reveal.md).
+- The connection line outside the measured 800x600 layout. Shared fog was visibly verified
+  on a stationary joiner's map on 2026-09-30; earlier native reveal checks also covered a
+  module transition. See [map evidence](research/map-reveal.md).
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
 - A complete run past Taris. Dantooine's natural training prerequisites and current private class-choice flow, Leviathan rescue and gear
