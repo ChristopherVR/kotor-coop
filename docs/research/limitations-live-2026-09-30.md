@@ -374,3 +374,20 @@ bare follower travel into `bos_ebovis`, defers saved-world adoption during actua
 controlled host solo state, and uses the existing native input-lock channel to park
 a joiner waiting in another world. Unit checks include pre-flag announcements,
 host return and owner disconnect. Live parking and return checks remain pending.
+
+## Real announcement expiry during host combat
+
+Native91 and Agent83 ran three private stock copies with an explicitly crafted
+durable combat fixture. The host's real ranged attack entered combat against native
+enemy owner `0x38`. A joiner completed a real `warp end_m01ab` request, including
+native transition announcement; the host remained in `tar_m10aa` throughout.
+At 02:41:06 local time, the host logged refusal of that announcement after
+20,005 ms of continued combat. Typed native samples retained target `0x38` and
+observed enemy health falling from 324 to 244 while the host stayed in its area.
+
+The final repeat disabled the announcing joiner's own follow-back, since the first
+attempt returned it before the expiry window. No destination-metadata injection,
+health writes or target writes formed this proof. Evidence:
+`artifacts/final91-arena/expiry-evidence.txt` and `expiry-samples.json`; the earlier
+unqualified attempt is preserved separately. This closes the real announcement
+expiry check left open by the earlier isolated test.
