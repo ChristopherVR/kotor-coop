@@ -101,6 +101,14 @@ internal static unsafe class NativeSaveCompletionHook
     {
         try
         {
+            // Re-check on the actual serialization pass. SaveGame only arms a
+            // stall event; controllers may have resumed since its request or
+            // save-flush reissue. The later 4B36C5 party walk cannot tolerate
+            // a member which GetCharacter no longer resolves.
+            if (_installed && Odyssey.TryBoundClientPartyCountByResolvable(
+                out int before, out int resolved, out string entries))
+                PluginHost.Log($"party count: bounded {before} -> {resolved} at save serialization "
+                    + $"(entries {entries}; StallEventSaveGame walks the array without a null check)");
             if(!_installed || Block==0 || !PartyOccupantHook.Installed)return;
             string path=ReadString(stall+0x18,128).Replace('\\','/');
             int colon=path.LastIndexOf(':'); if(colon>=0)path=path[(colon+1)..];
