@@ -17,6 +17,16 @@ if (($null -ne $a.AttributedAvailable -and !$a.AttributedAvailable) -or
     ($null -ne $b.AttributedAvailable -and !$b.AttributedAvailable)) {
     throw 'NativeOnly snapshots cannot prove attributed damage or quiet replay.'
 }
+if ($a.Version -ge 88 -or $b.Version -ge 88) {
+    foreach($snapshot in @($a,$b)) {
+        if($snapshot.AttributedAvailable -ne $true -or $null -eq $snapshot.NativeLivenessEpoch -or
+            $snapshot.NativeLivenessEpoch -eq 0 -or $null -eq $snapshot.AttributedNativeWorldEpoch -or
+            $snapshot.AttributedNativeWorldEpoch -ne $snapshot.NativeLivenessEpoch) {
+            throw 'Native88 proof requires a present, nonzero native epoch and its matching attributed bank binding.'
+        }
+    }
+    if($a.NativeLivenessEpoch -ne $b.NativeLivenessEpoch) { throw 'Changed native world epoch.' }
+}
 foreach($name in @('Pid','ProcessStartTicks','Version','Epoch','WorldLoadSerial','NativeDamageIncarnation')) {
     if ($null -eq $a.$name -or $a.$name -ne $b.$name) { throw "Changed or absent host namespace field: $name" }
 }

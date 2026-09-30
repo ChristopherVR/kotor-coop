@@ -13,6 +13,9 @@ public static partial class PacketCodec
         w.WriteUInt64(packet.FlagId);
         w.WriteUInt8((byte)packet.Value);
         w.WriteUInt32(packet.Serial);
+        w.WriteUInt32(packet.HostSessionId);
+        w.WriteUInt32(packet.HostLoadSerial);
+        w.WriteUInt32(packet.WorldRevision);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -29,7 +32,10 @@ public static partial class PacketCodec
         ulong flagId = r.ReadUInt64();
         sbyte value = (sbyte)r.ReadUInt8();
         uint serial = r.ReadUInt32();
-        return r.Failed ? null : new FlagOpPacket(origin, opSeq, flagId, value, serial);
+        uint hostSession = r.ReadUInt32();
+        uint hostLoad = r.ReadUInt32();
+        uint worldRevision = r.ReadUInt32();
+        return r.Failed ? null : new FlagOpPacket(origin, opSeq, flagId, value, serial, hostSession, hostLoad, worldRevision);
     }
 
     public static int Write(Span<byte> buffer, FlagAckPacket packet)
@@ -79,6 +85,9 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.FlagSnapshot);
         w.WriteUInt32(packet.Version);
+        w.WriteUInt32(packet.HostSessionId);
+        w.WriteUInt32(packet.HostLoadSerial);
+        w.WriteUInt32(packet.WorldRevision);
 
         // 17 bytes per flag (FlagId 8 + Value 1 + Serial 4 + OriginPeerId 4; protocol 31 added
         // the last two, protocol 53 widened the id); stay inside one datagram.
@@ -112,8 +121,11 @@ public static partial class PacketCodec
         }
 
         uint version = r.ReadUInt32();
+        uint hostSession = r.ReadUInt32();
+        uint hostLoad = r.ReadUInt32();
+        uint worldRevision = r.ReadUInt32();
         ushort count = r.ReadUInt16();
-        if (r.Failed)
+        if (r.Failed || count > ProtocolConstants.MaxFlagEntriesPerPacket)
         {
             return null;
         }
@@ -133,6 +145,6 @@ public static partial class PacketCodec
             flags.Add(new FlagSnapshotEntry(id, value, serial, origin));
         }
 
-        return new FlagSnapshotPacket(version, flags);
+        return new FlagSnapshotPacket(version, flags, hostSession, hostLoad, worldRevision);
     }
 }

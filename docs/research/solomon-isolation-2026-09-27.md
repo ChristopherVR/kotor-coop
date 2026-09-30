@@ -97,8 +97,11 @@ re-recruitment through story dialogue, flashbacks, temporary PCs, cinematic came
 alternate branches, save adoption and reconnect. One debug warp out of an active
 conversation left the shared subtitle capture at an earlier speaker temporarily;
 the final module-entry check matched both copies, but this does not certify all
-subtitle/UI capture paths. External campaign movies, voice and music are currently
-outside the content manifest.
+subtitle/UI capture paths. The September 27 manifest excluded external campaign
+movies, voice and music. Current development code includes those nested media
+files, `chitin.key` and its referenced BIFs; see the [manifest implementation](../../src/KotorCoop.Memory/ModContentManifest.cs)
+and [September 30 audit evidence](limitations-live-2026-09-30.md#dedicated-saves-and-compatibility-audit).
+That expanded audit does not add campaign-playthrough evidence to this report.
 
 ## Evidence files
 

@@ -54,6 +54,9 @@ public sealed partial class CoopHost
                 BeginHostWorldLoadEdgeLocked();
             }
 
+            // Keep the last ready module across transient unresolved loading digests.
+            ObserveLoadedFlagWorld(digest);
+
             _localWorld = digest with
             {
                 ScriptRefreshRevision = _scriptRefreshSaveIdentity == 0 ? 0 : _scriptRefreshRevision,
@@ -104,6 +107,7 @@ public sealed partial class CoopHost
 
     private void BeginHostWorldLoadEdgeLocked()
     {
+        ResetFlagsForLoadedSave();
         _scriptRefreshSaveIdentity = 0;
         _localWorld = _localWorld with { ScriptRefreshRevision = 0, ScriptRefreshSaveIdentity = 0 };
         _hasObservedHostLoad = true;

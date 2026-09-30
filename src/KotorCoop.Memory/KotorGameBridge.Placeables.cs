@@ -41,6 +41,7 @@ public sealed partial class KotorGameBridge
     private uint _placeableModuleHash;
     private uint _placeableNativeEpoch;
     private bool _placeableBaselined;
+    private bool _publishPlaceableBaseline;
     private long _nextPlaceableScanTicks;
     private int _placeableSlotCursor;
 
@@ -138,7 +139,7 @@ public sealed partial class KotorGameBridge
             bool firstSighting = !_placeableShadow.ContainsKey(objectId);
             _placeableShadow[objectId] = (open, locked, trapped);
 
-            if (!_placeableBaselined && firstSighting)
+            if (!_placeableBaselined && firstSighting && !_publishPlaceableBaseline)
             {
                 continue;
             }
@@ -155,6 +156,7 @@ public sealed partial class KotorGameBridge
         }
 
         _placeableBaselined = true;
+        _publishPlaceableBaseline = false;
         return changed;
     }
 

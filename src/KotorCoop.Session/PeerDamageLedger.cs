@@ -25,9 +25,9 @@ namespace KotorCoop.Session;
 ///    as permanently stale and everything it did from then on would be ignored — the
 ///    quietest possible way to lose a whole player's fight.
 ///
-/// Module-scoped, because engine object ids are assigned per module load: a total collected
-/// in <c>tar_m02aa</c> would be spent on whatever creature holds that number in
-/// <c>end_m01aa</c>.
+/// Native-world scoped, because every load can reassign engine object ids, including a
+/// reload of the same module. The production merge binds the module, load serial and
+/// native world epoch; old debt is discarded and sender runs are retired on turnover.
 ///
 /// ⚠ DELIBERATELY NOT PRUNED WHEN A PEER LEAVES (docs/review-seamless-2026-09-18.md §2 asked
 /// whether <see cref="_seen"/> "grows per rejoin"). It does not: a rejoining player reclaims

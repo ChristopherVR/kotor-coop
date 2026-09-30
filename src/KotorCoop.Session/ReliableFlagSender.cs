@@ -64,7 +64,7 @@ public sealed class ReliableFlagSender(
     /// Mints and tracks a flag op, or refuses it. See <see cref="RetransmitBackoff"/>'s remarks
     /// for the enqueue-past-cap contract every reliable sender in this file family shares.
     /// </summary>
-    public FlagOpPacket? Enqueue(uint originPeerId, ulong flagId, sbyte value, long nowMs, uint serial = 0)
+    public FlagOpPacket? Enqueue(uint originPeerId, ulong flagId, sbyte value, long nowMs, uint serial = 0, uint hostSessionId = 0, uint hostLoadSerial = 0, uint worldRevision = 0)
     {
         lock (_gate)
         {
@@ -79,7 +79,7 @@ public sealed class ReliableFlagSender(
             _capRefusalLogged = false;
 
             uint sequence = _nextSequence++;
-            FlagOpPacket packet = new(originPeerId, sequence, flagId, value, serial);
+            FlagOpPacket packet = new(originPeerId, sequence, flagId, value, serial, hostSessionId, hostLoadSerial, worldRevision);
             _pending[sequence] = new Pending
             {
                 Packet = packet,

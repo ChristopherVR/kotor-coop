@@ -118,6 +118,9 @@ public sealed partial class CoopClient
                 lock (_gate)
                 {
                     _hostWorld = WorldDigest.Empty;
+                    _flagWorldRevision = 0;
+                    Flags.Prune(KotorCoop.Memory.ObjectKeyedFlags.IsObjectKeyed);
+                    _flagSender.Clear();
                     _livenessById.Clear();
                     _livenessHasGeneration = false;
                 }

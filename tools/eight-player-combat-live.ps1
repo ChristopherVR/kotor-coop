@@ -32,6 +32,13 @@ function Stable-Key($snapshot) {
     ($snapshot.Accepted | Sort-Object Peer,Enemy | ConvertTo-Json -Compress)+':'+$e.BaseHp+':'+$e.TemporaryHp+':'+$snapshot.AppliedEffects
 }
 function Validate-World($snapshot,$reference,[uint32]$enemy) {
+    if($snapshot.Version -ge 88 -or $reference.Version -ge 88){
+        foreach($value in @($snapshot,$reference)){
+            if($null -eq $value.NativeLivenessEpoch -or $value.NativeLivenessEpoch -eq 0){throw 'Native88 current-world epoch missing'}
+            if($value.Pid -eq $ProcessIds[0] -and ($value.AttributedAvailable -ne $true -or $null -eq $value.AttributedNativeWorldEpoch -or
+                $value.AttributedNativeWorldEpoch -ne $value.NativeLivenessEpoch)){throw 'Native88 host bank epoch is absent or mismatched'}
+        }
+    }
     foreach($key in @('Pid','ProcessStartTicks','Version','Epoch','WorldLoadSerial','NativeDamageIncarnation')) {
         if($snapshot.$key -ne $reference.$key){throw "Changed process/world field $key"}
     }

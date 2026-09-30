@@ -35,7 +35,7 @@ active/inactive profiles, declared template availability and differing file path
 It reads global resources and module archives for UTC presence; presence in one
 archive does not prove availability in every module covered by a prefix.
 
-Top-level Override and module files plus active compatibility declarations receive
+Override and module files plus active compatibility declarations receive
 full SHA-256 hashes. The wire carries compact digests over canonical paths and
 hashes. Same-size edits are detected. Inactive profiles do not affect fingerprints.
 Changed/unreadable inputs are reported unchecked; malformed profiles fail the audit.
@@ -44,9 +44,14 @@ Hashes run at startup, outside the frame/pump path. Restart agents after mod cha
 Known gameplay mismatches disable shared gameplay channels with `W_GAMEPLAY`;
 avatar and independently checked appearance channels remain eligible. Loose
 textures/models are classified separately. Save identity reads a replacement `.mod`
-before its stock `.rim`. The manifest does not yet audit patched base BIFs or external
-movie, voice and music directories. Matching files prove identical audited inputs,
-not successful campaign behavior.
+before its stock `.rim`. Since 2026-09-30, the manifest also hashes `chitin.key`,
+every BIF referenced by that index, and nested movie, voice, sound, music and lip
+files. Same-size, same-timestamp edits are detected. Base-archive and external-media
+differences conservatively disable shared gameplay, including cosmetic changes;
+startup auditing reads several GB. Mutable saves, logs and co-op runtime files are
+excluded. See the current [manifest implementation](../../src/KotorCoop.Memory/ModContentManifest.cs)
+and [15,336-file stock comparison](limitations-live-2026-09-30.md#dedicated-saves-and-compatibility-audit).
+Matching files prove identical audited inputs, not successful campaign behavior.
 
 ## Isolation and qualification
 
@@ -65,8 +70,7 @@ were exercised with two connected instances. See
    Reset health/equipment caches when the occupant changes and recover identity on load.
 2. Add explicit campaign policies for solo scenes, script-local state and temporary
    player-character substitutions. Template recovery cannot implement these behaviors.
-3. Extend package auditing to base resources, movies, voice and music.
-4. Qualify full campaign playthroughs, including alternate branches, scripted combat,
+3. Qualify full campaign playthroughs, including alternate branches, scripted combat,
    flashbacks, replacement companions, save adoption and reconnect.
 
 Regression tests cover marker detection, active-only hashing, conflicts, strict field

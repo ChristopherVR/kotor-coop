@@ -188,8 +188,15 @@ internal sealed class WorldStatePump(
     /// per change (see <c>EventFlagStore</c>), so it already no-ops correctly on a value the
     /// store already agrees with, and never refuses a real local change in either direction.
     /// </summary>
+    private uint _flagLoadRevision;
+
     public void PumpDoors(SessionCapabilities caps)
     {
+        if (session is CoopHost host && host.FlagLoadRevision != _flagLoadRevision)
+        {
+            _flagLoadRevision = host.FlagLoadRevision;
+            bridge.RequestObjectFlagBaseline();
+        }
         if (!bridge.SupportsDoorSync || (caps & SessionCapabilities.Doors) == 0)
         {
             return;

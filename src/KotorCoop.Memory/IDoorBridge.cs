@@ -14,6 +14,9 @@ public interface IDoorBridge
     /// </summary>
     List<KeyValuePair<ulong, sbyte>> CollectChangedDoorState() => [];
 
+    /// <summary>Publish the loaded host save baseline once, before applying session flags.</summary>
+    void RequestObjectFlagBaseline() { }
+
     /// <summary>
     /// Publishes the session's door truth for the local module into the game. The bridge
     /// filters: flags for doors in other modules are held back until that module loads.

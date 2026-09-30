@@ -16,7 +16,7 @@ namespace KotorCoop.Protocol;
 /// (Serial, OriginPeerId) tie-break is deterministic without a second round trip.
 /// </summary>
 public sealed record FlagOpPacket(
-    uint OriginPeerId, uint OpSequence, ulong FlagId, sbyte Value, uint Serial);
+    uint OriginPeerId, uint OpSequence, ulong FlagId, sbyte Value, uint Serial, uint HostSessionId = 0, uint HostLoadSerial = 0, uint WorldRevision = 0);
 
 public sealed record FlagAckPacket(uint OpSequence);
 
@@ -32,4 +32,4 @@ public readonly record struct FlagSnapshotEntry(ulong FlagId, sbyte Value, uint 
 /// signed-byte numbers (quest stages, counters), and splitting a number across derived
 /// boolean ids would break the last-writer-wins rule that keeps the two worlds convergent.
 /// </summary>
-public sealed record FlagSnapshotPacket(uint Version, IReadOnlyList<FlagSnapshotEntry> Flags);
+public sealed record FlagSnapshotPacket(uint Version, IReadOnlyList<FlagSnapshotEntry> Flags, uint HostSessionId = 0, uint HostLoadSerial = 0, uint WorldRevision = 0);

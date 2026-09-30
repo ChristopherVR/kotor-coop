@@ -195,6 +195,11 @@ public sealed partial class CoopClient
                 && !LivenessAdmissionRule.IsNewer(hostDigest.Digest.LoadSerial, _hostWorld.LoadSerial)) return;
             if (!_hostWorld.IsEmpty && hostDigest.Digest.NativeWorldEpoch != _hostWorld.NativeWorldEpoch
                 && !LivenessAdmissionRule.IsNewer(hostDigest.Digest.NativeWorldEpoch, _hostWorld.NativeWorldEpoch)) return;
+            if (_hostWorld.LoadSerial != hostDigest.Digest.LoadSerial)
+            {
+                Flags.Prune(KotorCoop.Memory.ObjectKeyedFlags.IsObjectKeyed);
+                _flagSender.Clear();
+            }
             _hostWorld = hostDigest.Digest;
             }
             RefineCompatibility();

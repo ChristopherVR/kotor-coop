@@ -32,10 +32,17 @@ public sealed partial class KotorGameBridge
     private uint _doorModuleHash;
     private uint _doorNativeEpoch;
     private bool _doorBaselined;
+    private bool _publishDoorBaseline;
     private long _nextDoorScanTicks;
 
     /// <summary>Door sync needs the plugin to apply swings on the game's thread.</summary>
     public bool SupportsDoorSync => _pluginBlock != 0;
+
+    public void RequestObjectFlagBaseline()
+    {
+        _publishDoorBaseline = true;
+        _publishPlaceableBaseline = true;
+    }
 
     /// <summary>
     /// Diffs the local module's settled doors against the last scan and reports changes as
@@ -95,7 +102,7 @@ public sealed partial class KotorGameBridge
             bool firstSighting = !_doorShadow.ContainsKey(objectId);
             _doorShadow[objectId] = (open, locked);
 
-            if (!_doorBaselined && firstSighting)
+            if (!_doorBaselined && firstSighting && !_publishDoorBaseline)
             {
                 continue;
             }
@@ -108,6 +115,7 @@ public sealed partial class KotorGameBridge
         }
 
         _doorBaselined = true;
+        _publishDoorBaseline = false;
         return changed;
     }
 

@@ -11,11 +11,14 @@ namespace KotorCoop.Session;
 public sealed partial class CoopClient
 {
     private readonly ReliableFlagSender _flagSender = new();
+    private uint _flagWorldRevision;
 
     public EventFlagStore Flags { get; } = new();
 
     public void SetFlag(ulong flagId, sbyte value)
     {
+        lock (_gate)
+        {
         // Applied locally straight away so the local player is not waiting on a round
         // trip; the host's authoritative version will confirm or correct it. Always mints a
         // fresh, outranking serial (see EventFlagStore.Set), so this local write is
@@ -39,7 +42,7 @@ public sealed partial class CoopClient
         // logged there) — see RetransmitBackoff's remarks. Nothing to send; a session that
         // far gone is not coming back, but the local store still applied the change above so
         // this player's own game is at least correct.
-        if (_flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs, serial) is not { } op)
+        if (_flagSender.Enqueue(_sessionPeerId, flagId, value, SessionClock.NowMs, serial, _hostSessionId, _hostWorld.LoadSerial, _flagWorldRevision) is not { } op)
         {
             return;
         }
@@ -47,6 +50,7 @@ public sealed partial class CoopClient
         if (IsConnected)
         {
             SendFlagOp(op);
+        }
         }
     }
 
@@ -76,7 +80,19 @@ public sealed partial class CoopClient
             // has not heard of yet — see EventFlagStore's remarks. Flags used to
             // overwrite outright, which is how a change made during an outage
             // disappeared on reconnect.
-            Flags.MergeSnapshot(flagSnapshot.Flags, flagSnapshot.Version);
+            lock (_gate)
+            {
+                if (flagSnapshot.HostSessionId != _hostSessionId
+                    || flagSnapshot.HostLoadSerial != _hostWorld.LoadSerial) return;
+                if (flagSnapshot.WorldRevision != _flagWorldRevision)
+                {
+                    if (!LivenessAdmissionRule.IsNewer(flagSnapshot.WorldRevision, _flagWorldRevision)) return;
+                    Flags.Prune(KotorCoop.Memory.ObjectKeyedFlags.IsObjectKeyed);
+                    _flagSender.Clear();
+                    _flagWorldRevision = flagSnapshot.WorldRevision;
+                }
+                Flags.MergeSnapshot(flagSnapshot.Flags, flagSnapshot.Version);
+            }
         }
     }
 }

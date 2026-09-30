@@ -11,12 +11,33 @@ namespace KotorCoop.Session;
 public sealed partial class CoopHost
 {
     public EventFlagStore Flags { get; } = new();
+    public uint FlagLoadRevision { get; private set; }
+    private uint _flagNativeEpoch;
+    private string _flagReadyModule = string.Empty;
+
+    private void ObserveLoadedFlagWorld(in WorldDigest digest)
+    {
+        if (digest.Module.Length == 0 || digest.NativeWorldEpoch == 0) return;
+        if (_flagNativeEpoch != 0 && digest.NativeWorldEpoch != _flagNativeEpoch
+            && string.Equals(digest.Module, _flagReadyModule, StringComparison.OrdinalIgnoreCase))
+            ResetFlagsForLoadedSave();
+        _flagNativeEpoch = digest.NativeWorldEpoch;
+        _flagReadyModule = digest.Module;
+    }
+
+    private void ResetFlagsForLoadedSave()
+    {
+        // A checkpoint replaces object state, including other visited modules.
+        Flags.Prune(KotorCoop.Memory.ObjectKeyedFlags.IsObjectKeyed);
+        FlagLoadRevision++;
+        _flagNativeEpoch = 0;
+    }
 
     public void SetFlag(ulong flagId, sbyte value)
     {
         // The host is authoritative, so its own changes apply immediately. Clients pick
         // them up through the version tripwire in the next world snapshot.
-        Flags.Set(flagId, value, HostPeerId);
+        lock (_gate) Flags.Set(flagId, value, HostPeerId);
     }
 
     private void HandleFlagOp(IPEndPoint from, ReadOnlySpan<byte> span, long now)
@@ -27,7 +48,13 @@ public sealed partial class CoopHost
             return;
         }
 
-        Flags.ApplyOp(op);
+        lock (_gate)
+        {
+            if (op.HostSessionId != _sessionId || op.HostLoadSerial != _localWorld.LoadSerial || op.WorldRevision != FlagLoadRevision
+                || !_peers.TryGetValue(op.OriginPeerId, out PeerConnection? peer)
+                || !peer.EndPoint.Equals(from)) return;
+            Flags.ApplyOp(op);
+        }
 
         // Ack unconditionally: a duplicate op means the previous ack was lost.
         int length = PacketCodec.Write(_replyBuffer, new FlagAckPacket(op.OpSequence));
@@ -59,6 +86,8 @@ public sealed partial class CoopHost
         // its primary path; here it is merely much better than the alternative, and a client
         // whose digest still disagrees re-requests on its own 500 ms timer anyway — which now
         // actually converges instead of asking the same unanswerable question forever.
+        lock (_gate)
+        {
         List<FlagSnapshotEntry> entries = Flags.SnapshotEntries();
         uint version = Flags.Version;
 
@@ -67,7 +96,7 @@ public sealed partial class CoopHost
             List<FlagSnapshotEntry> page =
                 [.. entries.Skip(start).Take(ProtocolConstants.MaxFlagEntriesPerPacket)];
 
-            int length = PacketCodec.Write(_replyBuffer, new FlagSnapshotPacket(version, page));
+            int length = PacketCodec.Write(_replyBuffer, new FlagSnapshotPacket(version, page, _sessionId, _localWorld.LoadSerial, FlagLoadRevision));
             if (length > 0)
             {
                 _channel.Send(from, _replyBuffer.AsSpan(0, length));
@@ -77,6 +106,7 @@ public sealed partial class CoopHost
             {
                 break;
             }
+        }
         }
     }
 }
