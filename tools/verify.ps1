@@ -282,14 +282,15 @@ function WorstSpam($path, [int]$since) {
 function BreakOffCombat($h, $b) {
     $localPlayerId = PlayerId $h $b
     if ($localPlayerId -eq 0) { return }
-    RequireWrite32 $h ($b + 0x1DA0) $localPlayerId
-    [VF]::W32($h, $b + 0x1DA4, 0) | Out-Null                 # no target = stop
-    [VF]::W32($h, $b + 0x1DA8, [int]([VF]::U32($h, $b + 0x1DA8) + 1)) | Out-Null
+    # Clearing the queued actions does not end a running attack round. This command uses
+    # native CancelCombat(0) and acknowledges only after its active target is cleared.
+    if (-not (SendConsole $h $b 'attack stop')) { throw 'native player combat cancellation failed' }
 }
 
 function BreakOffAllCombat($h, $b) {
     BreakOffCombat $h $b
     $actors = [Collections.Generic.HashSet[uint32]]::new()
+    [void]$actors.Add((PlayerId $h $b))
     $app = [VF]::U32($h, 0x7A39FC)
     $server = if ($app) { [VF]::U32($h, $app + 8) } else { 0 }
     $internal = if ($server) { [VF]::U32($h, $server + 4) } else { 0 }
@@ -1317,7 +1318,8 @@ else {
     # the co-op revive ran, and a failed revive still echoes the serial (with a non-zero
     # status), so the status has to be read too.
     WaitFor2 {
-        ([VF]::U32($h2, $b2 + 0x1038) -eq $reviveRequested) -and ([VF]::I16($h2, $pcPeer + 0xDC) -gt 0)
+        ([VF]::U32($h2, $b2 + 0x1038) -eq $reviveRequested) -and ([VF]::I16($h2, $pcPeer + 0xDC) -gt 0) `
+            -and ([VF]::U32($h2, $b2 + 0x1020) -eq 0)
     } 25 | Out-Null
 
     $reviveApplied = [VF]::U32($h2, $b2 + 0x1038)
