@@ -1192,3 +1192,13 @@ entries removed from the bound. Native ABI remains 95. The warning-clean native
 build is in `artifacts/live-native-v95-partyguard`; live reproduction against the
 repair is pending. Severe scene corruption in a later third-client retry was
 preserved separately and is not claimed fixed by this party guard.
+
+
+Follow-up inspection: the original log released the flush at 04:38:40.194, then
+faulted at 04:38:41.729. A request-time guard alone can be outrun by delayed stall
+serialization and controller reconstruction. Commit `17183c2` also checks the same
+party bound at the existing save-begin observer (`0x4B327C`), on the actual native
+serialization pass before the unsafe party walk at `0x4B36C5`. This does not change
+hook bytes or the ABI. Warning-clean build: `artifacts/live-native-v95-serializationguard`.
+The initial party guard passed all 24 existing party-count rule tests; live replay
+must use this later serialization guard.
