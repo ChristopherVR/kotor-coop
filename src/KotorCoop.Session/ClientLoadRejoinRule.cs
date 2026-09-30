@@ -36,6 +36,9 @@ public enum RejoinTrigger
     /// <summary>The host returned from a known single-seat module and its saved object
     /// mapping no longer matches the client's origin world.</summary>
     SoloReturn,
+
+    /// <summary>The joiner explicitly requested the host's latest saved world.</summary>
+    ManualWorldRefresh,
 }
 
 /// <summary>Where a rejoin attempt is: <see cref="Idle"/> (nothing running, a new trigger is

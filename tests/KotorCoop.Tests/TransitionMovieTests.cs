@@ -267,8 +267,8 @@ public class TransitionMovieTests
         // 32-entry enemy census/presence/materialised-owner/damage-ledger tables all widen to
         // 128 and relocate into a new region, block grown to 0x8600 — see
         // SharedBlock.Combat.cs and SharedBlock.TotalSize's own remarks.
-        // 81 carries the caller's dialogue resource override for forced scene joining.
-        Assert.Equal(81, int.Parse(version.Groups[1].Value));
+        // 82 adds explicit manual load/travel intent to the mailboxes.
+        Assert.Equal(82, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

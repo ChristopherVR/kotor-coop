@@ -1,20 +1,27 @@
 # Runs the co-op verification battery against a live two-instance session and prints a
-# PASS/FAIL line per feature. Assumes tools\session.ps1 has both instances in-world with
+# PASS/FAIL/SKIP line per feature. Assumes tools\demo.ps1 has both instances in-world with
 # both agents connected.
 #
 #   pwsh tools\verify.ps1 -Host1 <pid> -Client2 <pid>
 #
 # Every check reads or drives real engine state; nothing is inferred from the agent's own
 # bookkeeping, because the agent believing a thing is not the thing being true.
+# SKIP means a prerequisite was not met or an optional destructive check was disabled;
+# it is reported separately and is never counted as a pass. Combat can kill enemies and
+# script interactions can change the world, so a fresh baseline still gives full coverage.
 param(
     [int]$Host1 = 0,
     [int]$Client2 = 0,
     [string]$Log1 = 'C:\GOG Games\Star Wars KOTOR (GOG)\kotorcoop-plugin.log',
     [string]$Log2 = 'D:\Games\swkotor-gog-p2\kotorcoop-plugin.log',
 
-    # The port the session under test is hosted on, so its LAN beacon can be told apart
-    # from any other agent advertising on this machine.
+    # Retained for existing callers; LAN beacon checks are no longer part of this battery.
     [int]$SessionPort = 27140,
+
+    # A real module reload resets engine objects and phantom damage counters. Opt in on
+    # a disposable session; the ordinary battery keeps the world available for another run.
+    [switch]$IncludeTransitionCheck,
+    [string]$TransitionModule = 'end_m01ab',
 
     # The CLIENT agent's drop file (demo.ps1 starts it with --drop-file). This is the only
     # lever that makes a real, session-owned ground item exist: see section 15 for why the
@@ -105,10 +112,13 @@ public class VF {
 '@
 
 $results = [ordered]@{}
-$script:resetDone = $false
 function Check($name, $ok, $detail) {
-    $results[$name] = [pscustomobject]@{ Pass = $ok; Detail = $detail }
+    $results[$name] = [pscustomobject]@{ Pass = $ok; Skipped = $false; Detail = $detail }
     "{0,-34} {1}  {2}" -f $name, $(if ($ok) { 'PASS' } else { 'FAIL' }), $detail
+}
+function SkipCheck($name, $detail) {
+    $results[$name] = [pscustomobject]@{ Pass = $false; Skipped = $true; Detail = $detail }
+    "{0,-34} SKIP  {1}" -f $name, $detail
 }
 function Tail($path, $n = 40) { if (Test-Path $path) { Get-Content $path -Tail $n } else { @() } }
 
@@ -200,6 +210,16 @@ $h1 = [VF]::OpenProcess(0x0438, $false, $Host1)
 $h2 = [VF]::OpenProcess(0x0438, $false, $Client2)
 $b1 = [VF]::FindBlock($h1)
 $b2 = [VF]::FindBlock($h2)
+if ($h1 -eq [IntPtr]::Zero -or $h2 -eq [IntPtr]::Zero -or $b1 -eq 0 -or $b2 -eq 0) {
+    [VF]::CloseHandle($h1) | Out-Null
+    [VF]::CloseHandle($h2) | Out-Null
+    throw 'both processes must have a readable co-op shared block before verification'
+}
+$runStarted = Get-Date
+$startModule1 = [VF]::Str($h1, $b1 + 0x20, 32)
+$startModule2 = [VF]::Str($h2, $b2 + 0x20, 32)
+$startPosition1 = @(0x10, 0x14, 0x18 | ForEach-Object { [VF]::F32($h1, $b1 + $_) })
+$startPosition2 = @(0x10, 0x14, 0x18 | ForEach-Object { [VF]::F32($h2, $b2 + $_) })
 
 "host  pid $Host1  block 0x{0:X}  version {1}" -f $b1, [VF]::U32($h1, $b1 + 8)
 "client pid $Client2  block 0x{0:X}  version {1}" -f $b2, [VF]::U32($h2, $b2 + 8)
@@ -216,6 +236,8 @@ $battery2 = LogLines $Log2
 # gone — issuing the close and pressing on measured a world still mid-conversation.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2
+BreakOffCombat $h1 $b1
+BreakOffCombat $h2 $b2
 for ($i = 0; $i -lt 20; $i++) {
     if ([VF]::U32($h2, $b2 + 0x1228) -eq 0) { break }
     Start-Sleep -Milliseconds 500
@@ -337,66 +359,8 @@ Check 'phantom-hit watch installed' (LogHas $Log1 'combat: phantom-hit watch at'
 Check 'dialogue gate installed' (LogHas $Log1 'dialogue: dialogue gate at') 'StartDialog'
 Check 'no crash on either side' (-not ((LogHas $Log1 'CRASH: access') -or (LogHas $Log2 'CRASH: access'))) ''
 
-# --- 7. server browser ------------------------------------------------------------------
-# Listen for the host's LAN beacon ourselves rather than reading the client's block. That
-# is the browser's actual data source, and it is testable independently of whether an agent
-# happens to be in menu mode: a connected agent stops republishing the list into the block
-# (the in-world F9 panel therefore reads empty mid-session — known, minor, recorded).
-$beacon = $null
-try {
-    # Share the port: the plugin's own menu-mode agents keep a listener bound, and an
-    # exclusive bind here either fails or silently steals their datagrams.
-    $udp = [System.Net.Sockets.UdpClient]::new()
-    $udp.Client.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket,
-        [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
-    $udp.Client.Bind([System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 27016))
-    $udp.Client.ReceiveTimeout = 3000
-    $remote = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
-
-    # Take the beacon for the session under test, not merely the first one heard. Other
-    # agents on this machine advertise too (a plugin auto-starts one per instance), and
-    # picking whichever arrived first read a menu-mode host with no module and failed the
-    # join-in-progress check for a reason that had nothing to do with the feature.
-    $bytes = $null
-    for ($try = 0; $try -lt 8; $try++) {
-        $candidate = $udp.Receive([ref]$remote)
-        if ($candidate.Length -ge 8 -and $candidate[0] -eq 0x4B -and $candidate[1] -eq 0x44) {
-            $candPort = ([int]$candidate[3] -shl 8) -bor [int]$candidate[4]
-            if ($candPort -eq $SessionPort) { $bytes = $candidate; break }
-            if ($null -eq $bytes) { $bytes = $candidate }   # fall back to any valid beacon
-        }
-    }
-    $udp.Close()
-
-    if ($null -ne $bytes -and $bytes.Length -ge 8 -and $bytes[0] -eq 0x4B -and $bytes[1] -eq 0x44) {
-        $nameLen = $bytes[7]
-        # ⚠ Cast before shifting: PowerShell evaluates -shl in the operand's own width, so
-        # [byte]0x6A -shl 8 is 0, not 0x6A00. Reported the game port as "4".
-        $gamePort = ([int]$bytes[3] -shl 8) -bor [int]$bytes[4]
-        $name = [Text.Encoding]::UTF8.GetString($bytes, 8, $nameLen)
-        $at = 8 + $nameLen
-        $locked = if ($bytes.Length -gt $at) { $bytes[$at] -band 1 } else { 0 }
-        $moduleLen = if ($bytes.Length -gt ($at + 1)) { $bytes[$at + 1] } else { 0 }
-        $module = if ($moduleLen -gt 0) { [Text.Encoding]::UTF8.GetString($bytes, $at + 2, $moduleLen) } else { '' }
-        $beacon = @{ Name = $name; Port = $gamePort; Players = $bytes[5]; Max = $bytes[6]; Locked = $locked; Module = $module }
-    }
-}
-catch {
-    $beacon = $null
-}
-
-Check 'host advertises itself on the LAN' ($null -ne $beacon) `
-    $(if ($beacon) { "'$($beacon.Name)' port $($beacon.Port) players $($beacon.Players)/$($beacon.Max)" } else { 'no beacon in 4s' })
-Check 'beacon carries join-in-progress info' ($null -ne $beacon -and $beacon.Module.Length -gt 0) `
-    $(if ($beacon) { "module '$($beacon.Module)' locked=$($beacon.Locked)" } else { 'no beacon' })
-
-# The panel's own data, mid-session. This is the half that used to go stale: only the
-# menu-mode loop republished the list, so the F9 browser read empty once you had joined.
-$browserCount = [VF]::U32($h2, $b2 + 0xE08)
-$entryName = [VF]::Str($h2, $b2 + 0xE20, 32)
-$entryAddr = [VF]::Str($h2, $b2 + 0xE20 + 0x20, 24)
-Check 'the in-game browser list stays fed mid-session' ($browserCount -ge 1) `
-    "count $browserCount, first '$entryName' at '$entryAddr'"
+# LAN beacon/browser checks were removed from this local two-instance battery.
+# Broadcast delivery on one machine is not a prerequisite for gameplay verification.
 
 # --- 8. presence census agrees across instances ---------------------------------------
 # Only the MIRRORING side fills these in: the authority publishes to the wire and never
@@ -424,6 +388,7 @@ if ($c1) {
 # previous value afterwards was not enough: three points a run walked the player down to 1
 # and every later check then measured a nearly-dead body (conversations included).
 $pcAddr = [VF]::FindCreature($h2, 0x7FFFFFFF)
+$damageHpSaved = if ($pcAddr) { [VF]::I16($h2, $pcAddr + 0xDC) } else { 0 }
 if ($pcAddr) {
     $maxHp = [VF]::I16($h2, $pcAddr + 0xE0)
     $target = if ($maxHp -ge 12) { $maxHp } else { 20 }
@@ -438,10 +403,25 @@ if ($pcAddr) {
     Start-Sleep -Seconds 2
     [VF]::W16($h2, $pcAddr + 0xDC, [int16]$target) | Out-Null
     Start-Sleep -Milliseconds 800
+    # The phantom's vitals arrive over the wire. Do not hit a stale downed stand-in
+    # just because the client's own health write has completed.
+    WaitFor2 { $c1 -ne 0 -and [VF]::I16($h1, $c1 + 0xDC) -gt 3 } 10 | Out-Null
 }
 
 $pcBefore = [VF]::I16($h2, $pcAddr + 0xDC)
 $owedBefore = [VF]::U32($h2, $b2 + 0x1D50)
+$sourceBefore = [VF]::U32($h1, $b1 + 0x1CD4)
+if ($sourceBefore -lt $owedBefore) {
+    # A previous opt-in reload resets the source counter, while the session's replay
+    # guard still remembers the old total. Another identical hit cannot test delivery.
+    SkipCheck 'a hit on a phantom reaches the peer' "source total $sourceBefore is behind owed $owedBefore after a reload; start a fresh session"
+    SkipCheck 'the peer really loses those hit points' 'damage delivery prerequisite was not met'
+}
+elseif (-not $pcAddr -or -not $c1) {
+    SkipCheck 'a hit on a phantom reaches the peer' 'both live player and phantom creatures are required'
+    SkipCheck 'the peer really loses those hit points' 'damage delivery prerequisite was not met'
+}
+else {
 [VF]::W32($h1, $b1 + 0x1D5C, 0) | Out-Null           # phantom slot
 [VF]::W32($h1, $b1 + 0x1D60, 3) | Out-Null           # amount
 [VF]::W32($h1, $b1 + 0x1D64, [int]([VF]::U32($h1, $b1 + 0x1D64) + 1)) | Out-Null
@@ -456,9 +436,10 @@ Check 'a hit on a phantom reaches the peer' (($owedAfter - $owedBefore) -eq 3) `
 # exact -eq 3 flaked between 3, 5 and 0 lost. The exact forwarded amount is asserted one check up.
 Check 'the peer really loses those hit points' ((($pcBefore - $pcAfter) -ge 3) -or ($pcAfter -le 1)) `
     "hp $pcBefore -> $pcAfter"
+}
 
 # Put the health back so the session is left as it was found.
-if ($pcAddr -and $pcBefore -gt 0) { [VF]::W16($h2, $pcAddr + 0xDC, [int16]$pcBefore) | Out-Null }
+if ($pcAddr -and $damageHpSaved -gt 0) { [VF]::W16($h2, $pcAddr + 0xDC, [int16]$damageHpSaved) | Out-Null }
 
 # --- 10. animation replication ----------------------------------------------------------
 # One-shots (swings, draws, flourishes) are captured by hooking the engine's dispatch, not
@@ -521,6 +502,11 @@ Check 'the peer follows the same conversation' `
     (WaitFor2 { [VF]::U32($h2, $b2 + 0x1228) -eq 1 } 20) `
     ("partner '{0}'" -f [VF]::Str($h2, $b2 + 0x1240, 32))
 
+# Capture the lock while the host conversation is active. Waiting until after the
+# rejected second-conversation attempt could observe an already-finished dialogue.
+$dialogueLockSeen = WaitFor2 { [VF]::U32($h2, $b2 + 0x1358) -ge 1 } 10
+$clientLocks = [VF]::U32($h2, $b2 + 0x1358)
+
 $dlgMark2 = LogLines $Log2
 $carth = [byte[]]::new(32)
 [Array]::Copy([Text.Encoding]::ASCII.GetBytes('carth'), $carth, 5)
@@ -543,8 +529,7 @@ Check 'the peer cannot start a second conversation' ($clientPartner -ne 'carth')
 #
 # This is the channel that fixes "Trask keeps walking around on the other screen": ownership
 # is one-directional, so without a lock the owner's AI is never told anything is happening.
-$clientLocks = [VF]::U32($h2, $b2 + 0x1358)
-Check 'an interaction lock reaches the other instance' ($clientLocks -ge 1) `
+Check 'an interaction lock reaches the other instance' $dialogueLockSeen `
     "client sees $clientLocks object(s) held by a peer"
 
 # --- 11b. NPC barks reach the other player ------------------------------------------------
@@ -703,7 +688,9 @@ $statsPeer = if ($pcPeer) { [VF]::U32($h2, $pcPeer + 0xA74) } else { 0 }
 
 if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     $goldBefore = [VF]::U32($h1, $partyTable1 + 0xFC)
+    $clientGoldBefore = [VF]::U32($h2, $partyTable2 + 0xFC)
     $xpBefore = [VF]::U32($h1, $statsHost + 0x68)
+    $clientXpBefore = [VF]::U32($h2, $statsPeer + 0x68)
 
     # Move both by a small offset from what the host already has, rather than to a fixed
     # marker number. Two reasons: the session can be restored exactly afterwards, and the
@@ -720,9 +707,8 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # So the old check — push the host's XP DOWN and wait for the client to follow — now
     # asserts exactly the bug that was fixed. It moves UP, and the downward case becomes its
     # own check: the client must REFUSE to be pulled backwards.
-    # Experience arithmetic is done as UNSIGNED 32-bit and written back through this: a fresh
-    # Endar Spire PC can read 0xFFFFFFEC (-20), and `[int]4294967281` throws instead of wrapping,
-    # which made every XP write below a silent no-op.
+    # The memory reader exposes the raw unsigned bits. Reinterpret them for W32 rather
+    # than using a throwing PowerShell numeric cast; the progression merge uses signed XP.
     function AsI32([uint64]$v) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]($v -band 0xFFFFFFFF)), 0) }
     $goldTarget = $goldBefore + 137
     $xpTarget = ([uint64]$xpBefore + 5) -band 0xFFFFFFFF   # small: crossing a level threshold lights a modal prompt
@@ -778,8 +764,13 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # figure pull it straight back up, which is the behaviour two checks above just proved.
     [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldBefore) | Out-Null
     [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpBefore)) | Out-Null
-    [VF]::W32($h2, $statsPeer + 0x68, (AsI32 $xpBefore)) | Out-Null
-    WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
+    [VF]::W32($h2, $statsPeer + 0x68, (AsI32 $clientXpBefore)) | Out-Null
+    if ($creditsShared) {
+        WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
+    }
+    else {
+        [VF]::W32($h2, $partyTable2 + 0xFC, (AsI32 $clientGoldBefore)) | Out-Null
+    }
 }
 else {
     # Emit BOTH checks even when the pointers do not resolve. A check that is skipped
@@ -1079,7 +1070,7 @@ Check 'every engine call signature matches the binary' $auditOk `
 #
 # Scoped to this run: an older crash in the log is history, not a regression (verify3 learned
 # the same lesson from its own log checks).
-$sinceRun = (Get-Date).AddMinutes(-30)
+$sinceRun = $runStarted
 $eventCrashes = @(
     Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000; StartTime = $sinceRun } -ErrorAction SilentlyContinue |
     Where-Object { $_.Message -like '*swkotor*' -or $_.Message -like '*dinput8*' })
@@ -1152,13 +1143,15 @@ Start-Sleep -Seconds 1
 $doorLine = @(NewLogLines $Log2 $doorMark | Where-Object { $_ -match 'door: opened 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)' } | Select-Object -First 1)
 $doorId = 0
 $doorOpenedOnClient = $false
+$doorStateBefore = 0
 if ($doorLine.Count -gt 0 -and $doorLine[0] -match 'door: opened 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)') {
     $doorId = [Convert]::ToUInt32($matches[1], 16)
+    $doorStateBefore = [int]$matches[2]
     $doorOpenedOnClient = ([int]$matches[3] -ne [int]$matches[2])
 }
 $hostDoorAddr = 0
 $hostDoorState = 0
-if ($doorId -ne 0) {
+if ($doorId -ne 0 -and $doorOpenedOnClient) {
     # Poll the STATE itself, not just the address: round 57 measured ~1.8s mirror latency for a
     # nearby door, so a single read taken the instant the address resolves can catch state=0
     # before DoorController.Apply's mirror write lands. 20s is generous over that.
@@ -1180,6 +1173,10 @@ if ($hostDoorAddr -ne 0) {
     $hpx = [VF]::F32($h1, $b1 + 0x10); $hpy = [VF]::F32($h1, $b1 + 0x14)
     $hostDoorDist = [math]::Sqrt([math]::Pow($hx - $hpx, 2) + [math]::Pow($hy - $hpy, 2))
 }
+if ($doorId -ne 0 -and $doorStateBefore -gt 0 -and -not $doorOpenedOnClient) {
+    SkipCheck 'a door opened on the client opens on the host' ("door 0x{0:X} was already open; load a fresh baseline to measure a new opening" -f $doorId)
+}
+else {
 Check 'a door opened on the client opens on the host' `
     (($doorId -ne 0) -and $doorOpenedOnClient -and ($hostDoorAddr -ne 0) -and ($hostDoorState -gt 0)) `
     $(if (-not $doorReplied) { 'the opendoor console command got no reply within 10s' }
@@ -1188,6 +1185,7 @@ Check 'a door opened on the client opens on the host' `
       elseif ($hostDoorAddr -eq 0) { "door 0x{0:X} not found in the host's engine" -f $doorId }
       elseif ($hostDoorState -eq 0) { "door 0x{0:X}: client opened it, host STILL reads open-state 0 after 20s (host is {1:F0} units from the door — see this check's own comment on the deferred-commit/distance gap)" -f $doorId, $hostDoorDist }
       else { "door 0x{0:X}: client opened it, host reads open-state {1} ({2:F0} units from the door)" -f $doorId, $hostDoorState, $hostDoorDist })
+}
 
 # --- 20b. a container opened on the client is held and shown open on the host ---------------
 # docs/research/container-sync.md §5 (live-verified 2026-08-22, protocol 37): the same
@@ -1288,21 +1286,44 @@ if ($containerId -ne 0) {
 # of OffsetHostPartyRoster/0x3304) is the client's only signal that it has something to
 # reconcile against; ReleaseSession already proved it can be left set incorrectly (round 56's
 # "a disconnected agent... nothing lowered it on teardown"). This checks the OTHER direction: a
-# real module teardown/rebuild must not silently drop it. Round-trips through a self-warp (the
-# module the client is already in) so the check restores exactly where it found the session.
+# real module teardown/rebuild must not silently drop it. A same-module warp is acknowledged
+# without reloading, so opt-in coverage travels to a different module and back instead.
+# Use a disposable session: module scripts can run and followers can travel with the client.
 $hostRosterBefore = [VF]::U32($h2, $b2 + 0x3304)
 $validBefore = ($hostRosterBefore -band 0x80000000) -ne 0
 $moduleBefore = [VF]::Str($h2, $b2 + 0x20, 32)
-if ($validBefore -and $moduleBefore.Length -gt 0) {
-    $warpReplied = SendConsole $h2 $b2 "warp $moduleBefore"
-    Start-Sleep -Seconds 2
-    $reloaded = WaitFor2 { ([VF]::Str($h2, $b2 + 0x20, 32)) -eq $moduleBefore } 40
-    Start-Sleep -Seconds 5
+if (-not $IncludeTransitionCheck) {
+    SkipCheck 'the client party roster survives a transition' 'opt in with -IncludeTransitionCheck on a disposable session; reload resets phantom damage counters'
+}
+elseif ($TransitionModule.Length -eq 0 -or $TransitionModule -eq $moduleBefore) {
+    SkipCheck 'the client party roster survives a transition' 'choose a different -TransitionModule; same-module warp does not reload'
+}
+elseif ($validBefore -and $moduleBefore.Length -gt 0) {
+    $travelAppliedBefore = [VF]::U32($h2, $b2 + 0x964)
+    $warpReplied = SendConsole $h2 $b2 "warp $TransitionModule"
+    $outbound = WaitFor2 {
+        [VF]::U32($h2, $b2 + 0x964) -ne $travelAppliedBefore -and
+        [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
+        [VF]::Str($h2, $b2 + 0x20, 32) -eq $TransitionModule
+    } 40
+    $reloaded = $false
+    $returnReplied = $false
+    # Return even if the outward wait timed out after the module did change.
+    if ([VF]::Str($h2, $b2 + 0x20, 32) -eq $TransitionModule) {
+        $travelAppliedAway = [VF]::U32($h2, $b2 + 0x964)
+        $returnReplied = SendConsole $h2 $b2 "warp $moduleBefore"
+        $reloaded = WaitFor2 {
+            [VF]::U32($h2, $b2 + 0x964) -ne $travelAppliedAway -and
+            [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
+            [VF]::Str($h2, $b2 + 0x20, 32) -eq $moduleBefore
+        } 40
+    }
+    $rosterRestored = WaitFor2 { ([VF]::U32($h2, $b2 + 0x3304) -band 0x80000000) -ne 0 } 10
     $hostRosterAfter = [VF]::U32($h2, $b2 + 0x3304)
     $validAfter = ($hostRosterAfter -band 0x80000000) -ne 0
-    Check 'the client party roster survives a transition' $validAfter `
-        ("module '{0}', warp replied {1}, reloaded {2}, roster before 0x{3:X8} (valid={4}) after 0x{5:X8} (valid={6})" `
-            -f $moduleBefore, $warpReplied, $reloaded, $hostRosterBefore, $validBefore, $hostRosterAfter, $validAfter)
+    Check 'the client party roster survives a transition' ($warpReplied -and $returnReplied -and $outbound -and $reloaded -and $rosterRestored -and $validAfter) `
+        ("'{0}' -> '{1}' -> '{0}', command replied {2}, arrived away {3}, returned {4}, roster before 0x{5:X8} after 0x{6:X8}" `
+            -f $moduleBefore, $TransitionModule, $warpReplied, $outbound, $reloaded, $hostRosterBefore, $hostRosterAfter)
 }
 else {
     Check 'the client party roster survives a transition' $false `
@@ -1332,12 +1353,24 @@ Check 'no per-frame spam' ($spamOk1 -and $spamOk2) `
         $(if ($worst1) { $worst1.Value } else { 0 }), $(if ($worst1) { $worst1.Key } else { 'n/a' }),
         $(if ($worst2) { $worst2.Value } else { 0 }), $(if ($worst2) { $worst2.Key } else { 'n/a' }))
 
-# Leave the world as we found it, so the next run measures the same starting conditions.
+# Clear temporary interactions and restore positions. Kills, journal changes and opened
+# doors are real engine actions; this is not a complete saved-world rollback.
 CloseConversations $h1 $b1
 CloseConversations $h2 $b2
+BreakOffCombat $h1 $b1
+BreakOffCombat $h2 $b2
+# Combat and the container check move the players. Restore their starting positions
+# only if they are still in the same module; a teleport across modules is meaningless.
+if ([VF]::Str($h1, $b1 + 0x20, 32) -eq $startModule1) {
+    SendConsole $h1 $b1 ('tp {0} {1} {2}' -f $startPosition1[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition1[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition1[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)) | Out-Null
+}
+if ([VF]::Str($h2, $b2 + 0x20, 32) -eq $startModule2) {
+    SendConsole $h2 $b2 ('tp {0} {1} {2}' -f $startPosition2[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition2[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition2[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)) | Out-Null
+}
 
 ''
-'summary: {0} passed, {1} failed' -f ($results.Values | Where-Object Pass).Count, ($results.Values | Where-Object { -not $_.Pass }).Count
+$failed = @($results.Values | Where-Object { -not $_.Pass -and -not $_.Skipped }).Count
+'summary: {0} passed, {1} failed, {2} skipped' -f @($results.Values | Where-Object Pass).Count, $failed, @($results.Values | Where-Object Skipped).Count
 [VF]::CloseHandle($h1) | Out-Null
 [VF]::CloseHandle($h2) | Out-Null
-exit ($results.Values | Where-Object { -not $_.Pass }).Count
+exit $failed

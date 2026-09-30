@@ -170,6 +170,7 @@ internal partial struct SharedBlock
     /// bark-ring hole already established, so a stale reader finds zeros there rather than half
     /// a record. See SharedBlock.Combat.cs for the five moved regions' own remarks.
     /// v81 grows to 0x8700 for the local/remote dialogue resource names at 0x8600/0x8614.
+    /// v82 uses 0x8630/0x8634 in that tail for manual travel/load request intent.
     /// </summary>
     public const int TotalSize = 0x8700;
 

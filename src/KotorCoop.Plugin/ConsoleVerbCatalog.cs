@@ -23,7 +23,7 @@ internal static class ConsoleVerbCatalog
         ("disconnect", "disconnect"),
         ("dc", "dc"),
         ("leave", "leave"),
-        ("reconnect", "reconnect"),
+        ("reconnect", "reconnect [world]  (world: reload the host's latest save with your own character)"),
         ("rc", "rc"),
         ("say", "say <message>"),
         ("chat", "chat <message>"),

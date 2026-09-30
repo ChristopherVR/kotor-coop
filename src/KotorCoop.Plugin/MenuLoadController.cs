@@ -99,13 +99,6 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
     private bool _loginRerouted;
 
 
-    /// <summary>A request first seen after the main thread was gone this long is refused. The
-    /// agent stops polling a load after 90 s, and the world it staged for the request was fetched
-    /// before the stall, so running it afterwards loads a world the host has already replaced
-    /// (live 2026-09-30: a rejoin queued behind a 120 s stall ran after the host quit to the menu
-    /// and the client died in HandleServerToPlayerCreatureUpdate_Add).</summary>
-    private const long StaleAfterStallMs = 45_000;
-
     /// <summary>Failure status for a request refused as stale.</summary>
     public const int StatusStaleAfterStall = 9;
 
@@ -113,6 +106,12 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
 
     private uint _staleCheckedSerial;
 
+    /// <summary>An automatic request first seen after a long main-thread stall is refused. The
+    /// agent stops polling a load after 90 s, and the world it staged for the request was fetched
+    /// before the stall, so running it afterwards loads a world the host has already replaced
+    /// (live 2026-09-30: a rejoin queued behind a 120 s stall ran after the host quit to the menu
+    /// and the client died in HandleServerToPlayerCreatureUpdate_Add). Explicit human commands
+    /// retain their intent across the stall; the ordinary phase and engine safety gates apply.</summary>
     public void OnFrame()
     {
         long nowMs = Environment.TickCount64;
@@ -137,7 +136,8 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
         if (serial != _staleCheckedSerial)
         {
             _staleCheckedSerial = serial;
-            if (gapMs > StaleAfterStallMs && !_pumping && _panel == 0 && _firedSerial != serial)
+            if (StalledRequestRule.ShouldRefuse(gapMs, block.MenuLoadManualIntent,
+                alreadyStarted: _pumping || _panel != 0 || _firedSerial == serial))
             {
                 PluginHost.Log($"menu: request #{serial} was pending across a {gapMs / 1000.0:F0} s stall - "
                     + "refused as stale (the agent re-requests against the current world)");

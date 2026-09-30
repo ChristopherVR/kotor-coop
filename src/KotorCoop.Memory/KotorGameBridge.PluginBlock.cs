@@ -755,6 +755,8 @@ public sealed partial class KotorGameBridge
     // docs/research/dialogue-sync.md's 2026-08-23 Item 1 and SharedBlock.cs's own remarks.
     private const int BlockLocalDialogueForced = 0x3F1C;
     private const int BlockRemoteDialogueForced = 0x3F20;
+    // v82: reset for every request, so an automatic follow cannot inherit human intent.
+    private const int BlockTravelManualIntent = 0x8630;
     private const int BlockLocalDialogueResref = 0x8600;
     private const int BlockRemoteDialogueResref = 0x8614;
     private const int BlockDialogueResrefLength = 20;

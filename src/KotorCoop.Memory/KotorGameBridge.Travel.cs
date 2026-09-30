@@ -18,6 +18,13 @@ public sealed partial class KotorGameBridge
     /// engine's MainLoop performs the transition exactly as the shipped `warp` cheat does.
     /// </summary>
     public bool TryRequestTravel(string module, string waypoint = "", IReadOnlyList<string>? movies = null)
+        => RequestTravel(module, waypoint, movies, manualIntent: false);
+
+    /// <summary>An explicit console command keeps its intent across a long game-thread stall.</summary>
+    public bool TryRequestManualTravel(string module, string waypoint = "")
+        => RequestTravel(module, waypoint, null, manualIntent: true);
+
+    private bool RequestTravel(string module, string waypoint, IReadOnlyList<string>? movies, bool manualIntent)
     {
         if (_pluginBlock == 0 || string.IsNullOrEmpty(module) || module.Length >= BlockTravelNameLength)
         {
@@ -52,12 +59,17 @@ public sealed partial class KotorGameBridge
 
         ok &= _memory.TryWrite(_pluginBlock + BlockTravelMovieCount, count);
 
+        ok &= _memory.TryWrite(_pluginBlock + BlockTravelManualIntent, manualIntent ? 1u : 0u);
+        if (!ok)
+        {
+            return false;
+        }
+
         // Serial last, so the plugin never observes a half-written request. Continue from
         // whatever the block already holds: the plugin outlives the agent, and restarting
         // from zero would replay whichever request the previous agent left behind.
-        ok &= _memory.TryReadUInt32(_pluginBlock + BlockTravelSerial, out uint serial);
-        ok &= _memory.TryWrite(_pluginBlock + BlockTravelSerial, serial + 1);
-        return ok;
+        return _memory.TryReadUInt32(_pluginBlock + BlockTravelSerial, out uint serial)
+            && _memory.TryWrite(_pluginBlock + BlockTravelSerial, unchecked(serial + 1));
     }
 
     /// <inheritdoc />

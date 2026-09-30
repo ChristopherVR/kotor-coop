@@ -1290,6 +1290,7 @@ public sealed partial class CoopCommandDispatcher
             // save", and had no gate of its own until it needed one for join_mode.
             RejoinTrigger.SaveMismatch => AutoAdoptWorldEnabled,
             RejoinTrigger.SoloReturn => AutoAdoptWorldEnabled,
+            RejoinTrigger.ManualWorldRefresh => true,
             _ => false,
         };
 
@@ -1355,13 +1356,13 @@ public sealed partial class CoopCommandDispatcher
                 int maxAttempts = trigger switch
                 {
                     RejoinTrigger.SoloReturn => SoloReturnRejoinMaxAttempts,
-                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch => HostReloadRejoinMaxAttempts,
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh => HostReloadRejoinMaxAttempts,
                     _ => 1,
                 };
                 TimeSpan retryDelay = trigger switch
                 {
                     RejoinTrigger.SoloReturn => TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
-                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
                         => TimeSpan.FromMilliseconds(HostReloadRejoinRetryDelayMs),
                     _ => TimeSpan.Zero,
                 };
@@ -1378,16 +1379,16 @@ public sealed partial class CoopCommandDispatcher
                         adoption = await manager
                         .RejoinAfterLoadAsync(
                             bridge, gameDirectory, carried, managerGeneration, cancellationToken,
-                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad
+                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad or RejoinTrigger.ManualWorldRefresh
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
-                            onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
+                            onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
                                 ? () => hostWorldUnavailable = true
                                 : null)
                         .ConfigureAwait(false);
                         if (adoption is null && attempt < maxAttempts
                             && (trigger == RejoinTrigger.SoloReturn
-                                || trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch
+                                || trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
                                     && hostWorldUnavailable))
                         {
                             string reason = trigger switch
@@ -1412,7 +1413,7 @@ public sealed partial class CoopCommandDispatcher
                         && _rejoinState.Phase == RejoinPhase.InFlight,
                     rejoinCts.Token,
                     shouldRetryFailedAttempt: () =>
-                        trigger is not (RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch) || hostWorldUnavailable)
+                        trigger is not (RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh) || hostWorldUnavailable)
                     .ConfigureAwait(false);
 
                 if (!adoptedSuccessfully || adoption is null)
@@ -1717,7 +1718,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        if (!_kotor.TryRequestStagedMidSessionLoad(out string request, out uint requestId))
+        if (!_kotor.TryRequestStagedMidSessionLoad(out string request, out uint requestId, manualIntent: true))
         {
             Reply($"loadgame: {request}");
             return;

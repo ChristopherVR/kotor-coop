@@ -147,6 +147,11 @@ public sealed partial class CoopCommandDispatcher
 
     private void ReconnectCommand(CoopCommand command)
     {
+        if (command.Address == "world")
+        {
+            BeginManualWorldRefresh();
+            return;
+        }
         CancelRejoinForExternalSessionChange();
         _promptedForPassword = false;
         manager.Reconnect();

@@ -34,7 +34,11 @@ public static partial class ConsoleCommand
 
     private static CoopCommand ParseDisconnect(string[] rest) => new(CoopCommandKind.Disconnect);
 
-    private static CoopCommand ParseReconnect(string[] rest) => new(CoopCommandKind.Reconnect);
+    private static CoopCommand ParseReconnect(string[] rest) =>
+        rest.Length == 0 ? new(CoopCommandKind.Reconnect)
+        : rest.Length == 1 && rest[0].Equals("world", StringComparison.OrdinalIgnoreCase)
+            ? new(CoopCommandKind.Reconnect, Address: "world")
+            : new(CoopCommandKind.Invalid, Error: "usage: reconnect [world]");
 
     private static CoopCommand ParseSay(string[] rest) =>
         rest.Length == 0

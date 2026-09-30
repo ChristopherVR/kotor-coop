@@ -70,6 +70,11 @@ internal partial struct SharedBlock
 
     public const int TravelNameLength = 32;
 
+    // v82: explicit human intent survives a blocked game thread. Always overwritten before
+    // the corresponding serial; automatic followers must never inherit an earlier command.
+    public const int OffsetTravelManualIntent = 0x8630;
+    public const int OffsetMenuLoadManualIntent = 0x8634;
+
 
     // ---- placeable state (version 11) --------------------------------------------
     //

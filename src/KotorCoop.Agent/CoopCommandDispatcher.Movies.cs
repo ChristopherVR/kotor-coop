@@ -18,7 +18,7 @@ public sealed partial class CoopCommandDispatcher
         {
             Reply("warp needs the in-game plugin (no shared block found)");
         }
-        else if (_kotor.TryRequestTravel(module, waypoint))
+        else if (_kotor.TryRequestManualTravel(module, waypoint))
         {
             Reply($"warping to {module}...");
         }

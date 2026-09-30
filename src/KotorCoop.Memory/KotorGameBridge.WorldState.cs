@@ -394,11 +394,11 @@ public sealed partial class KotorGameBridge
         return true;
     }
 
-    public bool TryRequestStagedMidSessionLoad(out string diagnostic, out uint requestId)
+    public bool TryRequestStagedMidSessionLoad(out string diagnostic, out uint requestId, bool manualIntent = false)
     {
         requestId = 0;
         bool ok = PluginMenuLoader.TryRequestLoad(
-            _memory, out nint block, out string request, out requestId, adoptedWorld: false, inSession: true);
+            _memory, out nint block, out string request, out requestId, adoptedWorld: false, inSession: true, manualIntent: manualIntent);
         if (ok)
         {
             _menuLoadBlock = block;

@@ -67,9 +67,6 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     /// </summary>
     private uint _fadedForSerial;
 
-    /// <summary>See <see cref="OnFrame"/>: the stall after which a first-seen request is refused.</summary>
-    private const long StaleAfterStallMs = 45_000;
-
     private long _lastFrameMs;
 
     private uint _staleCheckedSerial;
@@ -133,7 +130,7 @@ internal sealed unsafe class TravelController(SharedBlockView block)
 
     /// <summary>
     /// Runs EVERY frame (not only while a request is pending), from PluginHost's frame prelude.
-    /// A request first seen after the main thread was gone this long was filed against a world that
+    /// An automatic request first seen after a long main-thread stall was filed against a world that
     /// has moved on (a relayed movie, a long load). Running it would warp this player back into a
     /// stale module and ANNOUNCE it, and the peer would follow that announce: live 2026-09-29/30, a
     /// queued travel replayed after the host's opening movie dragged the host out of its new game.
@@ -152,7 +149,7 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         }
 
         _staleCheckedSerial = serial;
-        if (gapMs > StaleAfterStallMs)
+        if (StalledRequestRule.ShouldRefuse(gapMs, block.TravelManualIntent))
         {
             PluginHost.Log($"travel: request #{serial} was pending across a {gapMs / 1000.0:F0} s stall - "
                 + "refused as stale (the agent re-requests against the current world)");

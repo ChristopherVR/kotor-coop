@@ -28,6 +28,7 @@ public static class PluginMenuLoader
     /// </summary>
     public const string AutosaveSlot = "000001 - AUTOSAVE";
 
+    private const int BlockMenuLoadManualIntent = 0x8634;
     private const int BlockMenuLoadSerial = 0x9A4;
     private const int BlockMenuLoadApplied = 0x9A8;
     private const int BlockMenuLoadStatus = 0x9AC;
@@ -255,12 +256,12 @@ public static class PluginMenuLoader
     /// docs/research/session-save.md's dated entry on the <c>loadgame</c> verb.</param>
     public static bool TryRequestLoad(
         ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false,
-        bool inSession = false)
-        => TryRequestLoad(memory, out block, out diagnostic, out _, adoptedWorld, inSession);
+        bool inSession = false, bool manualIntent = false)
+        => TryRequestLoad(memory, out block, out diagnostic, out _, adoptedWorld, inSession, manualIntent);
 
     public static bool TryRequestLoad(
         ProcessMemory memory, out nint block, out string diagnostic, out uint requestId,
-        bool adoptedWorld = false, bool inSession = false)
+        bool adoptedWorld = false, bool inSession = false, bool manualIntent = false)
     {
         requestId = 0;
         if (!TryFindBlock(memory, out block, out diagnostic))
@@ -309,6 +310,12 @@ public static class PluginMenuLoader
         if (!memory.TryWrite(block + BlockMenuLoadInSession, inSession ? 1u : 0u))
         {
             diagnostic = "could not write the in-session flag";
+            return false;
+        }
+
+        if (!memory.TryWrite(block + BlockMenuLoadManualIntent, manualIntent ? 1u : 0u))
+        {
+            diagnostic = "could not write the manual request intent";
             return false;
         }
 

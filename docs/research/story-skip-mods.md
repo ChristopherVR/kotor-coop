@@ -4,6 +4,46 @@ Static review of the two mods' shipped source (`Lit Ridl _Super_Skip_Taris.zip`,
 `Jedi from the Start v4.0.0.7z`) against the co-op code. Tags: **READ** (read from the mod's
 files or our code), **INFERRED** (reasoned, not run), **NEEDS-LIVE**.
 
+## Current follow-up status (2026-09-30)
+
+- Negative XP is accepted as resolved for this follow-up. The signed merge fix remains;
+  no further live negative-XP injection is required by the user. Earlier observations
+  below describe the pre-fix runs.
+- The three LAN beacon/browser assertions were removed from `tools/verify.ps1` at the
+  user's request. Historical 46 PASS / 3 FAIL totals below still include them; removal
+  is not evidence of a networking fix.
+- Shared block v82 distinguishes explicit `warp`/`moviewarp`/`loadgame` commands from
+  automatic requests. Automatic requests first seen after a >45-second stall still
+  receive status 9; explicit commands retain their intent and existing engine gates.
+  Manual `loadgame` still has a 90-second reply timeout, so the engine can execute it
+  after that timeout if it was blocked longer. Focused rule/layout tests cover the
+  distinction; the combined host-new-game repro and 20-second announce expiry remain
+  **NEEDS-LIVE**.
+- Verification restores temporary health, positions and personal purse edits, observes
+  dialogue locks earlier, and reports unmet prerequisites as SKIP separately from FAIL.
+  Real travel away and back now requires `-IncludeTransitionCheck` and a different
+  `-TransitionModule`; the old same-module warp was acknowledged without a reload.
+  It therefore did not prove roster survival or explain the historical `owed 3 -> 3`.
+  Kills, opened doors and journal changes still require a fresh baseline for full
+  coverage. Two successive live runs have not been repeated for this update.
+- The detection-only profiles do not supply companion or campaign rules. These mods
+  retain stock recruitable identities; no custom mapping was justified. JFTS detection
+  was checked against `Jedi from the Start-1-4-0-0`, not a verified `v4.0.0.7` install.
+- Remaining live checks, including JFTS saved-world refresh, same-world script edits,
+  actual turret shooting and story-skip sessions with three or more players, are in
+  [PLAYTEST.md](../PLAYTEST.md#story-skip-follow-up-checks-2026-09-30).
+
+The restored game directories and retained `es_baseline` / `jfts_after` saves were not
+changed by this follow-up. HoloPatcher `--uninstall` failed during the earlier mod test;
+restore from verified file backups for the next install test.
+
+Validation for this follow-up: native x86 plugin publish with `-WarnAsError` passed;
+`verify.ps1` parsed without errors, and its PASS/FAIL/SKIP accounting was checked in
+isolation. A broad automated run passed 5,222 tests before the refresh command was
+simplified to use player-written saves. The final implementation then passed all
+5,108 tests in `tools/test-fast.ps1`, including refresh, adoption, rejoin and mailbox
+coverage. No live verification run or game-folder deployment was performed.
+
 ## How they work
 
 ### Super Skip Taris & Endar Spire (TSLPatcher, one GFF edit + three scripts)
@@ -281,3 +321,27 @@ seen after the main thread was gone more than 45 s (`travel: request #N was pend
 refused as stale`); the agent re-asks against the current world. Verified live: joiner suspended 61 s
 with `blockpoke travel end_m01ab` filed gave `applied 1 status 9` and it stayed in END_M01AA; a normal
 `warp end_m01ab` afterwards ran. The full host-new-game-with-blocked-joiner sequence was not re-run.
+
+### Explicit script-world refresh (2026-09-30)
+
+`reconnect world` now provides a supported recovery for a joiner that adopted the host's
+pre-choice JFTS world. After finishing the class conversation and level-up, both players
+must save. The joiner then types `reconnect world` within 30 seconds of their own save,
+while both players are out of movies, conversations and combat. The command captures the
+joiner's exact current saved character and fetches the host's latest saved world through
+the existing adoption path. The joiner's own class, personal backpack and personal purse
+are carried; the host's saved Trask replacement and locker contents arrive through a load
+screen. A plain `reconnect` continues to reconnect without forcing a world load.
+
+The command rejects active saves/loads/chargen, a stale or unreadable local archive, and an
+archive whose module or save identity differs from the joiner's current world. It confirms
+that local module, load serial and archive timestamp stayed unchanged during capture. It
+never requests a native quicksave or moves the user's quicksave aside: an engine save can
+be delayed across a blocked thread, making premature holdback restoration unsafe. Explicit
+refresh is allowed even when automatic world adoption is disabled.
+
+Verified in automated tests: command parsing, busy-state and same-module load safety, fresh
+archive age, host refusal without replacing the session, and existing character/world
+adoption coverage. The full JFTS command round trip has not been run live with the mod
+installed. This is a manual saved-world recovery; script-created friendly creatures and
+locker additions still do not mirror continuously.

@@ -171,6 +171,9 @@ internal sealed unsafe partial class SharedBlockView
 
     /// <summary>Agent-written request serial; a request is pending while it is ahead of
     /// <see cref="TravelApplied"/>.</summary>
+    public bool TravelManualIntent => *U32(SharedBlock.OffsetTravelManualIntent) == 1;
+    public bool MenuLoadManualIntent => *U32(SharedBlock.OffsetMenuLoadManualIntent) == 1;
+
     public uint TravelSerial => *U32(SharedBlock.OffsetTravelSerial);
 
     /// <summary>Pointer to the null-terminated destination module name (32 bytes).</summary>

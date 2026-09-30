@@ -5,6 +5,13 @@ beside `swkotor.exe`. Only profiles whose detection files all exist activate;
 shipping a profile does not install the mod. Restart both games and agents after
 changing a profile. Both players need identical active profile bytes and mod files.
 
+The Super Skip Taris and Jedi From The Start profiles currently declare detection
+only. They do not add companion or campaign recovery rules: Super Skip Taris uses
+stock companion identities, and JFTS adds no recruitable companions. Detection does
+not implement live replication of JFTS's scripted Trask/locker changes. The JFTS
+markers were checked with archive `Jedi from the Start-1-4-0-0`; the older package
+label `v4.0.0.7` was not a verified identification of that live-test archive.
+
 ```json
 {
   "schema": 2,

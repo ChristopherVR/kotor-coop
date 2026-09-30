@@ -76,6 +76,20 @@ log; "the joiner's log" means the joining player's copy.
 
 If something here crashes the game, `KotorCoop.Agent.exe logs` includes the crash record that survives a hard crash.
 
+## Story-skip follow-up checks (2026-09-30)
+
+Use identical mod files on separate test installs. Keep a file-level backup before
+patching: HoloPatcher `--uninstall` failed to restore the previous test installs;
+that run was restored by comparison with `D:\kotor-story-skip-backup2`.
+
+| Check | Setup and action | Evidence required |
+| --- | --- | --- |
+| New-game hijack | Connect a joiner in an older world, block its main thread for more than 45 seconds with an automatic crossing queued, and start a new game on the host before releasing the joiner. | The old request is refused and never announced as a fresh crossing; the host stays in its new game. Isolated stale-travel refusal already passed; this combined sequence has not. |
+| JFTS world edits | Put the joiner in the host's same Endar Spire world before the class choice; choose different Jedi classes. After the scripts finish, inspect Trask and both lockers on each side. | Record class, creature tags and locker contents before and after. The older-world test does not establish same-world live mirroring. |
+| JFTS scale | Repeat class choice and world refresh with at least three players. | Each player keeps their own class, character and inventory; every world has the host's post-script objects. Existing three-player travel evidence does not qualify this mod path. |
+| Skip and turret fight | Join after the opening conversation, choose the skip, and win the turret fight through real shooting. | All players arrive at the following playable scene; bypassing or forcing the fight's completion does not prove shooting. |
+| Verification repetition | Run `tools/verify.ps1` twice in the same two-instance session. | Report PASS, FAIL and any prerequisite skips separately for both runs. Do not compare them with historical totals that included the removed LAN/browser checks. |
+
 ## Card persistence regression
 
 Buy a Pazaak card and select a distinctive side deck as the joiner. Save, disconnect,
