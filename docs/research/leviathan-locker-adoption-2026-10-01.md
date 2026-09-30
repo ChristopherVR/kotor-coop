@@ -68,3 +68,15 @@ models both players leaving the prison while the joiner's gear remains unclaimed
 28 focused inventory/adoption tests and all 5,554 fast tests pass, zero failures,
 1m45s, with a warning-clean standard x64 Agent publish. Evidence:
 `artifacts/companion-v95-archived-locker`. Cross-area live proof remains pending.
+
+
+The combined automatic host-load replay on 2026-10-01 completed the joiner's
+native load in five seconds and retained all eight verified own locker entries,
+with the joiner's own classes and effective 12 HP intact. The host's actual
+locker retrieval separately produced eight backpack entries and an empty host
+locker. The joiner's post-load received-items popup still requires a completed
+movement/retrieval/reconnect check. Developer popup cleanup is being corrected
+independently; it must allow the engine's normal deferred OK dismissal to finish.
+See [the live recovery report](leviathan-recovery-live-2026-10-01.md) for exact
+scope and saved-health evidence. This same-area result does not establish the
+cross-area case above.
