@@ -295,7 +295,7 @@ and exact log lines are in the linked research sections and in review-seamless-2
 | Turret ambush completion | **Works** (staged win) | `mgkill all` kills 6/6 through `SWMG_AdjustFollowerHitPoints`; the return runs once a `ST_PlayPostTurret` branch matches (`K_RANDOM_MINI_GAME`) — research/minigames.md §25.5 |
 | Real Jedi / cast | **Works** | `levelup` through the engine's AutoLevelup; `cast` through `CSWCCreature::PerformCastSpell` heals for real. The VM route only ever filed a request — research/effect-sync.md §14.8-§14.11 |
 | Partner heal | **Works**, now default ON | A host Cure heals the joiner 4 -> 12 hp (`partner_buffs`) |
-| Enemy crowd control | **Works** (stun), now default ON | The joiner's stun is applied to the host's enemy in 70 ms (`enemy_effect_sync`) |
+| Enemy crowd control | **Works**, default ON | Stun was previously live checked; actual Stasis, Fear and Force Push also reached the host's original enemy on Native96. Same-area load refused an old captured namespace; reconnect stayed quiet and admitted a fresh cast. Developer caster, mirrored-enemy channel; natural power acquisition and FP spending remain unproven. See [current live evidence](research/enemy-effects-live-2026-10-01.md). |
 | Sticky aggro | **Works** | Client-route `attack`; the hound stayed on the joiner for 90 s. `threat_retarget` had a drifted OFF default, now ON — research/peer-damage-ledger.md |
 | Recruitment | **Works**, all nine slots | Engine recruit calls; a same-id reuse bug fixed — research/dialogue-consequences.md |
 | Placed-mine recover/disarm | **Works** with Demolitions > 0 | Retail's trained-only rule was the silent refusal — research/mines.md §14.10-§14.12 |
