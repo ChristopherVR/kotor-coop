@@ -119,6 +119,18 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
+        // StallEventSaveGame (4B36C0..4B36D1) walks CSWParty with the same
+        // GetCharacter -> GetServerCreature chain as DoPCAutosave. A client
+        // companion left behind by an adopted load, or destroyed during the
+        // save flush, must not remain under its member-count bound: retail
+        // dereferences the unresolved result before testing the server object.
+        // This runs again immediately before a held save is re-issued.
+        if (TryBoundClientPartyCountByResolvable(out int before, out int resolved, out string entries))
+        {
+            PluginHost.Log($"party count: bounded {before} -> {resolved} before saving "
+                + $"(entries {entries}; StallEventSaveGame walks the array without a null check)");
+        }
+
         reason = string.Empty;
         return true;
     }
