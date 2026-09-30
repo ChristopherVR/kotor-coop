@@ -261,9 +261,11 @@ fight without loosening attack guards.
 The first battery's short-lived Sith fixture invalidated its later enemy comparisons.
 Its native base HP was2; one physical host hit removed both its base and temporary HP.
 This is not established as a co-op defect or an effect-expiry event. Repeat verification
-uses a clearly staged stock Sith UTC clone with500 base/max/current HP, preserving its
-hostile faction and scripts, before measurement. Evidence and any remaining failures
-are retained separately from successful runs.
+uses a clearly staged stock Sith UTC clone with a unique tag, blank script callbacks,
+class level20, Constitution30 and500 stored base/max HP. The engine gives this fixture
+700 current HP without a temporary-HP effect. Earlier500-HP variants also died abruptly;
+their script callbacks are not established as the cause. Evidence and failures are
+retained separately from successful runs.
 
 ## Three-player target and down follow-up
 
@@ -284,7 +286,11 @@ ordering a target. Phantom targetability and down pose honor the same explicit d
 A regression selects the remaining contributor when the leading peer has1HP plus flag8,
 then covers zeroHP, inactive, away, minigame and genuine revival. All61 focused threat and
 phantom-target tests passed, and Plugin Release built with warnings treated as errors.
-The longer live fallback rerun remains outstanding.
+The longer live fallback rerun remains outstanding. A subsequent native89c run kept the
+victim genuinely down for about51seconds, with the host observing flag8. The other
+contributor's threat had decayed below the selection threshold while moving outside
+rescue range; no eligible living fallback remained. The enemy cleared its target.
+This neither proves nor disproves retargeting to a qualifying living contributor.
 
 The frozen inactive-companion snapshot2ceeb10 (native89/wire82) passed all5366 fast tests
 and all116 Slow tests (9m16s), with clean warning-as-error native and managed publishes.
@@ -292,3 +298,18 @@ Its exact recruitment-template hook and occupant generation fencing are implemen
 coverage; live BoS replacement verification is tracked separately. Active replacements
 are deliberately held in this snapshot, including after a load; save-transfer identity
 binding is the next implementation step and is not credited to89/82.
+
+## Native89d repeated live battery
+
+Frozen snapshot ff90207 passed all5374 fast tests. Native89d and its matching Agent82
+then completed two full verification batteries in the same original stock game instances,
+without a reload or restart between runs: each49PASS,0FAIL and1opt-in transition SKIP.
+Evidence: `artifacts/live-verify-v89-relockfix-run1.txt` and `run2.txt`.
+
+The actual loot GUI needed its real Close button; the development close primitive's ACK
+did not establish that the GUI had closed. The verifier now clicks that observed button
+and measures both native container states. A genuine delayed-snapshot race then overwrote
+an immediate local relock before its collector could publish it. Commit ff90207 defers
+that conflicting snapshot until the local lock edge has been published. Actual close,
+immediate relock, unlock and reopen passed in both batteries, alongside repeated item
+pickup/removal, damage, down and revive checks.
