@@ -20,7 +20,8 @@ Explicit `local_combat=0` exercises the mirrored-enemy effect channel; that chan
 deliberately excludes local-combat bypass enemies. `enemy_effect_sync=1` was explicit.
 
 The developer caster was created with actual native `addclass 3`, `levelup 3 10`,
-and `grantpower` calls. Native stats proved Soldier1/Guardian10, HP106/106 and FP40/110.
+and `grantpower` calls. Native stats proved base class2 at level1 plus Guardian10,
+HP106/106 and FP40/110.
 These are controlled plumbing checks, **not natural class progression or power
 acquisition**. Every successful cast used `CastSpellAtObjectViaClient`, the radial-menu
 client handler. No `applyeffect`, raw HP/FP, quest/global/class writes, or pause writes
