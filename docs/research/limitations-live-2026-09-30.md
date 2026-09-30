@@ -614,3 +614,16 @@ A read-only XInput1_4 query on 2026-10-01 reports error1167 (device not connecte
 for all four slots. Evidence: `artifacts/xinput-readonly-2026-10-01.json`. No virtual
 pad was substituted and no physical-pad success is claimed. Human hardware
 availability has been requested while independent story checks continue.
+
+
+### Existing WSL/Wine startup probe
+
+Ubuntu on this host provides Wine6.0.3, wine32/i386 and wine64 libraries plus WSLg.
+A separate owned prefix `/tmp/kotor-coop-v95-audit-20261001` attempted the packaged
+Agent e69d7bc `--help` without opening a game or changing existing Wine prefixes.
+It failed before managed startup: Wine reports unimplemented
+`KERNEL32.dll.GetProcessGroupAffinity`, then a page fault. Evidence:
+`artifacts/wine-v95-agent-startup.txt`. A launcher exit alone was not treated as
+success. The owned prefix's wineserver was stopped; the prefix remains for inspection.
+This is a failure on old Wine6.0.3 under WSL, not a modern Wine/Proton or physical
+Steam Deck result. Modern compatibility remains unverified.

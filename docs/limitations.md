@@ -122,7 +122,7 @@ Historical dates below describe the scope of each check, not a guarantee for eve
 
 | | Status | What to expect |
 | --- | --- | --- |
-| Playing through Proton / Wine | **Should work — untested** | Everything is built to run inside the game's Proton prefix with nothing extra installed (the agent carries its own .NET). You add one launch option, `WINEDLLOVERRIDES="dinput8=n,b" %command%`, so Wine loads the mod's `dinput8.dll` instead of its own; the packaged README has the Steam Deck, Heroic and Lutris versions. Nobody has run it on a real Linux machine yet — the logs say `running under Wine` so a report tells us exactly how far it got. |
+| Playing through Proton / Wine | **Should work — untested** | Everything is built to run inside the game's Proton prefix with nothing extra installed (the agent carries its own .NET). You add one launch option, `WINEDLLOVERRIDES="dinput8=n,b" %command%`, so Wine loads the mod's `dinput8.dll` instead of its own; the packaged README has the Steam Deck, Heroic and Lutris versions. Modern Wine and Proton have not been verified. A 2026-10-01 startup probe under WSL with the installed Wine 6.0.3 failed before the Agent started because that runtime lacks `GetProcessGroupAffinity`; treat that old Wine version as unsupported for this build. This does not establish Steam Deck compatibility. See [compatibility evidence](research/limitations-live-2026-09-30.md). |
 | The Deck's built-in controls | **Should work — untested** | They reach the game as an Xbox controller, which the controller support above picks up. Typing (address, chat, console) now has the mod's own on-screen grid, or the Deck's own on-screen keyboard through Steam Input either way. |
 
 ---
