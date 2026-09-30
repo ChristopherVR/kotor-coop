@@ -240,9 +240,17 @@ public static class ClientCharacterPersistence
     {
         if (!TryReadSidecar(savesDirectory, out _, out SidecarMetadata metadata, out _)
             || metadata.SourceSaveDirectory is not { } source) return null;
-        string root = Path.GetFullPath(savesDirectory);
-        if (!string.Equals(Path.GetDirectoryName(source), root, StringComparison.OrdinalIgnoreCase)) return null;
-        return IsVerifiedCaptureSource(source) ? source : null;
+        try
+        {
+            string root = Path.GetFullPath(savesDirectory);
+            if (!Path.IsPathFullyQualified(source)
+                || !string.Equals(Path.GetDirectoryName(source), root, StringComparison.OrdinalIgnoreCase)) return null;
+            return IsVerifiedCaptureSource(source) ? source : null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Stable content fingerprint for the archive a confirmed load request names.</summary>
@@ -410,14 +418,25 @@ public static class ClientCharacterPersistence
             return CharacterCapture.Kept;
         }
 
+        if (!TryHashSave(saveDirectory, out string sourceHash, out long sourceLength))
+        {
+            diagnostic = "could not fingerprint the own save - kept the existing character";
+            return CharacterCapture.Failed;
+        }
         if (!PlayerIfo.TryExtractPlayer(saveDirectory, out GffStruct player, out diagnostic))
         {
             return CharacterCapture.Failed;
         }
 
         string extracted = diagnostic;
-
-        if (!TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic))
+        if (!TryHashSave(saveDirectory, out string afterHash, out long afterLength)
+            || afterHash != sourceHash || afterLength != sourceLength)
+        {
+            diagnostic = "the own save changed while its character was read - kept the existing character";
+            return CharacterCapture.Failed;
+        }
+        if (!TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic,
+                Path.GetFullPath(saveDirectory), sourceHash, sourceLength))
         {
             return CharacterCapture.Failed;
         }

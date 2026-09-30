@@ -661,6 +661,17 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
         Assert.Null(ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
     }
 
+    [Fact]
+    public void NormalOwnSaveCaptureAlsoBindsItsInventorySource()
+    {
+        string saves = TempDirectory();
+        string source = BuildSaveIn(saves, "000005 - Co-op", "end_m01aa", 0x99, "Own Player");
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(saves, source, 42, out _));
+        Assert.True(ClientCharacterPersistence.IsVerifiedCaptureSource(source));
+        File.AppendAllText(Path.Combine(source, "SAVEGAME.sav"), "changed");
+        Assert.False(ClientCharacterPersistence.IsVerifiedCaptureSource(source));
+    }
+
     private string TempDirectory()
     {
         string directory = Path.Combine(Path.GetTempPath(), "kotorcoop-charpersist-" + Guid.NewGuid().ToString("N"));
