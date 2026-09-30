@@ -78,6 +78,9 @@ function Body([uint32]$id) {
     $address = Find-Object $id
     if (!$address) { return @{ Id=$id; Resolved=$false } }
     $bytes = Read-Bytes $address 0xA90
+    if ([BitConverter]::ToUInt32($bytes,0) -ne 0x007470C8 -or [BitConverter]::ToUInt32($bytes,4) -ne $id) {
+        return @{ Id=$id; Resolved=$false; Reason='Current object is not the selected creature' }
+    }
     $round = [BitConverter]::ToUInt32($bytes,0x9C8)
     $target = if ($round) { Word ($round + 0x9CC) } else { 0 }
     if ((Find-Object $id) -ne $address) { throw 'Object changed during snapshot; retry.' }
