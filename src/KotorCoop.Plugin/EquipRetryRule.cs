@@ -35,9 +35,7 @@ internal static class EquipRetryRule
 {
     /// <summary>The one failure code that can never succeed on retry: the blueprint resref does
     /// not exist on this install. <c>PhantomController.ApplyEquipment</c> equips through
-    /// <see cref="Odyssey.EquipItemFromTemplateDirect"/>, whose create step is
-    /// <see cref="Odyssey.GiveItemToInventory"/>; that method reports a missing blueprint as
-    /// failure 8 (its own doc: "The blueprint does not exist in this install"). The older VM
+    /// <see cref="Odyssey.EquipItemFromTemplateDirect"/>, whose isolated floor-create step rejects an unloaded blueprint as failure 8. The older VM
     /// path (<see cref="Odyssey.EquipItemFromTemplate"/>) used 7 for the same case, but the
     /// phantom path no longer calls it - see the 2026-09-16 note in ApplyEquipment.</summary>
     public const int BlueprintMissing = 8;
@@ -56,7 +54,7 @@ internal static class EquipRetryRule
     /// succeeded.
     ///
     /// ⚠ WHY THIS EXISTS. Every failure code <see cref="ShouldLatch"/> tells the caller to
-    /// retry occurs AFTER <c>Odyssey.GiveItemToInventory</c> has already created a brand-new
+    /// retry occurs AFTER <c>Odyssey.SpawnItemOnFloor</c> has already created a brand-new
     /// item object on the target creature — <c>EquipItemFromTemplateDirect</c>'s own 20-26 range
     /// (slot-map miss, resolve failures, the engine's own equip call refusing, or the post-call
     /// slot read-back not matching) all fire strictly after the create step succeeds. Retrying

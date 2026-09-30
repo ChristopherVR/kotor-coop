@@ -37,7 +37,7 @@ internal static unsafe partial class Odyssey
     private static int _routineCreateItemOnObject = -1;
     private static int _routineActionEquipItem = -1;
 
-    /// <summary>How many repository unlinks <see cref="EquipItemFromTemplateDirect"/> has
+    /// <summary>How many isolated creations <see cref="EquipItemFromTemplateDirect"/> has
     /// logged — bounded, the same way PartyPresenceController bounds its own equip lines.</summary>
     private static int _equipUnlinksLogged;
 
@@ -351,32 +351,20 @@ internal static unsafe partial class Odyssey
     private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, int, int, int, int> EquipItemFn =
         (delegate* unmanaged[Thiscall]<nint, int, nint, int, int, int, int>)0x004FEB90;
 
+    // CSWSItem::RemoveFromArea(this), GOG 0x5538A0: no stack arguments, bare ret.
+    // Detaches the fresh floor item from the area's list and clears its area/position.
+    private static readonly delegate* unmanaged[Thiscall]<nint, void> EquipmentItemRemoveFromAreaFn =
+        (delegate* unmanaged[Thiscall]<nint, void>)0x005538A0;
+
     /// <summary>
-    /// The companion-safe counterpart to <see cref="EquipItemFromTemplate"/>: creates the item
-    /// on the target exactly the same way (<see cref="GiveItemToInventory"/>, itself unchanged
-    /// and already VERIFIED target-based — no caller-object dependency at all, confirmed by
-    /// disassembly of <c>CreateItemOnObject</c> this round), then equips it through the
-    /// synchronous <see cref="EquipItemFn"/> instead of the queued VM action.
-    ///
-    /// <paramref name="nwscriptSlot"/> is the same 1/4/5 convention every other equip caller in
-    /// this codebase already uses (<see cref="InventorySlotBody"/> etc.); mapped through
-    /// <see cref="EquipSlotMap"/> to the engine's own BIT-FLAG internal slot value (2/0x10/0x20)
-    /// — VERIFIED by disassembly this round (see <see cref="EquipSlotMap"/>'s own doc comment).
-    /// The OLD "byte offset / 4" mapping (2/5/6) silently no-opped both weapon slots — 5 and 6
-    /// are not valid bit-flags, so <c>CSWInventory</c>'s own slot resolver returned NULL and the
-    /// write never happened, while <see cref="EquipItemFn"/> still reported success.
-    ///
-    /// Never trusts <see cref="EquipItemFn"/>'s own return value — VERIFIED by full disassembly
-    /// to be unconditionally 1 regardless of whether the write landed (see its own doc comment).
-    /// Instead this reads the raw <c>CSWInventory</c> slot back
-    /// (<see cref="EquipSlotMap.ToSlotByteOffset"/>) after the call and confirms it now holds
-    /// the item id <see cref="GiveItemToInventory"/> just created, so an unresolved slot or any
-    /// other silent engine-side no-op is reported to the caller as a genuine failure instead of
-    /// a false "equipped" — never silently fail.
-    ///
-    /// MAIN THREAD ONLY. NEEDS-LIVE — the corrected slot values and the readback verification
-    /// have never been exercised against a running game; see companion-state-sync.md's live
-    /// test plan.
+    /// Creates an isolated item and synchronously equips it, verifying the native slot.
+    /// CreateItemOnObject on a party companion merges into the shared party inventory:
+    /// live 2026-10-01, a player's clothes stack of three became the companion's stack
+    /// of four when the merged result was unlinked. CreateItemOnFloor bypasses that
+    /// repository. The item is immediately detached through the engine's RemoveFromArea
+    /// and assigned to its wearer before any frame returns; no AcquireItem or pool merge
+    /// occurs. Missing blueprints are rejected before equipping their empty native body.
+    /// MAIN THREAD ONLY.
     /// </summary>
     public static bool EquipItemFromTemplateDirect(
         uint creatureObjectId, byte* resrefAscii, int resrefLength, int nwscriptSlot, out int failure)
@@ -391,54 +379,44 @@ internal static unsafe partial class Odyssey
             return false;
         }
 
-        uint itemId = GiveItemToInventory(creatureObjectId, resrefAscii, resrefLength, 1, out int giveFailure);
-        if (itemId == ObjectInvalid)
-        {
-            failure = giveFailure != 0 ? giveFailure : 21;
-            return false;
-        }
-
         nint creature = ResolveServerObject(creatureObjectId);
-        if (creature == 0)
+        if (creature == 0 || !NativeMethods.IsReadable(creature, 0xA30)
+            || !PartyCreatureIdentity.IsLiveMatch(*(nint*)creature, *(uint*)(creature + 4), creatureObjectId))
         {
             failure = 22;
             return false;
         }
 
+        Vec3 position = GetPosition(creature);
+        if (!Vec3.IsWorldPlausible(position))
+        {
+            failure = 22;
+            return false;
+        }
+        uint itemId = SpawnItemOnFloor(resrefAscii, resrefLength, position, out int spawnFailure);
+        if (itemId is 0 or ObjectInvalid)
+        {
+            failure = spawnFailure is > 0 and < 8 ? spawnFailure : 21;
+            return false;
+        }
         nint item = ResolveItemBase(itemId);
         if (item == 0)
         {
             failure = 23;
             return false;
         }
-
-        // Unlink the freshly created body from the creature's item repository FIRST — exactly
-        // what the engine's own ForceEquipClothing does right before its EquipItem call
-        // (0x00501D4D `Contains(item)` -> 0x00501D59 `CItemRepository::RemoveItem(item)` ->
-        // 0x00501D69 EquipItem, VERIFIED by disassembly 2026-09-02). EquipItem itself never
-        // touches the repository, and GiveItemToInventory files the body wherever
-        // CSWSCreature::GetItemRepository(1) points — for a live party member (every mirrored
-        // companion a client dresses) that is the SHARED PARTY POOL. Without this step the
-        // equipped body stays linked into the stash: every pool scan counted the companion's
-        // clothes+pistol as a surplus and the client deposited copies to the host after every
-        // rejoin (live 2026-09-01, shared-inventory-v2.md §17), and a later pool reconcile could
-        // "remove" the body from under the slot it is worn in. RemoveItem is a documented no-op
-        // when the item is not linked (see Odyssey.PartyPool.cs's RepositoryRemoveItemFn).
-        //
-        // The possessor too, in the engine's own order (0x00501D43 SetPossessor(item,
-        // creatureId, 0, 0, OBJECT_INVALID) comes first): filing into the pool stamped the
-        // body with the pool's parent — the PC — so without this the wearer's gear reads as
-        // the PC's in every possessor-keyed view (ReadPossessedItems, the `items` listing).
+        EquipmentItemRemoveFromAreaFn(item);
+        if (!TryReadItemIdentityFields(itemId, out ItemIdentityFields created) || created.LooksUnloaded)
+        {
+            DestroyObjectById(itemId, out _);
+            failure = EquipRetryRule.BlueprintMissing;
+            return false;
+        }
         SetPossessorFn(item, creatureObjectId, 0, 0, ObjectInvalid);
-        nint repo = ResolveCreatureItemRepo(creature);
-        int unlinked = repo != 0 ? RepositoryRemoveItemFn(repo, item) : 0;
-        if (unlinked != 0 && _equipUnlinksLogged < 8)
+        if (_equipUnlinksLogged < 8)
         {
             _equipUnlinksLogged++;
-            PluginHost.Log(
-                $"equip: unlinked 0x{itemId:X} from 0x{creatureObjectId:X}'s repository "
-                + "0x" + repo.ToString("X") + " before wearing it (repo count now "
-                + $"{*(int*)(repo + RepositoryItemCount)})");
+            PluginHost.Log($"equip: isolated item 0x{itemId:X} stack {created.StackSize} for 0x{creatureObjectId:X}; party repository untouched");
         }
 
         // p3/p4/p5 read as (1, 0, 0) at every clean call site this round's disassembly found
