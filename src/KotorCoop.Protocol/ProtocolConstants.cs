@@ -354,7 +354,7 @@ public static class ProtocolConstants
     /// <summary>
     /// Flag entries per snapshot datagram: <c>FlagId</c> 8 + <c>Value</c> 1 + <c>Serial</c> 4 +
     /// <c>OriginPeerId</c> 4 = 17 bytes each (protocol 53 widened the id from 4), after the
-    /// header + version + session/load/revision + count, so 80 is what fits inside <see cref="MaxPacketSize"/>
+    /// header + version + session/load/revision + count, so 81 is what fits inside <see cref="MaxPacketSize"/>
     /// (it was 106 at 13 bytes). A longer store is sent as several snapshot packets in one
     /// burst, exactly like <see cref="MaxJournalEntriesPerPacket"/>.
     ///
@@ -369,7 +369,7 @@ public static class ProtocolConstants
     /// then re-requested the same truncated head every 500 ms for the rest of the session.
     /// Live symptom: a door OPEN on the host, CLOSED on the client, forever.
     /// </summary>
-    public const int MaxFlagEntriesPerPacket = 80;
+    public const int MaxFlagEntriesPerPacket = 81;
 
     /// <summary>Odyssey resource references are at most 16 characters.</summary>
     public const int MaxResrefLength = 16;

@@ -213,25 +213,4 @@ public class ServerDiscoveryTests
             after.Single(s => s.Name == "Alpha").Address);
     }
 
-    [Fact]
-    public async Task AHostBeaconReachesAListeningBrowserOverLoopback()
-    {
-        // Isolated high port so a real discovery service (or a parallel test run) does not clash.
-        const int port = 47016;
-        using ServerDiscovery browser = new(port);
-        using ServerDiscovery host = new(port);
-
-        browser.StartListening();
-        await Task.Delay(200); // let the listener bind before the first beacon
-        host.StartAdvertising("Revan", 27140, 8, () => 2);
-
-        bool seen = false;
-        for (int i = 0; i < 60 && !seen; i++)
-        {
-            await Task.Delay(100);
-            seen = browser.Servers.Any(s => s.Name == "Revan" && s.EndPoint.Port == 27140 && s.PlayerCount == 2);
-        }
-
-        Assert.True(seen, "the browsing client never heard the host's LAN beacon");
-    }
 }

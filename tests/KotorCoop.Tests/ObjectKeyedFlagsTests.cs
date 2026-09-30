@@ -211,7 +211,7 @@ public class ObjectKeyedFlagsTests
         }
 
         byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
-        int length = PacketCodec.Write(buffer, new FlagSnapshotPacket(uint.MaxValue, page));
+        int length = PacketCodec.Write(buffer, new FlagSnapshotPacket(uint.MaxValue, page, 10, 20, 30));
 
         Assert.True(length > 0);
         Assert.True(length <= ProtocolConstants.MaxPacketSize);
@@ -220,6 +220,9 @@ public class ObjectKeyedFlagsTests
         FlagSnapshotPacket? decoded = PacketCodec.ReadFlagSnapshot(buffer.AsSpan(0, length));
         Assert.NotNull(decoded);
         Assert.Equal(page, decoded.Flags);
+        Assert.Equal(10u, decoded.HostSessionId);
+        Assert.Equal(20u, decoded.HostLoadSerial);
+        Assert.Equal(30u, decoded.WorldRevision);
     }
 
     [Fact]
@@ -229,10 +232,10 @@ public class ObjectKeyedFlagsTests
         Assert.True(key > uint.MaxValue);
 
         byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
-        FlagOpPacket op = new(OriginPeerId: 2, OpSequence: 9, FlagId: key, Value: 3, Serial: 11);
+        FlagOpPacket op = new(OriginPeerId: 2, OpSequence: 9, FlagId: key, Value: 3, Serial: 11, HostSessionId: 10, HostLoadSerial: 20, WorldRevision: 30);
         int length = PacketCodec.Write(buffer, op);
 
-        Assert.Equal(ProtocolConstants.HeaderSize + 4 + 4 + 8 + 1 + 4, length);
+        Assert.Equal(ProtocolConstants.HeaderSize + 4 + 4 + 8 + 1 + 4 + 12, length);
         Assert.Equal(op, PacketCodec.ReadFlagOp(buffer.AsSpan(0, length)));
     }
 }
