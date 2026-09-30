@@ -23,6 +23,7 @@ internal static unsafe class LoadProvenanceHook
     private static SharedBlockView? _view;
     private static bool _installed;
     private static uint _generation;
+    private static string? _savesDirectory;
 
     /// <summary>Both observers are in. Version 76: a world with no observed load request is a
     /// new-game candidate only while this holds.</summary>
@@ -40,6 +41,13 @@ internal static unsafe class LoadProvenanceHook
     {
         ArgumentNullException.ThrowIfNull(view);
         _view = view;
+        char* executable=stackalloc char[512];
+        uint executableLength=NativeMethods.GetModuleFileName(0,executable,512);
+        if(executableLength is >0 and <512)
+        {
+            string? game=Path.GetDirectoryName(new string(executable,0,(int)executableLength));
+            if(game is not null)_savesDirectory=Path.Combine(game,"saves");
+        }
         if (_installed)
         {
             diagnostic = "already installed";
@@ -252,6 +260,19 @@ internal static unsafe class LoadProvenanceHook
 
         view.BeginLoadProvenanceWrite(odd);
         view.WriteLoadProvenancePayload(slot, source, status, view.WorldLoadSerial, name);
+        uint serial=view.WorldLoadSerial,epoch=view.LivenessNativeEpoch;
+        long requested=Environment.TickCount64;
+        LocalSaveReadProof? proof=null;
+        try
+        {
+            if(_installed && _savesDirectory is not null
+                && status is LoadProvenanceStatus.Captured or LoadProvenanceStatus.CapturedDirectory
+                && LocalSaveReadProofReader.TryResolve(_savesDirectory,slot,source,System.Text.Encoding.Latin1.GetString(name),out string directory))
+                LocalSaveReadProofReader.TryCapture(directory,out proof);
+        } catch { }
+        // Failure is published too, so a later unrelated request revokes an older proof.
+        if(serial!=view.WorldLoadSerial || epoch!=view.LivenessNativeEpoch)proof=null;
+        view.PublishNativePartyLoadProof(even,serial,epoch,requested,proof);
         view.PublishLoadProvenanceGeneration(even);
     }
 

@@ -66,6 +66,7 @@ public sealed partial class CoopCommandDispatcher
     private void MaintainPartyProvenanceReload()
     {
         MaintainPartyProvenanceSave();
+        MaintainNativePartyLoadProof();
         if (_partyReload is not { } pending) return;
         if (SessionClock.NowMs - pending.RequestedMs > 90_000)
         { _partyReload = null; return; }

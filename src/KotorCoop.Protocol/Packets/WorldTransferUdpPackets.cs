@@ -27,19 +27,19 @@ public sealed record WorldTransferRequestPacket(uint RequestId, uint PasswordHas
 /// identity trails the status regardless of the answer" shape
 /// <c>KotorCoop.Session.WorldTransfer</c>'s TCP reply header uses.</summary>
 public sealed record WorldTransferHeaderPacket(
-    uint RequestId, WorldTransferUdpStatus Status, uint SaveIdentity, uint TotalBytes, ushort TotalChunks);
+    uint RequestId, WorldTransferUdpStatus Status, uint SaveIdentity, uint TotalBytes, uint TotalChunks);
 
 /// <summary>host -&gt; client: one slice of the flat payload. <paramref name="Payload"/>'s
 /// length is whatever the datagram actually carried (fixed for every chunk but the last,
 /// which is however many bytes remained) — there is no separate length field, the same way a
 /// UDP datagram's own size already tells a receiver how much arrived.</summary>
-public sealed record WorldTransferChunkPacket(uint RequestId, ushort ChunkIndex, byte[] Payload);
+public sealed record WorldTransferChunkPacket(uint RequestId, uint ChunkIndex, byte[] Payload);
 
 /// <summary>client -&gt; host: which chunks (of <see cref="WorldTransferHeaderPacket.TotalChunks"/>)
-/// are still missing, as a bitmap — bit N set means chunk N has not arrived yet. Sent
+/// are still missing, as a bounded bitmap page — bit N means FirstChunk+N. Sent
 /// periodically while a transfer is in progress; the host simply resends whatever bit is
 /// still set, so a lost status datagram costs one resend cycle, never a stuck transfer.</summary>
-public sealed record WorldTransferChunkStatusPacket(uint RequestId, byte[] MissingBitmap);
+public sealed record WorldTransferChunkStatusPacket(uint RequestId, byte[] MissingBitmap, uint FirstChunk = 0);
 
 /// <summary>client -&gt; host: every chunk arrived and reassembled/validated cleanly. Lets the
 /// host free its per-client transfer buffer instead of waiting out the transfer's own

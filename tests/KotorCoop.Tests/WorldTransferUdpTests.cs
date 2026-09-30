@@ -12,6 +12,29 @@ namespace KotorCoop.Tests;
 /// </summary>
 public class WorldTransferUdpTests
 {
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task SeventeenMiBWorldTransfersThroughRealUdpHostAndPagedAcknowledgements()
+    {
+        byte[] archive = new byte[17 * 1024 * 1024];
+        Random.Shared.NextBytes(archive);
+        using CoopHost host = new(new SessionSettings { Port = 0, TickRate = 30, UpnpEnabled = false, StunServers = [] });
+        host.SetWorldTransferProvider(() => ([new("SAVEGAME.sav", archive)], 0x12345678), 0);
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(50));
+        Task running = host.RunAsync(cts.Token);
+        try
+        {
+            FetchedWorld fetched = await WorldTransferUdp.FetchAsync(
+                new(System.Net.IPAddress.Loopback, host.ListenEndPoint.Port), 0, cts.Token);
+            Assert.Equal(0x12345678u, fetched.SaveIdentity);
+            Assert.Equal(archive, Assert.Single(fetched.Files).Data);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await running; } catch (OperationCanceledException) { }
+        }
+    }
     private static WorldFile[] SampleWorld() =>
     [
         new WorldFile("SAVEGAME.sav", [.. Enumerable.Range(0, 500).Select(i => (byte)i)]),
@@ -40,12 +63,70 @@ public class WorldTransferUdpTests
     [Fact]
     public void SharedPayloadAggregateStillRejectsThirdFileBeyond128MiB()
     {
-        byte[] payload = WorldTransfer.SerializePayload([
+        byte[] valid = WorldTransfer.SerializePayload([
             new("SAVEGAME.sav", new byte[64 * 1024 * 1024]),
-            new("PARTYTABLE.res", new byte[64 * 1024 * 1024]),
-            new("GLOBALVARS.res", [1])]);
+            new("PARTYTABLE.res", new byte[64 * 1024 * 1024])]);
+        byte[] payload = [..valid, 1, 0, 1, 0, 0, 0, (byte)'x', 1];
+        payload[0] = 3;
         InvalidDataException error = Assert.Throws<InvalidDataException>(() => WorldTransfer.ParsePayload(payload));
         Assert.Contains("total exceeds", error.Message);
+    }
+
+    [Fact]
+    public void PagedAcknowledgementsAreMonotonicAndIndependent()
+    {
+        WorldTransferUdpSender sender = new(1, new byte[5000 * 1024], 1, 0);
+        sender.NoteStatus([0], 1, 4096);
+        Assert.False(sender.IsMissing(4096));
+        Assert.True(sender.IsMissing(0));
+        sender.NoteStatus([255], 2, 4096);
+        Assert.False(sender.IsMissing(4096)); // late old page cannot undo an acknowledgement
+        sender.NoteStatus([0], 3, 1); // unaligned page is ignored
+        Assert.True(sender.IsMissing(0));
+    }
+
+    [Fact]
+    public void ReceiverRequiresExactHeaderAndChunkLengths()
+    {
+        Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(1, 1, uint.MaxValue, uint.MaxValue));
+        Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(1, 1, 1, uint.MaxValue));
+        Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(1, 1, 1025, 1));
+        Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(1, 1, 0, 1));
+        WorldTransferUdpReceiver receiver = new(1, 1, 1025, 2);
+        receiver.ReceiveChunk(0, new byte[1023]);
+        receiver.ReceiveChunk(1, new byte[2]);
+        Assert.Equal(0, receiver.ReceivedCount);
+        receiver.ReceiveChunk(0, new byte[1024]);
+        receiver.ReceiveChunk(1, new byte[1]);
+        Assert.True(receiver.IsComplete);
+    }
+
+    [Fact]
+    public void ChunkIndicesBeyondUshortRoundTripWithoutWrapping()
+    {
+        byte[] bytes = new byte[Protocol.ProtocolConstants.MaxPacketSize];
+        Protocol.WorldTransferChunkPacket chunk = new(1, 65536, [42]);
+        int length = Protocol.PacketCodec.Write(bytes, chunk);
+        Assert.Equal(65536u, Protocol.PacketCodec.ReadWorldTransferChunk(bytes.AsSpan(0, length))!.ChunkIndex);
+        Protocol.WorldTransferChunkStatusPacket page = new(1, [0], 65536);
+        length = Protocol.PacketCodec.Write(bytes, page);
+        Assert.Equal(65536u, Protocol.PacketCodec.ReadWorldTransferChunkStatus(bytes.AsSpan(0, length))!.FirstChunk);
+    }
+
+    [Fact]
+    public void InvalidPageAndChunkWireBoundsRefuseBeforePayloadAllocation()
+    {
+        byte[] buffer = new byte[Protocol.ProtocolConstants.MaxPacketSize];
+        foreach (Protocol.WorldTransferChunkStatusPacket page in new Protocol.WorldTransferChunkStatusPacket[]
+            { new(1, [], 0), new(1, new byte[513], 0), new(1, [0], 1), new(1, [0], uint.MaxValue) })
+        {
+            int length = Protocol.PacketCodec.Write(buffer, page);
+            Assert.Null(Protocol.PacketCodec.ReadWorldTransferChunkStatus(buffer.AsSpan(0, length)));
+        }
+        int chunkLength = Protocol.PacketCodec.Write(buffer, new Protocol.WorldTransferChunkPacket(1, uint.MaxValue, [1]));
+        Assert.Null(Protocol.PacketCodec.ReadWorldTransferChunk(buffer.AsSpan(0, chunkLength)));
+        chunkLength = Protocol.PacketCodec.Write(buffer, new Protocol.WorldTransferChunkPacket(1, 0, new byte[1025]));
+        Assert.Null(Protocol.PacketCodec.ReadWorldTransferChunk(buffer.AsSpan(0, chunkLength)));
     }
 
     [Fact]
@@ -186,7 +267,7 @@ public class WorldTransferUdpTests
 
         Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(
             requestId: 1, saveIdentity: 0,
-            totalBytes: 10, totalChunks: (ushort)(Protocol.ProtocolConstants.MaxWorldTransferChunks + 1)));
+            totalBytes: 10, totalChunks: (uint)(Protocol.ProtocolConstants.MaxWorldTransferChunks + 1)));
 
         Assert.Throws<InvalidDataException>(() => new WorldTransferUdpReceiver(
             requestId: 1, saveIdentity: 0, totalBytes: 10, totalChunks: 0));

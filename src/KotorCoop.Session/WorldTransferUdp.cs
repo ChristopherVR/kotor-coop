@@ -26,8 +26,8 @@ public static class WorldTransferUdp
     /// <c>LastActivityMs</c> never goes stale mid-transfer, per that class's remarks.</summary>
     private const int StatusReportIntervalMs = 250;
 
-    /// <summary>Matches <see cref="WorldTransfer"/>'s own <c>TimeoutMs</c>.</summary>
-    private const int OverallTimeoutMs = 60_000;
+    /// <summary>Finite deadline allowing a128 MiB first pass plus bounded resends.</summary>
+    private const int OverallTimeoutMs = 240_000;
 
     /// <summary>How often the poll loop wakes to check timers and drive sends — a plain
     /// poll-driven state machine, the same shape every other reliable channel in this codebase
@@ -121,7 +121,7 @@ public static class WorldTransferUdp
                         {
                             lock (gate)
                             {
-                                receiver?.ReceiveChunk(chunk.ChunkIndex, chunk.Payload);
+                                receiver?.ReceiveChunk((int)chunk.ChunkIndex, chunk.Payload);
                             }
                         }
 
@@ -179,20 +179,27 @@ public static class WorldTransferUdp
 
                 if (localReceiver.IsComplete)
                 {
+                    IReadOnlyList<WorldFile> files = WorldTransfer.ParsePayload(localReceiver.Payload);
                     int completeLength = PacketCodec.Write(
                         sendBuffer, new WorldTransferCompletePacket(requestId, Success: true));
                     channel.Send(host, sendBuffer.AsSpan(0, completeLength));
 
-                    IReadOnlyList<WorldFile> files = WorldTransfer.ParsePayload(localReceiver.Payload);
                     return new FetchedWorld(files, localReceiver.SaveIdentity);
                 }
 
                 if (now - lastStatusMs > StatusReportIntervalMs)
                 {
-                    byte[] bitmap = localReceiver.MissingBitmap();
-                    int statusLength = PacketCodec.Write(
-                        sendBuffer, new WorldTransferChunkStatusPacket(requestId, bitmap));
-                    channel.Send(host, sendBuffer.AsSpan(0, statusLength));
+                    // At the128 MiB limit this is at most33 bounded datagrams, never one
+                    // oversized bitmap. Repeated pages tolerate loss and reordering.
+                    for (int first = 0; first < localReceiver.TotalChunks;
+                        first += ProtocolConstants.WorldTransferStatusPageChunks)
+                    {
+                        byte[] bitmap;
+                        lock (gate) bitmap = localReceiver.MissingBitmap(first, ProtocolConstants.WorldTransferStatusPageChunks);
+                        int statusLength = PacketCodec.Write(sendBuffer,
+                            new WorldTransferChunkStatusPacket(requestId, bitmap, (uint)first));
+                        channel.Send(host, sendBuffer.AsSpan(0, statusLength));
+                    }
                     lastStatusMs = now;
                 }
             }

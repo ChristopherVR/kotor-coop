@@ -71,6 +71,7 @@
     <Compile Include="..\KotorCoop.Protocol\KorribanFinalTestMachine.cs" Link="Shared\KorribanFinalTestMachine.cs" />
     <Compile Include="..\KotorCoop.Protocol\LocalSessionRoleRule.cs" Link="Shared\LocalSessionRoleRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\LoadProvenance.cs" Link="Shared\LoadProvenance.cs" />
+    <Compile Include="..\KotorCoop.Protocol\LocalSaveReadProof.cs" Link="Shared\LocalSaveReadProof.cs" />
     <Compile Include="..\KotorCoop.Protocol\EnemyScalingBaseline.cs" Link="Shared\EnemyScalingBaseline.cs" />
     <Compile Include="..\KotorCoop.Protocol\EnemyScalingBaselineChannel.cs" Link="Shared\EnemyScalingBaselineChannel.cs" />
     <Compile Include="..\KotorCoop.Protocol\EnemyScalingImportGate.cs" Link="Shared\EnemyScalingImportGate.cs" />

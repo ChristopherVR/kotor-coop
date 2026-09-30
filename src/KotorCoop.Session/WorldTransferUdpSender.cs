@@ -25,6 +25,8 @@ public sealed class WorldTransferUdpSender
 
     public WorldTransferUdpSender(uint requestId, byte[] payload, uint saveIdentity, long nowMs)
     {
+        if (payload.Length == 0 || payload.Length > ProtocolConstants.MaxWorldTransferBytes)
+            throw new InvalidDataException("world transfer (UDP): payload exceeds bounded transfer size");
         RequestId = requestId;
         _payload = payload;
         SaveIdentity = saveIdentity;
@@ -50,14 +52,16 @@ public sealed class WorldTransferUdpSender
     public long LastActivityMs { get; private set; }
 
     /// <summary>Applies the client's latest <see cref="PacketType.WorldTransferChunkStatus"/>
-    /// bitmap. Clamped to however many bytes this transfer's own bitmap holds — a client
-    /// report that is a different length (a build with a different chunk-payload constant,
-    /// say) is trimmed or padded rather than trusted outright, so it can never read or write
-    /// outside this sender's own bounds.</summary>
-    public void NoteStatus(ReadOnlySpan<byte> missingBitmap, long nowMs)
+    /// bounded bitmap page. Acknowledgements only clear missing bits; older pages cannot
+    /// resurrect a received chunk. Unaligned/out-of-range/oversized pages are ignored.</summary>
+    public void NoteStatus(ReadOnlySpan<byte> missingBitmap, long nowMs, uint firstChunk = 0)
     {
-        int n = Math.Min(missingBitmap.Length, _missing.Length);
-        missingBitmap[..n].CopyTo(_missing);
+        if (firstChunk >= TotalChunks || firstChunk % 8 != 0 || missingBitmap.Length == 0
+            || missingBitmap.Length > ProtocolConstants.WorldTransferStatusBitmapBytes) return;
+        int firstByte = (int)firstChunk / 8;
+        int n = Math.Min(missingBitmap.Length, _missing.Length - firstByte);
+        // Received chunks never become missing again when an older status page arrives late.
+        for (int i = 0; i < n; i++) _missing[firstByte + i] &= missingBitmap[i];
         LastActivityMs = nowMs;
     }
 

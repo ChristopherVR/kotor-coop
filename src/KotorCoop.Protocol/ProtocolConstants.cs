@@ -340,7 +340,7 @@ public static class ProtocolConstants
     // v76 adds the gameplay-content fingerprint to both handshake digests (scheme 2).
     /// <summary>Version 77 appends durable saved-script-world refresh fields to WorldDigest.</summary>
     // 82: companion occupant generations/templates plus host-world namespaces.
-    public const byte Version = 83;
+    public const byte Version = 84;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;
@@ -640,30 +640,17 @@ public static class ProtocolConstants
     /// Bytes per <see cref="PacketType.WorldTransferChunk"/> datagram (the last chunk of a
     /// transfer carries however many bytes remain, which is smaller). Comfortably under
     /// <see cref="MaxPacketSize"/> once the 4-byte header, <c>RequestId</c> and
-    /// <c>ChunkIndex</c> are added (4 + 4 + 2 + 1024 = 1034), leaving headroom for a lower-MTU
+    /// <c>ChunkIndex</c> are added (4 + 4 + 4 + 1024 = 1036), leaving headroom for a lower-MTU
     /// path than the LAN case <see cref="MaxPacketSize"/> itself is sized against.
     /// </summary>
     public const int WorldTransferChunkPayloadSize = 1024;
 
-    /// <summary>
-    /// The largest transfer the UDP world-transfer fallback (<see cref="PacketType.WorldTransferRequest"/>
-    /// et al.) will attempt, in bytes. A real save measures ~654 KB
-    /// (<c>KotorCoop.Session.WorldTransfer</c>'s own doc comment), so 8 MiB is over 12x
-    /// headroom while still keeping <see cref="MaxWorldTransferChunks"/>' missing-bitmap inside
-    /// one datagram — a save that somehow exceeds this refuses the UDP path outright rather
-    /// than growing the bitmap past a single packet's worth of chunk-status bookkeeping. The
-    /// TCP path (<see cref="MaxFileBytes"/>-style bounds in <c>WorldTransfer</c> itself) has no
-    /// such ceiling, so a save this large still adopts fine over a path where TCP reaches the
-    /// host at all.
-    /// </summary>
-    public const int MaxWorldTransferBytes = 8 * 1024 * 1024;
-
-    /// <summary>
-    /// <see cref="MaxWorldTransferBytes"/> divided into <see cref="WorldTransferChunkPayloadSize"/>-byte
-    /// pieces, rounded up. A <see cref="PacketType.WorldTransferChunkStatus"/> bitmap is this
-    /// many bits — 1024 bytes at the cap — which is why <see cref="MaxWorldTransferBytes"/> is
-    /// sized the way it is rather than larger.
-    /// </summary>
+    /// <summary>128 MiB of bounded world files plus at most 16 filename/framing records.</summary>
+    public const int MaxWorldTransferBytes = 128 * 1024 * 1024 + 16 * (64 + 6) + 2;
+    /// <summary>Each acknowledgement page contains at most 4096 chunk bits.</summary>
+    public const int WorldTransferStatusBitmapBytes = 512;
+    public const int WorldTransferStatusPageChunks = WorldTransferStatusBitmapBytes * 8;
+    /// <summary>Maximum uint-indexed chunks accepted before allocating a receiver.</summary>
     public const int MaxWorldTransferChunks = (MaxWorldTransferBytes + WorldTransferChunkPayloadSize - 1)
         / WorldTransferChunkPayloadSize;
 }

@@ -20,11 +20,12 @@ public sealed class WorldTransferUdpReceiver
     /// strength of a number it merely claimed, any more over this channel than
     /// <see cref="WorldTransfer"/>'s TCP path already refuses to.
     /// </summary>
-    public WorldTransferUdpReceiver(uint requestId, uint saveIdentity, uint totalBytes, ushort totalChunks)
+    public WorldTransferUdpReceiver(uint requestId, uint saveIdentity, uint totalBytes, uint totalChunks)
     {
-        if (totalBytes > ProtocolConstants.MaxWorldTransferBytes
+        if (totalBytes == 0 || totalBytes > ProtocolConstants.MaxWorldTransferBytes
             || totalChunks > ProtocolConstants.MaxWorldTransferChunks
-            || totalChunks == 0)
+            || totalChunks != (totalBytes + ProtocolConstants.WorldTransferChunkPayloadSize - 1)
+                / ProtocolConstants.WorldTransferChunkPayloadSize)
         {
             throw new InvalidDataException(
                 $"world transfer (UDP): implausible size ({totalBytes:N0} bytes, {totalChunks} chunks)");
@@ -32,7 +33,7 @@ public sealed class WorldTransferUdpReceiver
 
         RequestId = requestId;
         SaveIdentity = saveIdentity;
-        TotalChunks = totalChunks;
+        TotalChunks = (int)totalChunks;
         _payload = new byte[totalBytes];
         _have = new bool[totalChunks];
     }
@@ -60,7 +61,7 @@ public sealed class WorldTransferUdpReceiver
         }
 
         int offset = chunkIndex * ProtocolConstants.WorldTransferChunkPayloadSize;
-        if (offset + data.Length > _payload.Length)
+        if (data.Length != Math.Min(ProtocolConstants.WorldTransferChunkPayloadSize, _payload.Length - offset))
         {
             return;
         }
@@ -72,12 +73,15 @@ public sealed class WorldTransferUdpReceiver
 
     /// <summary>One bit per chunk, set where still missing — the status report
     /// <see cref="PacketType.WorldTransferChunkStatus"/> ships.</summary>
-    public byte[] MissingBitmap()
+    public byte[] MissingBitmap(int firstChunk = 0, int maxChunks = int.MaxValue)
     {
-        byte[] bitmap = new byte[(TotalChunks + 7) / 8];
-        for (int i = 0; i < TotalChunks; i++)
+        if (firstChunk < 0 || firstChunk >= TotalChunks || firstChunk % 8 != 0 || maxChunks <= 0)
+            throw new ArgumentOutOfRangeException(nameof(firstChunk));
+        int count = Math.Min(maxChunks, TotalChunks - firstChunk);
+        byte[] bitmap = new byte[(count + 7) / 8];
+        for (int i = 0; i < count; i++)
         {
-            if (!_have[i])
+            if (!_have[firstChunk + i])
             {
                 bitmap[i / 8] |= (byte)(1 << (i % 8));
             }

@@ -91,6 +91,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterAvailabilityRule.cs" Link="Plugin\PartyRosterAvailabilityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterBodyReuseRule.cs" Link="Plugin\PartyRosterBodyReuseRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantTable.cs" Link="Plugin\PartyOccupantTable.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.NativePartyLoadProof.cs" Link="Plugin\SharedBlock.NativePartyLoadProof.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.NativePartyLoadProof.cs" Link="Plugin\SharedBlockView.NativePartyLoadProof.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeSaveIoWatch.cs" Link="Plugin\NativeSaveIoWatch.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeSaveCompletionHook.cs" Link="Plugin\NativeSaveCompletionHook.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.NativeSaveCompletion.cs" Link="Plugin\SharedBlock.NativeSaveCompletion.cs" />

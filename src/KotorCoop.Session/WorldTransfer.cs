@@ -457,10 +457,17 @@ public static class WorldTransfer
     /// </summary>
     public static byte[] SerializePayload(IReadOnlyList<WorldFile> world)
     {
+        if (world.Count is <= 0 or > MaxFiles) throw new InvalidDataException("world transfer: invalid file count");
         long total = 2; // count
+        long dataTotal = 0;
         foreach (WorldFile file in world)
         {
-            total += 6 + Encoding.Latin1.GetByteCount(file.Name) + file.Data.Length;
+            int nameLength = Encoding.Latin1.GetByteCount(file.Name);
+            if (nameLength is <= 0 or > MaxNameLength || file.Data.Length > MaxFileBytes)
+                throw new InvalidDataException("world transfer: file exceeds bounded transfer limits");
+            dataTotal += file.Data.Length;
+            if (dataTotal > MaxTotalBytes) throw new InvalidDataException("world transfer: total data exceeds bounded transfer limit");
+            total += 6 + nameLength + file.Data.Length;
         }
 
         byte[] buffer = new byte[total];

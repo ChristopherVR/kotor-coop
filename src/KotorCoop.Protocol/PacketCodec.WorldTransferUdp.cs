@@ -34,7 +34,7 @@ public static partial class PacketCodec
         w.WriteUInt8((byte)packet.Status);
         w.WriteUInt32(packet.SaveIdentity);
         w.WriteUInt32(packet.TotalBytes);
-        w.WriteUInt16(packet.TotalChunks);
+        w.WriteUInt32(packet.TotalChunks);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -50,7 +50,7 @@ public static partial class PacketCodec
         byte status = r.ReadUInt8();
         uint saveIdentity = r.ReadUInt32();
         uint totalBytes = r.ReadUInt32();
-        ushort totalChunks = r.ReadUInt16();
+        uint totalChunks = r.ReadUInt32();
 
         if (r.Failed || !Enum.IsDefined((WorldTransferUdpStatus)status))
         {
@@ -73,7 +73,7 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.WorldTransferChunk);
         w.WriteUInt32(packet.RequestId);
-        w.WriteUInt16(packet.ChunkIndex);
+        w.WriteUInt32(packet.ChunkIndex);
         w.WriteBytes(packet.Payload);
         return w.Failed ? 0 : w.Position;
     }
@@ -87,9 +87,10 @@ public static partial class PacketCodec
         }
 
         uint requestId = r.ReadUInt32();
-        ushort chunkIndex = r.ReadUInt16();
+        uint chunkIndex = r.ReadUInt32();
 
-        if (r.Failed)
+        if (r.Failed || chunkIndex >= ProtocolConstants.MaxWorldTransferChunks
+            || r.Remaining == 0 || r.Remaining > ProtocolConstants.WorldTransferChunkPayloadSize)
         {
             return null;
         }
@@ -112,6 +113,7 @@ public static partial class PacketCodec
         PacketWriter w = new(buffer);
         w.WriteHeader(PacketType.WorldTransferChunkStatus);
         w.WriteUInt32(packet.RequestId);
+        w.WriteUInt32(packet.FirstChunk);
         w.WriteBytes(packet.MissingBitmap);
         return w.Failed ? 0 : w.Position;
     }
@@ -125,14 +127,16 @@ public static partial class PacketCodec
         }
 
         uint requestId = r.ReadUInt32();
-        if (r.Failed)
+        uint firstChunk = r.ReadUInt32();
+        if (r.Failed || firstChunk % 8 != 0 || firstChunk >= ProtocolConstants.MaxWorldTransferChunks
+            || r.Remaining == 0 || r.Remaining > ProtocolConstants.WorldTransferStatusBitmapBytes)
         {
             return null;
         }
 
         byte[] bitmap = new byte[r.Remaining];
         r.ReadBytes(bitmap);
-        return r.Failed ? null : new WorldTransferChunkStatusPacket(requestId, bitmap);
+        return r.Failed ? null : new WorldTransferChunkStatusPacket(requestId, bitmap, firstChunk);
     }
 
     public static int Write(Span<byte> buffer, WorldTransferCompletePacket packet)

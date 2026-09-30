@@ -26,7 +26,7 @@ public sealed partial class CoopHost
     /// <summary>Chunks sent per transfer per tick. At the default 30 Hz tick rate that is up to
     /// 1,440 chunks/second (~1.4 MB/s of 1 KB chunks) — comfortably under a typical residential
     /// uplink, and a full <see cref="ProtocolConstants.MaxWorldTransferChunks"/>-chunk transfer's
-    /// first pass still finishes in a handful of seconds.</summary>
+    /// first pass takes about90 seconds at the128 MiB limit.</summary>
     private const int WorldTransferChunksPerTick = 48;
 
     private Func<(IReadOnlyList<WorldFile> World, uint SaveIdentity)>? _worldTransferProvider;
@@ -92,8 +92,25 @@ public sealed partial class CoopHost
             if (!_worldTransferSenders.TryGetValue(from, out WorldTransferUdpSender? existing)
                 || existing.RequestId != request.RequestId)
             {
-                byte[] payload = WorldTransfer.SerializePayload(world);
-                existing = new WorldTransferUdpSender(request.RequestId, payload, saveIdentity, now);
+                long estimatedBytes = 2 + world.Sum(file => 6L + file.Name.Length + file.Data.Length);
+                long retainedBytes = _worldTransferSenders.Where(pair => !pair.Key.Equals(from))
+                    .Sum(pair => (long)pair.Value.TotalBytes);
+                if ((!_worldTransferSenders.ContainsKey(from) && _worldTransferSenders.Count >= ProtocolConstants.MaxPeers)
+                    || retainedBytes + estimatedBytes > 2L * ProtocolConstants.MaxWorldTransferBytes)
+                {
+                    SendWorldTransferHeader(from, request.RequestId, WorldTransferUdpStatus.NoWorld, 0, 0, 0);
+                    return;
+                }
+                try
+                {
+                    byte[] payload = WorldTransfer.SerializePayload(world);
+                    existing = new WorldTransferUdpSender(request.RequestId, payload, saveIdentity, now);
+                }
+                catch (InvalidDataException)
+                {
+                    SendWorldTransferHeader(from, request.RequestId, WorldTransferUdpStatus.NoWorld, 0, 0, 0);
+                    return;
+                }
                 _worldTransferSenders[from] = existing;
             }
 
@@ -102,12 +119,12 @@ public sealed partial class CoopHost
 
         SendWorldTransferHeader(
             from, sender.RequestId, WorldTransferUdpStatus.Ok, sender.SaveIdentity,
-            (uint)sender.TotalBytes, (ushort)sender.TotalChunks);
+            (uint)sender.TotalBytes, (uint)sender.TotalChunks);
     }
 
     private void SendWorldTransferHeader(
         IPEndPoint to, uint requestId, WorldTransferUdpStatus status, uint saveIdentity,
-        uint totalBytes, ushort totalChunks)
+        uint totalBytes, uint totalChunks)
     {
         int length = PacketCodec.Write(
             _replyBuffer,
@@ -131,7 +148,7 @@ public sealed partial class CoopHost
             if (_worldTransferSenders.TryGetValue(from, out WorldTransferUdpSender? sender)
                 && sender.RequestId == status.RequestId)
             {
-                sender.NoteStatus(status.MissingBitmap, now);
+                sender.NoteStatus(status.MissingBitmap, now, status.FirstChunk);
             }
         }
     }
@@ -199,7 +216,7 @@ public sealed partial class CoopHost
                 int length = PacketCodec.Write(
                     _sendBuffer,
                     new WorldTransferChunkPacket(
-                        sender.RequestId, (ushort)chunkIndex, sender.Chunk(chunkIndex).ToArray()));
+                        sender.RequestId, (uint)chunkIndex, sender.Chunk(chunkIndex).ToArray()));
 
                 if (length > 0)
                 {

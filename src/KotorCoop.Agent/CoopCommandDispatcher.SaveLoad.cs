@@ -296,6 +296,7 @@ public sealed partial class CoopCommandDispatcher
     /// <summary>See <see cref="WipeRecoveryRule"/> — the host's reload from the game-over menu
     /// after a session wipe, which neither classifier can see. Reset with the two above.</summary>
     private WipeRecoveryState _wipeRecoveryState = WipeRecoveryState.Initial;
+    private bool _wipeTeardownWithoutOwnLoad;
 
     /// <summary>See <see cref="HostWorldReplacedRule"/> — a host load whose serial edge never
     /// found a digest change to correlate with (live 2026-09-02: an in-world reload of the
@@ -433,6 +434,7 @@ public sealed partial class CoopCommandDispatcher
             _mismatchRejoinState = MismatchRejoinWatchState.Initial;
             _saveLineageAnnounced = false;
             _wipeRecoveryState = WipeRecoveryState.Initial;
+            _wipeTeardownWithoutOwnLoad = false;
             _hostWorldReplacedState = HostWorldReplacedState.Initial;
             _soloReturnState = SoloReturnRejoinState.Initial;
             _postAdoptionGitNotice.Reset();
@@ -609,6 +611,20 @@ public sealed partial class CoopCommandDispatcher
             string savesDirectory = Path.Combine(gameDirectory, "saves");
             LoadProvenance? loadProvenance = bridge.TryReadLoadProvenance(out LoadProvenance? observedProvenance)
                 ? observedProvenance : null;
+            PlayerState? localState = bridge.TryReadLocalState(out PlayerState localNow) ? localNow : null;
+            bool confirmedWipeTeardown = WipeTeardownRule.MaySuppressOwnLoad(
+                _wipeRecoveryState.Wiped, localState,
+                _lastOwnLoadProvenanceGeneration, loadProvenance?.Generation,
+                _pendingCommandOwnLoadCharacterSource is not null,
+                _ownLoadCaptureRequiresConfirmedSave || _verifiedOwnLoadAwaitingRejoin);
+            _wipeTeardownWithoutOwnLoad = confirmedWipeTeardown
+                && (_wipeTeardownWithoutOwnLoad || ownLoadEdge);
+            if (_wipeTeardownWithoutOwnLoad)
+            {
+                ownLoadEdge = false;
+                if (ownVerdict == SaveOrLoadVerdict.Load)
+                    ownVerdict = SaveOrLoadVerdict.None;
+            }
             ObserveOwnLoadCharacterSource(loadProvenance, loadSerial, nowMs, savesDirectory);
 
             bool ownLoadCharacterCaptured = false;
@@ -734,7 +750,6 @@ public sealed partial class CoopCommandDispatcher
             // The wipe watch runs every tick regardless of the verdicts below: its latch must
             // be armed during the ~13 s both parties lie wiped before the game-over teardown,
             // and it fires on the host's reappearance, which neither classifier reports.
-            PlayerState? localState = bridge.TryReadLocalState(out PlayerState localNow) ? localNow : null;
             bool soloCaptureReady = MaintainSoloReturnCapture(localState, nowMs);
             PlayerState? hostState = null;
             IReadOnlyList<RemotePeer> peersNow = session.GetRemotePeers();
@@ -749,7 +764,10 @@ public sealed partial class CoopCommandDispatcher
 
             (bool hostBackAfterWipe, WipeRecoveryState nextWipeState) =
                 WipeRecoveryRule.Observe(_wipeRecoveryState, localState, hostState);
-            _wipeRecoveryState = nextWipeState;
+            // Keep the wipe armed until adoption succeeds: another safety/capture branch
+            // can defer this tick, and observing the host must not consume recovery.
+            if (!hostBackAfterWipe)
+                _wipeRecoveryState = nextWipeState;
 
             // Every tick too: a quicksave request in flight has to be watched for its save
             // landing regardless of what the verdict chain below decides this tick.
@@ -833,7 +851,7 @@ public sealed partial class CoopCommandDispatcher
                 && HostWorldReplacedRule.IsHostReady(hostState, hostDigest.Module))
             {
                 Reply("host loaded a save - rejoining their world");
-                TriggerRejoin(RejoinTrigger.HostReload, session);
+                TriggerRejoin(_wipeRecoveryState.Wiped ? RejoinTrigger.WipeRecovery : RejoinTrigger.HostReload, session);
             }
             else if (hostBackAfterWipe)
             {
@@ -843,7 +861,7 @@ public sealed partial class CoopCommandDispatcher
             else if (hostWorldReplaced)
             {
                 Reply("the host's world was reloaded - rejoining their world");
-                TriggerRejoin(RejoinTrigger.HostReload, session);
+                TriggerRejoin(_wipeRecoveryState.Wiped ? RejoinTrigger.WipeRecovery : RejoinTrigger.HostReload, session);
             }
             else if (soloReturn || soloCaptureReady)
             {
@@ -1585,6 +1603,8 @@ public sealed partial class CoopCommandDispatcher
                         _sessionSaveWatch?.RebaseOwnVerdictAfterAdoptedLoad(
                             bridge.SaveIdentityDigest, adoptedLoadSerial);
 
+                        _wipeRecoveryState = WipeRecoveryState.Initial;
+                        _wipeTeardownWithoutOwnLoad = false;
                         bridge.ForgetWorldShadows();
                         bridge.RecordPartyAdoptionProof(adoptedParty, adoption.World.CompanionCacheFingerprints ?? [], adoption.World.SaveIdentity);
                         if (adoption.World.StagedSaveDirectory is { } adoptedSource
