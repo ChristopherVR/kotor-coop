@@ -1138,7 +1138,7 @@ public sealed partial class CoopAgent
             _worldStatePump.PumpMines(caps);
         }
 
-        // Off by default (coop.ini local_var_sync); see docs/research/quest-sync.md §8.3.
+        // Audited allowlist on by default (coop.ini local_var_sync); see docs/research/quest-sync.md §8.3.
         if (_settings.LocalVarSync)
         {
             _localVarPump.Pump(caps);

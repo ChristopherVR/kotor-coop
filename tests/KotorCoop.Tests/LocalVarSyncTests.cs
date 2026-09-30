@@ -475,15 +475,19 @@ public class LocalVarSyncTests
         Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse(line).Kind);
     }
 
-    // ---- the OFF default, three readers ----------------------------------------------------
+    // ---- the verified ON default, explicit opt-out -----------------------------------------
 
     [Fact]
-    public void LocalVarSyncIsOffWhenTheKeyIsAbsentAndOnWhenSet()
+    public void LocalVarSyncIsOnWhenAbsentAndHonoursExplicitOptOut()
     {
         string path = Path.Combine(Path.GetTempPath(), $"coop-localvar-{Guid.NewGuid():N}.ini");
         try
         {
             File.WriteAllText(path, "mode = host");
+            Assert.True(CoopConfig.TryLoad(path)!.LocalVarSync);
+            Assert.True(new CoopConfig().LocalVarSync);
+            Assert.True(new AgentSettings().LocalVarSync);
+            File.WriteAllText(path, "mode = host\nlocal_var_sync = 0");
             Assert.False(CoopConfig.TryLoad(path)!.LocalVarSync);
             File.WriteAllText(path, "mode = host\nlocal_var_sync = 1");
             Assert.True(CoopConfig.TryLoad(path)!.LocalVarSync);
@@ -495,26 +499,26 @@ public class LocalVarSyncTests
     }
 
     [Fact]
-    public void AllThreeDefaultReadersAgreeOnOff()
+    public void AllThreeDefaultReadersAgreeOnOn()
     {
         string root = RepositoryRoot();
         string composition = File.ReadAllText(Path.Combine(root, "src", "KotorCoop.Agent", "AgentComposition.cs"));
-        Assert.Contains("LocalVarSync = config?.LocalVarSync ?? false", composition);
+        Assert.Contains("LocalVarSync = config?.LocalVarSync ?? true", composition);
         Assert.Contains("localVarSync: agentSettings.LocalVarSync", composition);
 
         string plugin = File.ReadAllText(Path.Combine(root, "src", "KotorCoop.Plugin", "LocalVarController.cs"));
-        Assert.Contains("PluginConfig.ReadBool(\"local_var_sync\", false)", plugin);
+        Assert.Contains("PluginConfig.ReadBool(\"local_var_sync\", true)", plugin);
 
         string configDoc = File.ReadAllText(Path.Combine(root, "docs", "CONFIG.md"));
-        Assert.Matches(new Regex(@"\|\s*`local_var_sync`\s*\|\s*OFF"), configDoc);
+        Assert.Matches(new Regex(@"\|\s*`local_var_sync`\s*\|\s*ON"), configDoc);
     }
 
     [Fact]
-    public void TheDigestCarriesTheKeyAndDefaultsOff()
+    public void TheDigestCarriesTheKeyAndWarnsForExplicitOptOut()
     {
-        Assert.False(BehaviourDigest.Default.Has(BehaviourFlags.LocalVarSync));
-        BehaviourDigest on = BehaviourDigest.FromFields(BehaviourDigest.Default.Flags | (uint)BehaviourFlags.LocalVarSync, 100, "any");
-        BehaviourComparisonResult result = BehaviourCompatibility.Compare(BehaviourDigest.Default, on);
+        Assert.True(BehaviourDigest.Default.Has(BehaviourFlags.LocalVarSync));
+        BehaviourDigest off = BehaviourDigest.FromFields(BehaviourDigest.Default.Flags & ~(uint)BehaviourFlags.LocalVarSync, 100, "any");
+        BehaviourComparisonResult result = BehaviourCompatibility.Compare(BehaviourDigest.Default, off);
         Assert.Contains(result.Differences, d => d.Key == "local_var_sync" && !d.HostAuthoritative);
     }
 

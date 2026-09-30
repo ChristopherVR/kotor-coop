@@ -24,7 +24,7 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe class LocalVarController(SharedBlockView block)
 {
-    public static readonly bool Enabled = PluginConfig.ReadBool("local_var_sync", false);
+    public static readonly bool Enabled = PluginConfig.ReadBool("local_var_sync", true);
 
     private const int IntervalFrames = 15;
     private const int MaxLogged = 60;

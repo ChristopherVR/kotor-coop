@@ -63,7 +63,7 @@ internal static unsafe partial class PluginHost
         }
 
         // local_var_sync (docs/research/quest-sync.md §8.3): the two SetLocal* call sites inside
-        // ExecuteCommandSetLocalValue. Only when the key is on — default OFF until live-verified.
+        // ExecuteCommandSetLocalValue. Only when the key is on; the audited allowlist is now live-verified and defaults ON.
         if (LocalVarController.Enabled)
         {
             LocalVarWatchTable.Build();

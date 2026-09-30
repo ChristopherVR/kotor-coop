@@ -277,7 +277,7 @@ public readonly record struct BehaviourDigest(
         int xpRate = PlayerCountScalingRule.Auto,
         int storeStock = PlayerCountScalingRule.Auto,
         int storePrices = PlayerCountScalingRule.Vanilla,
-        bool localVarSync = false,
+        bool localVarSync = true,
         bool inventoryPersonal = true,
         bool creditsPersonal = true)
     {

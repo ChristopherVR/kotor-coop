@@ -134,7 +134,7 @@ internal static class AgentComposition
             PartyFastPump = config?.PartyFastPump ?? true,
             ContainerFastPump = config?.ContainerFastPump ?? false,
             MineSync = config?.MineSync ?? true,
-            LocalVarSync = config?.LocalVarSync ?? false,
+            LocalVarSync = config?.LocalVarSync ?? true,
             TransitionAnnounceEnabled = config?.TransitionAnnounceEnabled ?? true,
             FollowStunt = config?.FollowStunt ?? true,
             ClientDoorRefusalEnabled = config?.ClientDoorRefusalEnabled ?? true,

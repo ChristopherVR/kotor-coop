@@ -415,7 +415,7 @@ internal static unsafe partial class PluginHost
         // 77 adds per-object local-variable replication (SharedBlock.LocalVars.cs,
         //    0x5800..0x5A00, TotalSize 0x5A00): a 16-row capture ring LocalVarSyncHook fills
         //    from ExecuteCommandSetLocalValue and a 28-row seqlocked apply list for
-        //    LocalVarController. coop.ini local_var_sync, default OFF; NEEDS-LIVE. See
+        //    LocalVarController. coop.ini local_var_sync, default ON after the stock-VM and combat-exclusion checks. See
         //    docs/research/quest-sync.md §8.3.
         // 78 adds party-placed floor-mine
         //      replication at 0x5A00..0x5BB8 (SharedBlock.PlacedMines.cs; TotalSize grown to
