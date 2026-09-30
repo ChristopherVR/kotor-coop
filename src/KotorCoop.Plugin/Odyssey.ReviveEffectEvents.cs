@@ -7,23 +7,37 @@ internal static unsafe partial class Odyssey
     private const int ReviveRemovalCapacity = 64;
     private const int ReviveQueueLimit = 4096;
     private static int _reviveExpiryWitnesses;
+    private readonly struct ReviveQueueNativeReader : IReviveQueueNodeReader
+    {
+        public bool TryReadNode(nint node, out nint next, out nint record)
+        {
+            next = record = 0;
+            if (!NativeMethods.IsReadable(node, 12)) return false;
+            next = *(nint*)(node + ReviveEffectEventRule.NextNodeOffset);
+            record = *(nint*)(node + 8);
+            return true;
+        }
+    }
 
     private static bool ReviveRemovalContractMatches()
     {
         if (!NativeMethods.IsReadable(0x4FED68, 12) || !NativeMethods.IsReadable(0x7441EC, 4)
             || !NativeMethods.IsReadable(0x7473C0, 2) || !NativeMethods.IsReadable(0x4B0B59, 1)
             || !NativeMethods.IsReadable(0x4E1480, 48) || !NativeMethods.IsReadable(0x4AFDF8, 21)
+            || !NativeMethods.IsReadable(0x5E9CA9, 16)
             || !NativeMethods.IsReadable(0x4E1472, 5) || *(byte*)0x4E1472 != 0xBB) return false;
         int branch = *(byte*)0x4B0B59;
         nint branchAddress = 0x4B0B34 + branch * 4;
         return branch < 6 && NativeMethods.IsReadable(branchAddress, 4)
+            && new ReadOnlySpan<byte>((void*)0x5E9CA9, 16).SequenceEqual(ReviveEffectEventRule.QueueHeadRemoval)
             && ReviveEffectEventRule.LayoutMatches(new ReadOnlySpan<byte>((void*)0x4E1480, 48),
                 new ReadOnlySpan<byte>((void*)0x4AFDF8, 21), *(uint*)0x4E1473)
             && ReviveEffectEventRule.NativeContractMatches(new ReadOnlySpan<byte>((void*)0x4FED68, 12),
                 *(uint*)0x7441EC, *(ushort*)0x7473C0, *(uint*)branchAddress);
     }
 
-    // Verified GOG layout: CServerAIMaster+54 -> CExoLinkedList; node+8 ->
+    // Verified GOG layout: CServerAIMaster+54 -> CExoLinkedList; node+0 is
+    // PREVIOUS, node+4 NEXT (GetHead 5E9C80), node+8 ->
     // 24-byte event (day,time,sender,target,type,borrowed payload). No ownership
     // transfer: DeleteEventData(14,...) is a no-op. EventHandler(14,null) is also
     // a no-op. See the disassembly preserved in the Manaan crash report.
@@ -61,12 +75,11 @@ internal static unsafe partial class Odyssey
         if (!ReviveRemovalContractMatches()
             || !TryReadReviveEffects(body, out nint effects, out int effectCount)
             || !NativeMethods.IsReadable(queue, 12)) return false;
-        nint node = *(nint*)queue;
-        int traversed = 0;
-        while (node != 0)
+        var walk = new ReviveQueueWalker<ReviveQueueNativeReader>(*(nint*)queue,
+            ReviveQueueLimit, default);
+        while (walk.TryMoveNext(out nint record))
         {
-            if (++traversed > ReviveQueueLimit || !NativeMethods.IsReadable(node, 12)
-                || !TryReadReviveEvent(*(nint*)(node + 8), out var pending)) return false;
+            if (!TryReadReviveEvent(record, out var pending)) return false;
             if (pending.Type == 14 && pending.Target == ownId && pending.Payload != 0)
             {
                 for (int i = 0; i < effectCount; i++)
@@ -82,9 +95,8 @@ internal static unsafe partial class Odyssey
                     break;
                 }
             }
-            node = *(nint*)node;
         }
-        return true;
+        return !walk.Failed;
     }
 
     private static bool ReviveEffectIsAbsent(nint body, ReviveRemovalEvent before)
@@ -111,12 +123,11 @@ internal static unsafe partial class Odyssey
             || !NativeMethods.IsReadable(queue, 12)) return;
         // Walk the CURRENT queue after the VM call. Never dereference cached nodes
         // or records: Resurrection callbacks may have drained/reordered the queue.
-        nint node = *(nint*)queue;
-        int traversed = 0;
-        while (node != 0)
+        var walk = new ReviveQueueWalker<ReviveQueueNativeReader>(*(nint*)queue,
+            ReviveQueueLimit, default);
+        while (walk.TryMoveNext(out nint record))
         {
-            if (++traversed > ReviveQueueLimit || !NativeMethods.IsReadable(node, 12)
-                || !TryReadReviveEvent(*(nint*)(node + 8), out var current)) return;
+            if (!TryReadReviveEvent(record, out var current)) return;
             for (int i = 0; i < events.Length; i++)
             {
                 var before = events[i];
@@ -127,7 +138,6 @@ internal static unsafe partial class Odyssey
                 *(nint*)(current.Record + 20) = 0;
                 PluginHost.Log($"revive: retired redundant effect expiry target 0x{ownId:X} event 0x{current.Record:X} effect 0x{before.Payload:X} uid {before.EffectId:X16}");
             }
-            node = *(nint*)node;
         }
     }
 }

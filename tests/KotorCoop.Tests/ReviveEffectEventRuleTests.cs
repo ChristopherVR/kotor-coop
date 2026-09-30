@@ -5,7 +5,45 @@ namespace KotorCoop.Tests;
 
 public sealed class ReviveEffectEventRuleTests
 {
+    private readonly struct Nodes(System.Collections.Generic.Dictionary<nint, (nint Next, nint Record)> nodes) : IReviveQueueNodeReader
+    {
+        public bool TryReadNode(nint node, out nint next, out nint record)
+        {
+            bool valid = nodes.TryGetValue(node, out var value);
+            next = value.Next; record = value.Record; return valid;
+        }
+    }
+
+    [Fact]
+    public void ForeignHeadDoesNotHideSecondMatchingEvent()
+    {
+        var nodes = new Nodes(new() { [10] = (20, 100), [20] = (0, 200) });
+        var walk = new ReviveQueueWalker<Nodes>(10, 4, nodes);
+        Assert.True(walk.TryMoveNext(out nint foreign)); Assert.Equal(100, foreign);
+        Assert.True(walk.TryMoveNext(out nint matching)); Assert.Equal(200, matching);
+        Assert.False(walk.TryMoveNext(out _)); Assert.False(walk.Failed);
+    }
+
+    [Fact]
+    public void CyclicOrUnreadableQueueCannotProduceCompleteSnapshot()
+    {
+        var cycle = new ReviveQueueWalker<Nodes>(10, 2, new(new() { [10] = (20, 100), [20] = (10, 200) }));
+        Assert.True(cycle.TryMoveNext(out _)); Assert.True(cycle.TryMoveNext(out _));
+        Assert.False(cycle.TryMoveNext(out _)); Assert.True(cycle.Failed);
+        var unreadable = new ReviveQueueWalker<Nodes>(10, 4, new(new() { [10] = (20, 100) }));
+        Assert.True(unreadable.TryMoveNext(out _));
+        Assert.False(unreadable.TryMoveNext(out _)); Assert.True(unreadable.Failed);
+    }
     private static readonly ReviveRemovalEvent Event = new(100, 1, 2, 0x77, 0x7FFFFFFD, 14, 200, 300);
+
+    [Fact]
+    public void HeadRemovalProvesForwardLinkInsteadOfPreviousLink()
+    {
+        var code = ReviveEffectEventRule.QueueHeadRemoval;
+        Assert.Equal(new byte[] { 0x8B, 0x41, 0x04 }, code[..3].ToArray());
+        Assert.Equal(4, ReviveEffectEventRule.NextNodeOffset);
+        Assert.Equal(new byte[] { 0x8B, 0x79, 0x08 }, code.Slice(6, 3).ToArray());
+    }
 
     [Fact]
     public void NativeNullPayloadAndNoDestructorContractMustMatchExactly()

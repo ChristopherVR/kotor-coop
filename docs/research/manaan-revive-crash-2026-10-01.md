@@ -65,3 +65,24 @@ surviving-effect refusal. Managed native Release/x86 compilation passed with
 warnings treated as errors. Immutable AOT publication and the genuine repeated-NPC
 rescue replay are pending. No crash repair, complete underwater route or campaign
 compatibility is certified by these unit tests.
+
+### First repair replay exposed an incomplete queue walk
+
+The immutable first fence (`cea2f03`, native SHA
+`99AB48E1AEEBBB61D8EDA35C36C7276C8377B1F57A6452CA3B67F064CC246FA2`)
+passed 5,589 fast tests and warning-clean AOT publication. Its original airlock/NPC
+replay on host21048/client50616 still failed at `0x4FED74` at09:44:38.449, after
+many genuine nearby-peer rescues; it produced no matching captured/retired event
+witness. It is **not a proven repair**. Exact failure artifacts and all owned files
+are retained under `artifacts/manaan-underwater-v96/revive-events-head-only-failure`;
+all56 originals were restored exactly.
+
+Fresh disassembly of native `GetHead` at `0x5E9C80` proves that node+0 is the
+previous link and node+4 is the next link. The first implementation mistakenly
+followed+0 and only inspected the queue head. The correction follows+4 in both
+walks, validates the exact GetHead instructions for next-link/data/head writes, and
+uses one shared bounded walker in the production pre/post paths. Regression tests
+exercise a foreign head followed by a matching second event, a cyclic queue and
+an unreadable second node. Twelve focused tests and warning-clean managed native
+compilation passed. A fresh immutable corrected build and matching live witness
+are still pending.
