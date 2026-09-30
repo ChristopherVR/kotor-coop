@@ -425,11 +425,12 @@ public sealed partial class CoopCommandDispatcher
             bool freshIntent = _lastNewGameIntentGeneration.HasValue
                 && _lastNewGameIntentGeneration.Value != generation && generation != 0;
             _lastNewGameIntentGeneration = generation;
-            if (freshIntent && manager.Current is CoopClient)
+            if (freshIntent && (manager.Current is CoopClient || _rejoinOwnsDisconnect))
             {
                 // Stock chargen has no selected-save provenance. Keep the chosen new
                 // game and the existing co-op checkpoint; recovery must not interrupt it.
-                _skipNextDisconnectCapture = true;
+                CancelRejoinForExternalSessionChange();
+                _skipNextDisconnectCapture = manager.Current is CoopClient;
                 Reply("new game selected - left co-op so character creation can continue; connect again when you are ready");
                 manager.Disconnect();
                 return;
