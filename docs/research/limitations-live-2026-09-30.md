@@ -556,3 +556,24 @@ allocation and avoids full creature scans when coherent native state reports no
 player and no running module. External mode and unreadable/mismatched native state
 retain discovery fallback. It passes 22 focused worldless, known-load and concurrency
 checks; live uninterrupted first join and the updated full fast tier are pending.
+
+
+### Latest managed full fast tier
+
+The immutable `e69d7bc` source passes 5,515 fast tests, zero failed, 1m41s, with
+warnings treated as errors. Log: `artifacts/companion-v95-worldless/fast-tests.txt`.
+The plugin and protocol trees exactly match the final save-guard native source.
+Live uninterrupted first join now completes its constructor and quick-class/accept
+commands while remaining admitted; character capture and world adoption are still
+being checked separately.
+
+### Healthy three-player save replay on the final serialization guard
+
+With reduced concurrent game load, private6/7/8 reached full readiness with two
+visible peer bodies apiece. Actual Endar-to-Dantooine travel, stock Bastila arrival,
+adoption and dedicated four-file saves completed on all three. Their own single
+base classes remained 2/0/0 and eligible client gear remained present in the saves.
+All 12 QuickSave files retained exact hashes and timestamps. Scoped cleanup restored
+64 original save files plus native/config/userdata files. This healthy replay did
+not log a naturally stale party bound, so it does not certify the original crash
+race. The earlier severe third-client rendering corruption was absent in this run.
