@@ -1,6 +1,6 @@
 # Read-only native combat acceptance snapshot. No write access or engine calls.
 # Native HP/round offsets: Odyssey.Core/Combat and research/death-handling.md.
-param([Parameter(Mandatory)][int]$ProcId, [uint32[]]$EnemyIds = @(), [string]$OutputPath = '')
+param([Parameter(Mandatory)][int]$ProcId, [uint32[]]$EnemyIds = @(), [string]$OutputPath = '', [switch]$NativeOnly)
 $ErrorActionPreference = 'Stop'
 if (-not ('PeerCombatReader' -as [type])) {
 Add-Type @'
@@ -94,14 +94,17 @@ try {
     $block = [PeerCombatReader]::FindBlock($handle,$signature)
     if (!$block) { throw 'Shared block not found.' }
     if ((Word ($block + 8)) -lt 83) { throw 'Attributed damage requires shared version >=83.' }
+    if ($NativeOnly -and (Word ($block + 8)) -lt 87) { throw 'Native-only namespace validation requires shared version >=87.' }
     $result = $null
     for ($attempt=0; $attempt -lt 20; $attempt++) {
         try {
             $serial = Word ($block + 0x396C); $sequence = Word ($block + 0x8700)
-            if ($sequence -band 1) { continue }
+            $livenessEpoch = if ((Word ($block+8)) -ge 87) { Word ($block+0xB99C) } else { 0 }
+            if (!$NativeOnly -and ($sequence -band 1)) { continue }
             $snapshot = Read-Bytes $block $(if ((Word ($block+8)) -ge 86) { 0xBC00 } elseif ((Word ($block+8)) -ge 85) { 0xBA00 } else { 0xB800 })
-            if ((Value 0x8700) -ne $sequence -or (Word ($block + 0x8700)) -ne $sequence) { continue }
-            if ((Value 0x870C) -ne $serial) { throw 'Attributed bank belongs to another world load.' }
+            if (!$NativeOnly -and ((Value 0x8700) -ne $sequence -or (Word ($block + 0x8700)) -ne $sequence)) { continue }
+            if (!$NativeOnly -and (Value 0x870C) -ne $serial) { throw 'Attributed bank belongs to another world load.' }
+            if ((Value 8) -ge 87 -and (Value 0xB99C) -ne $livenessEpoch) { continue }
             $manager = Word 0x7A39FC
             if (!$manager) { throw 'Native app manager unavailable.' }
             $server = Word ($manager + 8)
@@ -113,11 +116,11 @@ try {
             $tree = Word $array
             $nativeModule=Native-Module $internal
             $nativeEpoch=[PeerCombatReader]::Epoch($nativeModule)
-            if ((Value 0x8704) -ne $nativeEpoch) { throw 'Attributed epoch does not match the current native module namespace.' }
+            if (!$NativeOnly -and (Value 0x8704) -ne $nativeEpoch) { throw 'Attributed epoch does not match the current native module namespace.' }
             if (!$tree) { throw 'Current server object array unavailable.' }
             $appliedBefore=Word ($block+0x2014)
             $rows = @(); $peers = @(); $threat = @()
-            $count = Value 0x8708
+            $count = if ($NativeOnly) { 0 } else { Value 0x8708 }
             if ($count -gt 1024) { throw 'Invalid attributed bank count.' }
             for ($i=0; $i -lt $count; $i++) {
                 $offset = 0x8710 + $i * 12
@@ -130,7 +133,7 @@ try {
                     $peers += @{ Slot=$slot; Peer=Value ($offset+4); Phantom=$phantom; Native=(Body $phantom) }
                 }
             }
-            for ($i=0; $i -lt [Math]::Min((Value 0x4B80),6); $i++) {
+            for ($i=0; !$NativeOnly -and $i -lt [Math]::Min((Value 0x4B80),6); $i++) {
                 $offset=0x4B88 + $i * 20
                 $threat += @{ Enemy=Value $offset; DiagnosticTarget=Value ($offset+4); Top=Value ($offset+8);
                     TopThreat=(Value ($offset+12))/100.0; CurrentThreat=(Value ($offset+16))/100.0 }
@@ -138,19 +141,29 @@ try {
             $ids = if ($EnemyIds.Count) { $EnemyIds } else { @($rows.Enemy + $threat.Enemy | Sort-Object -Unique | Select-Object -First 16) }
             $enemies = @($ids | ForEach-Object { Body $_ })
             $localPlayer=Body (Value 0x2264)
-            if ((Word ($block+0x2014)) -ne $appliedBefore) { continue }
+            if (!$NativeOnly -and (Word ($block+0x2014)) -ne $appliedBefore) { continue }
             if ((Native-Module $internal) -ne $nativeModule) { continue }
             if ((Word ($internal + 0x1005C)) -ne $array -or (Word $array) -ne $tree -or (Word ($block+0x396C)) -ne $serial) { continue }
-            if ((Word ($block+0x8700)) -ne $sequence -or (Word ($block+0x4B84)) -ne (Value 0x4B84)) { continue }
+            if ((Value 8) -ge 87 -and (Word ($block+0xB99C)) -ne $livenessEpoch) { continue }
+            if (!$NativeOnly -and ((Word ($block+0x8700)) -ne $sequence -or (Word ($block+0x4B84)) -ne (Value 0x4B84))) { continue }
+            if ($NativeOnly) {
+                # The roster/local-PC fields are native control identity, not damage proof.
+                $roster = Read-Bytes ($block+0x50) 0x200
+                $phantoms = Read-Bytes ($block+0x1F80) 32
+                if ([Convert]::ToBase64String($roster) -ne [Convert]::ToBase64String($snapshot,0x50,0x200) -or
+                    [Convert]::ToBase64String($phantoms) -ne [Convert]::ToBase64String($snapshot,0x1F80,32) -or
+                    (Word ($block+0x2264)) -ne (Value 0x2264)) { continue }
+            }
             $result = @{ Utc=[DateTime]::UtcNow.ToString('o'); Pid=$ProcId; ProcessStartTicks=$process.StartTime.ToUniversalTime().Ticks;
-                Version=Value 8; WorldLoadSerial=$serial; AttributedWorldLoadSerial=Value 0x870C;
+                Version=Value 8; WorldLoadSerial=$serial; NativeLivenessEpoch=$livenessEpoch;
+                AttributedAvailable=(!$NativeOnly); AttributedWorldLoadSerial=$(if (!$NativeOnly) { Value 0x870C } else { $null });
                 WorldLoadSerialNote='Unannounced teardown counter; zero is valid for the initial world and ordinary warps do not increment it';
                 NativeNamespace=@{ Module=$nativeModule; ModuleEpoch=$nativeEpoch; ObjectArray=$array; ObjectTree=$tree };
-                ThreatGeneration=Value 0x4B84; NativeDamageIncarnation=$(if ((Value 8) -ge 86) { Value 0xB980 } else { 0 }); AttributedSequence=$sequence; Epoch=Value 0x8704;
+                ThreatGeneration=$(if (!$NativeOnly) { Value 0x4B84 } else { $null }); NativeDamageIncarnation=$(if ((Value 8) -ge 86) { Value 0xB980 } else { 0 }); AttributedSequence=$(if (!$NativeOnly) { $sequence } else { $null }); Epoch=$nativeEpoch;
                 LocalPlayer=$localPlayer; DamageDealtEnabled=Value 0x2118;
-                AppliedEffects=$appliedBefore; AppliedEffectsScope='Global successful engine calls, not damage amount';
+                AppliedEffects=$(if (!$NativeOnly) { $appliedBefore } else { $null }); AppliedEffectsScope='Global successful engine calls, not damage amount; unavailable in NativeOnly';
                 PerPeerAppliedDebt=$null; DebtNote='Private managed ledger is not exported; compare HP/tempHP and application-counter deltas';
-                Peers=$peers; Accepted=$rows; Enemies=$enemies; Threat=$threat;
+                Peers=$peers; Accepted=$(if (!$NativeOnly) { ,$rows } else { $null }); Enemies=$enemies; Threat=$(if (!$NativeOnly) { ,$threat } else { $null });
                 ThreatNote='Diagnostic rows; use Enemies.NativeTarget as actual native target oracle' }
             break
         } catch { if ($attempt -eq 19) { throw }; Start-Sleep -Milliseconds 20 }

@@ -8,6 +8,14 @@
 
 Capture after each stage and retain the JSON. It reads the attributed bank using its sequence lock, rejects an odd/changing sequence or another world load, and resolves every native body through the current server object array. Compare `Pid`, `ProcessStartTicks`, `Epoch`, and `WorldLoadSerial`, plus `NativeNamespace.Module/ObjectArray/ObjectTree`, before comparing counters. A world change requires a new baseline. Load serial zero is valid in an initial world; it counts unannounced teardowns and does not increment for ordinary warps. The probe separately checks the bank load serial at `0x870C` against `0x396C` and its epoch against FNV-1a of the loaded native module. `ThreatGeneration` at `0x4B84` is independent. Peer slot numbers are transient; compare `Peers.Peer`, not slot position.
 
+For client identity and current creature checks, use `-NativeOnly` with native87 or
+newer. Clients need not publish a host damage ledger. This mode validates the actual
+native module, object array, load serial and native liveness epoch before and after
+reading; it also verifies that peer roster, phantom IDs and local-player identity
+remain unchanged. It returns `AttributedAvailable=false` and null attribution rows,
+sequence, bank load serial, threat and application counters. The offline combat checker
+rejects these snapshots for both damage and quiet replay proof.
+
 `AcceptedCumulative` is a received cumulative damage amount. `AppliedEffects` counts successful engine effect calls across all enemies and peers, not hit points. Per-peer consumed debt is private managed state and is explicitly unavailable. A bank increase alone is not acceptance proof. `Enemies.BaseHp + TemporaryHp` measures native health; temp HP can absorb a hit while base HP stays unchanged. `Enemies.NativeTarget` reads the real combat-round target, independently of diagnostic threat rows.
 
 ## Controlled three-player scenario

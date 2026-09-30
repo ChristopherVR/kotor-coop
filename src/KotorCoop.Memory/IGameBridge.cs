@@ -745,7 +745,7 @@ public static class CheatKinds
     /// plugin already drives for a mirrored companion/enemy), so the sticky-aggro test (the
     /// unattended rig cannot click) and a live <c>cast</c> (which needs the caster's own
     /// active combat round) can finally be exercised. Target = the object id, or 0 for
-    /// "stop" (clears the queued attack through <c>Odyssey.ClearQueuedCombatActions</c>). See
+    /// "stop" (ends the active round and clears queued attacks through <c>Odyssey.StopLocalPlayerCombat</c>). See
     /// SharedBlock.CheatKindAttack and docs/research/combat-participation.md §15.
     /// </summary>
     public const uint Attack = 98;

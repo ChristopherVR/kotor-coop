@@ -13,6 +13,10 @@ if ($PeerIds.Count -ne 7 -or @($PeerIds | Sort-Object -Unique).Count -ne 7 -or $
 }
 $a=Get-Content -LiteralPath $Before -Raw | ConvertFrom-Json
 $b=Get-Content -LiteralPath $After -Raw | ConvertFrom-Json
+if (($null -ne $a.AttributedAvailable -and !$a.AttributedAvailable) -or
+    ($null -ne $b.AttributedAvailable -and !$b.AttributedAvailable)) {
+    throw 'NativeOnly snapshots cannot prove attributed damage or quiet replay.'
+}
 foreach($name in @('Pid','ProcessStartTicks','Version','Epoch','WorldLoadSerial','NativeDamageIncarnation')) {
     if ($null -eq $a.$name -or $a.$name -ne $b.$name) { throw "Changed or absent host namespace field: $name" }
 }

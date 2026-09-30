@@ -24,6 +24,26 @@ stop and repair the fixture; do not attack a stale old ID or pretend the host ID
 
 ## Seven real contributors and exact health
 
+The bounded executor performs these steps in one PowerShell process:
+
+```powershell
+& tools/eight-player-combat-live.ps1 -ProcessIds @($hostPid,$joiner1,$joiner2,$joiner3,$joiner4,$joiner5,$joiner6,$joiner7) -HostEnemyId $hostEnemy -OutputDirectory "$run/executor" -BaselinePath "$run/combat-before.json" -QuietSeconds 10
+```
+
+Supply actual process IDs with the host first. The executor derives peer identities
+from complete native rosters, verifies logged owner-to-local mappings against current
+native creatures, and uses native-only client snapshots. Only the host's verified
+attribution ledger can prove damage. Matching native87 or newer versions are required;
+mixed versions are refused. A supplied baseline is read before any output snapshot,
+including when it is the output directory's existing `entry-host.json`.
+
+Misses permit at most two 15-second attack windows per contributor. The binary must
+include the real native `CancelCombat` stop implementation: clearing queued actions
+alone leaves an active round running. Every `attack stop` requires exact kind98 native
+ACK/status1, and continuing damage after stopping fails the settling or quiet checks.
+The executor never writes health or synthetic damage. Review `result.json`,
+`hits-proof.json` and `quiet-proof.json`; a successful command ACK alone is insufficient.
+
 1. Capture the host baseline with explicit enemy ID:
 
    ```powershell
@@ -41,7 +61,7 @@ stop and repair the fixture; do not attack a stale old ID or pretend the host ID
    base plus temporary HP decreases by the summed accepted delta once queued effects
    settle. Existing rows must remain. Record raw health and global application count;
    the latter counts successful engine calls, not hit points or individual hits.
-4. Stop all seven attack queues; wait for two consecutive settled snapshots, then save
+4. Stop all seven active combat rounds; wait for two consecutive settled snapshots, then save
    the final host snapshot. Supply the seven actual stable joiner peer IDs:
 
    ```powershell

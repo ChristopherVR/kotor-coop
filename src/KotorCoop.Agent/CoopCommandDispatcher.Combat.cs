@@ -4,14 +4,14 @@ using KotorCoop.Session;
 namespace KotorCoop.Agent;
 
 /// <summary>The <c>attack</c> live-test verb (docs/research/combat-participation.md §15):
-/// orders the local player's own creature to attack a target, or clears the queued attack.</summary>
+/// orders the local player's own creature to attack a target, or cancels its active combat round and queued attacks.</summary>
 public sealed partial class CoopCommandDispatcher
 {
     /// <summary>
     /// Runs <c>Odyssey.AttackTarget</c> on the plugin — a real queued <c>ActionAttack</c> for
     /// the local player, the same route a click on a hostile produces. <c>Address == "stop"</c>
     /// (<see cref="CoopCommandKind.Attack"/> parses the literal word) sends Target 0, which the
-    /// plugin reads as "clear the queued attack" rather than a real id — no live object id is
+    /// plugin reads as "cancel active combat and queued attacks" rather than a real id — no live object id is
     /// ever 0.
     /// </summary>
     private void AttackCommand(CoopCommand command)

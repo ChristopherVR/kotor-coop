@@ -10,13 +10,16 @@ param(
 )
 $ErrorActionPreference='Stop'
 if ($ProcessIds.Count -ne 8 -or @($ProcessIds | Sort-Object -Unique).Count -ne 8) { throw 'Supply host first, then seven distinct joiner PIDs.' }
+# Retain an external baseline before writing entry-host.json, including when both
+# paths name the same file in the output directory.
+$suppliedBaseline=if($BaselinePath){Get-Content -LiteralPath $BaselinePath -Raw | ConvertFrom-Json}else{$null}
 $out=[IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($out) > $null
 $probe=Join-Path $PSScriptRoot 'peer-combat-probe.ps1'
 $checker=Join-Path $PSScriptRoot 'eight-player-combat-check.ps1'
 function Snapshot([int]$processId,[uint32]$enemy,[string]$name) {
     $path=if($name){Join-Path $out ($name+'.json')}else{''}
-    & $probe -ProcId $processId -EnemyIds @($enemy) -OutputPath $path | ConvertFrom-Json
+    & $probe -ProcId $processId -EnemyIds @($enemy) -OutputPath $path -NativeOnly:($processId -ne $ProcessIds[0]) | ConvertFrom-Json
 }
 function Save-Json($value,[string]$name) { [IO.File]::WriteAllText((Join-Path $out ($name+'.json')),($value | ConvertTo-Json -Depth 12)) }
 function Accepted($snapshot,[uint32]$peer) {
@@ -32,6 +35,7 @@ function Validate-World($snapshot,$reference,[uint32]$enemy) {
     foreach($key in @('Pid','ProcessStartTicks','Version','Epoch','WorldLoadSerial','NativeDamageIncarnation')) {
         if($snapshot.$key -ne $reference.$key){throw "Changed process/world field $key"}
     }
+    if($null -ne $reference.NativeLivenessEpoch -and $snapshot.NativeLivenessEpoch -ne $reference.NativeLivenessEpoch){throw 'Changed native liveness epoch'}
     foreach($key in @('Module','ModuleEpoch','ObjectArray','ObjectTree')) {
         if($snapshot.NativeNamespace.$key -ne $reference.NativeNamespace.$key){throw "Changed native namespace $key"}
     }
@@ -42,10 +46,10 @@ function Validate-World($snapshot,$reference,[uint32]$enemy) {
 }
 # Load the read-only reader type without opening any write handle yet.
 $hostNow=Snapshot $ProcessIds[0] $HostEnemyId 'entry-host'
-if($hostNow.Version -ne 87 -or $hostNow.DamageDealtEnabled -ne 0){throw 'Requires reviewed native87 rig with host damage forwarding disabled'}
+if($hostNow.Version -lt 87 -or $hostNow.DamageDealtEnabled -ne 0){throw 'Requires native87+ rig with host damage forwarding disabled'}
 $fixture=@($hostNow.Enemies | Where-Object Id -eq $HostEnemyId)
 if($fixture.Count -ne 1 -or !$fixture[0].Resolved -or $fixture[0].BaseHp -le 0 -or $fixture[0].Commandable -ne 0 -or $fixture[0].Plot -ne 0){throw 'Need the staged living, non-commandable, non-plot host creature'}
-$before=if($BaselinePath){Get-Content -LiteralPath $BaselinePath -Raw | ConvertFrom-Json}else{$hostNow}
+$before=if($null -ne $suppliedBaseline){$suppliedBaseline}else{$hostNow}
 Validate-World $hostNow $before $HostEnemyId
 Save-Json $before 'before'
 if(-not ('EightCombatMailbox' -as [type])) {
@@ -69,7 +73,7 @@ function Read-U32($entry,[int]$offset){
 function Attack-Command($entry,[uint32]$target){
     $fresh=Snapshot $entry.Pid $entry.Enemy ''
     Validate-World $fresh $entry.Reference $entry.Enemy
-    if((Read-U32 $entry 8) -ne 87 -or (Read-U32 $entry 12) -ne 0xC0FFEE01L){throw 'Shared block signature changed'}
+    if((Read-U32 $entry 8) -ne $entry.Reference.Version -or (Read-U32 $entry 12) -ne 0xC0FFEE01L){throw 'Shared block signature changed'}
     if((Read-U32 $entry 0x3328) -ne (Read-U32 $entry 0x3364)){throw 'Native command mailbox busy; refusing to overwrite'}
     $old=Read-U32 $entry 0x3328
     $cmd=if($target -eq 0){'attack stop'}else{'attack 0x{0:X}' -f $target}
@@ -99,6 +103,7 @@ try {
     }
     foreach($processId in $ProcessIds[1..7]){
         $initial=Snapshot $processId $HostEnemyId ''
+        if($initial.Version -ne $hostNow.Version){throw 'Mixed native versions in the rig'}
         $peer=@($hostPeers | Where-Object { $initial.Peers.Peer -notcontains $_ })
         if($peer.Count -ne 1 -or $initial.Peers.Count -ne 7 -or $initial.Peers.Peer -notcontains 1){throw 'Could not prove local peer identity from complete rosters'}
         $gameDirectory=Split-Path (Get-Process -Id $processId).Path
