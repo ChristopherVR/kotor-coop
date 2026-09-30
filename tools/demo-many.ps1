@@ -22,7 +22,10 @@ function Stop-OwnedRig {
     for ($index = $script:rig.Processes.Count - 1; $index -ge 0; $index--) {
         $owned = $script:rig.Processes[$index]
         $process = Get-Process -Id $owned.Id -ErrorAction SilentlyContinue
-        if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $owned.StartTicks -and $process.Path -eq $owned.Path) {
+        # A short-lived launcher may exit between Get-Process and reading StartTime.
+        # Without a readable identity, skip it rather than interrupting scoped cleanup.
+        $observedStart = if ($process) { $process.StartTime } else { $null }
+        if ($observedStart -and $observedStart.ToUniversalTime().Ticks -eq $owned.StartTicks -and $process.Path -eq $owned.Path) {
             Stop-Process -Id $process.Id -Force
             $process.WaitForExit(10000) > $null
         }
