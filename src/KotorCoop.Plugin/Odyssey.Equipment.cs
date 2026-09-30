@@ -393,7 +393,18 @@ internal static unsafe partial class Odyssey
             failure = 22;
             return false;
         }
-        uint itemId = SpawnItemOnFloor(resrefAscii, resrefLength, position, out int spawnFailure);
+        uint itemId;
+        int spawnFailure;
+        bool previousCheatSpawn = ItemTemplateSpawnHook.NextSpawnIsCheat;
+        ItemTemplateSpawnHook.NextSpawnIsCheat = true;
+        try
+        {
+            itemId = SpawnItemOnFloor(resrefAscii, resrefLength, position, out spawnFailure);
+        }
+        finally
+        {
+            ItemTemplateSpawnHook.NextSpawnIsCheat = previousCheatSpawn;
+        }
         if (itemId is 0 or ObjectInvalid)
         {
             failure = spawnFailure is > 0 and < 8 ? spawnFailure : 21;
