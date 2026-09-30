@@ -829,6 +829,14 @@ public interface IGameBridge :
     IJournalBridge,
     IDisposable
 {
+    /// <summary>Fresh engine completion for the exact local save directory, never a request ACK.</summary>
+    bool TryReadNativeSaveCompletion(out uint sequence, out string directory, out KotorCoop.Protocol.PartyRoster party)
+    {
+        sequence = 0;
+        directory = string.Empty;
+        party = default;
+        return false;
+    }
     /// <summary>
     /// The monitor every external entry point into this bridge takes (via C#'s <c>lock</c>
     /// statement) to serialize access to its mutable per-instance state — creature/scan
@@ -866,3 +874,4 @@ public interface IGameBridge :
     /// </summary>
     object Sync => this;
 }
+

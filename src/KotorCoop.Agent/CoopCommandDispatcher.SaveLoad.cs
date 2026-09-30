@@ -61,14 +61,9 @@ public sealed partial class CoopCommandDispatcher
 
     // ---- periodic + pre-disconnect character capture (2026-09-18) --------------------------
     //
-    // docs/review-seamless-2026-09-18.md §2: the co-op character was captured only when a
-    // door autosave or a clean disconnect happened to produce a save. Now a CLIENT asks its own
-    // engine for a quicksave (the same CheatKinds.QuickSave the `save` verb drives) every
-    // character_capture_interval_min minutes while idle, waits a bounded time for the save to
-    // land (CharacterCaptureCadenceRule.SaveWaitMs), then captures; and the disconnect capture
-    // quicksaves first the same way. The capture source is unchanged — this install's newest
-    // NON-staged save (ClientCharacterPersistence.FindCaptureSource) — so the staged copy of the
-    // host's world is never read (StagedSave). See docs/research/session-save.md.
+    // Periodic and explicit-disconnect character saves use the dedicated Co-op slot.
+    // Native completion and stable outputs certify that exact own-character source;
+    // neither path creates, moves or restores the user's QuickSave.
 
     /// <summary>coop.ini <c>character_capture_interval_min</c>; 0 = off; 10 when the ini is
     /// missing (the code default, same missing-ini note as the rejoin gates above).</summary>
@@ -81,11 +76,9 @@ public sealed partial class CoopCommandDispatcher
     /// measured from here. 0 = not yet baselined for this connection.</summary>
     private long _captureLastMs;
 
-    /// <summary>When the in-flight quicksave was requested, or 0 when none is.</summary>
+    /// <summary>When the in-flight dedicated save was requested, or 0 when none is.</summary>
     private long _captureRequestedMs;
 
-    private string? _captureSourceBefore;
-    private DateTime _captureStampBefore;
     private uint? _lastOwnLoadProvenanceGeneration;
     private OwnLoadCharacterSource? _pendingOwnLoadCharacterSource;
     private OwnLoadCharacterSource? _pendingCommandOwnLoadCharacterSource;
@@ -99,7 +92,6 @@ public sealed partial class CoopCommandDispatcher
     private bool _ownLoadCaptureRequiresConfirmedSave;
     private bool _verifiedOwnLoadAwaitingRejoin;
     private uint _ownLoadCaptureEpoch;
-    private uint _captureRequestOwnLoadEpoch;
 
     /// <summary>The main archive's write time. The DIRECTORY's own time is not enough: a
     /// quicksave over an existing QUICKSAVE folder rewrites files in place, which on NTFS
@@ -122,115 +114,6 @@ public sealed partial class CoopCommandDispatcher
         {
             return DateTime.MinValue;
         }
-    }
-
-    /// <summary>The client's periodic capture, one step per tick — see the section comment.</summary>
-    private void MaintainPeriodicCapture(PlayerState? localState, long nowMs, string savesDirectory)
-    {
-        if (_sessionSaveWatch is null || _ownLoadVerdictPending || _verifiedOwnLoadAwaitingRejoin
-            || _scriptSaveCapture is not null)
-        {
-            return;
-        }
-
-        if (_captureLastMs == 0)
-        {
-            // First tick of this connection: the interval runs from here, not from the epoch —
-            // a join must not be followed by an immediate quicksave into a world still landing.
-            _captureLastMs = nowMs;
-            return;
-        }
-
-        if (_captureRequestedMs != 0)
-        {
-            string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-            bool changed = CharacterCaptureCadenceRule.SaveLanded(
-                _captureSourceBefore, _captureStampBefore, sourceNow, SaveStamp(sourceNow));
-            bool landed = changed && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
-
-            if (!landed && !CharacterCaptureCadenceRule.WaitExpired(_captureRequestedMs, nowMs))
-            {
-                return;
-            }
-
-            // Whatever happened to the quicksave slot this request cycle (a fresh co-op
-            // capture landed there, or nothing did), this is the one place every exit below
-            // funnels through: relocate a fresh capture to the dedicated co-op slot and restore
-            // the player's own held-back quicksave now, rather than leaving it hidden in the
-            // holdback directory across a bail-out branch. A no-op when nothing was held back
-            // or nothing fresh landed. See docs/research/session-save.md's 2026-09-25 entry.
-            if (CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out string redirectDiagnostic))
-            {
-                Log?.Invoke($"character capture: {redirectDiagnostic}");
-            }
-
-            if (_ownLoadCaptureRequiresConfirmedSave
-                && _captureRequestOwnLoadEpoch != _ownLoadCaptureEpoch)
-            {
-                Log?.Invoke("character capture: discarded a quicksave request from before the load");
-                _captureRequestedMs = 0;
-                _captureLastMs = nowMs;
-                return;
-            }
-
-            if (!landed && _ownLoadCaptureRequiresConfirmedSave)
-            {
-                Log?.Invoke("character capture: no save landed after the load; refusing the unrelated newest-save fallback");
-                _captureRequestedMs = 0;
-                _captureLastMs = nowMs;
-                return;
-            }
-
-            Log?.Invoke(landed
-                ? $"character capture: quicksave landed after {nowMs - _captureRequestedMs} ms - capturing"
-                : "character capture: no save appeared within the wait (the engine may refuse to save here) - capturing the newest save as before");
-
-            // Resolve once more after the wait. The engine can publish the quicksave's
-            // SAVEGAME.sav after another file has already made SaveLanded true; carrying
-            // sourceNow across that boundary would capture the previously newest named save
-            // even though the requested quicksave is now newer. Keep the observed source as a
-            // fallback when the save tree is being torn down concurrently.
-            string? captureSource = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, sourceNow);
-            bool captured = _sessionSaveWatch.CaptureNowWritten(captureSource, out string? outcome);
-            if (outcome is not null)
-            {
-                Log?.Invoke(outcome);
-            }
-            if (OwnLoadCaptureSafetyRule.MayReleaseWithPeriodicSave(
-                _captureRequestOwnLoadEpoch, _ownLoadCaptureEpoch, landed, captured))
-            {
-                _ownLoadCaptureRequiresConfirmedSave = false;
-            }
-
-            _captureRequestedMs = 0;
-            _captureLastMs = nowMs;
-            return;
-        }
-
-        if (!CharacterCaptureCadenceRule.IsDue(CharacterCaptureIntervalMin, nowMs, _captureLastMs, requestPending: false, localState))
-        {
-            return;
-        }
-
-        if (!bridge.SupportsCheats)
-        {
-            // No plugin block: nothing can ask the engine to save. Try again next interval
-            // rather than every tick.
-            _captureLastMs = nowMs;
-            return;
-        }
-
-        _captureSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-        _captureStampBefore = SaveStamp(_captureSourceBefore);
-        _captureRequestedMs = nowMs;
-        _captureRequestOwnLoadEpoch = _ownLoadCaptureEpoch;
-
-        Log?.Invoke($"character capture: {CharacterCaptureIntervalMin} min elapsed - asking the engine for a quicksave");
-        if (!CoopSaveRedirect.BeginHoldback(savesDirectory, out string holdbackDiagnostic))
-        {
-            Log?.Invoke($"character capture: {holdbackDiagnostic}");
-        }
-        SendCheat(new CheatRequest(CheatKinds.QuickSave), quiet: true);
     }
 
     /// <summary>
@@ -496,12 +379,20 @@ public sealed partial class CoopCommandDispatcher
             _ownLoadCaptureRequiresConfirmedSave = false;
             _verifiedOwnLoadAwaitingRejoin = false;
             _ownLoadCaptureEpoch = 0;
-            _captureRequestOwnLoadEpoch = 0;
+            _periodicCapture = null;
             return;
         }
 
         uint digest = bridge.SaveIdentityDigest;
         long nowMs = SessionClock.NowMs;
+        // Finish an already-owned periodic request before another capture waits for the
+        // shared save channel. This also lets completion drain while automatic rejoin waits.
+        if (_captureRequestedMs != 0)
+        {
+            MaintainPeriodicCapture(bridge.TryReadLocalState(out PlayerState periodicLocal) ? periodicLocal : null,
+                nowMs, Path.Combine(gameDirectory, "saves"));
+            if (_captureRequestedMs != 0) return;
+        }
         if (MaintainAutomaticRejoinCapture(nowMs)) return;
 
         // ⚠ null, not 0, while the bridge has no plugin block to read it from — see
@@ -661,8 +552,7 @@ public sealed partial class CoopCommandDispatcher
                 manager.ClearLineageSeed();
                 _ownLoadCaptureEpoch = OwnLoadCaptureSafetyRule.NextEpoch(_ownLoadCaptureEpoch);
                 _captureRequestedMs = 0;
-                _captureSourceBefore = null;
-                _captureStampBefore = default;
+                _periodicCapture = null;
                 _ownLoadVerdictPending = true;
                 _ownLoadLoadVerdictSeen = false;
                 _ownLoadRefusalReady = false;
@@ -792,8 +682,7 @@ public sealed partial class CoopCommandDispatcher
             if (!hostBackAfterWipe)
                 _wipeRecoveryState = nextWipeState;
 
-            // Every tick too: a quicksave request in flight has to be watched for its save
-            // landing regardless of what the verdict chain below decides this tick.
+            // The periodic dedicated save is watched every tick.
             MaintainPeriodicCapture(localState, nowMs, Path.Combine(gameDirectory, "saves"));
 
             // The serial-only fallback for the host's load, same lifecycle as the wipe watch:
@@ -1074,7 +963,7 @@ public sealed partial class CoopCommandDispatcher
         return source is null ? null : capture;
     }
 
-    private bool ReturnSaveCoordinationBusy => _rejoinState.Phase == RejoinPhase.InFlight
+    private bool ReturnSaveCoordinationBusy => _captureRequestedMs != 0 || _rejoinState.Phase == RejoinPhase.InFlight
         || _ownLoadVerdictPending || _ownLoadCaptureRequiresConfirmedSave || _verifiedOwnLoadAwaitingRejoin;
 
     private bool ReturnSaveIsCurrent(ReturnSaveCapture capture) =>

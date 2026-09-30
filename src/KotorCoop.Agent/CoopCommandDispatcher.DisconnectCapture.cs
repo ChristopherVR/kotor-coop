@@ -21,8 +21,8 @@ public sealed partial class CoopCommandDispatcher
 
         bool CurrentWorld() => manager.Current == session && manager.LifecycleGeneration == generation
             && bridge.TryReadLocalState(out PlayerState current) && ScriptSaveIsSafe(current)
-            && ManualWorldRefreshRule.IsSameWorld(local.Module, loadSerial, current,
-                bridge.TryReadWorldLoadSerial(out uint serial) ? serial : uint.MaxValue)
+            && bridge.TryReadWorldLoadSerial(out uint currentSerial)
+            && ManualWorldRefreshRule.IsSameWorld(local.Module, loadSerial, current, currentSerial)
             && bridge.TryReadLivenessEpoch(out uint currentEpoch) && currentEpoch == epoch;
 
         string saves = Path.Combine(gameDirectory, "saves");
